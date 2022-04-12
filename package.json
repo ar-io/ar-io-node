@@ -1,0 +1,16 @@
+{
+  "name": "ar-io-node",
+  "version": "1.0.0",
+  "description": "An AR.IO gateway node.",
+  "main": "index.js",
+  "repository": {
+    "url": "https://github.com/ar-io/ar-io-node",
+    "type": "git"
+  },
+  "dependencies": {
+    "better-sqlite3": "^7.5.1",
+    "express": "^4.17.3",
+    "typescript": "^4.6.3",
+    "winston": "^3.7.2"
+  }
+}
