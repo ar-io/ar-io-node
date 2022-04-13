@@ -34,16 +34,18 @@ const transactionTagInsertsStmt = db.prepare(`
   VALUES (@tag_hash, @height, @transaction_id)
 `);
 
-const insertTransactions = db.transaction((txs) => {
+const insertBlockTransactions = db.transaction((txs) => {
   for (tx of txs) {
+    const txId = Buffer.from(tx.id, 'base64');
+
     txInsertStmt.run({
-      id: tx.id,
+      id: txId,
       height: tx.BlockHeight,
     });
 
     for (tag of tx.tags) {
       const tagHashContent = `${tag.name}|${tag.value}`;
-      const tagHash = crypto.createHash('md5').update(tagHashContent).digest('hex');
+      const tagHash = crypto.createHash('md5').update(tagHashContent).digest();
 
       tagInsertStmt.run({
         hash: tagHash,
@@ -54,24 +56,20 @@ const insertTransactions = db.transaction((txs) => {
       transactionTagInsertsStmt.run({
         tag_hash: tagHash,
         height: tx.BlockHeight,
-        transaction_id: tx.id
+        transaction_id: txId
       });
     }
   }
 });
 
-function saveTransactions(txs) {
-  insertTransactions(txs);
-}
-
 let totalTxCount = 0;
 
-app.post('/add-transactions', async (req, res) => {
+app.post('/add-block-transactions', async (req, res) => {
   txCount = req.body.length;
   totalTxCount += txCount;
   console.log(`Received ${txCount} transactions, total: ${totalTxCount}`);
   const startTs = Date.now();
-  saveTransactions(req.body);
+  insertBlockTransactions(req.body);
   console.log(`Saved ${txCount} transactions in ${Date.now() - startTs}ms`);
   res.send({ endpoint: 'add-transactions' });
 });
