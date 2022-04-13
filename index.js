@@ -17,6 +17,7 @@ app.use(bodyParser.json({limit: '50mb'}));
 //});
 
 db = new Database('./chain.db');
+db.pragma('journal_mode = WAL');
 
 const txInsertStmt = db.prepare(`
   INSERT OR IGNORE INTO stable_transactions (id, height)
