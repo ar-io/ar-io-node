@@ -20,8 +20,8 @@ db = new Database('./chain.db');
 db.pragma('journal_mode = WAL');
 
 const txInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transactions (id, height)
-  VALUES (@id, @height)
+  INSERT OR IGNORE INTO stable_transactions (id, height, block_transaction_index)
+  VALUES (@id, @height, @block_transaction_index)
 `);
 
 const tagInsertStmt = db.prepare(`
@@ -30,17 +30,19 @@ const tagInsertStmt = db.prepare(`
 `);
 
 const transactionTagInsertsStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transaction_tags (tag_hash, height, transaction_id)
-  VALUES (@tag_hash, @height, @transaction_id)
+  INSERT OR IGNORE INTO stable_transaction_tags (tag_hash, height, block_transaction_index)
+  VALUES (@tag_hash, @height, @block_transaction_index)
 `);
 
 const insertBlockTransactions = db.transaction((txs) => {
+  let blockTransactionIndex = 0;
   for (tx of txs) {
     const txId = Buffer.from(tx.id, 'base64');
 
     txInsertStmt.run({
       id: txId,
       height: tx.BlockHeight,
+      block_transaction_index: blockTransactionIndex,
     });
 
     for (tag of tx.tags) {
@@ -56,9 +58,11 @@ const insertBlockTransactions = db.transaction((txs) => {
       transactionTagInsertsStmt.run({
         tag_hash: tagHash,
         height: tx.BlockHeight,
-        transaction_id: txId
+        block_transaction_index: blockTransactionIndex,
       });
     }
+
+    blockTransactionIndex++;
   }
 });
 

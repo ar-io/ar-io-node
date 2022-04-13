@@ -43,8 +43,8 @@
 CREATE TABLE stable_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
-  height INTEGER NOT NULL
-  --block_transaction_index INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  block_transaction_index INTEGER NOT NULL
   --signature BLOB NOT NULL,
   --format INTEGER NOT NULL,
   --last_tx BLOB NOT NULL,
@@ -62,7 +62,7 @@ CREATE TABLE stable_transactions (
   --data_root BLOB
 );
 
-CREATE INDEX stable_transactions_id_height_idx ON stable_transactions (id, height);
+CREATE INDEX stable_transactions_id_height_idx ON stable_transactions (height, block_transaction_index);
 
 CREATE TABLE tags (
   hash BLOB PRIMARY KEY,
@@ -70,11 +70,10 @@ CREATE TABLE tags (
   value BLOB NOT NULL
 );
 
--- TODO add block_transaction_index
 CREATE TABLE stable_transaction_tags (
   tag_hash BLOB NOT NULL,
   height INTEGER NOT NULL,
-  transaction_id BLOB NOT NULL,
+  block_transaction_index INTEGER NOT NULL,
   --transaction_tag_index INTEGER NOT NULL,
-  PRIMARY KEY (tag_hash, height, transaction_id)
+  PRIMARY KEY (tag_hash, height, block_transaction_index)
 );
