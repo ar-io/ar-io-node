@@ -49,8 +49,8 @@ const insertBlockTransactions = db.transaction((txs) => {
 
       tagInsertStmt.run({
         hash: tagHash,
-        name: tag.name,
-        value: tag.value,
+        name: Buffer.from(tag.name, 'base64'),
+        value: Buffer.from(tag.value, 'base64'),
       });
 
       transactionTagInsertsStmt.run({

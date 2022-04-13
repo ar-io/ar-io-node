@@ -66,8 +66,8 @@ CREATE INDEX stable_transactions_id_height_idx ON stable_transactions (id, heigh
 
 CREATE TABLE tags (
   hash BLOB PRIMARY KEY,
-  name TEXT NOT NULL,
-  value TEXT NOT NULL
+  name BLOB NOT NULL,
+  value BLOB NOT NULL
 );
 
 -- TODO add block_transaction_index
