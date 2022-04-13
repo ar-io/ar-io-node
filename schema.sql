@@ -74,6 +74,6 @@ CREATE TABLE stable_transaction_tags (
   tag_hash BLOB NOT NULL,
   height INTEGER NOT NULL,
   block_transaction_index INTEGER NOT NULL,
-  --transaction_tag_index INTEGER NOT NULL,
-  PRIMARY KEY (tag_hash, height, block_transaction_index)
+  transaction_tag_index INTEGER NOT NULL,
+  PRIMARY KEY (tag_hash, height, block_transaction_index, transaction_tag_index)
 );

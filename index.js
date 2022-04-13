@@ -30,8 +30,8 @@ const tagInsertStmt = db.prepare(`
 `);
 
 const transactionTagInsertsStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transaction_tags (tag_hash, height, block_transaction_index)
-  VALUES (@tag_hash, @height, @block_transaction_index)
+  INSERT OR IGNORE INTO stable_transaction_tags (tag_hash, height, block_transaction_index, transaction_tag_index)
+  VALUES (@tag_hash, @height, @block_transaction_index, @transaction_tag_index)
 `);
 
 const insertBlockTransactions = db.transaction((txs) => {
@@ -45,6 +45,7 @@ const insertBlockTransactions = db.transaction((txs) => {
       block_transaction_index: blockTransactionIndex,
     });
 
+    let transactionTagIndex = 0;
     for (tag of tx.tags) {
       const tagHashContent = `${tag.name}|${tag.value}`;
       const tagHash = crypto.createHash('md5').update(tagHashContent).digest();
@@ -59,7 +60,10 @@ const insertBlockTransactions = db.transaction((txs) => {
         tag_hash: tagHash,
         height: tx.BlockHeight,
         block_transaction_index: blockTransactionIndex,
+        transaction_tag_index: transactionTagIndex,
       });
+
+      transactionTagIndex++;
     }
 
     blockTransactionIndex++;
