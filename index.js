@@ -19,9 +19,21 @@ app.use(bodyParser.json({limit: '50mb'}));
 db = new Database('./chain.db');
 db.pragma('journal_mode = WAL');
 
+const walletInsertStmt = db.prepare(`
+  INSERT OR IGNORE INTO wallets (address, public_modulus)
+  VALUES (@address, @public_modulus)
+`);
+
 const txInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transactions (id, height, block_transaction_index)
-  VALUES (@id, @height, @block_transaction_index)
+  INSERT OR IGNORE INTO stable_transactions (
+    id, height, block_transaction_index, signature, format,
+    last_tx, owner_address, target, quantity, reward,
+    data_size, data_root
+  ) VALUES (
+    @id, @height, @block_transaction_index, @signature, @format,
+    @last_tx, @owner_address, @target, @quantity, @reward,
+    @data_size, @data_root
+  )
 `);
 
 const tagInsertStmt = db.prepare(`
@@ -38,12 +50,6 @@ const insertBlockTransactions = db.transaction((txs) => {
   let blockTransactionIndex = 0;
   for (tx of txs) {
     const txId = Buffer.from(tx.id, 'base64');
-
-    txInsertStmt.run({
-      id: txId,
-      height: tx.BlockHeight,
-      block_transaction_index: blockTransactionIndex,
-    });
 
     let transactionTagIndex = 0;
     for (tag of tx.tags) {
@@ -65,6 +71,30 @@ const insertBlockTransactions = db.transaction((txs) => {
 
       transactionTagIndex++;
     }
+
+    const ownerBuffer = Buffer.from(tx.owner, 'base64');
+    const ownerAddressBuffer = crypto.createHash('sha256').update(ownerBuffer).digest();
+
+    walletInsertStmt.run({
+      address: ownerAddressBuffer,
+      public_modulus: ownerBuffer
+    });
+
+    // TODO add content type
+    txInsertStmt.run({
+      id: txId,
+      height: tx.BlockHeight,
+      block_transaction_index: blockTransactionIndex,
+      signature: Buffer(tx.signature, 'base64'),
+      format: tx.format,
+      last_tx: Buffer(tx.last_tx, 'base64'),
+      owner_address: ownerAddressBuffer,
+      target: Buffer(tx.target, 'base64'),
+      quantity: tx.quantity,
+      reward: tx.reward,
+      data_size: tx.data_size,
+      data_root: Buffer(tx.data_root, 'base64')
+    });
 
     blockTransactionIndex++;
   }

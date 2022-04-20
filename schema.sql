@@ -1,3 +1,8 @@
+CREATE TABLE wallets ( 
+  address BLOB PRIMARY KEY,
+  public_modulus BLOB
+);
+
 --CREATE TABLE stable_blocks (
 --  -- Identity
 --  height INTEGER PRIMARY KEY,
@@ -44,25 +49,27 @@ CREATE TABLE stable_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
   height INTEGER NOT NULL,
-  block_transaction_index INTEGER NOT NULL
-  --signature BLOB NOT NULL,
-  --format INTEGER NOT NULL,
-  --last_tx BLOB NOT NULL,
+  block_transaction_index INTEGER NOT NULL,
+  signature BLOB NOT NULL,
+  format INTEGER NOT NULL,
+  last_tx BLOB NOT NULL,
 
   -- Ownership
-  --owner_address BLOB NOT NULL,
-  --target BLOB,
+  owner_address BLOB NOT NULL,
+  target BLOB,
 
   -- Tokens
-  --quantity TEXT NOT NULL,
-  --reward TEXT NOT NULL,
+  quantity TEXT NOT NULL,
+  reward TEXT NOT NULL,
 
   -- Data
-  --data_size INTEGER,
-  --data_root BLOB
+  data_size INTEGER,
+  data_root BLOB
 );
 
 CREATE INDEX stable_transactions_id_height_idx ON stable_transactions (height, block_transaction_index);
+CREATE INDEX stable_transactions_target_height_idx ON stable_transactions (target, height, block_transaction_index);
+CREATE INDEX stable_transactions_owner_address_height_idx ON stable_transactions (owner_address, height, block_transaction_index);
 
 CREATE TABLE tags (
   hash BLOB PRIMARY KEY,
