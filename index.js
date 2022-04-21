@@ -17,6 +17,7 @@ app.use(bodyParser.json({limit: '50mb'}));
 //});
 
 db = new Database('./chain.db');
+
 db.pragma('journal_mode = WAL');
 
 const walletInsertStmt = db.prepare(`
@@ -24,7 +25,7 @@ const walletInsertStmt = db.prepare(`
   VALUES (@address, @public_modulus)
 `);
 
-const txInsertStmt = db.prepare(`
+const stableTxInsertStmt = db.prepare(`
   INSERT OR IGNORE INTO stable_transactions (
     id, height, block_transaction_index, signature, format,
     last_tx, owner_address, target, quantity, reward,
@@ -41,12 +42,12 @@ const tagInsertStmt = db.prepare(`
   VALUES (@hash, @name, @value)
 `);
 
-const transactionTagInsertsStmt = db.prepare(`
+const stableTxTagInsertsStmt = db.prepare(`
   INSERT OR IGNORE INTO stable_transaction_tags (tag_hash, height, block_transaction_index, transaction_tag_index)
   VALUES (@tag_hash, @height, @block_transaction_index, @transaction_tag_index)
 `);
 
-const insertBlockTransactions = db.transaction((txs) => {
+const insertStableBlockTransactions = db.transaction((txs) => {
   let blockTransactionIndex = 0;
   for (tx of txs) {
     const txId = Buffer.from(tx.id, 'base64');
@@ -62,7 +63,7 @@ const insertBlockTransactions = db.transaction((txs) => {
         value: Buffer.from(tag.value, 'base64'),
       });
 
-      transactionTagInsertsStmt.run({
+      stableTxTagInsertsStmt.run({
         tag_hash: tagHash,
         height: tx.BlockHeight,
         block_transaction_index: blockTransactionIndex,
@@ -81,7 +82,7 @@ const insertBlockTransactions = db.transaction((txs) => {
     });
 
     // TODO add content type
-    txInsertStmt.run({
+    stableTxInsertStmt.run({
       id: txId,
       height: tx.BlockHeight,
       block_transaction_index: blockTransactionIndex,
@@ -102,19 +103,18 @@ const insertBlockTransactions = db.transaction((txs) => {
 
 let totalTxCount = 0;
 
-app.post('/add-block-transactions', async (req, res) => {
+app.post('/add-stable-block-transactions', async (req, res) => {
   txCount = req.body.length;
   totalTxCount += txCount;
   console.log(`Received ${txCount} transactions, total: ${totalTxCount}`);
   const startTs = Date.now();
-  insertBlockTransactions(req.body);
+  insertStableBlockTransactions(req.body);
   console.log(`Saved ${txCount} transactions in ${Date.now() - startTs}ms`);
-  res.send({ endpoint: 'add-transactions' });
+  res.send({ endpoint: 'add-stable-block-transactions' });
 });
 
-app.post('/add-blocks', (_req, res) => {
-  //console.log(req.body);
-  res.send({ endpoint: 'add-blocks' });
+app.post('/add-stable-blocks', (_req, res) => {
+  res.send({ endpoint: 'add-stable-blocks' });
 });
 
 app.listen(port, () => {
