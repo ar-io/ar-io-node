@@ -8,17 +8,10 @@ const port = 3000;
 const app = express();
 app.use(bodyParser.json({limit: '50mb'}));
 
-//const knex = require('knex')({
-//  client: 'better-sqlite3',
-//  useNullAsDefault: true,
-//  connection: {
-//    filename: "./chain.db"
-//  }
-//});
-
 db = new Database('./chain.db');
 
 db.pragma('journal_mode = WAL');
+db.pragma('page_size = 4096'); // may depend on OS and FS
 
 const walletInsertStmt = db.prepare(`
   INSERT OR IGNORE INTO wallets (address, public_modulus)
