@@ -69,6 +69,6 @@ LIMIT 100;
 SELECT HEX(st.id)
 FROM stable_transactions st
 JOIN stable_transaction_tags stt ON stt.height = st.height AND stt.block_transaction_index = st.block_transaction_index
-WHERE stt.tag_hash = x'0ACA3398B829AA7A47D47C3BF1180D2A' AND stt.height <= 830000
+WHERE stt.tag_hash = x'0ACA3398B829AA7A47D47C3BF1180D2A' AND stt.height >= 830000
 ORDER BY stt.height, stt.block_transaction_index
 LIMIT 100;
