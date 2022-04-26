@@ -35,9 +35,77 @@ const tagInsertStmt = db.prepare(`
   VALUES (@hash, @name, @value)
 `);
 
-const stableTxTagInsertsStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transaction_tags (tag_hash, height, block_transaction_index, transaction_tag_index)
-  VALUES (@tag_hash, @height, @block_transaction_index, @transaction_tag_index)
+const stableTxTagsInsertStmt = db.prepare(`
+  INSERT OR IGNORE INTO stable_transaction_tags (
+    tag_hash, height, block_transaction_index, transaction_tag_index
+  ) VALUES (
+    @tag_hash, @height, @block_transaction_index, @transaction_tag_index
+  )
+`);
+
+const newTxInsertStmt = db.prepare(`
+  INSERT OR IGNORE INTO new_transactions (
+    id, signature, format, last_tx, owner_address,
+    target, quantity, reward, data_size, data_root,
+    created_at
+  ) VALUES (
+    @id, @signature, @format, @last_tx, @owner_address,
+    @target, @quantity, @reward, @data_size, @data_root,
+    @created_at
+  )
+`);
+
+const newTxTagsInsertStmt = db.prepare(`
+  INSERT OR IGNORE INTO new_transaction_tags (
+    tag_hash, transaction_id, transaction_tag_index
+  ) VALUES (
+    @tag_hash, @transaction_id, @transaction_tag_index
+  )
+`);
+
+const newBlocksInsertStmt = db.prepare(`
+  INSERT OR IGNORE INTO new_blocks (
+    indep_hash, previous_block, nonce, hash, block_timestamp, diff,
+    cumulative_diff, last_retarget,
+    reward_addr, reward_pool, 
+    block_size, weave_size,
+    usd_to_ar_rate_dividend,
+    usd_to_ar_rate_divisor,
+    scheduled_usd_to_ar_rate_dividend,
+    scheduled_usd_to_ar_rate_divisor,
+    packing_2_5_threshold, strict_data_split_threshold, hash_list_merkle,
+    wallet_list, tx_root, created_at
+  ) VALUES (
+    @indep_hash, @previous_block, @nonce, @hash,
+    CAST(@block_timestamp AS INTEGER), @diff,
+    @cumulative_diff, CAST(@last_retarget AS INTEGER),
+    @reward_addr, CAST(@reward_pool AS INTEGER),
+    CAST(@block_size AS INTEGER), CAST(@weave_size AS INTEGER), 
+    CAST(@usd_to_ar_rate_dividend AS INTEGER),
+    CAST(@usd_to_ar_rate_divisor AS INTEGER),
+    CAST(@scheduled_usd_to_ar_rate_dividend AS INTEGER),
+    CAST(@scheduled_usd_to_ar_rate_divisor AS INTEGER),
+    CAST(@packing_2_5_threshold AS INTEGER),
+    CAST(@strict_data_split_threshold AS INTEGER),
+    @hash_list_merkle, @wallet_list, @tx_root,
+    CAST(@created_at AS INTEGER)
+  )
+`);
+
+const newBlockHeightsInsertStmt = db.prepare(`
+  INSERT OR IGNORE INTO new_block_heights (
+    height, block_indep_hash
+  ) VALUES (
+    @height, @block_indep_hash
+  )
+`);
+
+const newBlockTxsInsertStmt = db.prepare(`
+  INSERT OR IGNORE INTO new_block_transactions (
+    block_indep_hash, transaction_id, block_transaction_index
+  ) VALUES (
+    @block_indep_hash, @transaction_id, @block_transaction_index
+  )
 `);
 
 const insertStableBlockTransactions = db.transaction((txs) => {
@@ -56,7 +124,7 @@ const insertStableBlockTransactions = db.transaction((txs) => {
         value: Buffer.from(tag.value, 'base64'),
       });
 
-      stableTxTagInsertsStmt.run({
+      stableTxTagsInsertStmt.run({
         tag_hash: tagHash,
         height: tx.BlockHeight,
         block_transaction_index: blockTransactionIndex,
@@ -74,7 +142,7 @@ const insertStableBlockTransactions = db.transaction((txs) => {
       public_modulus: ownerBuffer
     });
 
-    // TODO add content type
+    // TODO add content_type
     stableTxInsertStmt.run({
       id: txId,
       height: tx.BlockHeight,
@@ -94,22 +162,162 @@ const insertStableBlockTransactions = db.transaction((txs) => {
   }
 });
 
+const insertNewTransactions = db.transaction((txs) => {
+  for (tx of txs) {
+    const txId = Buffer.from(tx.id, 'base64');
+
+    let transactionTagIndex = 0;
+    for (tag of tx.tags) {
+      const tagHashContent = `${tag.name}|${tag.value}`;
+      const tagHash = crypto.createHash('md5').update(tagHashContent).digest();
+
+      tagInsertStmt.run({
+        hash: tagHash,
+        name: Buffer.from(tag.name, 'base64'),
+        value: Buffer.from(tag.value, 'base64'),
+      });
+
+      newTxTagsInsertStmt.run({
+        tag_hash: tagHash,
+        transaction_id: txId,
+        transaction_tag_index: transactionTagIndex,
+      });
+
+      transactionTagIndex++;
+    }
+
+    const ownerBuffer = Buffer.from(tx.owner, 'base64');
+    const ownerAddressBuffer = crypto.createHash('sha256').update(ownerBuffer).digest();
+
+    walletInsertStmt.run({
+      address: ownerAddressBuffer,
+      public_modulus: ownerBuffer
+    });
+
+    // TODO add content_type
+    newTxInsertStmt.run({
+      id: txId,
+      signature: Buffer(tx.signature, 'base64'),
+      format: tx.format,
+      last_tx: Buffer(tx.last_tx, 'base64'),
+      owner_address: ownerAddressBuffer,
+      target: Buffer(tx.target, 'base64'),
+      quantity: tx.quantity,
+      reward: tx.reward,
+      data_size: tx.data_size,
+      data_root: Buffer(tx.data_root, 'base64'),
+      created_at: (Date.now()/1000).toFixed(0)
+    });
+  }
+});
+
+const insertNewBlocks = db.transaction((blocks) => {
+  for (block of blocks) {
+    if (block.indep_hash) {
+      const indepHash = Buffer.from(block.indep_hash, 'base64');
+      const previousBlock = Buffer.from(block.previous_block, 'base64');
+      const nonce = Buffer.from(block.nonce , 'base64');
+      const hash = Buffer.from(block.hash, 'base64');
+      const rewardAddr = Buffer.from(block.reward_addr, 'base64');
+      const hashListMerkle = block.hash_list_merkle && Buffer.from(block.hash_list_merkle, 'base64');
+      const walletList = Buffer.from(block.wallet_list, 'base64');
+      const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
+
+      newBlocksInsertStmt.run({
+        indep_hash: indepHash,
+        previous_block: previousBlock,
+        nonce: nonce,
+        hash: hash,
+        block_timestamp: block.timestamp,
+        diff: block.diff,
+        cumulative_diff: block.cumulative_diff,
+        last_retarget: block.last_retarget,
+        reward_addr: rewardAddr,
+        reward_pool: block.reward_pool,
+        block_size: block.block_size,
+        weave_size: block.weave_size,
+        usd_to_ar_rate_dividend: block.usd_to_ar_rate_dividend,
+        usd_to_ar_rate_divisor: block.usd_to_ar_rate_divisor,
+        scheduled_usd_to_ar_rate_dividend: block.scheduled_usd_to_ar_rate_dividend,
+        scheduled_usd_to_ar_rate_divisor: block.scheduled_usd_to_ar_rate_divisor,
+        packing_2_5_threshold: block.packing_2_5_threshold,
+        strict_data_split_threshold: block.strict_data_split_threshold,
+        hash_list_merkle: hashListMerkle,
+        wallet_list: walletList,
+        tx_root: txRoot,
+        created_at: (Date.now()/1000).toFixed(0),
+      });
+
+      newBlockHeightsInsertStmt.run({
+        height: block.height,
+        block_indep_hash: indepHash
+      });
+
+      let blockTransactionIndex = 0;
+      for (txIdStr of block.txs) {
+        const txId = Buffer.from(txIdStr, 'base64');
+
+        newBlockTxsInsertStmt.run({
+          transaction_id: txId,
+          block_indep_hash: indepHash,
+          block_transaction_index: blockTransactionIndex
+        });
+
+        blockTransactionIndex++;
+      }
+
+    } else {
+      console.log('Skipping block with no indep_hash');
+    }
+  }
+});
+
 let totalTxCount = 0;
+let totalBlockCount = 0;
 
 app.post('/add-stable-block-transactions', async (req, res) => {
   txCount = req.body.length;
   totalTxCount += txCount;
   console.log(`Received ${txCount} transactions, total: ${totalTxCount}`);
   const startTs = Date.now();
-  insertStableBlockTransactions(req.body);
+  try {
+    insertStableBlockTransactions(req.body);
+  } catch (error) {
+    console.log(error);
+  }
   console.log(`Saved ${txCount} transactions in ${Date.now() - startTs}ms`);
   res.send({ endpoint: 'add-stable-block-transactions' });
 });
 
-app.post('/add-stable-blocks', (_req, res) => {
-  res.send({ endpoint: 'add-stable-blocks' });
+app.post('/add-new-transactions', async (req, res) => {
+  txCount = req.body.length;
+  totalTxCount += txCount;
+  console.log(`Received ${txCount} transactions, total: ${totalTxCount}`);
+  const startTs = Date.now();
+  try {
+    insertNewTransactions(req.body);
+  } catch (error) {
+    console.log(error);
+  }
+  console.log(`Saved ${txCount} transactions in ${Date.now() - startTs}ms`);
+  res.send({ endpoint: 'add-new-transactions' });
+});
+
+app.post('/add-new-blocks', async (req, res) => {
+  blockCount = req.body.length;
+  totalBlockCount += blockCount;
+  console.log(`Received ${blockCount} blocks, total: ${totalBlockCount}`);
+  const startTs = Date.now();
+  try {
+    insertNewBlocks(req.body);
+  } catch (error) {
+    console.log(error);
+    //System.exit(1);
+  }
+  console.log(`Saved ${blockCount} blocks in ${Date.now() - startTs}ms`);
+  res.send({ endpoint: 'add-new-blocks' });
 });
 
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
+  console.log(`AR.IO gateway POC listening on port ${port}`);
 });

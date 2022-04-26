@@ -68,9 +68,9 @@ CREATE TABLE stable_transactions (
   data_root BLOB
 );
 
-CREATE INDEX stable_transactions_id_height_idx ON stable_transactions (height, block_transaction_index);
-CREATE INDEX stable_transactions_target_height_idx ON stable_transactions (target, height, block_transaction_index);
-CREATE INDEX stable_transactions_owner_address_height_idx ON stable_transactions (owner_address, height, block_transaction_index);
+CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
+CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
+CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
 
 CREATE TABLE tags (
   hash BLOB PRIMARY KEY,
@@ -97,7 +97,7 @@ CREATE TABLE new_blocks (
   -- Difficulty
   diff TEXT NOT NULL,
   cumulative_diff TEXT,
-  last_retarget TEXT NOT NULL,
+  last_retarget INTEGER NOT NULL,
 
   -- Rewards
   reward_addr BLOB,
@@ -124,7 +124,10 @@ CREATE TABLE new_blocks (
   wallet_list BLOB,
 
   -- Transactions
-  tx_root BLOB
+  tx_root BLOB,
+
+  -- Metadata
+  created_at INTEGER NOT NULL
 );
 
 -- TODO add block indexes
@@ -153,7 +156,10 @@ CREATE TABLE new_transactions (
 
   -- Data
   data_size INTEGER,
-  data_root BLOB
+  data_root BLOB,
+
+  -- Metadata
+  created_at INTEGER NOT NULL
 );
 
 CREATE INDEX stable_transactions_target_id_idx ON new_transactions (target, id);
@@ -167,10 +173,8 @@ CREATE TABLE new_block_transactions (
 );
 
 CREATE TABLE new_transaction_tags (
-  transaction_id BLOB NOT NULL,
   tag_hash BLOB NOT NULL,
-  block_transaction_index INTEGER NOT NULL,
+  transaction_id BLOB NOT NULL,
   transaction_tag_index INTEGER NOT NULL,
-  -- TODO potentially add all fields to index for sorting purposes
-  PRIMARY KEY (transaction_id, tag_hash)
+  PRIMARY KEY (tag_hash, transaction_id, transaction_tag_index)
 );
