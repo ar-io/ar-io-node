@@ -76,8 +76,7 @@ const newBlocksInsertStmt = db.prepare(`
     usd_to_ar_rate_divisor,
     scheduled_usd_to_ar_rate_dividend,
     scheduled_usd_to_ar_rate_divisor,
-    hash_list_merkle, wallet_list, tx_root,
-    created_at
+    hash_list_merkle, wallet_list, tx_root
   ) VALUES (
     @indep_hash, @previous_block, @nonce, @hash,
     CAST(@block_timestamp AS INTEGER), @diff,
@@ -88,8 +87,7 @@ const newBlocksInsertStmt = db.prepare(`
     CAST(@usd_to_ar_rate_divisor AS INTEGER),
     CAST(@scheduled_usd_to_ar_rate_dividend AS INTEGER),
     CAST(@scheduled_usd_to_ar_rate_divisor AS INTEGER),
-    @hash_list_merkle, @wallet_list, @tx_root,
-    CAST(@created_at AS INTEGER)
+    @hash_list_merkle, @wallet_list, @tx_root
   ) ON CONFLICT DO NOTHING
 `);
 
@@ -280,8 +278,7 @@ const insertNewBlocks = db.transaction((blocks) => {
         scheduled_usd_to_ar_rate_divisor: block.scheduled_usd_to_ar_rate_divisor,
         hash_list_merkle: hashListMerkle,
         wallet_list: walletList,
-        tx_root: txRoot,
-        created_at: (Date.now()/1000).toFixed(0),
+        tx_root: txRoot
       });
 
       newBlockHeightsInsertStmt.run({

@@ -119,10 +119,7 @@ CREATE TABLE new_blocks (
   wallet_list BLOB,
 
   -- Transactions
-  tx_root BLOB,
-
-  -- Metadata
-  created_at INTEGER NOT NULL
+  tx_root BLOB
 );
 
 -- TODO add block indexes
