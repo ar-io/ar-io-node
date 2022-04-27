@@ -108,6 +108,43 @@ const newBlockTxsInsertStmt = db.prepare(`
   )
 `);
 
+const saveStableTxsRangeStmt = db.prepare(`
+  INSERT OR IGNORE INTO stable_transactions (
+    id, height, block_transaction_index, signature,
+    format, last_tx, owner_address, target, quantity,
+    reward, data_size, data_root
+  ) SELECT
+    nt.id, nbh.height, nbt.block_transaction_index, nt.signature, 
+    nt.format, nt.last_tx, nt.owner_address, nt.target, nt.quantity,
+    nt.reward, nt.data_size, nt.data_root
+  FROM new_transactions nt
+  JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+  JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+  WHERE nbh.height >= @start_height AND nbh.height < @end_height
+`);
+
+const saveStableBlockRangeStmt = db.prepare(`
+  INSERT OR IGNORE INTO stable_blocks (
+    height, indep_hash, previous_block, nonce, hash,
+    block_timestamp, diff, cumulative_diff, last_retarget,
+    reward_addr, reward_pool, block_size, weave_size,
+    usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
+    scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
+    packing_2_5_threshold, strict_data_split_threshold,
+    hash_list_merkle, wallet_list, tx_root
+  ) SELECT
+    nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
+    nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
+    nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
+    nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
+    nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
+    nb.packing_2_5_threshold, nb.strict_data_split_threshold,
+    nb.hash_list_merkle, nb.wallet_list, nb.tx_root
+  FROM new_blocks nb
+  JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
+  WHERE nbh.height >= @start_height AND nbh.height < @end_height
+`);
+
 const insertStableBlockTransactions = db.transaction((txs) => {
   let blockTransactionIndex = 0;
   for (tx of txs) {
@@ -272,6 +309,18 @@ const insertNewBlocks = db.transaction((blocks) => {
   }
 });
 
+const saveStableBlockRange = db.transaction((startHeight, endHeight) => {
+  saveStableBlockRangeStmt.run({
+    start_height: startHeight,
+    end_height: endHeight
+  });
+
+  saveStableTxsRangeStmt.run({
+    start_height: startHeight,
+    end_height: endHeight
+  });
+});
+
 let totalTxCount = 0;
 let totalBlockCount = 0;
 
@@ -316,6 +365,13 @@ app.post('/add-new-blocks', async (req, res) => {
   }
   console.log(`Saved ${blockCount} blocks in ${Date.now() - startTs}ms`);
   res.send({ endpoint: 'add-new-blocks' });
+});
+
+app.post('/save-stable-block/:blockHeight', async (req, res) => {
+  console.log(req.params);
+  const blockHeight = parseInt(req.params.blockHeight);
+  saveStableBlockRange(blockHeight, blockHeight+1);
+  res.send({ endpoint: 'save-stable-block' });
 });
 
 app.listen(port, () => {

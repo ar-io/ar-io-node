@@ -3,47 +3,48 @@ CREATE TABLE wallets (
   public_modulus BLOB
 );
 
---CREATE TABLE stable_blocks (
---  -- Identity
---  height INTEGER PRIMARY KEY,
---  indep_hash BLOB UNIQUE,
---  previous_block BLOB,
---  nonce BLOB NOT NULL,
---  hash BLOB NOT NULL,
---  block_timestamp INTEGER NOT NULL,
---
---  -- Difficulty
---  diff TEXT NOT NULL,
---  cumulative_diff TEXT,
---  last_retarget TEXT NOT NULL,
---
---  -- Rewards
---  reward_addr BLOB,
---  reward_pool TEXT NOT NULL,
---
---  -- Sizes
---  block_size INTEGER NOT NULL,
---  weave_size INTEGER NOT NULL,
---
---  -- Pricing
---  usd_to_ar_rate_dividend INTEGER,
---  usd_to_ar_rate_divisor INTEGER,
---  scheduled_usd_to_ar_rate_dividend INTEGER,
---  scheduled_usd_to_ar_rate_divisor INTEGER,
---
---  -- Packing
---  packing_2_5_threshold INTEGER,
---  strict_data_split_threshold INTEGER,
---
---  -- Hash list merkel
---  hash_list_merkle BLOB,
---
---  -- Wallets
---  wallet_list BLOB,
---
---  -- Transactions
---  tx_root BLOB
---);
+-- TODO add transaction(s)_count
+CREATE TABLE stable_blocks (
+  -- Identity
+  height INTEGER PRIMARY KEY,
+  indep_hash BLOB UNIQUE,
+  previous_block BLOB,
+  nonce BLOB NOT NULL,
+  hash BLOB NOT NULL,
+  block_timestamp INTEGER NOT NULL,
+
+  -- Difficulty
+  diff TEXT NOT NULL,
+  cumulative_diff TEXT,
+  last_retarget TEXT NOT NULL,
+
+  -- Rewards
+  reward_addr BLOB,
+  reward_pool TEXT NOT NULL,
+
+  -- Sizes
+  block_size INTEGER NOT NULL,
+  weave_size INTEGER NOT NULL,
+
+  -- Pricing
+  usd_to_ar_rate_dividend INTEGER,
+  usd_to_ar_rate_divisor INTEGER,
+  scheduled_usd_to_ar_rate_dividend INTEGER,
+  scheduled_usd_to_ar_rate_divisor INTEGER,
+
+  -- Packing
+  packing_2_5_threshold INTEGER,
+  strict_data_split_threshold INTEGER,
+
+  -- Hash list merkel
+  hash_list_merkle BLOB,
+
+  -- Wallets
+  wallet_list BLOB,
+
+  -- Transactions
+  tx_root BLOB
+);
 
 -- TODO add content_type
 CREATE TABLE stable_transactions (
@@ -72,6 +73,7 @@ CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable
 CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
 CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
 
+-- Use combo hash, name, value as PK so we can detect duplicate hashes
 CREATE TABLE tags (
   hash BLOB PRIMARY KEY,
   name BLOB NOT NULL,
@@ -86,6 +88,7 @@ CREATE TABLE stable_transaction_tags (
   PRIMARY KEY (tag_hash, height, block_transaction_index, transaction_tag_index)
 );
 
+-- TODO add transaction(s)_count
 CREATE TABLE new_blocks (
   -- Identity
   indep_hash BLOB PRIMARY KEY,
@@ -139,6 +142,7 @@ CREATE TABLE new_block_heights (
 
 CREATE INDEX new_block_heights_block_indep_hash_idx ON new_block_heights (height, block_indep_hash);
 
+-- TODO add tag(s)_count
 CREATE TABLE new_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
