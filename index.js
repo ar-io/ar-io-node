@@ -14,12 +14,13 @@ db.pragma('journal_mode = WAL');
 db.pragma('page_size = 4096'); // may depend on OS and FS
 
 const walletInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO wallets (address, public_modulus)
+  INSERT INTO wallets (address, public_modulus)
   VALUES (@address, @public_modulus)
+  ON CONFLICT DO NOTHING
 `);
 
 const stableTxInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transactions (
+  INSERT INTO stable_transactions (
     id, height, block_transaction_index, signature, format,
     last_tx, owner_address, target, quantity, reward,
     data_size, data_root
@@ -27,24 +28,25 @@ const stableTxInsertStmt = db.prepare(`
     @id, @height, @block_transaction_index, @signature, @format,
     @last_tx, @owner_address, @target, @quantity, @reward,
     @data_size, @data_root
-  )
+  ) ON CONFLICT DO NOTHING
 `);
 
 const tagInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO tags (hash, name, value)
+  INSERT INTO tags (hash, name, value)
   VALUES (@hash, @name, @value)
+  ON CONFLICT DO NOTHING
 `);
 
 const stableTxTagsInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transaction_tags (
+  INSERT INTO stable_transaction_tags (
     tag_hash, height, block_transaction_index, transaction_tag_index
   ) VALUES (
     @tag_hash, @height, @block_transaction_index, @transaction_tag_index
-  )
+  ) ON CONFLICT DO NOTHING
 `);
 
 const newTxInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO new_transactions (
+  INSERT INTO new_transactions (
     id, signature, format, last_tx, owner_address,
     target, quantity, reward, data_size, data_root,
     created_at
@@ -52,19 +54,19 @@ const newTxInsertStmt = db.prepare(`
     @id, @signature, @format, @last_tx, @owner_address,
     @target, @quantity, @reward, @data_size, @data_root,
     @created_at
-  )
+  ) ON CONFLICT DO NOTHING
 `);
 
 const newTxTagsInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO new_transaction_tags (
+  INSERT INTO new_transaction_tags (
     tag_hash, transaction_id, transaction_tag_index
   ) VALUES (
     @tag_hash, @transaction_id, @transaction_tag_index
-  )
+  ) ON CONFLICT DO NOTHING
 `);
 
 const newBlocksInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO new_blocks (
+  INSERT INTO new_blocks (
     indep_hash, previous_block, nonce, hash,
     block_timestamp, diff,
     cumulative_diff, last_retarget,
@@ -88,27 +90,27 @@ const newBlocksInsertStmt = db.prepare(`
     CAST(@scheduled_usd_to_ar_rate_divisor AS INTEGER),
     @hash_list_merkle, @wallet_list, @tx_root,
     CAST(@created_at AS INTEGER)
-  )
+  ) ON CONFLICT DO NOTHING
 `);
 
 const newBlockHeightsInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO new_block_heights (
+  INSERT INTO new_block_heights (
     height, block_indep_hash
   ) VALUES (
     @height, @block_indep_hash
-  )
+  ) ON CONFLICT DO NOTHING
 `);
 
 const newBlockTxsInsertStmt = db.prepare(`
-  INSERT OR IGNORE INTO new_block_transactions (
+  INSERT INTO new_block_transactions (
     block_indep_hash, transaction_id, block_transaction_index
   ) VALUES (
     @block_indep_hash, @transaction_id, @block_transaction_index
-  )
+  ) ON CONFLICT DO NOTHING
 `);
 
 const saveStableTxsRangeStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_transactions (
+  INSERT INTO stable_transactions (
     id, height, block_transaction_index, signature,
     format, last_tx, owner_address, target, quantity,
     reward, data_size, data_root
@@ -120,10 +122,11 @@ const saveStableTxsRangeStmt = db.prepare(`
   JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
   JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
   WHERE nbh.height >= @start_height AND nbh.height < @end_height
+  ON CONFLICT DO NOTHING
 `);
 
 const saveStableBlockRangeStmt = db.prepare(`
-  INSERT OR IGNORE INTO stable_blocks (
+  INSERT INTO stable_blocks (
     height, indep_hash, previous_block, nonce, hash,
     block_timestamp, diff, cumulative_diff, last_retarget,
     reward_addr, reward_pool, block_size, weave_size,
@@ -140,6 +143,7 @@ const saveStableBlockRangeStmt = db.prepare(`
   FROM new_blocks nb
   JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
   WHERE nbh.height >= @start_height AND nbh.height < @end_height
+  ON CONFLICT DO NOTHING
 `);
 
 const insertStableBlockTransactions = db.transaction((txs) => {
