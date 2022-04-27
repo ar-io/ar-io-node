@@ -153,7 +153,7 @@ const insertStableBlockTransactions = db.transaction((txs) => {
     let transactionTagIndex = 0;
     for (tag of tx.tags) {
       const tagHashContent = `${tag.name}|${tag.value}`;
-      const tagHash = crypto.createHash('md5').update(tagHashContent).digest();
+      const tagHash = crypto.createHash('sha-1').update(tagHashContent).digest();
 
       tagInsertStmt.run({
         hash: tagHash,
