@@ -32,10 +32,6 @@ CREATE TABLE stable_blocks (
   scheduled_usd_to_ar_rate_dividend INTEGER,
   scheduled_usd_to_ar_rate_divisor INTEGER,
 
-  -- Packing
-  packing_2_5_threshold INTEGER,
-  strict_data_split_threshold INTEGER,
-
   -- Hash list merkel
   hash_list_merkle BLOB,
 
@@ -115,10 +111,6 @@ CREATE TABLE new_blocks (
   usd_to_ar_rate_divisor INTEGER,
   scheduled_usd_to_ar_rate_dividend INTEGER,
   scheduled_usd_to_ar_rate_divisor INTEGER,
-
-  -- Packing
-  packing_2_5_threshold INTEGER,
-  strict_data_split_threshold INTEGER,
 
   -- Hash list merkel
   hash_list_merkle BLOB,

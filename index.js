@@ -65,7 +65,8 @@ const newTxTagsInsertStmt = db.prepare(`
 
 const newBlocksInsertStmt = db.prepare(`
   INSERT OR IGNORE INTO new_blocks (
-    indep_hash, previous_block, nonce, hash, block_timestamp, diff,
+    indep_hash, previous_block, nonce, hash,
+    block_timestamp, diff,
     cumulative_diff, last_retarget,
     reward_addr, reward_pool, 
     block_size, weave_size,
@@ -73,8 +74,8 @@ const newBlocksInsertStmt = db.prepare(`
     usd_to_ar_rate_divisor,
     scheduled_usd_to_ar_rate_dividend,
     scheduled_usd_to_ar_rate_divisor,
-    packing_2_5_threshold, strict_data_split_threshold, hash_list_merkle,
-    wallet_list, tx_root, created_at
+    hash_list_merkle, wallet_list, tx_root,
+    created_at
   ) VALUES (
     @indep_hash, @previous_block, @nonce, @hash,
     CAST(@block_timestamp AS INTEGER), @diff,
@@ -85,8 +86,6 @@ const newBlocksInsertStmt = db.prepare(`
     CAST(@usd_to_ar_rate_divisor AS INTEGER),
     CAST(@scheduled_usd_to_ar_rate_dividend AS INTEGER),
     CAST(@scheduled_usd_to_ar_rate_divisor AS INTEGER),
-    CAST(@packing_2_5_threshold AS INTEGER),
-    CAST(@strict_data_split_threshold AS INTEGER),
     @hash_list_merkle, @wallet_list, @tx_root,
     CAST(@created_at AS INTEGER)
   )
@@ -130,7 +129,6 @@ const saveStableBlockRangeStmt = db.prepare(`
     reward_addr, reward_pool, block_size, weave_size,
     usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
     scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-    packing_2_5_threshold, strict_data_split_threshold,
     hash_list_merkle, wallet_list, tx_root
   ) SELECT
     nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
@@ -138,7 +136,6 @@ const saveStableBlockRangeStmt = db.prepare(`
     nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
     nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
     nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
-    nb.packing_2_5_threshold, nb.strict_data_split_threshold,
     nb.hash_list_merkle, nb.wallet_list, nb.tx_root
   FROM new_blocks nb
   JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
@@ -277,8 +274,6 @@ const insertNewBlocks = db.transaction((blocks) => {
         usd_to_ar_rate_divisor: block.usd_to_ar_rate_divisor,
         scheduled_usd_to_ar_rate_dividend: block.scheduled_usd_to_ar_rate_dividend,
         scheduled_usd_to_ar_rate_divisor: block.scheduled_usd_to_ar_rate_divisor,
-        packing_2_5_threshold: block.packing_2_5_threshold,
-        strict_data_split_threshold: block.strict_data_split_threshold,
         hash_list_merkle: hashListMerkle,
         wallet_list: walletList,
         tx_root: txRoot,
