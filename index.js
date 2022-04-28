@@ -123,6 +123,18 @@ const saveStableTxsRangeStmt = db.prepare(`
   ON CONFLICT DO NOTHING
 `);
 
+const saveStableTxTagsRangeStmt = db.prepare(`
+  INSERT INTO stable_transaction_tags (
+    tag_hash, height, block_transaction_index, transaction_tag_index
+  ) SELECT
+    ntt.tag_hash, nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
+  FROM new_transaction_tags ntt
+  JOIN new_block_transactions nbt ON nbt.transaction_id = ntt.transaction_id
+  JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+  WHERE nbh.height >= @start_height AND nbh.height < @end_height
+  ON CONFLICT DO NOTHING
+`);
+
 const saveStableBlockRangeStmt = db.prepare(`
   INSERT INTO stable_blocks (
     height, indep_hash, previous_block, nonce, hash,
@@ -312,6 +324,11 @@ const saveStableBlockRange = db.transaction((startHeight, endHeight) => {
   });
 
   saveStableTxsRangeStmt.run({
+    start_height: startHeight,
+    end_height: endHeight
+  });
+
+  saveStableTxTagsRangeStmt.run({
     start_height: startHeight,
     end_height: endHeight
   });
