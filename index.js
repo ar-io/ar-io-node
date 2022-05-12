@@ -338,6 +338,67 @@ const saveStableBlockRange = db.transaction((startHeight, endHeight) => {
 let totalTxCount = 0;
 let totalBlockCount = 0;
 
+async function getInfo() {
+  const response = await fetch('https://arweave.net/info');
+  const info = response.json();
+  return info;
+}
+
+async function getLatestHeight() {
+  const info = await getInfo();
+  return info.height;
+}
+
+async function getBlockByHeight(height) {
+  const response = await fetch(`https://arweave.net/block/height/${height}`);
+  const block = response.json();
+  return block;
+}
+
+async function getTransaction(id) {
+  const response = await fetch(`https://arweave.net/tx/${id}`);
+  const tx = response.json();
+  return tx;
+}
+
+async function importBlocks() {
+  let latestHeight = parseInt(process.env.STARTING_BLOCK_HEIGHT ?? 0);
+  while (true) {
+    try {
+      console.log(`Fetching block at height ${latestHeight}`);
+      const latestBlock = await getBlockByHeight(latestHeight);
+
+      console.log(`Inserting block`);
+      insertNewBlocks([latestBlock]);
+
+      // TODO queue transactions instead of inserting them here
+      const txs = await Promise.all(latestBlock.txs.map(async (txId) => {
+        console.log(`Fetching transaction ${txId}`);
+        const tx = await getTransaction(txId);
+        return tx;
+      }));
+
+      console.log(`Inserting new transactions`);
+      insertNewTransactions(txs);
+
+      // TODO don't save stable data every block
+      // TODO only save data > 50 blocks old
+      if (latestHeight > 0) {
+        saveStableBlockRange(latestHeight - 1, latestHeight);
+      }
+
+      console.log(`Waiting 1s`);
+      await wait(1000);
+
+      latestHeight++;
+    } catch (error) {
+      console.log(`Error processing block ${latestHeight}`, error);
+      console.log(`Waiting 15s`);
+      await wait(15000);
+    }
+  }
+}
+
 app.post('/add-stable-block-transactions', async (req, res) => {
   txCount = req.body.length;
   totalTxCount += txCount;
@@ -391,3 +452,5 @@ app.post('/save-stable-block/:blockHeight', async (req, res) => {
 app.listen(port, () => {
   console.log(`AR.IO gateway POC listening on port ${port}`);
 });
+
+importBlocks();
