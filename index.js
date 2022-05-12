@@ -1,8 +1,9 @@
 const crypto = require('crypto');
 const express = require('express');
 const bodyParser = require('body-parser');
-const R = require('ramda');
 const Database = require('better-sqlite3');
+const fetch = require('node-fetch');
+const wait = require('wait');
 
 const port = 3000;
 const app = express();
