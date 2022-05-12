@@ -195,15 +195,15 @@ const insertStableBlockTransactions = db.transaction((txs) => {
       id: txId,
       height: tx.BlockHeight,
       block_transaction_index: blockTransactionIndex,
-      signature: Buffer(tx.signature, 'base64'),
+      signature: Buffer.from(tx.signature, 'base64'),
       format: tx.format,
-      last_tx: Buffer(tx.last_tx, 'base64'),
+      last_tx: Buffer.from(tx.last_tx, 'base64'),
       owner_address: ownerAddressBuffer,
       target: Buffer(tx.target, 'base64'),
       quantity: tx.quantity,
       reward: tx.reward,
       data_size: tx.data_size,
-      data_root: Buffer(tx.data_root, 'base64')
+      data_root: Buffer.from(tx.data_root, 'base64')
     });
 
     blockTransactionIndex++;
@@ -245,15 +245,15 @@ const insertNewTransactions = db.transaction((txs) => {
     // TODO add content_type
     newTxInsertStmt.run({
       id: txId,
-      signature: Buffer(tx.signature, 'base64'),
+      signature: Buffer.from(tx.signature, 'base64'),
       format: tx.format,
-      last_tx: Buffer(tx.last_tx, 'base64'),
+      last_tx: Buffer.from(tx.last_tx, 'base64'),
       owner_address: ownerAddressBuffer,
-      target: Buffer(tx.target, 'base64'),
+      target: Buffer.from(tx.target, 'base64'),
       quantity: tx.quantity,
       reward: tx.reward,
       data_size: tx.data_size,
-      data_root: Buffer(tx.data_root, 'base64'),
+      data_root: Buffer.from(tx.data_root, 'base64'),
       created_at: (Date.now()/1000).toFixed(0)
     });
   }
