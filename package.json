@@ -1,20 +1,30 @@
 {
   "name": "ar-io-node",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "An AR.IO gateway node.",
-  "main": "index.js",
+  "main": "./dist/app.js",
   "repository": {
-    "url": "https://github.com/ar-io/ar-io-node",
-    "type": "git"
+    "type": "git",
+    "url": "https://github.com/ar-io/ar-io-node"
   },
   "dependencies": {
     "better-sqlite3": "^7.5.1",
     "express": "^4.17.3",
-    "knex": "^1.0.6",
     "node-fetch": "2",
-    "ramda": "^0.28.0",
-    "typescript": "^4.6.3",
     "wait": "^0.4.2",
     "winston": "^3.7.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.5.0",
+    "@types/express": "^4.17.13",
+    "@types/node": "^12.0.0",
+    "@types/node-fetch": "^2.0.0",
+    "rimraf": "^3.0.2",
+    "ts-node": "^10.7.0",
+    "typescript": "^4.6.4"
+  },
+  "scripts": {
+    "build": "yarn clean && npx tsc --project ./tsconfig.prod.json",
+    "clean": "npx rimraf [ .nyc_output coverage dist ]"
   }
 }
