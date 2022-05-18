@@ -10,6 +10,7 @@ export interface JsonBlock {
   height: number;
   nonce: string;
   hash: string;
+  previous_block: string | undefined;
   timestamp: number;
   diff: string;
   cumulative_diff: string | undefined;
@@ -23,7 +24,7 @@ export interface JsonBlock {
   scheduled_usd_to_ar_rate_dividend: string | undefined;
   scheduled_usd_to_ar_rate_divisor: string | undefined;
   hash_list_merkle: string;
-  wallet_list_merkel: string;
+  wallet_list: string;
   tx_root: string;
   tags: JsonTags;
   txs: string[];
