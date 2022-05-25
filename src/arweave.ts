@@ -10,13 +10,13 @@ export class ChainApiClient implements ChainApiClientInterface {
 
   // TODO handle errors
   async getBlockByHeight(height: number): Promise<JsonBlock> {
-    const response = await axios.get(`${this.chainApiUrl}/blocks/height/${height}`);
+    const response = await axios.get(`${this.chainApiUrl}block/height/${height}`);
     return response.data as JsonBlock;
   }
 
   // TODO handle errors
   async getTransaction(txId: string): Promise<JsonTransaction> {
-    const response = await axios.get(`${this.chainApiUrl}/tx/${txId}`);
+    const response = await axios.get(`${this.chainApiUrl}tx/${txId}`);
     return response.data as JsonTransaction;
   }
 }

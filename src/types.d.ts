@@ -53,5 +53,5 @@ export interface ChainApiClientInterface {
 
 export interface ChainDatabaseInterface {
   insertBlockAndTxs(block: JsonBlock, transactions: JsonTransaction[]): Promise<void>;
-  getMaxIndexedHeight(): Promise<number>;
+  //getMaxIndexedHeight(): Promise<number>;
 }

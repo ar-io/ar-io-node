@@ -2,7 +2,7 @@ import { ChainDatabaseInterface, JsonBlock, JsonTransaction } from '../types';
 import Sqlite = require('better-sqlite3');
 import * as crypto from 'crypto';
 
-class ChainDatabase implements ChainDatabaseInterface {
+export class ChainDatabase implements ChainDatabaseInterface {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
   private tagInsertStmt: Sqlite.Statement;
