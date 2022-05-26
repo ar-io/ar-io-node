@@ -12,4 +12,4 @@ const blockImporter = new BlockImporter({
   eventEmitter
 });
 
-blockImporter.run({ startHeight: 0 });
+blockImporter.run({});

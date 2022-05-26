@@ -1,4 +1,4 @@
-import { 
+import {
   ChainApiClientInterface,
   ChainDatabaseInterface,
   JsonBlock,
@@ -28,39 +28,37 @@ export class BlockImporter {
   }
 
   private async saveBlock(block: JsonBlock) {
+    // TODO consider creating API client getTransactions function
     const txs = await Promise.all(block.txs.map(async (txId) => {
-      // TODO handle 404s
+      // TODO handle errors
       const tx = await this.chainApiClient.getTransaction(txId);
       return tx;
     }));
 
     this.chainDatabase.insertBlockAndTxs(block, txs);
+
+    // TODO emit events
   }
 
   public async run({
     startHeight
   } : {
-    startHeight: number,
+    startHeight?: number,
   }) {
-    let nextHeight = startHeight;
-    //let nextHeight =
-    //  startHeight ??
-    //  await this.chainDatabase.getMaxIndexedHeight() + 1;
-
-    // TODO maybe something more elegant than a 'while(true)'
+    // TODO something more elegant than a 'while(true)'
     while (true) {
       try {
+        // TODO check whether this is > current chain height
+        const nextHeight =
+          startHeight ??
+          await this.chainDatabase.getMaxIndexedHeight() + 1;
+
         console.log('Importing block at height', nextHeight);
         const block = await this.chainApiClient.getBlockByHeight(nextHeight);
 
         // TODO check previous_block and resolve forks
 
         await this.saveBlock(block);
-
-        // TODO emit events
-
-        // TODO check whether this is > current chain height
-        nextHeight++;
       } catch (error) {
         console.log(error);
         // TODO handle errors

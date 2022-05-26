@@ -11,6 +11,7 @@ export class ChainDatabase implements ChainDatabaseInterface {
   private newBlocksInsertStmt: Sqlite.Statement;
   private newBlockHeightsInsertStmt: Sqlite.Statement;
   private newBlockTxsInsertStmt: Sqlite.Statement;
+  private getMaxIndexedHeightStmt: Sqlite.Statement;
   private insertBlockAndTxsFn: Sqlite.Transaction;
 
   constructor(dbPath: string) {
@@ -91,6 +92,17 @@ export class ChainDatabase implements ChainDatabaseInterface {
       ) VALUES (
         @block_indep_hash, @transaction_id, @block_transaction_index
       ) ON CONFLICT DO NOTHING
+    `);
+
+    this.getMaxIndexedHeightStmt = this.db.prepare(`
+      SELECT MAX(height) AS height
+      FROM (
+        SELECT MAX(height) AS height
+        FROM new_block_heights
+        UNION
+        SELECT MAX(height) AS height
+        FROM stable_blocks
+      )
     `);
 
     this.insertBlockAndTxsFn = this.db.transaction((
@@ -198,5 +210,9 @@ export class ChainDatabase implements ChainDatabaseInterface {
     this.insertBlockAndTxsFn(block, transactions);
 
     // TODO flush to stable every N blocks
+  }
+
+  async getMaxIndexedHeight(): Promise<number> {
+    return this.getMaxIndexedHeightStmt.get().height ?? -1;
   }
 }
