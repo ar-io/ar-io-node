@@ -57,7 +57,7 @@ export class ChainDatabase implements ChainDatabaseInterface {
         indep_hash, previous_block, nonce, hash,
         block_timestamp, diff,
         cumulative_diff, last_retarget,
-        reward_addr, reward_pool, 
+        reward_addr, reward_pool,
         block_size, weave_size,
         usd_to_ar_rate_dividend,
         usd_to_ar_rate_divisor,
@@ -69,7 +69,7 @@ export class ChainDatabase implements ChainDatabaseInterface {
         CAST(@block_timestamp AS INTEGER), @diff,
         @cumulative_diff, CAST(@last_retarget AS INTEGER),
         @reward_addr, CAST(@reward_pool AS INTEGER),
-        CAST(@block_size AS INTEGER), CAST(@weave_size AS INTEGER), 
+        CAST(@block_size AS INTEGER), CAST(@weave_size AS INTEGER),
         CAST(@usd_to_ar_rate_dividend AS INTEGER),
         CAST(@usd_to_ar_rate_divisor AS INTEGER),
         CAST(@scheduled_usd_to_ar_rate_dividend AS INTEGER),
@@ -105,14 +105,12 @@ export class ChainDatabase implements ChainDatabaseInterface {
       )
     `);
 
-    this.insertBlockAndTxsFn = this.db.transaction((
-      block : JsonBlock, txs: JsonTransaction[]
-    ) => {
+    this.insertBlockAndTxsFn = this.db.transaction((block: JsonBlock, txs: JsonTransaction[]) => {
       const indepHash = Buffer.from(block.indep_hash, 'base64');
-      const previousBlock = Buffer.from(block.previous_block ?? "", 'base64');
-      const nonce = Buffer.from(block.nonce , 'base64');
+      const previousBlock = Buffer.from(block.previous_block ?? '', 'base64');
+      const nonce = Buffer.from(block.nonce, 'base64');
       const hash = Buffer.from(block.hash, 'base64');
-      const rewardAddr = Buffer.from(block.reward_addr ?? "", 'base64');
+      const rewardAddr = Buffer.from(block.reward_addr ?? '', 'base64');
       const hashListMerkle = block.hash_list_merkle && Buffer.from(block.hash_list_merkle, 'base64');
       const walletList = Buffer.from(block.wallet_list, 'base64');
       const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
@@ -168,13 +166,13 @@ export class ChainDatabase implements ChainDatabaseInterface {
           this.tagInsertStmt.run({
             hash: tagHash,
             name: Buffer.from(tag.name, 'base64'),
-            value: Buffer.from(tag.value, 'base64'),
+            value: Buffer.from(tag.value, 'base64')
           });
 
           this.newTxTagsInsertStmt.run({
             tag_hash: tagHash,
             transaction_id: txId,
-            transaction_tag_index: transactionTagIndex,
+            transaction_tag_index: transactionTagIndex
           });
 
           transactionTagIndex++;
@@ -200,7 +198,7 @@ export class ChainDatabase implements ChainDatabaseInterface {
           reward: tx.reward,
           data_size: tx.data_size,
           data_root: Buffer.from(tx.data_root, 'base64'),
-          created_at: (Date.now()/1000).toFixed(0)
+          created_at: (Date.now() / 1000).toFixed(0)
         });
       }
     });
