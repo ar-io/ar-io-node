@@ -12,7 +12,11 @@ export class ChainDatabase implements ChainDatabaseInterface {
   private newBlockHeightsInsertStmt: Sqlite.Statement;
   private newBlockTxsInsertStmt: Sqlite.Statement;
   private getMaxIndexedHeightStmt: Sqlite.Statement;
+  private saveStableTxsRangeStmt: Sqlite.Statement;
+  private saveStableTxTagsRangeStmt: Sqlite.Statement;
+  private saveStableBlockRangeStmt: Sqlite.Statement;
   private insertBlockAndTxsFn: Sqlite.Transaction;
+  private saveStableBlockRangeFn: Sqlite.Transaction;
 
   constructor(dbPath: string) {
     this.db = new Sqlite(dbPath);
@@ -103,6 +107,55 @@ export class ChainDatabase implements ChainDatabaseInterface {
         SELECT MAX(height) AS height
         FROM stable_blocks
       )
+    `);
+
+    this.saveStableTxsRangeStmt = this.db.prepare(`
+      INSERT INTO stable_transactions (
+        id, height, block_transaction_index, signature,
+        format, last_tx, owner_address, target, quantity,
+        reward, data_size, data_root
+      ) SELECT
+        nt.id, nbh.height, nbt.block_transaction_index, nt.signature,
+        nt.format, nt.last_tx, nt.owner_address, nt.target, nt.quantity,
+        nt.reward, nt.data_size, nt.data_root
+      FROM new_transactions nt
+      JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+      JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+      WHERE nbh.height >= @start_height AND nbh.height < @end_height
+      ON CONFLICT DO NOTHING
+    `);
+
+    this.saveStableTxTagsRangeStmt = this.db.prepare(`
+      INSERT INTO stable_transaction_tags (
+        tag_hash, height, block_transaction_index, transaction_tag_index
+      ) SELECT
+        ntt.tag_hash, nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
+      FROM new_transaction_tags ntt
+      JOIN new_block_transactions nbt ON nbt.transaction_id = ntt.transaction_id
+      JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+      WHERE nbh.height >= @start_height AND nbh.height < @end_height
+      ON CONFLICT DO NOTHING
+    `);
+
+    this.saveStableBlockRangeStmt = this.db.prepare(`
+      INSERT INTO stable_blocks (
+        height, indep_hash, previous_block, nonce, hash,
+        block_timestamp, diff, cumulative_diff, last_retarget,
+        reward_addr, reward_pool, block_size, weave_size,
+        usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
+        scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
+        hash_list_merkle, wallet_list, tx_root
+      ) SELECT
+        nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
+        nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
+        nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
+        nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
+        nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
+        nb.hash_list_merkle, nb.wallet_list, nb.tx_root
+      FROM new_blocks nb
+      JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
+      WHERE nbh.height >= @start_height AND nbh.height < @end_height
+      ON CONFLICT DO NOTHING
     `);
 
     this.insertBlockAndTxsFn = this.db.transaction((block: JsonBlock, txs: JsonTransaction[]) => {
@@ -202,12 +255,30 @@ export class ChainDatabase implements ChainDatabaseInterface {
         });
       }
     });
+
+    this.saveStableBlockRangeFn = this.db.transaction((startHeight: number, endHeight: number) => {
+      this.saveStableBlockRangeStmt.run({
+        start_height: startHeight,
+        end_height: endHeight
+      });
+
+      this.saveStableTxsRangeStmt.run({
+        start_height: startHeight,
+        end_height: endHeight
+      });
+
+      this.saveStableTxTagsRangeStmt.run({
+        start_height: startHeight,
+        end_height: endHeight
+      });
+    });
   }
 
   async insertBlockAndTxs(block: JsonBlock, transactions: JsonTransaction[]): Promise<void> {
     this.insertBlockAndTxsFn(block, transactions);
 
-    // TODO flush to stable every N blocks
+    // FIXME should use a range queried from the database
+    this.saveStableBlockRangeFn(block.height - 10, block.height);
   }
 
   async getMaxIndexedHeight(): Promise<number> {
