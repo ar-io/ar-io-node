@@ -164,7 +164,8 @@ export class ChainDatabase implements ChainDatabaseInterface {
       const nonce = Buffer.from(block.nonce, 'base64');
       const hash = Buffer.from(block.hash, 'base64');
       const rewardAddr = Buffer.from(block.reward_addr ?? '', 'base64');
-      const hashListMerkle = block.hash_list_merkle && Buffer.from(block.hash_list_merkle, 'base64');
+      const hashListMerkle =
+        block.hash_list_merkle && Buffer.from(block.hash_list_merkle, 'base64');
       const walletList = Buffer.from(block.wallet_list, 'base64');
       const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
 
@@ -274,11 +275,18 @@ export class ChainDatabase implements ChainDatabaseInterface {
     });
   }
 
-  async insertBlockAndTxs(block: JsonBlock, transactions: JsonTransaction[]): Promise<void> {
-    this.insertBlockAndTxsFn(block, transactions);
+  async insertBlockAndTxs(
+    block: JsonBlock,
+    txs: JsonTransaction[],
+    missingTxIds: string[]
+  ): Promise<void> {
+    this.insertBlockAndTxsFn(block, txs);
 
     // FIXME should use a range queried from the database
     this.saveStableBlockRangeFn(block.height - 10, block.height);
+
+    // TODO track missing transaction ids
+    // TODO delete old data from new_* tables
   }
 
   async getMaxIndexedHeight(): Promise<number> {

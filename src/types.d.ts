@@ -1,7 +1,7 @@
 export type JsonTag = {
   name: string;
   value: string;
-}
+};
 
 export type JsonTags = JsonTag[];
 
@@ -49,9 +49,16 @@ export interface JsonTransaction {
 export interface ChainApiClientInterface {
   getBlockByHeight(height: number): Promise<JsonBlock>;
   getTransaction(txId: string): Promise<JsonTransaction>;
+  getBlockAndTransactions(
+    height: number
+  ): Promise<{ block: JsonBlock; txs: JsonTransaction[]; missingTxIds: string[] }>;
 }
 
 export interface ChainDatabaseInterface {
-  insertBlockAndTxs(block: JsonBlock, transactions: JsonTransaction[]): Promise<void>;
+  insertBlockAndTxs(
+    block: JsonBlock,
+    txs: JsonTransaction[],
+    missingTxIds: string[]
+  ): Promise<void>;
   getMaxIndexedHeight(): Promise<number>;
 }

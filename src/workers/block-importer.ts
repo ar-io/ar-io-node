@@ -1,9 +1,10 @@
-import { ChainApiClientInterface, ChainDatabaseInterface, JsonTransaction } from '../types';
+import { ChainApiClientInterface, ChainDatabaseInterface } from '../types';
 import * as EventEmitter from 'events';
 
 export class BlockImporter {
   private eventEmitter: EventEmitter;
   private chainDatabase: ChainDatabaseInterface;
+  // TODO rename to chainSource (could be non-API sources)
   private chainApiClient: ChainApiClientInterface;
 
   // TODO add metrics registry
@@ -32,30 +33,22 @@ export class BlockImporter {
         // TODO check whether this is > current chain height
         const nextHeight = startHeight ?? (await this.chainDatabase.getMaxIndexedHeight()) + 1;
 
-        console.log('Importing block at height', nextHeight);
-        const block = await this.chainApiClient.getBlockByHeight(nextHeight);
-        this.eventEmitter.emit('block', block);
-
         // TODO check previous_block and resolve forks
 
-        // Retrieve block transactions
-        const missingTxIds: string[] = [];
-        const txs: JsonTransaction[] = [];
-        await Promise.all(
-          block.txs.map(async (txId) => {
-            try {
-              const tx = await this.chainApiClient.getTransaction(txId);
-              txs.push(tx);
-              this.eventEmitter.emit('transaction', tx);
-            } catch (error) {
-              // TODO log error
-              missingTxIds.push(txId);
-            }
-          })
+        console.log('Importing block at height', nextHeight);
+
+        const { block, txs, missingTxIds } = await this.chainApiClient.getBlockAndTransactions(
+          nextHeight
         );
 
-        // TODO save missing TX ids
-        this.chainDatabase.insertBlockAndTxs(block, txs);
+        // Emit events
+        this.eventEmitter.emit('block', block);
+        txs.forEach((tx) => {
+          this.eventEmitter.emit('transaction', tx);
+          this.eventEmitter.emit('block-transaction', tx);
+        });
+
+        this.chainDatabase.insertBlockAndTxs(block, txs, missingTxIds);
       } catch (error) {
         console.log(error);
         // TODO handle errors
