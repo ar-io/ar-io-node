@@ -44,8 +44,7 @@ export class BlockImporter {
         // Emit events
         this.eventEmitter.emit('block', block);
         txs.forEach((tx) => {
-          this.eventEmitter.emit('transaction', tx);
-          this.eventEmitter.emit('block-transaction', tx);
+          this.eventEmitter.emit('block-tx', tx);
         });
 
         this.chainDatabase.insertBlockAndTxs(block, txs, missingTxIds);
