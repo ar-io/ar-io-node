@@ -10,7 +10,6 @@ export class BlockImporter {
   private chainApiClient: ChainApiClientInterface;
 
   // TODO add metrics registry
-  // TODO add logger
   constructor({
     log,
     chainApiClient,
@@ -30,14 +29,15 @@ export class BlockImporter {
 
   // TODO implement rewindToFork
 
-  // TODO start or run for name?
-  public async run(startHeight?: number) {
+  public async start() {
+    let nextHeight;
+
     // TODO something more elegant than a 'while(true)'
     while (true) {
       try {
         // TODO check whether this is > current chain height
-        const nextHeight = startHeight ?? (await this.chainDatabase.getMaxIndexedHeight()) + 1;
         this.log.info(`Importing block at height ${nextHeight}`);
+        nextHeight = (await this.chainDatabase.getMaxIndexedHeight()) + 1;
 
         const { block, txs, missingTxIds } = await this.chainApiClient.getBlockAndTransactions(
           nextHeight
@@ -53,7 +53,7 @@ export class BlockImporter {
 
         this.chainDatabase.insertBlockAndTxs(block, txs, missingTxIds);
       } catch (error) {
-        this.log.error(`Error importing block`, error);
+        this.log.error(`Error importing block at height ${nextHeight}`, error);
       }
     }
   }

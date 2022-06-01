@@ -14,4 +14,4 @@ const blockImporter = new BlockImporter({
   eventEmitter
 });
 
-blockImporter.run();
+blockImporter.start();
