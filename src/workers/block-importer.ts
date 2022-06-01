@@ -28,6 +28,20 @@ export class BlockImporter {
 
   // TODO implement rewindToFork
 
+  private async importBlock(height: number) {
+    const { block, txs, missingTxIds } = await this.chainSource.getBlockAndTxs(height);
+
+    // TODO check previous_block and resolve forks
+
+    // Emit events
+    this.eventEmitter.emit('block', block);
+    txs.forEach((tx) => {
+      this.eventEmitter.emit('block-tx', tx);
+    });
+
+    this.chainDatabase.insertBlockAndTxs(block, txs, missingTxIds);
+  }
+
   public async start() {
     let nextHeight;
 
@@ -35,20 +49,10 @@ export class BlockImporter {
     while (true) {
       try {
         // TODO check whether this is > current chain height
-        this.log.info(`Importing block at height ${nextHeight}`);
         nextHeight = (await this.chainDatabase.getMaxIndexedHeight()) + 1;
+        this.log.info(`Importing block at height ${nextHeight}`);
 
-        const { block, txs, missingTxIds } = await this.chainSource.getBlockAndTxs(nextHeight);
-
-        // TODO check previous_block and resolve forks
-
-        // Emit events
-        this.eventEmitter.emit('block', block);
-        txs.forEach((tx) => {
-          this.eventEmitter.emit('block-tx', tx);
-        });
-
-        this.chainDatabase.insertBlockAndTxs(block, txs, missingTxIds);
+        await this.importBlock(nextHeight);
       } catch (error) {
         this.log.error(`Error importing block at height ${nextHeight}`, error);
       }
