@@ -1,9 +1,4 @@
-import {
-  ChainApiClientInterface,
-  ChainDatabaseInterface,
-  JsonBlock
-  //JsonTransaction
-} from '../types';
+import { ChainApiClientInterface, ChainDatabaseInterface, JsonTransaction } from '../types';
 import * as EventEmitter from 'events';
 
 export class BlockImporter {
@@ -27,21 +22,6 @@ export class BlockImporter {
     this.eventEmitter = eventEmitter;
   }
 
-  private async saveBlock(block: JsonBlock) {
-    // TODO consider creating API client getTransactions function
-    const txs = await Promise.all(
-      block.txs.map(async (txId) => {
-        // TODO handle errors
-        const tx = await this.chainApiClient.getTransaction(txId);
-        return tx;
-      })
-    );
-
-    this.chainDatabase.insertBlockAndTxs(block, txs);
-
-    // TODO emit events
-  }
-
   // TODO implement rewindToFork
 
   // TODO start or run for name?
@@ -57,7 +37,25 @@ export class BlockImporter {
 
         // TODO check previous_block and resolve forks
 
-        await this.saveBlock(block);
+        // Retrieve block transactions
+        const missingTxIds: string[] = [];
+        const txs: JsonTransaction[] = [];
+        await Promise.all(
+          block.txs.map(async (txId) => {
+            try {
+              const tx = await this.chainApiClient.getTransaction(txId);
+              txs.push(tx);
+            } catch (error) {
+              // TODO log error
+              missingTxIds.push(txId);
+            }
+          })
+        );
+
+        // TODO save missing TX ids
+        this.chainDatabase.insertBlockAndTxs(block, txs);
+
+        // TODO emit events
       } catch (error) {
         console.log(error);
         // TODO handle errors
