@@ -34,6 +34,7 @@ export class BlockImporter {
 
         console.log('Importing block at height', nextHeight);
         const block = await this.chainApiClient.getBlockByHeight(nextHeight);
+        this.eventEmitter.emit('block', block);
 
         // TODO check previous_block and resolve forks
 
@@ -45,6 +46,7 @@ export class BlockImporter {
             try {
               const tx = await this.chainApiClient.getTransaction(txId);
               txs.push(tx);
+              this.eventEmitter.emit('transaction', tx);
             } catch (error) {
               // TODO log error
               missingTxIds.push(txId);
@@ -54,8 +56,6 @@ export class BlockImporter {
 
         // TODO save missing TX ids
         this.chainDatabase.insertBlockAndTxs(block, txs);
-
-        // TODO emit events
       } catch (error) {
         console.log(error);
         // TODO handle errors
