@@ -7,6 +7,7 @@ export class BlockImporter {
   private eventEmitter: EventEmitter;
   private chainDatabase: ChainDatabaseInterface;
   private chainSource: ChainSourceInterface;
+  private shouldRun: boolean;
 
   // TODO add metrics registry
   constructor({
@@ -24,6 +25,7 @@ export class BlockImporter {
     this.chainSource = chainSource;
     this.chainDatabase = chainDatabase;
     this.eventEmitter = eventEmitter;
+    this.shouldRun = false;
   }
 
   // TODO implement rewindToFork
@@ -43,10 +45,10 @@ export class BlockImporter {
   }
 
   public async start() {
+    this.shouldRun = true;
     let nextHeight;
 
-    // TODO something more elegant than a 'while(true)'
-    while (true) {
+    while (this.shouldRun) {
       try {
         // TODO check whether this is > current chain height
         nextHeight = (await this.chainDatabase.getMaxIndexedHeight()) + 1;
@@ -57,5 +59,9 @@ export class BlockImporter {
         this.log.error(`Error importing block at height ${nextHeight}`, error);
       }
     }
+  }
+
+  public async stop() {
+    this.shouldRun = false;
   }
 }
