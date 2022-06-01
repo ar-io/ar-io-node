@@ -9,7 +9,7 @@ const chainApiClient = new ChainApiClient('https://arweave.net/');
 const chainDatabase = new ChainDatabase('chain.db');
 const blockImporter = new BlockImporter({
   log,
-  chainApiClient,
+  chainSource: chainApiClient,
   chainDatabase,
   eventEmitter
 });

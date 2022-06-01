@@ -1,7 +1,7 @@
-import { ChainApiClientInterface, JsonBlock, JsonTransaction } from './types';
+import { ChainSourceInterface, JsonBlock, JsonTransaction } from './types';
 import axios from 'axios';
 
-export class ChainApiClient implements ChainApiClientInterface {
+export class ChainApiClient implements ChainSourceInterface {
   private chainApiUrl: string;
 
   constructor(chainApiUrl: string) {
@@ -15,12 +15,12 @@ export class ChainApiClient implements ChainApiClientInterface {
   }
 
   // TODO handle errors (retry 429s and 5XXs)
-  async getTransaction(txId: string): Promise<JsonTransaction> {
+  async getTx(txId: string): Promise<JsonTransaction> {
     const response = await axios.get(`${this.chainApiUrl}tx/${txId}`);
     return response.data as JsonTransaction;
   }
 
-  async getBlockAndTransactions(height: number): Promise<{
+  async getBlockAndTxs(height: number): Promise<{
     block: JsonBlock;
     txs: JsonTransaction[];
     missingTxIds: string[];
@@ -33,7 +33,7 @@ export class ChainApiClient implements ChainApiClientInterface {
     await Promise.all(
       block.txs.map(async (txId) => {
         try {
-          const tx = await this.getTransaction(txId);
+          const tx = await this.getTx(txId);
           txs.push(tx);
         } catch (error) {
           // TODO log error

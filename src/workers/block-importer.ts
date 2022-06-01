@@ -1,28 +1,27 @@
 import * as EventEmitter from 'events';
 import * as winston from 'winston';
-import { ChainApiClientInterface, ChainDatabaseInterface } from '../types';
+import { ChainSourceInterface, ChainDatabaseInterface } from '../types';
 
 export class BlockImporter {
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
   private chainDatabase: ChainDatabaseInterface;
-  // TODO rename to chainSource (could be non-API sources)
-  private chainApiClient: ChainApiClientInterface;
+  private chainSource: ChainSourceInterface;
 
   // TODO add metrics registry
   constructor({
     log,
-    chainApiClient,
+    chainSource,
     chainDatabase,
     eventEmitter
   }: {
     log: winston.Logger;
-    chainApiClient: ChainApiClientInterface;
+    chainSource: ChainSourceInterface;
     chainDatabase: ChainDatabaseInterface;
     eventEmitter: EventEmitter;
   }) {
     this.log = log;
-    this.chainApiClient = chainApiClient;
+    this.chainSource = chainSource;
     this.chainDatabase = chainDatabase;
     this.eventEmitter = eventEmitter;
   }
@@ -39,9 +38,7 @@ export class BlockImporter {
         this.log.info(`Importing block at height ${nextHeight}`);
         nextHeight = (await this.chainDatabase.getMaxIndexedHeight()) + 1;
 
-        const { block, txs, missingTxIds } = await this.chainApiClient.getBlockAndTransactions(
-          nextHeight
-        );
+        const { block, txs, missingTxIds } = await this.chainSource.getBlockAndTxs(nextHeight);
 
         // TODO check previous_block and resolve forks
 

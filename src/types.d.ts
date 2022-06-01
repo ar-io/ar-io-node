@@ -46,10 +46,10 @@ export interface JsonTransaction {
   // TODO check for other fields
 }
 
-export interface ChainApiClientInterface {
+export interface ChainSourceInterface {
   getBlockByHeight(height: number): Promise<JsonBlock>;
-  getTransaction(txId: string): Promise<JsonTransaction>;
-  getBlockAndTransactions(
+  getTx(txId: string): Promise<JsonTransaction>;
+  getBlockAndTxs(
     height: number
   ): Promise<{ block: JsonBlock; txs: JsonTransaction[]; missingTxIds: string[] }>;
 }
