@@ -1,8 +1,8 @@
-import { ChainDatabaseInterface, JsonBlock, JsonTransaction } from '../types';
+import { IChainDatabase, JsonBlock, JsonTransaction } from '../types';
 import Sqlite = require('better-sqlite3');
 import * as crypto from 'crypto';
 
-export class ChainDatabase implements ChainDatabaseInterface {
+export class ChainDatabase implements IChainDatabase {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
   private tagInsertStmt: Sqlite.Statement;
@@ -302,7 +302,7 @@ export class ChainDatabase implements ChainDatabaseInterface {
     // TODO delete old data from new_* tables
   }
 
-  async getMaxIndexedHeight(): Promise<number> {
+  async getMaxHeight(): Promise<number> {
     return this.getMaxIndexedHeightStmt.get().height ?? -1;
   }
 }

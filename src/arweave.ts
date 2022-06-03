@@ -1,7 +1,7 @@
-import { ChainSourceInterface, JsonBlock, JsonTransaction } from './types';
+import { IChainSource, JsonBlock, JsonTransaction } from './types';
 import axios from 'axios';
 
-export class ChainApiClient implements ChainSourceInterface {
+export class ChainApiClient implements IChainSource {
   private chainApiUrl: string;
 
   constructor(chainApiUrl: string) {

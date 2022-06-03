@@ -46,23 +46,21 @@ export interface JsonTransaction {
   // TODO check for other fields
 }
 
-export interface ChainSourceInterface {
+export interface IChainSource {
   getBlockByHeight(height: number): Promise<JsonBlock>;
   getTx(txId: string): Promise<JsonTransaction>;
-  getBlockAndTxs(
-    height: number
-  ): Promise<{
+  getBlockAndTxs(height: number): Promise<{
     block: JsonBlock;
     txs: JsonTransaction[];
     missingTxIds: string[];
   }>;
 }
 
-export interface ChainDatabaseInterface {
+export interface IChainDatabase {
   insertBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
     missingTxIds: string[]
   ): Promise<void>;
-  getMaxIndexedHeight(): Promise<number>;
+  getMaxHeight(): Promise<number>;
 }

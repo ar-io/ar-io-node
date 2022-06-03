@@ -1,12 +1,12 @@
 import * as EventEmitter from 'events';
 import * as winston from 'winston';
-import { ChainSourceInterface, ChainDatabaseInterface } from '../types';
+import { IChainSource, IChainDatabase } from '../types';
 
 export class BlockImporter {
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
-  private chainDatabase: ChainDatabaseInterface;
-  private chainSource: ChainSourceInterface;
+  private chainDatabase: IChainDatabase;
+  private chainSource: IChainSource;
   private shouldRun: boolean;
 
   // TODO add metrics registry
@@ -17,8 +17,8 @@ export class BlockImporter {
     eventEmitter
   }: {
     log: winston.Logger;
-    chainSource: ChainSourceInterface;
-    chainDatabase: ChainDatabaseInterface;
+    chainSource: IChainSource;
+    chainDatabase: IChainDatabase;
     eventEmitter: EventEmitter;
   }) {
     this.log = log.child({ module: 'block-importer' });
@@ -53,7 +53,7 @@ export class BlockImporter {
     while (this.shouldRun) {
       try {
         // TODO check whether this is > current chain height
-        nextHeight = (await this.chainDatabase.getMaxIndexedHeight()) + 1;
+        nextHeight = (await this.chainDatabase.getMaxHeight()) + 1;
         this.log.info(`Importing block at height ${nextHeight}`);
 
         await this.importBlock(nextHeight);
