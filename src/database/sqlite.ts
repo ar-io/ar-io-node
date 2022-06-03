@@ -158,121 +158,134 @@ export class ChainDatabase implements ChainDatabaseInterface {
       ON CONFLICT DO NOTHING
     `);
 
-    this.insertBlockAndTxsFn = this.db.transaction((block: JsonBlock, txs: JsonTransaction[]) => {
-      const indepHash = Buffer.from(block.indep_hash, 'base64');
-      const previousBlock = Buffer.from(block.previous_block ?? '', 'base64');
-      const nonce = Buffer.from(block.nonce, 'base64');
-      const hash = Buffer.from(block.hash, 'base64');
-      const rewardAddr = Buffer.from(block.reward_addr ?? '', 'base64');
-      const hashListMerkle =
-        block.hash_list_merkle && Buffer.from(block.hash_list_merkle, 'base64');
-      const walletList = Buffer.from(block.wallet_list, 'base64');
-      const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
+    this.insertBlockAndTxsFn = this.db.transaction(
+      (block: JsonBlock, txs: JsonTransaction[]) => {
+        const indepHash = Buffer.from(block.indep_hash, 'base64');
+        const previousBlock = Buffer.from(block.previous_block ?? '', 'base64');
+        const nonce = Buffer.from(block.nonce, 'base64');
+        const hash = Buffer.from(block.hash, 'base64');
+        const rewardAddr = Buffer.from(block.reward_addr ?? '', 'base64');
+        const hashListMerkle =
+          block.hash_list_merkle &&
+          Buffer.from(block.hash_list_merkle, 'base64');
+        const walletList = Buffer.from(block.wallet_list, 'base64');
+        const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
 
-      this.newBlocksInsertStmt.run({
-        indep_hash: indepHash,
-        previous_block: previousBlock,
-        nonce: nonce,
-        hash: hash,
-        block_timestamp: block.timestamp,
-        diff: block.diff,
-        cumulative_diff: block.cumulative_diff,
-        last_retarget: block.last_retarget,
-        reward_addr: rewardAddr,
-        reward_pool: block.reward_pool,
-        block_size: block.block_size,
-        weave_size: block.weave_size,
-        usd_to_ar_rate_dividend: block.usd_to_ar_rate_dividend,
-        usd_to_ar_rate_divisor: block.usd_to_ar_rate_divisor,
-        scheduled_usd_to_ar_rate_dividend: block.scheduled_usd_to_ar_rate_dividend,
-        scheduled_usd_to_ar_rate_divisor: block.scheduled_usd_to_ar_rate_divisor,
-        hash_list_merkle: hashListMerkle,
-        wallet_list: walletList,
-        tx_root: txRoot
-      });
-
-      this.newBlockHeightsInsertStmt.run({
-        height: block.height,
-        block_indep_hash: indepHash
-      });
-
-      let blockTransactionIndex = 0;
-      for (const txIdStr of block.txs) {
-        const txId = Buffer.from(txIdStr, 'base64');
-
-        this.newBlockTxsInsertStmt.run({
-          transaction_id: txId,
-          block_indep_hash: indepHash,
-          block_transaction_index: blockTransactionIndex
+        this.newBlocksInsertStmt.run({
+          indep_hash: indepHash,
+          previous_block: previousBlock,
+          nonce: nonce,
+          hash: hash,
+          block_timestamp: block.timestamp,
+          diff: block.diff,
+          cumulative_diff: block.cumulative_diff,
+          last_retarget: block.last_retarget,
+          reward_addr: rewardAddr,
+          reward_pool: block.reward_pool,
+          block_size: block.block_size,
+          weave_size: block.weave_size,
+          usd_to_ar_rate_dividend: block.usd_to_ar_rate_dividend,
+          usd_to_ar_rate_divisor: block.usd_to_ar_rate_divisor,
+          scheduled_usd_to_ar_rate_dividend:
+            block.scheduled_usd_to_ar_rate_dividend,
+          scheduled_usd_to_ar_rate_divisor:
+            block.scheduled_usd_to_ar_rate_divisor,
+          hash_list_merkle: hashListMerkle,
+          wallet_list: walletList,
+          tx_root: txRoot
         });
 
-        blockTransactionIndex++;
-      }
+        this.newBlockHeightsInsertStmt.run({
+          height: block.height,
+          block_indep_hash: indepHash
+        });
 
-      for (const tx of txs) {
-        const txId = Buffer.from(tx.id, 'base64');
+        let blockTransactionIndex = 0;
+        for (const txIdStr of block.txs) {
+          const txId = Buffer.from(txIdStr, 'base64');
 
-        let transactionTagIndex = 0;
-        for (const tag of tx.tags) {
-          const tagHashContent = `${tag.name}|${tag.value}`;
-          const tagHash = crypto.createHash('md5').update(tagHashContent).digest();
-
-          this.tagInsertStmt.run({
-            hash: tagHash,
-            name: Buffer.from(tag.name, 'base64'),
-            value: Buffer.from(tag.value, 'base64')
-          });
-
-          this.newTxTagsInsertStmt.run({
-            tag_hash: tagHash,
+          this.newBlockTxsInsertStmt.run({
             transaction_id: txId,
-            transaction_tag_index: transactionTagIndex
+            block_indep_hash: indepHash,
+            block_transaction_index: blockTransactionIndex
           });
 
-          transactionTagIndex++;
+          blockTransactionIndex++;
         }
 
-        const ownerBuffer = Buffer.from(tx.owner, 'base64');
-        const ownerAddressBuffer = crypto.createHash('sha256').update(ownerBuffer).digest();
+        for (const tx of txs) {
+          const txId = Buffer.from(tx.id, 'base64');
 
-        this.walletInsertStmt.run({
-          address: ownerAddressBuffer,
-          public_modulus: ownerBuffer
+          let transactionTagIndex = 0;
+          for (const tag of tx.tags) {
+            const tagHashContent = `${tag.name}|${tag.value}`;
+            const tagHash = crypto
+              .createHash('md5')
+              .update(tagHashContent)
+              .digest();
+
+            this.tagInsertStmt.run({
+              hash: tagHash,
+              name: Buffer.from(tag.name, 'base64'),
+              value: Buffer.from(tag.value, 'base64')
+            });
+
+            this.newTxTagsInsertStmt.run({
+              tag_hash: tagHash,
+              transaction_id: txId,
+              transaction_tag_index: transactionTagIndex
+            });
+
+            transactionTagIndex++;
+          }
+
+          const ownerBuffer = Buffer.from(tx.owner, 'base64');
+          const ownerAddressBuffer = crypto
+            .createHash('sha256')
+            .update(ownerBuffer)
+            .digest();
+
+          this.walletInsertStmt.run({
+            address: ownerAddressBuffer,
+            public_modulus: ownerBuffer
+          });
+
+          // TODO add content_type
+          this.newTxInsertStmt.run({
+            id: txId,
+            signature: Buffer.from(tx.signature, 'base64'),
+            format: tx.format,
+            last_tx: Buffer.from(tx.last_tx, 'base64'),
+            owner_address: ownerAddressBuffer,
+            target: Buffer.from(tx.target, 'base64'),
+            quantity: tx.quantity,
+            reward: tx.reward,
+            data_size: tx.data_size,
+            data_root: Buffer.from(tx.data_root, 'base64'),
+            created_at: (Date.now() / 1000).toFixed(0)
+          });
+        }
+      }
+    );
+
+    this.saveStableBlockRangeFn = this.db.transaction(
+      (startHeight: number, endHeight: number) => {
+        this.saveStableBlockRangeStmt.run({
+          start_height: startHeight,
+          end_height: endHeight
         });
 
-        // TODO add content_type
-        this.newTxInsertStmt.run({
-          id: txId,
-          signature: Buffer.from(tx.signature, 'base64'),
-          format: tx.format,
-          last_tx: Buffer.from(tx.last_tx, 'base64'),
-          owner_address: ownerAddressBuffer,
-          target: Buffer.from(tx.target, 'base64'),
-          quantity: tx.quantity,
-          reward: tx.reward,
-          data_size: tx.data_size,
-          data_root: Buffer.from(tx.data_root, 'base64'),
-          created_at: (Date.now() / 1000).toFixed(0)
+        this.saveStableTxsRangeStmt.run({
+          start_height: startHeight,
+          end_height: endHeight
+        });
+
+        this.saveStableTxTagsRangeStmt.run({
+          start_height: startHeight,
+          end_height: endHeight
         });
       }
-    });
-
-    this.saveStableBlockRangeFn = this.db.transaction((startHeight: number, endHeight: number) => {
-      this.saveStableBlockRangeStmt.run({
-        start_height: startHeight,
-        end_height: endHeight
-      });
-
-      this.saveStableTxsRangeStmt.run({
-        start_height: startHeight,
-        end_height: endHeight
-      });
-
-      this.saveStableTxTagsRangeStmt.run({
-        start_height: startHeight,
-        end_height: endHeight
-      });
-    });
+    );
   }
 
   async insertBlockAndTxs(

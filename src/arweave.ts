@@ -10,7 +10,9 @@ export class ChainApiClient implements ChainSourceInterface {
 
   // TODO handle errors (retry 429s and 5XXs)
   async getBlockByHeight(height: number): Promise<JsonBlock> {
-    const response = await axios.get(`${this.chainApiUrl}block/height/${height}`);
+    const response = await axios.get(
+      `${this.chainApiUrl}block/height/${height}`
+    );
     return response.data as JsonBlock;
   }
 

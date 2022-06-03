@@ -51,7 +51,11 @@ export interface ChainSourceInterface {
   getTx(txId: string): Promise<JsonTransaction>;
   getBlockAndTxs(
     height: number
-  ): Promise<{ block: JsonBlock; txs: JsonTransaction[]; missingTxIds: string[] }>;
+  ): Promise<{
+    block: JsonBlock;
+    txs: JsonTransaction[];
+    missingTxIds: string[];
+  }>;
 }
 
 export interface ChainDatabaseInterface {

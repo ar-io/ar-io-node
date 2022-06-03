@@ -31,7 +31,9 @@ export class BlockImporter {
   // TODO implement rewindToFork
 
   private async importBlock(height: number) {
-    const { block, txs, missingTxIds } = await this.chainSource.getBlockAndTxs(height);
+    const { block, txs, missingTxIds } = await this.chainSource.getBlockAndTxs(
+      height
+    );
 
     // TODO check previous_block and resolve forks
 
