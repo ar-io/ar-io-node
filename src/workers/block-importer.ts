@@ -21,7 +21,7 @@ export class BlockImporter {
     chainDatabase: ChainDatabaseInterface;
     eventEmitter: EventEmitter;
   }) {
-    this.log = log;
+    this.log = log.child({ module: 'block-importer' });
     this.chainSource = chainSource;
     this.chainDatabase = chainDatabase;
     this.eventEmitter = eventEmitter;
