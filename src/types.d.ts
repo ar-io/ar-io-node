@@ -54,6 +54,7 @@ export interface IChainSource {
     txs: JsonTransaction[];
     missingTxIds: string[];
   }>;
+  getHeight(): Promise<number>;
 }
 
 export interface IChainDatabase {

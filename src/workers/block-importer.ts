@@ -1,6 +1,7 @@
 import * as EventEmitter from 'events';
 import * as promClient from 'prom-client';
 import * as winston from 'winston';
+import wait from 'wait';
 
 import { IChainSource, IChainDatabase } from '../types';
 
@@ -9,12 +10,13 @@ export class BlockImporter {
   private eventEmitter: EventEmitter;
   private chainDatabase: IChainDatabase;
   private chainSource: IChainSource;
+  private maxChainHeight: number;
   private shouldRun: boolean;
+  private heightPollingDelay: number;
   private blocksImportedCounter: promClient.Counter<string>;
   private transactionsImportedCounter: promClient.Counter<string>;
   private blockImportErrorsCounter: promClient.Counter<string>;
 
-  // TODO add metrics registry
   constructor({
     log,
     metricsRegistry,
@@ -32,6 +34,8 @@ export class BlockImporter {
     this.chainSource = chainSource;
     this.chainDatabase = chainDatabase;
     this.eventEmitter = eventEmitter;
+    this.maxChainHeight = 0;
+    this.heightPollingDelay = 5000;
     this.shouldRun = false;
 
     // TODO should all metrics be defined in one place?
@@ -75,14 +79,31 @@ export class BlockImporter {
     this.transactionsImportedCounter.inc(txs.length);
   }
 
+  private async getNextHeight() {
+    // Set maxChainHeight on first run
+    if (this.maxChainHeight === 0) {
+      this.maxChainHeight = await this.chainSource.getHeight();
+    }
+
+    const dbHeight = await this.chainDatabase.getMaxHeight();
+    while (dbHeight >= this.maxChainHeight) {
+      await wait(this.heightPollingDelay);
+      this.log.info(
+        `DB is ahead of last retrieved chain height ${this.maxChainHeight}`
+      );
+      this.maxChainHeight = await this.chainSource.getHeight();
+      this.log.info(`Retrieved height ${this.maxChainHeight} from the chain`);
+    }
+    return dbHeight + 1;
+  }
+
   public async start() {
     this.shouldRun = true;
     let nextHeight;
 
     while (this.shouldRun) {
       try {
-        // TODO check whether this is > current chain height
-        nextHeight = (await this.chainDatabase.getMaxHeight()) + 1;
+        nextHeight = await this.getNextHeight();
         this.log.info(`Importing block at height ${nextHeight}`);
 
         await this.importBlock(nextHeight);

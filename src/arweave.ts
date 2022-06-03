@@ -46,4 +46,9 @@ export class ChainApiClient implements IChainSource {
 
     return { block, txs: txs, missingTxIds: missingTxIds };
   }
+
+  async getHeight(): Promise<number> {
+    const response = await axios.get(`${this.chainApiUrl}height`);
+    return response.data as number;
+  }
 }
