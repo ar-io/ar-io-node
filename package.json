@@ -38,6 +38,7 @@
   },
   "scripts": {
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json",
-    "clean": "npx rimraf [ .nyc_output coverage dist ]"
+    "clean": "npx rimraf [ .nyc_output coverage dist ]",
+    "test": "mocha"
   }
 }
