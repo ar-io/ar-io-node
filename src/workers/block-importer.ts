@@ -3,7 +3,12 @@ import * as promClient from 'prom-client';
 import * as winston from 'winston';
 import wait from 'wait';
 
-import { IChainSource, IChainDatabase } from '../types';
+import {
+  JsonTransaction,
+  JsonBlock,
+  IChainSource,
+  IChainDatabase
+} from '../types';
 
 export class BlockImporter {
   private log: winston.Logger;
@@ -59,14 +64,36 @@ export class BlockImporter {
     metricsRegistry.registerMetric(this.blockImportErrorsCounter);
   }
 
-  // TODO implement rewindToFork
-
-  private async importBlock(height: number) {
+  // TODO fork count and depth metric
+  // TODO better name?
+  private async rewindToFork(height: number): Promise<{
+    block: JsonBlock;
+    txs: JsonTransaction[];
+    missingTxIds: string[];
+  }> {
     const { block, txs, missingTxIds } = await this.chainSource.getBlockAndTxs(
       height
     );
 
-    // TODO check previous_block and resolve forks
+    const previousHeight = height - 1;
+    if (
+      block.previous_block !==
+      // TODO handle undefined (log error + stop block importer)
+      (await this.chainDatabase.getNewBlockHashByHeight(previousHeight))
+    ) {
+      // TODO improve log message
+      this.log.info(
+        `Previous block hash mismatch at height ${height}. Rewinding...`
+      );
+      this.chainDatabase.resetToHeight(previousHeight);
+      return this.rewindToFork(previousHeight);
+    }
+
+    return { block, txs, missingTxIds };
+  }
+
+  private async importBlock(height: number) {
+    const { block, txs, missingTxIds } = await this.rewindToFork(height);
 
     // Emit events
     this.eventEmitter.emit('block', block);
@@ -79,6 +106,7 @@ export class BlockImporter {
     this.transactionsImportedCounter.inc(txs.length);
   }
 
+  // TODO better name?
   private async getNextHeight() {
     // Set maxChainHeight on first run
     if (this.maxChainHeight === 0) {

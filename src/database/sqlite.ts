@@ -15,6 +15,8 @@ export class ChainDatabase implements IChainDatabase {
   private saveStableTxsRangeStmt: Sqlite.Statement;
   private saveStableTxTagsRangeStmt: Sqlite.Statement;
   private saveStableBlockRangeStmt: Sqlite.Statement;
+  private getNewBlockHashByHeightStmt: Sqlite.Statement;
+  private resetToHeightStmt: Sqlite.Statement;
   private insertBlockAndTxsFn: Sqlite.Transaction;
   private saveStableBlockRangeFn: Sqlite.Transaction;
 
@@ -98,6 +100,7 @@ export class ChainDatabase implements IChainDatabase {
       ) ON CONFLICT DO NOTHING
     `);
 
+    // TODO rename
     this.getMaxIndexedHeightStmt = this.db.prepare(`
       SELECT MAX(height) AS height
       FROM (
@@ -156,6 +159,17 @@ export class ChainDatabase implements IChainDatabase {
       JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
       WHERE nbh.height >= @start_height AND nbh.height < @end_height
       ON CONFLICT DO NOTHING
+    `);
+
+    this.getNewBlockHashByHeightStmt = this.db.prepare(`
+      SELECT block_indep_hash
+      FROM new_block_heights
+      WHERE height = @height
+    `);
+
+    this.resetToHeightStmt = this.db.prepare(`
+      DELETE FROM new_block_heights
+      WHERE height > @height
     `);
 
     this.insertBlockAndTxsFn = this.db.transaction(
@@ -304,5 +318,17 @@ export class ChainDatabase implements IChainDatabase {
 
   async getMaxHeight(): Promise<number> {
     return this.getMaxIndexedHeightStmt.get().height ?? -1;
+  }
+
+  async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
+    const hash = this.getNewBlockHashByHeightStmt.get({
+      height
+    }).block_indep_hash;
+    return hash ? hash.toString('base64url') : undefined;
+  }
+
+  // TODO rename to revertToHeight ?
+  async resetToHeight(height: number): Promise<void> {
+    this.resetToHeightStmt.run({ height });
   }
 }

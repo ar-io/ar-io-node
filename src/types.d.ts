@@ -64,4 +64,6 @@ export interface IChainDatabase {
     missingTxIds: string[]
   ): Promise<void>;
   getMaxHeight(): Promise<number>;
+  getNewBlockHashByHeight(height: number): Promise<string | undefined>;
+  resetToHeight(height: number): Promise<void>;
 }
