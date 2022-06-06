@@ -18,6 +18,10 @@ export class BlockImporter {
   private maxChainHeight: number;
   private shouldRun: boolean;
   private heightPollingDelay: number;
+
+  // Metrics
+  private forksCounter: promClient.Counter<string>;
+  private lastForkDepthGauge: promClient.Gauge<string>;
   private blocksImportedCounter: promClient.Counter<string>;
   private transactionsImportedCounter: promClient.Counter<string>;
   private blockImportErrorsCounter: promClient.Counter<string>;
@@ -43,7 +47,17 @@ export class BlockImporter {
     this.heightPollingDelay = 5000;
     this.shouldRun = false;
 
-    // TODO should all metrics be defined in one place?
+    this.forksCounter = new promClient.Counter({
+      name: 'forks_total',
+      help: 'Number of forks observed'
+    });
+    metricsRegistry.registerMetric(this.forksCounter);
+
+    this.lastForkDepthGauge = new promClient.Gauge({
+      name: 'last_fork_depth',
+      help: 'Depth of the last observed fork'
+    });
+    metricsRegistry.registerMetric(this.lastForkDepthGauge);
 
     this.blocksImportedCounter = new promClient.Counter({
       name: 'blocks_imported_total',
@@ -64,9 +78,10 @@ export class BlockImporter {
     metricsRegistry.registerMetric(this.blockImportErrorsCounter);
   }
 
-  // TODO fork count and depth metric
-  // TODO better name?
-  private async rewindToFork(height: number): Promise<{
+  private async getBlockOrForkedBlock(
+    height: number,
+    forkDepth = 0
+  ): Promise<{
     block: JsonBlock;
     txs: JsonTransaction[];
     missingTxIds: string[];
@@ -75,25 +90,41 @@ export class BlockImporter {
       height
     );
 
+    // Retrieve expected previous block hash from the DB
     const previousHeight = height - 1;
-    if (
-      block.previous_block !==
-      // TODO handle undefined (log error + stop block importer)
-      (await this.chainDatabase.getNewBlockHashByHeight(previousHeight))
-    ) {
-      // TODO improve log message
+    const previousDbBlockHash =
+      await this.chainDatabase.getNewBlockHashByHeight(previousHeight);
+
+    // Stop importing if unable to find the previous block in the DB
+    if (height != 0 && !previousDbBlockHash) {
+      this.log.error(
+        'Missing previous block hash. Stopping block import process.'
+      );
+      this.shouldRun = false;
+      throw new Error('Missing previous block hash missing');
+    }
+
+    if (block.previous_block !== previousDbBlockHash) {
       this.log.info(
-        `Previous block hash mismatch at height ${height}. Rewinding...`
+        `Fork detected at height ${height}. Reseting index to height ${previousHeight}...`
       );
       this.chainDatabase.resetToHeight(previousHeight);
-      return this.rewindToFork(previousHeight);
+      return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
+    }
+
+    // Record fork count and depth metrics
+    if (forkDepth > 0) {
+      this.forksCounter.inc();
+      this.lastForkDepthGauge.set(forkDepth);
     }
 
     return { block, txs, missingTxIds };
   }
 
   private async importBlock(height: number) {
-    const { block, txs, missingTxIds } = await this.rewindToFork(height);
+    const { block, txs, missingTxIds } = await this.getBlockOrForkedBlock(
+      height
+    );
 
     // Emit events
     this.eventEmitter.emit('block', block);
@@ -102,11 +133,12 @@ export class BlockImporter {
     });
 
     this.chainDatabase.insertBlockAndTxs(block, txs, missingTxIds);
+
+    // Record import count metrics
     this.blocksImportedCounter.inc();
     this.transactionsImportedCounter.inc(txs.length);
   }
 
-  // TODO better name?
   private async getNextHeight() {
     // Set maxChainHeight on first run
     if (this.maxChainHeight === 0) {
@@ -114,14 +146,14 @@ export class BlockImporter {
     }
 
     const dbHeight = await this.chainDatabase.getMaxHeight();
+
+    // Wait for the next block if the DB is in sync with the chain
     while (dbHeight >= this.maxChainHeight) {
+      this.log.info(`Polling for block after height ${dbHeight}...`);
       await wait(this.heightPollingDelay);
-      this.log.info(
-        `DB is ahead of last retrieved chain height ${this.maxChainHeight}`
-      );
       this.maxChainHeight = await this.chainSource.getHeight();
-      this.log.info(`Retrieved height ${this.maxChainHeight} from the chain`);
     }
+
     return dbHeight + 1;
   }
 
@@ -129,6 +161,7 @@ export class BlockImporter {
     this.shouldRun = true;
     let nextHeight;
 
+    // Run until stop is called or an unrecoverable error occurs
     while (this.shouldRun) {
       try {
         nextHeight = await this.getNextHeight();

@@ -327,7 +327,6 @@ export class ChainDatabase implements IChainDatabase {
     return hash ? hash.toString('base64url') : undefined;
   }
 
-  // TODO rename to revertToHeight ?
   async resetToHeight(height: number): Promise<void> {
     this.resetToHeightStmt.run({ height });
   }
