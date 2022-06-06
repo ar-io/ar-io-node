@@ -1,0 +1,7 @@
+*.db
+*.db-shm
+*.db-wal
+*.log
+/.direnv
+/dist
+/node_modules
