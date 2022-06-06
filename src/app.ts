@@ -11,12 +11,12 @@ promClient.collectDefaultMetrics({ register: metricsRegistry });
 
 const eventEmitter = new EventEmitter();
 const chainApiClient = new ChainApiClient('http://192.168.1.21:1984/');
-const chainDatabase = new ChainDatabase('chain.db');
+const chainDb = new ChainDatabase('chain.db');
 const blockImporter = new BlockImporter({
   log,
   metricsRegistry,
   chainSource: chainApiClient,
-  chainDatabase,
+  chainDb,
   eventEmitter
 });
 

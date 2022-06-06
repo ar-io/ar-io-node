@@ -10,14 +10,19 @@ import {
   IChainDatabase
 } from '../types';
 
+const MAX_FORK_DEPTH = 50;
+const HEIGHT_POLLING_INTERVAL = 5000;
+
 export class BlockImporter {
+  // Dependencies
   private log: winston.Logger;
-  private eventEmitter: EventEmitter;
-  private chainDatabase: IChainDatabase;
   private chainSource: IChainSource;
+  private chainDb: IChainDatabase;
+  private eventEmitter: EventEmitter;
+
+  // State
   private maxChainHeight: number;
   private shouldRun: boolean;
-  private heightPollingDelay: number;
 
   // Metrics
   private forksCounter: promClient.Counter<string>;
@@ -30,22 +35,29 @@ export class BlockImporter {
     log,
     metricsRegistry,
     chainSource,
-    chainDatabase,
+    chainDb,
     eventEmitter
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
     chainSource: IChainSource;
-    chainDatabase: IChainDatabase;
+    chainDb: IChainDatabase;
     eventEmitter: EventEmitter;
   }) {
+    // Dependencies
     this.log = log.child({ module: 'block-importer' });
     this.chainSource = chainSource;
-    this.chainDatabase = chainDatabase;
+    this.chainDb = chainDb;
     this.eventEmitter = eventEmitter;
+
+    // State
     this.maxChainHeight = 0;
-    this.heightPollingDelay = 5000;
     this.shouldRun = false;
+
+    // Metrics
+
+    // TODO add errors_total metric
+    // TODO add fatal_errors_total metric
 
     this.forksCounter = new promClient.Counter({
       name: 'forks_total',
@@ -92,8 +104,9 @@ export class BlockImporter {
 
     // Retrieve expected previous block hash from the DB
     const previousHeight = height - 1;
-    const previousDbBlockHash =
-      await this.chainDatabase.getNewBlockHashByHeight(previousHeight);
+    const previousDbBlockHash = await this.chainDb.getNewBlockHashByHeight(
+      previousHeight
+    );
 
     // Stop importing if unable to find the previous block in the DB
     if (height != 0 && !previousDbBlockHash) {
@@ -108,8 +121,17 @@ export class BlockImporter {
       this.log.info(
         `Fork detected at height ${height}. Reseting index to height ${previousHeight}...`
       );
-      this.chainDatabase.resetToHeight(previousHeight);
+      this.chainDb.resetToHeight(previousHeight);
       return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
+    }
+
+    // Stop importing if fork depth exceeeds max fork depth
+    if (forkDepth > MAX_FORK_DEPTH) {
+      this.log.error(
+        `Fork depth exceeded ${MAX_FORK_DEPTH}. Stopping block import process.`
+      );
+      this.shouldRun = false;
+      throw new Error('Maximum fork depth exceeded');
     }
 
     // Record fork count and depth metrics
@@ -132,7 +154,7 @@ export class BlockImporter {
       this.eventEmitter.emit('block-tx', tx);
     });
 
-    this.chainDatabase.insertBlockAndTxs(block, txs, missingTxIds);
+    this.chainDb.insertBlockAndTxs(block, txs, missingTxIds);
 
     // Record import count metrics
     this.blocksImportedCounter.inc();
@@ -145,12 +167,12 @@ export class BlockImporter {
       this.maxChainHeight = await this.chainSource.getHeight();
     }
 
-    const dbHeight = await this.chainDatabase.getMaxHeight();
+    const dbHeight = await this.chainDb.getMaxHeight();
 
     // Wait for the next block if the DB is in sync with the chain
     while (dbHeight >= this.maxChainHeight) {
       this.log.info(`Polling for block after height ${dbHeight}...`);
-      await wait(this.heightPollingDelay);
+      await wait(HEIGHT_POLLING_INTERVAL);
       this.maxChainHeight = await this.chainSource.getHeight();
     }
 
