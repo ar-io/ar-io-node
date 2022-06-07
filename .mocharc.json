@@ -1,0 +1,9 @@
+{
+  "extension": ["ts"],
+  "loader": "ts-node/esm",
+  "spec": ["**/*.test.ts"],
+  "require": ["ts-node/register/transpile-only"],
+  "timeout": "3000",
+  "parallel": true,
+  "recursive": true
+}
