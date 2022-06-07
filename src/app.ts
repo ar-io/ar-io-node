@@ -1,10 +1,10 @@
 import * as promClient from 'prom-client';
-import EventEmitter = require('events');
+import { EventEmitter } from 'events';
 
-import log from './log';
-import { BlockImporter } from './workers/block-importer';
-import { ChainApiClient } from './arweave';
-import { ChainDatabase } from './database/sqlite';
+import log from './log.js';
+import { BlockImporter } from './workers/block-importer.js';
+import { ChainApiClient } from './arweave.js';
+import { ChainDatabase } from './database/sqlite.js';
 
 const metricsRegistry = new promClient.Registry();
 promClient.collectDefaultMetrics({ register: metricsRegistry });

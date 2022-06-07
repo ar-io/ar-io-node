@@ -1,5 +1,5 @@
-import { IChainSource, JsonBlock, JsonTransaction } from './types';
-import axios from 'axios';
+import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
+import { default as axios } from 'axios';
 
 export class ChainApiClient implements IChainSource {
   private chainApiUrl: string;

@@ -1,5 +1,5 @@
-import { IChainDatabase, JsonBlock, JsonTransaction } from '../types';
-import Sqlite = require('better-sqlite3');
+import { IChainDatabase, JsonBlock, JsonTransaction } from '../types.js';
+import Sqlite from 'better-sqlite3';
 import * as crypto from 'crypto';
 
 const MAX_FORK_DEPTH = 50;

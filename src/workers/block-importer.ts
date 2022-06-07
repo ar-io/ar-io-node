@@ -1,14 +1,14 @@
 import * as EventEmitter from 'events';
 import * as promClient from 'prom-client';
 import * as winston from 'winston';
-import wait from 'wait';
+import { default as wait } from 'wait';
 
 import {
   JsonTransaction,
   JsonBlock,
   IChainSource,
   IChainDatabase
-} from '../types';
+} from '../types.js';
 
 const MAX_FORK_DEPTH = 50;
 const HEIGHT_POLLING_INTERVAL = 5000;
