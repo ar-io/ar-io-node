@@ -4,7 +4,6 @@ import * as crypto from 'crypto';
 
 const MAX_FORK_DEPTH = 50;
 const STABLE_FLUSH_INTERVAL = 50;
-const STABLE_FLUSH_BUFFER = 10;
 
 export class ChainDatabase implements IChainDatabase {
   private db: Sqlite.Database;
@@ -311,7 +310,7 @@ export class ChainDatabase implements IChainDatabase {
     );
   }
 
-  async insertBlockAndTxs(
+  async saveBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
     missingTxIds: string[]

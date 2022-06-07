@@ -154,7 +154,7 @@ export class BlockImporter {
       this.eventEmitter.emit('block-tx', tx);
     });
 
-    this.chainDb.insertBlockAndTxs(block, txs, missingTxIds);
+    this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
 
     // Record import count metrics
     this.blocksImportedCounter.inc();

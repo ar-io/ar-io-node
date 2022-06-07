@@ -58,7 +58,7 @@ export interface IChainSource {
 }
 
 export interface IChainDatabase {
-  insertBlockAndTxs(
+  saveBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
     missingTxIds: string[]
