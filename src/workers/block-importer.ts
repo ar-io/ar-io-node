@@ -11,7 +11,7 @@ import {
 } from '../types.js';
 
 const MAX_FORK_DEPTH = 50;
-const HEIGHT_POLLING_INTERVAL = 5000;
+const HEIGHT_POLLING_INTERVAL_MS = 5000;
 
 export class BlockImporter {
   // Dependencies
@@ -172,7 +172,7 @@ export class BlockImporter {
     // Wait for the next block if the DB is in sync with the chain
     while (dbHeight >= this.maxChainHeight) {
       this.log.info(`Polling for block after height ${dbHeight}...`);
-      await wait(HEIGHT_POLLING_INTERVAL);
+      await wait(HEIGHT_POLLING_INTERVAL_MS);
       this.maxChainHeight = await this.chainSource.getHeight();
     }
 
