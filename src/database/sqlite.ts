@@ -2,6 +2,10 @@ import { IChainDatabase, JsonBlock, JsonTransaction } from '../types';
 import Sqlite = require('better-sqlite3');
 import * as crypto from 'crypto';
 
+const MAX_FORK_DEPTH = 50;
+const STABLE_FLUSH_INTERVAL = 50;
+const STABLE_FLUSH_BUFFER = 10;
+
 export class ChainDatabase implements IChainDatabase {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
@@ -11,7 +15,8 @@ export class ChainDatabase implements IChainDatabase {
   private newBlocksInsertStmt: Sqlite.Statement;
   private newBlockHeightsInsertStmt: Sqlite.Statement;
   private newBlockTxsInsertStmt: Sqlite.Statement;
-  private getMaxIndexedHeightStmt: Sqlite.Statement;
+  private getMaxStableHeightStmt: Sqlite.Statement;
+  private getMaxHeightStmt: Sqlite.Statement;
   private saveStableTxsRangeStmt: Sqlite.Statement;
   private saveStableTxTagsRangeStmt: Sqlite.Statement;
   private saveStableBlockRangeStmt: Sqlite.Statement;
@@ -100,8 +105,12 @@ export class ChainDatabase implements IChainDatabase {
       ) ON CONFLICT DO NOTHING
     `);
 
-    // TODO rename
-    this.getMaxIndexedHeightStmt = this.db.prepare(`
+    this.getMaxStableHeightStmt = this.db.prepare(`
+      SELECT MAX(height) AS height
+      FROM stable_blocks
+    `);
+
+    this.getMaxHeightStmt = this.db.prepare(`
       SELECT MAX(height) AS height
       FROM (
         SELECT MAX(height) AS height
@@ -309,15 +318,22 @@ export class ChainDatabase implements IChainDatabase {
   ): Promise<void> {
     this.insertBlockAndTxsFn(block, txs);
 
-    // FIXME should use a range queried from the database
-    this.saveStableBlockRangeFn(block.height - 10, block.height);
-
     // TODO track missing transaction ids
+
+    if (block.height % STABLE_FLUSH_INTERVAL === 0) {
+      const startHeight = this.getMaxStableHeightStmt.get().height ?? -1;
+      const endHeight = block.height - MAX_FORK_DEPTH;
+
+      if (endHeight > startHeight) {
+        this.saveStableBlockRangeFn(startHeight, endHeight);
+      }
+    }
+
     // TODO delete old data from new_* tables
   }
 
   async getMaxHeight(): Promise<number> {
-    return this.getMaxIndexedHeightStmt.get().height ?? -1;
+    return this.getMaxHeightStmt.get().height ?? -1;
   }
 
   async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
