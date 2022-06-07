@@ -46,6 +46,25 @@ export interface JsonTransaction {
   // TODO check for other fields
 }
 
+export type Tag = {
+  name: Buffer;
+  value: Buffer;
+};
+
+export type Tags = Tag[];
+
+export interface DataItem {
+  parentTxId: Buffer;
+  id: Buffer;
+  signature: Buffer;
+  owner: Buffer;
+  owner_address: Buffer;
+  target: Buffer;
+  anchor: Buffer;
+  tags: Tags;
+  data_size: bigint;
+}
+
 export interface IChainSource {
   getBlockByHeight(height: number): Promise<JsonBlock>;
   getTx(txId: string): Promise<JsonTransaction>;
@@ -66,4 +85,8 @@ export interface IChainDatabase {
   getMaxHeight(): Promise<number>;
   getNewBlockHashByHeight(height: number): Promise<string | undefined>;
   resetToHeight(height: number): Promise<void>;
+}
+
+export interface IBundleDatabase {
+  saveDataItem(dataItem: DataItem): Promise<void>;
 }
