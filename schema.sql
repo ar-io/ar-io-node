@@ -1,9 +1,8 @@
-CREATE TABLE wallets ( 
+CREATE TABLE wallets (
   address BLOB PRIMARY KEY,
   public_modulus BLOB
 );
 
--- TODO add transaction(s)_count
 CREATE TABLE stable_blocks (
   -- Identity
   height INTEGER PRIMARY KEY,
@@ -39,7 +38,10 @@ CREATE TABLE stable_blocks (
   wallet_list BLOB,
 
   -- Transactions
-  tx_root BLOB
+  tx_root BLOB,
+
+  -- Metadata
+  tx_count INTEGER NOT NULL
 );
 
 -- TODO add content_type
@@ -84,10 +86,10 @@ CREATE TABLE stable_transaction_tags (
   PRIMARY KEY (tag_hash, height, block_transaction_index, transaction_tag_index)
 );
 
--- TODO add transaction(s)_count
 CREATE TABLE new_blocks (
   -- Identity
   indep_hash BLOB PRIMARY KEY,
+  height INTEGER NOT NULL,
   previous_block BLOB,
   nonce BLOB NOT NULL,
   hash BLOB NOT NULL,
@@ -119,8 +121,13 @@ CREATE TABLE new_blocks (
   wallet_list BLOB,
 
   -- Transactions
-  tx_root BLOB
+  tx_root BLOB,
+
+  -- Metadata
+  tx_count INTEGER NOT NULL
 );
+
+CREATE INDEX new_blocks_height_idx ON new_blocks (height);
 
 -- TODO add block indexes
 

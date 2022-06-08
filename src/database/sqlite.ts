@@ -23,6 +23,8 @@ export class ChainDatabase implements IChainDatabase {
   private resetToHeightStmt: Sqlite.Statement;
   private insertBlockAndTxsFn: Sqlite.Transaction;
   private saveStableBlockRangeFn: Sqlite.Transaction;
+
+  // Stale "new" data cleanup
   private deleteStaleNewTxTagsStmt: Sqlite.Statement;
   private deleteStaleNewTxsStmt: Sqlite.Statement;
   private deleteStaleNewBlockTxsStmt: Sqlite.Statement;
@@ -70,7 +72,7 @@ export class ChainDatabase implements IChainDatabase {
     // TODO are the CASTs necessary
     this.newBlocksInsertStmt = this.db.prepare(`
       INSERT INTO new_blocks (
-        indep_hash, previous_block, nonce, hash,
+        indep_hash, height, previous_block, nonce, hash,
         block_timestamp, diff,
         cumulative_diff, last_retarget,
         reward_addr, reward_pool,
@@ -79,9 +81,10 @@ export class ChainDatabase implements IChainDatabase {
         usd_to_ar_rate_divisor,
         scheduled_usd_to_ar_rate_dividend,
         scheduled_usd_to_ar_rate_divisor,
-        hash_list_merkle, wallet_list, tx_root
+        hash_list_merkle, wallet_list, tx_root,
+        tx_count
       ) VALUES (
-        @indep_hash, @previous_block, @nonce, @hash,
+        @indep_hash, @height, @previous_block, @nonce, @hash,
         CAST(@block_timestamp AS INTEGER), @diff,
         @cumulative_diff, CAST(@last_retarget AS INTEGER),
         @reward_addr, CAST(@reward_pool AS INTEGER),
@@ -90,7 +93,8 @@ export class ChainDatabase implements IChainDatabase {
         CAST(@usd_to_ar_rate_divisor AS INTEGER),
         CAST(@scheduled_usd_to_ar_rate_dividend AS INTEGER),
         CAST(@scheduled_usd_to_ar_rate_divisor AS INTEGER),
-        @hash_list_merkle, @wallet_list, @tx_root
+        @hash_list_merkle, @wallet_list, @tx_root,
+        @tx_count
       ) ON CONFLICT DO NOTHING
     `);
 
@@ -161,14 +165,14 @@ export class ChainDatabase implements IChainDatabase {
         reward_addr, reward_pool, block_size, weave_size,
         usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
         scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-        hash_list_merkle, wallet_list, tx_root
+        hash_list_merkle, wallet_list, tx_root, tx_count
       ) SELECT
         nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
         nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
         nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
         nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
         nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
-        nb.hash_list_merkle, nb.wallet_list, nb.tx_root
+        nb.hash_list_merkle, nb.wallet_list, nb.tx_root, nb.tx_count
       FROM new_blocks nb
       JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
       WHERE nbh.height >= @start_height AND nbh.height < @end_height
@@ -218,11 +222,7 @@ export class ChainDatabase implements IChainDatabase {
 
     this.deleteStaleNewBlocksStmt = this.db.prepare(`
       DELETE FROM new_blocks
-      WHERE indep_hash IN (
-        SELECT block_indep_hash
-        FROM new_block_heights
-        WHERE height < @height
-      )
+      WHERE height < @height
     `);
 
     this.deleteStaleNewBlockHeightsStmt = this.db.prepare(`
@@ -245,6 +245,7 @@ export class ChainDatabase implements IChainDatabase {
 
         this.newBlocksInsertStmt.run({
           indep_hash: indepHash,
+          height: block.height,
           previous_block: previousBlock,
           nonce: nonce,
           hash: hash,
@@ -264,7 +265,8 @@ export class ChainDatabase implements IChainDatabase {
             block.scheduled_usd_to_ar_rate_divisor,
           hash_list_merkle: hashListMerkle,
           wallet_list: walletList,
-          tx_root: txRoot
+          tx_root: txRoot,
+          tx_count: block.txs.length
         });
 
         this.newBlockHeightsInsertStmt.run({
