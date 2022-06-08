@@ -53,11 +53,11 @@ export class ChainDatabase implements IChainDatabase {
       INSERT INTO new_transactions (
         id, signature, format, last_tx, owner_address,
         target, quantity, reward, data_size, data_root,
-        created_at
+        tag_count, created_at
       ) VALUES (
         @id, @signature, @format, @last_tx, @owner_address,
         @target, @quantity, @reward, @data_size, @data_root,
-        @created_at
+        @tag_count, @created_at
       ) ON CONFLICT DO NOTHING
     `);
 
@@ -134,11 +134,11 @@ export class ChainDatabase implements IChainDatabase {
       INSERT INTO stable_transactions (
         id, height, block_transaction_index, signature,
         format, last_tx, owner_address, target, quantity,
-        reward, data_size, data_root
+        reward, data_size, data_root, tag_count
       ) SELECT
         nt.id, nbh.height, nbt.block_transaction_index, nt.signature,
         nt.format, nt.last_tx, nt.owner_address, nt.target, nt.quantity,
-        nt.reward, nt.data_size, nt.data_root
+        nt.reward, nt.data_size, nt.data_root, nt.tag_count
       FROM new_transactions nt
       JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
       JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
@@ -339,6 +339,7 @@ export class ChainDatabase implements IChainDatabase {
             reward: tx.reward,
             data_size: tx.data_size,
             data_root: Buffer.from(tx.data_root, 'base64'),
+            tag_count: tx.tags.length,
             created_at: (Date.now() / 1000).toFixed(0)
           });
         }

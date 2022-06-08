@@ -67,7 +67,10 @@ CREATE TABLE stable_transactions (
 
   -- Data
   data_size INTEGER,
-  data_root BLOB
+  data_root BLOB,
+
+  -- Metadata
+  tag_count INTEGER NOT NULL
 );
 
 CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
@@ -133,8 +136,6 @@ CREATE TABLE new_blocks (
 
 CREATE INDEX new_blocks_height_idx ON new_blocks (height);
 
--- TODO add block indexes
-
 CREATE TABLE new_block_heights (
   height INTEGER PRIMARY KEY,
   block_indep_hash BLOB NOT NULL
@@ -142,7 +143,6 @@ CREATE TABLE new_block_heights (
 
 CREATE INDEX new_block_heights_block_indep_hash_idx ON new_block_heights (height, block_indep_hash);
 
--- TODO add tag(s)_count
 CREATE TABLE new_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
@@ -163,6 +163,7 @@ CREATE TABLE new_transactions (
   data_root BLOB,
 
   -- Metadata
+  tag_count INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
 
