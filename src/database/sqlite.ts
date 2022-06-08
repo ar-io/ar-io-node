@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 
 const MAX_FORK_DEPTH = 50;
 const STABLE_FLUSH_INTERVAL = 50;
+const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
 export class ChainDatabase implements IChainDatabase {
   private db: Sqlite.Database;
@@ -14,7 +15,7 @@ export class ChainDatabase implements IChainDatabase {
   private newBlocksInsertStmt: Sqlite.Statement;
   private newBlockHeightsInsertStmt: Sqlite.Statement;
   private newBlockTxsInsertStmt: Sqlite.Statement;
-  private getMaxStableHeightStmt: Sqlite.Statement;
+  private getMaxStableHeightAndTimestampStmt: Sqlite.Statement;
   private getMaxHeightStmt: Sqlite.Statement;
   private saveStableTxsRangeStmt: Sqlite.Statement;
   private saveStableTxTagsRangeStmt: Sqlite.Statement;
@@ -26,7 +27,8 @@ export class ChainDatabase implements IChainDatabase {
 
   // Stale "new" data cleanup
   private deleteStaleNewTxTagsStmt: Sqlite.Statement;
-  private deleteStaleNewTxsStmt: Sqlite.Statement;
+  private deleteStaleNewTxsByHeightStmt: Sqlite.Statement;
+  private deleteStaleNewTxsByTimestampStmt: Sqlite.Statement;
   private deleteStaleNewBlockTxsStmt: Sqlite.Statement;
   private deleteStaleNewBlocksStmt: Sqlite.Statement;
   private deleteStaleNewBlockHeightsStmt: Sqlite.Statement;
@@ -114,8 +116,10 @@ export class ChainDatabase implements IChainDatabase {
       ) ON CONFLICT DO NOTHING
     `);
 
-    this.getMaxStableHeightStmt = this.db.prepare(`
-      SELECT MAX(height) AS height
+    this.getMaxStableHeightAndTimestampStmt = this.db.prepare(`
+      SELECT
+        IFNULL(MAX(height), -1) AS height,
+        IFNULL(MAX(block_timestamp), 0) AS block_timestamp
       FROM stable_blocks
     `);
 
@@ -198,17 +202,17 @@ export class ChainDatabase implements IChainDatabase {
         SELECT nbt.transaction_id
         FROM new_block_transactions nbt
         JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-        WHERE nbh.height < @height
+        WHERE nbh.height < @height_threshold
       )
     `);
 
-    this.deleteStaleNewTxsStmt = this.db.prepare(`
+    this.deleteStaleNewTxsByHeightStmt = this.db.prepare(`
       DELETE FROM new_transactions
       WHERE id IN (
         SELECT nbt.transaction_id
         FROM new_block_transactions nbt
         JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-        WHERE nbh.height < @height
+        WHERE nbh.height < @height_threshold
       )
     `);
 
@@ -218,18 +222,27 @@ export class ChainDatabase implements IChainDatabase {
         SELECT nbt.transaction_id
         FROM new_block_transactions nbt
         JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-        WHERE nbh.height < @height
+        WHERE nbh.height < @height_threshold
+      ) OR transaction_id IN (
+        SELECT transaction_id
+        FROM new_transactions
+        WHERE created_at < @created_at_threshold
       )
     `);
 
     this.deleteStaleNewBlocksStmt = this.db.prepare(`
       DELETE FROM new_blocks
-      WHERE height < @height
+      WHERE height < @height_threshold
     `);
 
     this.deleteStaleNewBlockHeightsStmt = this.db.prepare(`
       DELETE FROM new_block_heights
-      WHERE height < @height
+      WHERE height < @height_threshold
+    `);
+
+    this.deleteStaleNewTxsByTimestampStmt = this.db.prepare(`
+      DELETE FROM new_transactions
+      WHERE created_at < @created_at_threshold
     `);
 
     this.insertBlockAndTxsFn = this.db.transaction(
@@ -365,29 +378,34 @@ export class ChainDatabase implements IChainDatabase {
       }
     );
 
-    this.deleteStaleNewDataFn = this.db.transaction((height: number) => {
-      this.deleteStaleNewTxTagsStmt.run({
-        height: height
-      });
+    this.deleteStaleNewDataFn = this.db.transaction(
+      (heightThreshold: number, createdAtThreshold: number) => {
+        this.deleteStaleNewTxTagsStmt.run({
+          height_threshold: heightThreshold
+        });
 
-      this.deleteStaleNewTxsStmt.run({
-        height: height
-      });
+        this.deleteStaleNewTxsByHeightStmt.run({
+          height_threshold: heightThreshold
+        });
 
-      this.deleteStaleNewBlockTxsStmt.run({
-        height: height
-      });
+        this.deleteStaleNewBlockTxsStmt.run({
+          height_threshold: heightThreshold,
+          created_at_threshold: createdAtThreshold
+        });
 
-      this.deleteStaleNewBlocksStmt.run({
-        height: height
-      });
+        this.deleteStaleNewBlocksStmt.run({
+          height_threshold: heightThreshold
+        });
 
-      this.deleteStaleNewBlockHeightsStmt.run({
-        height: height
-      });
+        this.deleteStaleNewBlockHeightsStmt.run({
+          height_threshold: heightThreshold
+        });
 
-      // TODO timestamp based cleanup
-    });
+        this.deleteStaleNewTxsByTimestampStmt.run({
+          created_at_threshold: createdAtThreshold
+        });
+      }
+    );
   }
 
   async saveBlockAndTxs(
@@ -400,14 +418,18 @@ export class ChainDatabase implements IChainDatabase {
     this.insertBlockAndTxsFn(block, txs, missingTxIds);
 
     if (block.height % STABLE_FLUSH_INTERVAL === 0) {
-      const startHeight = this.getMaxStableHeightStmt.get().height ?? -1;
+      const { height: startHeight, block_timestamp: maxStableTimestamp } =
+        this.getMaxStableHeightAndTimestampStmt.get();
       const endHeight = block.height - MAX_FORK_DEPTH;
 
       if (startHeight < endHeight) {
         this.saveStableBlockRangeFn(startHeight, endHeight);
       }
 
-      this.deleteStaleNewDataFn(endHeight);
+      this.deleteStaleNewDataFn(
+        endHeight,
+        maxStableTimestamp - NEW_TX_CLEANUP_WAIT_SECS
+      );
     }
   }
 
