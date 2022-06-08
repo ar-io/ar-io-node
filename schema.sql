@@ -45,7 +45,7 @@ CREATE TABLE stable_blocks (
   missing_tx_count INTEGER NOT NULL
 );
 
-CREATE INDEX stable_block_missing_tx_count_idx ON stable_blocks (missing_tx_count);
+CREATE INDEX stable_blocks_missing_tx_count_idx ON stable_blocks (missing_tx_count);
 
 -- TODO add content_type
 CREATE TABLE stable_transactions (
