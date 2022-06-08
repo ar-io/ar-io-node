@@ -41,8 +41,11 @@ CREATE TABLE stable_blocks (
   tx_root BLOB,
 
   -- Metadata
-  tx_count INTEGER NOT NULL
+  tx_count INTEGER NOT NULL,
+  missing_tx_count INTEGER NOT NULL
 );
+
+CREATE INDEX stable_block_missing_tx_count_idx ON stable_blocks (missing_tx_count);
 
 -- TODO add content_type
 CREATE TABLE stable_transactions (
@@ -124,7 +127,8 @@ CREATE TABLE new_blocks (
   tx_root BLOB,
 
   -- Metadata
-  tx_count INTEGER NOT NULL
+  tx_count INTEGER NOT NULL,
+  missing_tx_count INTEGER NOT NULL
 );
 
 CREATE INDEX new_blocks_height_idx ON new_blocks (height);

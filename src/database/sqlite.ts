@@ -82,7 +82,7 @@ export class ChainDatabase implements IChainDatabase {
         scheduled_usd_to_ar_rate_dividend,
         scheduled_usd_to_ar_rate_divisor,
         hash_list_merkle, wallet_list, tx_root,
-        tx_count
+        tx_count, missing_tx_count
       ) VALUES (
         @indep_hash, @height, @previous_block, @nonce, @hash,
         CAST(@block_timestamp AS INTEGER), @diff,
@@ -94,7 +94,7 @@ export class ChainDatabase implements IChainDatabase {
         CAST(@scheduled_usd_to_ar_rate_dividend AS INTEGER),
         CAST(@scheduled_usd_to_ar_rate_divisor AS INTEGER),
         @hash_list_merkle, @wallet_list, @tx_root,
-        @tx_count
+        @tx_count, @missing_tx_count
       ) ON CONFLICT DO NOTHING
     `);
 
@@ -165,14 +165,16 @@ export class ChainDatabase implements IChainDatabase {
         reward_addr, reward_pool, block_size, weave_size,
         usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
         scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-        hash_list_merkle, wallet_list, tx_root, tx_count
+        hash_list_merkle, wallet_list, tx_root,
+        tx_count, missing_tx_count
       ) SELECT
         nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
         nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
         nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
         nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
         nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
-        nb.hash_list_merkle, nb.wallet_list, nb.tx_root, nb.tx_count
+        nb.hash_list_merkle, nb.wallet_list, nb.tx_root,
+        nb.tx_count, missing_tx_count
       FROM new_blocks nb
       JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
       WHERE nbh.height >= @start_height AND nbh.height < @end_height
@@ -231,7 +233,7 @@ export class ChainDatabase implements IChainDatabase {
     `);
 
     this.insertBlockAndTxsFn = this.db.transaction(
-      (block: JsonBlock, txs: JsonTransaction[]) => {
+      (block: JsonBlock, txs: JsonTransaction[], missingTxIds: string[]) => {
         const indepHash = Buffer.from(block.indep_hash, 'base64');
         const previousBlock = Buffer.from(block.previous_block ?? '', 'base64');
         const nonce = Buffer.from(block.nonce, 'base64');
@@ -266,7 +268,8 @@ export class ChainDatabase implements IChainDatabase {
           hash_list_merkle: hashListMerkle,
           wallet_list: walletList,
           tx_root: txRoot,
-          tx_count: block.txs.length
+          tx_count: block.txs.length,
+          missing_tx_count: missingTxIds.length
         });
 
         this.newBlockHeightsInsertStmt.run({
@@ -391,9 +394,9 @@ export class ChainDatabase implements IChainDatabase {
     txs: JsonTransaction[],
     missingTxIds: string[]
   ): Promise<void> {
-    this.insertBlockAndTxsFn(block, txs);
+    // TODO add metrics to track timing
 
-    // TODO track missing transaction ids
+    this.insertBlockAndTxsFn(block, txs, missingTxIds);
 
     if (block.height % STABLE_FLUSH_INTERVAL === 0) {
       const startHeight = this.getMaxStableHeightStmt.get().height ?? -1;
