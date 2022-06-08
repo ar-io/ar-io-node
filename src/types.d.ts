@@ -88,5 +88,5 @@ export interface IChainDatabase {
 }
 
 export interface IBundleDatabase {
-  saveDataItem(dataItem: DataItem): Promise<void>;
+  saveDataItems(dataItems: DataItem[]): Promise<void>;
 }
