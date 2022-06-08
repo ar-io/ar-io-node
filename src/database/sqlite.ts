@@ -23,6 +23,12 @@ export class ChainDatabase implements IChainDatabase {
   private resetToHeightStmt: Sqlite.Statement;
   private insertBlockAndTxsFn: Sqlite.Transaction;
   private saveStableBlockRangeFn: Sqlite.Transaction;
+  private deleteStaleNewTxTagsStmt: Sqlite.Statement;
+  private deleteStaleNewTxsStmt: Sqlite.Statement;
+  private deleteStaleNewBlockTxsStmt: Sqlite.Statement;
+  private deleteStaleNewBlocksStmt: Sqlite.Statement;
+  private deleteStaleNewBlockHeightsStmt: Sqlite.Statement;
+  private deleteStaleNewDataFn: Sqlite.Transaction;
 
   constructor(dbPath: string) {
     this.db = new Sqlite(dbPath);
@@ -180,6 +186,50 @@ export class ChainDatabase implements IChainDatabase {
       WHERE height > @height
     `);
 
+    this.deleteStaleNewTxTagsStmt = this.db.prepare(`
+      DELETE FROM new_transaction_tags
+      WHERE transaction_id IN (
+        SELECT nbt.transaction_id
+        FROM new_block_transactions nbt
+        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+        WHERE nbh.height < @height
+      )
+    `);
+
+    this.deleteStaleNewTxsStmt = this.db.prepare(`
+      DELETE FROM new_transactions
+      WHERE id IN (
+        SELECT nbt.transaction_id
+        FROM new_block_transactions nbt
+        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+        WHERE nbh.height < @height
+      )
+    `);
+
+    this.deleteStaleNewBlockTxsStmt = this.db.prepare(`
+      DELETE FROM new_block_transactions
+      WHERE transaction_id IN (
+        SELECT nbt.transaction_id
+        FROM new_block_transactions nbt
+        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+        WHERE nbh.height < @height
+      )
+    `);
+
+    this.deleteStaleNewBlocksStmt = this.db.prepare(`
+      DELETE FROM new_blocks
+      WHERE indep_hash IN (
+        SELECT block_indep_hash
+        FROM new_block_heights
+        WHERE height < @height
+      )
+    `);
+
+    this.deleteStaleNewBlockHeightsStmt = this.db.prepare(`
+      DELETE FROM new_block_heights
+      WHERE height < @height
+    `);
+
     this.insertBlockAndTxsFn = this.db.transaction(
       (block: JsonBlock, txs: JsonTransaction[]) => {
         const indepHash = Buffer.from(block.indep_hash, 'base64');
@@ -308,6 +358,30 @@ export class ChainDatabase implements IChainDatabase {
         });
       }
     );
+
+    this.deleteStaleNewDataFn = this.db.transaction((height: number) => {
+      this.deleteStaleNewTxTagsStmt.run({
+        height: height
+      });
+
+      this.deleteStaleNewTxsStmt.run({
+        height: height
+      });
+
+      this.deleteStaleNewBlockTxsStmt.run({
+        height: height
+      });
+
+      this.deleteStaleNewBlocksStmt.run({
+        height: height
+      });
+
+      this.deleteStaleNewBlockHeightsStmt.run({
+        height: height
+      });
+
+      // TODO timestamp based cleanup
+    });
   }
 
   async saveBlockAndTxs(
