@@ -399,12 +399,12 @@ export class ChainDatabase implements IChainDatabase {
       const startHeight = this.getMaxStableHeightStmt.get().height ?? -1;
       const endHeight = block.height - MAX_FORK_DEPTH;
 
-      if (endHeight > startHeight) {
+      if (startHeight < endHeight) {
         this.saveStableBlockRangeFn(startHeight, endHeight);
       }
-    }
 
-    // TODO delete old data from new_* tables
+      this.deleteStaleNewDataFn(endHeight);
+    }
   }
 
   async getMaxHeight(): Promise<number> {
