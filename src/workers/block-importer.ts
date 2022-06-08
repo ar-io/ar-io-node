@@ -102,9 +102,10 @@ export class BlockImporter {
       height
     );
 
-    // Retrieve expected previous block hash from the DB
-    const previousHeight = height - 1;
-    if (previousHeight >= 0) {
+    if (height > 0) {
+      // Retrieve expected previous block hash from the DB
+      const previousHeight = height - 1;
+
       const previousDbBlockHash = await this.chainDb.getNewBlockHashByHeight(
         previousHeight
       );
