@@ -167,8 +167,9 @@ CREATE TABLE new_transactions (
   created_at INTEGER NOT NULL
 );
 
-CREATE INDEX stable_transactions_target_id_idx ON new_transactions (target, id);
-CREATE INDEX stable_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
+CREATE INDEX new_transactions_target_id_idx ON new_transactions (target, id);
+CREATE INDEX new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
+CREATE INDEX new_transactions_created_at_idx ON new_transactions (created_at);
 
 CREATE TABLE new_block_transactions (
   block_indep_hash BYTEA,
