@@ -10,7 +10,8 @@ export class ChainDatabase implements IChainDatabase {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
   private tagInsertStmt: Sqlite.Statement;
-  private newTxInsertStmt: Sqlite.Statement;
+  private newTxsInsertStmt: Sqlite.Statement;
+  private missingTxsInsertStmt: Sqlite.Statement;
   private newTxTagsInsertStmt: Sqlite.Statement;
   private newBlocksInsertStmt: Sqlite.Statement;
   private newBlockHeightsInsertStmt: Sqlite.Statement;
@@ -51,7 +52,7 @@ export class ChainDatabase implements IChainDatabase {
       ON CONFLICT DO NOTHING
     `);
 
-    this.newTxInsertStmt = this.db.prepare(`
+    this.newTxsInsertStmt = this.db.prepare(`
       INSERT INTO new_transactions (
         id, signature, format, last_tx, owner_address,
         target, quantity, reward, data_size, data_root,
@@ -68,6 +69,14 @@ export class ChainDatabase implements IChainDatabase {
         tag_hash, transaction_id, transaction_tag_index
       ) VALUES (
         @tag_hash, @transaction_id, @transaction_tag_index
+      ) ON CONFLICT DO NOTHING
+    `);
+
+    this.missingTxsInsertStmt = this.db.prepare(`
+      INSERT INTO missing_transactions (
+        block_indep_hash, transaction_id, height
+      ) VALUES (
+        @block_indep_hash, @transaction_id, @height
       ) ON CONFLICT DO NOTHING
     `);
 
@@ -257,6 +266,7 @@ export class ChainDatabase implements IChainDatabase {
           Buffer.from(block.hash_list_merkle, 'base64');
         const walletList = Buffer.from(block.wallet_list, 'base64');
         const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
+        const createdAt = (Date.now() / 1000).toFixed(0);
 
         this.newBlocksInsertStmt.run({
           indep_hash: indepHash,
@@ -341,7 +351,7 @@ export class ChainDatabase implements IChainDatabase {
           });
 
           // TODO add content_type
-          this.newTxInsertStmt.run({
+          this.newTxsInsertStmt.run({
             id: txId,
             signature: Buffer.from(tx.signature, 'base64'),
             format: tx.format,
@@ -354,6 +364,16 @@ export class ChainDatabase implements IChainDatabase {
             data_root: Buffer.from(tx.data_root, 'base64'),
             tag_count: tx.tags.length,
             created_at: (Date.now() / 1000).toFixed(0)
+          });
+        }
+
+        for (const txIdStr of missingTxIds) {
+          const txId = Buffer.from(txIdStr, 'base64');
+
+          this.missingTxsInsertStmt.run({
+            block_indep_hash: indepHash,
+            transaction_id: txId,
+            height: block.height
           });
         }
       }

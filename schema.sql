@@ -77,6 +77,15 @@ CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable
 CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
 CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
 
+CREATE TABLE missing_transactions (
+  block_indep_hash BLOB NOT NULL,
+  transaction_id BLOB NOT NULL,
+  height INTEGER NOT NULL,
+  PRIMARY KEY (block_indep_hash, transaction_id)
+);
+
+CREATE INDEX missing_transactions_height_idx ON missing_transactions (height);
+
 -- Use combo hash, name, value as PK so we can detect duplicate hashes
 CREATE TABLE tags (
   hash BLOB PRIMARY KEY,
