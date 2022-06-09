@@ -1,9 +1,9 @@
 import * as winston from 'winston';
 import stream from 'stream';
-import processBundle from "arbundles/stream/index.js";
-import base64url from "base64url";
+import processBundle from 'arbundles/stream/index.js';
+import base64url from 'base64url';
 import { fromB64Url, sha256B64Url } from './utils.js';
-import { IBundleDatabase, DataItem, Tags } from '../types.js';
+import { IBundleDatabase, DataItem, Tag, Tags } from '../types.js';
 
 const DEFAULT_BATCH_SIZE = 10;
 
@@ -43,8 +43,9 @@ export async function importAns104Bundle({
 
   // Gather list of all data items in proper format
   const allDataItems: DataItem[] = [];
+  const allTags: Tags[] = [];
   iterable.forEach((dataItem, index) => {
-    log.info(`[data-item] ${index + 1}/${bundleLength} in ${tx.id}`);
+    log.info(`[data-item] unpacking ${index + 1}/${bundleLength}`);
 
     if (!dataItem.id) {
       log.info(`[data-item] missing id, skipping...`);
@@ -68,13 +69,16 @@ export async function importAns104Bundle({
       signature: Buffer.from(dataItem.signature),
       owner: dataItem.owner,
       owner_address: Buffer.from(sha256B64Url(fromB64Url(dataItem.owner))),
-      target: Buffer.from(dataItem.target || ""),
+      target: Buffer.from(dataItem.target || ''),
       anchor: Buffer.from('TODO'),
       tags: b64EncodedTags,
       data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength
     }
 
+    log.info(`[data-item] succesfully unpacked data item`);
     allDataItems.push(newDataItem);
+
+    // TODO: extract tags
   })
 
   // Convert data items to batches for quicker processing
@@ -88,10 +92,11 @@ export async function importAns104Bundle({
   // TODO: probably redundant, but adding in for now
   if (expectedBatchCount !== batches.length){
     log.info(`[batches] batch count (${batches.length}) different than expected (${expectedBatchCount})`);
-
+    // TODO: throw error
   }
 
   // Save batches to database
+  // Promise.allSettled is also an option, if we don't want one failed batch write to block others
   await Promise.all(
     batches.map(async (dataItems) => {
       db.saveDataItems([...dataItems]);
