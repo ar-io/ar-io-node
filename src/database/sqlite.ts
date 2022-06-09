@@ -266,7 +266,6 @@ export class ChainDatabase implements IChainDatabase {
           Buffer.from(block.hash_list_merkle, 'base64');
         const walletList = Buffer.from(block.wallet_list, 'base64');
         const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
-        const createdAt = (Date.now() / 1000).toFixed(0);
 
         this.newBlocksInsertStmt.run({
           indep_hash: indepHash,
@@ -458,9 +457,12 @@ export class ChainDatabase implements IChainDatabase {
   }
 
   async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
+    if (height < 0) {
+      throw new Error(`Invalid height ${height}, must be >= 0.`);
+    }
     const hash = this.getNewBlockHashByHeightStmt.get({
       height
-    }).block_indep_hash;
+    })?.block_indep_hash;
     return hash ? hash.toString('base64url') : undefined;
   }
 
