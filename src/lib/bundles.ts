@@ -41,8 +41,8 @@ export async function importAns104Bundle({
 
   log.info(`[ans-104-bundle] processing ${parentTxId} bundle of size ${bundleLength}`)
 
-  const batches: Array<Set<DataItem>> = [];
-  const currentBatch = new Set<DataItem>();
+  // Gather list of all data items in proper format
+  const allDataItems: DataItem[] = [];
   iterable.forEach((dataItem, index) => {
     log.info(`[data-item] ${index + 1}/${bundleLength} in ${tx.id}`);
 
@@ -51,9 +51,8 @@ export async function importAns104Bundle({
       return;
     }
 
-    const existingDataItem = batches.find(b => b.has(dataItem.id));
-    if (existingDataItem) {
-      log.info(`[data-item] ans104 found duplicate data-item id: ${dataItem.id}`);
+    if (allDataItems.includes(dataItem.id)) {
+      log.info(`[data-item] skipping duplicate data-item id: ${dataItem.id}`);
       return;
     }
 
@@ -75,14 +74,22 @@ export async function importAns104Bundle({
       data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength
     }
 
-    if (currentBatch.size < batchSize){
-      currentBatch.add(newDataItem);
-    } else {
-      // start a new batch
-      batches.push(currentBatch);
-      currentBatch.clear();
-    }
+    allDataItems.push(newDataItem);
   })
+
+  // Convert data items to batches for quicker processing
+  const batches: DataItem[][] = [];
+  const expectedBatchCount = Math.ceil(allDataItems.length / batchSize);
+  while(allDataItems.length > 0){
+    const newBatch = allDataItems.splice(0, batchSize);
+    batches.push(newBatch);
+  }
+
+  // TODO: probably redundant, but adding in for now
+  if (expectedBatchCount !== batches.length){
+    log.info(`[batches] batch count (${batches.length}) different than expected (${expectedBatchCount})`);
+
+  }
 
   // Save batches to database
   await Promise.all(
