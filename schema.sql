@@ -68,6 +68,7 @@ CREATE TABLE stable_transactions (
   -- Data
   data_size INTEGER,
   data_root BLOB,
+  content_type TEXT,
 
   -- Metadata
   tag_count INTEGER NOT NULL
@@ -170,6 +171,7 @@ CREATE TABLE new_transactions (
   -- Data
   data_size INTEGER,
   data_root BLOB,
+  content_type TEXT,
 
   -- Metadata
   tag_count INTEGER NOT NULL,

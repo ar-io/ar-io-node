@@ -56,11 +56,11 @@ export class ChainDatabase implements IChainDatabase {
       INSERT INTO new_transactions (
         id, signature, format, last_tx, owner_address,
         target, quantity, reward, data_size, data_root,
-        tag_count, created_at
+        tag_count, content_type, created_at
       ) VALUES (
         @id, @signature, @format, @last_tx, @owner_address,
         @target, @quantity, @reward, @data_size, @data_root,
-        @tag_count, @created_at
+        @tag_count, @content_type, @created_at
       ) ON CONFLICT DO NOTHING
     `);
 
@@ -147,11 +147,11 @@ export class ChainDatabase implements IChainDatabase {
       INSERT INTO stable_transactions (
         id, height, block_transaction_index, signature,
         format, last_tx, owner_address, target, quantity,
-        reward, data_size, data_root, tag_count
+        reward, data_size, data_root, content_type, tag_count
       ) SELECT
         nt.id, nbh.height, nbt.block_transaction_index, nt.signature,
         nt.format, nt.last_tx, nt.owner_address, nt.target, nt.quantity,
-        nt.reward, nt.data_size, nt.data_root, nt.tag_count
+        nt.reward, nt.data_size, nt.data_root, nt.content_type, nt.tag_count
       FROM new_transactions nt
       JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
       JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
@@ -313,10 +313,18 @@ export class ChainDatabase implements IChainDatabase {
         }
 
         for (const tx of txs) {
+          let contentType: string | undefined;
           const txId = Buffer.from(tx.id, 'base64');
 
           let transactionTagIndex = 0;
           for (const tag of tx.tags) {
+            if (
+              Buffer.from(tag.name, 'base64').toString('utf8').toLowerCase() ===
+              'content-type'
+            ) {
+              contentType = Buffer.from(tag.value, 'base64').toString('utf8');
+            }
+
             const tagHashContent = `${tag.name}|${tag.value}`;
             const tagHash = crypto
               .createHash('md5')
@@ -361,6 +369,7 @@ export class ChainDatabase implements IChainDatabase {
             reward: tx.reward,
             data_size: tx.data_size,
             data_root: Buffer.from(tx.data_root, 'base64'),
+            content_type: contentType,
             tag_count: tx.tags.length,
             created_at: (Date.now() / 1000).toFixed(0)
           });

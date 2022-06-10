@@ -116,7 +116,7 @@ export class BlockImporter {
           'Missing previous block hash. Stopping block import process.'
         );
         this.shouldRun = false;
-        throw new Error('Missing previous block hash missing');
+        throw new Error('Missing previous block hash');
       }
 
       // TODO comment
