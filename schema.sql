@@ -87,19 +87,19 @@ CREATE TABLE missing_transactions (
 
 CREATE INDEX missing_transactions_height_idx ON missing_transactions (height);
 
--- Use combo hash, name, value as PK so we can detect duplicate hashes
 CREATE TABLE tags (
   hash BLOB PRIMARY KEY,
-  name BLOB NOT NULL,
   value BLOB NOT NULL
 );
 
 CREATE TABLE stable_transaction_tags (
-  tag_hash BLOB NOT NULL,
+  tag_name_hash BLOB NOT NULL,
+  tag_value_hash BLOB NOT NULL,
   height INTEGER NOT NULL,
   block_transaction_index INTEGER NOT NULL,
   transaction_tag_index INTEGER NOT NULL,
-  PRIMARY KEY (tag_hash, height, block_transaction_index, transaction_tag_index)
+  transaction_id BLOB NOT NULL,
+  PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, transaction_tag_index)
 );
 
 CREATE TABLE new_blocks (
@@ -190,8 +190,9 @@ CREATE TABLE new_block_transactions (
 );
 
 CREATE TABLE new_transaction_tags (
-  tag_hash BLOB NOT NULL,
+  tag_name_hash BLOB NOT NULL,
+  tag_value_hash BLOB NOT NULL,
   transaction_id BLOB NOT NULL,
   transaction_tag_index INTEGER NOT NULL,
-  PRIMARY KEY (tag_hash, transaction_id, transaction_tag_index)
+  PRIMARY KEY (tag_name_hash, tag_value_hash, transaction_id, transaction_tag_index)
 );

@@ -47,8 +47,8 @@ export class ChainDatabase implements IChainDatabase {
     `);
 
     this.tagInsertStmt = this.db.prepare(`
-      INSERT INTO tags (hash, name, value)
-      VALUES (@hash, @name, @value)
+      INSERT INTO tags (hash, value)
+      VALUES (@hash, @value)
       ON CONFLICT DO NOTHING
     `);
 
@@ -66,9 +66,11 @@ export class ChainDatabase implements IChainDatabase {
 
     this.newTxTagsInsertStmt = this.db.prepare(`
       INSERT INTO new_transaction_tags (
-        tag_hash, transaction_id, transaction_tag_index
+        tag_name_hash, tag_value_hash,
+        transaction_id, transaction_tag_index
       ) VALUES (
-        @tag_hash, @transaction_id, @transaction_tag_index
+        @tag_name_hash, @tag_value_hash,
+        @transaction_id, @transaction_tag_index
       ) ON CONFLICT DO NOTHING
     `);
 
@@ -161,9 +163,13 @@ export class ChainDatabase implements IChainDatabase {
 
     this.saveStableTxTagsRangeStmt = this.db.prepare(`
       INSERT INTO stable_transaction_tags (
-        tag_hash, height, block_transaction_index, transaction_tag_index
+        tag_name_hash, tag_value_hash, height,
+        block_transaction_index, transaction_tag_index,
+        transaction_id
       ) SELECT
-        ntt.tag_hash, nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
+        ntt.tag_name_hash, ntt.tag_name_hash, nbh.height,
+        nbt.block_transaction_index, ntt.transaction_tag_index,
+        ntt.transaction_id
       FROM new_transaction_tags ntt
       JOIN new_block_transactions nbt ON nbt.transaction_id = ntt.transaction_id
       JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
@@ -318,27 +324,35 @@ export class ChainDatabase implements IChainDatabase {
 
           let transactionTagIndex = 0;
           for (const tag of tx.tags) {
-            if (
-              Buffer.from(tag.name, 'base64').toString('utf8').toLowerCase() ===
-              'content-type'
-            ) {
-              contentType = Buffer.from(tag.value, 'base64').toString('utf8');
-            }
-
-            const tagHashContent = `${tag.name}|${tag.value}`;
-            const tagHash = crypto
-              .createHash('md5')
-              .update(tagHashContent)
+            const tagName = Buffer.from(tag.name, 'base64');
+            const tagNameHash = crypto
+              .createHash('sha1')
+              .update(tagName)
               .digest();
 
             this.tagInsertStmt.run({
-              hash: tagHash,
-              name: Buffer.from(tag.name, 'base64'),
-              value: Buffer.from(tag.value, 'base64')
+              hash: tagNameHash,
+              value: tagName
             });
 
+            const tagValue = Buffer.from(tag.value, 'base64');
+            const tagValueHash = crypto
+              .createHash('sha1')
+              .update(tagValue)
+              .digest();
+
+            this.tagInsertStmt.run({
+              hash: tagValueHash,
+              value: tagValue
+            });
+
+            if (tagName.toString('utf8').toLowerCase() === 'content-type') {
+              contentType = tagValue.toString('utf8');
+            }
+
             this.newTxTagsInsertStmt.run({
-              tag_hash: tagHash,
+              tag_name_hash: tagNameHash,
+              tag_value_hash: tagValueHash,
               transaction_id: txId,
               transaction_tag_index: transactionTagIndex
             });
@@ -357,7 +371,6 @@ export class ChainDatabase implements IChainDatabase {
             public_modulus: ownerBuffer
           });
 
-          // TODO add content_type
           this.newTxsInsertStmt.run({
             id: txId,
             signature: Buffer.from(tx.signature, 'base64'),
