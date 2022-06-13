@@ -1,9 +1,8 @@
 import * as winston from 'winston';
 import stream from 'stream';
-import processBundle from 'arbundles/stream/index.js';
-import base64url from 'base64url';
+import { default as processBundle } from 'arbundles/stream/index.js';
 import { fromB64Url, sha256B64Url } from './utils.js';
-import { IBundleDatabase, DataItem, Tag, Tags } from '../types.js';
+import { IBundleDatabase, DataItem, Tags } from '../types.js';
 
 const DEFAULT_BATCH_SIZE = 10;
 
@@ -36,71 +35,54 @@ export async function importAns104Bundle({
   parentTxId: string;
   batchSize?: number;
 }) {
-  const iterable = await processBundle.default(bundleStream)
+  const iterable = await processBundle(bundleStream)
   const bundleLength = iterable.length;
 
-  log.info(`[ans-104-bundle] processing ${parentTxId} bundle of size ${bundleLength}`)
+  // TODO: create child logger
+  log.info(`processing ${parentTxId} bundle of size ${bundleLength}`)
 
   // Gather list of all data items in proper format
-  const allDataItems: DataItem[] = [];
-  const allTags: Tags[] = [];
-  iterable.forEach((dataItem, index) => {
-    log.info(`[data-item] unpacking ${index + 1}/${bundleLength}`);
-
+  const processedDataItems: DataItem[] = [];
+  const currentBatch: DataItem[] = [];
+  for await (const [index, dataItem] of iterable.entries()) {
+    log.info(`unpacking ${index} of ${bundleLength} data items`);
+    
     if (!dataItem.id) {
-      log.info(`[data-item] missing id, skipping...`);
-      return;
+      log.info(`data-item is missing id, skipping...`);
+      continue;
     }
 
-    if (allDataItems.includes(dataItem.id)) {
-      log.info(`[data-item] skipping duplicate data-item id: ${dataItem.id}`);
-      return;
+    if (processedDataItems.includes(dataItem.id)) {
+      log.info(`duplicate data-item id '${dataItem.id}', skipping...`);
+      continue;
     }
 
     // data-items don't have tags b64 encoded
-    const b64EncodedTags: Tags = (dataItem.tags || []).map((tag: Tag) => ({
-      name: base64url.default(tag.name),
-      value: base64url.default(tag.value),
+    const b64EncodedTags: Tags = (dataItem.tags || []).map((tag: { name: string; value: string }) => ({
+        name: fromB64Url(tag.name),
+        value: fromB64Url(tag.value),
     }));
 
     const newDataItem: DataItem = {
-      parentTxId: Buffer.from(parentTxId),
-      id: Buffer.from(dataItem.id),
-      signature: Buffer.from(dataItem.signature),
-      owner: dataItem.owner,
-      owner_address: Buffer.from(sha256B64Url(fromB64Url(dataItem.owner))),
-      target: Buffer.from(dataItem.target || ''),
-      anchor: Buffer.from('TODO'),
+      parentTxId: fromB64Url(parentTxId),
+      id: fromB64Url(dataItem.id),
+      signature: fromB64Url(dataItem.signature),
+      owner: fromB64Url(dataItem.owner),
+      owner_address: fromB64Url(sha256B64Url(fromB64Url(dataItem.owner))),
+      target: fromB64Url(dataItem.target || ''),
+      anchor: fromB64Url(dataItem.anchor),
       tags: b64EncodedTags,
       data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength
     }
 
-    log.info(`[data-item] succesfully unpacked data item`);
-    allDataItems.push(newDataItem);
+    log.info(`succesfully unpacked data item, adding to batch`);
+    currentBatch.push(newDataItem);
 
-    // TODO: extract tags
-  })
-
-  // Convert data items to batches for quicker processing
-  const batches: DataItem[][] = [];
-  const expectedBatchCount = Math.ceil(allDataItems.length / batchSize);
-  while(allDataItems.length > 0){
-    const newBatch = allDataItems.splice(0, batchSize);
-    batches.push(newBatch);
+    // process batch when it's ready, or we're at the end
+    if (currentBatch.length >= batchSize || index + 1 == bundleLength){
+      processedDataItems.concat(currentBatch);
+      await db.saveDataItems(currentBatch);
+      currentBatch.length = 0;
+    }
   }
-
-  // TODO: probably redundant, but adding in for now
-  if (expectedBatchCount !== batches.length){
-    log.info(`[batches] batch count (${batches.length}) different than expected (${expectedBatchCount})`);
-    // TODO: throw error
-  }
-
-  // Save batches to database
-  // Promise.allSettled is also an option, if we don't want one failed batch write to block others
-  await Promise.all(
-    batches.map(async (dataItems) => {
-      db.saveDataItems([...dataItems]);
-      // todo: save tags?
-    })
-  )
 }

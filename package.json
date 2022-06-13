@@ -26,6 +26,7 @@
     "@types/mocha": "^9.1.1",
     "@types/node": "^12.0.0",
     "@types/node-fetch": "^2.0.0",
+    "@types/sinon": "^10.0.11",
     "@typescript-eslint/eslint-plugin": "^5.26.0",
     "@typescript-eslint/parser": "^5.26.0",
     "chai": "^4.3.6",
@@ -35,7 +36,9 @@
     "mocha": "^10.0.0",
     "prettier": "^2.6.2",
     "rimraf": "^3.0.2",
+    "sinon": "^14.0.0",
     "ts-node": "^10.8.0",
+    "ts-sinon": "^2.0.2",
     "typescript": "^4.7.3",
     "typescript-eslint": "^0.0.1-alpha.0"
   },

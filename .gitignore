@@ -5,3 +5,7 @@
 /.direnv
 /dist
 /node_modules
+
+
+# VS Code
+/.vscode
