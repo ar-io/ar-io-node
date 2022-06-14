@@ -21,13 +21,14 @@ describe('importAns104Bundle', () => {
   beforeEach(async () => {
     log = sinon.stub(winston.createLogger());
     bundleDb = new BundleDatabase();
-    saveDbSpy = sinon.spy(bundleDb, 'saveDataItems');
+    saveDbSpy = sinon.stub(bundleDb, 'saveDataItems');
     ans104Bundle = await stubAns104Bundle();
   });
 
   afterEach(function () {
     sinon.restore();
   });
+
   it('should proccess bundles and save data items to the database using default batch size', async () => {
     const result = await importAns104Bundle({
       log: log,
@@ -38,6 +39,7 @@ describe('importAns104Bundle', () => {
     expect(result).not.to.throw;
     expect(saveDbSpy.calledOnce).to.be.ok;
   });
+
   it('should proccess bundles and save data items to the database with specifed batch size', async () => {
     const result = await importAns104Bundle({
       log: log,

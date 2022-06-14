@@ -18,6 +18,7 @@ describe('toB64url', () => {
     const expected = str.toString('base64url');
     expect(result).to.equal(expected);
   });
+
   it('should properly handle padding', () => {
     const str = 'test';
     const buf = Buffer.from(str, 'base64');
