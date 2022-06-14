@@ -1,6 +1,6 @@
 import * as winston from 'winston';
 import stream from 'stream';
-import { default as processBundle } from 'arbundles/stream/index.js';
+import processStream from 'arbundles/stream/index.js';
 import { fromB64Url, sha256B64Url } from './utils.js';
 import { IBundleDatabase, DataItem, Tags } from '../types.js';
 
@@ -15,7 +15,7 @@ export async function importAns102Bundle({
   parentTxId,
   batchSize = DEFAULT_BATCH_SIZE
 }: {
-  log: winston.Logger;
+  log: winston.Logger; 
   db: IBundleDatabase;
   bundleStream: stream.Readable;
   parentTxId: string;
@@ -35,32 +35,38 @@ export async function importAns104Bundle({
   parentTxId: string;
   batchSize?: number;
 }) {
-  const iterable = await processBundle(bundleStream)
+  const iterable = await processStream.default(bundleStream);
   const bundleLength = iterable.length;
 
   // TODO: create child logger
-  log.info(`processing ${parentTxId} bundle of size ${bundleLength}`)
+  log.info(`processing ${parentTxId} bundle tx of size ${bundleLength}`);
 
-  // Gather list of all data items in proper format
-  const processedDataItems: DataItem[] = [];
   const currentBatch: DataItem[] = [];
+  const processedDataItems = new Set<string>();
+  let nextBatchPromise: Promise<void> | undefined;
   for await (const [index, dataItem] of iterable.entries()) {
-    log.info(`unpacking ${index} of ${bundleLength} data items`);
+    log.info(`unpacking ${index + 1} of ${bundleLength} data items`);
     
+    // save previous batch
+    if (nextBatchPromise){
+      await nextBatchPromise;
+      nextBatchPromise = undefined;
+    }
+
     if (!dataItem.id) {
       log.info(`data-item is missing id, skipping...`);
       continue;
     }
 
-    if (processedDataItems.includes(dataItem.id)) {
+    if (processedDataItems.has(dataItem.id)) {
       log.info(`duplicate data-item id '${dataItem.id}', skipping...`);
       continue;
     }
 
     // data-items don't have tags b64 encoded
-    const b64EncodedTags: Tags = (dataItem.tags || []).map((tag: { name: string; value: string }) => ({
-        name: fromB64Url(tag.name),
-        value: fromB64Url(tag.value),
+    const tags: Tags = (dataItem.tags || []).map((tag: { name: string; value: string }) => ({
+      name: fromB64Url(tag.name),
+      value: fromB64Url(tag.value),
     }));
 
     const newDataItem: DataItem = {
@@ -71,18 +77,20 @@ export async function importAns104Bundle({
       owner_address: fromB64Url(sha256B64Url(fromB64Url(dataItem.owner))),
       target: fromB64Url(dataItem.target || ''),
       anchor: fromB64Url(dataItem.anchor),
-      tags: b64EncodedTags,
+      tags,
       data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength
     }
 
-    log.info(`succesfully unpacked data item, adding to batch`);
+    log.info(`succesfully unpacked data item ${dataItem.id}, adding to batch`);
     currentBatch.push(newDataItem);
+    processedDataItems.add(dataItem.id);
 
-    // process batch when it's ready, or we're at the end
+    // create promise for batch when it's ready, or we're at the end
     if (currentBatch.length >= batchSize || index + 1 == bundleLength){
-      processedDataItems.concat(currentBatch);
-      await db.saveDataItems(currentBatch);
+      nextBatchPromise = db.saveDataItems(currentBatch);
       currentBatch.length = 0;
     }
   }
+
+  await nextBatchPromise;
 }
