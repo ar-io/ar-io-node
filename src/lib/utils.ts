@@ -5,7 +5,7 @@ export function fromB64Url(input: string) {
 }
 
 export function toB64url(buffer: Buffer) {
-  return buffer.toString('base64');
+  return buffer.toString('base64url');
 }
 
 export function sha256B64Url(input: Buffer) {
