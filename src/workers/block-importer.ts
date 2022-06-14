@@ -21,6 +21,7 @@ export class BlockImporter {
   private eventEmitter: EventEmitter;
 
   // State
+  private startHeight: number;
   private maxChainHeight: number;
   private shouldRun: boolean;
 
@@ -36,13 +37,15 @@ export class BlockImporter {
     metricsRegistry,
     chainSource,
     chainDb,
-    eventEmitter
+    eventEmitter,
+    startHeight = 0
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
     chainSource: IChainSource;
     chainDb: IChainDatabase;
     eventEmitter: EventEmitter;
+    startHeight: number;
   }) {
     // Dependencies
     this.log = log.child({ module: 'block-importer' });
@@ -53,6 +56,7 @@ export class BlockImporter {
     // State
     this.maxChainHeight = 0;
     this.shouldRun = false;
+    this.startHeight = startHeight;
 
     // Metrics
 
@@ -102,7 +106,7 @@ export class BlockImporter {
       height
     );
 
-    if (height > 0) {
+    if (height > this.startHeight) {
       // Retrieve expected previous block hash from the DB
       const previousHeight = height - 1;
       const previousDbBlockHash = await this.chainDb.getNewBlockHashByHeight(
@@ -188,6 +192,9 @@ export class BlockImporter {
     while (this.shouldRun) {
       try {
         nextHeight = await this.getNextHeight();
+        if (nextHeight == 0 && this.startHeight != 0) {
+          nextHeight = this.startHeight;
+        }
         this.log.info(`Importing block at height ${nextHeight}`);
 
         await this.importBlock(nextHeight);
