@@ -15,7 +15,7 @@ export async function importAns102Bundle({
   parentTxId,
   batchSize = DEFAULT_BATCH_SIZE
 }: {
-  log: winston.Logger; 
+  log: winston.Logger;
   db: IBundleDatabase;
   bundleStream: stream.Readable;
   parentTxId: string;
