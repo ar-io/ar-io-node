@@ -19,7 +19,8 @@ const blockImporter = new BlockImporter({
   metricsRegistry,
   chainSource: chainApiClient,
   chainDb,
-  eventEmitter
+  eventEmitter,
+  startHeight: parseInt(process.env.START_HEIGHT ?? '0')
 });
 
 blockImporter.start();
