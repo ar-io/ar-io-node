@@ -35,8 +35,8 @@ export class ChainDatabase implements IChainDatabase {
   private deleteStaleNewBlockHeightsStmt: Sqlite.Statement;
   private deleteStaleNewDataFn: Sqlite.Transaction;
 
-  constructor(dbPath: string) {
-    this.db = new Sqlite(dbPath);
+  constructor(db: Sqlite.Database) {
+    this.db = db;
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('page_size = 4096'); // may depend on OS and FS
 

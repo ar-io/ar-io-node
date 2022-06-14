@@ -90,7 +90,7 @@ export class BlockImporter {
     metricsRegistry.registerMetric(this.blockImportErrorsCounter);
   }
 
-  private async getBlockOrForkedBlock(
+  public async getBlockOrForkedBlock(
     height: number,
     forkDepth = 0
   ): Promise<{
@@ -147,7 +147,7 @@ export class BlockImporter {
     return { block, txs, missingTxIds };
   }
 
-  private async importBlock(height: number) {
+  public async importBlock(height: number) {
     const { block, txs, missingTxIds } = await this.getBlockOrForkedBlock(
       height
     );
@@ -165,7 +165,7 @@ export class BlockImporter {
     this.transactionsImportedCounter.inc(txs.length);
   }
 
-  private async getNextHeight() {
+  public async getNextHeight() {
     // Set maxChainHeight on first run
     if (this.maxChainHeight === 0) {
       this.maxChainHeight = await this.chainSource.getHeight();

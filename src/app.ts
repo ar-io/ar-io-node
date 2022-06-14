@@ -1,4 +1,5 @@
 import * as promClient from 'prom-client';
+import Sqlite from 'better-sqlite3';
 import { EventEmitter } from 'events';
 
 import log from './log.js';
@@ -11,7 +12,8 @@ promClient.collectDefaultMetrics({ register: metricsRegistry });
 
 const eventEmitter = new EventEmitter();
 const chainApiClient = new ChainApiClient('http://192.168.1.21:1984/');
-const chainDb = new ChainDatabase('chain.db');
+const db = new Sqlite('chain.db');
+const chainDb = new ChainDatabase(db);
 const blockImporter = new BlockImporter({
   log,
   metricsRegistry,
