@@ -9,7 +9,8 @@ const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 export class ChainDatabase implements IChainDatabase {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
-  private tagInsertStmt: Sqlite.Statement;
+  private tagNamesInsertStmt: Sqlite.Statement;
+  private tagValuesInsertStmt: Sqlite.Statement;
   private newTxsInsertStmt: Sqlite.Statement;
   private missingTxsInsertStmt: Sqlite.Statement;
   private newTxTagsInsertStmt: Sqlite.Statement;
@@ -46,8 +47,14 @@ export class ChainDatabase implements IChainDatabase {
       ON CONFLICT DO NOTHING
     `);
 
-    this.tagInsertStmt = this.db.prepare(`
-      INSERT INTO tags (hash, value)
+    this.tagNamesInsertStmt = this.db.prepare(`
+      INSERT INTO tag_names (hash, name)
+      VALUES (@hash, @name)
+      ON CONFLICT DO NOTHING
+    `);
+
+    this.tagValuesInsertStmt = this.db.prepare(`
+      INSERT INTO tag_values (hash, value)
       VALUES (@hash, @value)
       ON CONFLICT DO NOTHING
     `);
@@ -330,9 +337,9 @@ export class ChainDatabase implements IChainDatabase {
               .update(tagName)
               .digest();
 
-            this.tagInsertStmt.run({
+            this.tagNamesInsertStmt.run({
               hash: tagNameHash,
-              value: tagName
+              name: tagName
             });
 
             const tagValue = Buffer.from(tag.value, 'base64');
@@ -341,7 +348,7 @@ export class ChainDatabase implements IChainDatabase {
               .update(tagValue)
               .digest();
 
-            this.tagInsertStmt.run({
+            this.tagValuesInsertStmt.run({
               hash: tagValueHash,
               value: tagValue
             });

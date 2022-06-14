@@ -47,7 +47,6 @@ CREATE TABLE stable_blocks (
 
 CREATE INDEX stable_blocks_missing_tx_count_idx ON stable_blocks (missing_tx_count);
 
--- TODO add content_type
 CREATE TABLE stable_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
@@ -87,7 +86,12 @@ CREATE TABLE missing_transactions (
 
 CREATE INDEX missing_transactions_height_idx ON missing_transactions (height);
 
-CREATE TABLE tags (
+CREATE TABLE tag_names (
+  hash BLOB PRIMARY KEY,
+  name BLOB NOT NULL
+);
+
+CREATE TABLE tag_values (
   hash BLOB PRIMARY KEY,
   value BLOB NOT NULL
 );
