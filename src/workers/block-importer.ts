@@ -105,22 +105,19 @@ export class BlockImporter {
     if (height > 0) {
       // Retrieve expected previous block hash from the DB
       const previousHeight = height - 1;
-
       const previousDbBlockHash = await this.chainDb.getNewBlockHashByHeight(
         previousHeight
       );
 
-      // Stop importing if unable to find the previous block in the DB
       if (!previousDbBlockHash) {
+        // If a gap is found, rewind the the index to the last known block
         this.log.error(
-          'Missing previous block hash. Stopping block import process.'
+          `Gap found at height ${height}. Reseting index to height ${previousHeight}...`
         );
-        this.shouldRun = false;
-        throw new Error('Missing previous block hash');
-      }
-
-      // TODO comment
-      if (block.previous_block !== previousDbBlockHash) {
+        this.chainDb.resetToHeight(previousHeight);
+        return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
+      } else if (block.previous_block !== previousDbBlockHash) {
+        // If there is a fork, rewind the index to the fork point
         this.log.info(
           `Fork detected at height ${height}. Reseting index to height ${previousHeight}...`
         );
@@ -132,7 +129,7 @@ export class BlockImporter {
     // Stop importing if fork depth exceeeds max fork depth
     if (forkDepth > MAX_FORK_DEPTH) {
       this.log.error(
-        `Fork depth exceeded ${MAX_FORK_DEPTH}. Stopping block import process.`
+        `Maximum fork depth of ${MAX_FORK_DEPTH} exceeded. Stopping block import process.`
       );
       this.shouldRun = false;
       throw new Error('Maximum fork depth exceeded');
