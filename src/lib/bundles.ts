@@ -20,7 +20,7 @@ export async function importAns102Bundle({
   bundleStream: stream.Readable;
   parentTxId: string;
   batchSize?: number;
-}) {}
+}): Promise<void> {}
 
 export async function importAns104Bundle({
   log,
@@ -34,7 +34,7 @@ export async function importAns104Bundle({
   bundleStream: stream.Readable;
   parentTxId: string;
   batchSize?: number;
-}) {
+}): Promise<void> {
   const iterable = await processStream.default(bundleStream);
   const bundleLength = iterable.length;
 
@@ -86,7 +86,7 @@ export async function importAns104Bundle({
     processedDataItems.add(dataItem.id);
 
     // create promise for batch when it's ready, or we're at the end
-    if (currentBatch.length >= batchSize || index + 1 == bundleLength){
+    if (currentBatch.length >= batchSize || index + 1 === bundleLength){
       nextBatchPromise = db.saveDataItems(currentBatch);
       currentBatch.length = 0;
     }
