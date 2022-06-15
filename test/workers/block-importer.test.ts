@@ -1,3 +1,5 @@
+/* eslint-disable */
+// @ts-nocheck
 import { expect } from 'chai';
 
 import * as promClient from 'prom-client';
