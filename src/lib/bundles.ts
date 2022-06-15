@@ -1,9 +1,10 @@
 import * as winston from 'winston';
 import stream from 'stream';
-import processStream from 'arbundles/stream/index.js';
+import arbundles from 'arbundles/stream/index.js';
 import { fromB64Url, sha256B64Url } from './utils.js';
 import { IBundleDatabase, DataItem, Tags } from '../types.js';
 
+const { default: processStream } = arbundles;
 const DEFAULT_BATCH_SIZE = 10;
 
 /* eslint-disable */
@@ -35,7 +36,7 @@ export async function importAns104Bundle({
   parentTxId: string;
   batchSize?: number;
 }): Promise<void> {
-  const iterable = await processStream.default(bundleStream);
+  const iterable = await processStream(bundleStream);
   const bundleLength = iterable.length;
 
   // TODO: create child logger
