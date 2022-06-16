@@ -2,7 +2,10 @@
   "extension": ["ts"],
   "loader": "ts-node/esm",
   "spec": ["**/*.test.ts"],
-  "require": ["ts-node/register/transpile-only"],
+  "require": [
+    "ts-node/register/transpile-only",
+    "source-map-support/register.js"
+  ],
   "timeout": "3000",
   "parallel": true,
   "recursive": true

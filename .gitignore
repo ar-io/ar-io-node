@@ -3,6 +3,7 @@
 *.db-wal
 *.log
 /.direnv
+/coverage
 /dist
 /node_modules
 

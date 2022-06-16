@@ -27,8 +27,10 @@
     "@types/node": "^12.0.0",
     "@types/node-fetch": "^2.0.0",
     "@types/sinon": "^10.0.11",
+    "@types/source-map-support": "^0.5.4",
     "@typescript-eslint/eslint-plugin": "^5.26.0",
     "@typescript-eslint/parser": "^5.26.0",
+    "c8": "^7.11.3",
     "chai": "^4.3.6",
     "eslint": "^8.16.0",
     "eslint-config-prettier": "^8.5.0",
@@ -37,6 +39,7 @@
     "prettier": "^2.6.2",
     "rimraf": "^3.0.2",
     "sinon": "^14.0.0",
+    "source-map-support": "^0.5.21",
     "ts-node": "^10.8.0",
     "ts-sinon": "^2.0.2",
     "typescript": "^4.7.3",
@@ -46,6 +49,7 @@
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json",
     "clean": "npx rimraf [ .nyc_output coverage dist ]",
     "start": "ts-node ./dist/app.js",
-    "test": "mocha --no-warnings"
+    "test": "mocha --no-warnings",
+    "test:coverage": "npx c8 mocha --no-warnings"
   }
 }
