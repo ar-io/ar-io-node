@@ -48,7 +48,7 @@
   "scripts": {
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json",
     "clean": "npx rimraf [ .nyc_output coverage dist ]",
-    "start": "ts-node ./dist/app.js",
+    "start": "ts-node-esm ./src/app.ts",
     "test": "mocha --no-warnings",
     "test:coverage": "npx c8 mocha --no-warnings"
   }
