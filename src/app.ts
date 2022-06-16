@@ -11,7 +11,7 @@ const metricsRegistry = new promClient.Registry();
 promClient.collectDefaultMetrics({ register: metricsRegistry });
 
 const eventEmitter = new EventEmitter();
-const chainApiClient = new ChainApiClient('http://192.168.1.21:1984/');
+const chainApiClient = new ChainApiClient('https://arweave.net/');
 const db = new Sqlite('chain.db');
 const chainDb = new ChainDatabase(db);
 const blockImporter = new BlockImporter({
