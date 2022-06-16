@@ -46,6 +46,6 @@
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json",
     "clean": "npx rimraf [ .nyc_output coverage dist ]",
     "start": "ts-node ./dist/app.js",
-    "test": "mocha"
+    "test": "mocha --no-warnings"
   }
 }
