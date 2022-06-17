@@ -47,28 +47,26 @@ export async function importAns104Bundle({
   let nextBatchPromise: Promise<void> | undefined;
   for await (const [index, dataItem] of iterable.entries()) {
     log.info(`unpacking ${index + 1} of ${bundleLength} data items`);
-    
-    // save previous batch
-    if (nextBatchPromise){
-      await nextBatchPromise;
-      nextBatchPromise = undefined;
-    }
 
     if (!dataItem.id) {
+      // TODO counter metric data items with missing ids
       log.info(`data-item is missing id, skipping...`);
       continue;
     }
 
     if (processedDataItems.has(dataItem.id)) {
+      // TODO counter metric for skipped data items
       log.info(`duplicate data-item id '${dataItem.id}', skipping...`);
       continue;
     }
 
     // data-items don't have tags b64 encoded
-    const tags: Tags = (dataItem.tags || []).map((tag: { name: string; value: string }) => ({
-      name: fromB64Url(tag.name),
-      value: fromB64Url(tag.value),
-    }));
+    const tags: Tags = (dataItem.tags || []).map(
+      (tag: { name: string; value: string }) => ({
+        name: fromB64Url(tag.name),
+        value: fromB64Url(tag.value)
+      })
+    );
 
     const newDataItem: DataItem = {
       parentTxId: fromB64Url(parentTxId),
@@ -80,14 +78,20 @@ export async function importAns104Bundle({
       anchor: fromB64Url(dataItem.anchor),
       tags,
       data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength
-    }
+    };
 
     log.info(`succesfully unpacked data item ${dataItem.id}, adding to batch`);
     currentBatch.push(newDataItem);
     processedDataItems.add(dataItem.id);
 
+    // wait for previous batch save to complete
+    if (nextBatchPromise) {
+      await nextBatchPromise;
+      nextBatchPromise = undefined;
+    }
+
     // create promise for batch when it's ready, or we're at the end
-    if (currentBatch.length >= batchSize || index + 1 === bundleLength){
+    if (currentBatch.length >= batchSize || index + 1 === bundleLength) {
       nextBatchPromise = db.saveDataItems(currentBatch);
       currentBatch.length = 0;
     }
