@@ -200,3 +200,48 @@ CREATE TABLE new_transaction_tags (
   transaction_tag_index INTEGER NOT NULL,
   PRIMARY KEY (tag_name_hash, tag_value_hash, transaction_id, transaction_tag_index)
 );
+
+CREATE TABLE data_item_owners (
+  address BLOB PRIMARY KEY,
+  owner BLOB
+);
+
+CREATE TABLE stable_data_items (
+  height INTEGER NOT NULL,
+  block_transaction_index INTEGER NOT NULL,
+  bundle_data_item_index INTEGER NOT NULL,
+  id BLOB NOT NULL,
+  parent_transaction_id BLOB NOT NULL,
+  signature BLOB NOT NULL,
+  owner_address BLOB NOT NULL,
+  target BLOB NOT NULL,
+  anchor BLOB NOT NULL,
+  data_size INTEGER NOT NULL,
+  PRIMARY KEY (height, block_transaction_index, bundle_data_item_index)
+);
+
+CREATE TABLE stable_data_item_tags (
+  tag_name_hash BLOB NOT NULL,
+  tag_value_hash BLOB NOT NULL,
+  height INTEGER NOT NULL,
+  block_transaction_index INTEGER NOT NULL,
+  bundle_data_item_index INTEGER NOT NULL,
+  data_item_tag_index INTEGER NOT NULL,
+  data_item_id BLOB NOT NULL,
+  PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, bundle_data_item_index, data_item_tag_index)
+);
+
+-- TODO new_data_items
+-- TODO new_data_item_tags
+
+CREATE TABLE chunks (
+  data_root BLOB NOT NULL,
+  data_size INTEGER NOT NULL,
+  offset INTEGER NOT NULL,
+  data_path BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_exported_at INTEGER,
+  PRIMARY KEY (data_root, data_size, offset)
+);
+
+CREATE INDEX chunks_last_exported_at_idx ON chunks (last_exported_at);
