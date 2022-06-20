@@ -7,11 +7,14 @@ import { BlockImporter } from './workers/block-importer.js';
 import { ChainApiClient } from './arweave.js';
 import { ChainDatabase } from './database/sqlite.js';
 
+const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
+const arweaveUrl = process.env.ARWEAVE_URL ?? 'https://arweave.net';
+
 const metricsRegistry = new promClient.Registry();
 promClient.collectDefaultMetrics({ register: metricsRegistry });
 
 const eventEmitter = new EventEmitter();
-const chainApiClient = new ChainApiClient('https://arweave.net/');
+const chainApiClient = new ChainApiClient(arweaveUrl);
 const db = new Sqlite('chain.db');
 const chainDb = new ChainDatabase(db);
 const blockImporter = new BlockImporter({
@@ -20,7 +23,7 @@ const blockImporter = new BlockImporter({
   chainSource: chainApiClient,
   chainDb,
   eventEmitter,
-  startHeight: parseInt(process.env.START_HEIGHT ?? '0')
+  startHeight: startHeight
 });
 
 blockImporter.start();
