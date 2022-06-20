@@ -9,11 +9,13 @@
     "url": "https://github.com/ar-io/ar-io-node"
   },
   "dependencies": {
+    "@types/express-prometheus-middleware": "^1.2.1",
     "arbundles": "^0.6.19",
     "axios": "^0.27.2",
     "better-sqlite3": "^7.5.1",
     "crypto": "^1.0.1",
-    "express": "^4.17.3",
+    "express": "^4.18.1",
+    "express-prometheus-middleware": "^1.2.0",
     "node-fetch": "2",
     "prom-client": "^14.0.1",
     "wait": "^0.4.2",

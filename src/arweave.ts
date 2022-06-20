@@ -5,20 +5,20 @@ export class ChainApiClient implements IChainSource {
   private chainApiUrl: string;
 
   constructor(chainApiUrl: string) {
-    this.chainApiUrl = chainApiUrl;
+    this.chainApiUrl = chainApiUrl.replace(/\/$/, '');
   }
 
   // TODO handle errors (retry 429s and 5XXs)
   async getBlockByHeight(height: number): Promise<JsonBlock> {
     const response = await axios.get(
-      `${this.chainApiUrl}block/height/${height}`
+      `${this.chainApiUrl}/block/height/${height}`
     );
     return response.data as JsonBlock;
   }
 
   // TODO handle errors (retry 429s and 5XXs)
   async getTx(txId: string): Promise<JsonTransaction> {
-    const response = await axios.get(`${this.chainApiUrl}tx/${txId}`);
+    const response = await axios.get(`${this.chainApiUrl}/tx/${txId}`);
     return response.data as JsonTransaction;
   }
 
@@ -48,7 +48,7 @@ export class ChainApiClient implements IChainSource {
   }
 
   async getHeight(): Promise<number> {
-    const response = await axios.get(`${this.chainApiUrl}height`);
+    const response = await axios.get(`${this.chainApiUrl}/height`);
     return response.data as number;
   }
 }
