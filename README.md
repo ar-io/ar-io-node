@@ -16,11 +16,11 @@ Note: this erases the DB!
 
 With defaults:
 
-`yarn service`
+`yarn start`
 
 Starting at an arbitrary block (after DB reset only):
 
-`START_HEIGHT=800000 yarn service`
+`START_HEIGHT=800000 yarn start`
 
 ## Design principles
 
