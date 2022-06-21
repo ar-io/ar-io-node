@@ -1,11 +1,46 @@
 import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
 import { default as axios } from 'axios';
 
+type Peer = {
+  url: string;
+  blocks: number;
+  height: number;
+  lastSeen: number;
+};
+
 export class ChainApiClient implements IChainSource {
   private chainApiUrl: string;
+  private peers: Record<string, Peer> = {};
 
   constructor(chainApiUrl: string) {
     this.chainApiUrl = chainApiUrl.replace(/\/$/, '');
+  }
+
+  async refreshPeers(): Promise<void> {
+    try {
+      const response = await axios.get(`${this.chainApiUrl}/peers`);
+      const peerHosts = response.data as string[];
+      await Promise.all(
+        peerHosts.map(async (peerHost) => {
+          try {
+            const peerUrl = `http://${peerHost}`;
+            const response = await axios.get(`${peerUrl}/info`);
+            this.peers[peerHost] = {
+              url: peerUrl,
+              blocks: response.data.blocks,
+              height: response.data.height,
+              lastSeen: new Date().getTime()
+            };
+          } catch (error) {
+            // TODO track metric
+          }
+          return;
+        })
+      );
+      console.log(this.peers);
+    } catch (error) {
+      // TODO track metric
+    }
   }
 
   // TODO handle errors (retry 429s and 5XXs)
