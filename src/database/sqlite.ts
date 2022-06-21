@@ -6,6 +6,20 @@ const MAX_FORK_DEPTH = 50;
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
+type DebugInfo = {
+  walletCount: number;
+  tagNameCount: number;
+  tagValueCount: number;
+  stableTxCount: number;
+  stableBlockCount: number;
+  stableBlockTxCount: number;
+  maxStableHeight: number;
+  minStableHeight: number;
+  missingStableBlockCount: number;
+  newTxCount: number;
+  newBlockCount: number;
+};
+
 export class ChainDatabase implements IChainDatabase {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
@@ -497,5 +511,55 @@ export class ChainDatabase implements IChainDatabase {
 
   async resetToHeight(height: number): Promise<void> {
     this.resetToHeightStmt.run({ height });
+  }
+
+  async getDebugInfo(): Promise<DebugInfo> {
+    const walletCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM wallets')
+      .get().cnt as number;
+    const tagNameCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM tag_names')
+      .get().cnt as number;
+    const tagValueCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM tag_values')
+      .get().cnt as number;
+    const stableTxCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM stable_transactions')
+      .get().cnt as number;
+    const stableBlockCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM stable_blocks')
+      .get().cnt as number;
+    const stableBlockTxCount = this.db
+      .prepare('SELECT SUM(tx_count) AS cnt FROM stable_blocks')
+      .get().cnt as number;
+    const maxStableHeight = this.db
+      .prepare('SELECT MAX(height) AS max_height FROM stable_blocks')
+      .get().max_height as number;
+    const minStableHeight = this.db
+      .prepare('SELECT MIN(height) AS min_height FROM stable_blocks')
+      .get().min_height as number;
+    const newTxCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM new_transactions')
+      .get().cnt as number;
+    const newBlockCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM new_blocks')
+      .get().cnt as number;
+
+    const missingStableBlockCount =
+      maxStableHeight - (minStableHeight - 1) - stableBlockCount;
+
+    return {
+      walletCount,
+      tagNameCount,
+      tagValueCount,
+      stableTxCount,
+      stableBlockCount,
+      stableBlockTxCount,
+      maxStableHeight,
+      minStableHeight,
+      missingStableBlockCount,
+      newTxCount,
+      newBlockCount
+    };
   }
 }

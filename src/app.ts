@@ -33,6 +33,11 @@ blockImporter.start();
 // HTTP server
 const app = express();
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
+app.get('/debug', async (_req, res) => {
+  res.json({
+    db: await chainDb.getDebugInfo()
+  });
+});
 app.listen(port, () => {
   log.info(`Listening on port ${port}`);
 });
