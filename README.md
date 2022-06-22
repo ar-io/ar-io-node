@@ -2,31 +2,31 @@
 
 ## Dev Workflow
 
-### Install Dependencies
+### Install dependencies
 
 `yarn install`
 
-### Running tests
+### Run tests
 
 `yarn test`
 
-### Initializing/reseting the Sqlite DB
+### Initialize/reset the Sqlite DB
 
 Note: this erases the DB!
 
 `./reset-db.sh`
 
-### Running the service
+### Run the service
 
 With defaults:
 
 `yarn start`
 
-Starting at an arbitrary block (after DB reset only):
+Starting at an arbitrary block (only works immediately after a DB reset):
 
 `START_HEIGHT=800000 yarn start`
 
-## Design principles
+## Design Principles
 
 1. Code to interfaces.
 2. Separate IO from logic.
