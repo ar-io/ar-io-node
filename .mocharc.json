@@ -7,6 +7,6 @@
     "source-map-support/register.js"
   ],
   "timeout": "3000",
-  "parallel": true,
+  "parallel": false,
   "recursive": true
 }

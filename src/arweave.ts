@@ -1,5 +1,5 @@
 import { default as NodeCache } from 'node-cache';
-import { AxiosPromise, AxiosResponse, default as axios } from 'axios';
+import { default as axios } from 'axios';
 
 import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
 
