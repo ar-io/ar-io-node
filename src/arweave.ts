@@ -1,5 +1,7 @@
+import { default as NodeCache } from 'node-cache';
+import { AxiosPromise, AxiosResponse, default as axios } from 'axios';
+
 import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
-import { default as axios } from 'axios';
 
 type Peer = {
   url: string;
@@ -11,6 +13,8 @@ type Peer = {
 export class ChainApiClient implements IChainSource {
   private chainApiUrl: string;
   private peers: Record<string, Peer> = {};
+  private blockPromiseCache = new NodeCache({ stdTTL: 300, useClones: false });
+  private maxHeight = -1;
 
   constructor(chainApiUrl: string) {
     this.chainApiUrl = chainApiUrl.replace(/\/$/, '');
@@ -43,12 +47,36 @@ export class ChainApiClient implements IChainSource {
     }
   }
 
+  async prefetchBlockByHeight(height: number): Promise<void> {
+    try {
+      const cachedResponsePromise = this.blockPromiseCache.get(height);
+      if (cachedResponsePromise) {
+        // Update TTL if block promise is already cached
+        this.blockPromiseCache.set(height, cachedResponsePromise);
+        return;
+      }
+      const responsePromise = axios.get(
+        `${this.chainApiUrl}/block/height/${height}`
+      );
+      this.blockPromiseCache.set(height, responsePromise);
+    } catch (error) {
+      // TODO log error
+    }
+  }
+
   // TODO handle errors (retry 429s and 5XXs)
   async getBlockByHeight(height: number): Promise<JsonBlock> {
-    const response = await axios.get(
-      `${this.chainApiUrl}/block/height/${height}`
-    );
-    return response.data as JsonBlock;
+    if (height < this.maxHeight) {
+      this.prefetchBlockByHeight(height + 1);
+    }
+
+    const response = await (this.blockPromiseCache.has(height)
+      ? this.blockPromiseCache.get(height)
+      : axios.get(`${this.chainApiUrl}/block/height/${height}`));
+
+    // TODO throw if response is undefined
+    // TODO fix type
+    return (response as any).data as JsonBlock;
   }
 
   // TODO handle errors (retry 429s and 5XXs)
@@ -84,6 +112,8 @@ export class ChainApiClient implements IChainSource {
 
   async getHeight(): Promise<number> {
     const response = await axios.get(`${this.chainApiUrl}/height`);
+    this.maxHeight =
+      this.maxHeight < response.data ? response.data : this.maxHeight;
     return response.data as number;
   }
 }

@@ -16,6 +16,7 @@
     "crypto": "^1.0.1",
     "express": "^4.18.1",
     "express-prometheus-middleware": "^1.2.0",
+    "node-cache": "^5.1.2",
     "node-fetch": "2",
     "prom-client": "^14.0.1",
     "wait": "^0.4.2",
