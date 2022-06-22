@@ -2,6 +2,10 @@
 
 ## Dev Workflow
 
+### Install Dependencies
+
+`yarn install`
+
 ### Running tests
 
 `yarn test`
