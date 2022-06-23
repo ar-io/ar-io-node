@@ -65,13 +65,13 @@ export class BlockImporter {
 
     this.forksCounter = new promClient.Counter({
       name: 'forks_total',
-      help: 'Number of forks observed'
+      help: 'Number of chain forks observed'
     });
     metricsRegistry.registerMetric(this.forksCounter);
 
     this.lastForkDepthGauge = new promClient.Gauge({
       name: 'last_fork_depth',
-      help: 'Depth of the last observed fork'
+      help: 'Depth of the last observed chain fork'
     });
     metricsRegistry.registerMetric(this.lastForkDepthGauge);
 
