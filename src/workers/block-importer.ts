@@ -118,14 +118,14 @@ export class BlockImporter {
         this.log.error(
           `Gap found at height ${height}. Reseting index to height ${previousHeight}...`
         );
-        this.chainDb.resetToHeight(previousHeight);
+        this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       } else if (block.previous_block !== previousDbBlockHash) {
         // If there is a fork, rewind the index to the fork point
         this.log.info(
           `Fork detected at height ${height}. Reseting index to height ${previousHeight}...`
         );
-        this.chainDb.resetToHeight(previousHeight);
+        this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       }
     }
