@@ -19,6 +19,7 @@
     "node-cache": "^5.1.2",
     "node-fetch": "2",
     "prom-client": "^14.0.1",
+    "retry-axios": "^3.0.0",
     "wait": "^0.4.2",
     "winston": "^3.7.2"
   },
