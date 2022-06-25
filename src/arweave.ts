@@ -137,10 +137,17 @@ export class ChainApiClient implements IChainSource {
       return;
     }
 
-    const responsePromise = this.trustedNodeRequestQueue.push({
-      method: 'GET',
-      url: `/block/height/${height}`
-    });
+    const responsePromise = this.trustedNodeRequestQueue
+      .push({
+        method: 'GET',
+        url: `/block/height/${height}`
+      })
+      .then((response) => {
+        if (response.data.poa) {
+          delete response.data.poa;
+        }
+        return response;
+      });
     this.blockByHeightPromiseCache.set(height, responsePromise);
 
     try {
@@ -197,10 +204,17 @@ export class ChainApiClient implements IChainSource {
       return;
     }
 
-    const responsePromise = this.trustedNodeRequestQueue.push({
-      method: 'GET',
-      url: `/tx/${id}`
-    });
+    const responsePromise = this.trustedNodeRequestQueue
+      .push({
+        method: 'GET',
+        url: `/tx/${id}`
+      })
+      .then((response) => {
+        if (response.data.data) {
+          delete response.data.data;
+        }
+        return response;
+      });
     this.txPromiseCache.set(id, responsePromise);
   }
 
