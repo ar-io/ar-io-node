@@ -24,8 +24,8 @@ export class ChainApiClient implements IChainSource {
     useClones: false
   });
   private txPromiseCache = new NodeCache({
-    checkperiod: 600,
-    stdTTL: 600,
+    checkperiod: 30,
+    stdTTL: 120,
     useClones: false
   });
   private maxHeight = -1;
