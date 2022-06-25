@@ -16,7 +16,9 @@ const port = parseInt(process.env.PORT ?? '3000');
 
 // Workers
 const eventEmitter = new EventEmitter();
-const chainApiClient = new ChainApiClient(arweaveUrl);
+const chainApiClient = new ChainApiClient({
+  chainApiUrl: arweaveUrl
+});
 const db = new Sqlite('chain.db');
 const chainDb = new ChainDatabase(db);
 const blockImporter = new BlockImporter({

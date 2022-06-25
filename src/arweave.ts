@@ -1,6 +1,9 @@
 import { default as NodeCache } from 'node-cache';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
 import * as rax from 'retry-axios';
+import { default as fastq } from 'fastq';
+import type { queueAsPromised } from 'fastq';
+import { default as wait } from 'wait';
 
 import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
 
@@ -20,24 +23,65 @@ export class ChainApiClient implements IChainSource {
     stdTTL: 30,
     useClones: false
   });
+  private txPromiseCache = new NodeCache({
+    checkperiod: 600,
+    stdTTL: 600,
+    useClones: false
+  });
   private maxHeight = -1;
   private blockPrefetchCount = 50;
+  private trustedNodeRequestQueue: queueAsPromised<
+    AxiosRequestConfig,
+    AxiosResponse
+  >;
+  private trustedNodeRequestBucket = 0;
 
-  constructor(chainApiUrl: string) {
+  constructor({
+    chainApiUrl,
+    requestTimeout = 15000,
+    requestRetryCount = 5,
+    requestPerSecond = 100,
+    maxConcurrentRequests = 100
+  }: {
+    chainApiUrl: string;
+    requestTimeout?: number;
+    requestRetryCount?: number;
+    requestPerSecond?: number;
+    maxConcurrentRequests?: number;
+  }) {
     this.trustedNodeUrl = chainApiUrl.replace(/\/$/, '');
+
+    // Initialize Axios
     this.trustedNodeAxios = axios.create({
       baseURL: this.trustedNodeUrl,
-      timeout: 15000
+      timeout: requestTimeout
     });
     this.trustedNodeAxios.defaults.raxConfig = {
-      retry: 5,
-      instance: this.trustedNodeAxios
+      retry: requestRetryCount,
+      instance: this.trustedNodeAxios,
+      onRetryAttempt: (err) => {
+        const cfg = rax.getConfig(err);
+        const attempt = cfg?.currentRetryAttempt ?? 1;
+        if (err?.response?.status === 429) {
+          // TODO is this the right amount
+          this.trustedNodeRequestBucket -= attempt ** 2;
+        }
+      }
     };
     rax.attach(this.trustedNodeAxios);
-  }
 
-  trustedNodeRequest(request: AxiosRequestConfig) {
-    return this.trustedNodeAxios(request);
+    // Start rate limiter
+    setInterval(() => {
+      if (this.trustedNodeRequestBucket <= requestPerSecond * 300) {
+        this.trustedNodeRequestBucket += requestPerSecond;
+      }
+    }, 1000);
+
+    // Initialize trusted node request queue
+    this.trustedNodeRequestQueue = fastq.promise(
+      this.trustedNodeRequest.bind(this),
+      maxConcurrentRequests
+    );
   }
 
   // TODO recursively traverse peers
@@ -73,7 +117,15 @@ export class ChainApiClient implements IChainSource {
     }
   }
 
-  prefetchBlockByHeight(height: number) {
+  async trustedNodeRequest(request: AxiosRequestConfig) {
+    while (this.trustedNodeRequestBucket <= 0) {
+      await wait(100);
+    }
+    this.trustedNodeRequestBucket--;
+    return this.trustedNodeAxios(request);
+  }
+
+  async prefetchBlockByHeight(height: number) {
     const cachedResponsePromise = this.blockByHeightPromiseCache.get(height);
     if (cachedResponsePromise) {
       // Update TTL if block promise is already cached
@@ -85,15 +137,21 @@ export class ChainApiClient implements IChainSource {
       return;
     }
 
-    const responsePromise = this.trustedNodeRequest({
+    const responsePromise = this.trustedNodeRequestQueue.push({
       method: 'GET',
       url: `/block/height/${height}`
-    }).catch((error) => {
-      return error;
     });
     this.blockByHeightPromiseCache.set(height, responsePromise);
 
-    // TODO prefetch txs
+    try {
+      const response = await responsePromise;
+
+      response.data.txs.forEach((txId: string) => {
+        this.prefetchTx(txId);
+      });
+    } catch (error) {
+      // TODO log error
+    }
   }
 
   async getBlockByHeight(
@@ -115,24 +173,53 @@ export class ChainApiClient implements IChainSource {
       }
     }
 
-    const responseOrError = await this.blockByHeightPromiseCache.get(height);
+    const response = (await this.blockByHeightPromiseCache.get(
+      height
+    )) as AxiosResponse;
+    const block = response.data as JsonBlock;
 
-    // TODO cleanup error handling
-    if (!(responseOrError as AxiosResponse).status) {
-      throw new Error(`Failed to retrieve block at height ${height}`);
+    if (!block || typeof block !== 'object' || !block.indep_hash) {
+      throw new Error(`Failed to retrieve block at ${height}`);
     }
 
-    return (responseOrError as AxiosResponse).data as JsonBlock;
+    return block;
+  }
+
+  prefetchTx(id: string) {
+    const cachedResponsePromise = this.txPromiseCache.get(id);
+    if (cachedResponsePromise) {
+      // Update TTL if block promise is already cached
+      try {
+        this.txPromiseCache.set(id, cachedResponsePromise);
+      } catch (error) {
+        // TODO log error
+      }
+      return;
+    }
+
+    const responsePromise = this.trustedNodeRequestQueue.push({
+      method: 'GET',
+      url: `/tx/${id}`
+    });
+    this.txPromiseCache.set(id, responsePromise);
   }
 
   async getTx(txId: string): Promise<JsonTransaction> {
-    const response = await this.trustedNodeRequest({
-      method: 'GET',
-      url: `/tx/${txId}`
-    });
-    return response.data as JsonTransaction;
+    // Prefetch TX
+    this.prefetchTx(txId);
+
+    // Wait for TX response
+    const response = (await this.txPromiseCache.get(txId)) as AxiosResponse;
+    const tx = response.data as JsonTransaction;
+
+    if (!tx || typeof tx !== 'object' || !tx.id) {
+      throw new Error(`Failed to retrieve transaction ${txId}`);
+    }
+
+    return tx;
   }
 
+  // TODO make second arg an object
   async getBlockAndTxs(
     height: number,
     shouldPrefetch = true
