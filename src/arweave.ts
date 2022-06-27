@@ -35,18 +35,20 @@ export class ChainApiClient implements IChainSource {
     AxiosResponse
   >;
   private trustedNodeRequestBucket = 0;
+  private requestsPerSecond = 10;
 
   constructor({
     chainApiUrl,
     requestTimeout = 15000,
     requestRetryCount = 5,
-    requestPerSecond = 100,
+    maxRequestsPerSecond = 100,
     maxConcurrentRequests = 100
   }: {
     chainApiUrl: string;
     requestTimeout?: number;
     requestRetryCount?: number;
     requestPerSecond?: number;
+    maxRequestsPerSecond?: number;
     maxConcurrentRequests?: number;
   }) {
     this.trustedNodeUrl = chainApiUrl.replace(/\/$/, '');
@@ -63,8 +65,8 @@ export class ChainApiClient implements IChainSource {
         const cfg = rax.getConfig(err);
         const attempt = cfg?.currentRetryAttempt ?? 1;
         if (err?.response?.status === 429) {
-          // TODO is this the right amount
-          this.trustedNodeRequestBucket -= attempt ** 2;
+          this.trustedNodeRequestBucket -= 2 ** attempt;
+          this.requestsPerSecond -= Math.max(1, 2 ** attempt);
         }
       }
     };
@@ -72,8 +74,15 @@ export class ChainApiClient implements IChainSource {
 
     // Start rate limiter
     setInterval(() => {
-      if (this.trustedNodeRequestBucket <= requestPerSecond * 300) {
-        this.trustedNodeRequestBucket += requestPerSecond;
+      if (this.trustedNodeRequestBucket <= this.requestsPerSecond * 300) {
+        this.trustedNodeRequestBucket += this.requestsPerSecond;
+      }
+    }, 1000);
+
+    // Start request rate increment process
+    setInterval(() => {
+      if (this.requestsPerSecond < maxRequestsPerSecond) {
+        this.requestsPerSecond += 0.2;
       }
     }, 1000);
 
