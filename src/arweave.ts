@@ -148,6 +148,7 @@ export class ChainApiClient implements IChainSource {
         url: `/block/height/${height}`
       })
       .then((response) => {
+        // Delete POA to reduce cache size
         if (response.data.poa) {
           delete response.data.poa;
         }
@@ -166,6 +167,7 @@ export class ChainApiClient implements IChainSource {
     }
   }
 
+  // TODO make second arg an options object
   async getBlockByHeight(
     height: number,
     shouldPrefetch = false
@@ -211,6 +213,7 @@ export class ChainApiClient implements IChainSource {
         url: `/tx/${id}`
       })
       .then((response) => {
+        // Delete TX data to reduce cache size
         if (response.data.data) {
           delete response.data.data;
         }
@@ -234,7 +237,7 @@ export class ChainApiClient implements IChainSource {
     return tx;
   }
 
-  // TODO make second arg an object
+  // TODO make second arg an options object
   async getBlockAndTxs(
     height: number,
     shouldPrefetch = true
