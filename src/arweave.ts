@@ -138,11 +138,7 @@ export class ChainApiClient implements IChainSource {
     const cachedResponsePromise = this.blockByHeightPromiseCache.get(height);
     if (cachedResponsePromise) {
       // Update TTL if block promise is already cached
-      try {
-        this.blockByHeightPromiseCache.set(height, cachedResponsePromise);
-      } catch (error) {
-        // TODO log error
-      }
+      this.blockByHeightPromiseCache.set(height, cachedResponsePromise);
       return;
     }
 
@@ -205,11 +201,7 @@ export class ChainApiClient implements IChainSource {
     const cachedResponsePromise = this.txPromiseCache.get(id);
     if (cachedResponsePromise) {
       // Update TTL if block promise is already cached
-      try {
-        this.txPromiseCache.set(id, cachedResponsePromise);
-      } catch (error) {
-        // TODO log error
-      }
+      this.txPromiseCache.set(id, cachedResponsePromise);
       return;
     }
 
