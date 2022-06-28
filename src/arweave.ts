@@ -16,28 +16,41 @@ type Peer = {
 };
 
 export class ChainApiClient implements IChainSource {
+  // Trusted node
   private trustedNodeUrl: string;
   private trustedNodeAxios;
+
+  // Peers
   private peers: Record<string, Peer> = {};
   private preferredPeers: Set<Peer> = new Set();
+
+  // Block and TX caches
   private blockByHeightPromiseCache = new NodeCache({
     checkperiod: 10,
     stdTTL: 30,
-    useClones: false
+    useClones: false // cloning promises is unsafe
   });
   private txPromiseCache = new NodeCache({
     checkperiod: 30,
     stdTTL: 120,
-    useClones: false
+    useClones: false // cloning promises is unsafe
   });
-  private maxHeight = -1;
-  private blockPrefetchCount;
+
+  // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<
     AxiosRequestConfig,
     AxiosResponse
   >;
+
+  // Trusted node request bucket (for rate limiting)
   private trustedNodeRequestBucket = 0;
-  private requestsPerSecond = 10;
+
+  // Prefetch settings and state
+  private blockPrefetchCount;
+  private maxPrefetchHeight = -1;
+
+  // TODO construct this in app.ts and pass it in
+  // Arweave API (for TX validatio)
   private arweave = Arweave.init({});
 
   constructor({
@@ -56,7 +69,7 @@ export class ChainApiClient implements IChainSource {
   }) {
     this.trustedNodeUrl = chainApiUrl.replace(/\/$/, '');
 
-    // Initialize Axios
+    // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
       baseURL: this.trustedNodeUrl,
       timeout: requestTimeout
@@ -69,23 +82,15 @@ export class ChainApiClient implements IChainSource {
         const attempt = cfg?.currentRetryAttempt ?? 1;
         if (err?.response?.status === 429) {
           this.trustedNodeRequestBucket -= 2 ** attempt;
-          this.requestsPerSecond -= Math.max(1, 2 ** attempt);
         }
       }
     };
     rax.attach(this.trustedNodeAxios);
 
-    // Start rate limiter
+    // Start request bucket filler (rate limiter)
     setInterval(() => {
-      if (this.trustedNodeRequestBucket <= this.requestsPerSecond * 300) {
-        this.trustedNodeRequestBucket += this.requestsPerSecond;
-      }
-    }, 1000);
-
-    // Start request rate increment process
-    setInterval(() => {
-      if (this.requestsPerSecond < maxRequestsPerSecond) {
-        this.requestsPerSecond += 0.2;
+      if (this.trustedNodeRequestBucket <= maxRequestsPerSecond * 300) {
+        this.trustedNodeRequestBucket += maxRequestsPerSecond;
       }
     }, 1000);
 
@@ -186,11 +191,11 @@ export class ChainApiClient implements IChainSource {
     this.prefetchBlockByHeight(height);
 
     // Prefetch the next N blocks
-    if (shouldPrefetch && height < this.maxHeight) {
+    if (shouldPrefetch && height < this.maxPrefetchHeight) {
       for (let i = 0; i < this.blockPrefetchCount; i++) {
         const prefetchHeight = height + i;
         if (
-          prefetchHeight <= this.maxHeight &&
+          prefetchHeight <= this.maxPrefetchHeight &&
           this.trustedNodeRequestQueue.length() === 0
         ) {
           this.prefetchBlockByHeight(prefetchHeight, i < 1);
@@ -308,8 +313,10 @@ export class ChainApiClient implements IChainSource {
       method: 'GET',
       url: '/height'
     });
-    this.maxHeight =
-      this.maxHeight < response.data ? response.data : this.maxHeight;
+    this.maxPrefetchHeight =
+      this.maxPrefetchHeight < response.data
+        ? response.data
+        : this.maxPrefetchHeight;
     return response.data as number;
   }
 }
