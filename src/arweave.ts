@@ -217,16 +217,22 @@ export class ChainApiClient implements IChainSource {
       }
     }
 
-    const response = (await this.blockByHeightPromiseCache.get(
-      height
-    )) as AxiosResponse;
-    const block = response.data as JsonBlock;
+    try {
+      const response = (await this.blockByHeightPromiseCache.get(
+        height
+      )) as AxiosResponse;
+      const block = response.data as JsonBlock;
 
-    if (!block || typeof block !== 'object' || !block.indep_hash) {
-      throw new Error(`Failed to retrieve block at ${height}`);
+      if (!block || typeof block !== 'object' || !block.indep_hash) {
+        throw new Error(`Failed to retrieve block at ${height}`);
+      }
+
+      return block;
+    } catch (error) {
+      // Remove failed requests from the cache
+      this.blockByHeightPromiseCache.del(height);
+      throw error;
     }
-
-    return block;
   }
 
   async peerGetTx(txId: string) {
@@ -280,15 +286,21 @@ export class ChainApiClient implements IChainSource {
     // Prefetch TX
     this.prefetchTx(txId);
 
-    // Wait for TX response
-    const response = (await this.txPromiseCache.get(txId)) as AxiosResponse;
-    const tx = response.data as JsonTransaction;
+    try {
+      // Wait for TX response
+      const response = (await this.txPromiseCache.get(txId)) as AxiosResponse;
+      const tx = response.data as JsonTransaction;
 
-    if (!tx || typeof tx !== 'object' || !tx.id) {
-      throw new Error(`Failed to retrieve transaction ${txId}`);
+      if (!tx || typeof tx !== 'object' || !tx.id) {
+        throw new Error(`Failed to retrieve transaction ${txId}`);
+      }
+
+      return tx;
+    } catch (error) {
+      // Remove failed requests from the cache
+      this.txPromiseCache.del(txId);
+      throw error;
     }
-
-    return tx;
   }
 
   // TODO make second arg an options object
