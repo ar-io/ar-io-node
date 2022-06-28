@@ -45,7 +45,7 @@ export class ChainApiClient implements IChainSource {
     requestTimeout = 15000,
     requestRetryCount = 5,
     maxRequestsPerSecond = 100,
-    maxConcurrentRequests = 50
+    maxConcurrentRequests = 100
   }: {
     chainApiUrl: string;
     requestTimeout?: number;
@@ -95,7 +95,7 @@ export class ChainApiClient implements IChainSource {
       maxConcurrentRequests
     );
 
-    this.blockPrefetchCount = maxConcurrentRequests;
+    this.blockPrefetchCount = maxConcurrentRequests / 2;
   }
 
   // TODO recursively traverse peers
@@ -143,34 +143,35 @@ export class ChainApiClient implements IChainSource {
     return this.trustedNodeAxios(request);
   }
 
-  async prefetchBlockByHeight(height: number) {
-    const cachedResponsePromise = this.blockByHeightPromiseCache.get(height);
-    if (cachedResponsePromise) {
+  async prefetchBlockByHeight(height: number, prefetchTxs = false) {
+    let responsePromise = this.blockByHeightPromiseCache.get(height);
+    if (responsePromise) {
       // Update TTL if block promise is already cached
-      this.blockByHeightPromiseCache.set(height, cachedResponsePromise);
-      return;
+      this.blockByHeightPromiseCache.set(height, responsePromise);
+    } else {
+      responsePromise = this.trustedNodeRequestQueue
+        .push({
+          method: 'GET',
+          url: `/block/height/${height}`
+        })
+        .then((response) => {
+          // Delete POA to reduce cache size
+          if (response.data.poa) {
+            delete response.data.poa;
+          }
+          return response;
+        });
+      this.blockByHeightPromiseCache.set(height, responsePromise);
     }
 
-    const responsePromise = this.trustedNodeRequestQueue
-      .push({
-        method: 'GET',
-        url: `/block/height/${height}`
-      })
-      .then((response) => {
-        // Delete POA to reduce cache size
-        if (response.data.poa) {
-          delete response.data.poa;
-        }
-        return response;
-      });
-    this.blockByHeightPromiseCache.set(height, responsePromise);
-
     try {
-      const response = await responsePromise;
+      const response = (await responsePromise) as AxiosResponse<JsonBlock>;
 
-      response.data.txs.forEach((txId: string) => {
-        this.prefetchTx(txId);
-      });
+      if (prefetchTxs) {
+        response.data.txs.forEach((txId: string) => {
+          this.prefetchTx(txId);
+        });
+      }
     } catch (error) {
       // TODO log error
     }
@@ -186,13 +187,13 @@ export class ChainApiClient implements IChainSource {
 
     // Prefetch the next N blocks
     if (shouldPrefetch && height < this.maxHeight) {
-      for (let i = 1; i <= this.blockPrefetchCount; i++) {
+      for (let i = 0; i < this.blockPrefetchCount; i++) {
         const prefetchHeight = height + i;
         if (
           prefetchHeight <= this.maxHeight &&
           this.trustedNodeRequestQueue.length() === 0
         ) {
-          this.prefetchBlockByHeight(prefetchHeight);
+          this.prefetchBlockByHeight(prefetchHeight, i < 1);
         } else {
           break;
         }
