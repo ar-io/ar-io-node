@@ -40,3 +40,4 @@ Starting at an arbitrary block (only works immediately after a DB reset):
 10. Avoid naively trusting data when the cost to validate it is low.
 11. Make liberal use of [metrics](https://github.com/siimon/prom-client) to aid in monitoring and debugging.
 12. Follow the Prometheus [metrics namings recommendations](https://prometheus.io/docs/practices/naming/).
+13. Commit messages should describe both the what and why of the change being made.
