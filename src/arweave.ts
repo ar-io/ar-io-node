@@ -227,7 +227,6 @@ export class ChainApiClient implements IChainSource {
       if (!isValid) {
         throw new Error(`Invalid peer TX ${txId}`);
       }
-      console.log(`Successfully peer retrieved TX ${txId}`);
       return response;
     });
   }
