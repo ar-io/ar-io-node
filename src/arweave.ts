@@ -31,8 +31,8 @@ export class ChainApiClient implements IChainSource {
     useClones: false // cloning promises is unsafe
   });
   private txPromiseCache = new NodeCache({
-    checkperiod: 30,
-    stdTTL: 120,
+    checkperiod: 10,
+    stdTTL: 60,
     useClones: false // cloning promises is unsafe
   });
 
