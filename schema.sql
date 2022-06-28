@@ -201,68 +201,68 @@ CREATE TABLE new_transaction_tags (
   PRIMARY KEY (tag_name_hash, tag_value_hash, transaction_id, transaction_tag_index)
 );
 
-CREATE TABLE data_item_owners (
-  address BLOB PRIMARY KEY,
-  owner BLOB
-);
-
-CREATE TABLE stable_data_items (
-  id BLOB NOT NULL,
-  parent_transaction_id BLOB NOT NULL,
-  height INTEGER NOT NULL,
-  block_transaction_index INTEGER NOT NULL,
-  bundle_data_item_index INTEGER NOT NULL,
-  signature BLOB NOT NULL,
-  owner_address BLOB NOT NULL,
-  target BLOB NOT NULL,
-  anchor BLOB NOT NULL,
-  data_size INTEGER NOT NULL,
-  PRIMARY KEY (id, parent_transaction_id)
-);
-
-CREATE INDEX stable_data_items_lookup_idx ON stable_data_items (id, height, block_transaction_index, bundle_data_item_index);
-CREATE INDEX stable_data_items_sort_idx ON stable_data_items (height, block_transaction_index, bundle_data_item_index);
-
-CREATE TABLE stable_data_item_tags (
-  tag_name_hash BLOB NOT NULL,
-  tag_value_hash BLOB NOT NULL,
-  height INTEGER NOT NULL,
-  block_transaction_index INTEGER NOT NULL,
-  bundle_data_item_index INTEGER NOT NULL,
-  data_item_tag_index INTEGER NOT NULL,
-  data_item_id BLOB NOT NULL,
-  PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, bundle_data_item_index, data_item_tag_index)
-);
-
-CREATE TABLE new_data_items (
-  parent_transaction_id BLOB NOT NULL,
-  id BLOB NOT NULL,
-  bundle_data_item_index INTEGER NOT NULL,
-  signature BLOB NOT NULL,
-  owner_address BLOB NOT NULL,
-  target BLOB NOT NULL,
-  anchor BLOB NOT NULL,
-  data_size INTEGER NOT NULL,
-  PRIMARY KEY (parent_transaction_id, id)
-);
-
-CREATE TABLE new_data_item_tags (
-  tag_name_hash BLOB NOT NULL,
-  tag_value_hash BLOB NOT NULL,
-  parent_transaction_id BLOB NOT NULL,
-  data_item_id BLOB NOT NULL,
-  data_item_tag_index INTEGER NOT NULL,
-  PRIMARY KEY (tag_name_hash, tag_value_hash, parent_transaction_id, data_item_id, data_item_tag_index)
-);
-
-CREATE TABLE chunks (
-  data_root BLOB NOT NULL,
-  data_size INTEGER NOT NULL,
-  offset INTEGER NOT NULL,
-  data_path BLOB NOT NULL,
-  created_at INTEGER NOT NULL,
-  last_exported_at INTEGER,
-  PRIMARY KEY (data_root, data_size, offset)
-);
-
-CREATE INDEX chunks_last_exported_at_idx ON chunks (last_exported_at);
+--CREATE TABLE data_item_owners (
+--  address BLOB PRIMARY KEY,
+--  owner BLOB
+--);
+--
+--CREATE TABLE stable_data_items (
+--  id BLOB NOT NULL,
+--  parent_transaction_id BLOB NOT NULL,
+--  height INTEGER NOT NULL,
+--  block_transaction_index INTEGER NOT NULL,
+--  bundle_data_item_index INTEGER NOT NULL,
+--  signature BLOB NOT NULL,
+--  owner_address BLOB NOT NULL,
+--  target BLOB NOT NULL,
+--  anchor BLOB NOT NULL,
+--  data_size INTEGER NOT NULL,
+--  PRIMARY KEY (id, parent_transaction_id)
+--);
+--
+--CREATE INDEX stable_data_items_lookup_idx ON stable_data_items (id, height, block_transaction_index, bundle_data_item_index);
+--CREATE INDEX stable_data_items_sort_idx ON stable_data_items (height, block_transaction_index, bundle_data_item_index);
+--
+--CREATE TABLE stable_data_item_tags (
+--  tag_name_hash BLOB NOT NULL,
+--  tag_value_hash BLOB NOT NULL,
+--  height INTEGER NOT NULL,
+--  block_transaction_index INTEGER NOT NULL,
+--  bundle_data_item_index INTEGER NOT NULL,
+--  data_item_tag_index INTEGER NOT NULL,
+--  data_item_id BLOB NOT NULL,
+--  PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, bundle_data_item_index, data_item_tag_index)
+--);
+--
+--CREATE TABLE new_data_items (
+--  parent_transaction_id BLOB NOT NULL,
+--  id BLOB NOT NULL,
+--  bundle_data_item_index INTEGER NOT NULL,
+--  signature BLOB NOT NULL,
+--  owner_address BLOB NOT NULL,
+--  target BLOB NOT NULL,
+--  anchor BLOB NOT NULL,
+--  data_size INTEGER NOT NULL,
+--  PRIMARY KEY (parent_transaction_id, id)
+--);
+--
+--CREATE TABLE new_data_item_tags (
+--  tag_name_hash BLOB NOT NULL,
+--  tag_value_hash BLOB NOT NULL,
+--  parent_transaction_id BLOB NOT NULL,
+--  data_item_id BLOB NOT NULL,
+--  data_item_tag_index INTEGER NOT NULL,
+--  PRIMARY KEY (tag_name_hash, tag_value_hash, parent_transaction_id, data_item_id, data_item_tag_index)
+--);
+--
+--CREATE TABLE chunks (
+--  data_root BLOB NOT NULL,
+--  data_size INTEGER NOT NULL,
+--  offset INTEGER NOT NULL,
+--  data_path BLOB NOT NULL,
+--  created_at INTEGER NOT NULL,
+--  last_exported_at INTEGER,
+--  PRIMARY KEY (data_root, data_size, offset)
+--);
+--
+--CREATE INDEX chunks_last_exported_at_idx ON chunks (last_exported_at);
