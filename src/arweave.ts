@@ -29,7 +29,7 @@ export class ChainApiClient implements IChainSource {
     useClones: false
   });
   private maxHeight = -1;
-  private blockPrefetchCount = 50;
+  private blockPrefetchCount;
   private trustedNodeRequestQueue: queueAsPromised<
     AxiosRequestConfig,
     AxiosResponse
@@ -91,6 +91,8 @@ export class ChainApiClient implements IChainSource {
       this.trustedNodeRequest.bind(this),
       maxConcurrentRequests
     );
+
+    this.blockPrefetchCount = maxConcurrentRequests;
   }
 
   // TODO recursively traverse peers
@@ -179,7 +181,10 @@ export class ChainApiClient implements IChainSource {
     if (shouldPrefetch && height < this.maxHeight) {
       for (let i = 1; i <= this.blockPrefetchCount; i++) {
         const prefetchHeight = height + i;
-        if (prefetchHeight <= this.maxHeight) {
+        if (
+          prefetchHeight <= this.maxHeight &&
+          this.trustedNodeRequestQueue.length() === 0
+        ) {
           this.prefetchBlockByHeight(prefetchHeight);
         } else {
           break;
