@@ -223,7 +223,7 @@ export class ChainApiClient implements IChainSource {
       timeout: 500
     }).then(async (response) => {
       const tx = this.arweave.transactions.fromRaw(response.data);
-      const isValid = this.arweave.transactions.verify(tx);
+      const isValid = await this.arweave.transactions.verify(tx);
       if (!isValid) {
         throw new Error(`Invalid peer TX ${txId}`);
       }
