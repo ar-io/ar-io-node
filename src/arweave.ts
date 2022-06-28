@@ -92,21 +92,20 @@ export class ChainApiClient implements IChainSource {
     };
     rax.attach(this.trustedNodeAxios);
 
-    // Start request bucket filler (rate limiter)
-    setInterval(() => {
-      if (this.trustedNodeRequestBucket <= maxRequestsPerSecond * 300) {
-        this.trustedNodeRequestBucket += maxRequestsPerSecond;
-      }
-    }, 1000);
-
     // Initialize trusted node request queue
     this.trustedNodeRequestQueue = fastq.promise(
       this.trustedNodeRequest.bind(this),
       maxConcurrentRequests
     );
 
-    this.blockPrefetchCount = maxConcurrentRequests / 2;
+    // Start trusted node request bucket filler (for rate limiting)
+    setInterval(() => {
+      if (this.trustedNodeRequestBucket <= maxRequestsPerSecond * 300) {
+        this.trustedNodeRequestBucket += maxRequestsPerSecond;
+      }
+    }, 1000);
 
+    // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
   }
@@ -203,7 +202,9 @@ export class ChainApiClient implements IChainSource {
       for (let i = 1; i < this.blockPrefetchCount; i++) {
         const prefetchHeight = height + i;
         if (
+          // Don't prefetch beyond the end of the chain
           prefetchHeight <= this.maxPrefetchHeight &&
+          // Save some capacity for other requests
           this.trustedNodeRequestQueue.length() === 0
         ) {
           this.prefetchBlockByHeight(
@@ -324,10 +325,13 @@ export class ChainApiClient implements IChainSource {
       method: 'GET',
       url: '/height'
     });
+
+    // Save max observed height for use as block prefetch boundary
     this.maxPrefetchHeight =
       this.maxPrefetchHeight < response.data
         ? response.data
         : this.maxPrefetchHeight;
-    return response.data as number;
+
+    return response.data;
   }
 }
