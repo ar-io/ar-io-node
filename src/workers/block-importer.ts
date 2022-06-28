@@ -164,6 +164,12 @@ export class BlockImporter {
     // Record import count metrics
     this.blocksImportedCounter.inc();
     this.transactionsImportedCounter.inc(txs.length);
+
+    this.log.info(`Block imported`, {
+      height: block.height,
+      txCount: txs.length,
+      missingTxCount: missingTxIds.length
+    });
   }
 
   public async getNextHeight() {
@@ -195,7 +201,9 @@ export class BlockImporter {
         if (nextHeight == 0 && this.startHeight != 0) {
           nextHeight = this.startHeight;
         }
-        this.log.info(`Importing block at height ${nextHeight}`);
+        this.log.info(`Importing block...`, {
+          height: nextHeight
+        });
 
         await this.importBlock(nextHeight);
       } catch (error) {
