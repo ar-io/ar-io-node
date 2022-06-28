@@ -47,6 +47,7 @@ export class ChainApiClient implements IChainSource {
 
   // Prefetch settings and state
   private blockPrefetchCount;
+  private blockTxPrefetchCount;
   private maxPrefetchHeight = -1;
 
   // TODO construct this in app.ts and pass it in
@@ -58,7 +59,9 @@ export class ChainApiClient implements IChainSource {
     requestTimeout = 15000,
     requestRetryCount = 5,
     maxRequestsPerSecond = 100,
-    maxConcurrentRequests = 100
+    maxConcurrentRequests = 100,
+    blockPrefetchCount = 50,
+    blockTxPrefetchCount = 1
   }: {
     chainApiUrl: string;
     requestTimeout?: number;
@@ -66,6 +69,8 @@ export class ChainApiClient implements IChainSource {
     requestPerSecond?: number;
     maxRequestsPerSecond?: number;
     maxConcurrentRequests?: number;
+    blockPrefetchCount?: number;
+    blockTxPrefetchCount?: number;
   }) {
     this.trustedNodeUrl = chainApiUrl.replace(/\/$/, '');
 
@@ -101,6 +106,9 @@ export class ChainApiClient implements IChainSource {
     );
 
     this.blockPrefetchCount = maxConcurrentRequests / 2;
+
+    this.blockPrefetchCount = blockPrefetchCount;
+    this.blockTxPrefetchCount = blockTxPrefetchCount;
   }
 
   // TODO recursively traverse peers
@@ -198,7 +206,10 @@ export class ChainApiClient implements IChainSource {
           prefetchHeight <= this.maxPrefetchHeight &&
           this.trustedNodeRequestQueue.length() === 0
         ) {
-          this.prefetchBlockByHeight(prefetchHeight, i <= 1);
+          this.prefetchBlockByHeight(
+            prefetchHeight,
+            i <= this.blockTxPrefetchCount
+          );
         } else {
           break;
         }
