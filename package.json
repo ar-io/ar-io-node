@@ -11,6 +11,7 @@
   "dependencies": {
     "@types/express-prometheus-middleware": "^1.2.1",
     "arbundles": "^0.6.19",
+    "arweave": "^1.11.4",
     "axios": "^0.27.2",
     "better-sqlite3": "^7.5.1",
     "crypto": "^1.0.1",

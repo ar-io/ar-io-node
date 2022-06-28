@@ -4,6 +4,7 @@ import * as rax from 'retry-axios';
 import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import { default as wait } from 'wait';
+import { default as Arweave } from 'arweave';
 
 import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
 
@@ -18,6 +19,7 @@ export class ChainApiClient implements IChainSource {
   private trustedNodeUrl: string;
   private trustedNodeAxios;
   private peers: Record<string, Peer> = {};
+  private preferredPeers: Set<Peer> = new Set();
   private blockByHeightPromiseCache = new NodeCache({
     checkperiod: 10,
     stdTTL: 30,
@@ -36,6 +38,7 @@ export class ChainApiClient implements IChainSource {
   >;
   private trustedNodeRequestBucket = 0;
   private requestsPerSecond = 10;
+  private arweave = Arweave.init({});
 
   constructor({
     chainApiUrl,
@@ -107,9 +110,10 @@ export class ChainApiClient implements IChainSource {
         peerHosts.map(async (peerHost) => {
           try {
             const peerUrl = `http://${peerHost}`;
-            const response = await this.trustedNodeRequest({
+            const response = await axios({
               method: 'GET',
-              url: '/info'
+              url: '/info',
+              baseURL: peerUrl
             });
             this.peers[peerHost] = {
               url: peerUrl,
@@ -117,6 +121,9 @@ export class ChainApiClient implements IChainSource {
               height: response.data.height,
               lastSeen: new Date().getTime()
             };
+            if (response.data.blocks / response.data.height > 0.9) {
+              this.preferredPeers.add(this.peers[peerHost]);
+            }
           } catch (error) {
             // TODO track metric
           }
@@ -204,27 +211,52 @@ export class ChainApiClient implements IChainSource {
     return block;
   }
 
-  prefetchTx(id: string) {
-    const cachedResponsePromise = this.txPromiseCache.get(id);
+  async peerGetTx(txId: string) {
+    const peersToTry = Array.from(this.preferredPeers);
+    const randomPeer =
+      peersToTry[Math.floor(Math.random() * peersToTry.length)];
+
+    return axios({
+      method: 'GET',
+      url: `/tx/${txId}`,
+      baseURL: randomPeer.url,
+      timeout: 500
+    }).then(async (response) => {
+      const tx = this.arweave.transactions.fromRaw(response.data);
+      const isValid = this.arweave.transactions.verify(tx);
+      if (!isValid) {
+        throw new Error(`Invalid peer TX ${txId}`);
+      }
+      console.log(`Successfully peer retrieved TX ${txId}`);
+      return response;
+    });
+  }
+
+  prefetchTx(txId: string) {
+    const cachedResponsePromise = this.txPromiseCache.get(txId);
     if (cachedResponsePromise) {
       // Update TTL if block promise is already cached
-      this.txPromiseCache.set(id, cachedResponsePromise);
+      this.txPromiseCache.set(txId, cachedResponsePromise);
       return;
     }
 
-    const responsePromise = this.trustedNodeRequestQueue
-      .push({
-        method: 'GET',
-        url: `/tx/${id}`
+    const responsePromise = this.peerGetTx(txId)
+      .catch(async () => {
+        // Request TX from trusted node if peer fetch failed
+        return this.trustedNodeRequestQueue.push({
+          method: 'GET',
+          url: `/tx/${txId}`
+        });
       })
       .then((response) => {
         // Delete TX data to reduce cache size
-        if (response.data.data) {
+        if (response && response.data.data) {
           delete response.data.data;
         }
         return response;
       });
-    this.txPromiseCache.set(id, responsePromise);
+
+    this.txPromiseCache.set(txId, responsePromise);
   }
 
   async getTx(txId: string): Promise<JsonTransaction> {

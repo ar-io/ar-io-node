@@ -35,6 +35,7 @@ const blockImporter = new BlockImporter({
   startHeight: startHeight
 });
 
+chainApiClient.refreshPeers();
 blockImporter.start();
 
 // HTTP server
