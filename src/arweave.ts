@@ -192,13 +192,13 @@ export class ChainApiClient implements IChainSource {
 
     // Prefetch the next N blocks
     if (shouldPrefetch && height < this.maxPrefetchHeight) {
-      for (let i = 0; i < this.blockPrefetchCount; i++) {
+      for (let i = 1; i < this.blockPrefetchCount; i++) {
         const prefetchHeight = height + i;
         if (
           prefetchHeight <= this.maxPrefetchHeight &&
           this.trustedNodeRequestQueue.length() === 0
         ) {
-          this.prefetchBlockByHeight(prefetchHeight, i < 1);
+          this.prefetchBlockByHeight(prefetchHeight, i <= 1);
         } else {
           break;
         }
