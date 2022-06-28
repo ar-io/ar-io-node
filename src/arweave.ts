@@ -45,7 +45,7 @@ export class ChainApiClient implements IChainSource {
     requestTimeout = 15000,
     requestRetryCount = 5,
     maxRequestsPerSecond = 100,
-    maxConcurrentRequests = 100
+    maxConcurrentRequests = 50
   }: {
     chainApiUrl: string;
     requestTimeout?: number;
