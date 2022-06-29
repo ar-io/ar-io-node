@@ -58,7 +58,7 @@ export class ChainApiClient implements IChainSource {
     chainApiUrl,
     requestTimeout = 15000,
     requestRetryCount = 5,
-    maxRequestsPerSecond = 100,
+    maxRequestsPerSecond = 20,
     maxConcurrentRequests = 100,
     blockPrefetchCount = 50,
     blockTxPrefetchCount = 1
