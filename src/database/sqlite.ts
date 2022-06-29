@@ -33,6 +33,7 @@ export class ChainDatabase implements IChainDatabase {
   private newBlockTxsInsertStmt: Sqlite.Statement;
   private getMaxStableHeightAndTimestampStmt: Sqlite.Statement;
   private getMaxHeightStmt: Sqlite.Statement;
+  private saveStableBlockTxsRangeStmt: Sqlite.Statement;
   private saveStableTxsRangeStmt: Sqlite.Statement;
   private saveStableTxTagsRangeStmt: Sqlite.Statement;
   private saveStableBlockRangeStmt: Sqlite.Statement;
@@ -164,6 +165,17 @@ export class ChainDatabase implements IChainDatabase {
         SELECT MAX(height) AS height
         FROM stable_blocks
       )
+    `);
+
+    this.saveStableBlockTxsRangeStmt = this.db.prepare(`
+      INSERT INTO stable_block_transactions (
+        block_indep_hash, transaction_id, block_transaction_index
+      ) SELECT
+        nbt.block_indep_hash, nbt.transaction_id, nbt.block_transaction_index
+      FROM new_block_transactions nbt
+      JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+      WHERE nbh.height >= @start_height AND nbh.height < @end_height
+      ON CONFLICT DO NOTHING
     `);
 
     this.saveStableTxsRangeStmt = this.db.prepare(`
@@ -424,6 +436,11 @@ export class ChainDatabase implements IChainDatabase {
     this.saveStableBlockRangeFn = this.db.transaction(
       (startHeight: number, endHeight: number) => {
         this.saveStableBlockRangeStmt.run({
+          start_height: startHeight,
+          end_height: endHeight
+        });
+
+        this.saveStableBlockTxsRangeStmt.run({
           start_height: startHeight,
           end_height: endHeight
         });

@@ -47,6 +47,13 @@ CREATE TABLE stable_blocks (
 
 CREATE INDEX stable_blocks_missing_tx_count_idx ON stable_blocks (missing_tx_count);
 
+CREATE TABLE stable_block_transactions (
+  block_indep_hash BYTEA,
+  transaction_id BYTEA NOT NULL,
+  block_transaction_index INTEGER NOT NULL,
+  PRIMARY KEY(block_indep_hash, transaction_id, block_transaction_index)
+);
+
 CREATE TABLE stable_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
