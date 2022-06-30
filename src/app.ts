@@ -14,9 +14,10 @@ const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
 const arweaveUrl = process.env.ARWEAVE_URL ?? 'https://arweave.net';
 const port = parseInt(process.env.PORT ?? '3000');
 
-process.on('uncaughtException', function (error) {
+// Uncaught exception handler
+process.on('uncaughtException', (error) => {
   // TODO track metrics
-  log.error(error);
+  log.error('Uncaught exception:', error);
 });
 
 // Workers
