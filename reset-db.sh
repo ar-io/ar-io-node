@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 
-rm -f chain.db
-sqlite3 chain.db < schema.sql
+rm -f data/sqlite/standalone.db
+sqlite3 data/sqlite/standalone.db < schema.sql
