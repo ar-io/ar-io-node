@@ -26,7 +26,7 @@ const chainApiClient = new ChainApiClient({
   log,
   chainApiUrl: arweaveUrl
 });
-const db = new Sqlite('chain.db');
+const db = new Sqlite('data/sqlite/standalone.db');
 const chainDb = new ChainDatabase(db);
 const blockImporter = new BlockImporter({
   log,
