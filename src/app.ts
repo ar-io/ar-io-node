@@ -8,6 +8,7 @@ import log from './log.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { ChainApiClient } from './arweave.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+import { apolloServer } from './routes/graphql/index.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
@@ -43,10 +44,19 @@ blockImporter.start();
 // HTTP server
 const app = express();
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
+// TODO move under '/admin'
 app.get('/debug', async (_req, res) => {
   res.json({
     db: await chainDb.getDebugInfo()
   });
+});
+const apolloServerInstanceGql = apolloServer(chainDb, {
+  introspection: true
+});
+await apolloServerInstanceGql.start();
+apolloServerInstanceGql.applyMiddleware({
+  app,
+  path: '/graphql'
 });
 app.listen(port, () => {
   log.info(`Listening on port ${port}`);

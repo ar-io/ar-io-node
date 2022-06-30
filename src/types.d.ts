@@ -90,3 +90,16 @@ export interface ChainDatabase {
 export interface BundleDatabase {
   saveDataItems(dataItems: DataItem[]): Promise<void>;
 }
+
+type GraphQLBlock = {
+  id: string;
+  height: number;
+  timestamp: number;
+  previous: string;
+  cursor: string;
+  node: string;
+};
+
+export interface GraphQLQueryable {
+  getGqlBlocks(args: { ids?: string[] }): Promise<GraphQLBlock[]>;
+}
