@@ -342,7 +342,7 @@ export class ChainApiClient implements ChainSource {
   }
 
   // TODO make second arg an options object
-  async getBlockAndTxs(
+  async getBlockAndTxsByHeight(
     height: number,
     shouldPrefetch = true
   ): Promise<{

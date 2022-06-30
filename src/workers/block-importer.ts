@@ -102,9 +102,8 @@ export class BlockImporter {
     txs: JsonTransaction[];
     missingTxIds: string[];
   }> {
-    const { block, txs, missingTxIds } = await this.chainSource.getBlockAndTxs(
-      height
-    );
+    const { block, txs, missingTxIds } =
+      await this.chainSource.getBlockAndTxsByHeight(height);
 
     if (height > this.startHeight) {
       // Retrieve expected previous block hash from the DB

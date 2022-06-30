@@ -68,7 +68,7 @@ export interface DataItem {
 export interface ChainSource {
   getBlockByHeight(height: number): Promise<JsonBlock>;
   getTx(txId: string): Promise<JsonTransaction>;
-  getBlockAndTxs(height: number): Promise<{
+  getBlockAndTxsByHeight(height: number): Promise<{
     block: JsonBlock;
     txs: JsonTransaction[];
     missingTxIds: string[];
