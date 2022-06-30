@@ -5,6 +5,7 @@ import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import { default as wait } from 'wait';
 import { default as Arweave } from 'arweave';
+import * as winston from 'winston';
 
 import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
 
@@ -16,6 +17,8 @@ type Peer = {
 };
 
 export class ChainApiClient implements IChainSource {
+  private log: winston.Logger;
+
   // Trusted node
   private trustedNodeUrl: string;
   private trustedNodeAxios;
@@ -24,6 +27,7 @@ export class ChainApiClient implements IChainSource {
   private peers: Record<string, Peer> = {};
   private preferredPeers: Set<Peer> = new Set();
 
+  // TODO rename caches
   // Block and TX caches
   private blockByHeightPromiseCache = new NodeCache({
     checkperiod: 10,
@@ -55,6 +59,7 @@ export class ChainApiClient implements IChainSource {
   private arweave = Arweave.init({});
 
   constructor({
+    log,
     chainApiUrl,
     requestTimeout = 15000,
     requestRetryCount = 5,
@@ -63,6 +68,7 @@ export class ChainApiClient implements IChainSource {
     blockPrefetchCount = 50,
     blockTxPrefetchCount = 1
   }: {
+    log: winston.Logger;
     chainApiUrl: string;
     requestTimeout?: number;
     requestRetryCount?: number;
@@ -72,6 +78,7 @@ export class ChainApiClient implements IChainSource {
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
   }) {
+    this.log = log;
     this.trustedNodeUrl = chainApiUrl.replace(/\/$/, '');
 
     // Initialize trusted node Axios with automatic retries
@@ -82,10 +89,10 @@ export class ChainApiClient implements IChainSource {
     this.trustedNodeAxios.defaults.raxConfig = {
       retry: requestRetryCount,
       instance: this.trustedNodeAxios,
-      onRetryAttempt: (err) => {
-        const cfg = rax.getConfig(err);
+      onRetryAttempt: (error) => {
+        const cfg = rax.getConfig(error);
         const attempt = cfg?.currentRetryAttempt ?? 1;
-        if (err?.response?.status === 429) {
+        if (error?.response?.status === 429) {
           this.trustedNodeRequestBucket -= 2 ** attempt;
         }
       }
@@ -168,10 +175,16 @@ export class ChainApiClient implements IChainSource {
         })
         .then((response) => {
           // Delete POA to reduce cache size
-          if (response.data.poa) {
+          if (response?.data?.poa) {
             delete response.data.poa;
           }
           return response;
+        })
+        .catch((error) => {
+          this.log.error(`Block prefetch failed:`, {
+            height: height,
+            message: error.message
+          });
         });
       this.blockByHeightPromiseCache.set(height, responsePromise);
     }
@@ -221,10 +234,17 @@ export class ChainApiClient implements IChainSource {
       const response = (await this.blockByHeightPromiseCache.get(
         height
       )) as AxiosResponse;
+
+      // Check that a response was returned
+      if (!response) {
+        throw new Error('Prefetched block request failed');
+      }
+
       const block = response.data as JsonBlock;
 
-      if (!block || typeof block !== 'object' || !block.indep_hash) {
-        throw new Error(`Failed to retrieve block at ${height}`);
+      // Sanity check block format
+      if (!block?.indep_hash) {
+        throw new Error(`Invalid block`);
       }
 
       return block;
@@ -249,7 +269,7 @@ export class ChainApiClient implements IChainSource {
       const tx = this.arweave.transactions.fromRaw(response.data);
       const isValid = await this.arweave.transactions.verify(tx);
       if (!isValid) {
-        throw new Error(`Invalid peer TX ${txId}`);
+        throw new Error(`Invalid transaction`);
       }
       return response;
     });
@@ -273,12 +293,17 @@ export class ChainApiClient implements IChainSource {
       })
       .then((response) => {
         // Delete TX data to reduce cache size
-        if (response && response.data.data) {
+        if (response?.data?.data) {
           delete response.data.data;
         }
         return response;
+      })
+      .catch((error) => {
+        this.log.error('Transaction prefetch failed:', {
+          txId: txId,
+          message: error.message
+        });
       });
-
     this.txPromiseCache.set(txId, responsePromise);
   }
 
@@ -289,16 +314,29 @@ export class ChainApiClient implements IChainSource {
     try {
       // Wait for TX response
       const response = (await this.txPromiseCache.get(txId)) as AxiosResponse;
+
+      // Check that a response was returned
+      if (!response) {
+        throw new Error('Prefetched transaction request failed');
+      }
+
       const tx = response.data as JsonTransaction;
 
-      if (!tx || typeof tx !== 'object' || !tx.id) {
-        throw new Error(`Failed to retrieve transaction ${txId}`);
+      // Sanity check TX format
+      if (!tx?.id) {
+        throw new Error('Invalid transaction');
       }
 
       return tx;
-    } catch (error) {
+    } catch (error: any) {
       // Remove failed requests from the cache
       this.txPromiseCache.del(txId);
+
+      this.log.error('Failed to get transaction:', {
+        txId: txId,
+        message: error.message
+      });
+
       throw error;
     }
   }
@@ -323,7 +361,6 @@ export class ChainApiClient implements IChainSource {
           const tx = await this.getTx(txId);
           txs.push(tx);
         } catch (error) {
-          // TODO log error
           missingTxIds.push(txId);
         }
       })

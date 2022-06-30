@@ -22,6 +22,7 @@ process.on('uncaughtException', function (error) {
 // Workers
 const eventEmitter = new EventEmitter();
 const chainApiClient = new ChainApiClient({
+  log,
   chainApiUrl: arweaveUrl
 });
 const db = new Sqlite('chain.db');
