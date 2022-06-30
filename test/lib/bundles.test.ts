@@ -1,10 +1,24 @@
 import { expect } from 'chai';
 import * as sinon from 'sinon';
 import stream from 'stream';
-import { BundleDatabase } from '../../src/database/bundle.js';
 import { importAns104Bundle } from '../../src/lib/bundles.js';
 import { stubAns104Bundle, stubTxID } from '../stubs.js';
 import * as winston from 'winston';
+import { DataItem, BundleDatabase } from '../../src/types.js';
+import logger from '../../src/log.js';
+
+export class BundleDatabaseStub implements BundleDatabase {
+  private log: winston.Logger;
+
+  constructor() {
+    this.log = logger;
+  }
+
+  async saveDataItems(dataItems: DataItem[]): Promise<void> {
+    this.log.info(`Saving ${dataItems.length} data items to bundle database`);
+    return await new Promise((resolve) => resolve());
+  }
+}
 
 describe('importAns102Bundle', () => {
   it('should do something (placedholder test)', () => {
@@ -20,7 +34,7 @@ describe('importAns104Bundle', () => {
 
   beforeEach(async () => {
     log = sinon.stub(winston.createLogger());
-    bundleDb = new BundleDatabase();
+    bundleDb = new BundleDatabaseStub();
     saveDbSpy = sinon.stub(bundleDb, 'saveDataItems');
     ans104Bundle = await stubAns104Bundle();
   });

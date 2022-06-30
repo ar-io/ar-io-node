@@ -1,4 +1,4 @@
-import { IChainDatabase, JsonBlock, JsonTransaction } from '../types.js';
+import { ChainDatabase, JsonBlock, JsonTransaction } from '../types.js';
 import Sqlite from 'better-sqlite3';
 import * as crypto from 'crypto';
 
@@ -20,7 +20,7 @@ type DebugInfo = {
   newBlockCount: number;
 };
 
-export class ChainDatabase implements IChainDatabase {
+export class StandaloneSqliteDatabase implements ChainDatabase {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
   private tagNamesInsertStmt: Sqlite.Statement;

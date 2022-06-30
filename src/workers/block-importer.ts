@@ -6,8 +6,8 @@ import { default as wait } from 'wait';
 import {
   JsonTransaction,
   JsonBlock,
-  IChainSource,
-  IChainDatabase
+  ChainSource,
+  ChainDatabase
 } from '../types.js';
 
 const MAX_FORK_DEPTH = 50;
@@ -16,8 +16,8 @@ const HEIGHT_POLLING_INTERVAL_MS = 5000;
 export class BlockImporter {
   // Dependencies
   private log: winston.Logger;
-  private chainSource: IChainSource;
-  private chainDb: IChainDatabase;
+  private chainSource: ChainSource;
+  private chainDb: ChainDatabase;
   private eventEmitter: EventEmitter;
 
   // State
@@ -42,8 +42,8 @@ export class BlockImporter {
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
-    chainSource: IChainSource;
-    chainDb: IChainDatabase;
+    chainSource: ChainSource;
+    chainDb: ChainDatabase;
     eventEmitter: EventEmitter;
     startHeight: number;
   }) {

@@ -65,7 +65,7 @@ export interface DataItem {
   data_size: bigint;
 }
 
-export interface IChainSource {
+export interface ChainSource {
   getBlockByHeight(height: number): Promise<JsonBlock>;
   getTx(txId: string): Promise<JsonTransaction>;
   getBlockAndTxs(height: number): Promise<{
@@ -76,7 +76,7 @@ export interface IChainSource {
   getHeight(): Promise<number>;
 }
 
-export interface IChainDatabase {
+export interface ChainDatabase {
   saveBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
@@ -87,6 +87,6 @@ export interface IChainDatabase {
   resetToHeight(height: number): Promise<void>;
 }
 
-export interface IBundleDatabase {
+export interface BundleDatabase {
   saveDataItems(dataItems: DataItem[]): Promise<void>;
 }

@@ -7,7 +7,7 @@ import { default as wait } from 'wait';
 import { default as Arweave } from 'arweave';
 import * as winston from 'winston';
 
-import { IChainSource, JsonBlock, JsonTransaction } from './types.js';
+import { ChainSource, JsonBlock, JsonTransaction } from './types.js';
 
 type Peer = {
   url: string;
@@ -16,7 +16,7 @@ type Peer = {
   lastSeen: number;
 };
 
-export class ChainApiClient implements IChainSource {
+export class ChainApiClient implements ChainSource {
   private log: winston.Logger;
 
   // Trusted node

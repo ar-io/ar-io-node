@@ -10,7 +10,7 @@ import { EventEmitter } from 'events';
 import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
 import { ChainApiClient } from '../../src/arweave.js';
-import { ChainDatabase } from '../../src/database/sqlite.js';
+import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 
 describe('BlockImporter class', () => {
   let metricsRegistry: promClient.Registry;
@@ -28,7 +28,7 @@ describe('BlockImporter class', () => {
     db = new Sqlite(':memory:');
     const schema = fs.readFileSync('schema.sql', 'utf8');
     db.exec(schema);
-    chainDb = new ChainDatabase(db);
+    chainDb = new StandaloneSqliteDatabase(db);
     blockImporter = new BlockImporter({
       log,
       metricsRegistry,

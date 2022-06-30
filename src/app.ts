@@ -7,7 +7,7 @@ import promMid from 'express-prometheus-middleware';
 import log from './log.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { ChainApiClient } from './arweave.js';
-import { ChainDatabase } from './database/sqlite.js';
+import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
@@ -27,7 +27,7 @@ const chainApiClient = new ChainApiClient({
   chainApiUrl: arweaveUrl
 });
 const db = new Sqlite('data/sqlite/standalone.db');
-const chainDb = new ChainDatabase(db);
+const chainDb = new StandaloneSqliteDatabase(db);
 const blockImporter = new BlockImporter({
   log,
   metricsRegistry: promClient.register,
