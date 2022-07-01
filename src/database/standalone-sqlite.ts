@@ -7,6 +7,7 @@ import {
 import Sqlite from 'better-sqlite3';
 import * as crypto from 'crypto';
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
+import sql from 'sql-bricks';
 
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
@@ -586,19 +587,34 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getGqlBlocks({ ids = [] }: { ids?: string[] }) {
-    const sql = `
-      SELECT
-        indep_hash AS id,
-        previous_block AS previous,
-        block_timestamp AS "timestamp",
-        height
-      FROM stable_blocks
-      WHERE indep_hash = @indep_hash
-    `;
+    const q = sql
+      .select(
+        'indep_hash AS id',
+        'previous_block AS previous',
+        'block_timestamp AS "timestamp"',
+        'height'
+      )
+      .from('stable_blocks')
+      .where(
+        sql.in(
+          'indep_hash',
+          ids.map((v) => Buffer.from(v, 'base64'))
+        )
+      )
+      .toParams();
+
+    const params = q.values
+      .map((v, i) => {
+        return [i + 1, v];
+      })
+      .reduce((acc, [i, v]) => {
+        acc[i] = v;
+        return acc;
+      }, {} as any);
 
     const blocks = this.db
-      .prepare(sql)
-      .all({ indep_hash: Buffer.from(ids[0], 'base64') })
+      .prepare(q.text)
+      .all(params)
       .map((block) => ({
         ...block,
         id: block.id.toString('base64url'),
