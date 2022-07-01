@@ -60,7 +60,7 @@ export class ArweaveCompositeClient implements ChainSource {
 
   constructor({
     log,
-    chainApiUrl,
+    trustedNodeUrl,
     requestTimeout = 15000,
     requestRetryCount = 5,
     maxRequestsPerSecond = 20,
@@ -69,7 +69,7 @@ export class ArweaveCompositeClient implements ChainSource {
     blockTxPrefetchCount = 1
   }: {
     log: winston.Logger;
-    chainApiUrl: string;
+    trustedNodeUrl: string;
     requestTimeout?: number;
     requestRetryCount?: number;
     requestPerSecond?: number;
@@ -79,7 +79,7 @@ export class ArweaveCompositeClient implements ChainSource {
     blockTxPrefetchCount?: number;
   }) {
     this.log = log;
-    this.trustedNodeUrl = chainApiUrl.replace(/\/$/, '');
+    this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
 
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({

@@ -9,7 +9,7 @@ import { EventEmitter } from 'events';
 
 import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
-import { ChainApiClient } from '../../src/arweave.js';
+import { ArweaveCompositeClient } from '../../src/arweave/composite-client.js';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 
 describe('BlockImporter class', () => {
@@ -24,7 +24,7 @@ describe('BlockImporter class', () => {
     metricsRegistry = new promClient.Registry();
     promClient.collectDefaultMetrics({ register: metricsRegistry });
     eventEmitter = new EventEmitter();
-    chainApiClient = new ChainApiClient('https://arweave.net/');
+    chainApiClient = new ArweaveCompositeClient('https://arweave.net/');
     db = new Sqlite(':memory:');
     const schema = fs.readFileSync('schema.sql', 'utf8');
     db.exec(schema);

@@ -23,22 +23,22 @@ process.on('uncaughtException', (error) => {
 
 // Workers
 const eventEmitter = new EventEmitter();
-const chainApiClient = new ArweaveCompositeClient({
+const arweaveClient = new ArweaveCompositeClient({
   log,
-  chainApiUrl: arweaveUrl
+  trustedNodeUrl: arweaveUrl
 });
 const db = new Sqlite('data/sqlite/standalone.db');
 const chainDb = new StandaloneSqliteDatabase(db);
 const blockImporter = new BlockImporter({
   log,
   metricsRegistry: promClient.register,
-  chainSource: chainApiClient,
+  chainSource: arweaveClient,
   chainDb,
   eventEmitter,
   startHeight: startHeight
 });
 
-chainApiClient.refreshPeers();
+arweaveClient.refreshPeers();
 blockImporter.start();
 
 // HTTP server
