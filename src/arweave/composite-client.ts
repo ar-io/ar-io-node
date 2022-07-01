@@ -17,6 +17,7 @@ type Peer = {
 };
 
 export class ArweaveCompositeClient implements ChainSource {
+  private arweave: Arweave;
   private log: winston.Logger;
 
   // Trusted node
@@ -54,12 +55,9 @@ export class ArweaveCompositeClient implements ChainSource {
   private blockTxPrefetchCount;
   private maxPrefetchHeight = -1;
 
-  // TODO construct this in app.ts and pass it in
-  // Arweave API (for TX validatio)
-  private arweave = Arweave.init({});
-
   constructor({
     log,
+    arweave,
     trustedNodeUrl,
     requestTimeout = 15000,
     requestRetryCount = 5,
@@ -69,6 +67,7 @@ export class ArweaveCompositeClient implements ChainSource {
     blockTxPrefetchCount = 1
   }: {
     log: winston.Logger;
+    arweave: Arweave;
     trustedNodeUrl: string;
     requestTimeout?: number;
     requestRetryCount?: number;
@@ -79,6 +78,7 @@ export class ArweaveCompositeClient implements ChainSource {
     blockTxPrefetchCount?: number;
   }) {
     this.log = log;
+    this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
 
     // Initialize trusted node Axios with automatic retries

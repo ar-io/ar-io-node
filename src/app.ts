@@ -9,6 +9,7 @@ import { BlockImporter } from './workers/block-importer.js';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { apolloServer } from './routes/graphql/index.js';
+import { default as Arweave } from 'arweave';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
@@ -21,10 +22,13 @@ process.on('uncaughtException', (error) => {
   log.error('Uncaught exception:', error);
 });
 
+const arweave = Arweave.init({});
+
 // Workers
 const eventEmitter = new EventEmitter();
 const arweaveClient = new ArweaveCompositeClient({
   log,
+  arweave,
   trustedNodeUrl: arweaveUrl
 });
 const db = new Sqlite('data/sqlite/standalone.db');
