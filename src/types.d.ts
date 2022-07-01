@@ -91,15 +91,13 @@ export interface BundleDatabase {
   saveDataItems(dataItems: DataItem[]): Promise<void>;
 }
 
-type GraphQLBlock = {
+type GqlBlock = {
   id: string;
-  height: number;
   timestamp: number;
+  height: number;
   previous: string;
-  cursor: string;
-  node: string;
 };
 
-export interface GraphQLQueryable {
-  getGqlBlocks(args: { ids?: string[] }): Promise<GraphQLBlock[]>;
+export interface GqlQueryable {
+  getGqlBlocks(args: { ids?: string[] }): Promise<GqlBlock[]>;
 }

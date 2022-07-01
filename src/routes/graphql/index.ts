@@ -9,14 +9,14 @@ import {
 } from 'apollo-server-core';
 import { readFileSync } from 'fs';
 import { resolvers } from './resolvers.js';
-import { GraphQLQueryable } from '../../types.js';
+import { GqlQueryable } from '../../types.js';
 
 const typeDefs = gql(
   readFileSync('./src/routes/graphql/schema/types.graphql', 'utf8')
 );
 
 const apolloServer = (
-  db: GraphQLQueryable,
+  db: GqlQueryable,
   opts: ApolloServerExpressConfig = {}
 ) => {
   return new ApolloServer({

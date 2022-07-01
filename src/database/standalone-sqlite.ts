@@ -2,7 +2,7 @@ import {
   ChainDatabase,
   JsonBlock,
   JsonTransaction,
-  GraphQLQueryable
+  GqlQueryable
 } from '../types.js';
 import Sqlite from 'better-sqlite3';
 import * as crypto from 'crypto';
@@ -25,9 +25,7 @@ type DebugInfo = {
   newBlockCount: number;
 };
 
-export class StandaloneSqliteDatabase
-  implements ChainDatabase, GraphQLQueryable
-{
+export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private db: Sqlite.Database;
   private walletInsertStmt: Sqlite.Statement;
   private tagNamesInsertStmt: Sqlite.Statement;
@@ -597,19 +595,15 @@ export class StandaloneSqliteDatabase
       FROM stable_blocks
       WHERE indep_hash = @indep_hash
     `;
-    console.log(ids);
+
     const blocks = this.db
       .prepare(sql)
       .all({ indep_hash: Buffer.from(ids[0], 'base64') })
       .map((block) => ({
         ...block,
-        cursor: '',
-        node: '',
         id: block.id.toString('base64url'),
         previous: block.previous.toString('base64url')
       }));
-
-      console.log(blocks);
 
     return blocks;
   }
