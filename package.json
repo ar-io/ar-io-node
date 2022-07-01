@@ -46,11 +46,12 @@
     "eslint-config-prettier": "^8.5.0",
     "eslint-plugin-prettier": "^4.0.0",
     "mocha": "^10.0.0",
+    "nodemon": "^2.0.18",
     "prettier": "^2.6.2",
     "rimraf": "^3.0.2",
     "sinon": "^14.0.0",
     "source-map-support": "^0.5.21",
-    "ts-node": "^10.8.0",
+    "ts-node": "^10.8.1",
     "ts-sinon": "^2.0.2",
     "typescript": "^4.7.3",
     "typescript-eslint": "^0.0.1-alpha.0"
@@ -59,6 +60,7 @@
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json",
     "clean": "npx rimraf [ .nyc_output coverage dist ]",
     "start": "ts-node-esm ./src/app.ts",
+    "watch": "nodemon",
     "test": "mocha --no-warnings",
     "test:coverage": "npx c8 mocha --no-warnings"
   }
