@@ -6,8 +6,8 @@ import {
 } from '../types.js';
 import Sqlite from 'better-sqlite3';
 import * as crypto from 'crypto';
+import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 
-const MAX_FORK_DEPTH = 50;
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 

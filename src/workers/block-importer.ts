@@ -2,6 +2,7 @@ import * as EventEmitter from 'events';
 import * as promClient from 'prom-client';
 import * as winston from 'winston';
 import { default as wait } from 'wait';
+import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 
 import {
   JsonTransaction,
@@ -10,7 +11,6 @@ import {
   ChainDatabase
 } from '../types.js';
 
-const MAX_FORK_DEPTH = 50;
 const HEIGHT_POLLING_INTERVAL_MS = 5000;
 
 export class BlockImporter {
