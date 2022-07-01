@@ -6,7 +6,7 @@ import promMid from 'express-prometheus-middleware';
 
 import log from './log.js';
 import { BlockImporter } from './workers/block-importer.js';
-import { ChainApiClient } from './arweave.js';
+import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { apolloServer } from './routes/graphql/index.js';
 
@@ -23,7 +23,7 @@ process.on('uncaughtException', (error) => {
 
 // Workers
 const eventEmitter = new EventEmitter();
-const chainApiClient = new ChainApiClient({
+const chainApiClient = new ArweaveCompositeClient({
   log,
   chainApiUrl: arweaveUrl
 });
