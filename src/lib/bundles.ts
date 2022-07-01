@@ -4,7 +4,10 @@ import arbundles from 'arbundles/stream/index.js';
 import { fromB64Url, sha256B64Url } from './utils.js';
 import { BundleDatabase, DataItem, Tags } from '../types.js';
 
+/* eslint-disable */
+// @ts-ignore
 const { default: processStream } = arbundles;
+
 const DEFAULT_BATCH_SIZE = 10;
 
 /* eslint-disable */

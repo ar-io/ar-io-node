@@ -57,11 +57,12 @@ app.get('/debug', async (_req, res) => {
 const apolloServerInstanceGql = apolloServer(chainDb, {
   introspection: true
 });
-await apolloServerInstanceGql.start();
-apolloServerInstanceGql.applyMiddleware({
-  app,
-  path: '/graphql'
-});
-app.listen(port, () => {
-  log.info(`Listening on port ${port}`);
+apolloServerInstanceGql.start().then(() => {
+  apolloServerInstanceGql.applyMiddleware({
+    app,
+    path: '/graphql'
+  });
+  app.listen(port, () => {
+    log.info(`Listening on port ${port}`);
+  });
 });
