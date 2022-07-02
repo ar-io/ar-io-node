@@ -76,15 +76,16 @@ export interface ChainSource {
   getHeight(): Promise<number>;
 }
 
+// TODO consider renaming to ChainIndexer
 export interface ChainDatabase {
+  getMaxHeight(): Promise<number>;
+  getNewBlockHashByHeight(height: number): Promise<string | undefined>;
+  resetToHeight(height: number): Promise<void>;
   saveBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
     missingTxIds: string[]
   ): Promise<void>;
-  getMaxHeight(): Promise<number>;
-  getNewBlockHashByHeight(height: number): Promise<string | undefined>;
-  resetToHeight(height: number): Promise<void>;
 }
 
 export interface BundleDatabase {

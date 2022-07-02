@@ -28,33 +28,47 @@ type DebugInfo = {
 
 export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private db: Sqlite.Database;
+
+  // Lookup table inserts
   private walletInsertStmt: Sqlite.Statement;
   private tagNamesInsertStmt: Sqlite.Statement;
   private tagValuesInsertStmt: Sqlite.Statement;
-  private newTxsInsertStmt: Sqlite.Statement;
-  private missingTxsInsertStmt: Sqlite.Statement;
-  private newTxTagsInsertStmt: Sqlite.Statement;
+
+  // "new_*" (and related) inserts
   private newBlocksInsertStmt: Sqlite.Statement;
   private newBlockHeightsInsertStmt: Sqlite.Statement;
   private newBlockTxsInsertStmt: Sqlite.Statement;
-  private getMaxStableHeightAndTimestampStmt: Sqlite.Statement;
-  private getMaxHeightStmt: Sqlite.Statement;
+  private newTxTagsInsertStmt: Sqlite.Statement;
+  private newTxsInsertStmt: Sqlite.Statement;
+  private missingTxsInsertStmt: Sqlite.Statement;
+
+  // "new_*" to "stable_*" copy
+  private saveStableBlockRangeStmt: Sqlite.Statement;
   private saveStableBlockTxsRangeStmt: Sqlite.Statement;
   private saveStableTxsRangeStmt: Sqlite.Statement;
   private saveStableTxTagsRangeStmt: Sqlite.Statement;
-  private saveStableBlockRangeStmt: Sqlite.Statement;
-  private getNewBlockHashByHeightStmt: Sqlite.Statement;
-  private resetToHeightStmt: Sqlite.Statement;
-  private insertBlockAndTxsFn: Sqlite.Transaction;
-  private saveStableBlockRangeFn: Sqlite.Transaction;
 
-  // Stale "new" data cleanup
+  // Stale "new_*" data cleanup
   private deleteStaleNewTxTagsStmt: Sqlite.Statement;
   private deleteStaleNewTxsByHeightStmt: Sqlite.Statement;
   private deleteStaleNewTxsByTimestampStmt: Sqlite.Statement;
   private deleteStaleNewBlockTxsStmt: Sqlite.Statement;
   private deleteStaleNewBlocksStmt: Sqlite.Statement;
   private deleteStaleNewBlockHeightsStmt: Sqlite.Statement;
+
+  // Internal accessors
+  private getMaxStableHeightAndTimestampStmt: Sqlite.Statement;
+
+  // Public accessors
+  private getMaxHeightStmt: Sqlite.Statement;
+  private getNewBlockHashByHeightStmt: Sqlite.Statement;
+
+  // Height reset
+  private resetToHeightStmt: Sqlite.Statement;
+
+  // Transactions
+  private insertBlockAndTxsFn: Sqlite.Transaction;
+  private saveStableBlockRangeFn: Sqlite.Transaction;
   private deleteStaleNewDataFn: Sqlite.Transaction;
 
   constructor(db: Sqlite.Database) {
@@ -62,6 +76,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('page_size = 4096'); // may depend on OS and FS
 
+    // Lookup table inserts
     this.walletInsertStmt = this.db.prepare(`
       INSERT INTO wallets (address, public_modulus)
       VALUES (@address, @public_modulus)
@@ -80,36 +95,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ON CONFLICT DO NOTHING
     `);
 
-    this.newTxsInsertStmt = this.db.prepare(`
-      INSERT INTO new_transactions (
-        id, signature, format, last_tx, owner_address,
-        target, quantity, reward, data_size, data_root,
-        tag_count, content_type, created_at
-      ) VALUES (
-        @id, @signature, @format, @last_tx, @owner_address,
-        @target, @quantity, @reward, @data_size, @data_root,
-        @tag_count, @content_type, @created_at
-      ) ON CONFLICT DO NOTHING
-    `);
-
-    this.newTxTagsInsertStmt = this.db.prepare(`
-      INSERT INTO new_transaction_tags (
-        tag_name_hash, tag_value_hash,
-        transaction_id, transaction_tag_index
-      ) VALUES (
-        @tag_name_hash, @tag_value_hash,
-        @transaction_id, @transaction_tag_index
-      ) ON CONFLICT DO NOTHING
-    `);
-
-    this.missingTxsInsertStmt = this.db.prepare(`
-      INSERT INTO missing_transactions (
-        block_indep_hash, transaction_id, height
-      ) VALUES (
-        @block_indep_hash, @transaction_id, @height
-      ) ON CONFLICT DO NOTHING
-    `);
-
+    // "new_*" (and related) inserts
     // TODO are the CASTs necessary
     this.newBlocksInsertStmt = this.db.prepare(`
       INSERT INTO new_blocks (
@@ -155,22 +141,58 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ) ON CONFLICT DO NOTHING
     `);
 
-    this.getMaxStableHeightAndTimestampStmt = this.db.prepare(`
-      SELECT
-        IFNULL(MAX(height), -1) AS height,
-        IFNULL(MAX(block_timestamp), 0) AS block_timestamp
-      FROM stable_blocks
+    this.newTxTagsInsertStmt = this.db.prepare(`
+      INSERT INTO new_transaction_tags (
+        tag_name_hash, tag_value_hash,
+        transaction_id, transaction_tag_index
+      ) VALUES (
+        @tag_name_hash, @tag_value_hash,
+        @transaction_id, @transaction_tag_index
+      ) ON CONFLICT DO NOTHING
     `);
 
-    this.getMaxHeightStmt = this.db.prepare(`
-      SELECT MAX(height) AS height
-      FROM (
-        SELECT MAX(height) AS height
-        FROM new_block_heights
-        UNION
-        SELECT MAX(height) AS height
-        FROM stable_blocks
-      )
+    this.newTxsInsertStmt = this.db.prepare(`
+      INSERT INTO new_transactions (
+        id, signature, format, last_tx, owner_address,
+        target, quantity, reward, data_size, data_root,
+        tag_count, content_type, created_at
+      ) VALUES (
+        @id, @signature, @format, @last_tx, @owner_address,
+        @target, @quantity, @reward, @data_size, @data_root,
+        @tag_count, @content_type, @created_at
+      ) ON CONFLICT DO NOTHING
+    `);
+
+    this.missingTxsInsertStmt = this.db.prepare(`
+      INSERT INTO missing_transactions (
+        block_indep_hash, transaction_id, height
+      ) VALUES (
+        @block_indep_hash, @transaction_id, @height
+      ) ON CONFLICT DO NOTHING
+    `);
+
+    // "new_*" to "stable_*" copy
+    this.saveStableBlockRangeStmt = this.db.prepare(`
+      INSERT INTO stable_blocks (
+        height, indep_hash, previous_block, nonce, hash,
+        block_timestamp, diff, cumulative_diff, last_retarget,
+        reward_addr, reward_pool, block_size, weave_size,
+        usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
+        scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
+        hash_list_merkle, wallet_list, tx_root,
+        tx_count, missing_tx_count
+      ) SELECT
+        nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
+        nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
+        nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
+        nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
+        nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
+        nb.hash_list_merkle, nb.wallet_list, nb.tx_root,
+        nb.tx_count, missing_tx_count
+      FROM new_blocks nb
+      JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
+      WHERE nbh.height >= @start_height AND nbh.height < @end_height
+      ON CONFLICT DO NOTHING
     `);
 
     this.saveStableBlockTxsRangeStmt = this.db.prepare(`
@@ -216,40 +238,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ON CONFLICT DO NOTHING
     `);
 
-    this.saveStableBlockRangeStmt = this.db.prepare(`
-      INSERT INTO stable_blocks (
-        height, indep_hash, previous_block, nonce, hash,
-        block_timestamp, diff, cumulative_diff, last_retarget,
-        reward_addr, reward_pool, block_size, weave_size,
-        usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
-        scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-        hash_list_merkle, wallet_list, tx_root,
-        tx_count, missing_tx_count
-      ) SELECT
-        nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
-        nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
-        nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
-        nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
-        nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
-        nb.hash_list_merkle, nb.wallet_list, nb.tx_root,
-        nb.tx_count, missing_tx_count
-      FROM new_blocks nb
-      JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
-      WHERE nbh.height >= @start_height AND nbh.height < @end_height
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.getNewBlockHashByHeightStmt = this.db.prepare(`
-      SELECT block_indep_hash
-      FROM new_block_heights
-      WHERE height = @height
-    `);
-
-    this.resetToHeightStmt = this.db.prepare(`
-      DELETE FROM new_block_heights
-      WHERE height > @height
-    `);
-
+    // Stale "new_*" data cleanup
     this.deleteStaleNewTxTagsStmt = this.db.prepare(`
       DELETE FROM new_transaction_tags
       WHERE transaction_id IN (
@@ -299,6 +288,39 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       WHERE created_at < @created_at_threshold
     `);
 
+    // Internal accessors
+    this.getMaxStableHeightAndTimestampStmt = this.db.prepare(`
+      SELECT
+        IFNULL(MAX(height), -1) AS height,
+        IFNULL(MAX(block_timestamp), 0) AS block_timestamp
+      FROM stable_blocks
+    `);
+
+    // Public accessors
+    this.getMaxHeightStmt = this.db.prepare(`
+      SELECT MAX(height) AS height
+      FROM (
+        SELECT MAX(height) AS height
+        FROM new_block_heights
+        UNION
+        SELECT MAX(height) AS height
+        FROM stable_blocks
+      )
+    `);
+
+    this.getNewBlockHashByHeightStmt = this.db.prepare(`
+      SELECT block_indep_hash
+      FROM new_block_heights
+      WHERE height = @height
+    `);
+
+    // Height reset
+    this.resetToHeightStmt = this.db.prepare(`
+      DELETE FROM new_block_heights
+      WHERE height > @height
+    `);
+
+    // Transactions
     this.insertBlockAndTxsFn = this.db.transaction(
       (block: JsonBlock, txs: JsonTransaction[], missingTxIds: string[]) => {
         const indepHash = Buffer.from(block.indep_hash, 'base64');
@@ -493,6 +515,24 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     );
   }
 
+  async getMaxHeight(): Promise<number> {
+    return this.getMaxHeightStmt.get().height ?? -1;
+  }
+
+  async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
+    if (height < 0) {
+      throw new Error(`Invalid height ${height}, must be >= 0.`);
+    }
+    const hash = this.getNewBlockHashByHeightStmt.get({
+      height
+    })?.block_indep_hash;
+    return hash ? hash.toString('base64url') : undefined;
+  }
+
+  async resetToHeight(height: number): Promise<void> {
+    this.resetToHeightStmt.run({ height });
+  }
+
   async saveBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
@@ -516,24 +556,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         maxStableTimestamp - NEW_TX_CLEANUP_WAIT_SECS
       );
     }
-  }
-
-  async getMaxHeight(): Promise<number> {
-    return this.getMaxHeightStmt.get().height ?? -1;
-  }
-
-  async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
-    if (height < 0) {
-      throw new Error(`Invalid height ${height}, must be >= 0.`);
-    }
-    const hash = this.getNewBlockHashByHeightStmt.get({
-      height
-    })?.block_indep_hash;
-    return hash ? hash.toString('base64url') : undefined;
-  }
-
-  async resetToHeight(height: number): Promise<void> {
-    this.resetToHeightStmt.run({ height });
   }
 
   async getDebugInfo(): Promise<DebugInfo> {

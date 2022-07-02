@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
 import { resolvers } from './resolvers.js';
 import { GqlQueryable } from '../../types.js';
 
+// TODO make path relative to file in stead of cwd
 const typeDefs = gql(
   readFileSync('./src/routes/graphql/schema/types.graphql', 'utf8')
 );
