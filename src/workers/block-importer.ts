@@ -62,6 +62,8 @@ export class BlockImporter {
 
     // TODO add errors_total metric
     // TODO add fatal_errors_total metric
+    // TODO metric to indicate if the block importer is running
+    // TODO missing transaction count
 
     this.forksCounter = new promClient.Counter({
       name: 'forks_total',
@@ -105,6 +107,7 @@ export class BlockImporter {
     const { block, txs, missingTxIds } =
       await this.chainSource.getBlockAndTxsByHeight(height);
 
+    // Detect gaps and forks
     if (height > this.startHeight) {
       // Retrieve expected previous block hash from the DB
       const previousHeight = height - 1;
@@ -156,6 +159,9 @@ export class BlockImporter {
     this.eventEmitter.emit('block', block);
     txs.forEach((tx) => {
       this.eventEmitter.emit('block-tx', tx);
+    });
+    missingTxIds.forEach((txId) => {
+      this.eventEmitter.emit('missing-block-tx', txId);
     });
 
     this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
