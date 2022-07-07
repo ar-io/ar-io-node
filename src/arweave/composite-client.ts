@@ -247,6 +247,9 @@ export class ArweaveCompositeClient implements ChainSource {
         throw new Error(`Invalid block`);
       }
 
+      // Remove prefetched request from cache so forks are handled correctly
+      this.blockByHeightPromiseCache.del(height);
+
       return block;
     } catch (error) {
       // Remove failed requests from the cache
