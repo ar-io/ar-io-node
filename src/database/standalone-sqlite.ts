@@ -12,6 +12,24 @@ import sql from 'sql-bricks';
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
+function encodeBlockGqlCursor({ height }: { height: number }) {
+  const string = JSON.stringify([height]);
+  return Buffer.from(string).toString('base64url');
+}
+
+function decodeBlockGqlCursor(cursor: string) {
+  try {
+    const [height] = JSON.parse(Buffer.from(cursor, 'base64').toString()) as [
+      number
+    ];
+
+    return height;
+  } catch (error) {
+    // TODO use BadRequest error?
+    throw new Error('Invalid block cursor');
+  }
+}
+
 type DebugInfo = {
   walletCount: number;
   tagNameCount: number;
@@ -609,17 +627,19 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getGqlBlocks({
+    pageSize,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
     ids = [],
     minHeight = -1,
-    maxHeight = -1,
-    sortOrder = 'HEIGHT_DESC',
-    limit
+    maxHeight = -1
   }: {
-    ids?: string[];
+    pageSize: number;
+    cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
     minHeight?: number;
     maxHeight?: number;
-    limit: number;
   }) {
     const q = sql
       .select(
@@ -647,9 +667,17 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       q.where(sql.lte('height', maxHeight));
     }
 
+    const cursorHeight = cursor && decodeBlockGqlCursor(cursor);
+
     if (sortOrder === 'HEIGHT_DESC') {
+      if (cursorHeight) {
+        q.where(sql.lt('height', cursorHeight));
+      }
       q.orderBy('height DESC');
     } else {
+      if (cursorHeight) {
+        q.where(sql.gt('height', cursorHeight));
+      }
       q.orderBy('height ASC');
     }
 
@@ -667,7 +695,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     // TODO extend sql-bricks to support LIMIT
     const blocks = this.db
-      .prepare(`${qp.text} LIMIT ${limit + 1}`)
+      .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
       .all(params)
       .map((block) => ({
         id: block.id.toString('base64url'),
@@ -676,6 +704,16 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         previous: block.previous.toString('base64url')
       }));
 
-    return blocks;
+    return {
+      pageInfo: {
+        hasNextPage: blocks.length > pageSize
+      },
+      edges: blocks.slice(0, pageSize).map((block) => {
+        return {
+          cursor: encodeBlockGqlCursor(block),
+          node: block
+        };
+      })
+    };
   }
 }

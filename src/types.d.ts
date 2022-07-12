@@ -92,6 +92,10 @@ export interface BundleDatabase {
   saveDataItems(dataItems: DataItem[]): Promise<void>;
 }
 
+type GqlPageInfo = {
+  hasNextPage: boolean;
+};
+
 type GqlBlock = {
   id: string;
   timestamp: number;
@@ -99,6 +103,23 @@ type GqlBlock = {
   previous: string;
 };
 
+type GqlBlockEdge = {
+  cursor: string;
+  node: GqlBlock;
+};
+
+type GqlBlocksResult = {
+  pageInfo: GqlPageInfo;
+  edges: GqlBlockEdge[];
+};
+
 export interface GqlQueryable {
-  getGqlBlocks(args: { ids?: string[] }): Promise<GqlBlock[]>;
+  getGqlBlocks(args: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }): Promise<GqlBlocksResult>;
 }
