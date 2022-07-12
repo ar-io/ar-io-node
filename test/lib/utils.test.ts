@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { fromB64Url, sha256B64Url, toB64url } from '../../src/lib/utils.js';
+import { fromB64Url, sha256B64Url, toB64Url } from '../../src/lib/utils.js';
 
 const TEST_STRING = 'http://test.com';
 const TEST_BASE_64_URL_ENCODED_STRING = 'aHR0cDovL3Rlc3QuY29t';
@@ -18,15 +18,15 @@ describe('fromB64Url', () => {
   });
 });
 
-describe('toB64url', () => {
+describe('toB64Url', () => {
   it('should convert buffer to a base64url encoded string', () => {
-    expect(toB64url(TEST_BASE_64_BUFFER)).to.equal(
+    expect(toB64Url(TEST_BASE_64_BUFFER)).to.equal(
       TEST_BASE_64_URL_ENCODED_STRING
     );
   });
 
   it('should convert a buffer with padding to base64 url encoded string', () => {
-    expect(toB64url(TEST_BASE_64_BUFFER_WITH_PADDING)).to.deep.equal(
+    expect(toB64Url(TEST_BASE_64_BUFFER_WITH_PADDING)).to.deep.equal(
       TEST_BASE_64_URL_ENCODED_STRING
     );
   });

@@ -4,6 +4,7 @@ import {
   JsonTransaction,
   GqlQueryable
 } from '../types.js';
+import { toB64Url, fromB64Url } from '../lib/utils.js';
 import Sqlite from 'better-sqlite3';
 import * as crypto from 'crypto';
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
@@ -14,14 +15,12 @@ const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
 function encodeBlockGqlCursor({ height }: { height: number }) {
   const string = JSON.stringify([height]);
-  return Buffer.from(string).toString('base64url');
+  return toB64Url(Buffer.from(string));
 }
 
 function decodeBlockGqlCursor(cursor: string) {
   try {
-    const [height] = JSON.parse(Buffer.from(cursor, 'base64').toString()) as [
-      number
-    ];
+    const [height] = JSON.parse(fromB64Url(cursor).toString()) as [number];
 
     return height;
   } catch (error) {
