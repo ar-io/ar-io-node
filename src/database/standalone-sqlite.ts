@@ -608,7 +608,19 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     };
   }
 
-  async getGqlBlocks({ ids = [] }: { ids?: string[] }) {
+  async getGqlBlocks({
+    ids = [],
+    minHeight = -1,
+    maxHeight = -1,
+    sortOrder = 'HEIGHT_DESC',
+    limit
+  }: {
+    ids?: string[];
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    minHeight?: number;
+    maxHeight?: number;
+    limit: number;
+  }) {
     const q = sql
       .select(
         'indep_hash AS id',
@@ -616,16 +628,35 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         'block_timestamp AS "timestamp"',
         'height'
       )
-      .from('stable_blocks')
-      .where(
+      .from('stable_blocks');
+
+    if (ids.length > 0) {
+      q.where(
         sql.in(
           'indep_hash',
           ids.map((v) => Buffer.from(v, 'base64'))
         )
-      )
-      .toParams();
+      );
+    }
 
-    const params = q.values
+    if (minHeight >= 0) {
+      q.where(sql.gte('height', minHeight));
+    }
+
+    if (maxHeight >= 0) {
+      q.where(sql.lte('height', maxHeight));
+    }
+
+    if (sortOrder === 'HEIGHT_DESC') {
+      q.orderBy('height DESC');
+    } else {
+      q.orderBy('height ASC');
+    }
+
+    const qp = q.toParams();
+
+    // TODO extract into standalone function
+    const params = qp.values
       .map((v, i) => {
         return [i + 1, v];
       })
@@ -634,12 +665,14 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         return acc;
       }, {} as any);
 
+    // TODO extend sql-bricks to support LIMIT
     const blocks = this.db
-      .prepare(q.text)
+      .prepare(`${qp.text} LIMIT ${limit + 1}`)
       .all(params)
       .map((block) => ({
-        ...block,
         id: block.id.toString('base64url'),
+        timestamp: block.timestamp,
+        height: block.height,
         previous: block.previous.toString('base64url')
       }));
 
