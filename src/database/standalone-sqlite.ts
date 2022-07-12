@@ -18,11 +18,15 @@ function encodeBlockGqlCursor({ height }: { height: number }) {
   return toB64Url(Buffer.from(string));
 }
 
-function decodeBlockGqlCursor(cursor: string) {
+function decodeBlockGqlCursor(cursor: string | undefined) {
   try {
+    if (!cursor) {
+      return { height: undefined };
+    }
+
     const [height] = JSON.parse(fromB64Url(cursor).toString()) as [number];
 
-    return height;
+    return { height };
   } catch (error) {
     // TODO use BadRequest error?
     throw new Error('Invalid block cursor');
@@ -666,7 +670,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       q.where(sql.lte('height', maxHeight));
     }
 
-    const cursorHeight = cursor && decodeBlockGqlCursor(cursor);
+    const { height: cursorHeight } = decodeBlockGqlCursor(cursor);
 
     if (sortOrder === 'HEIGHT_DESC') {
       if (cursorHeight) {
