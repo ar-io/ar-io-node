@@ -62,6 +62,7 @@
     "start": "ts-node-esm ./src/app.ts",
     "watch": "nodemon",
     "test": "mocha --no-warnings",
+    "test:watch": "mocha --no-warnings --watch --parallel",
     "test:coverage": "npx c8 mocha --no-warnings"
   }
 }
