@@ -164,10 +164,8 @@ export class ArweaveCompositeClient implements ChainSource {
 
   async prefetchBlockByHeight(height: number, prefetchTxs = false) {
     let responsePromise = this.blockByHeightPromiseCache.get(height);
-    if (responsePromise) {
-      // Update TTL if block promise is already cached
-      this.blockByHeightPromiseCache.set(height, responsePromise);
-    } else {
+
+    if (!responsePromise) {
       responsePromise = this.trustedNodeRequestQueue
         .push({
           method: 'GET',
