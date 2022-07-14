@@ -96,6 +96,29 @@ type GqlPageInfo = {
   hasNextPage: boolean;
 };
 
+type GqlTransaction = {
+  id: string;
+  anchor: string;
+  signature: string;
+  recipient: string | undefined;
+  ownerAddress: string;
+  ownerKey: string;
+  fee: string;
+  quantity: string;
+  dataSize: string;
+  contentType: string;
+};
+
+type GqlTransactionEdge = {
+  cursor: string;
+  node: GqlTransaction;
+};
+
+type GqlTransactionsResult = {
+  pageInfo: GqlPageInfo;
+  edges: GqlTransactionEdge[];
+};
+
 type GqlBlock = {
   id: string;
   timestamp: number;
@@ -114,6 +137,15 @@ type GqlBlocksResult = {
 };
 
 export interface GqlQueryable {
+  getGqlTransactions(args: {
+    pageSize: number;
+    //cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }): Promise<GqlTransactionsResult>;
+
   getGqlBlocks(args: {
     pageSize: number;
     cursor?: string;

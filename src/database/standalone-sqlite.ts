@@ -13,8 +13,16 @@ import sql from 'sql-bricks';
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
+// TODO include block transaction index
+function encodeTransactionGqlCursor({ height }: { height: number }) {
+  const string = JSON.stringify([height]);
+  // TODO implement helper to convert directly from UTF-8
+  return toB64Url(Buffer.from(string));
+}
+
 function encodeBlockGqlCursor({ height }: { height: number }) {
   const string = JSON.stringify([height]);
+  // TODO implement helper to convert directly from UTF-8
   return toB64Url(Buffer.from(string));
 }
 
@@ -24,6 +32,7 @@ function decodeBlockGqlCursor(cursor: string | undefined) {
       return { height: undefined };
     }
 
+    // TODO implement helper to convert directly to UTF-8
     const [height] = JSON.parse(fromB64Url(cursor).toString()) as [number];
 
     return { height };
@@ -626,6 +635,114 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       missingStableBlockCount,
       newTxCount,
       newBlockCount
+    };
+  }
+
+  async getGqlTransactions({
+    pageSize,
+    //cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    minHeight = -1,
+    maxHeight = -1
+  }: {
+    pageSize: number;
+    //cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }) {
+    const q = sql
+      .select(
+        'height',
+        'id',
+        'last_tx',
+        'signature',
+        'target',
+        'CAST(reward AS TEXT) AS reward',
+        'CAST(quantity AS TEXT) AS quantity',
+        'CAST(data_size AS TEXT) AS data_size',
+        'content_type',
+        'owner_address',
+        'public_modulus'
+      )
+      .from('stable_transactions')
+      .join('wallets', {
+        'stable_transactions.owner_address': 'wallets.address'
+      });
+
+    if (ids.length > 0) {
+      q.where(
+        sql.in(
+          'id',
+          ids.map((v) => Buffer.from(v, 'base64'))
+        )
+      );
+    }
+
+    if (minHeight >= 0) {
+      q.where(sql.gte('height', minHeight));
+    }
+
+    if (maxHeight >= 0) {
+      q.where(sql.lte('height', maxHeight));
+    }
+
+    //const { height: cursorHeight } = decodeBlockGqlCursor(cursor);
+
+    if (sortOrder === 'HEIGHT_DESC') {
+      //if (cursorHeight) {
+      //  q.where(sql.lt('height', cursorHeight));
+      //}
+      q.orderBy('height DESC, block_transaction_index DESC');
+    } else {
+      //if (cursorHeight) {
+      //  q.where(sql.gt('height', cursorHeight));
+      //}
+      q.orderBy('height ASC, block_transaction_index ASC');
+    }
+
+    const qp = q.toParams();
+
+    // TODO extract into standalone function
+    const params = qp.values
+      .map((v, i) => {
+        return [i + 1, v];
+      })
+      .reduce((acc, [i, v]) => {
+        acc[i] = v;
+        return acc;
+      }, {} as any);
+
+    // TODO extend sql-bricks to support LIMIT
+    const txs = this.db
+      .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
+      .all(params)
+      .map((block) => ({
+        height: block.height,
+        id: block.id.toString('base64url'),
+        anchor: block.last_tx.toString('base64url'),
+        signature: block.signature.toString('base64url'),
+        recipient: block.target?.toString('base64url'),
+        ownerAddress: block.owner_address.toString('base64url'),
+        ownerKey: block.public_modulus.toString('base64url'),
+        fee: block.reward,
+        quantity: block.quantity,
+        dataSize: block.data_size,
+        contentType: block.content_type
+      }));
+
+    return {
+      pageInfo: {
+        hasNextPage: txs.length > pageSize
+      },
+      edges: txs.slice(0, pageSize).map((tx) => {
+        return {
+          cursor: encodeTransactionGqlCursor(tx),
+          node: tx
+        };
+      })
     };
   }
 

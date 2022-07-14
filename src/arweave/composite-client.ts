@@ -77,6 +77,7 @@ export class ArweaveCompositeClient implements ChainSource {
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
   }) {
+    // TODO add context to logger
     this.log = log;
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
