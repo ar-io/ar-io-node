@@ -22,7 +22,6 @@ function winstonToAr(amount: string) {
 export const resolvers: IResolvers = {
   Query: {
     transactions: (_, queryParams, { db }) => {
-      console.log('queryParams', queryParams);
       // TODO extract parameter construction into a function
       return db.getGqlTransactions({
         pageSize: getPageSize(queryParams),
