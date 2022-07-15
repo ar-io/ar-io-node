@@ -258,7 +258,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         block_transaction_index, transaction_tag_index,
         transaction_id
       ) SELECT
-        ntt.tag_name_hash, ntt.tag_name_hash, nbh.height,
+        ntt.tag_name_hash, ntt.tag_value_hash, nbh.height,
         nbt.block_transaction_index, ntt.transaction_tag_index,
         ntt.transaction_id
       FROM new_transaction_tags ntt
