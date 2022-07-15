@@ -30,6 +30,7 @@ export const resolvers: IResolvers = {
         ids: queryParams.ids,
         recipients: queryParams.recipients,
         owners: queryParams.owners,
+        tags: queryParams.tags || [],
         minHeight: queryParams.height?.min,
         maxHeight: queryParams.height?.max
       });

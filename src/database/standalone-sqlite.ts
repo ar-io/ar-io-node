@@ -6,7 +6,7 @@ import {
 } from '../types.js';
 import { toB64Url, fromB64Url } from '../lib/utils.js';
 import Sqlite from 'better-sqlite3';
-import * as crypto from 'crypto';
+import crypto from 'crypto';
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import sql from 'sql-bricks';
 
@@ -646,7 +646,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     recipients = [],
     owners = [],
     minHeight = -1,
-    maxHeight = -1
+    maxHeight = -1,
+    tags = []
   }: {
     pageSize: number;
     //cursor?: string;
@@ -656,10 +657,11 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    tags: { name: string; values: string[] }[];
   }) {
     const q = sql
       .select(
-        'height',
+        'stable_transactions.height AS height',
         'id',
         'last_tx',
         'signature',
@@ -711,18 +713,50 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       q.where(sql.lte('height', maxHeight));
     }
 
+    let sortTable = 'stable_transactions';
+
+    if (tags) {
+      tags.forEach((tag, index) => {
+        tag.values.forEach((value, valueIndex) => {
+          const tagAlias = `"${index}_${index}_${valueIndex}"`;
+          sortTable = tagAlias;
+
+          q.join(`stable_transaction_tags AS ${tagAlias}`, {
+            'stable_transactions.height': `${tagAlias}.height`,
+            'stable_transactions.block_transaction_index': `${tagAlias}.block_transaction_index`
+          });
+
+          const nameHash = crypto
+            .createHash('sha1')
+            .update(Buffer.from(tag.name, 'utf8'))
+            .digest();
+          q.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
+
+          const valueHash = crypto
+            .createHash('sha1')
+            .update(Buffer.from(value, 'utf8'))
+            .digest();
+          q.where({ [`${tagAlias}.tag_value_hash`]: valueHash });
+        });
+      });
+    }
+
     //const { height: cursorHeight } = decodeBlockGqlCursor(cursor);
 
     if (sortOrder === 'HEIGHT_DESC') {
       //if (cursorHeight) {
       //  q.where(sql.lt('height', cursorHeight));
       //}
-      q.orderBy('height DESC, block_transaction_index DESC');
+      q.orderBy(
+        `${sortTable}.height DESC, ${sortTable}.block_transaction_index DESC`
+      );
     } else {
       //if (cursorHeight) {
       //  q.where(sql.gt('height', cursorHeight));
       //}
-      q.orderBy('height ASC, block_transaction_index ASC');
+      q.orderBy(
+        `${sortTable}.height ASC, ${sortTable}.block_transaction_index ASC`
+      );
     }
 
     const qp = q.toParams();
