@@ -28,6 +28,8 @@ export const resolvers: IResolvers = {
         sortOrder: queryParams.sort,
         cursor: queryParams.after,
         ids: queryParams.ids,
+        recipients: queryParams.recipients,
+        owners: queryParams.owners,
         minHeight: queryParams.height?.min,
         maxHeight: queryParams.height?.max
       });

@@ -142,6 +142,8 @@ export interface GqlQueryable {
     //cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
     ids?: string[];
+    recipients?: string[];
+    owners?: string[];
     minHeight?: number;
     maxHeight?: number;
   }): Promise<GqlTransactionsResult>;

@@ -643,6 +643,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     //cursor,
     sortOrder = 'HEIGHT_DESC',
     ids = [],
+    recipients = [],
+    owners = [],
     minHeight = -1,
     maxHeight = -1
   }: {
@@ -650,6 +652,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     //cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
     ids?: string[];
+    recipients?: string[];
+    owners?: string[];
     minHeight?: number;
     maxHeight?: number;
   }) {
@@ -677,6 +681,24 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         sql.in(
           'id',
           ids.map((v) => Buffer.from(v, 'base64'))
+        )
+      );
+    }
+
+    if (recipients.length > 0) {
+      q.where(
+        sql.in(
+          'target',
+          recipients.map((v) => Buffer.from(v, 'base64'))
+        )
+      );
+    }
+
+    if (owners.length > 0) {
+      q.where(
+        sql.in(
+          'owner_address',
+          owners.map((v) => Buffer.from(v, 'base64'))
         )
       );
     }
