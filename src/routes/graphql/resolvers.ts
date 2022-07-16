@@ -48,6 +48,16 @@ export const resolvers: IResolvers = {
     }
   },
   Transaction: {
+    block: (parent: GqlTransaction) => {
+      return parent.blockIndepHash
+        ? {
+            id: parent.blockIndepHash,
+            timestamp: parent.blockTimestamp,
+            height: parent.height,
+            previous: parent.blockPreviousBlock,
+          }
+        : null;
+    },
     // TODO extract formatting into testable functions
     recipient: (parent: GqlTransaction) => {
       if (parent.recipient) {
@@ -65,7 +75,7 @@ export const resolvers: IResolvers = {
     quantity: (parent: GqlTransaction) => {
       return {
         ar: winstonToAr(parent.quantity || '0'),
-        winston: parent.quantity || '0',
+        winston: parent.quantity || '0'
       };
     },
     fee: (parent: GqlTransaction) => {
@@ -80,5 +90,15 @@ export const resolvers: IResolvers = {
         key: parent.ownerKey
       };
     },
+    parent: () => {
+      return {
+        id: ''
+      };
+    },
+    bundledIn: () => {
+      return {
+        id: ''
+      };
+    }
   }
 };

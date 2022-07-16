@@ -671,9 +671,15 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         'CAST(data_size AS TEXT) AS data_size',
         'content_type',
         'owner_address',
-        'public_modulus'
+        'public_modulus',
+        'stable_blocks.indep_hash AS block_indep_hash',
+        'stable_blocks.block_timestamp AS block_timestamp',
+        'stable_blocks.previous_block AS block_previous_block'
       )
       .from('stable_transactions')
+      .join('stable_blocks', {
+        'stable_transactions.height': 'stable_blocks.height'
+      })
       .join('wallets', {
         'stable_transactions.owner_address': 'wallets.address'
       });
@@ -775,18 +781,21 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const txs = this.db
       .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
       .all(params)
-      .map((block) => ({
-        height: block.height,
-        id: block.id.toString('base64url'),
-        anchor: block.last_tx.toString('base64url'),
-        signature: block.signature.toString('base64url'),
-        recipient: block.target?.toString('base64url'),
-        ownerAddress: block.owner_address.toString('base64url'),
-        ownerKey: block.public_modulus.toString('base64url'),
-        fee: block.reward,
-        quantity: block.quantity,
-        dataSize: block.data_size,
-        contentType: block.content_type
+      .map((tx) => ({
+        height: tx.height,
+        id: tx.id.toString('base64url'),
+        anchor: tx.last_tx.toString('base64url'),
+        signature: tx.signature.toString('base64url'),
+        recipient: tx.target?.toString('base64url'),
+        ownerAddress: tx.owner_address.toString('base64url'),
+        ownerKey: tx.public_modulus.toString('base64url'),
+        fee: tx.reward,
+        quantity: tx.quantity,
+        dataSize: tx.data_size,
+        contentType: tx.content_type,
+        blockIndepHash: tx.block_indep_hash.toString('base64url'),
+        blockTimestamp: tx.block_timestamp,
+        blockPreviousBlock: tx.block_previous_block.toString('base64url')
       }));
 
     return {

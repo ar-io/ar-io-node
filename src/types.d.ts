@@ -107,6 +107,10 @@ type GqlTransaction = {
   quantity: string;
   dataSize: string;
   contentType: string;
+  blockIndepHash: string | undefined;
+  blockTimestamp: number | undefined;
+  height: number | undefined;
+  blockPreviousBlock: number | undefined;
 };
 
 type GqlTransactionEdge = {
