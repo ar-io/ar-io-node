@@ -113,6 +113,8 @@ CREATE TABLE stable_transaction_tags (
   PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, transaction_tag_index)
 );
 
+CREATE INDEX stable_transaction_tags_transaction_id_idx ON stable_transaction_tags (transaction_id);
+
 CREATE TABLE new_blocks (
   -- Identity
   indep_hash BLOB PRIMARY KEY,

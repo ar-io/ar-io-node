@@ -96,6 +96,9 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   // Height reset
   private resetToHeightStmt: Sqlite.Statement;
 
+  // GraphQL
+  private getTransactionTagsStmt: Sqlite.Statement;
+
   // Transactions
   private insertBlockAndTxsFn: Sqlite.Transaction;
   private saveStableBlockRangeFn: Sqlite.Transaction;
@@ -348,6 +351,15 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.resetToHeightStmt = this.db.prepare(`
       DELETE FROM new_block_heights
       WHERE height > @height
+    `);
+
+    // Get transaction tags (for GQL)
+    this.getTransactionTagsStmt = this.db.prepare(`
+      SELECT name, value
+      FROM stable_transaction_tags
+      JOIN tag_names ON tag_name_hash = tag_names.hash
+      JOIN tag_values ON tag_value_hash = tag_values.hash
+      WHERE transaction_id = @transaction_id
     `);
 
     // Transactions
@@ -638,6 +650,17 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     };
   }
 
+  getGqlTransactionTags(txId: Buffer) {
+    const tags = this.getTransactionTagsStmt.all({
+      transaction_id: txId
+    });
+
+    return tags.map((tag) => ({
+      name: tag.name.toString('utf8'),
+      value: tag.value.toString('utf8')
+    }));
+  }
+
   async getGqlTransactions({
     pageSize,
     //cursor,
@@ -792,6 +815,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
+        tags: this.getGqlTransactionTags(tx.id),
         contentType: tx.content_type,
         blockIndepHash: tx.block_indep_hash.toString('base64url'),
         blockTimestamp: tx.block_timestamp,

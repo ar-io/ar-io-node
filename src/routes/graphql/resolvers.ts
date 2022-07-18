@@ -21,6 +21,14 @@ function winstonToAr(amount: string) {
 
 export const resolvers: IResolvers = {
   Query: {
+    transaction: async (_, queryParams, { db }) => {
+      // TODO extract parameter construction into a function
+      // TODO separate function for returning a single transaction
+      return (await db.getGqlTransactions({
+        pageSize: 1,
+        ids: [queryParams.id],
+      })).edges[0].node;
+    },
     transactions: (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function
       return db.getGqlTransactions({
@@ -34,6 +42,14 @@ export const resolvers: IResolvers = {
         minHeight: queryParams.height?.min,
         maxHeight: queryParams.height?.max
       });
+    },
+    block: async (_, queryParams, { db }) => {
+      // TODO extract parameter construction into a function
+      // TODO separate function for returning a single block
+      return (await db.getGqlBlocks({
+        pageSize: 1,
+        ids: [queryParams.id],
+      })).edges[0].node;
     },
     blocks: (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function
