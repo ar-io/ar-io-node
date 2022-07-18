@@ -771,27 +771,31 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     if (tags) {
       tags.forEach((tag, index) => {
-        tag.values.forEach((value, valueIndex) => {
-          const tagAlias = `"${index}_${index}_${valueIndex}"`;
-          sortTable = tagAlias;
+        const tagAlias = `"${index}_${index}"`;
+        sortTable = tagAlias;
 
-          q.join(`stable_transaction_tags AS ${tagAlias}`, {
-            'stable_transactions.height': `${tagAlias}.height`,
-            'stable_transactions.block_transaction_index': `${tagAlias}.block_transaction_index`
-          });
-
-          const nameHash = crypto
-            .createHash('sha1')
-            .update(Buffer.from(tag.name, 'utf8'))
-            .digest();
-          q.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
-
-          const valueHash = crypto
-            .createHash('sha1')
-            .update(Buffer.from(value, 'utf8'))
-            .digest();
-          q.where({ [`${tagAlias}.tag_value_hash`]: valueHash });
+        q.join(`stable_transaction_tags AS ${tagAlias}`, {
+          'stable_transactions.height': `${tagAlias}.height`,
+          'stable_transactions.block_transaction_index': `${tagAlias}.block_transaction_index`
         });
+
+        const nameHash = crypto
+          .createHash('sha1')
+          .update(Buffer.from(tag.name, 'utf8'))
+          .digest();
+        q.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
+
+        q.where(
+          sql.in(
+            `${tagAlias}.tag_value_hash`,
+            tag.values.map((value) => {
+              return crypto
+                .createHash('sha1')
+                .update(Buffer.from(value, 'utf8'))
+                .digest();
+            })
+          )
+        );
       });
     }
 
