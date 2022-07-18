@@ -14,10 +14,34 @@ const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
 // TODO include block transaction index
-function encodeTransactionGqlCursor({ height }: { height: number }) {
-  const string = JSON.stringify([height]);
+function encodeTransactionGqlCursor({
+  height,
+  blockTransactionIndex
+}: {
+  height: number;
+  blockTransactionIndex: number;
+}) {
+  const string = JSON.stringify([height, blockTransactionIndex]);
   // TODO implement helper to convert directly from UTF-8
   return toB64Url(Buffer.from(string));
+}
+
+function decodeTransactionGqlCursor(cursor: string | undefined) {
+  try {
+    if (!cursor) {
+      return { height: undefined, blockTransactionIndex: undefined };
+    }
+
+    // TODO implement helper to convert directly to UTF-8
+    const [height, blockTransactionIndex] = JSON.parse(
+      fromB64Url(cursor).toString()
+    ) as [number, number];
+
+    return { height, blockTransactionIndex };
+  } catch (error) {
+    // TODO use BadRequest error?
+    throw new Error('Invalid block cursor');
+  }
 }
 
 function encodeBlockGqlCursor({ height }: { height: number }) {
@@ -663,7 +687,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
   async getGqlTransactions({
     pageSize,
-    //cursor,
+    cursor,
     sortOrder = 'HEIGHT_DESC',
     ids = [],
     recipients = [],
@@ -673,7 +697,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     tags = []
   }: {
     pageSize: number;
-    //cursor?: string;
+    cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
     ids?: string[];
     recipients?: string[];
@@ -685,6 +709,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const q = sql
       .select(
         'stable_transactions.height AS height',
+        'stable_transactions.block_transaction_index AS block_transaction_index',
         'id',
         'last_tx',
         'signature',
@@ -770,19 +795,32 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       });
     }
 
-    //const { height: cursorHeight } = decodeBlockGqlCursor(cursor);
+    const {
+      height: cursorHeight,
+      blockTransactionIndex: cursorBlockTransactionIndex
+    } = decodeTransactionGqlCursor(cursor);
 
     if (sortOrder === 'HEIGHT_DESC') {
-      //if (cursorHeight) {
-      //  q.where(sql.lt('height', cursorHeight));
-      //}
+      if (cursorHeight) {
+        q.where(
+          sql.lt(
+            'stable_transactions.height * 1000 + stable_transactions.block_transaction_index',
+            cursorHeight * 1000 + cursorBlockTransactionIndex
+          )
+        );
+      }
       q.orderBy(
         `${sortTable}.height DESC, ${sortTable}.block_transaction_index DESC`
       );
     } else {
-      //if (cursorHeight) {
-      //  q.where(sql.gt('height', cursorHeight));
-      //}
+      if (cursorHeight) {
+        q.where(
+          sql.gt(
+            'stable_transactions.height * 1000 + stable_transactions.block_transaction_index',
+            cursorHeight * 1000 + cursorBlockTransactionIndex
+          )
+        );
+      }
       q.orderBy(
         `${sortTable}.height ASC, ${sortTable}.block_transaction_index ASC`
       );
@@ -806,6 +844,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       .all(params)
       .map((tx) => ({
         height: tx.height,
+        blockTransactionIndex: tx.block_transaction_index,
         id: tx.id.toString('base64url'),
         anchor: tx.last_tx.toString('base64url'),
         signature: tx.signature.toString('base64url'),
