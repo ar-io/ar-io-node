@@ -39,8 +39,8 @@ export const resolvers: IResolvers = {
         recipients: queryParams.recipients,
         owners: queryParams.owners,
         tags: queryParams.tags || [],
-        minHeight: queryParams.height?.min,
-        maxHeight: queryParams.height?.max
+        minHeight: queryParams.block?.min,
+        maxHeight: queryParams.block?.max
       });
     },
     block: async (_, queryParams, { db }) => {

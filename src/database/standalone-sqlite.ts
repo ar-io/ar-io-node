@@ -760,11 +760,11 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     if (minHeight >= 0) {
-      q.where(sql.gte('height', minHeight));
+      q.where(sql.gte('stable_transactions.height', minHeight));
     }
 
     if (maxHeight >= 0) {
-      q.where(sql.lte('height', maxHeight));
+      q.where(sql.lte('stable_transactions.height', maxHeight));
     }
 
     let sortTable = 'stable_transactions';
