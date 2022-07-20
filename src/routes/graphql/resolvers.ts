@@ -19,15 +19,67 @@ function winstonToAr(amount: string) {
   return ar.winstonToAr(amount);
 }
 
+export function resolveTxRecipient(tx: GqlTransaction) {
+  if (tx.recipient) {
+    return tx.recipient;
+  } else {
+    return '';
+  }
+}
+
+export function resolveTxData(tx: GqlTransaction) {
+  return {
+    size: tx.dataSize || '0',
+    type: tx.contentType
+  };
+}
+
+export function resolveTxQuantity(tx: GqlTransaction) {
+  return {
+    ar: winstonToAr(tx.quantity || '0'),
+    winston: tx.quantity || '0'
+  };
+}
+
+export function resolveTxFee(tx: GqlTransaction) {
+  return {
+    ar: winstonToAr(tx.fee || '0'),
+    winston: tx.fee || '0'
+  };
+}
+
+export function resolveTxOwner(tx: GqlTransaction) {
+  return {
+    address: tx.ownerAddress,
+    key: tx.ownerKey
+  };
+}
+
+// TODO implement
+export function resolveTxParent(_tx: GqlTransaction) {
+  return {
+    id: ''
+  };
+}
+
+// TODO implement
+export function resolveTxBundledIn(_tx: GqlTransaction) {
+  return {
+    id: ''
+  };
+}
+
 export const resolvers: IResolvers = {
   Query: {
     transaction: async (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function
       // TODO separate function for returning a single transaction
-      return (await db.getGqlTransactions({
-        pageSize: 1,
-        ids: [queryParams.id],
-      })).edges[0].node;
+      return (
+        await db.getGqlTransactions({
+          pageSize: 1,
+          ids: [queryParams.id]
+        })
+      ).edges[0].node;
     },
     transactions: (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function
@@ -46,10 +98,12 @@ export const resolvers: IResolvers = {
     block: async (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function
       // TODO separate function for returning a single block
-      return (await db.getGqlBlocks({
-        pageSize: 1,
-        ids: [queryParams.id],
-      })).edges[0].node;
+      return (
+        await db.getGqlBlocks({
+          pageSize: 1,
+          ids: [queryParams.id]
+        })
+      ).edges[0].node;
     },
     blocks: (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function
@@ -70,51 +124,16 @@ export const resolvers: IResolvers = {
             id: parent.blockIndepHash,
             timestamp: parent.blockTimestamp,
             height: parent.height,
-            previous: parent.blockPreviousBlock,
+            previous: parent.blockPreviousBlock
           }
         : null;
     },
-    // TODO extract formatting into testable functions
-    recipient: (parent: GqlTransaction) => {
-      if (parent.recipient) {
-        return parent.recipient.trim();
-      } else {
-        return '';
-      }
-    },
-    data: (parent: GqlTransaction) => {
-      return {
-        size: parent.dataSize || '0',
-        type: parent.contentType
-      };
-    },
-    quantity: (parent: GqlTransaction) => {
-      return {
-        ar: winstonToAr(parent.quantity || '0'),
-        winston: parent.quantity || '0'
-      };
-    },
-    fee: (parent: GqlTransaction) => {
-      return {
-        ar: winstonToAr(parent.fee || '0'),
-        winston: parent.fee || '0'
-      };
-    },
-    owner: (parent: GqlTransaction) => {
-      return {
-        address: parent.ownerAddress,
-        key: parent.ownerKey
-      };
-    },
-    parent: () => {
-      return {
-        id: ''
-      };
-    },
-    bundledIn: () => {
-      return {
-        id: ''
-      };
-    }
+    recipient: resolveTxRecipient,
+    data: resolveTxData,
+    quantity: resolveTxQuantity,
+    fee: resolveTxFee,
+    owner: resolveTxOwner,
+    parent: resolveTxParent,
+    bundledIn: resolveTxBundledIn
   }
 };

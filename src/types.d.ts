@@ -106,11 +106,11 @@ type GqlTransaction = {
   fee: string;
   quantity: string;
   dataSize: string;
-  contentType: string;
+  contentType: string | undefined;
   blockIndepHash: string | undefined;
   blockTimestamp: number | undefined;
   height: number | undefined;
-  blockPreviousBlock: number | undefined;
+  blockPreviousBlock: string | undefined;
 };
 
 type GqlTransactionEdge = {
