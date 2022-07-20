@@ -4,7 +4,7 @@ import {
   JsonTransaction,
   GqlQueryable
 } from '../types.js';
-import { toB64Url, fromB64Url } from '../lib/utils.js';
+import { fromB64Url, utf8ToB64Url } from '../lib/utils.js';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
@@ -13,7 +13,6 @@ import sql from 'sql-bricks';
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
-// TODO include block transaction index
 function encodeTransactionGqlCursor({
   height,
   blockTransactionIndex
@@ -21,9 +20,7 @@ function encodeTransactionGqlCursor({
   height: number;
   blockTransactionIndex: number;
 }) {
-  const string = JSON.stringify([height, blockTransactionIndex]);
-  // TODO implement helper to convert directly from UTF-8
-  return toB64Url(Buffer.from(string));
+  return utf8ToB64Url(JSON.stringify([height, blockTransactionIndex]));
 }
 
 function decodeTransactionGqlCursor(cursor: string | undefined) {
@@ -45,9 +42,7 @@ function decodeTransactionGqlCursor(cursor: string | undefined) {
 }
 
 function encodeBlockGqlCursor({ height }: { height: number }) {
-  const string = JSON.stringify([height]);
-  // TODO implement helper to convert directly from UTF-8
-  return toB64Url(Buffer.from(string));
+  return utf8ToB64Url(JSON.stringify([height]));
 }
 
 function decodeBlockGqlCursor(cursor: string | undefined) {
