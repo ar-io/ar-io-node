@@ -61,6 +61,15 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
   }
 }
 
+export function toSqliteParams(sqlBricksParams: { values: any[] }) {
+  return sqlBricksParams.values
+    .map((v, i) => [i + 1, v])
+    .reduce((acc, [i, v]) => {
+      acc[i] = v;
+      return acc;
+    }, {} as { [key: string]: any });
+}
+
 type DebugInfo = {
   walletCount: number;
   tagNameCount: number;
@@ -828,21 +837,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     const qp = q.toParams();
-
-    // TODO extract into standalone function
-    const params = qp.values
-      .map((v, i) => {
-        return [i + 1, v];
-      })
-      .reduce((acc, [i, v]) => {
-        acc[i] = v;
-        return acc;
-      }, {} as any);
+    const sqliteParams = toSqliteParams(qp);
 
     // TODO extend sql-bricks to support LIMIT
     const txs = this.db
       .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
-      .all(params)
+      .all(sqliteParams)
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
@@ -931,21 +931,14 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     const qp = q.toParams();
-
-    // TODO extract into standalone function
-    const params = qp.values
-      .map((v, i) => {
-        return [i + 1, v];
-      })
-      .reduce((acc, [i, v]) => {
-        acc[i] = v;
-        return acc;
-      }, {} as any);
+    console.log('qp', qp);
+    const sqliteParams = toSqliteParams(qp);
+    console.log('sqliteParams', sqliteParams);
 
     // TODO extend sql-bricks to support LIMIT
     const blocks = this.db
       .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
-      .all(params)
+      .all(sqliteParams)
       .map((block) => ({
         id: block.id.toString('base64url'),
         timestamp: block.timestamp,

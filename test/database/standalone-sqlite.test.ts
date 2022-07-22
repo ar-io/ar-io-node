@@ -3,7 +3,8 @@ import {
   encodeTransactionGqlCursor,
   decodeTransactionGqlCursor,
   encodeBlockGqlCursor,
-  decodeBlockGqlCursor
+  decodeBlockGqlCursor,
+  toSqliteParams
 } from '../../src/database/standalone-sqlite.js';
 
 const HEIGHT = 1138;
@@ -56,6 +57,15 @@ describe('encodeBlockGqlCursor', () => {
   it('should return an undefined height given an undefined cursor', () => {
     expect(decodeBlockGqlCursor(undefined)).to.deep.equal({
       height: undefined
+    });
+  });
+});
+
+describe('toSqliteParams', () => {
+  it('should convert SQL Bricks param values to better-sqlite3 params', () => {
+    expect(toSqliteParams({ values: [820389, 820389] })).to.deep.equal({
+      '1': 820389,
+      '2': 820389
     });
   });
 });
