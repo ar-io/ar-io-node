@@ -141,9 +141,11 @@ type GqlBlocksResult = {
 };
 
 export interface GqlQueryable {
+  getGqlTransaction(args: { id: string }): Promise<GqlTransaction>;
+
   getGqlTransactions(args: {
     pageSize: number;
-    //cursor?: string;
+    cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
     ids?: string[];
     recipients?: string[];
@@ -152,6 +154,8 @@ export interface GqlQueryable {
     maxHeight?: number;
     tags: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult>;
+
+  getGqlBlock(args: { id: string }): Promise<GqlBlock>;
 
   getGqlBlocks(args: {
     pageSize: number;

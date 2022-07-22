@@ -72,14 +72,11 @@ export function resolveTxBundledIn(_tx: GqlTransaction) {
 export const resolvers: IResolvers = {
   Query: {
     transaction: async (_, queryParams, { db }) => {
-      // TODO extract parameter construction into a function
-      // TODO separate function for returning a single transaction
       return (
-        await db.getGqlTransactions({
-          pageSize: 1,
-          ids: [queryParams.id]
+        await db.getGqlTransaction({
+          id: queryParams.id
         })
-      ).edges[0].node;
+      );
     },
     transactions: (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function
@@ -96,14 +93,11 @@ export const resolvers: IResolvers = {
       });
     },
     block: async (_, queryParams, { db }) => {
-      // TODO extract parameter construction into a function
-      // TODO separate function for returning a single block
       return (
-        await db.getGqlBlocks({
-          pageSize: 1,
-          ids: [queryParams.id]
+        await db.getGqlBlock({
+          id: queryParams.id
         })
-      ).edges[0].node;
+      );
     },
     blocks: (_, queryParams, { db }) => {
       // TODO extract parameter construction into a function

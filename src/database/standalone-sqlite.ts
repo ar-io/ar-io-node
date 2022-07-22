@@ -689,6 +689,64 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }));
   }
 
+  getGqlStableTxBaseSql() {
+    return sql
+      .select(
+        'st.height AS height',
+        'st.block_transaction_index AS block_transaction_index',
+        'id',
+        'last_tx',
+        'signature',
+        'target',
+        'CAST(reward AS TEXT) AS reward',
+        'CAST(quantity AS TEXT) AS quantity',
+        'CAST(data_size AS TEXT) AS data_size',
+        'content_type',
+        'owner_address',
+        'public_modulus',
+        'sb.indep_hash AS block_indep_hash',
+        'sb.block_timestamp AS block_timestamp',
+        'sb.previous_block AS block_previous_block'
+      )
+      .from('stable_transactions st')
+      .join('stable_blocks sb', {
+        'st.height': 'sb.height'
+      })
+      .join('wallets w', {
+        'st.owner_address': 'w.address'
+      });
+  }
+
+  async getGqlTransaction({ id }: { id: string }) {
+    const q = this.getGqlStableTxBaseSql();
+
+    q.where({ 'st.id': Buffer.from(id, 'base64') });
+
+    const qp = q.toParams();
+    const sqliteParams = toSqliteParams(qp);
+
+    const tx = this.db.prepare(qp.text).get(sqliteParams);
+
+    return {
+      height: tx.height,
+      blockTransactionIndex: tx.block_transaction_index,
+      id: tx.id.toString('base64url'),
+      anchor: tx.last_tx.toString('base64url'),
+      signature: tx.signature.toString('base64url'),
+      recipient: tx.target?.toString('base64url'),
+      ownerAddress: tx.owner_address.toString('base64url'),
+      ownerKey: tx.public_modulus.toString('base64url'),
+      fee: tx.reward,
+      quantity: tx.quantity,
+      dataSize: tx.data_size,
+      tags: this.getGqlTransactionTags(tx.id),
+      contentType: tx.content_type,
+      blockIndepHash: tx.block_indep_hash.toString('base64url'),
+      blockTimestamp: tx.block_timestamp,
+      blockPreviousBlock: tx.block_previous_block.toString('base64url')
+    };
+  }
+
   async getGqlTransactions({
     pageSize,
     cursor,
@@ -710,36 +768,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     maxHeight?: number;
     tags: { name: string; values: string[] }[];
   }) {
-    const q = sql
-      .select(
-        'stable_transactions.height AS height',
-        'stable_transactions.block_transaction_index AS block_transaction_index',
-        'id',
-        'last_tx',
-        'signature',
-        'target',
-        'CAST(reward AS TEXT) AS reward',
-        'CAST(quantity AS TEXT) AS quantity',
-        'CAST(data_size AS TEXT) AS data_size',
-        'content_type',
-        'owner_address',
-        'public_modulus',
-        'stable_blocks.indep_hash AS block_indep_hash',
-        'stable_blocks.block_timestamp AS block_timestamp',
-        'stable_blocks.previous_block AS block_previous_block'
-      )
-      .from('stable_transactions')
-      .join('stable_blocks', {
-        'stable_transactions.height': 'stable_blocks.height'
-      })
-      .join('wallets', {
-        'stable_transactions.owner_address': 'wallets.address'
-      });
+    const q = this.getGqlStableTxBaseSql();
 
     if (ids.length > 0) {
       q.where(
         sql.in(
-          'id',
+          'st.id',
           ids.map((v) => Buffer.from(v, 'base64'))
         )
       );
@@ -748,7 +782,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     if (recipients.length > 0) {
       q.where(
         sql.in(
-          'target',
+          'st.target',
           recipients.map((v) => Buffer.from(v, 'base64'))
         )
       );
@@ -757,21 +791,21 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     if (owners.length > 0) {
       q.where(
         sql.in(
-          'owner_address',
+          'st.owner_address',
           owners.map((v) => Buffer.from(v, 'base64'))
         )
       );
     }
 
     if (minHeight >= 0) {
-      q.where(sql.gte('stable_transactions.height', minHeight));
+      q.where(sql.gte('st.height', minHeight));
     }
 
     if (maxHeight >= 0) {
-      q.where(sql.lte('stable_transactions.height', maxHeight));
+      q.where(sql.lte('st.height', maxHeight));
     }
 
-    let sortTable = 'stable_transactions';
+    let sortTable = 'st';
 
     if (tags) {
       tags.forEach((tag, index) => {
@@ -779,8 +813,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         sortTable = tagAlias;
 
         q.join(`stable_transaction_tags AS ${tagAlias}`, {
-          'stable_transactions.height': `${tagAlias}.height`,
-          'stable_transactions.block_transaction_index': `${tagAlias}.block_transaction_index`
+          'st.height': `${tagAlias}.height`,
+          'st.block_transaction_index': `${tagAlias}.block_transaction_index`
         });
 
         const nameHash = crypto
@@ -813,7 +847,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         // TODO handle missing block transaction index
         q.where(
           sql.lt(
-            'stable_transactions.height * 1000 + stable_transactions.block_transaction_index',
+            'st.height * 1000 + st.block_transaction_index',
             cursorHeight * 1000 + cursorBlockTransactionIndex
           )
         );
@@ -826,7 +860,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         // TODO handle missing block transaction index
         q.where(
           sql.gt(
-            'stable_transactions.height * 1000 + stable_transactions.block_transaction_index',
+            'st.height * 1000 + st.block_transaction_index',
             cursorHeight * 1000 + cursorBlockTransactionIndex
           )
         );
@@ -875,6 +909,35 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     };
   }
 
+  getGqlStableBlocksBaseSql() {
+    return sql
+      .select(
+        'indep_hash AS id',
+        'previous_block AS previous',
+        'block_timestamp AS "timestamp"',
+        'height'
+      )
+      .from('stable_blocks');
+  }
+
+  async getGqlBlock({ id }: { id: string }) {
+    const q = this.getGqlStableBlocksBaseSql();
+
+    q.where({ indep_hash: Buffer.from(id, 'base64') });
+
+    const qp = q.toParams();
+    const sqliteParams = toSqliteParams(qp);
+
+    const block = this.db.prepare(qp.text).get(sqliteParams);
+
+    return {
+      id: block.id.toString('base64url'),
+      timestamp: block.timestamp,
+      height: block.height,
+      previous: block.previous.toString('base64url')
+    };
+  }
+
   async getGqlBlocks({
     pageSize,
     cursor,
@@ -890,14 +953,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     minHeight?: number;
     maxHeight?: number;
   }) {
-    const q = sql
-      .select(
-        'indep_hash AS id',
-        'previous_block AS previous',
-        'block_timestamp AS "timestamp"',
-        'height'
-      )
-      .from('stable_blocks');
+    const q = this.getGqlStableBlocksBaseSql();
 
     if (ids.length > 0) {
       q.where(
