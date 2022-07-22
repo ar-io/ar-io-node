@@ -931,9 +931,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     const qp = q.toParams();
-    console.log('qp', qp);
     const sqliteParams = toSqliteParams(qp);
-    console.log('sqliteParams', sqliteParams);
 
     // TODO extend sql-bricks to support LIMIT
     const blocks = this.db
