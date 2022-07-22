@@ -6,10 +6,10 @@ import ArModule from 'arweave/node/ar.js';
 // @ts-ignore
 const { default: Ar } = ArModule;
 
-const DEFAULT_PAGE_SIZE = 10;
-const MAX_PAGE_SIZE = 100;
+export const DEFAULT_PAGE_SIZE = 10;
+export const MAX_PAGE_SIZE = 100;
 
-function getPageSize({ first }: { first?: number }) {
+export function getPageSize({ first }: { first?: number }) {
   return Math.min(first || DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
 }
 
@@ -72,14 +72,11 @@ export function resolveTxBundledIn(_tx: GqlTransaction) {
 export const resolvers: IResolvers = {
   Query: {
     transaction: async (_, queryParams, { db }) => {
-      return (
-        await db.getGqlTransaction({
-          id: queryParams.id
-        })
-      );
+      return await db.getGqlTransaction({
+        id: queryParams.id
+      });
     },
     transactions: (_, queryParams, { db }) => {
-      // TODO extract parameter construction into a function
       return db.getGqlTransactions({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
@@ -93,14 +90,11 @@ export const resolvers: IResolvers = {
       });
     },
     block: async (_, queryParams, { db }) => {
-      return (
-        await db.getGqlBlock({
-          id: queryParams.id
-        })
-      );
+      return await db.getGqlBlock({
+        id: queryParams.id
+      });
     },
     blocks: (_, queryParams, { db }) => {
-      // TODO extract parameter construction into a function
       return db.getGqlBlocks({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
