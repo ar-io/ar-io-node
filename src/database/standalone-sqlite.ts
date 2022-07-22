@@ -13,7 +13,7 @@ import sql from 'sql-bricks';
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
-function encodeTransactionGqlCursor({
+export function encodeTransactionGqlCursor({
   height,
   blockTransactionIndex
 }: {
@@ -23,7 +23,7 @@ function encodeTransactionGqlCursor({
   return utf8ToB64Url(JSON.stringify([height, blockTransactionIndex]));
 }
 
-function decodeTransactionGqlCursor(cursor: string | undefined) {
+export function decodeTransactionGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
       return { height: undefined, blockTransactionIndex: undefined };
@@ -41,11 +41,11 @@ function decodeTransactionGqlCursor(cursor: string | undefined) {
   }
 }
 
-function encodeBlockGqlCursor({ height }: { height: number }) {
+export function encodeBlockGqlCursor({ height }: { height: number }) {
   return utf8ToB64Url(JSON.stringify([height]));
 }
 
-function decodeBlockGqlCursor(cursor: string | undefined) {
+export function decodeBlockGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
       return { height: undefined };
@@ -801,6 +801,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     if (sortOrder === 'HEIGHT_DESC') {
       if (cursorHeight) {
+        // TODO handle missing block transaction index
         q.where(
           sql.lt(
             'stable_transactions.height * 1000 + stable_transactions.block_transaction_index',
@@ -813,6 +814,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       );
     } else {
       if (cursorHeight) {
+        // TODO handle missing block transaction index
         q.where(
           sql.gt(
             'stable_transactions.height * 1000 + stable_transactions.block_transaction_index',
