@@ -12,6 +12,7 @@ import {
 } from '../types.js';
 
 const HEIGHT_POLLING_INTERVAL_MS = 5000;
+const BLOCK_ERROR_RETRY_INTERVAL_MS = 50;
 
 export class BlockImporter {
   // Dependencies
@@ -214,6 +215,7 @@ export class BlockImporter {
       } catch (error) {
         this.log.error(`Error importing block at height ${nextHeight}`, error);
         this.blockImportErrorsCounter.inc();
+        await wait(BLOCK_ERROR_RETRY_INTERVAL_MS);
       }
     }
   }
