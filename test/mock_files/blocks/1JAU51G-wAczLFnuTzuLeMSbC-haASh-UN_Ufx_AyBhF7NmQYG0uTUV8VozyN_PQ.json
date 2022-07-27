@@ -1,0 +1,34 @@
+{
+  "usd_to_ar_rate": [
+    "328",
+    "17839"
+  ],
+  "scheduled_usd_to_ar_rate": [
+    "8159",
+    "445975"
+  ],
+  "packing_2_5_threshold": "0",
+  "strict_data_split_threshold": "30607159107830",
+  "nonce": "82jmx6fPLCT5twSrX9M2zU_9HkFOE6eg2aqNBjw1ByU",
+  "previous_block": "m4oBdcclV-Cl2P-PjtX-rQK9fcgqjv9ZqOXoYKlZAejitz1n56CWgH3Z0l97UEnU",
+  "timestamp": 1658852880,
+  "last_retarget": 1658852566,
+  "diff": "115792089201224919696294500547802599948296907569176735951586057688343578267824",
+  "height": 982575,
+  "hash": "_____2abaEnwjEuacJYuZbl1pVGbtJl8af0Bo5QUH9A",
+  "indep_hash": "1JAU51G-wAczLFnuTzuLeMSbC-haASh-UN_Ufx_AyBhF7NmQYG0uTUV8VozyN_PQ",
+  "txs": [
+    "vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA",
+    "oq-v4Cv61YAGmY_KlLdxmGp5HjcldvOSLOMv0UPjSTE",
+    "cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0"
+  ],
+  "tx_root": "HSPMoVQXDxjyhMK9paUmn92ep7Ejb4Sk6C5RcVfqLKQ",
+  "wallet_list": "DWg13IP4PGvYtjLhDnCQhQo-3CbsSiYbVTNA3HETKknLCkgZoL388jJA9bovufuM",
+  "reward_addr": "yTeqSquiz8rXZc3sXsTESSB6wx7HA9HZhJwv-__Fpbw",
+  "tags": [],
+  "reward_pool": "38906967173395672",
+  "weave_size": "90764323102966",
+  "block_size": "2097152",
+  "cumulative_diff": "3800069149414534",
+  "hash_list_merkle": "byCxMerYeffySxHTFhf9V9AqiRpzDKr3PmvS588R40539W1BkBn8VfomxSYwcXmF"
+}

@@ -70,20 +70,6 @@ export function toSqliteParams(sqlBricksParams: { values: any[] }) {
     }, {} as { [key: string]: any });
 }
 
-type DebugInfo = {
-  walletCount: number;
-  tagNameCount: number;
-  tagValueCount: number;
-  stableTxCount: number;
-  stableBlockCount: number;
-  stableBlockTxCount: number;
-  maxStableHeight: number;
-  minStableHeight: number;
-  missingStableBlockCount: number;
-  newTxCount: number;
-  newBlockCount: number;
-};
-
 export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private db: Sqlite.Database;
 
@@ -628,7 +614,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
   }
 
-  async getDebugInfo(): Promise<DebugInfo> {
+  async getDebugInfo() {
     const walletCount = this.db
       .prepare('SELECT COUNT(*) AS cnt FROM wallets')
       .get().cnt as number;
@@ -647,34 +633,50 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const stableBlockTxCount = this.db
       .prepare('SELECT SUM(tx_count) AS cnt FROM stable_blocks')
       .get().cnt as number;
-    const maxStableHeight = this.db
-      .prepare('SELECT MAX(height) AS max_height FROM stable_blocks')
-      .get().max_height as number;
-    const minStableHeight = this.db
-      .prepare('SELECT MIN(height) AS min_height FROM stable_blocks')
-      .get().min_height as number;
     const newTxCount = this.db
       .prepare('SELECT COUNT(*) AS cnt FROM new_transactions')
       .get().cnt as number;
     const newBlockCount = this.db
       .prepare('SELECT COUNT(*) AS cnt FROM new_blocks')
       .get().cnt as number;
+    const missingTxCount = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM missing_transactions')
+      .get().cnt as number;
+    const minStableHeight = this.db
+      .prepare('SELECT MIN(height) AS min_height FROM stable_blocks')
+      .get().min_height as number;
+    const maxStableHeight = this.db
+      .prepare('SELECT MAX(height) AS max_height FROM stable_blocks')
+      .get().max_height as number;
+    const minNewBlockHeight = this.db
+      .prepare('SELECT MIN(height) AS min_height FROM new_block_heights')
+      .get().min_height as number;
+    const maxNewBlockHeight = this.db
+      .prepare('SELECT MAX(height) AS max_height FROM new_block_heights')
+      .get().max_height as number;
 
     const missingStableBlockCount =
       maxStableHeight - (minStableHeight - 1) - stableBlockCount;
 
     return {
-      walletCount,
-      tagNameCount,
-      tagValueCount,
-      stableTxCount,
-      stableBlockCount,
-      stableBlockTxCount,
-      maxStableHeight,
-      minStableHeight,
-      missingStableBlockCount,
-      newTxCount,
-      newBlockCount
+      counts: {
+        wallets: walletCount,
+        tagNames: tagNameCount,
+        tagValues: tagValueCount,
+        stableTxs: stableTxCount,
+        stableBlocks: stableBlockCount,
+        stableBlockTxs: stableBlockTxCount,
+        missingStableBlocks: missingStableBlockCount,
+        missingTxs: missingTxCount,
+        newTxs: newTxCount,
+        newBlocks: newBlockCount
+      },
+      heights: {
+        minStable: minStableHeight,
+        maxStable: maxStableHeight,
+        minNew: minNewBlockHeight,
+        maxNew: maxNewBlockHeight
+      }
     };
   }
 
@@ -873,7 +875,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const qp = q.toParams();
     const sqliteParams = toSqliteParams(qp);
 
-    // TODO extend sql-bricks to support LIMIT
     const txs = this.db
       .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
@@ -989,7 +990,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const qp = q.toParams();
     const sqliteParams = toSqliteParams(qp);
 
-    // TODO extend sql-bricks to support LIMIT
     const blocks = this.db
       .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
