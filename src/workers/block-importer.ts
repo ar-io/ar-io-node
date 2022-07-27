@@ -11,7 +11,7 @@ import {
   ChainDatabase
 } from '../types.js';
 
-const HEIGHT_POLLING_INTERVAL_MS = 5000;
+const DEFAULT_HEIGHT_POLLING_INTERVAL_MS = 5000;
 const BLOCK_ERROR_RETRY_INTERVAL_MS = 50;
 
 export class BlockImporter {
@@ -23,6 +23,7 @@ export class BlockImporter {
 
   // State
   private startHeight: number;
+  private heightPollingIntervalMs: number;
   private maxChainHeight: number;
   private shouldRun: boolean;
 
@@ -39,7 +40,8 @@ export class BlockImporter {
     chainSource,
     chainDb,
     eventEmitter,
-    startHeight = 0
+    startHeight = 0,
+    heightPollingIntervalMs = DEFAULT_HEIGHT_POLLING_INTERVAL_MS
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
@@ -47,6 +49,7 @@ export class BlockImporter {
     chainDb: ChainDatabase;
     eventEmitter: EventEmitter;
     startHeight: number;
+    heightPollingIntervalMs?: number;
   }) {
     // Dependencies
     this.log = log.child({ module: 'block-importer' });
@@ -56,6 +59,7 @@ export class BlockImporter {
 
     // State
     this.maxChainHeight = 0;
+    this.heightPollingIntervalMs = heightPollingIntervalMs;
     this.shouldRun = false;
     this.startHeight = startHeight;
 
@@ -105,6 +109,15 @@ export class BlockImporter {
     txs: JsonTransaction[];
     missingTxIds: string[];
   }> {
+    // Stop importing if fork depth exceeeds max fork depth
+    if (forkDepth > MAX_FORK_DEPTH) {
+      this.log.error(
+        `Maximum fork depth of ${MAX_FORK_DEPTH} exceeded. Stopping block import process.`
+      );
+      this.shouldRun = false;
+      throw new Error('Maximum fork depth exceeded');
+    }
+
     const { block, txs, missingTxIds } =
       await this.chainSource.getBlockAndTxsByHeight(height);
 
@@ -131,15 +144,6 @@ export class BlockImporter {
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       }
-    }
-
-    // Stop importing if fork depth exceeeds max fork depth
-    if (forkDepth > MAX_FORK_DEPTH) {
-      this.log.error(
-        `Maximum fork depth of ${MAX_FORK_DEPTH} exceeded. Stopping block import process.`
-      );
-      this.shouldRun = false;
-      throw new Error('Maximum fork depth exceeded');
     }
 
     // Record fork count and depth metrics
@@ -189,7 +193,7 @@ export class BlockImporter {
     // Wait for the next block if the DB is in sync with the chain
     while (dbHeight >= this.maxChainHeight) {
       this.log.info(`Polling for block after height ${dbHeight}...`);
-      await wait(HEIGHT_POLLING_INTERVAL_MS);
+      await wait(this.heightPollingIntervalMs);
       this.maxChainHeight = await this.chainSource.getHeight();
     }
 
