@@ -240,7 +240,6 @@ describe('BlockImporter', () => {
       });
 
       it('should throw an exception', async () => {
-        // TODO add blocks 52 and 53 and use those instead
         expect(blockImporter.importBlock(51)).to.be.rejectedWith(
           'Maximum fork depth exceeded'
         );
