@@ -62,18 +62,25 @@ describe('BlockImporter', () => {
   let metricsRegistry: promClient.Registry;
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
-  let chainSource: ChainSource;
+  let chainSource: MockArweaveChainSource;
   let db: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
 
-  const createBlockImporter = ({ startHeight }: { startHeight: number }) => {
+  const createBlockImporter = ({
+    startHeight,
+    heightPollingIntervalMs
+  }: {
+    startHeight: number;
+    heightPollingIntervalMs?: number;
+  }) => {
     return new BlockImporter({
       log: log,
       metricsRegistry,
       chainSource,
       chainDb,
       eventEmitter,
-      startHeight: startHeight
+      startHeight,
+      heightPollingIntervalMs
     });
   };
 
@@ -166,6 +173,42 @@ describe('BlockImporter', () => {
       it('should return one more than the max height in the DB', async () => {
         const nextHeight = await blockImporter.getNextHeight();
         expect(nextHeight).to.equal(2);
+      });
+    });
+
+    describe('when the chain is fully synced', () => {
+      beforeEach(async () => {
+        blockImporter = createBlockImporter({
+          startHeight: 1,
+          heightPollingIntervalMs: 5
+        });
+        chainSource.setHeight(1);
+        await blockImporter.importBlock(1);
+      });
+
+      it('should wait for the next block to be produced', async () => {
+        const nextHeightPromise = blockImporter.getNextHeight();
+
+        const getNextHeightWaited = await Promise.race([
+          (async () => {
+            await wait(1);
+            return true;
+          })(),
+          (async () => {
+            await nextHeightPromise;
+            return false;
+          })()
+        ]);
+        expect(getNextHeightWaited).to.be.true;
+
+        chainSource.setHeight(2);
+        expect(await nextHeightPromise).to.equal(2);
+      });
+
+      it('should return one more than the max height in the DB if multiple blocks are produced while waiting', async () => {
+        const nextHeightPromise = blockImporter.getNextHeight();
+        chainSource.setHeight(3);
+        expect(await nextHeightPromise).to.equal(2);
       });
     });
   });
