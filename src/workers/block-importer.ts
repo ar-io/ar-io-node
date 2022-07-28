@@ -171,6 +171,8 @@ export class BlockImporter {
 
     this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
 
+    // TODO emit events for imported blocks and transactions
+
     // Record import count metrics
     this.blocksImportedCounter.inc();
     this.transactionsImportedCounter.inc(txs.length);
