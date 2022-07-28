@@ -1,5 +1,7 @@
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
+import sinonChai from 'sinon-chai';
+import * as sinon from 'sinon';
 
 import * as promClient from 'prom-client';
 import Sqlite from 'better-sqlite3';
@@ -13,21 +15,34 @@ import log from '../../src/log.js';
 import { default as wait } from 'wait';
 
 chai.use(chaiAsPromised);
+chai.use(sinonChai);
 
 class MockArweaveChainSource implements ChainSource {
   private height = 10000000;
   private missingTxIds: string[] = [];
+  private tempBlockIdOverrides: { [key: string]: string } = {};
+
+  setTempBlockIdOverride(height: number, id: string) {
+    this.tempBlockIdOverrides[height.toString()] = id;
+  }
 
   async getBlockByHeight(height: number): Promise<JsonBlock> {
     const heightToId = JSON.parse(
       fs.readFileSync('test/mock_files/block_height_to_id.json', 'utf8')
     );
+    const heightStr = height.toString();
 
-    const blockId = heightToId[height.toString()];
+    let blockId: string;
+    if (this.tempBlockIdOverrides[heightStr]) {
+      blockId = this.tempBlockIdOverrides[heightStr];
+    } else {
+      blockId = heightToId[height.toString()];
+    }
     if (fs.existsSync(`test/mock_files/blocks/${blockId}.json`)) {
-      return JSON.parse(
+      const block = JSON.parse(
         fs.readFileSync(`test/mock_files/blocks/${blockId}.json`, 'utf8')
       );
+      return block;
     }
 
     throw new Error(`Block ${height} not found`);
@@ -83,6 +98,7 @@ describe('BlockImporter', () => {
   let chainSource: MockArweaveChainSource;
   let db: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
+  let sandbox: sinon.SinonSandbox;
 
   const createBlockImporter = ({
     startHeight,
@@ -103,6 +119,8 @@ describe('BlockImporter', () => {
   };
 
   beforeEach(async () => {
+    sandbox = sinon.createSandbox();
+
     log.transports.forEach((t) => (t.silent = true));
     metricsRegistry = promClient.register;
     metricsRegistry.clear();
@@ -113,6 +131,10 @@ describe('BlockImporter', () => {
     const schema = fs.readFileSync('schema.sql', 'utf8');
     db.exec(schema);
     chainDb = new StandaloneSqliteDatabase(db);
+  });
+
+  after(() => {
+    sandbox.restore();
   });
 
   describe('importBlock', () => {
@@ -132,7 +154,7 @@ describe('BlockImporter', () => {
         expect(stats.counts.newBlocks).to.equal(1);
       });
 
-      it('should add the block transactions to the DB', async () => {
+      it("should add the block's transactions to the DB", async () => {
         const stats = await chainDb.getDebugInfo();
         expect(stats.counts.newTxs).to.equal(3);
       });
@@ -157,7 +179,7 @@ describe('BlockImporter', () => {
         expect(stats.counts.newBlocks).to.equal(1);
       });
 
-      it('should add the block transactions to the DB', async () => {
+      it("should add the block's transactions to the DB", async () => {
         const stats = await chainDb.getDebugInfo();
         expect(stats.counts.newTxs).to.equal(2);
       });
@@ -183,6 +205,32 @@ describe('BlockImporter', () => {
       it('should import only 1 block', async () => {
         const maxHeight = await chainDb.getMaxHeight();
         expect(maxHeight).to.equal(2);
+      });
+    });
+
+    describe('attempting to import a block after a fork', () => {
+      beforeEach(async () => {
+        blockImporter = createBlockImporter({ startHeight: 1 });
+        chainSource.setTempBlockIdOverride(
+          2,
+          'JRhPWF4b66QtiYXe-nBHhj6nKVc7oFgvnwOEqhWmfUGdronQUeOUkyI789uBSGPP'
+        );
+        await blockImporter.importBlock(1);
+      });
+
+      it('should reset the height to where the fork occured', async () => {
+        await blockImporter.importBlock(2);
+        const maxHeight = await chainDb.getMaxHeight();
+        expect(maxHeight).to.equal(1);
+      });
+
+      it('should reimport the block where the fork occured', async () => {
+        sandbox.spy(chainDb, 'saveBlockAndTxs');
+        await blockImporter.importBlock(2);
+        expect(chainDb.saveBlockAndTxs).to.have.been.calledOnce;
+        expect(chainDb.saveBlockAndTxs).to.have.been.calledWithMatch({
+          height: 1
+        });
       });
     });
 
