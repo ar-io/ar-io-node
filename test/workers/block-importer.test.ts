@@ -66,6 +66,17 @@ describe('BlockImporter', () => {
   let db: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
 
+  const createBlockImporter = ({ startHeight }: { startHeight: number }) => {
+    return new BlockImporter({
+      log: log,
+      metricsRegistry,
+      chainSource,
+      chainDb,
+      eventEmitter,
+      startHeight: startHeight
+    });
+  };
+
   beforeEach(async () => {
     log.transports.forEach((t) => (t.silent = true));
     metricsRegistry = promClient.register;
@@ -82,14 +93,7 @@ describe('BlockImporter', () => {
   describe('importBlock', () => {
     describe('importing a single block', () => {
       beforeEach(async () => {
-        blockImporter = new BlockImporter({
-          log: log,
-          metricsRegistry,
-          chainSource,
-          chainDb,
-          eventEmitter,
-          startHeight: 982575
-        });
+        blockImporter = createBlockImporter({ startHeight: 982575 });
         await blockImporter.importBlock(982575);
       });
 
@@ -111,36 +115,25 @@ describe('BlockImporter', () => {
 
     describe('attempting to import a block with a gap before it', () => {
       beforeEach(async () => {
-        blockImporter = new BlockImporter({
-          log: log,
-          metricsRegistry,
-          chainSource,
-          chainDb,
-          eventEmitter,
-          startHeight: 1
-        });
+        blockImporter = createBlockImporter({ startHeight: 1 });
         await blockImporter.importBlock(1);
+        await blockImporter.importBlock(6);
       });
 
-      it('should import the block at the beginning of the gap', async () => {
-        await blockImporter.importBlock(6);
+      it('should import the first block at the start of the gap', async () => {
         const stats = await chainDb.getDebugInfo();
         expect(stats.counts.newBlocks).to.equal(2);
+      });
+
+      it('should import only 1 block', async () => {
         const maxHeight = await chainDb.getMaxHeight();
         expect(maxHeight).to.equal(2);
       });
     });
 
-    describe('importing with a gap that exceeds the max fork depth', () => {
+    describe('attempting to import a block following a gap that exceeds the max fork depth', () => {
       beforeEach(async () => {
-        blockImporter = new BlockImporter({
-          log: log,
-          metricsRegistry,
-          chainSource,
-          chainDb,
-          eventEmitter,
-          startHeight: 0
-        });
+        blockImporter = createBlockImporter({ startHeight: 0 });
       });
 
       it('should throw an exception', async () => {
@@ -155,14 +148,7 @@ describe('BlockImporter', () => {
   describe('getNextHeight', () => {
     describe('when no blocks have been imported', () => {
       beforeEach(async () => {
-        blockImporter = new BlockImporter({
-          log: log,
-          metricsRegistry,
-          chainSource,
-          chainDb,
-          eventEmitter,
-          startHeight: 0
-        });
+        blockImporter = createBlockImporter({ startHeight: 0 });
       });
 
       it('should return the start height', async () => {
@@ -171,16 +157,9 @@ describe('BlockImporter', () => {
       });
     });
 
-    describe('when a blocks have been imported the chain is not fully synced', () => {
+    describe('when blocks have been imported but the chain is not fully synced', () => {
       beforeEach(async () => {
-        blockImporter = new BlockImporter({
-          log: log,
-          metricsRegistry,
-          chainSource,
-          chainDb,
-          eventEmitter,
-          startHeight: 1
-        });
+        blockImporter = createBlockImporter({ startHeight: 1 });
         await blockImporter.importBlock(1);
       });
 
@@ -193,17 +172,10 @@ describe('BlockImporter', () => {
 
   describe('start', () => {
     beforeEach(async () => {
-      blockImporter = new BlockImporter({
-        log: log,
-        metricsRegistry,
-        chainSource,
-        chainDb,
-        eventEmitter,
-        startHeight: 1
-      });
+      blockImporter = createBlockImporter({ startHeight: 1 });
     });
 
-    it('should not throw an exception when called', async () => {
+    it('should not throw an exception when called (smoke test)', async () => {
       blockImporter.start();
       await wait(5);
       blockImporter.stop();
@@ -212,17 +184,10 @@ describe('BlockImporter', () => {
 
   describe('stop', () => {
     beforeEach(async () => {
-      blockImporter = new BlockImporter({
-        log: log,
-        metricsRegistry,
-        chainSource,
-        chainDb,
-        eventEmitter,
-        startHeight: 0
-      });
+      blockImporter = createBlockImporter({ startHeight: 0 });
     });
 
-    it('should not throw an exception when called', async () => {
+    it('should not throw an exception when called (smoke test)', async () => {
       await blockImporter.stop();
     });
   });
