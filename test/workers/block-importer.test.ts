@@ -16,6 +16,7 @@ chai.use(chaiAsPromised);
 
 class MockArweaveChainSource implements ChainSource {
   private height = 10000000;
+  private missingTxIds: string[] = [];
 
   async getBlockByHeight(height: number): Promise<JsonBlock> {
     const heightToId = JSON.parse(
@@ -32,21 +33,38 @@ class MockArweaveChainSource implements ChainSource {
     throw new Error(`Block ${height} not found`);
   }
 
+  addMissingTxIds(txIds: string[]) {
+    this.missingTxIds = this.missingTxIds.concat(txIds);
+  }
+
   async getTx(txId: string): Promise<JsonTransaction> {
-    return JSON.parse(
-      fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8')
-    );
+    if (fs.existsSync(`test/mock_files/txs/${txId}.json`)) {
+      return JSON.parse(
+        fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8')
+      );
+    } else {
+      throw new Error(`Transaction ${txId} not found`);
+    }
   }
 
   async getBlockAndTxsByHeight(height: number) {
     const block = await this.getBlockByHeight(height);
-    const txs = await Promise.all(
-      block.txs.map(
-        async (txId: string): Promise<JsonTransaction> => this.getTx(txId)
-      )
-    );
+    const txs = [];
+    const missingTxIds = [];
 
-    return { block, txs, missingTxIds: [] };
+    for (const txId of block.txs) {
+      try {
+        if (this.missingTxIds.includes(txId)) {
+          missingTxIds.push(txId);
+        } else {
+          txs.push(await this.getTx(txId));
+        }
+      } catch (e) {
+        missingTxIds.push(txId);
+      }
+    }
+
+    return { block, txs, missingTxIds: missingTxIds };
   }
 
   async getHeight(): Promise<number> {
@@ -98,7 +116,7 @@ describe('BlockImporter', () => {
   });
 
   describe('importBlock', () => {
-    describe('importing a single block', () => {
+    describe('importing a block', () => {
       beforeEach(async () => {
         blockImporter = createBlockImporter({ startHeight: 982575 });
         await blockImporter.importBlock(982575);
@@ -114,9 +132,39 @@ describe('BlockImporter', () => {
         expect(stats.counts.newBlocks).to.equal(1);
       });
 
-      it('should add the associated transactions to the DB', async () => {
+      it('should add the block transactions to the DB', async () => {
         const stats = await chainDb.getDebugInfo();
         expect(stats.counts.newTxs).to.equal(3);
+      });
+    });
+
+    describe('importing a block with missing transactions', () => {
+      beforeEach(async () => {
+        chainSource.addMissingTxIds([
+          'oq-v4Cv61YAGmY_KlLdxmGp5HjcldvOSLOMv0UPjSTE'
+        ]);
+        blockImporter = createBlockImporter({ startHeight: 982575 });
+        await blockImporter.importBlock(982575);
+      });
+
+      it('should increase the max height', async () => {
+        const maxHeight = await chainDb.getMaxHeight();
+        expect(maxHeight).to.equal(982575);
+      });
+
+      it('should add the block to the DB', async () => {
+        const stats = await chainDb.getDebugInfo();
+        expect(stats.counts.newBlocks).to.equal(1);
+      });
+
+      it('should add the block transactions to the DB', async () => {
+        const stats = await chainDb.getDebugInfo();
+        expect(stats.counts.newTxs).to.equal(2);
+      });
+
+      it('should add the IDs of the missing transactions to DB', async () => {
+        const stats = await chainDb.getDebugInfo();
+        expect(stats.counts.missingTxs).to.equal(1);
       });
     });
 
