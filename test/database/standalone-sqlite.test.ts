@@ -5,8 +5,12 @@ import {
   decodeTransactionGqlCursor,
   encodeBlockGqlCursor,
   decodeBlockGqlCursor,
-  toSqliteParams
+  toSqliteParams,
+  StandaloneSqliteDatabase
 } from '../../src/database/standalone-sqlite.js';
+import Sqlite from 'better-sqlite3';
+import fs from 'fs';
+import { ArweaveChainSourceStub } from '../stubs.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -79,6 +83,32 @@ describe('toSqliteParams', () => {
     expect(toSqliteParams({ values: [820389, 820389] })).to.deep.equal({
       '1': 820389,
       '2': 820389
+    });
+  });
+});
+
+describe('StandaloneSqliteDatabase', () => {
+  let db: Sqlite.Database;
+  let chainSource: ArweaveChainSourceStub;
+  let chainDb: StandaloneSqliteDatabase;
+
+  beforeEach(async () => {
+    db = new Sqlite(':memory:');
+    const schema = fs.readFileSync('schema.sql', 'utf8');
+    db.exec(schema);
+    chainDb = new StandaloneSqliteDatabase(db);
+    chainSource = new ArweaveChainSourceStub();
+  });
+
+  describe('saveBlockAndTxs', () => {
+    it('should save a block and its transactions', async () => {
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(982575);
+      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      const stats = await chainDb.getDebugInfo();
+
+      expect(stats.counts.newBlocks).to.equal(1);
+      expect(stats.counts.newTxs).to.equal(txs.length);
     });
   });
 });
