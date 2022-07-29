@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import { ValidationError } from 'apollo-server-express';
 import {
   encodeTransactionGqlCursor,
   decodeTransactionGqlCursor,
@@ -35,6 +36,12 @@ describe('decodeTransactionGqlCursor', () => {
       blockTransactionIndex: undefined
     });
   });
+
+  it('should throw an error given an invalid cursor', async () => {
+    expect(() => {
+      decodeTransactionGqlCursor('123');
+    }).to.throw(ValidationError, 'Invalid transaction cursor');
+  });
 });
 
 describe('encodeBlockGqlCursor', () => {
@@ -47,7 +54,7 @@ describe('encodeBlockGqlCursor', () => {
   });
 });
 
-describe('encodeBlockGqlCursor', () => {
+describe('decodeBlockGqlCursor', () => {
   it('should decode a height given an encoded cursor', () => {
     expect(decodeBlockGqlCursor('WzExMzhd')).to.deep.equal({
       height: HEIGHT
@@ -58,6 +65,12 @@ describe('encodeBlockGqlCursor', () => {
     expect(decodeBlockGqlCursor(undefined)).to.deep.equal({
       height: undefined
     });
+  });
+
+  it('should throw an error given an invalid cursor', async () => {
+    expect(() => {
+      decodeBlockGqlCursor('123');
+    }).to.throw(ValidationError, 'Invalid block cursor');
   });
 });
 

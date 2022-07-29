@@ -4,11 +4,12 @@ import {
   JsonTransaction,
   GqlQueryable
 } from '../types.js';
-import { fromB64Url, utf8ToB64Url } from '../lib/utils.js';
+import { b64UrlToUtf8, utf8ToB64Url } from '../lib/utils.js';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import sql from 'sql-bricks';
+import { ValidationError } from 'apollo-server-express';
 
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
@@ -29,15 +30,14 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
       return { height: undefined, blockTransactionIndex: undefined };
     }
 
-    // TODO implement helper to convert directly to UTF-8
     const [height, blockTransactionIndex] = JSON.parse(
-      fromB64Url(cursor).toString()
+      b64UrlToUtf8(cursor)
     ) as [number, number];
 
     return { height, blockTransactionIndex };
   } catch (error) {
-    // TODO use BadRequest error?
-    throw new Error('Invalid block cursor');
+    console.log('error', error);
+    throw new ValidationError('Invalid transaction cursor');
   }
 }
 
@@ -51,13 +51,11 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
       return { height: undefined };
     }
 
-    // TODO implement helper to convert directly to UTF-8
-    const [height] = JSON.parse(fromB64Url(cursor).toString()) as [number];
+    const [height] = JSON.parse(b64UrlToUtf8(cursor)) as [number];
 
     return { height };
   } catch (error) {
-    // TODO use BadRequest error?
-    throw new Error('Invalid block cursor');
+    throw new ValidationError('Invalid block cursor');
   }
 }
 
