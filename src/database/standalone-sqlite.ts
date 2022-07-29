@@ -36,7 +36,6 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
 
     return { height, blockTransactionIndex };
   } catch (error) {
-    console.log('error', error);
     throw new ValidationError('Invalid transaction cursor');
   }
 }
