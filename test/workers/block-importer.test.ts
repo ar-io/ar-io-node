@@ -10,92 +10,18 @@ import { EventEmitter } from 'events';
 
 import { BlockImporter } from '../../src/workers/block-importer.js';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
-import { ChainSource, JsonBlock, JsonTransaction } from '../../src/types.js';
 import log from '../../src/log.js';
 import { default as wait } from 'wait';
+import { ArweaveChainSourceStub } from '../stubs.js';
 
 chai.use(chaiAsPromised);
 chai.use(sinonChai);
-
-class MockArweaveChainSource implements ChainSource {
-  private height = 10000000;
-  private missingTxIds: string[] = [];
-  private tempBlockIdOverrides: { [key: string]: string } = {};
-
-  setTempBlockIdOverride(height: number, id: string) {
-    this.tempBlockIdOverrides[height.toString()] = id;
-  }
-
-  async getBlockByHeight(height: number): Promise<JsonBlock> {
-    const heightToId = JSON.parse(
-      fs.readFileSync('test/mock_files/block_height_to_id.json', 'utf8')
-    );
-    const heightStr = height.toString();
-
-    let blockId: string;
-    if (this.tempBlockIdOverrides[heightStr]) {
-      blockId = this.tempBlockIdOverrides[heightStr];
-    } else {
-      blockId = heightToId[height.toString()];
-    }
-    if (fs.existsSync(`test/mock_files/blocks/${blockId}.json`)) {
-      const block = JSON.parse(
-        fs.readFileSync(`test/mock_files/blocks/${blockId}.json`, 'utf8')
-      );
-      return block;
-    }
-
-    throw new Error(`Block ${height} not found`);
-  }
-
-  addMissingTxIds(txIds: string[]) {
-    this.missingTxIds = this.missingTxIds.concat(txIds);
-  }
-
-  async getTx(txId: string): Promise<JsonTransaction> {
-    if (fs.existsSync(`test/mock_files/txs/${txId}.json`)) {
-      return JSON.parse(
-        fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8')
-      );
-    } else {
-      throw new Error(`Transaction ${txId} not found`);
-    }
-  }
-
-  async getBlockAndTxsByHeight(height: number) {
-    const block = await this.getBlockByHeight(height);
-    const txs = [];
-    const missingTxIds = [];
-
-    for (const txId of block.txs) {
-      try {
-        if (this.missingTxIds.includes(txId)) {
-          missingTxIds.push(txId);
-        } else {
-          txs.push(await this.getTx(txId));
-        }
-      } catch (e) {
-        missingTxIds.push(txId);
-      }
-    }
-
-    return { block, txs, missingTxIds: missingTxIds };
-  }
-
-  async getHeight(): Promise<number> {
-    return this.height;
-  }
-
-  setHeight(height: number) {
-    this.height = height;
-  }
-}
 
 describe('BlockImporter', () => {
   let metricsRegistry: promClient.Registry;
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
-  let chainSource: MockArweaveChainSource;
+  let chainSource: ArweaveChainSourceStub;
   let db: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
   let sandbox: sinon.SinonSandbox;
@@ -126,7 +52,7 @@ describe('BlockImporter', () => {
     metricsRegistry.clear();
     promClient.collectDefaultMetrics({ register: metricsRegistry });
     eventEmitter = new EventEmitter();
-    chainSource = new MockArweaveChainSource();
+    chainSource = new ArweaveChainSourceStub();
     db = new Sqlite(':memory:');
     const schema = fs.readFileSync('schema.sql', 'utf8');
     db.exec(schema);
