@@ -11,9 +11,7 @@ import {
 import Sqlite from 'better-sqlite3';
 import fs from 'fs';
 import { ArweaveChainSourceStub } from '../stubs.js';
-import {
-  toB64Url
-} from '../../src/lib/utils.js';
+import { toB64Url } from '../../src/lib/utils.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
