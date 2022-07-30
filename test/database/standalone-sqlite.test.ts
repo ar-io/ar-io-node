@@ -11,6 +11,9 @@ import {
 import Sqlite from 'better-sqlite3';
 import fs from 'fs';
 import { ArweaveChainSourceStub } from '../stubs.js';
+import {
+  toB64Url
+} from '../../src/lib/utils.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -105,8 +108,35 @@ describe('StandaloneSqliteDatabase', () => {
       const { block, txs, missingTxIds } =
         await chainSource.getBlockAndTxsByHeight(982575);
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      const stats = await chainDb.getDebugInfo();
 
+      const dbBlock = db
+        .prepare('SELECT * FROM new_blocks WHERE height = 982575')
+        .get();
+
+      expect(toB64Url(dbBlock.indep_hash)).to.deep.equal(block.indep_hash);
+      expect(dbBlock.height).to.equal(982575);
+      expect(toB64Url(dbBlock.previous_block)).to.deep.equal(
+        block.previous_block
+      );
+      expect(toB64Url(dbBlock.nonce)).to.equal(block.nonce);
+      expect(toB64Url(dbBlock.hash)).to.equal(block.hash);
+      expect(dbBlock.block_timestamp).to.equal(block.timestamp);
+      expect(dbBlock.diff).to.equal(block.diff);
+      expect(dbBlock.cumulative_diff).to.equal(block.cumulative_diff);
+      expect(dbBlock.last_retarget).to.equal(block.last_retarget);
+      expect(toB64Url(dbBlock.reward_addr)).to.equal(block.reward_addr);
+      expect(dbBlock.block_size.toString()).to.equal(block.block_size);
+      expect(dbBlock.weave_size.toString()).to.equal(block.weave_size);
+      // TODO fix stored rates
+      expect(toB64Url(dbBlock.hash_list_merkle)).to.equal(
+        block.hash_list_merkle
+      );
+      expect(toB64Url(dbBlock.wallet_list)).to.equal(block.wallet_list);
+      expect(toB64Url(dbBlock.tx_root)).to.equal(block.tx_root);
+      expect(dbBlock.tx_count).to.equal(txs.length);
+      expect(dbBlock.missing_tx_count).to.equal(0);
+
+      const stats = await chainDb.getDebugInfo();
       expect(stats.counts.newBlocks).to.equal(1);
       expect(stats.counts.newTxs).to.equal(txs.length);
     });
