@@ -10,11 +10,13 @@ import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { default as Arweave } from 'arweave';
+import { ArNSImporter } from './workers/arns-importer.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
 const arweaveUrl = process.env.ARWEAVE_URL ?? 'https://arweave.net';
 const port = parseInt(process.env.PORT ?? '3000');
+const arnsEnabled = process.env.ARNS_ENABLED ?? true;
 
 // Uncaught exception handler
 process.on('uncaughtException', (error) => {
@@ -41,6 +43,10 @@ const blockImporter = new BlockImporter({
   eventEmitter,
   startHeight: startHeight
 });
+
+if (arnsEnabled) {
+  new ArNSImporter({ log, eventEmitter });
+}
 
 arweaveClient.refreshPeers();
 blockImporter.start();
