@@ -11,6 +11,7 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { default as Arweave } from 'arweave';
 import { ArNSImporter } from './workers/arns-importer.js';
+import { StandaloneArNSDatabase } from './database/standalone-arns-sqlite.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
@@ -45,7 +46,10 @@ const blockImporter = new BlockImporter({
 });
 
 if (arnsEnabled) {
-  new ArNSImporter({ log, eventEmitter });
+  const arnsDB = new StandaloneArNSDatabase();
+  const arnsImporter = new ArNSImporter({ arnsDB, log, eventEmitter });
+  arnsImporter.start();
+  // TODO: add ArNS middleware to resolve subdomains
 }
 
 arweaveClient.refreshPeers();

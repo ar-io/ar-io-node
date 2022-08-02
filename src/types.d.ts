@@ -1,3 +1,16 @@
+export interface ArNSMapping {
+  id: string;
+  subdomain: string;
+  ttlSeconds: number;
+}
+
+export interface ArNSContract {
+  id: string;
+  height: number;
+  owner: string;
+  contract_source?: string;
+}
+
 export type JsonTag = {
   name: string;
   value: string;
@@ -86,6 +99,14 @@ export interface ChainDatabase {
     txs: JsonTransaction[],
     missingTxIds: string[]
   ): Promise<void>;
+}
+
+export interface ArNSDatabase {
+  resetToHeight(height: number): Promise<void>;
+  getANTContract(id: string): Promise<ArNSContract | void>;
+  getWhitelistedContracts(): Promise<ArNSContract[] | string[]>;
+  getArNSMapping(subdomain: string): Promise<ArNSMapping | void>;
+  saveArNSMapping(record: ArNSMapping): Promise<void>;
 }
 
 export interface BundleDatabase {
