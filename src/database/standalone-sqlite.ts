@@ -4,7 +4,12 @@ import {
   JsonTransaction,
   GqlQueryable
 } from '../types.js';
-import { b64UrlToUtf8, utf8ToB64Url } from '../lib/utils.js';
+import {
+  toB64Url,
+  fromB64Url,
+  b64UrlToUtf8,
+  utf8ToB64Url
+} from '../lib/utils.js';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
@@ -910,30 +915,78 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   getGqlStableBlocksBaseSql() {
     return sql
       .select(
-        'indep_hash AS id',
-        'previous_block AS previous',
-        'block_timestamp AS "timestamp"',
-        'height'
+        'b.indep_hash AS id',
+        'b.previous_block AS previous',
+        'b.block_timestamp AS "timestamp"',
+        'b.height AS height'
       )
-      .from('stable_blocks');
+      .from('stable_blocks AS b');
   }
 
   async getGqlBlock({ id }: { id: string }) {
-    const q = this.getGqlStableBlocksBaseSql();
+    const query = this.getGqlStableBlocksBaseSql();
 
-    q.where({ indep_hash: Buffer.from(id, 'base64') });
+    query.where({ 'b.indep_hash': fromB64Url(id) });
 
-    const qp = q.toParams();
-    const sqliteParams = toSqliteParams(qp);
+    const queryParams = query.toParams();
+    const sql = queryParams.text;
+    const sqliteParams = toSqliteParams(queryParams);
 
-    const block = this.db.prepare(qp.text).get(sqliteParams);
+    const block = this.db.prepare(sql).get(sqliteParams);
 
     return {
-      id: block.id.toString('base64url'),
+      id: toB64Url(block.id),
       timestamp: block.timestamp,
       height: block.height,
-      previous: block.previous.toString('base64url')
+      previous: toB64Url(block.previous)
     };
+  }
+
+  addGqlBlockFilters({
+    query,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    minHeight = -1,
+    maxHeight = -1
+  }: {
+    query: sql.SelectStatement;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }) {
+    if (ids.length > 0) {
+      query.where(
+        sql.in(
+          'b.indep_hash',
+          ids.map((id) => fromB64Url(id))
+        )
+      );
+    }
+
+    if (minHeight >= 0) {
+      query.where(sql.gte('b.height', minHeight));
+    }
+
+    if (maxHeight >= 0) {
+      query.where(sql.lte('b.height', maxHeight));
+    }
+
+    const { height: cursorHeight } = decodeBlockGqlCursor(cursor);
+
+    if (sortOrder === 'HEIGHT_DESC') {
+      if (cursorHeight) {
+        query.where(sql.lt('b.height', cursorHeight));
+      }
+      query.orderBy('b.height DESC');
+    } else {
+      if (cursorHeight) {
+        query.where(sql.gt('b.height', cursorHeight));
+      }
+      query.orderBy('b.height ASC');
+    }
   }
 
   async getGqlBlocks({
@@ -951,50 +1004,29 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     minHeight?: number;
     maxHeight?: number;
   }) {
-    const q = this.getGqlStableBlocksBaseSql();
+    const query = this.getGqlStableBlocksBaseSql();
 
-    if (ids.length > 0) {
-      q.where(
-        sql.in(
-          'indep_hash',
-          ids.map((v) => Buffer.from(v, 'base64'))
-        )
-      );
-    }
+    this.addGqlBlockFilters({
+      query,
+      cursor,
+      sortOrder,
+      ids,
+      minHeight,
+      maxHeight
+    });
 
-    if (minHeight >= 0) {
-      q.where(sql.gte('height', minHeight));
-    }
-
-    if (maxHeight >= 0) {
-      q.where(sql.lte('height', maxHeight));
-    }
-
-    const { height: cursorHeight } = decodeBlockGqlCursor(cursor);
-
-    if (sortOrder === 'HEIGHT_DESC') {
-      if (cursorHeight) {
-        q.where(sql.lt('height', cursorHeight));
-      }
-      q.orderBy('height DESC');
-    } else {
-      if (cursorHeight) {
-        q.where(sql.gt('height', cursorHeight));
-      }
-      q.orderBy('height ASC');
-    }
-
-    const qp = q.toParams();
-    const sqliteParams = toSqliteParams(qp);
+    const queryParams = query.toParams();
+    const sql = queryParams.text;
+    const sqliteParams = toSqliteParams(queryParams);
 
     const blocks = this.db
-      .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
+      .prepare(`${sql} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
       .map((block) => ({
-        id: block.id.toString('base64url'),
+        id: toB64Url(block.id),
         timestamp: block.timestamp,
         height: block.height,
-        previous: block.previous.toString('base64url')
+        previous: toB64Url(block.previous)
       }));
 
     return {
