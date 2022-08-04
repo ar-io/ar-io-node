@@ -19,10 +19,8 @@ export interface JsonBlock {
   reward_pool: string;
   block_size: string;
   weave_size: string;
-  usd_to_ar_rate_dividend: string | undefined;
-  usd_to_ar_rate_divisor: string | undefined;
-  scheduled_usd_to_ar_rate_dividend: string | undefined;
-  scheduled_usd_to_ar_rate_divisor: string | undefined;
+  usd_to_ar_rate?: [string, string];
+  scheduled_usd_to_ar_rate?: [string, string];
   hash_list_merkle: string;
   wallet_list: string;
   tx_root: string;

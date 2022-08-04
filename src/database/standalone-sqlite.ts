@@ -406,12 +406,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           reward_pool: block.reward_pool,
           block_size: block.block_size,
           weave_size: block.weave_size,
-          usd_to_ar_rate_dividend: block.usd_to_ar_rate_dividend,
-          usd_to_ar_rate_divisor: block.usd_to_ar_rate_divisor,
-          scheduled_usd_to_ar_rate_dividend:
-            block.scheduled_usd_to_ar_rate_dividend,
-          scheduled_usd_to_ar_rate_divisor:
-            block.scheduled_usd_to_ar_rate_divisor,
+          usd_to_ar_rate_dividend: (block.usd_to_ar_rate ?? [])[0],
+          usd_to_ar_rate_divisor: (block.usd_to_ar_rate ?? [])[1],
+          scheduled_usd_to_ar_rate_dividend: (block.scheduled_usd_to_ar_rate ??
+            [])[0],
+          scheduled_usd_to_ar_rate_divisor: (block.scheduled_usd_to_ar_rate ??
+            [])[1],
           hash_list_merkle: hashListMerkle,
           wallet_list: walletList,
           tx_root: txRoot,

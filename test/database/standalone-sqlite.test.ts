@@ -102,36 +102,83 @@ describe('StandaloneSqliteDatabase', () => {
   });
 
   describe('saveBlockAndTxs', () => {
-    it('should save a block and its transactions', async () => {
+    it('should save the block in the new_blocks table', async () => {
+      const height = 982575;
+
       const { block, txs, missingTxIds } =
-        await chainSource.getBlockAndTxsByHeight(982575);
+        await chainSource.getBlockAndTxsByHeight(height);
+
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
 
       const dbBlock = db
-        .prepare('SELECT * FROM new_blocks WHERE height = 982575')
+        .prepare(`SELECT * FROM new_blocks WHERE height = ${height}`)
         .get();
 
-      expect(toB64Url(dbBlock.indep_hash)).to.deep.equal(block.indep_hash);
-      expect(dbBlock.height).to.equal(982575);
-      expect(toB64Url(dbBlock.previous_block)).to.deep.equal(
-        block.previous_block
-      );
-      expect(toB64Url(dbBlock.nonce)).to.equal(block.nonce);
-      expect(toB64Url(dbBlock.hash)).to.equal(block.hash);
+      expect(dbBlock.height).to.equal(height);
+
+      const binaryFields = [
+        'indep_hash',
+        'previous_block',
+        'nonce',
+        'hash',
+        'reward_addr',
+        'hash_list_merkle',
+        'wallet_list',
+        'tx_root'
+      ];
+      for (const field of binaryFields) {
+        expect(dbBlock[field]).to.be.an.instanceof(Buffer);
+        expect(toB64Url(dbBlock[field])).to.equal((block as any)[field]);
+      }
+
+      const stringFields = ['diff', 'cumulative_diff'];
+      for (const field of stringFields) {
+        expect(dbBlock[field]).to.be.a('string');
+        expect(dbBlock[field]).to.equal((block as any)[field]);
+      }
+
+      // Note: timestamp is renamed to block_timestamp to avoid collision with
+      // the SQLite timestamp data type
+      expect(dbBlock.block_timestamp).to.be.a('number');
       expect(dbBlock.block_timestamp).to.equal(block.timestamp);
-      expect(dbBlock.diff).to.equal(block.diff);
-      expect(dbBlock.cumulative_diff).to.equal(block.cumulative_diff);
-      expect(dbBlock.last_retarget).to.equal(block.last_retarget);
-      expect(toB64Url(dbBlock.reward_addr)).to.equal(block.reward_addr);
-      expect(dbBlock.block_size.toString()).to.equal(block.block_size);
-      expect(dbBlock.weave_size.toString()).to.equal(block.weave_size);
-      // TODO fix stored rates
-      expect(toB64Url(dbBlock.hash_list_merkle)).to.equal(
-        block.hash_list_merkle
+
+      const integerFields = ['last_retarget'];
+      for (const field of integerFields) {
+        expect(dbBlock[field]).to.be.a('number');
+        expect(dbBlock[field]).to.equal((block as any)[field]);
+      }
+
+      // These fields are strings in JSON blocks but 64 bit integers in SQLite
+      // const stringIntegerFields = ['block_size', 'weave_size'];
+      const stringIntegerFields = ['block_size', 'weave_size'];
+      for (const field of stringIntegerFields) {
+        expect(dbBlock[field]).to.be.a('number');
+        expect((block as any)[field]).to.be.a('string');
+        expect(dbBlock[field].toString()).to.equal((block as any)[field]);
+      }
+
+      expect(dbBlock.usd_to_ar_rate_dividend).to.be.a('number');
+      expect((block.usd_to_ar_rate ?? [])[0]).to.be.a('string');
+      expect(dbBlock.usd_to_ar_rate_dividend.toString()).to.equal(
+        (block.usd_to_ar_rate ?? [])[0]
       );
-      expect(toB64Url(dbBlock.wallet_list)).to.equal(block.wallet_list);
-      expect(toB64Url(dbBlock.tx_root)).to.equal(block.tx_root);
-      expect(dbBlock.tx_count).to.equal(txs.length);
+      expect(dbBlock.usd_to_ar_rate_divisor).to.be.a('number');
+      expect((block.usd_to_ar_rate ?? [])[1]).to.be.a('string');
+      expect(dbBlock.usd_to_ar_rate_divisor.toString()).to.equal(
+        (block.usd_to_ar_rate ?? [])[1]
+      );
+      expect(dbBlock.scheduled_usd_to_ar_rate_dividend).to.be.a('number');
+      expect((block.scheduled_usd_to_ar_rate ?? [])[0]).to.be.a('string');
+      expect(dbBlock.scheduled_usd_to_ar_rate_dividend.toString()).to.equal(
+        (block.scheduled_usd_to_ar_rate ?? [])[0]
+      );
+      expect(dbBlock.scheduled_usd_to_ar_rate_divisor).to.be.a('number');
+      expect((block.scheduled_usd_to_ar_rate ?? [])[1]).to.be.a('string');
+      expect(dbBlock.scheduled_usd_to_ar_rate_divisor.toString()).to.equal(
+        (block.scheduled_usd_to_ar_rate ?? [])[1]
+      );
+
+      expect(dbBlock.tx_count).to.equal(block.txs.length);
       expect(dbBlock.missing_tx_count).to.equal(0);
 
       const stats = await chainDb.getDebugInfo();
