@@ -10,12 +10,12 @@ export interface JsonBlock {
   height: number;
   nonce: string;
   hash: string;
-  previous_block: string | undefined;
+  previous_block?: string; // undefined for block 0
   timestamp: number;
   diff: string;
-  cumulative_diff: string | undefined;
-  last_retarget: string | undefined;
-  reward_addr: string | undefined; // undefined for block 0
+  cumulative_diff?: string;
+  last_retarget?: string;
+  reward_addr?: string; // undefined for block 0
   reward_pool: string;
   block_size: string;
   weave_size: string;
@@ -26,7 +26,6 @@ export interface JsonBlock {
   tx_root: string;
   tags: JsonTags;
   txs: string[];
-  // TODO check for other fields
 }
 
 export interface JsonTransaction {
@@ -41,7 +40,6 @@ export interface JsonTransaction {
   data_size: string;
   data_root: string;
   tags: JsonTags;
-  // TODO check for other fields
 }
 
 export type Tag = {
