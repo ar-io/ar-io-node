@@ -206,8 +206,6 @@ describe('StandaloneSqliteDatabase', () => {
 
       const dbTransactions = db.prepare(sql).all();
 
-      //console.log(dbTransactions);
-
       const txIds = [
         'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA',
         'oq-v4Cv61YAGmY_KlLdxmGp5HjcldvOSLOMv0UPjSTE',
@@ -218,8 +216,6 @@ describe('StandaloneSqliteDatabase', () => {
         const tx = JSON.parse(
           fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
         );
-
-        console.log(tx);
 
         const binaryFields = [
           'id',
