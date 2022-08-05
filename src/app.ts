@@ -29,7 +29,7 @@ const eventEmitter = new EventEmitter();
 const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
-  trustedNodeUrl: arweaveUrl
+  trustedNodeUrl: arweaveUrl,
 });
 const db = new Sqlite('data/sqlite/standalone.db');
 const chainDb = new StandaloneSqliteDatabase(db);
@@ -39,7 +39,7 @@ const blockImporter = new BlockImporter({
   chainSource: arweaveClient,
   chainDb,
   eventEmitter,
-  startHeight: startHeight
+  startHeight: startHeight,
 });
 
 arweaveClient.refreshPeers();
@@ -51,16 +51,16 @@ app.use(promMid({ metricsPath: '/gateway_metrics' }));
 // TODO move under '/admin'
 app.get('/debug', async (_req, res) => {
   res.json({
-    db: await chainDb.getDebugInfo()
+    db: await chainDb.getDebugInfo(),
   });
 });
 const apolloServerInstanceGql = apolloServer(chainDb, {
-  introspection: true
+  introspection: true,
 });
 apolloServerInstanceGql.start().then(() => {
   apolloServerInstanceGql.applyMiddleware({
     app,
-    path: '/graphql'
+    path: '/graphql',
   });
   app.listen(port, () => {
     log.info(`Listening on port ${port}`);

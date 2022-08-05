@@ -17,7 +17,7 @@ export async function importAns102Bundle({
   db,
   bundleStream,
   parentTxId,
-  batchSize = DEFAULT_BATCH_SIZE
+  batchSize = DEFAULT_BATCH_SIZE,
 }: {
   log: winston.Logger;
   db: BundleDatabase;
@@ -31,7 +31,7 @@ export async function importAns104Bundle({
   db,
   bundleStream,
   parentTxId,
-  batchSize = DEFAULT_BATCH_SIZE
+  batchSize = DEFAULT_BATCH_SIZE,
 }: {
   log: winston.Logger;
   db: BundleDatabase;
@@ -67,8 +67,8 @@ export async function importAns104Bundle({
     const tags: Tags = (dataItem.tags || []).map(
       (tag: { name: string; value: string }) => ({
         name: fromB64Url(tag.name),
-        value: fromB64Url(tag.value)
-      })
+        value: fromB64Url(tag.value),
+      }),
     );
 
     const newDataItem: DataItem = {
@@ -80,7 +80,7 @@ export async function importAns104Bundle({
       target: fromB64Url(dataItem.target || ''),
       anchor: fromB64Url(dataItem.anchor),
       tags,
-      data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength
+      data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength,
     };
 
     log.info(`succesfully unpacked data item ${dataItem.id}, adding to batch`);

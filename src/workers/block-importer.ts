@@ -8,7 +8,7 @@ import {
   JsonTransaction,
   JsonBlock,
   ChainSource,
-  ChainDatabase
+  ChainDatabase,
 } from '../types.js';
 
 const DEFAULT_HEIGHT_POLLING_INTERVAL_MS = 5000;
@@ -41,7 +41,7 @@ export class BlockImporter {
     chainDb,
     eventEmitter,
     startHeight = 0,
-    heightPollingIntervalMs = DEFAULT_HEIGHT_POLLING_INTERVAL_MS
+    heightPollingIntervalMs = DEFAULT_HEIGHT_POLLING_INTERVAL_MS,
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
@@ -72,38 +72,38 @@ export class BlockImporter {
 
     this.forksCounter = new promClient.Counter({
       name: 'forks_total',
-      help: 'Number of chain forks observed'
+      help: 'Number of chain forks observed',
     });
     metricsRegistry.registerMetric(this.forksCounter);
 
     this.lastForkDepthGauge = new promClient.Gauge({
       name: 'last_fork_depth',
-      help: 'Depth of the last observed chain fork'
+      help: 'Depth of the last observed chain fork',
     });
     metricsRegistry.registerMetric(this.lastForkDepthGauge);
 
     this.blocksImportedCounter = new promClient.Counter({
       name: 'blocks_imported_total',
-      help: 'Number of blocks imported'
+      help: 'Number of blocks imported',
     });
     metricsRegistry.registerMetric(this.blocksImportedCounter);
 
     this.transactionsImportedCounter = new promClient.Counter({
       name: 'transactions_imported_total',
-      help: 'Number of transactions imported'
+      help: 'Number of transactions imported',
     });
     metricsRegistry.registerMetric(this.transactionsImportedCounter);
 
     this.blockImportErrorsCounter = new promClient.Counter({
       name: 'block_import_errors_total',
-      help: 'Number of block import errors'
+      help: 'Number of block import errors',
     });
     metricsRegistry.registerMetric(this.blockImportErrorsCounter);
   }
 
   public async getBlockOrForkedBlock(
     height: number,
-    forkDepth = 0
+    forkDepth = 0,
   ): Promise<{
     block: JsonBlock;
     txs: JsonTransaction[];
@@ -112,7 +112,7 @@ export class BlockImporter {
     // Stop importing if fork depth exceeeds max fork depth
     if (forkDepth > MAX_FORK_DEPTH) {
       this.log.error(
-        `Maximum fork depth of ${MAX_FORK_DEPTH} exceeded. Stopping block import process.`
+        `Maximum fork depth of ${MAX_FORK_DEPTH} exceeded. Stopping block import process.`,
       );
       this.shouldRun = false;
       throw new Error('Maximum fork depth exceeded');
@@ -126,20 +126,20 @@ export class BlockImporter {
       // Retrieve expected previous block hash from the DB
       const previousHeight = height - 1;
       const previousDbBlockHash = await this.chainDb.getNewBlockHashByHeight(
-        previousHeight
+        previousHeight,
       );
 
       if (!previousDbBlockHash) {
         // If a gap is found, rewind the the index to the last known block
         this.log.error(
-          `Gap found at height ${height}. Reseting index to height ${previousHeight}...`
+          `Gap found at height ${height}. Reseting index to height ${previousHeight}...`,
         );
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       } else if (block.previous_block !== previousDbBlockHash) {
         // If there is a fork, rewind the index to the fork point
         this.log.info(
-          `Fork detected at height ${height}. Reseting index to height ${previousHeight}...`
+          `Fork detected at height ${height}. Reseting index to height ${previousHeight}...`,
         );
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
@@ -157,7 +157,7 @@ export class BlockImporter {
 
   public async importBlock(height: number) {
     const { block, txs, missingTxIds } = await this.getBlockOrForkedBlock(
-      height
+      height,
     );
 
     // Emit events
@@ -180,7 +180,7 @@ export class BlockImporter {
     this.log.info(`Block imported`, {
       height: block.height,
       txCount: txs.length,
-      missingTxCount: missingTxIds.length
+      missingTxCount: missingTxIds.length,
     });
   }
 
@@ -214,7 +214,7 @@ export class BlockImporter {
           nextHeight = this.startHeight;
         }
         this.log.info(`Importing block...`, {
-          height: nextHeight
+          height: nextHeight,
         });
 
         await this.importBlock(nextHeight);

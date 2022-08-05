@@ -80,7 +80,7 @@ export interface ChainDatabase {
   saveBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
-    missingTxIds: string[]
+    missingTxIds: string[],
   ): Promise<void>;
 }
 

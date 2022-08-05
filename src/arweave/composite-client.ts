@@ -33,12 +33,12 @@ export class ArweaveCompositeClient implements ChainSource {
   private blockByHeightPromiseCache = new NodeCache({
     checkperiod: 10,
     stdTTL: 30,
-    useClones: false // cloning promises is unsafe
+    useClones: false, // cloning promises is unsafe
   });
   private txPromiseCache = new NodeCache({
     checkperiod: 10,
     stdTTL: 60,
-    useClones: false // cloning promises is unsafe
+    useClones: false, // cloning promises is unsafe
   });
 
   // Trusted node request queue
@@ -64,7 +64,7 @@ export class ArweaveCompositeClient implements ChainSource {
     maxRequestsPerSecond = 20,
     maxConcurrentRequests = 100,
     blockPrefetchCount = 50,
-    blockTxPrefetchCount = 1
+    blockTxPrefetchCount = 1,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -85,7 +85,7 @@ export class ArweaveCompositeClient implements ChainSource {
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
       baseURL: this.trustedNodeUrl,
-      timeout: requestTimeout
+      timeout: requestTimeout,
     });
     this.trustedNodeAxios.defaults.raxConfig = {
       retry: requestRetryCount,
@@ -96,14 +96,14 @@ export class ArweaveCompositeClient implements ChainSource {
         if (error?.response?.status === 429) {
           this.trustedNodeRequestBucket -= 2 ** attempt;
         }
-      }
+      },
     };
     rax.attach(this.trustedNodeAxios);
 
     // Initialize trusted node request queue
     this.trustedNodeRequestQueue = fastq.promise(
       this.trustedNodeRequest.bind(this),
-      maxConcurrentRequests
+      maxConcurrentRequests,
     );
 
     // Start trusted node request bucket filler (for rate limiting)
@@ -123,7 +123,7 @@ export class ArweaveCompositeClient implements ChainSource {
     try {
       const response = await this.trustedNodeRequest({
         method: 'GET',
-        url: '/peers'
+        url: '/peers',
       });
       const peerHosts = response.data as string[];
       await Promise.all(
@@ -133,13 +133,13 @@ export class ArweaveCompositeClient implements ChainSource {
             const response = await axios({
               method: 'GET',
               url: '/info',
-              baseURL: peerUrl
+              baseURL: peerUrl,
             });
             this.peers[peerHost] = {
               url: peerUrl,
               blocks: response.data.blocks,
               height: response.data.height,
-              lastSeen: new Date().getTime()
+              lastSeen: new Date().getTime(),
             };
             if (response.data.blocks / response.data.height > 0.9) {
               this.preferredPeers.add(this.peers[peerHost]);
@@ -148,7 +148,7 @@ export class ArweaveCompositeClient implements ChainSource {
             // TODO track metric
           }
           return;
-        })
+        }),
       );
     } catch (error) {
       // TODO track metric
@@ -170,7 +170,7 @@ export class ArweaveCompositeClient implements ChainSource {
       responsePromise = this.trustedNodeRequestQueue
         .push({
           method: 'GET',
-          url: `/block/height/${height}`
+          url: `/block/height/${height}`,
         })
         .then((response) => {
           // Delete POA to reduce cache size
@@ -182,7 +182,7 @@ export class ArweaveCompositeClient implements ChainSource {
         .catch((error) => {
           this.log.error(`Block prefetch failed:`, {
             height: height,
-            message: error.message
+            message: error.message,
           });
         });
       this.blockByHeightPromiseCache.set(height, responsePromise);
@@ -204,7 +204,7 @@ export class ArweaveCompositeClient implements ChainSource {
   // TODO make second arg an options object
   async getBlockByHeight(
     height: number,
-    shouldPrefetch = false
+    shouldPrefetch = false,
   ): Promise<JsonBlock> {
     // Prefetch the requested block
     this.prefetchBlockByHeight(height);
@@ -221,7 +221,7 @@ export class ArweaveCompositeClient implements ChainSource {
         ) {
           this.prefetchBlockByHeight(
             prefetchHeight,
-            i <= this.blockTxPrefetchCount
+            i <= this.blockTxPrefetchCount,
           );
         } else {
           break;
@@ -231,7 +231,7 @@ export class ArweaveCompositeClient implements ChainSource {
 
     try {
       const response = (await this.blockByHeightPromiseCache.get(
-        height
+        height,
       )) as AxiosResponse;
 
       // Check that a response was returned
@@ -266,7 +266,7 @@ export class ArweaveCompositeClient implements ChainSource {
       method: 'GET',
       url: `/tx/${txId}`,
       baseURL: randomPeer.url,
-      timeout: 500
+      timeout: 500,
     }).then(async (response) => {
       const tx = this.arweave.transactions.fromRaw(response.data);
       const isValid = await this.arweave.transactions.verify(tx);
@@ -290,7 +290,7 @@ export class ArweaveCompositeClient implements ChainSource {
         // Request TX from trusted node if peer fetch failed
         return this.trustedNodeRequestQueue.push({
           method: 'GET',
-          url: `/tx/${txId}`
+          url: `/tx/${txId}`,
         });
       })
       .then((response) => {
@@ -303,7 +303,7 @@ export class ArweaveCompositeClient implements ChainSource {
       .catch((error) => {
         this.log.error('Transaction prefetch failed:', {
           txId: txId,
-          message: error.message
+          message: error.message,
         });
       });
     this.txPromiseCache.set(txId, responsePromise);
@@ -336,7 +336,7 @@ export class ArweaveCompositeClient implements ChainSource {
 
       this.log.error('Failed to get transaction:', {
         txId: txId,
-        message: error.message
+        message: error.message,
       });
 
       throw error;
@@ -346,7 +346,7 @@ export class ArweaveCompositeClient implements ChainSource {
   // TODO make second arg an options object
   async getBlockAndTxsByHeight(
     height: number,
-    shouldPrefetch = true
+    shouldPrefetch = true,
   ): Promise<{
     block: JsonBlock;
     txs: JsonTransaction[];
@@ -365,7 +365,7 @@ export class ArweaveCompositeClient implements ChainSource {
         } catch (error) {
           missingTxIds.push(txId);
         }
-      })
+      }),
     );
 
     return { block, txs: txs, missingTxIds: missingTxIds };
@@ -374,7 +374,7 @@ export class ArweaveCompositeClient implements ChainSource {
   async getHeight(): Promise<number> {
     const response = await this.trustedNodeRequest({
       method: 'GET',
-      url: '/height'
+      url: '/height',
     });
 
     // Save max observed height for use as block prefetch boundary

@@ -18,7 +18,7 @@ export class ArweaveChainSourceStub implements ChainSource {
 
   async getBlockByHeight(height: number): Promise<JsonBlock> {
     const heightToId = JSON.parse(
-      fs.readFileSync('test/mock_files/block_height_to_id.json', 'utf8')
+      fs.readFileSync('test/mock_files/block_height_to_id.json', 'utf8'),
     );
     const heightStr = height.toString();
 
@@ -30,7 +30,7 @@ export class ArweaveChainSourceStub implements ChainSource {
     }
     if (fs.existsSync(`test/mock_files/blocks/${blockId}.json`)) {
       const block = JSON.parse(
-        fs.readFileSync(`test/mock_files/blocks/${blockId}.json`, 'utf8')
+        fs.readFileSync(`test/mock_files/blocks/${blockId}.json`, 'utf8'),
       );
       return block;
     }
@@ -45,7 +45,7 @@ export class ArweaveChainSourceStub implements ChainSource {
   async getTx(txId: string): Promise<JsonTransaction> {
     if (fs.existsSync(`test/mock_files/txs/${txId}.json`)) {
       return JSON.parse(
-        fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8')
+        fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
       );
     } else {
       throw new Error(`Transaction ${txId} not found`);

@@ -48,7 +48,7 @@ describe('importAns104Bundle', () => {
       log: log,
       db: bundleDb,
       bundleStream: ans104Bundle,
-      parentTxId: stubTxID
+      parentTxId: stubTxID,
     });
     expect(result).not.to.throw;
     expect(saveDbSpy.calledOnce).to.be.ok;
@@ -60,7 +60,7 @@ describe('importAns104Bundle', () => {
       db: bundleDb,
       bundleStream: ans104Bundle,
       parentTxId: stubTxID,
-      batchSize: 1
+      batchSize: 1,
     });
     expect(result).not.to.throw;
     expect(saveDbSpy.calledTwice).to.be.ok;

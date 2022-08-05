@@ -28,7 +28,7 @@ describe('BlockImporter', () => {
 
   const createBlockImporter = ({
     startHeight,
-    heightPollingIntervalMs
+    heightPollingIntervalMs,
   }: {
     startHeight: number;
     heightPollingIntervalMs?: number;
@@ -40,7 +40,7 @@ describe('BlockImporter', () => {
       chainDb,
       eventEmitter,
       startHeight,
-      heightPollingIntervalMs
+      heightPollingIntervalMs,
     });
   };
 
@@ -89,7 +89,7 @@ describe('BlockImporter', () => {
     describe('importing a block with missing transactions', () => {
       beforeEach(async () => {
         chainSource.addMissingTxIds([
-          'oq-v4Cv61YAGmY_KlLdxmGp5HjcldvOSLOMv0UPjSTE'
+          'oq-v4Cv61YAGmY_KlLdxmGp5HjcldvOSLOMv0UPjSTE',
         ]);
         blockImporter = createBlockImporter({ startHeight: 982575 });
         await blockImporter.importBlock(982575);
@@ -139,7 +139,7 @@ describe('BlockImporter', () => {
         blockImporter = createBlockImporter({ startHeight: 1 });
         chainSource.setTempBlockIdOverride(
           2,
-          'JRhPWF4b66QtiYXe-nBHhj6nKVc7oFgvnwOEqhWmfUGdronQUeOUkyI789uBSGPP'
+          'JRhPWF4b66QtiYXe-nBHhj6nKVc7oFgvnwOEqhWmfUGdronQUeOUkyI789uBSGPP',
         );
         await blockImporter.importBlock(1);
       });
@@ -155,7 +155,7 @@ describe('BlockImporter', () => {
         await blockImporter.importBlock(2);
         expect(chainDb.saveBlockAndTxs).to.have.been.calledOnce;
         expect(chainDb.saveBlockAndTxs).to.have.been.calledWithMatch({
-          height: 1
+          height: 1,
         });
       });
     });
@@ -167,7 +167,7 @@ describe('BlockImporter', () => {
 
       it('should throw an exception', async () => {
         expect(blockImporter.importBlock(51)).to.be.rejectedWith(
-          'Maximum fork depth exceeded'
+          'Maximum fork depth exceeded',
         );
       });
     });
@@ -201,7 +201,7 @@ describe('BlockImporter', () => {
       beforeEach(async () => {
         blockImporter = createBlockImporter({
           startHeight: 1,
-          heightPollingIntervalMs: 5
+          heightPollingIntervalMs: 5,
         });
         chainSource.setHeight(1);
         await blockImporter.importBlock(1);
@@ -218,7 +218,7 @@ describe('BlockImporter', () => {
           (async () => {
             await nextHeightPromise;
             return false;
-          })()
+          })(),
         ]);
         expect(getNextHeightWaited).to.be.true;
 

@@ -6,7 +6,7 @@ import {
   encodeBlockGqlCursor,
   decodeBlockGqlCursor,
   toSqliteParams,
-  StandaloneSqliteDatabase
+  StandaloneSqliteDatabase,
 } from '../../src/database/standalone-sqlite.js';
 import Sqlite from 'better-sqlite3';
 import fs from 'fs';
@@ -21,8 +21,8 @@ describe('encodeTransactionGqlCursor', () => {
     expect(
       encodeTransactionGqlCursor({
         height: HEIGHT,
-        blockTransactionIndex: BLOCK_TX_INDEX
-      })
+        blockTransactionIndex: BLOCK_TX_INDEX,
+      }),
     ).to.equal('WzExMzgsNDJd');
   });
 });
@@ -31,14 +31,14 @@ describe('decodeTransactionGqlCursor', () => {
   it('should decode a height and blockTransactionIndex given an encoded cursor', () => {
     expect(decodeTransactionGqlCursor('WzExMzgsNDJd')).to.deep.equal({
       height: HEIGHT,
-      blockTransactionIndex: BLOCK_TX_INDEX
+      blockTransactionIndex: BLOCK_TX_INDEX,
     });
   });
 
   it('should return an undefined height and blockTransactionIndex given an undefined cursor', () => {
     expect(decodeTransactionGqlCursor(undefined)).to.deep.equal({
       height: undefined,
-      blockTransactionIndex: undefined
+      blockTransactionIndex: undefined,
     });
   });
 
@@ -53,8 +53,8 @@ describe('encodeBlockGqlCursor', () => {
   it('should encode a cursor given a height', () => {
     expect(
       encodeBlockGqlCursor({
-        height: HEIGHT
-      })
+        height: HEIGHT,
+      }),
     ).to.equal('WzExMzhd');
   });
 });
@@ -62,13 +62,13 @@ describe('encodeBlockGqlCursor', () => {
 describe('decodeBlockGqlCursor', () => {
   it('should decode a height given an encoded cursor', () => {
     expect(decodeBlockGqlCursor('WzExMzhd')).to.deep.equal({
-      height: HEIGHT
+      height: HEIGHT,
     });
   });
 
   it('should return an undefined height given an undefined cursor', () => {
     expect(decodeBlockGqlCursor(undefined)).to.deep.equal({
-      height: undefined
+      height: undefined,
     });
   });
 
@@ -83,7 +83,7 @@ describe('toSqliteParams', () => {
   it('should convert SQL Bricks param values to better-sqlite3 params', () => {
     expect(toSqliteParams({ values: [820389, 820389] })).to.deep.equal({
       '1': 820389,
-      '2': 820389
+      '2': 820389,
     });
   });
 });
@@ -124,7 +124,7 @@ describe('StandaloneSqliteDatabase', () => {
         'reward_addr',
         'hash_list_merkle',
         'wallet_list',
-        'tx_root'
+        'tx_root',
       ];
       for (const field of binaryFields) {
         expect(dbBlock[field]).to.be.an.instanceof(Buffer);
@@ -160,22 +160,22 @@ describe('StandaloneSqliteDatabase', () => {
       expect(dbBlock.usd_to_ar_rate_dividend).to.be.a('number');
       expect((block.usd_to_ar_rate ?? [])[0]).to.be.a('string');
       expect(dbBlock.usd_to_ar_rate_dividend.toString()).to.equal(
-        (block.usd_to_ar_rate ?? [])[0]
+        (block.usd_to_ar_rate ?? [])[0],
       );
       expect(dbBlock.usd_to_ar_rate_divisor).to.be.a('number');
       expect((block.usd_to_ar_rate ?? [])[1]).to.be.a('string');
       expect(dbBlock.usd_to_ar_rate_divisor.toString()).to.equal(
-        (block.usd_to_ar_rate ?? [])[1]
+        (block.usd_to_ar_rate ?? [])[1],
       );
       expect(dbBlock.scheduled_usd_to_ar_rate_dividend).to.be.a('number');
       expect((block.scheduled_usd_to_ar_rate ?? [])[0]).to.be.a('string');
       expect(dbBlock.scheduled_usd_to_ar_rate_dividend.toString()).to.equal(
-        (block.scheduled_usd_to_ar_rate ?? [])[0]
+        (block.scheduled_usd_to_ar_rate ?? [])[0],
       );
       expect(dbBlock.scheduled_usd_to_ar_rate_divisor).to.be.a('number');
       expect((block.scheduled_usd_to_ar_rate ?? [])[1]).to.be.a('string');
       expect(dbBlock.scheduled_usd_to_ar_rate_divisor.toString()).to.equal(
-        (block.scheduled_usd_to_ar_rate ?? [])[1]
+        (block.scheduled_usd_to_ar_rate ?? [])[1],
       );
 
       expect(dbBlock.tx_count).to.equal(block.txs.length);

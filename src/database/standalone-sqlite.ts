@@ -2,13 +2,13 @@ import {
   ChainDatabase,
   JsonBlock,
   JsonTransaction,
-  GqlQueryable
+  GqlQueryable,
 } from '../types.js';
 import {
   toB64Url,
   fromB64Url,
   b64UrlToUtf8,
-  utf8ToB64Url
+  utf8ToB64Url,
 } from '../lib/utils.js';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
@@ -21,7 +21,7 @@ const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
 
 export function encodeTransactionGqlCursor({
   height,
-  blockTransactionIndex
+  blockTransactionIndex,
 }: {
   height: number;
   blockTransactionIndex: number;
@@ -36,7 +36,7 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
     }
 
     const [height, blockTransactionIndex] = JSON.parse(
-      b64UrlToUtf8(cursor)
+      b64UrlToUtf8(cursor),
     ) as [number, number];
 
     return { height, blockTransactionIndex };
@@ -416,12 +416,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           wallet_list: walletList,
           tx_root: txRoot,
           tx_count: block.txs.length,
-          missing_tx_count: missingTxIds.length
+          missing_tx_count: missingTxIds.length,
         });
 
         this.newBlockHeightsInsertStmt.run({
           height: block.height,
-          block_indep_hash: indepHash
+          block_indep_hash: indepHash,
         });
 
         let blockTransactionIndex = 0;
@@ -431,7 +431,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           this.newBlockTxsInsertStmt.run({
             transaction_id: txId,
             block_indep_hash: indepHash,
-            block_transaction_index: blockTransactionIndex
+            block_transaction_index: blockTransactionIndex,
           });
 
           blockTransactionIndex++;
@@ -451,7 +451,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
             this.tagNamesInsertStmt.run({
               hash: tagNameHash,
-              name: tagName
+              name: tagName,
             });
 
             const tagValue = Buffer.from(tag.value, 'base64');
@@ -462,7 +462,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
             this.tagValuesInsertStmt.run({
               hash: tagValueHash,
-              value: tagValue
+              value: tagValue,
             });
 
             if (tagName.toString('utf8').toLowerCase() === 'content-type') {
@@ -473,7 +473,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
               tag_name_hash: tagNameHash,
               tag_value_hash: tagValueHash,
               transaction_id: txId,
-              transaction_tag_index: transactionTagIndex
+              transaction_tag_index: transactionTagIndex,
             });
 
             transactionTagIndex++;
@@ -487,7 +487,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
           this.walletInsertStmt.run({
             address: ownerAddressBuffer,
-            public_modulus: ownerBuffer
+            public_modulus: ownerBuffer,
           });
 
           this.newTxsInsertStmt.run({
@@ -503,7 +503,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
             data_root: Buffer.from(tx.data_root, 'base64'),
             content_type: contentType,
             tag_count: tx.tags.length,
-            created_at: (Date.now() / 1000).toFixed(0)
+            created_at: (Date.now() / 1000).toFixed(0),
           });
         }
 
@@ -513,63 +513,63 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           this.missingTxsInsertStmt.run({
             block_indep_hash: indepHash,
             transaction_id: txId,
-            height: block.height
+            height: block.height,
           });
         }
-      }
+      },
     );
 
     this.saveStableBlockRangeFn = this.db.transaction(
       (startHeight: number, endHeight: number) => {
         this.saveStableBlockRangeStmt.run({
           start_height: startHeight,
-          end_height: endHeight
+          end_height: endHeight,
         });
 
         this.saveStableBlockTxsRangeStmt.run({
           start_height: startHeight,
-          end_height: endHeight
+          end_height: endHeight,
         });
 
         this.saveStableTxsRangeStmt.run({
           start_height: startHeight,
-          end_height: endHeight
+          end_height: endHeight,
         });
 
         this.saveStableTxTagsRangeStmt.run({
           start_height: startHeight,
-          end_height: endHeight
+          end_height: endHeight,
         });
-      }
+      },
     );
 
     this.deleteStaleNewDataFn = this.db.transaction(
       (heightThreshold: number, createdAtThreshold: number) => {
         this.deleteStaleNewTxTagsStmt.run({
-          height_threshold: heightThreshold
+          height_threshold: heightThreshold,
         });
 
         this.deleteStaleNewTxsByHeightStmt.run({
-          height_threshold: heightThreshold
+          height_threshold: heightThreshold,
         });
 
         this.deleteStaleNewBlockTxsStmt.run({
           height_threshold: heightThreshold,
-          created_at_threshold: createdAtThreshold
+          created_at_threshold: createdAtThreshold,
         });
 
         this.deleteStaleNewBlocksStmt.run({
-          height_threshold: heightThreshold
+          height_threshold: heightThreshold,
         });
 
         this.deleteStaleNewBlockHeightsStmt.run({
-          height_threshold: heightThreshold
+          height_threshold: heightThreshold,
         });
 
         this.deleteStaleNewTxsByTimestampStmt.run({
-          created_at_threshold: createdAtThreshold
+          created_at_threshold: createdAtThreshold,
         });
-      }
+      },
     );
   }
 
@@ -582,7 +582,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       throw new Error(`Invalid height ${height}, must be >= 0.`);
     }
     const hash = this.getNewBlockHashByHeightStmt.get({
-      height
+      height,
     })?.block_indep_hash;
     return hash ? hash.toString('base64url') : undefined;
   }
@@ -594,7 +594,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   async saveBlockAndTxs(
     block: JsonBlock,
     txs: JsonTransaction[],
-    missingTxIds: string[]
+    missingTxIds: string[],
   ): Promise<void> {
     // TODO add metrics to track timing
 
@@ -611,7 +611,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
       this.deleteStaleNewDataFn(
         endHeight,
-        maxStableTimestamp - NEW_TX_CLEANUP_WAIT_SECS
+        maxStableTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
       );
     }
   }
@@ -671,25 +671,25 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         missingStableBlocks: missingStableBlockCount,
         missingTxs: missingTxCount,
         newTxs: newTxCount,
-        newBlocks: newBlockCount
+        newBlocks: newBlockCount,
       },
       heights: {
         minStable: minStableHeight,
         maxStable: maxStableHeight,
         minNew: minNewBlockHeight,
-        maxNew: maxNewBlockHeight
-      }
+        maxNew: maxNewBlockHeight,
+      },
     };
   }
 
   getGqlTransactionTags(txId: Buffer) {
     const tags = this.getTransactionTagsStmt.all({
-      transaction_id: txId
+      transaction_id: txId,
     });
 
     return tags.map((tag) => ({
       name: tag.name.toString('utf8'),
-      value: tag.value.toString('utf8')
+      value: tag.value.toString('utf8'),
     }));
   }
 
@@ -710,14 +710,14 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         'public_modulus',
         'sb.indep_hash AS block_indep_hash',
         'sb.block_timestamp AS block_timestamp',
-        'sb.previous_block AS block_previous_block'
+        'sb.previous_block AS block_previous_block',
       )
       .from('stable_transactions st')
       .join('stable_blocks sb', {
-        'st.height': 'sb.height'
+        'st.height': 'sb.height',
       })
       .join('wallets w', {
-        'st.owner_address': 'w.address'
+        'st.owner_address': 'w.address',
       });
   }
 
@@ -747,7 +747,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       contentType: tx.content_type,
       blockIndepHash: tx.block_indep_hash.toString('base64url'),
       blockTimestamp: tx.block_timestamp,
-      blockPreviousBlock: tx.block_previous_block.toString('base64url')
+      blockPreviousBlock: tx.block_previous_block.toString('base64url'),
     };
   }
 
@@ -760,7 +760,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     owners = [],
     minHeight = -1,
     maxHeight = -1,
-    tags = []
+    tags = [],
   }: {
     pageSize: number;
     cursor?: string;
@@ -778,8 +778,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       q.where(
         sql.in(
           'st.id',
-          ids.map((v) => Buffer.from(v, 'base64'))
-        )
+          ids.map((v) => Buffer.from(v, 'base64')),
+        ),
       );
     }
 
@@ -787,8 +787,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       q.where(
         sql.in(
           'st.target',
-          recipients.map((v) => Buffer.from(v, 'base64'))
-        )
+          recipients.map((v) => Buffer.from(v, 'base64')),
+        ),
       );
     }
 
@@ -796,8 +796,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       q.where(
         sql.in(
           'st.owner_address',
-          owners.map((v) => Buffer.from(v, 'base64'))
-        )
+          owners.map((v) => Buffer.from(v, 'base64')),
+        ),
       );
     }
 
@@ -818,7 +818,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
         q.join(`stable_transaction_tags AS ${tagAlias}`, {
           'st.height': `${tagAlias}.height`,
-          'st.block_transaction_index': `${tagAlias}.block_transaction_index`
+          'st.block_transaction_index': `${tagAlias}.block_transaction_index`,
         });
 
         const nameHash = crypto
@@ -835,15 +835,15 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
                 .createHash('sha1')
                 .update(Buffer.from(value, 'utf8'))
                 .digest();
-            })
-          )
+            }),
+          ),
         );
       });
     }
 
     const {
       height: cursorHeight,
-      blockTransactionIndex: cursorBlockTransactionIndex
+      blockTransactionIndex: cursorBlockTransactionIndex,
     } = decodeTransactionGqlCursor(cursor);
 
     if (sortOrder === 'HEIGHT_DESC') {
@@ -852,12 +852,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         q.where(
           sql.lt(
             'st.height * 1000 + st.block_transaction_index',
-            cursorHeight * 1000 + cursorBlockTransactionIndex
-          )
+            cursorHeight * 1000 + cursorBlockTransactionIndex,
+          ),
         );
       }
       q.orderBy(
-        `${sortTable}.height DESC, ${sortTable}.block_transaction_index DESC`
+        `${sortTable}.height DESC, ${sortTable}.block_transaction_index DESC`,
       );
     } else {
       if (cursorHeight) {
@@ -865,12 +865,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         q.where(
           sql.gt(
             'st.height * 1000 + st.block_transaction_index',
-            cursorHeight * 1000 + cursorBlockTransactionIndex
-          )
+            cursorHeight * 1000 + cursorBlockTransactionIndex,
+          ),
         );
       }
       q.orderBy(
-        `${sortTable}.height ASC, ${sortTable}.block_transaction_index ASC`
+        `${sortTable}.height ASC, ${sortTable}.block_transaction_index ASC`,
       );
     }
 
@@ -896,19 +896,19 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         contentType: tx.content_type,
         blockIndepHash: tx.block_indep_hash.toString('base64url'),
         blockTimestamp: tx.block_timestamp,
-        blockPreviousBlock: tx.block_previous_block.toString('base64url')
+        blockPreviousBlock: tx.block_previous_block.toString('base64url'),
       }));
 
     return {
       pageInfo: {
-        hasNextPage: txs.length > pageSize
+        hasNextPage: txs.length > pageSize,
       },
       edges: txs.slice(0, pageSize).map((tx) => {
         return {
           cursor: encodeTransactionGqlCursor(tx),
-          node: tx
+          node: tx,
         };
-      })
+      }),
     };
   }
 
@@ -918,7 +918,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         'b.indep_hash AS id',
         'b.previous_block AS previous',
         'b.block_timestamp AS "timestamp"',
-        'b.height AS height'
+        'b.height AS height',
       )
       .from('stable_blocks AS b');
   }
@@ -938,7 +938,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       id: toB64Url(block.id),
       timestamp: block.timestamp,
       height: block.height,
-      previous: toB64Url(block.previous)
+      previous: toB64Url(block.previous),
     };
   }
 
@@ -948,7 +948,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     sortOrder = 'HEIGHT_DESC',
     ids = [],
     minHeight = -1,
-    maxHeight = -1
+    maxHeight = -1,
   }: {
     query: sql.SelectStatement;
     cursor?: string;
@@ -961,8 +961,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       query.where(
         sql.in(
           'b.indep_hash',
-          ids.map((id) => fromB64Url(id))
-        )
+          ids.map((id) => fromB64Url(id)),
+        ),
       );
     }
 
@@ -995,7 +995,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     sortOrder = 'HEIGHT_DESC',
     ids = [],
     minHeight = -1,
-    maxHeight = -1
+    maxHeight = -1,
   }: {
     pageSize: number;
     cursor?: string;
@@ -1012,7 +1012,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       sortOrder,
       ids,
       minHeight,
-      maxHeight
+      maxHeight,
     });
 
     const queryParams = query.toParams();
@@ -1026,19 +1026,19 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         id: toB64Url(block.id),
         timestamp: block.timestamp,
         height: block.height,
-        previous: toB64Url(block.previous)
+        previous: toB64Url(block.previous),
       }));
 
     return {
       pageInfo: {
-        hasNextPage: blocks.length > pageSize
+        hasNextPage: blocks.length > pageSize,
       },
       edges: blocks.slice(0, pageSize).map((block) => {
         return {
           cursor: encodeBlockGqlCursor(block),
-          node: block
+          node: block,
         };
-      })
+      }),
     };
   }
 }
