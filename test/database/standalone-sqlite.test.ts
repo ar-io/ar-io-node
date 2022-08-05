@@ -102,7 +102,7 @@ describe('StandaloneSqliteDatabase', () => {
   });
 
   describe('saveBlockAndTxs', () => {
-    it('should save the block in the new_blocks table', async () => {
+    it('should insert the block in the new_blocks table', async () => {
       const height = 982575;
 
       const { block, txs, missingTxIds } =
@@ -116,8 +116,6 @@ describe('StandaloneSqliteDatabase', () => {
       const dbBlock = db
         .prepare(`SELECT * FROM new_blocks WHERE height = ${height}`)
         .get();
-
-      expect(dbBlock.height).to.equal(height);
 
       const binaryFields = [
         'indep_hash',
@@ -140,19 +138,18 @@ describe('StandaloneSqliteDatabase', () => {
         expect(dbBlock[field]).to.equal((block as any)[field]);
       }
 
-      // Note: timestamp is renamed to block_timestamp to avoid collision with
-      // the SQLite timestamp data type
+      // Note: 'timestamp' is renamed to 'block_timestamp' to avoid collision
+      // with the SQLite timestamp data type
       expect(dbBlock.block_timestamp).to.be.a('number');
       expect(dbBlock.block_timestamp).to.equal(block.timestamp);
 
-      const integerFields = ['last_retarget'];
+      const integerFields = ['height', 'last_retarget'];
       for (const field of integerFields) {
         expect(dbBlock[field]).to.be.a('number');
         expect(dbBlock[field]).to.equal((block as any)[field]);
       }
 
       // These fields are strings in JSON blocks but 64 bit integers in SQLite
-      // const stringIntegerFields = ['block_size', 'weave_size'];
       const stringIntegerFields = ['block_size', 'weave_size'];
       for (const field of stringIntegerFields) {
         expect(dbBlock[field]).to.be.a('number');
@@ -182,7 +179,7 @@ describe('StandaloneSqliteDatabase', () => {
       );
     });
 
-    it('should save the transactions in the new_transactions table', async () => {
+    it('should save the block transactions in the new_transactions table', async () => {
       const height = 982575;
 
       const { block, txs, missingTxIds } =
@@ -190,14 +187,76 @@ describe('StandaloneSqliteDatabase', () => {
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
 
-      //const dbBlock = db
-      //  .prepare(`SELECT * FROM new_transctions WHERE height = ${height}`)
-      //  .get();
-
-      //expect(dbBlock.height).to.equal(height);
-
       const stats = await chainDb.getDebugInfo();
       expect(stats.counts.newTxs).to.equal(txs.length);
+
+      const sql = `
+        SELECT
+          nbh.height AS height,
+          nt.*,
+          wo.public_modulus AS owner
+        FROM new_transactions nt
+        JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+        JOIN new_blocks nb ON nb.indep_hash = nbt.block_indep_hash
+        JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
+        JOIN wallets wo ON wo.address = nt.owner_address
+        WHERE nbh.height = ${height}
+        ORDER BY nbh.height, nbt.block_transaction_index
+      `;
+
+      const dbTransactions = db.prepare(sql).all();
+
+      //console.log(dbTransactions);
+
+      const txIds = [
+        'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA',
+        'oq-v4Cv61YAGmY_KlLdxmGp5HjcldvOSLOMv0UPjSTE',
+        'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
+      ];
+
+      txIds.forEach((txId, i) => {
+        const tx = JSON.parse(
+          fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
+        );
+
+        console.log(tx);
+
+        const binaryFields = [
+          'id',
+          'signature',
+          'last_tx',
+          'owner',
+          'data_root',
+        ];
+
+        for (const field of binaryFields) {
+          expect(dbTransactions[i][field]).to.be.an.instanceof(Buffer);
+          expect(toB64Url(dbTransactions[i][field])).to.equal(
+            (tx as any)[field],
+          );
+        }
+
+        const stringFields = ['quantity', 'reward'];
+        for (const field of stringFields) {
+          expect(dbTransactions[i][field]).to.be.a('string');
+          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+        }
+
+        const integerFields = ['format'];
+        for (const field of integerFields) {
+          expect(dbTransactions[i][field]).to.be.a('number');
+          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+        }
+
+        const stringIntegerFields = ['data_size'];
+        for (const field of stringIntegerFields) {
+          expect(dbTransactions[i][field]).to.be.a('number');
+          expect((tx as any)[field]).to.be.a('string');
+          expect(dbTransactions[i][field].toString()).to.equal(
+            (tx as any)[field],
+          );
+        }
+      });
     });
   });
 });
