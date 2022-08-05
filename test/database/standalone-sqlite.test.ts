@@ -110,6 +110,9 @@ describe('StandaloneSqliteDatabase', () => {
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
 
+      const stats = await chainDb.getDebugInfo();
+      expect(stats.counts.newBlocks).to.equal(1);
+
       const dbBlock = db
         .prepare(`SELECT * FROM new_blocks WHERE height = ${height}`)
         .get();
@@ -177,12 +180,23 @@ describe('StandaloneSqliteDatabase', () => {
       expect(dbBlock.scheduled_usd_to_ar_rate_divisor.toString()).to.equal(
         (block.scheduled_usd_to_ar_rate ?? [])[1],
       );
+    });
 
-      expect(dbBlock.tx_count).to.equal(block.txs.length);
-      expect(dbBlock.missing_tx_count).to.equal(0);
+    it('should save the transactions in the new_transactions table', async () => {
+      const height = 982575;
+
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(height);
+
+      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+
+      //const dbBlock = db
+      //  .prepare(`SELECT * FROM new_transctions WHERE height = ${height}`)
+      //  .get();
+
+      //expect(dbBlock.height).to.equal(height);
 
       const stats = await chainDb.getDebugInfo();
-      expect(stats.counts.newBlocks).to.equal(1);
       expect(stats.counts.newTxs).to.equal(txs.length);
     });
   });
