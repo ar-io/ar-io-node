@@ -151,7 +151,7 @@ export interface GqlQueryable {
     tags: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult>;
 
-  getGqlBlock(args: { id: string }): Promise<GqlBlock>;
+  getGqlBlock(args: { id: string }): Promise<GqlBlock | undefined>;
 
   getGqlBlocks(args: {
     pageSize: number;

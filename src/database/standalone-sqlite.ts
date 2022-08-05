@@ -923,23 +923,18 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       .from('stable_blocks AS b');
   }
 
-  async getGqlBlock({ id }: { id: string }) {
-    const query = this.getGqlStableBlocksBaseSql();
-
-    query.where({ 'b.indep_hash': fromB64Url(id) });
-
-    const queryParams = query.toParams();
-    const sql = queryParams.text;
-    const sqliteParams = toSqliteParams(queryParams);
-
-    const block = this.db.prepare(sql).get(sqliteParams);
-
-    return {
-      id: toB64Url(block.id),
-      timestamp: block.timestamp,
-      height: block.height,
-      previous: toB64Url(block.previous),
-    };
+  getGqlNewBlocksBaseSql() {
+    return sql
+      .select(
+        'b.indep_hash AS id',
+        'b.previous_block AS previous',
+        'b.block_timestamp AS "timestamp"',
+        'b.height AS height',
+      )
+      .from('new_blocks AS b')
+      .join('new_block_heights nbh', {
+        'b.indep_hash': 'nbh.block_indep_hash',
+      });
   }
 
   addGqlBlockFilters({
@@ -989,7 +984,50 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
   }
 
-  async getGqlBlocks({
+  async getGqlNewBlocks({
+    pageSize,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    minHeight = -1,
+    maxHeight = -1,
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }) {
+    const query = this.getGqlNewBlocksBaseSql();
+
+    this.addGqlBlockFilters({
+      query,
+      cursor,
+      sortOrder,
+      ids,
+      minHeight,
+      maxHeight,
+    });
+
+    const queryParams = query.toParams();
+    const sql = queryParams.text;
+    const sqliteParams = toSqliteParams(queryParams);
+
+    const blocks = this.db
+      .prepare(`${sql} LIMIT ${pageSize + 1}`)
+      .all(sqliteParams)
+      .map((block) => ({
+        id: toB64Url(block.id),
+        timestamp: block.timestamp,
+        height: block.height,
+        previous: toB64Url(block.previous),
+      }));
+
+    return blocks;
+  }
+
+  async getGqlStableBlocks({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -1028,6 +1066,96 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         height: block.height,
         previous: toB64Url(block.previous),
       }));
+
+    return blocks;
+  }
+
+  async getGqlBlock({ id }: { id: string }) {
+    let block = (await this.getGqlStableBlocks({ pageSize: 1, ids: [id] }))[0];
+    if (!block) {
+      block = (await this.getGqlNewBlocks({ pageSize: 1, ids: [id] }))[0];
+    }
+
+    if (block) {
+      return {
+        id: block.id,
+        timestamp: block.timestamp,
+        height: block.height,
+        previous: block.previous,
+      };
+    } else {
+      return undefined;
+    }
+  }
+
+  async getGqlBlocks({
+    pageSize,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    minHeight = -1,
+    maxHeight = -1,
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }) {
+    let blocks;
+
+    if (sortOrder === 'HEIGHT_DESC') {
+      blocks = await this.getGqlNewBlocks({
+        pageSize,
+        cursor,
+        sortOrder,
+        ids,
+        minHeight,
+        maxHeight,
+      });
+
+      if (blocks.length < pageSize) {
+        blocks = blocks.concat(
+          await this.getGqlStableBlocks({
+            pageSize,
+            cursor,
+            sortOrder,
+            ids,
+            minHeight,
+            maxHeight:
+              blocks.length > 0
+                ? blocks[blocks.length - 1].height - 1
+                : maxHeight,
+          }),
+        );
+      }
+    } else {
+      blocks = await this.getGqlStableBlocks({
+        pageSize,
+        cursor,
+        sortOrder,
+        ids,
+        minHeight,
+        maxHeight,
+      });
+
+      if (blocks.length < pageSize) {
+        blocks = blocks.concat(
+          await this.getGqlNewBlocks({
+            pageSize,
+            cursor,
+            sortOrder,
+            ids,
+            minHeight:
+              blocks.length > 0
+                ? blocks[blocks.length - 1].height + 1
+                : maxHeight,
+            maxHeight,
+          }),
+        );
+      }
+    }
 
     return {
       pageInfo: {
