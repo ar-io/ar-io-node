@@ -11,7 +11,8 @@ import {
 import Sqlite from 'better-sqlite3';
 import fs from 'fs';
 import { ArweaveChainSourceStub } from '../stubs.js';
-import { toB64Url } from '../../src/lib/utils.js';
+import { fromB64Url, toB64Url } from '../../src/lib/utils.js';
+import crypto from 'crypto';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -217,11 +218,15 @@ describe('StandaloneSqliteDatabase', () => {
           fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
         );
 
+        // TODO find a transaction with a non-empty target
+        // TODO check owner sha
+
         const binaryFields = [
           'id',
           'signature',
           'last_tx',
           'owner',
+          'target',
           'data_root',
         ];
 
@@ -252,6 +257,35 @@ describe('StandaloneSqliteDatabase', () => {
             (tx as any)[field],
           );
         }
+
+        const sql = `
+          SELECT ntt.*, tn.name, tv.value
+          FROM new_transaction_tags ntt
+          JOIN tag_names tn ON tn.hash = ntt.tag_name_hash
+          JOIN tag_values tv ON tv.hash = ntt.tag_value_hash
+          JOIN new_transactions nt ON nt.id = ntt.transaction_id
+          JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+          JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+          WHERE ntt.transaction_id = @transaction_id
+          ORDER BY nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
+        `;
+
+        const dbTags = db
+          .prepare(sql)
+          .all({ transaction_id: fromB64Url(txId) });
+
+        expect(dbTags.length).to.equal(tx.tags.length);
+
+        tx.tags.forEach((tag: any, j: number) => {
+          expect(dbTags[j].tag_name_hash).to.deep.equal(
+            crypto.createHash('sha1').update(fromB64Url(tag.name)).digest(),
+          );
+          expect(dbTags[j].tag_value_hash).to.deep.equal(
+            crypto.createHash('sha1').update(fromB64Url(tag.value)).digest(),
+          );
+          expect(toB64Url(dbTags[j].name)).to.equal(tag.name);
+          expect(toB64Url(dbTags[j].value)).to.equal(tag.value);
+        });
       });
     });
   });
