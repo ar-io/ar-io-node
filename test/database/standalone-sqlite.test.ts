@@ -319,6 +319,111 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.stableBlocks).to.equal(149);
     });
 
-    // TODO check that stable_block_transactions is written to
+    it('should save stable transaction IDs to stable_block_transactions', async () => {
+      for (let height = 1; height <= 200; height++) {
+        const { block, txs, missingTxIds } =
+          await chainSource.getBlockAndTxsByHeight(height);
+
+        await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      }
+
+      const sql = `
+        SELECT * FROM stable_block_transactions
+        ORDER BY block_indep_hash, transaction_id
+      `;
+
+      const dbStableBlockTransactions = db.prepare(sql).all();
+
+      const stableBlockTransactions = [
+        {
+          block_indep_hash:
+            'D2D5WWVDBxoD-hDGorPqCl5AD7a3rac_kP2s7OY80fDM_qnTqkyjLLcTEOMRA0_M',
+          transaction_id: 'MmKyBBqjk-BUFEsw5chhXZZ_tv7NrTj-55htn823RSk',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'F2LVA0stDZDJpkToRVibqQAfjSiMums0rSxNJ35NaviFch7vT6EK63HxxgDgKKj0',
+          transaction_id: 'lYtQ--_duWSxNwMuYruxIGE2_Le8am54jB76PoqyOk8',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'KEmoiNais6dwdWGRKuVvoqBzx9GaQvbLoQz4Gf54lzMmgGBk9okX0dHIneeFGwRD',
+          transaction_id: '4yuBbZkGVOsf_QkLhC4pzVGv4XrueZZXu9x3CbnCmUc',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'NygsmnbJN9N5GfIDuuNWcD3eQoMNLmzmvAzPVEcRYHhkoVlpQAAAwoeOVZd7eYAM',
+          transaction_id: 'o1UWZD7Q81SVIXj9f4ixk-9q7Ph8-Jwq0k4mQLQlGO4',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'RnpZKeVgbyKcSzXAvodEuUCqN_LhaiOhsR30gb3bjKmmBhkfjbBO0OkNq1X2KIWJ',
+          transaction_id: 'KJexrl4gTGrnAUwgX2UgVzQnup9P6UeGj_-8KvN9yQI',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'WAuLvCtWR7fQJYarbO1nfjqvKMJxy7dAyl7HulZOXLyy89gYhhLZuEafEhREVcOP',
+          transaction_id: 'Dw6OFwh0YjVq8lHOdi7igTTbbrCR7CM7v-kXiynwdmM',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'XkZPj08mmGWSc_i5DN4v2F0R4v7HaGsX0I7OI1wtfpegPYelKWrIGwxzmdlCUktB',
+          transaction_id: 'fjKUmMl67VahJqR-6oYYMQB_LSUxeXOWb-oM_JRrG5k',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'fxxFMvVrp8oOgBEjDr0WuI2PpVny1mJiq9S551y0Y5T-H7B4JKhc-gNkKz8zJ7oR',
+          transaction_id: 'glHacTmLlPSw55wUOU-MMaknJjWWHBLN16U8f3YuOd4',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'ngFDAB2KRhJgJRysuhpp1u65FjBf5WZk99_NyoMx8w6uP0IVjzb93EVkYxmcErdZ',
+          transaction_id: '7BoxcxiJIjTwUp3JXp0xRJQXf6hZtyJj1kjGNiEl5A8',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'vt3XSYzN-jjqT_bp520T0DXCvkbDlsY7WTNuH6QQzs2wjWrzJlalWp5Bn1WLtp04',
+          transaction_id: 'fgZVZzLOTwdVdeqnPZrbHmtx2MXfyjqNc6xOrt6wOMk',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'xiLfXCBtz8K1Xhgrr2rcje43FGo2kDOG6hrxhgc6imafsR8ybLF5b3XD4hkSPzRK',
+          transaction_id: 'ZaMEF5W4jk0BbL_o8DzrK0HM_RB3hoJYn_al_9pTOp0',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            '6OAy50Jx7O7JxHkG8SbGenvX_aHQ-6klsc7gOhLtDF1ebleir2sSJ1_MI3VKSv7N',
+          transaction_id: 't81tluHdoePSxjq7qG-6TMqBKmQLYr5gupmfvW25Y_o',
+          block_transaction_index: 0,
+        },
+      ];
+
+      expect(dbStableBlockTransactions.length).to.equal(
+        stableBlockTransactions.length,
+      );
+
+      stableBlockTransactions.forEach((stableBlockTransaction, i) => {
+        expect(dbStableBlockTransactions[i].block_indep_hash).to.deep.equal(
+          fromB64Url(stableBlockTransaction.block_indep_hash),
+        );
+        expect(dbStableBlockTransactions[i].transaction_id).to.deep.equal(
+          fromB64Url(stableBlockTransaction.transaction_id),
+        );
+        expect(dbStableBlockTransactions[i].block_transaction_index).to.equal(
+          stableBlockTransaction.block_transaction_index,
+        );
+      });
+    });
   });
 });
