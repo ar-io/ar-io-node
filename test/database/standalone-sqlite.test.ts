@@ -288,5 +288,37 @@ describe('StandaloneSqliteDatabase', () => {
         });
       });
     });
+
+    it('should save missing transaction IDs in missing_transactions', async () => {
+      for (let height = 1; height <= 200; height++) {
+        const { block, txs, missingTxIds } =
+          await chainSource.getBlockAndTxsByHeight(height);
+
+        await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      }
+
+      const dbMissingTxs = db
+        .prepare(`SELECT * FROM missing_transactions`)
+        .all();
+
+      expect(dbMissingTxs.length).to.equal(15);
+
+      // TODO check missing TX contents
+    });
+
+    it('should flush blocks and transactions to stable tables', async () => {
+      for (let height = 1; height <= 200; height++) {
+        const { block, txs, missingTxIds } =
+          await chainSource.getBlockAndTxsByHeight(height);
+
+        await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      }
+
+      // TODO replace with queries to make more focused
+      const stats = await chainDb.getDebugInfo();
+      expect(stats.counts.stableBlocks).to.equal(149);
+    });
+
+    // TODO check that stable_block_transactions is written to
   });
 });
