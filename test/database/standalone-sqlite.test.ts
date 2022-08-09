@@ -297,13 +297,117 @@ describe('StandaloneSqliteDatabase', () => {
         await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
       }
 
-      const dbMissingTxs = db
-        .prepare(`SELECT * FROM missing_transactions`)
-        .all();
+      const sql = `
+        SELECT * FROM missing_transactions
+        ORDER BY block_indep_hash, transaction_id
+      `;
 
-      expect(dbMissingTxs.length).to.equal(15);
+      const dbMissingTxs = db.prepare(sql).all();
 
-      // TODO check missing TX contents
+      const missingTxs = [
+        {
+          block_indep_hash:
+            'D2D5WWVDBxoD-hDGorPqCl5AD7a3rac_kP2s7OY80fDM_qnTqkyjLLcTEOMRA0_M',
+          transaction_id: 'MmKyBBqjk-BUFEsw5chhXZZ_tv7NrTj-55htn823RSk',
+          height: 107,
+        },
+        {
+          block_indep_hash:
+            'F2LVA0stDZDJpkToRVibqQAfjSiMums0rSxNJ35NaviFch7vT6EK63HxxgDgKKj0',
+          transaction_id: 'lYtQ--_duWSxNwMuYruxIGE2_Le8am54jB76PoqyOk8',
+          height: 65,
+        },
+        {
+          block_indep_hash:
+            'JN89gO6Ny0DRoVrw6iaJcTUo744fDXKjDj4DBtf76oFI5moQ56nRiP1cd12BrtvJ',
+          transaction_id: '91LHDJSNjVFhamHNwt660yVNdZfMRNDMb8oPwZ__xW4',
+          height: 176,
+        },
+        {
+          block_indep_hash:
+            'KEmoiNais6dwdWGRKuVvoqBzx9GaQvbLoQz4Gf54lzMmgGBk9okX0dHIneeFGwRD',
+          transaction_id: '4yuBbZkGVOsf_QkLhC4pzVGv4XrueZZXu9x3CbnCmUc',
+          height: 145,
+        },
+        {
+          block_indep_hash:
+            'NygsmnbJN9N5GfIDuuNWcD3eQoMNLmzmvAzPVEcRYHhkoVlpQAAAwoeOVZd7eYAM',
+          transaction_id: 'o1UWZD7Q81SVIXj9f4ixk-9q7Ph8-Jwq0k4mQLQlGO4',
+          height: 75,
+        },
+        {
+          block_indep_hash:
+            'PHP1MrQBdNm5pYo1rWC057WGwYZ7RicAu0vV2Gwri-2E827z2E6bQ7YGAXZ54rs5',
+          transaction_id: 'KZj5A-tQxQUBucTnNRZMYdSkSXztW00P9hnVqIv_4AM',
+          height: 167,
+        },
+        {
+          block_indep_hash:
+            'RnpZKeVgbyKcSzXAvodEuUCqN_LhaiOhsR30gb3bjKmmBhkfjbBO0OkNq1X2KIWJ',
+          transaction_id: 'KJexrl4gTGrnAUwgX2UgVzQnup9P6UeGj_-8KvN9yQI',
+          height: 114,
+        },
+        {
+          block_indep_hash:
+            'WAuLvCtWR7fQJYarbO1nfjqvKMJxy7dAyl7HulZOXLyy89gYhhLZuEafEhREVcOP',
+          transaction_id: 'Dw6OFwh0YjVq8lHOdi7igTTbbrCR7CM7v-kXiynwdmM',
+          height: 138,
+        },
+        {
+          block_indep_hash:
+            'XkZPj08mmGWSc_i5DN4v2F0R4v7HaGsX0I7OI1wtfpegPYelKWrIGwxzmdlCUktB',
+          transaction_id: 'fjKUmMl67VahJqR-6oYYMQB_LSUxeXOWb-oM_JRrG5k',
+          height: 54,
+        },
+        {
+          block_indep_hash:
+            'YlSZJEmac4BF0mzPbXc5F_evGBqDdPpw5JiKD-F0CPQDWR_KN3jtwa9FX-g4auX5',
+          transaction_id: 'UjDaRcYs1zoEleKrl9B3miG1lwRyD_5AdM6oeEe-k2s',
+          height: 151,
+        },
+        {
+          block_indep_hash:
+            'gYZpHCm6YdhiPOG6dGWGeh7zqLsQqOMJZaAkIPfr7CqYL7WktA-0tVsQUQL5en-6',
+          transaction_id: '1pHqMoNBJthy3JXYJr1GmItt2_QRNBHOZBSTOQDk-r8',
+          height: 153,
+        },
+        {
+          block_indep_hash:
+            'ngFDAB2KRhJgJRysuhpp1u65FjBf5WZk99_NyoMx8w6uP0IVjzb93EVkYxmcErdZ',
+          transaction_id: '7BoxcxiJIjTwUp3JXp0xRJQXf6hZtyJj1kjGNiEl5A8',
+          height: 100,
+        },
+        {
+          block_indep_hash:
+            'r8OR72xviqU3kq3WwbWveUuTMNsP4Of_9JDqjrgA4UrHSJm1A92_gT5ctPew7I7A',
+          transaction_id: 'o5SWZckPuQ9kqIaaJJHYgfxQ8LvkeVNyiCmDxu0sg9o',
+          height: 185,
+        },
+        {
+          block_indep_hash:
+            'xiLfXCBtz8K1Xhgrr2rcje43FGo2kDOG6hrxhgc6imafsR8ybLF5b3XD4hkSPzRK',
+          transaction_id: 'ZaMEF5W4jk0BbL_o8DzrK0HM_RB3hoJYn_al_9pTOp0',
+          height: 61,
+        },
+        {
+          block_indep_hash:
+            '6OAy50Jx7O7JxHkG8SbGenvX_aHQ-6klsc7gOhLtDF1ebleir2sSJ1_MI3VKSv7N',
+          transaction_id: 't81tluHdoePSxjq7qG-6TMqBKmQLYr5gupmfvW25Y_o',
+          height: 82,
+        },
+      ];
+
+      expect(dbMissingTxs.length).to.equal(missingTxs.length);
+
+      missingTxs.forEach((missingTx, i) => {
+        expect(dbMissingTxs[i].block_indep_hash).to.deep.equal(
+          fromB64Url(missingTx.block_indep_hash),
+        );
+        expect(dbMissingTxs[i].transaction_id).to.deep.equal(
+          fromB64Url(missingTx.transaction_id),
+        );
+        expect(dbMissingTxs[i].height).to.equal(missingTx.height);
+      });
     });
 
     it('should flush blocks and transactions to stable tables', async () => {
