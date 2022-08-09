@@ -116,9 +116,9 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private getTransactionTagsStmt: Sqlite.Statement;
 
   // Transactions
-  private insertBlockAndTxsFn: Sqlite.Transaction;
-  private saveStableBlockRangeFn: Sqlite.Transaction;
-  private deleteStaleNewDataFn: Sqlite.Transaction;
+  insertBlockAndTxsFn: Sqlite.Transaction;
+  saveStableBlockRangeFn: Sqlite.Transaction;
+  deleteStaleNewDataFn: Sqlite.Transaction;
 
   constructor(db: Sqlite.Database) {
     this.db = db;

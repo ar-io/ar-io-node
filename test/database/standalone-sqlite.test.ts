@@ -218,8 +218,11 @@ describe('StandaloneSqliteDatabase', () => {
           fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
         );
 
-        // TODO find a transaction with a non-empty target
-        // TODO check owner sha
+        const ownerAddress = crypto
+          .createHash('sha256')
+          .update(fromB64Url(tx.owner))
+          .digest();
+        expect(dbTransactions[i].owner_address).to.deep.equal(ownerAddress);
 
         const binaryFields = [
           'id',
@@ -527,6 +530,298 @@ describe('StandaloneSqliteDatabase', () => {
         expect(dbStableBlockTransactions[i].block_transaction_index).to.equal(
           stableBlockTransaction.block_transaction_index,
         );
+      });
+    });
+
+    it('should copy all the block fields to the stable_blocks table', async () => {
+      const height = 982575;
+
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(height);
+
+      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      chainDb.saveStableBlockRangeFn(height, height + 1);
+
+      const stats = await chainDb.getDebugInfo();
+      expect(stats.counts.stableBlocks).to.equal(1);
+
+      const dbBlock = db
+        .prepare(`SELECT * FROM stable_blocks WHERE height = ${height}`)
+        .get();
+
+      const binaryFields = [
+        'indep_hash',
+        'previous_block',
+        'nonce',
+        'hash',
+        'reward_addr',
+        'hash_list_merkle',
+        'wallet_list',
+        'tx_root',
+      ];
+      for (const field of binaryFields) {
+        expect(dbBlock[field]).to.be.an.instanceof(Buffer);
+        expect(toB64Url(dbBlock[field])).to.equal((block as any)[field]);
+      }
+
+      const stringFields = ['diff', 'cumulative_diff'];
+      for (const field of stringFields) {
+        expect(dbBlock[field]).to.be.a('string');
+        expect(dbBlock[field]).to.equal((block as any)[field]);
+      }
+
+      // TODO convert last_retarget to an INTEGER in the DB
+      expect(dbBlock.last_retarget).to.be.a('string');
+      expect(dbBlock.last_retarget).to.equal(block?.last_retarget?.toString());
+
+      // Note: 'timestamp' is renamed to 'block_timestamp' to avoid collision
+      // with the SQLite timestamp data type
+      expect(dbBlock.block_timestamp).to.be.a('number');
+      expect(dbBlock.block_timestamp).to.equal(block.timestamp);
+
+      const integerFields = ['height'];
+      for (const field of integerFields) {
+        expect(dbBlock[field]).to.be.a('number');
+        expect(dbBlock[field]).to.equal((block as any)[field]);
+      }
+
+      // These fields are strings in JSON blocks but 64 bit integers in SQLite
+      const stringIntegerFields = ['block_size', 'weave_size'];
+      for (const field of stringIntegerFields) {
+        expect(dbBlock[field]).to.be.a('number');
+        expect((block as any)[field]).to.be.a('string');
+        expect(dbBlock[field].toString()).to.equal((block as any)[field]);
+      }
+
+      expect(dbBlock.usd_to_ar_rate_dividend).to.be.a('number');
+      expect((block.usd_to_ar_rate ?? [])[0]).to.be.a('string');
+      expect(dbBlock.usd_to_ar_rate_dividend.toString()).to.equal(
+        (block.usd_to_ar_rate ?? [])[0],
+      );
+      expect(dbBlock.usd_to_ar_rate_divisor).to.be.a('number');
+      expect((block.usd_to_ar_rate ?? [])[1]).to.be.a('string');
+      expect(dbBlock.usd_to_ar_rate_divisor.toString()).to.equal(
+        (block.usd_to_ar_rate ?? [])[1],
+      );
+      expect(dbBlock.scheduled_usd_to_ar_rate_dividend).to.be.a('number');
+      expect((block.scheduled_usd_to_ar_rate ?? [])[0]).to.be.a('string');
+      expect(dbBlock.scheduled_usd_to_ar_rate_dividend.toString()).to.equal(
+        (block.scheduled_usd_to_ar_rate ?? [])[0],
+      );
+      expect(dbBlock.scheduled_usd_to_ar_rate_divisor).to.be.a('number');
+      expect((block.scheduled_usd_to_ar_rate ?? [])[1]).to.be.a('string');
+      expect(dbBlock.scheduled_usd_to_ar_rate_divisor.toString()).to.equal(
+        (block.scheduled_usd_to_ar_rate ?? [])[1],
+      );
+    });
+
+    it('should copy all the transaction fields to the stable_transactions table', async () => {
+      const height = 982575;
+
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(height);
+
+      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+
+      const stats = await chainDb.getDebugInfo();
+      expect(stats.counts.newTxs).to.equal(txs.length);
+
+      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      chainDb.saveStableBlockRangeFn(height, height + 1);
+
+      const sql = `
+        SELECT sb.*, wo.public_modulus AS owner
+        FROM stable_transactions sb
+        JOIN wallets wo ON wo.address = sb.owner_address
+        WHERE sb.height = ${height}
+        ORDER BY sb.height, sb.block_transaction_index
+      `;
+
+      const dbTransactions = db.prepare(sql).all();
+
+      const txIds = [
+        'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA',
+        'oq-v4Cv61YAGmY_KlLdxmGp5HjcldvOSLOMv0UPjSTE',
+        'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
+      ];
+
+      txIds.forEach((txId, i) => {
+        const tx = JSON.parse(
+          fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
+        );
+
+        const ownerAddress = crypto
+          .createHash('sha256')
+          .update(fromB64Url(tx.owner))
+          .digest();
+        expect(dbTransactions[i].owner_address).to.deep.equal(ownerAddress);
+
+        const binaryFields = [
+          'id',
+          'signature',
+          'last_tx',
+          'owner',
+          'target',
+          'data_root',
+        ];
+
+        for (const field of binaryFields) {
+          expect(dbTransactions[i][field]).to.be.an.instanceof(Buffer);
+          expect(toB64Url(dbTransactions[i][field])).to.equal(
+            (tx as any)[field],
+          );
+        }
+
+        const stringFields = ['quantity', 'reward'];
+        for (const field of stringFields) {
+          expect(dbTransactions[i][field]).to.be.a('string');
+          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+        }
+
+        const integerFields = ['format'];
+        for (const field of integerFields) {
+          expect(dbTransactions[i][field]).to.be.a('number');
+          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+        }
+
+        const stringIntegerFields = ['data_size'];
+        for (const field of stringIntegerFields) {
+          expect(dbTransactions[i][field]).to.be.a('number');
+          expect((tx as any)[field]).to.be.a('string');
+          expect(dbTransactions[i][field].toString()).to.equal(
+            (tx as any)[field],
+          );
+        }
+
+        const sql = `
+          SELECT stt.*, tn.name, tv.value
+          FROM stable_transaction_tags stt
+          JOIN tag_names tn ON tn.hash = stt.tag_name_hash
+          JOIN tag_values tv ON tv.hash = stt.tag_value_hash
+          JOIN stable_transactions st ON st.id = stt.transaction_id
+          WHERE stt.transaction_id = @transaction_id
+          ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
+        `;
+
+        const dbTags = db
+          .prepare(sql)
+          .all({ transaction_id: fromB64Url(txId) });
+
+        expect(dbTags.length).to.equal(tx.tags.length);
+
+        tx.tags.forEach((tag: any, j: number) => {
+          expect(dbTags[j].tag_name_hash).to.deep.equal(
+            crypto.createHash('sha1').update(fromB64Url(tag.name)).digest(),
+          );
+          expect(dbTags[j].tag_value_hash).to.deep.equal(
+            crypto.createHash('sha1').update(fromB64Url(tag.value)).digest(),
+          );
+          expect(toB64Url(dbTags[j].name)).to.equal(tag.name);
+          expect(toB64Url(dbTags[j].value)).to.equal(tag.value);
+        });
+      });
+    });
+
+    it('should copy all the owner fields to the stable_transactions table', async () => {
+      const height = 34;
+
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(height);
+
+      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+
+      const stats = await chainDb.getDebugInfo();
+      expect(stats.counts.newTxs).to.equal(txs.length);
+
+      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      chainDb.saveStableBlockRangeFn(height, height + 1);
+
+      const sql = `
+        SELECT sb.*, wo.public_modulus AS owner
+        FROM stable_transactions sb
+        JOIN wallets wo ON wo.address = sb.owner_address
+        WHERE sb.height = ${height}
+        ORDER BY sb.height, sb.block_transaction_index
+      `;
+
+      const dbTransactions = db.prepare(sql).all();
+
+      const txIds = ['glHacTmLlPSw55wUOU-MMaknJjWWHBLN16U8f3YuOd4'];
+
+      txIds.forEach((txId, i) => {
+        const tx = JSON.parse(
+          fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
+        );
+
+        const ownerAddress = crypto
+          .createHash('sha256')
+          .update(fromB64Url(tx.owner))
+          .digest();
+        expect(dbTransactions[i].owner_address).to.deep.equal(ownerAddress);
+
+        const binaryFields = [
+          'id',
+          'signature',
+          'last_tx',
+          'owner',
+          'target',
+          'data_root',
+        ];
+
+        for (const field of binaryFields) {
+          expect(dbTransactions[i][field]).to.be.an.instanceof(Buffer);
+          expect(toB64Url(dbTransactions[i][field])).to.equal(
+            (tx as any)[field],
+          );
+        }
+
+        const stringFields = ['quantity', 'reward'];
+        for (const field of stringFields) {
+          expect(dbTransactions[i][field]).to.be.a('string');
+          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+        }
+
+        const integerFields = ['format'];
+        for (const field of integerFields) {
+          expect(dbTransactions[i][field]).to.be.a('number');
+          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+        }
+
+        const stringIntegerFields = ['data_size'];
+        for (const field of stringIntegerFields) {
+          expect(dbTransactions[i][field]).to.be.a('number');
+          expect((tx as any)[field]).to.be.a('string');
+          expect(dbTransactions[i][field].toString()).to.equal(
+            (tx as any)[field],
+          );
+        }
+
+        const sql = `
+          SELECT stt.*, tn.name, tv.value
+          FROM stable_transaction_tags stt
+          JOIN tag_names tn ON tn.hash = stt.tag_name_hash
+          JOIN tag_values tv ON tv.hash = stt.tag_value_hash
+          JOIN stable_transactions st ON st.id = stt.transaction_id
+          WHERE stt.transaction_id = @transaction_id
+          ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
+        `;
+
+        const dbTags = db
+          .prepare(sql)
+          .all({ transaction_id: fromB64Url(txId) });
+
+        expect(dbTags.length).to.equal(tx.tags.length);
+
+        tx.tags.forEach((tag: any, j: number) => {
+          expect(dbTags[j].tag_name_hash).to.deep.equal(
+            crypto.createHash('sha1').update(fromB64Url(tag.name)).digest(),
+          );
+          expect(dbTags[j].tag_value_hash).to.deep.equal(
+            crypto.createHash('sha1').update(fromB64Url(tag.value)).digest(),
+          );
+          expect(toB64Url(dbTags[j].name)).to.equal(tag.name);
+          expect(toB64Url(dbTags[j].value)).to.equal(tag.value);
+        });
       });
     });
   });
