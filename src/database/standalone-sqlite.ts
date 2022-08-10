@@ -1081,18 +1081,20 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       });
 
       if (txs.length < pageSize) {
-        txs = await this.getGqlStableTransactions({
-          pageSize,
-          cursor,
-          sortOrder,
-          ids,
-          recipients,
-          owners,
-          minHeight,
-          maxHeight:
-            txs.length > 0 ? txs[txs.length - 1].height - 1 : maxHeight,
-          tags,
-        });
+        txs = txs.concat(
+          await this.getGqlStableTransactions({
+            pageSize,
+            cursor,
+            sortOrder,
+            ids,
+            recipients,
+            owners,
+            minHeight,
+            maxHeight:
+              txs.length > 0 ? txs[txs.length - 1].height - 1 : maxHeight,
+            tags,
+          }),
+        );
       }
     } else {
       txs = await this.getGqlStableTransactions({
@@ -1108,18 +1110,20 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       });
 
       if (txs.length < pageSize) {
-        txs = await this.getGqlNewTransactions({
-          pageSize,
-          cursor,
-          sortOrder,
-          ids,
-          recipients,
-          owners,
-          minHeight:
-            txs.length > 0 ? txs[txs.length - 1].height + 1 : minHeight,
-          maxHeight,
-          tags,
-        });
+        txs = txs.concat(
+          await this.getGqlNewTransactions({
+            pageSize,
+            cursor,
+            sortOrder,
+            ids,
+            recipients,
+            owners,
+            minHeight:
+              txs.length > 0 ? txs[txs.length - 1].height + 1 : minHeight,
+            maxHeight,
+            tags,
+          }),
+        );
       }
     }
 
