@@ -851,13 +851,16 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     if (tags) {
       tags.forEach((tag, index) => {
         const tagAlias = `"${index}_${index}"`;
-        const joinCond = {
-          [`${txTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
-        };
+        const joinCond = {} as { [key: string]: string };
         if (txTableAlias == heightTableAlias) {
           heightSortTable = tagAlias;
           blockTransactionIndexSortTable = tagAlias;
+          joinCond[
+            `${blockTransactionIndexTableAlias}.block_transaction_index`
+          ] = `${tagAlias}.block_transaction_index`;
           joinCond[`${txTableAlias}.height`] = `${tagAlias}.height`;
+        } else {
+          joinCond[`${txTableAlias}.id`] = `${tagAlias}.transaction_id`;
         }
 
         query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
