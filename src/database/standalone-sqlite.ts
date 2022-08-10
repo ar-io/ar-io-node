@@ -113,7 +113,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private resetToHeightStmt: Sqlite.Statement;
 
   // GraphQL
-  private getTransactionTagsStmt: Sqlite.Statement;
+  private getNewTransactionTagsStmt: Sqlite.Statement;
+  private getStableTransactionTagsStmt: Sqlite.Statement;
 
   // Transactions
   insertBlockAndTxsFn: Sqlite.Transaction;
@@ -369,8 +370,17 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       WHERE height > @height
     `);
 
-    // Get transaction tags (for GQL)
-    this.getTransactionTagsStmt = this.db.prepare(`
+    // Get new transaction tags (for GQL)
+    this.getNewTransactionTagsStmt = this.db.prepare(`
+      SELECT name, value
+      FROM new_transaction_tags
+      JOIN tag_names ON tag_name_hash = tag_names.hash
+      JOIN tag_values ON tag_value_hash = tag_values.hash
+      WHERE transaction_id = @transaction_id
+    `);
+
+    // Get stable transaction tags (for GQL)
+    this.getStableTransactionTagsStmt = this.db.prepare(`
       SELECT name, value
       FROM stable_transaction_tags
       JOIN tag_names ON tag_name_hash = tag_names.hash
@@ -682,8 +692,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     };
   }
 
-  getGqlTransactionTags(txId: Buffer) {
-    const tags = this.getTransactionTagsStmt.all({
+  getGqlNewTransactionTags(txId: Buffer) {
+    const tags = this.getNewTransactionTagsStmt.all({
       transaction_id: txId,
     });
 
@@ -693,7 +703,52 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }));
   }
 
-  getGqlStableTxBaseSql() {
+  getGqlStableTransactionTags(txId: Buffer) {
+    const tags = this.getStableTransactionTagsStmt.all({
+      transaction_id: txId,
+    });
+
+    return tags.map((tag) => ({
+      name: tag.name.toString('utf8'),
+      value: tag.value.toString('utf8'),
+    }));
+  }
+
+  getGqlNewTransactionsBaseSql() {
+    return sql
+      .select(
+        'nbh.height AS height',
+        'nbt.block_transaction_index AS block_transaction_index',
+        'id',
+        'last_tx',
+        'signature',
+        'target',
+        'CAST(reward AS TEXT) AS reward',
+        'CAST(quantity AS TEXT) AS quantity',
+        'CAST(data_size AS TEXT) AS data_size',
+        'content_type',
+        'owner_address',
+        'public_modulus',
+        'nb.indep_hash AS block_indep_hash',
+        'nb.block_timestamp AS block_timestamp',
+        'nb.previous_block AS block_previous_block',
+      )
+      .from('new_transactions nt')
+      .join('new_block_transactions nbt', {
+        'nbt.transaction_id': 'nt.id',
+      })
+      .join('new_blocks nb', {
+        'nb.indep_hash': 'nbt.block_indep_hash',
+      })
+      .join('new_block_heights nbh', {
+        'nbh.block_indep_hash': 'nb.indep_hash',
+      })
+      .join('wallets w', {
+        'nt.owner_address': 'w.address',
+      });
+  }
+
+  getGqlStableTransactionsBaseSql() {
     return sql
       .select(
         'st.height AS height',
@@ -721,34 +776,272 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       });
   }
 
-  async getGqlTransaction({ id }: { id: string }) {
-    const q = this.getGqlStableTxBaseSql();
+  addGqlTransactionFilters({
+    query,
+    txTableAlias = 'st',
+    heightTableAlias = 'st',
+    blockTransactionIndexTableAlias = 'st',
+    tagsTable = 'stable_transaction_tags',
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    recipients = [],
+    owners = [],
+    minHeight = -1,
+    maxHeight = -1,
+    tags = [],
+  }: {
+    query: sql.SelectStatement;
+    txTableAlias?: string;
+    heightTableAlias?: string;
+    blockTransactionIndexTableAlias?: string;
+    tagsTable?: string;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    recipients?: string[];
+    owners?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+    tags: { name: string; values: string[] }[];
+  }) {
+    if (ids.length > 0) {
+      query.where(
+        sql.in(
+          `${txTableAlias}.id`,
+          ids.map((v) => Buffer.from(v, 'base64')),
+        ),
+      );
+    }
 
-    q.where({ 'st.id': Buffer.from(id, 'base64') });
+    if (recipients.length > 0) {
+      query.where(
+        sql.in(
+          `${txTableAlias}.target`,
+          recipients.map((v) => Buffer.from(v, 'base64')),
+        ),
+      );
+    }
 
-    const qp = q.toParams();
-    const sqliteParams = toSqliteParams(qp);
+    if (owners.length > 0) {
+      query.where(
+        sql.in(
+          `${txTableAlias}.owner_address`,
+          owners.map((v) => Buffer.from(v, 'base64')),
+        ),
+      );
+    }
 
-    const tx = this.db.prepare(qp.text).get(sqliteParams);
+    if (minHeight >= 0) {
+      query.where(sql.gte(`${txTableAlias}.height`, minHeight));
+    }
 
-    return {
-      height: tx.height,
-      blockTransactionIndex: tx.block_transaction_index,
-      id: tx.id.toString('base64url'),
-      anchor: tx.last_tx.toString('base64url'),
-      signature: tx.signature.toString('base64url'),
-      recipient: tx.target?.toString('base64url'),
-      ownerAddress: tx.owner_address.toString('base64url'),
-      ownerKey: tx.public_modulus.toString('base64url'),
-      fee: tx.reward,
-      quantity: tx.quantity,
-      dataSize: tx.data_size,
-      tags: this.getGqlTransactionTags(tx.id),
-      contentType: tx.content_type,
-      blockIndepHash: tx.block_indep_hash.toString('base64url'),
-      blockTimestamp: tx.block_timestamp,
-      blockPreviousBlock: tx.block_previous_block.toString('base64url'),
-    };
+    if (maxHeight >= 0) {
+      query.where(sql.lte(`${txTableAlias}.height`, maxHeight));
+    }
+
+    // TODO use the most selective table for sorting
+    let heightSortTable = txTableAlias;
+    let blockTransactionIndexSortTable = txTableAlias;
+    if (txTableAlias !== heightTableAlias) {
+      heightSortTable = heightTableAlias;
+      blockTransactionIndexSortTable = blockTransactionIndexTableAlias;
+    }
+
+    if (tags) {
+      tags.forEach((tag, index) => {
+        const tagAlias = `"${index}_${index}"`;
+        const joinCond = {
+          [`${txTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
+        };
+        if (txTableAlias == heightTableAlias) {
+          heightSortTable = tagAlias;
+          blockTransactionIndexSortTable = tagAlias;
+          joinCond[`${txTableAlias}.height`] = `${tagAlias}.height`;
+        }
+
+        query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
+
+        const nameHash = crypto
+          .createHash('sha1')
+          .update(Buffer.from(tag.name, 'utf8'))
+          .digest();
+        query.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
+
+        query.where(
+          sql.in(
+            `${tagAlias}.tag_value_hash`,
+            tag.values.map((value) => {
+              return crypto
+                .createHash('sha1')
+                .update(Buffer.from(value, 'utf8'))
+                .digest();
+            }),
+          ),
+        );
+      });
+    }
+
+    const {
+      height: cursorHeight,
+      blockTransactionIndex: cursorBlockTransactionIndex,
+    } = decodeTransactionGqlCursor(cursor);
+
+    if (sortOrder === 'HEIGHT_DESC') {
+      if (cursorHeight) {
+        // TODO handle missing block transaction index in cursor
+        query.where(
+          sql.lt(
+            `${heightSortTable}.height * 1000 + ${blockTransactionIndexSortTable}.block_transaction_index`,
+            cursorHeight * 1000 + cursorBlockTransactionIndex,
+          ),
+        );
+      }
+      query.orderBy(
+        `${heightSortTable}.height DESC, ${blockTransactionIndexSortTable}.block_transaction_index DESC`,
+      );
+    } else {
+      if (cursorHeight) {
+        // TODO handle missing block transaction index in cursor
+        query.where(
+          sql.gt(
+            `${heightSortTable}.height * 1000 + ${blockTransactionIndexSortTable}.block_transaction_index`,
+            cursorHeight * 1000 + cursorBlockTransactionIndex,
+          ),
+        );
+      }
+      query.orderBy(
+        `${heightSortTable}.height ASC, ${blockTransactionIndexSortTable}.block_transaction_index ASC`,
+      );
+    }
+  }
+
+  async getGqlNewTransactions({
+    pageSize,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    recipients = [],
+    owners = [],
+    minHeight = -1,
+    maxHeight = -1,
+    tags = [],
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    recipients?: string[];
+    owners?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+    tags?: { name: string; values: string[] }[];
+  }) {
+    const query = this.getGqlNewTransactionsBaseSql();
+
+    this.addGqlTransactionFilters({
+      query,
+      txTableAlias: 'nt',
+      heightTableAlias: 'nb',
+      blockTransactionIndexTableAlias: 'nbt',
+      tagsTable: 'new_transaction_tags',
+      cursor,
+      sortOrder,
+      ids,
+      recipients,
+      owners,
+      minHeight,
+      maxHeight,
+      tags,
+    });
+
+    const queryParams = query.toParams();
+    const sql = queryParams.text;
+    const sqliteParams = toSqliteParams(queryParams);
+
+    return this.db
+      .prepare(`${sql} LIMIT ${pageSize + 1}`)
+      .all(sqliteParams)
+      .map((tx) => ({
+        height: tx.height,
+        blockTransactionIndex: tx.block_transaction_index,
+        id: tx.id.toString('base64url'),
+        anchor: tx.last_tx.toString('base64url'),
+        signature: tx.signature.toString('base64url'),
+        recipient: tx.target?.toString('base64url'),
+        ownerAddress: tx.owner_address.toString('base64url'),
+        ownerKey: tx.public_modulus.toString('base64url'),
+        fee: tx.reward,
+        quantity: tx.quantity,
+        dataSize: tx.data_size,
+        tags: this.getGqlNewTransactionTags(tx.id),
+        contentType: tx.content_type,
+        blockIndepHash: tx.block_indep_hash.toString('base64url'),
+        blockTimestamp: tx.block_timestamp,
+        blockPreviousBlock: tx.block_previous_block.toString('base64url'),
+      }));
+  }
+
+  async getGqlStableTransactions({
+    pageSize,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    recipients = [],
+    owners = [],
+    minHeight = -1,
+    maxHeight = -1,
+    tags = [],
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    recipients?: string[];
+    owners?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+    tags?: { name: string; values: string[] }[];
+  }) {
+    const query = this.getGqlStableTransactionsBaseSql();
+
+    this.addGqlTransactionFilters({
+      query,
+      cursor,
+      sortOrder,
+      ids,
+      recipients,
+      owners,
+      minHeight,
+      maxHeight,
+      tags,
+    });
+
+    const queryParams = query.toParams();
+    const sql = queryParams.text;
+    const sqliteParams = toSqliteParams(queryParams);
+
+    return this.db
+      .prepare(`${sql} LIMIT ${pageSize + 1}`)
+      .all(sqliteParams)
+      .map((tx) => ({
+        height: tx.height,
+        blockTransactionIndex: tx.block_transaction_index,
+        id: tx.id.toString('base64url'),
+        anchor: tx.last_tx.toString('base64url'),
+        signature: tx.signature.toString('base64url'),
+        recipient: tx.target?.toString('base64url'),
+        ownerAddress: tx.owner_address.toString('base64url'),
+        ownerKey: tx.public_modulus.toString('base64url'),
+        fee: tx.reward,
+        quantity: tx.quantity,
+        dataSize: tx.data_size,
+        tags: this.getGqlStableTransactionTags(tx.id),
+        contentType: tx.content_type,
+        blockIndepHash: tx.block_indep_hash.toString('base64url'),
+        blockTimestamp: tx.block_timestamp,
+        blockPreviousBlock: tx.block_previous_block.toString('base64url'),
+      }));
   }
 
   async getGqlTransactions({
@@ -770,134 +1063,65 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
-    tags: { name: string; values: string[] }[];
+    tags?: { name: string; values: string[] }[];
   }) {
-    const q = this.getGqlStableTxBaseSql();
-
-    if (ids.length > 0) {
-      q.where(
-        sql.in(
-          'st.id',
-          ids.map((v) => Buffer.from(v, 'base64')),
-        ),
-      );
-    }
-
-    if (recipients.length > 0) {
-      q.where(
-        sql.in(
-          'st.target',
-          recipients.map((v) => Buffer.from(v, 'base64')),
-        ),
-      );
-    }
-
-    if (owners.length > 0) {
-      q.where(
-        sql.in(
-          'st.owner_address',
-          owners.map((v) => Buffer.from(v, 'base64')),
-        ),
-      );
-    }
-
-    if (minHeight >= 0) {
-      q.where(sql.gte('st.height', minHeight));
-    }
-
-    if (maxHeight >= 0) {
-      q.where(sql.lte('st.height', maxHeight));
-    }
-
-    let sortTable = 'st';
-
-    if (tags) {
-      tags.forEach((tag, index) => {
-        const tagAlias = `"${index}_${index}"`;
-        sortTable = tagAlias;
-
-        q.join(`stable_transaction_tags AS ${tagAlias}`, {
-          'st.height': `${tagAlias}.height`,
-          'st.block_transaction_index': `${tagAlias}.block_transaction_index`,
-        });
-
-        const nameHash = crypto
-          .createHash('sha1')
-          .update(Buffer.from(tag.name, 'utf8'))
-          .digest();
-        q.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
-
-        q.where(
-          sql.in(
-            `${tagAlias}.tag_value_hash`,
-            tag.values.map((value) => {
-              return crypto
-                .createHash('sha1')
-                .update(Buffer.from(value, 'utf8'))
-                .digest();
-            }),
-          ),
-        );
-      });
-    }
-
-    const {
-      height: cursorHeight,
-      blockTransactionIndex: cursorBlockTransactionIndex,
-    } = decodeTransactionGqlCursor(cursor);
+    let txs;
 
     if (sortOrder === 'HEIGHT_DESC') {
-      if (cursorHeight) {
-        // TODO handle missing block transaction index
-        q.where(
-          sql.lt(
-            'st.height * 1000 + st.block_transaction_index',
-            cursorHeight * 1000 + cursorBlockTransactionIndex,
-          ),
-        );
+      txs = await this.getGqlNewTransactions({
+        pageSize,
+        cursor,
+        sortOrder,
+        ids,
+        recipients,
+        owners,
+        minHeight,
+        maxHeight,
+        tags,
+      });
+
+      if (txs.length < pageSize) {
+        txs = await this.getGqlStableTransactions({
+          pageSize,
+          cursor,
+          sortOrder,
+          ids,
+          recipients,
+          owners,
+          minHeight,
+          maxHeight:
+            txs.length > 0 ? txs[txs.length - 1].height - 1 : maxHeight,
+          tags,
+        });
       }
-      q.orderBy(
-        `${sortTable}.height DESC, ${sortTable}.block_transaction_index DESC`,
-      );
     } else {
-      if (cursorHeight) {
-        // TODO handle missing block transaction index
-        q.where(
-          sql.gt(
-            'st.height * 1000 + st.block_transaction_index',
-            cursorHeight * 1000 + cursorBlockTransactionIndex,
-          ),
-        );
+      txs = await this.getGqlStableTransactions({
+        pageSize,
+        cursor,
+        sortOrder,
+        ids,
+        recipients,
+        owners,
+        minHeight,
+        maxHeight,
+        tags,
+      });
+
+      if (txs.length < pageSize) {
+        txs = await this.getGqlNewTransactions({
+          pageSize,
+          cursor,
+          sortOrder,
+          ids,
+          recipients,
+          owners,
+          minHeight:
+            txs.length > 0 ? txs[txs.length - 1].height + 1 : minHeight,
+          maxHeight,
+          tags,
+        });
       }
-      q.orderBy(
-        `${sortTable}.height ASC, ${sortTable}.block_transaction_index ASC`,
-      );
     }
-
-    const qp = q.toParams();
-    const sqliteParams = toSqliteParams(qp);
-
-    const txs = this.db
-      .prepare(`${qp.text} LIMIT ${pageSize + 1}`)
-      .all(sqliteParams)
-      .map((tx) => ({
-        height: tx.height,
-        blockTransactionIndex: tx.block_transaction_index,
-        id: tx.id.toString('base64url'),
-        anchor: tx.last_tx.toString('base64url'),
-        signature: tx.signature.toString('base64url'),
-        recipient: tx.target?.toString('base64url'),
-        ownerAddress: tx.owner_address.toString('base64url'),
-        ownerKey: tx.public_modulus.toString('base64url'),
-        fee: tx.reward,
-        quantity: tx.quantity,
-        dataSize: tx.data_size,
-        tags: this.getGqlTransactionTags(tx.id),
-        contentType: tx.content_type,
-        blockIndepHash: tx.block_indep_hash.toString('base64url'),
-        blockTimestamp: tx.block_timestamp,
-        blockPreviousBlock: tx.block_previous_block.toString('base64url'),
-      }));
 
     return {
       pageInfo: {
@@ -910,6 +1134,17 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         };
       }),
     };
+  }
+
+  async getGqlTransaction({ id }: { id: string }) {
+    let tx = (
+      await this.getGqlStableTransactions({ pageSize: 1, ids: [id] })
+    )[0];
+    if (!tx) {
+      tx = (await this.getGqlNewTransactions({ pageSize: 1, ids: [id] }))[0];
+    }
+
+    return tx;
   }
 
   getGqlStableBlocksBaseSql() {
@@ -1057,7 +1292,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const sql = queryParams.text;
     const sqliteParams = toSqliteParams(queryParams);
 
-    const blocks = this.db
+    return this.db
       .prepare(`${sql} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
       .map((block) => ({
@@ -1066,26 +1301,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         height: block.height,
         previous: toB64Url(block.previous),
       }));
-
-    return blocks;
-  }
-
-  async getGqlBlock({ id }: { id: string }) {
-    let block = (await this.getGqlStableBlocks({ pageSize: 1, ids: [id] }))[0];
-    if (!block) {
-      block = (await this.getGqlNewBlocks({ pageSize: 1, ids: [id] }))[0];
-    }
-
-    if (block) {
-      return {
-        id: block.id,
-        timestamp: block.timestamp,
-        height: block.height,
-        previous: block.previous,
-      };
-    } else {
-      return undefined;
-    }
   }
 
   async getGqlBlocks({
@@ -1150,7 +1365,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
             minHeight:
               blocks.length > 0
                 ? blocks[blocks.length - 1].height + 1
-                : maxHeight,
+                : minHeight,
             maxHeight,
           }),
         );
@@ -1168,5 +1383,14 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         };
       }),
     };
+  }
+
+  async getGqlBlock({ id }: { id: string }) {
+    let block = (await this.getGqlStableBlocks({ pageSize: 1, ids: [id] }))[0];
+    if (!block) {
+      block = (await this.getGqlNewBlocks({ pageSize: 1, ids: [id] }))[0];
+    }
+
+    return block;
   }
 }
