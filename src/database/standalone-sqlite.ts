@@ -833,11 +833,11 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     if (minHeight >= 0) {
-      query.where(sql.gte(`${txTableAlias}.height`, minHeight));
+      query.where(sql.gte(`${heightTableAlias}.height`, minHeight));
     }
 
     if (maxHeight >= 0) {
-      query.where(sql.lte(`${txTableAlias}.height`, maxHeight));
+      query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
     }
 
     // TODO use the most selective table for sorting
