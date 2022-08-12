@@ -778,10 +778,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
   addGqlTransactionFilters({
     query,
-    txTableAlias = 'st',
-    heightTableAlias = 'st',
-    blockTransactionIndexTableAlias = 'st',
-    tagsTable = 'stable_transaction_tags',
+    source,
     cursor,
     sortOrder = 'HEIGHT_DESC',
     ids = [],
@@ -792,10 +789,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     tags = [],
   }: {
     query: sql.SelectStatement;
-    txTableAlias?: string;
-    heightTableAlias?: string;
-    blockTransactionIndexTableAlias?: string;
-    tagsTable?: string;
+    source: 'stable' | 'new';
     cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
     ids?: string[];
@@ -805,6 +799,29 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     maxHeight?: number;
     tags: { name: string; values: string[] }[];
   }) {
+    let txTableAlias: string;
+    let heightTableAlias: string;
+    let blockTransactionIndexTableAlias: string;
+    let tagsTable: string;
+    let heightSortTableAlias: string;
+    let blockTransactionIndexSortTableAlias: string;
+
+    if (source === 'stable') {
+      txTableAlias = 'st';
+      heightTableAlias = 'st';
+      blockTransactionIndexTableAlias = 'st';
+      tagsTable = 'stable_transaction_tags';
+      heightSortTableAlias = 'st';
+      blockTransactionIndexSortTableAlias = 'st';
+    } else {
+      txTableAlias = 'nt';
+      heightTableAlias = 'nb';
+      blockTransactionIndexTableAlias = 'nbt';
+      tagsTable = 'new_transaction_tags';
+      heightSortTableAlias = 'nb';
+      blockTransactionIndexSortTableAlias = 'nbt';
+    }
+
     if (ids.length > 0) {
       query.where(
         sql.in(
@@ -840,27 +857,21 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
     }
 
-    // TODO use the most selective table for sorting
-    let heightSortTable = txTableAlias;
-    let blockTransactionIndexSortTable = txTableAlias;
-    if (txTableAlias !== heightTableAlias) {
-      heightSortTable = heightTableAlias;
-      blockTransactionIndexSortTable = blockTransactionIndexTableAlias;
-    }
-
     if (tags) {
       tags.forEach((tag, index) => {
         const tagAlias = `"${index}_${index}"`;
-        const joinCond = {} as { [key: string]: string };
-        if (txTableAlias == heightTableAlias) {
-          heightSortTable = tagAlias;
-          blockTransactionIndexSortTable = tagAlias;
-          joinCond[
-            `${blockTransactionIndexTableAlias}.block_transaction_index`
-          ] = `${tagAlias}.block_transaction_index`;
-          joinCond[`${txTableAlias}.height`] = `${tagAlias}.height`;
+        let joinCond: { [key: string]: string };
+        if (source === 'stable') {
+          heightSortTableAlias = tagAlias;
+          blockTransactionIndexSortTableAlias = tagAlias;
+          joinCond = {
+            [`${blockTransactionIndexTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
+            [`${heightTableAlias}.height`]: `${tagAlias}.height`,
+          };
         } else {
-          joinCond[`${txTableAlias}.id`] = `${tagAlias}.transaction_id`;
+          joinCond = {
+            [`${txTableAlias}.id`]: `${tagAlias}.transaction_id`,
+          };
         }
 
         query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
@@ -892,29 +903,27 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     if (sortOrder === 'HEIGHT_DESC') {
       if (cursorHeight) {
-        // TODO handle missing block transaction index in cursor
         query.where(
           sql.lt(
-            `${heightSortTable}.height * 1000 + ${blockTransactionIndexSortTable}.block_transaction_index`,
-            cursorHeight * 1000 + cursorBlockTransactionIndex,
+            `${heightSortTableAlias}.height * 1000 + ${blockTransactionIndexSortTableAlias}.block_transaction_index`,
+            cursorHeight * 1000 + cursorBlockTransactionIndex ?? 0,
           ),
         );
       }
       query.orderBy(
-        `${heightSortTable}.height DESC, ${blockTransactionIndexSortTable}.block_transaction_index DESC`,
+        `${heightSortTableAlias}.height DESC, ${blockTransactionIndexSortTableAlias}.block_transaction_index DESC`,
       );
     } else {
       if (cursorHeight) {
-        // TODO handle missing block transaction index in cursor
         query.where(
           sql.gt(
-            `${heightSortTable}.height * 1000 + ${blockTransactionIndexSortTable}.block_transaction_index`,
-            cursorHeight * 1000 + cursorBlockTransactionIndex,
+            `${heightSortTableAlias}.height * 1000 + ${blockTransactionIndexSortTableAlias}.block_transaction_index`,
+            cursorHeight * 1000 + cursorBlockTransactionIndex ?? 0,
           ),
         );
       }
       query.orderBy(
-        `${heightSortTable}.height ASC, ${blockTransactionIndexSortTable}.block_transaction_index ASC`,
+        `${heightSortTableAlias}.height ASC, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC`,
       );
     }
   }
@@ -944,10 +953,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     this.addGqlTransactionFilters({
       query,
-      txTableAlias: 'nt',
-      heightTableAlias: 'nb',
-      blockTransactionIndexTableAlias: 'nbt',
-      tagsTable: 'new_transaction_tags',
+      source: 'new',
       cursor,
       sortOrder,
       ids,
@@ -1010,6 +1016,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     this.addGqlTransactionFilters({
       query,
+      source: 'stable',
       cursor,
       sortOrder,
       ids,
