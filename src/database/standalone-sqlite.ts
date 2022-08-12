@@ -849,14 +849,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       );
     }
 
-    if (minHeight >= 0) {
-      query.where(sql.gte(`${heightTableAlias}.height`, minHeight));
-    }
-
-    if (maxHeight >= 0) {
-      query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
-    }
-
     if (tags) {
       tags.forEach((tag, index) => {
         const tagAlias = `"${index}_${index}"`;
@@ -894,6 +886,14 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           ),
         );
       });
+    }
+
+    if (minHeight >= 0) {
+      query.where(sql.gte(`${heightSortTableAlias}.height`, minHeight));
+    }
+
+    if (maxHeight >= 0) {
+      query.where(sql.lte(`${heightSortTableAlias}.height`, maxHeight));
     }
 
     const {
