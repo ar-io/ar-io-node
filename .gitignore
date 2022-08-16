@@ -4,9 +4,9 @@
 *.log
 /.direnv
 /coverage
+/data/cache
 /dist
 /node_modules
-
 
 # VS Code
 /.vscode

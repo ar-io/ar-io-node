@@ -1,13 +1,69 @@
 import { default as Arweave } from 'arweave';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
-import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
+import { default as fastq } from 'fastq';
+import fs from 'fs';
 import { default as NodeCache } from 'node-cache';
 import * as rax from 'retry-axios';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
-import { ChainSource, JsonBlock, JsonTransaction } from '../types.js';
+import { jsonTxToMsgpack, msgpackToJsonTx } from '../lib/encoding.js';
+import {
+  ChainSource,
+  JsonBlock,
+  JsonTransaction,
+  JsonTxCache,
+} from '../types.js';
+
+function checkTx(tx: JsonTransaction) {
+  if (!tx?.id) {
+    throw new Error('Invalid transaction');
+  }
+}
+
+function txCacheDir(txId: string) {
+  const txPrefix = `${txId.substring(0, 2)}/${txId.substring(2, 4)}`;
+  return `data/cache/headers/txs/${txPrefix}`;
+}
+
+function txCachePath(txId: string) {
+  return `${txCacheDir(txId)}/${txId}.msgpack`;
+}
+
+class FsTxCache implements JsonTxCache {
+  async has(txId: string) {
+    try {
+      await fs.promises.access(txCachePath(txId), fs.constants.F_OK);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async get(txId: string) {
+    try {
+      const txData = await fs.promises.readFile(txCachePath(txId));
+      const tx = msgpackToJsonTx(txData);
+      checkTx(tx);
+      return msgpackToJsonTx(txData);
+    } catch (error) {
+      // TODO log error
+      return undefined;
+    }
+  }
+
+  async set(tx: JsonTransaction) {
+    try {
+      // TODO validate TX id
+      await fs.promises.mkdir(txCacheDir(tx.id), { recursive: true });
+      const txData = jsonTxToMsgpack(tx);
+      await fs.promises.writeFile(txCachePath(tx.id), txData);
+    } catch (error) {
+      // TODO log error
+    }
+  }
+}
 
 type Peer = {
   url: string;
@@ -19,6 +75,7 @@ type Peer = {
 export class ArweaveCompositeClient implements ChainSource {
   private arweave: Arweave;
   private log: winston.Logger;
+  private txCache: JsonTxCache;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -81,6 +138,7 @@ export class ArweaveCompositeClient implements ChainSource {
     this.log = log;
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
+    this.txCache = new FsTxCache();
 
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
@@ -192,8 +250,11 @@ export class ArweaveCompositeClient implements ChainSource {
       const response = (await responsePromise) as AxiosResponse<JsonBlock>;
 
       if (prefetchTxs) {
-        response.data.txs.forEach((txId: string) => {
-          this.prefetchTx(txId);
+        response.data.txs.forEach(async (txId: string) => {
+          // Only prefetch TXs that are not cached
+          if (!(await this.txCache.has(txId))) {
+            this.prefetchTx(txId);
+          }
         });
       }
     } catch (error) {
@@ -294,10 +355,11 @@ export class ArweaveCompositeClient implements ChainSource {
         });
       })
       .then((response) => {
-        // Delete TX data to reduce cache size
+        // Delete TX data to reduce response cache size
         if (response?.data?.data) {
           delete response.data.data;
         }
+
         return response;
       })
       .catch((error) => {
@@ -310,6 +372,12 @@ export class ArweaveCompositeClient implements ChainSource {
   }
 
   async getTx(txId: string): Promise<JsonTransaction> {
+    // Return cached TX if it exists
+    const cachedTx = await this.txCache.get(txId);
+    if (cachedTx) {
+      return cachedTx;
+    }
+
     // Prefetch TX
     this.prefetchTx(txId);
 
@@ -325,9 +393,10 @@ export class ArweaveCompositeClient implements ChainSource {
       const tx = response.data as JsonTransaction;
 
       // Sanity check TX format
-      if (!tx?.id) {
-        throw new Error('Invalid transaction');
-      }
+      checkTx(tx);
+
+      // Save TX in cache
+      this.txCache.set(response.data);
 
       return tx;
     } catch (error: any) {

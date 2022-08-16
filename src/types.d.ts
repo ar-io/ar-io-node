@@ -42,6 +42,26 @@ export interface JsonTransaction {
   tags: JsonTags;
 }
 
+export type MsgpackTag = {
+  name: Buffer;
+  value: Buffer;
+};
+
+export interface MsgpackTransaction {
+  id: Buffer;
+  signature: Buffer;
+  format: number;
+  last_tx: Buffer;
+  owner: Buffer;
+  target: Buffer;
+  quantity: string;
+  reward: string;
+  data_size: string;
+  data_root: Buffer;
+  tags: MsgpackTag[];
+}
+
+// TODO rename to DataItemTag
 export type Tag = {
   name: Buffer;
   value: Buffer;
@@ -59,6 +79,12 @@ export interface DataItem {
   anchor: Buffer;
   tags: Tags;
   data_size: bigint;
+}
+
+export interface JsonTxCache {
+  has(txId: string): Promise<boolean>;
+  get(txId: string): Promise<JsonTransaction | undefined>;
+  set(tx: JsonTransaction): Promise<void>;
 }
 
 export interface ChainSource {
