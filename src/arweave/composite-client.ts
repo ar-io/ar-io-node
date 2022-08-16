@@ -1,10 +1,10 @@
-import { default as NodeCache } from 'node-cache';
+import { default as Arweave } from 'arweave';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
-import * as rax from 'retry-axios';
 import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
+import { default as NodeCache } from 'node-cache';
+import * as rax from 'retry-axios';
 import { default as wait } from 'wait';
-import { default as Arweave } from 'arweave';
 import * as winston from 'winston';
 
 import { ChainSource, JsonBlock, JsonTransaction } from '../types.js';

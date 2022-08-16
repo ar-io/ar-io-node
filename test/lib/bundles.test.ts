@@ -1,11 +1,12 @@
 import { expect } from 'chai';
 import * as sinon from 'sinon';
 import stream from 'stream';
-import { importAns104Bundle } from '../../src/lib/bundles.js';
-import { stubAns104Bundle, stubTxID } from '../stubs.js';
 import * as winston from 'winston';
-import { DataItem, BundleDatabase } from '../../src/types.js';
+
+import { importAns104Bundle } from '../../src/lib/bundles.js';
 import logger from '../../src/log.js';
+import { BundleDatabase, DataItem } from '../../src/types.js';
+import { stubAns104Bundle, stubTxID } from '../stubs.js';
 
 export class BundleDatabaseStub implements BundleDatabase {
   private log: winston.Logger;

@@ -1,17 +1,16 @@
+import Sqlite from 'better-sqlite3';
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
-import sinonChai from 'sinon-chai';
-import * as sinon from 'sinon';
-
-import * as promClient from 'prom-client';
-import Sqlite from 'better-sqlite3';
-import fs from 'fs';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import * as promClient from 'prom-client';
+import * as sinon from 'sinon';
+import sinonChai from 'sinon-chai';
+import { default as wait } from 'wait';
 
-import { BlockImporter } from '../../src/workers/block-importer.js';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 import log from '../../src/log.js';
-import { default as wait } from 'wait';
+import { BlockImporter } from '../../src/workers/block-importer.js';
 import { ArweaveChainSourceStub } from '../stubs.js';
 
 chai.use(chaiAsPromised);

@@ -1,6 +1,7 @@
 import { IResolvers } from '@graphql-tools/utils';
-import { GqlTransaction } from '../../types.js';
 import ArModule from 'arweave/node/ar.js';
+
+import { GqlTransaction } from '../../types.js';
 
 /* eslint-disable */
 // @ts-ignore

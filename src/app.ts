@@ -1,15 +1,15 @@
-import * as promClient from 'prom-client';
+import { default as Arweave } from 'arweave';
 import Sqlite from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import express from 'express';
 import promMid from 'express-prometheus-middleware';
+import * as promClient from 'prom-client';
 
-import log from './log.js';
-import { BlockImporter } from './workers/block-importer.js';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
-import { default as Arweave } from 'arweave';
+import { BlockImporter } from './workers/block-importer.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');

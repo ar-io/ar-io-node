@@ -1,13 +1,14 @@
 import { expect } from 'chai';
+
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   getPageSize,
   resolveTxData,
-  resolveTxQuantity,
   resolveTxFee,
-  resolveTxRecipient,
   resolveTxOwner,
+  resolveTxQuantity,
+  resolveTxRecipient,
 } from '../../../src/routes/graphql/resolvers.js';
 
 const GQL_TX = {

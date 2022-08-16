@@ -1,18 +1,19 @@
-import { expect } from 'chai';
 import { ValidationError } from 'apollo-server-express';
+import Sqlite from 'better-sqlite3';
+import { expect } from 'chai';
+import crypto from 'crypto';
+import fs from 'fs';
+
 import {
-  encodeTransactionGqlCursor,
+  StandaloneSqliteDatabase,
+  decodeBlockGqlCursor,
   decodeTransactionGqlCursor,
   encodeBlockGqlCursor,
-  decodeBlockGqlCursor,
+  encodeTransactionGqlCursor,
   toSqliteParams,
-  StandaloneSqliteDatabase,
 } from '../../src/database/standalone-sqlite.js';
-import Sqlite from 'better-sqlite3';
-import fs from 'fs';
-import { ArweaveChainSourceStub } from '../stubs.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
-import crypto from 'crypto';
+import { ArweaveChainSourceStub } from '../stubs.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;

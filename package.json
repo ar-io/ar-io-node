@@ -30,6 +30,7 @@
     "winston": "^3.7.2"
   },
   "devDependencies": {
+    "@trivago/prettier-plugin-sort-imports": "^3.3.0",
     "@types/better-sqlite3": "^7.5.0",
     "@types/chai": "^4.3.1",
     "@types/chai-as-promised": "^7.1.5",

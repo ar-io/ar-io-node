@@ -1,14 +1,14 @@
 import * as EventEmitter from 'events';
 import * as promClient from 'prom-client';
-import * as winston from 'winston';
 import { default as wait } from 'wait';
-import { MAX_FORK_DEPTH } from '../arweave/constants.js';
+import * as winston from 'winston';
 
+import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import {
-  JsonTransaction,
-  JsonBlock,
-  ChainSource,
   ChainDatabase,
+  ChainSource,
+  JsonBlock,
+  JsonTransaction,
 } from '../types.js';
 
 const DEFAULT_HEIGHT_POLLING_INTERVAL_MS = 5000;

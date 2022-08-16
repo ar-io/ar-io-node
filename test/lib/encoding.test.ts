@@ -1,9 +1,10 @@
 import { expect } from 'chai';
+
 import {
+  b64UrlToUtf8,
   fromB64Url,
   sha256B64Url,
   toB64Url,
-  b64UrlToUtf8,
   utf8ToB64Url,
 } from '../../src/lib/encoding.js';
 

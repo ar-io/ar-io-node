@@ -1,20 +1,21 @@
-import {
-  ChainDatabase,
-  JsonBlock,
-  JsonTransaction,
-  GqlQueryable,
-} from '../types.js';
-import {
-  toB64Url,
-  fromB64Url,
-  b64UrlToUtf8,
-  utf8ToB64Url,
-} from '../lib/encoding.js';
+import { ValidationError } from 'apollo-server-express';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
-import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import sql from 'sql-bricks';
-import { ValidationError } from 'apollo-server-express';
+
+import { MAX_FORK_DEPTH } from '../arweave/constants.js';
+import {
+  b64UrlToUtf8,
+  fromB64Url,
+  toB64Url,
+  utf8ToB64Url,
+} from '../lib/encoding.js';
+import {
+  ChainDatabase,
+  GqlQueryable,
+  JsonBlock,
+  JsonTransaction,
+} from '../types.js';
 
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import stream from 'stream';
+
 import { ChainSource, JsonBlock, JsonTransaction } from '../src/types.js';
 
 export const stubTxID = '0000000000000000000000000000000000000000000';

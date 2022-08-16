@@ -1,15 +1,16 @@
 import {
+  ApolloServerPluginLandingPageDisabled,
+  ApolloServerPluginLandingPageGraphQLPlayground,
+} from 'apollo-server-core';
+import {
   ApolloServer,
   ApolloServerExpressConfig,
   gql,
 } from 'apollo-server-express';
-import {
-  ApolloServerPluginLandingPageDisabled,
-  ApolloServerPluginLandingPageGraphQLPlayground,
-} from 'apollo-server-core';
 import { readFileSync } from 'fs';
-import { resolvers } from './resolvers.js';
+
 import { GqlQueryable } from '../../types.js';
+import { resolvers } from './resolvers.js';
 
 // TODO make path relative to file in stead of cwd
 const typeDefs = gql(
