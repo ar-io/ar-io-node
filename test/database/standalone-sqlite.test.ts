@@ -11,80 +11,84 @@ import {
 import Sqlite from 'better-sqlite3';
 import fs from 'fs';
 import { ArweaveChainSourceStub } from '../stubs.js';
-import { fromB64Url, toB64Url } from '../../src/lib/utils.js';
+import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import crypto from 'crypto';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
 
-describe('encodeTransactionGqlCursor', () => {
-  it('should encode a cursor given a height and blockTransactionIndex', () => {
-    expect(
-      encodeTransactionGqlCursor({
+describe('SQLite support functions', () => {
+  describe('toSqliteParams', () => {
+    it('should convert SQL Bricks param values to better-sqlite3 params', () => {
+      expect(toSqliteParams({ values: [820389, 820389] })).to.deep.equal({
+        '1': 820389,
+        '2': 820389,
+      });
+    });
+  });
+});
+
+describe('SQLite GraphQL cursor functions', () => {
+  describe('encodeTransactionGqlCursor', () => {
+    it('should encode a cursor given a height and blockTransactionIndex', () => {
+      expect(
+        encodeTransactionGqlCursor({
+          height: HEIGHT,
+          blockTransactionIndex: BLOCK_TX_INDEX,
+        }),
+      ).to.equal('WzExMzgsNDJd');
+    });
+  });
+
+  describe('decodeTransactionGqlCursor', () => {
+    it('should decode a height and blockTransactionIndex given an encoded cursor', () => {
+      expect(decodeTransactionGqlCursor('WzExMzgsNDJd')).to.deep.equal({
         height: HEIGHT,
         blockTransactionIndex: BLOCK_TX_INDEX,
-      }),
-    ).to.equal('WzExMzgsNDJd');
-  });
-});
+      });
+    });
 
-describe('decodeTransactionGqlCursor', () => {
-  it('should decode a height and blockTransactionIndex given an encoded cursor', () => {
-    expect(decodeTransactionGqlCursor('WzExMzgsNDJd')).to.deep.equal({
-      height: HEIGHT,
-      blockTransactionIndex: BLOCK_TX_INDEX,
+    it('should return an undefined height and blockTransactionIndex given an undefined cursor', () => {
+      expect(decodeTransactionGqlCursor(undefined)).to.deep.equal({
+        height: undefined,
+        blockTransactionIndex: undefined,
+      });
+    });
+
+    it('should throw an error given an invalid cursor', async () => {
+      expect(() => {
+        decodeTransactionGqlCursor('123');
+      }).to.throw(ValidationError, 'Invalid transaction cursor');
     });
   });
 
-  it('should return an undefined height and blockTransactionIndex given an undefined cursor', () => {
-    expect(decodeTransactionGqlCursor(undefined)).to.deep.equal({
-      height: undefined,
-      blockTransactionIndex: undefined,
+  describe('encodeBlockGqlCursor', () => {
+    it('should encode a cursor given a height', () => {
+      expect(
+        encodeBlockGqlCursor({
+          height: HEIGHT,
+        }),
+      ).to.equal('WzExMzhd');
     });
   });
 
-  it('should throw an error given an invalid cursor', async () => {
-    expect(() => {
-      decodeTransactionGqlCursor('123');
-    }).to.throw(ValidationError, 'Invalid transaction cursor');
-  });
-});
-
-describe('encodeBlockGqlCursor', () => {
-  it('should encode a cursor given a height', () => {
-    expect(
-      encodeBlockGqlCursor({
+  describe('decodeBlockGqlCursor', () => {
+    it('should decode a height given an encoded cursor', () => {
+      expect(decodeBlockGqlCursor('WzExMzhd')).to.deep.equal({
         height: HEIGHT,
-      }),
-    ).to.equal('WzExMzhd');
-  });
-});
-
-describe('decodeBlockGqlCursor', () => {
-  it('should decode a height given an encoded cursor', () => {
-    expect(decodeBlockGqlCursor('WzExMzhd')).to.deep.equal({
-      height: HEIGHT,
+      });
     });
-  });
 
-  it('should return an undefined height given an undefined cursor', () => {
-    expect(decodeBlockGqlCursor(undefined)).to.deep.equal({
-      height: undefined,
+    it('should return an undefined height given an undefined cursor', () => {
+      expect(decodeBlockGqlCursor(undefined)).to.deep.equal({
+        height: undefined,
+      });
     });
-  });
 
-  it('should throw an error given an invalid cursor', async () => {
-    expect(() => {
-      decodeBlockGqlCursor('123');
-    }).to.throw(ValidationError, 'Invalid block cursor');
-  });
-});
-
-describe('toSqliteParams', () => {
-  it('should convert SQL Bricks param values to better-sqlite3 params', () => {
-    expect(toSqliteParams({ values: [820389, 820389] })).to.deep.equal({
-      '1': 820389,
-      '2': 820389,
+    it('should throw an error given an invalid cursor', async () => {
+      expect(() => {
+        decodeBlockGqlCursor('123');
+      }).to.throw(ValidationError, 'Invalid block cursor');
     });
   });
 });
@@ -192,17 +196,17 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       const sql = `
-        SELECT
-          nbh.height AS height,
-          nt.*,
-          wo.public_modulus AS owner
-        FROM new_transactions nt
-        JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
-        JOIN new_blocks nb ON nb.indep_hash = nbt.block_indep_hash
-        JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
-        JOIN wallets wo ON wo.address = nt.owner_address
-        WHERE nbh.height = ${height}
-        ORDER BY nbh.height, nbt.block_transaction_index
+      SELECT
+      nbh.height AS height,
+      nt.*,
+      wo.public_modulus AS owner
+      FROM new_transactions nt
+      JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+      JOIN new_blocks nb ON nb.indep_hash = nbt.block_indep_hash
+      JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
+      JOIN wallets wo ON wo.address = nt.owner_address
+      WHERE nbh.height = ${height}
+      ORDER BY nbh.height, nbt.block_transaction_index
       `;
 
       const dbTransactions = db.prepare(sql).all();
@@ -262,15 +266,15 @@ describe('StandaloneSqliteDatabase', () => {
         }
 
         const sql = `
-          SELECT ntt.*, tn.name, tv.value
-          FROM new_transaction_tags ntt
-          JOIN tag_names tn ON tn.hash = ntt.tag_name_hash
-          JOIN tag_values tv ON tv.hash = ntt.tag_value_hash
-          JOIN new_transactions nt ON nt.id = ntt.transaction_id
-          JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
-          JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-          WHERE ntt.transaction_id = @transaction_id
-          ORDER BY nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
+        SELECT ntt.*, tn.name, tv.value
+        FROM new_transaction_tags ntt
+        JOIN tag_names tn ON tn.hash = ntt.tag_name_hash
+        JOIN tag_values tv ON tv.hash = ntt.tag_value_hash
+        JOIN new_transactions nt ON nt.id = ntt.transaction_id
+        JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+        WHERE ntt.transaction_id = @transaction_id
+        ORDER BY nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
         `;
 
         const dbTags = db
@@ -301,8 +305,8 @@ describe('StandaloneSqliteDatabase', () => {
       }
 
       const sql = `
-        SELECT * FROM missing_transactions
-        ORDER BY block_indep_hash, transaction_id
+      SELECT * FROM missing_transactions
+      ORDER BY block_indep_hash, transaction_id
       `;
 
       const dbMissingTxs = db.prepare(sql).all();
@@ -435,8 +439,8 @@ describe('StandaloneSqliteDatabase', () => {
       }
 
       const sql = `
-        SELECT * FROM stable_block_transactions
-        ORDER BY block_indep_hash, transaction_id
+      SELECT * FROM stable_block_transactions
+      ORDER BY block_indep_hash, transaction_id
       `;
 
       const dbStableBlockTransactions = db.prepare(sql).all();
@@ -630,11 +634,11 @@ describe('StandaloneSqliteDatabase', () => {
       chainDb.saveStableBlockRangeFn(height, height + 1);
 
       const sql = `
-        SELECT sb.*, wo.public_modulus AS owner
-        FROM stable_transactions sb
-        JOIN wallets wo ON wo.address = sb.owner_address
-        WHERE sb.height = ${height}
-        ORDER BY sb.height, sb.block_transaction_index
+      SELECT sb.*, wo.public_modulus AS owner
+      FROM stable_transactions sb
+      JOIN wallets wo ON wo.address = sb.owner_address
+      WHERE sb.height = ${height}
+      ORDER BY sb.height, sb.block_transaction_index
       `;
 
       const dbTransactions = db.prepare(sql).all();
@@ -694,13 +698,13 @@ describe('StandaloneSqliteDatabase', () => {
         }
 
         const sql = `
-          SELECT stt.*, tn.name, tv.value
-          FROM stable_transaction_tags stt
-          JOIN tag_names tn ON tn.hash = stt.tag_name_hash
-          JOIN tag_values tv ON tv.hash = stt.tag_value_hash
-          JOIN stable_transactions st ON st.id = stt.transaction_id
-          WHERE stt.transaction_id = @transaction_id
-          ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
+        SELECT stt.*, tn.name, tv.value
+        FROM stable_transaction_tags stt
+        JOIN tag_names tn ON tn.hash = stt.tag_name_hash
+        JOIN tag_values tv ON tv.hash = stt.tag_value_hash
+        JOIN stable_transactions st ON st.id = stt.transaction_id
+        WHERE stt.transaction_id = @transaction_id
+        ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
         `;
 
         const dbTags = db
@@ -737,11 +741,11 @@ describe('StandaloneSqliteDatabase', () => {
       chainDb.saveStableBlockRangeFn(height, height + 1);
 
       const sql = `
-        SELECT sb.*, wo.public_modulus AS owner
-        FROM stable_transactions sb
-        JOIN wallets wo ON wo.address = sb.owner_address
-        WHERE sb.height = ${height}
-        ORDER BY sb.height, sb.block_transaction_index
+      SELECT sb.*, wo.public_modulus AS owner
+      FROM stable_transactions sb
+      JOIN wallets wo ON wo.address = sb.owner_address
+      WHERE sb.height = ${height}
+      ORDER BY sb.height, sb.block_transaction_index
       `;
 
       const dbTransactions = db.prepare(sql).all();
@@ -797,13 +801,13 @@ describe('StandaloneSqliteDatabase', () => {
         }
 
         const sql = `
-          SELECT stt.*, tn.name, tv.value
-          FROM stable_transaction_tags stt
-          JOIN tag_names tn ON tn.hash = stt.tag_name_hash
-          JOIN tag_values tv ON tv.hash = stt.tag_value_hash
-          JOIN stable_transactions st ON st.id = stt.transaction_id
-          WHERE stt.transaction_id = @transaction_id
-          ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
+        SELECT stt.*, tn.name, tv.value
+        FROM stable_transaction_tags stt
+        JOIN tag_names tn ON tn.hash = stt.tag_name_hash
+        JOIN tag_values tv ON tv.hash = stt.tag_value_hash
+        JOIN stable_transactions st ON st.id = stt.transaction_id
+        WHERE stt.transaction_id = @transaction_id
+        ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
         `;
 
         const dbTags = db

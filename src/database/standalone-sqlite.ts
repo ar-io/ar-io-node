@@ -9,7 +9,7 @@ import {
   fromB64Url,
   b64UrlToUtf8,
   utf8ToB64Url,
-} from '../lib/utils.js';
+} from '../lib/encoding.js';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';

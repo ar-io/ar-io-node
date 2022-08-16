@@ -1,7 +1,7 @@
 import * as winston from 'winston';
 import stream from 'stream';
 import arbundles from 'arbundles/stream/index.js';
-import { fromB64Url, sha256B64Url } from './utils.js';
+import { fromB64Url, sha256B64Url } from './encoding.js';
 import { BundleDatabase, DataItem, Tags } from '../types.js';
 
 /* eslint-disable */
