@@ -17,7 +17,7 @@ import crypto from 'crypto';
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
 
-describe('SQLite support functions', () => {
+describe('SQLite helper functions', () => {
   describe('toSqliteParams', () => {
     it('should convert SQL Bricks param values to better-sqlite3 params', () => {
       expect(toSqliteParams({ values: [820389, 820389] })).to.deep.equal({
