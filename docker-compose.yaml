@@ -2,17 +2,20 @@
 
 version: '3.0'
 services:
-  # envoy:
-  #   image: envoyproxy/envoy:v1.20-latest
-  #   ports:
-  #     - ${ARWEAVE0_PORT}:1984
-  #   volumes:
-  #     - ./config/envoy.yaml:/etc/envoy/envoy.yaml
+  envoy:
+    build:
+        context: envoy/
+        dockerfile: Dockerfile.envoy
+    ports:
+      - '1984:1984'
+      - '9901:9901'
+    environment:
+      - 'ARWEAVE_NODES=node-ny-247rack-1.ar.io:1984,node-ny-247rack-2.ar.io:1984,chain-ny-247rack-1.ar.io:1984'
 
   ario:
     build:
       context: .
-      dockerfile: Dockerfile.gateway
+      dockerfile: Dockerfile
     ports:
       - 3000:3000
     healthcheck:

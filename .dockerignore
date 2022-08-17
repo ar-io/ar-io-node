@@ -1,6 +1,16 @@
+# Docker
+docker-compose.yaml
+
+# Envoy
+envoy/
+
+# Node
 node_modules/
-coverage/
+
+# Other
 .vscode/
 .github/
+
+# Test
 test/
-docker-compose.yaml
+coverage/

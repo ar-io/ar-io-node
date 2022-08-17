@@ -1,0 +1,165 @@
+---
+
+admin:
+  address:
+    socket_address: {address: 0.0.0.0, port_value: 9901}
+
+static_resources:
+  listeners:
+    - name: arweave_listener
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 1984}
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: local_service
+                      domains: ["*"]
+                      routes:
+                        - match: {prefix: "/chunk"}
+                          route:
+                            cluster: chunk_nodes
+                            retry_policy:
+                              retry_on: "5xx,reset,retriable-status-codes"
+                              retriable_status_codes: 404
+                              num_retries: 5
+                        - match:
+                            safe_regex:
+                              google_re2: {}
+                              regex: "\/tx\/.*\/data.*"
+                          route:
+                            cluster: chunk_nodes
+                            retry_policy:
+                              retry_on: "5xx,reset,retriable-status-codes"
+                              retriable_status_codes: 404
+                              num_retries: 5
+                        - match: {prefix: "/price"}
+                          route:
+                            cluster: partial_chain_nodes_with_fallback
+                            retry_policy:
+                              retry_on: "5xx,reset"
+                              num_retries: 5
+                        - match: {prefix: "/height"}
+                          route:
+                            cluster: partial_chain_nodes_with_fallback
+                            retry_policy:
+                              retry_on: "5xx,reset"
+                              num_retries: 5
+                        - match: {prefix: "/wallet"}
+                          route:
+                            cluster: partial_chain_nodes_with_fallback
+                            retry_policy:
+                              retry_on: "5xx,reset"
+                              num_retries: 5
+                        - match: {prefix: "/block/current"}
+                          route:
+                            cluster: partial_chain_nodes_with_fallback
+                            retry_policy:
+                              retry_on: "5xx,reset"
+                              num_retries: 5
+                        - match: {prefix: "/"}
+                          route:
+                            cluster: full_chain_nodes_with_fallback
+                            retry_policy:
+                              retry_on: "5xx,reset,retriable-status-codes"
+                              retriable_status_codes: 404
+                              num_retries: 5
+                http_filters:
+                  - name: envoy.filters.http.router
+  clusters:
+    - name: partial_chain_nodes_with_fallback
+      connect_timeout: 1s
+      lb_policy: CLUSTER_PROVIDED
+      cluster_type:
+        name: envoy.clusters.aggregate
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
+          clusters:
+          - partial_chain_nodes
+          - full_chain_nodes
+          - chunk_nodes
+    - name: partial_chain_nodes
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      health_checks:
+        - timeout: 1s
+          interval: 20s
+          interval_jitter: 1s
+          unhealthy_threshold: 3
+          healthy_threshold: 1
+          http_health_check:
+            path: /height
+      load_assignment:
+        cluster_name: partial_chain_nodes
+        endpoints:
+          - lb_endpoints:
+              {% for node in partial_chain_nodes %}
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: {{ node.hostname }}
+                      port_value: {{ node.port }}
+              {% endfor %}
+    - name: full_chain_nodes_with_fallback
+      connect_timeout: 1s
+      lb_policy: CLUSTER_PROVIDED
+      cluster_type:
+        name: envoy.clusters.aggregate
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
+          clusters:
+          - full_chain_nodes
+          - chunk_nodes
+    - name: full_chain_nodes
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      health_checks:
+        - timeout: 1s
+          interval: 20s
+          interval_jitter: 1s
+          unhealthy_threshold: 3
+          healthy_threshold: 1
+          http_health_check:
+            path: /height
+      load_assignment:
+        cluster_name: full_chain_nodes
+        endpoints:
+          - lb_endpoints:
+              {% for node in full_chain_nodes %}
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: {{ node.hostname }}
+                      port_value: {{ node.port }}
+              {% endfor %}
+    - name: chunk_nodes
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      health_checks:
+        - timeout: 1s
+          interval: 20s
+          interval_jitter: 1s
+          unhealthy_threshold: 3
+          healthy_threshold: 1
+          http_health_check:
+            path: /height
+      load_assignment:
+        cluster_name: chunk_nodes
+        endpoints:
+          - lb_endpoints:
+              {% for node in chunk_nodes %}
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: {{ node.hostname }}
+                      port_value: {{ node.port }}
+              {% endfor %}
