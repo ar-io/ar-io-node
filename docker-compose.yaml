@@ -2,9 +2,24 @@
 
 version: '3.0'
 services:
-  envoy:
-    image: envoyproxy/envoy:v1.20-latest
+  # envoy:
+  #   image: envoyproxy/envoy:v1.20-latest
+  #   ports:
+  #     - ${ARWEAVE0_PORT}:1984
+  #   volumes:
+  #     - ./config/envoy.yaml:/etc/envoy/envoy.yaml
+
+  ario:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
     ports:
-      - ${ARWEAVE0_PORT}:1984
-    volumes:
-      - ./config/envoy.yaml:/etc/envoy/envoy.yaml
+      - 3000:3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    environment:
+      ENV: development

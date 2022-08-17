@@ -65,6 +65,18 @@ blockImporter.start();
 // HTTP server
 const app = express();
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
+
+// Healthcheck
+app.get('/healthcheck', async (_req, res) => {
+  const data = {
+    uptime: process.uptime(),
+    message: 'Welcome to the permaweb.',
+    date: new Date(),
+  };
+
+  res.status(200).send(data);
+});
+
 // TODO move under '/admin'
 app.get('/debug', async (_req, res) => {
   res.json({
