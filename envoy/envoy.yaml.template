@@ -63,6 +63,13 @@ static_resources:
                             retry_policy:
                               retry_on: "5xx,reset"
                               num_retries: 5
+                        - match: {prefix: "/graphql"}
+                          route:
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: "5xx,reset,retriable-status-codes"
+                              retriable_status_codes: 404
+                              num_retries: 5
                         - match: {prefix: "/"}
                           route:
                             cluster: full_chain_nodes_with_fallback
@@ -70,6 +77,7 @@ static_resources:
                               retry_on: "5xx,reset,retriable-status-codes"
                               retriable_status_codes: 404
                               num_retries: 5
+
                 http_filters:
                   - name: envoy.filters.http.router
   clusters:
@@ -81,9 +89,33 @@ static_resources:
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
           clusters:
-          - partial_chain_nodes
-          - full_chain_nodes
+          - ario_gateways
           - chunk_nodes
+          - full_chain_nodes
+          - partial_chain_nodes
+    - name: ario_gateways
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      health_checks:
+        - timeout: 3s
+          interval: 20s
+          interval_jitter: 1s
+          unhealthy_threshold: 3
+          healthy_threshold: 1
+          http_health_check:
+            path: /healthcheck
+      load_assignment:
+        cluster_name: ario_gateways
+        endpoints:
+          - lb_endpoints:
+              {% for node in ario_gateways %}
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: {{ node.hostname }}
+                      port_value: {{ node.port }}
+              {% endfor %}
     - name: partial_chain_nodes
       connect_timeout: 1s
       type: STRICT_DNS

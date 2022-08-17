@@ -24,15 +24,21 @@
   (or (getenv-hosts "ARWEAVE_CHUNK_NODES")
       (getenv-hosts "ARWEAVE_NODES")))
 
+(def ario-gateways
+  ( getenv-hosts "ARIO_GATEWAYS"))
+
 (when *command-line-args*
   (assert full-chain-nodes "No full chain nodes found")
   (assert partial-chain-nodes "No partial chain nodes found")
   (assert chunk-nodes "No chunk nodes found")
+  (assert ario-gateways "No ario gateways found")
 
   (-> *command-line-args*
       first
       slurp
-      (selmer/render {:full_chain_nodes full-chain-nodes
+      (selmer/render {
+                      :ario_gateways ario-gateways
+                      :full_chain_nodes full-chain-nodes
                       :partial_chain_nodes partial-chain-nodes
                       :chunk_nodes chunk-nodes})
       print))
@@ -44,8 +50,9 @@
   (extract-hosts "a:1,b:2,c:3")
 
   (selmer/render (slurp "envoy.yaml.template")
-                 {:full_chain_nodes (extract-hosts "a:1,b:2,c:3")
-                  :partial_chain_nodes (extract-hosts "d:4,e:5,f:6")
-                  :chunk_nodes (extract-hosts "g:7,h:8,i:9")})
-
-  )
+                 {                     
+                  :ario_gateways (extract-hosts "a:1,b:2,c:3")
+                  :full_chain_nodes (extract-hosts "d:1,e:2,f:3")
+                  :partial_chain_nodes (extract-hosts "g:4,h:5,i:6")
+                  :chunk_nodes (extract-hosts "j:7,k:8,l:9")})
+)

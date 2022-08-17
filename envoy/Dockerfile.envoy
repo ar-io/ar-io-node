@@ -9,11 +9,11 @@ RUN curl -sLO https://github.com/babashka/babashka/releases/download/v${BABASHKA
     && mv bb /usr/local/bin \
     && rm babashka-${BABASHKA_VERSION}-linux-amd64-static.tar.gz
 
-COPY envoy-entrypoint.sh /envoy-entrypoint.sh
+COPY docker-entrypoint.sh /docker-entrypoint.sh
 COPY envoy.yaml.template /etc/envoy/envoy.yaml.template
 COPY generate_config.clj /generate_config.clj
 
 LABEL ECS_PROMETHEUS_EXPORTER_PORT 9901
 LABEL ECS_PROMETHEUS_EXPORTER_METRICS_PATH /stats/prometheus
 
-RUN chmod 755 /generate_config.clj /envoy-entrypoint.sh
+RUN chmod 777 /generate_config.clj /docker-entrypoint.sh

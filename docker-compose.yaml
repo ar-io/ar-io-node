@@ -1,6 +1,9 @@
 ---
-
 version: '3.0'
+
+networks:
+  ario:
+
 services:
   envoy:
     build:
@@ -9,8 +12,13 @@ services:
     ports:
       - '1984:1984'
       - '9901:9901'
+    networks:
+      - ario
     environment:
-      - 'ARWEAVE_NODES=node-ny-247rack-1.ar.io:1984,node-ny-247rack-2.ar.io:1984,chain-ny-247rack-1.ar.io:1984'
+      - ARIO_GATEWAYS=ar.io:3000
+      - ARWEAVE_NODES=node-ny-247rack-1.ar.io:1984,node-ny-247rack-2.ar.io:1984,chain-ny-247rack-1.ar.io:1984
+      - ECS_PROMETHEUS_EXPORTER_PORT=9901
+      - ECS_PROMETHEUS_EXPORTER_METRICS_PATH=/stats/prometheus
 
   ario:
     build:
@@ -18,6 +26,10 @@ services:
       dockerfile: Dockerfile
     ports:
       - 3000:3000
+    networks:
+      ario:
+        aliases:
+            - ar.io
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
       interval: 30s
