@@ -4,7 +4,7 @@
 *.log
 /.direnv
 /coverage
-/data/cache
+/data/headers
 /dist
 /node_modules
 

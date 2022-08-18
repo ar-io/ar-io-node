@@ -8,13 +8,20 @@ import * as rax from 'retry-axios';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
-import { jsonTxToMsgpack, msgpackToJsonTx } from '../lib/encoding.js';
+import {
+  jsonBlockToMsgpack,
+  jsonTxToMsgpack,
+  msgpackToJsonBlock,
+  msgpackToJsonTx,
+} from '../lib/encoding.js';
 import {
   ChainSource,
   JsonBlock,
+  JsonBlockCache,
   JsonTransaction,
   JsonTxCache,
 } from '../types.js';
+import { MAX_FORK_DEPTH } from './constants.js';
 
 function checkTx(tx: JsonTransaction) {
   if (!tx?.id) {
@@ -24,7 +31,7 @@ function checkTx(tx: JsonTransaction) {
 
 function txCacheDir(txId: string) {
   const txPrefix = `${txId.substring(0, 2)}/${txId.substring(2, 4)}`;
-  return `data/cache/headers/txs/${txPrefix}`;
+  return `data/headers/txs/${txPrefix}`;
 }
 
 function txCachePath(txId: string) {
@@ -46,7 +53,7 @@ class FsTxCache implements JsonTxCache {
       const txData = await fs.promises.readFile(txCachePath(txId));
       const tx = msgpackToJsonTx(txData);
       checkTx(tx);
-      return msgpackToJsonTx(txData);
+      return tx;
     } catch (error) {
       // TODO log error
       return undefined;
@@ -55,10 +62,99 @@ class FsTxCache implements JsonTxCache {
 
   async set(tx: JsonTransaction) {
     try {
-      // TODO validate TX id
+      checkTx(tx);
       await fs.promises.mkdir(txCacheDir(tx.id), { recursive: true });
       const txData = jsonTxToMsgpack(tx);
       await fs.promises.writeFile(txCachePath(tx.id), txData);
+    } catch (error) {
+      // TODO log error
+    }
+  }
+}
+
+function blockCacheHashDir(hash: string) {
+  const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
+  return `data/headers/blocks/hash/${blockPrefix}`;
+}
+
+function blockCacheHashPath(hash: string) {
+  return `${blockCacheHashDir(hash)}/${hash}.msgpack`;
+}
+
+function blockCacheHeightDir(height: number) {
+  return `data/headers/blocks/height/${height % 1000}`;
+}
+
+function blockCacheHeightPath(height: number) {
+  return `${blockCacheHeightDir(height)}/${height}.msgpack`;
+}
+
+class FsBlockCache implements JsonBlockCache {
+  async hasHash(hash: string) {
+    try {
+      await fs.promises.access(blockCacheHashPath(hash), fs.constants.F_OK);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async hasHeight(height: number) {
+    try {
+      await fs.promises.access(blockCacheHeightPath(height), fs.constants.F_OK);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async getByHash(hash: string) {
+    try {
+      const blockData = await fs.promises.readFile(blockCacheHashPath(hash));
+      const block = msgpackToJsonBlock(blockData);
+      // check block
+      return block;
+    } catch (error) {
+      // TODO log error
+      return undefined;
+    }
+  }
+
+  async getByHeight(height: number) {
+    try {
+      const blockData = await fs.promises.readFile(
+        blockCacheHeightPath(height),
+      );
+      const block = msgpackToJsonBlock(blockData);
+      // check block
+      return block;
+    } catch (error) {
+      // TODO log error
+      return undefined;
+    }
+  }
+
+  async set(block: JsonBlock, height?: number) {
+    try {
+      await fs.promises.mkdir(blockCacheHashDir(block.indep_hash), {
+        recursive: true,
+      });
+      const blockData = jsonBlockToMsgpack(block);
+      await fs.promises.writeFile(
+        blockCacheHashPath(block.indep_hash),
+        blockData,
+      );
+
+      if (height) {
+        await fs.promises.mkdir(blockCacheHeightDir(height), {
+          recursive: true,
+        });
+
+        await fs.promises.symlink(
+          `${process.cwd()}/${blockCacheHashPath(block.indep_hash)}`,
+          blockCacheHeightPath(height),
+        );
+      }
     } catch (error) {
       // TODO log error
     }
@@ -76,6 +172,7 @@ export class ArweaveCompositeClient implements ChainSource {
   private arweave: Arweave;
   private log: winston.Logger;
   private txCache: JsonTxCache;
+  private blockCache: JsonBlockCache;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -139,6 +236,7 @@ export class ArweaveCompositeClient implements ChainSource {
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.txCache = new FsTxCache();
+    this.blockCache = new FsBlockCache();
 
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
@@ -267,6 +365,11 @@ export class ArweaveCompositeClient implements ChainSource {
     height: number,
     shouldPrefetch = false,
   ): Promise<JsonBlock> {
+    const cachedBlock = await this.blockCache.getByHeight(height);
+    if (cachedBlock) {
+      return cachedBlock;
+    }
+
     // Prefetch the requested block
     this.prefetchBlockByHeight(height);
 
@@ -309,6 +412,12 @@ export class ArweaveCompositeClient implements ChainSource {
 
       // Remove prefetched request from cache so forks are handled correctly
       this.blockByHeightPromiseCache.del(height);
+
+      // Save block in cache
+      this.blockCache.set(
+        response.data,
+        this.maxPrefetchHeight - height > MAX_FORK_DEPTH ? height : undefined,
+      );
 
       return block;
     } catch (error) {

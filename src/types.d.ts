@@ -21,7 +21,7 @@ export interface JsonBlock {
   weave_size: string;
   usd_to_ar_rate?: [string, string];
   scheduled_usd_to_ar_rate?: [string, string];
-  hash_list_merkle: string;
+  hash_list_merkle?: string;
   wallet_list: string;
   tx_root: string;
   tags: JsonTags;
@@ -46,6 +46,29 @@ export type MsgpackTag = {
   name: Buffer;
   value: Buffer;
 };
+
+export interface MsgpackBlock {
+  indep_hash: Buffer;
+  height: number;
+  nonce: Buffer;
+  hash: Buffer;
+  previous_block?: Buffer; // undefined for block 0
+  timestamp: number;
+  diff: string;
+  cumulative_diff?: string;
+  last_retarget?: string;
+  reward_addr?: Buffer; // undefined for block 0
+  reward_pool: string;
+  block_size: string;
+  weave_size: string;
+  usd_to_ar_rate?: [string, string];
+  scheduled_usd_to_ar_rate?: [string, string];
+  hash_list_merkle?: Buffer;
+  wallet_list: Buffer;
+  tx_root: Buffer;
+  tags: MsgpackTag[];
+  txs: Buffer[];
+}
 
 export interface MsgpackTransaction {
   id: Buffer;
@@ -79,6 +102,14 @@ export interface DataItem {
   anchor: Buffer;
   tags: Tags;
   data_size: bigint;
+}
+
+export interface JsonBlockCache {
+  hasHash(blockHash: string): Promise<boolean>;
+  hasHeight(height: number): Promise<boolean>;
+  getByHash(blockHash: string): Promise<JsonBlock | undefined>;
+  getByHeight(number: number): Promise<JsonBlock | undefined>;
+  set(block: JsonBlock, height?: number): Promise<void>;
 }
 
 export interface JsonTxCache {
