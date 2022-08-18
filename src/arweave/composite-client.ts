@@ -23,7 +23,7 @@ import {
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
-function checkTx(tx: JsonTransaction) {
+function sanityCheckTx(tx: JsonTransaction) {
   if (!tx?.id) {
     throw new Error('Invalid transaction');
   }
@@ -51,9 +51,7 @@ class FsTxCache implements JsonTxCache {
   async get(txId: string) {
     try {
       const txData = await fs.promises.readFile(txCachePath(txId));
-      const tx = msgpackToJsonTx(txData);
-      checkTx(tx);
-      return tx;
+      return msgpackToJsonTx(txData);
     } catch (error) {
       // TODO log error
       return undefined;
@@ -62,13 +60,23 @@ class FsTxCache implements JsonTxCache {
 
   async set(tx: JsonTransaction) {
     try {
-      checkTx(tx);
       await fs.promises.mkdir(txCacheDir(tx.id), { recursive: true });
       const txData = jsonTxToMsgpack(tx);
       await fs.promises.writeFile(txCachePath(tx.id), txData);
     } catch (error) {
       // TODO log error
     }
+  }
+}
+
+function sanityCheckBlock(block: JsonBlock) {
+  if (!block?.indep_hash) {
+    throw new Error('Invalid block: missing indep_hash');
+  }
+
+  if (!block?.height === undefined) {
+    console.log(block);
+    throw new Error('Invalid block: missing height');
   }
 }
 
@@ -110,10 +118,12 @@ class FsBlockCache implements JsonBlockCache {
 
   async getByHash(hash: string) {
     try {
-      const blockData = await fs.promises.readFile(blockCacheHashPath(hash));
-      const block = msgpackToJsonBlock(blockData);
-      // check block
-      return block;
+      if (await this.hasHash(hash)) {
+        const blockData = await fs.promises.readFile(blockCacheHashPath(hash));
+        return msgpackToJsonBlock(blockData);
+      }
+
+      return undefined;
     } catch (error) {
       // TODO log error
       return undefined;
@@ -122,12 +132,14 @@ class FsBlockCache implements JsonBlockCache {
 
   async getByHeight(height: number) {
     try {
-      const blockData = await fs.promises.readFile(
-        blockCacheHeightPath(height),
-      );
-      const block = msgpackToJsonBlock(blockData);
-      // check block
-      return block;
+      if (await this.hasHeight(height)) {
+        const blockData = await fs.promises.readFile(
+          blockCacheHeightPath(height),
+        );
+        return msgpackToJsonBlock(blockData);
+      }
+
+      return undefined;
     } catch (error) {
       // TODO log error
       return undefined;
@@ -136,16 +148,19 @@ class FsBlockCache implements JsonBlockCache {
 
   async set(block: JsonBlock, height?: number) {
     try {
-      await fs.promises.mkdir(blockCacheHashDir(block.indep_hash), {
-        recursive: true,
-      });
-      const blockData = jsonBlockToMsgpack(block);
-      await fs.promises.writeFile(
-        blockCacheHashPath(block.indep_hash),
-        blockData,
-      );
+      if (!(await this.hasHash(block.indep_hash))) {
+        await fs.promises.mkdir(blockCacheHashDir(block.indep_hash), {
+          recursive: true,
+        });
 
-      if (height) {
+        const blockData = jsonBlockToMsgpack(block);
+        await fs.promises.writeFile(
+          blockCacheHashPath(block.indep_hash),
+          blockData,
+        );
+      }
+
+      if (height && !(await this.hasHeight(height))) {
         await fs.promises.mkdir(blockCacheHeightDir(height), {
           recursive: true,
         });
@@ -182,8 +197,7 @@ export class ArweaveCompositeClient implements ChainSource {
   private peers: Record<string, Peer> = {};
   private preferredPeers: Set<Peer> = new Set();
 
-  // TODO rename caches
-  // Block and TX caches
+  // Block and TX promise caches
   private blockByHeightPromiseCache = new NodeCache({
     checkperiod: 10,
     stdTTL: 30,
@@ -320,20 +334,39 @@ export class ArweaveCompositeClient implements ChainSource {
   }
 
   async prefetchBlockByHeight(height: number, prefetchTxs = false) {
-    let responsePromise = this.blockByHeightPromiseCache.get(height);
+    let blockPromise = this.blockByHeightPromiseCache.get(height);
 
-    if (!responsePromise) {
-      responsePromise = this.trustedNodeRequestQueue
-        .push({
-          method: 'GET',
-          url: `/block/height/${height}`,
-        })
-        .then((response) => {
-          // Delete POA to reduce cache size
-          if (response?.data?.poa) {
-            delete response.data.poa;
+    if (!blockPromise) {
+      blockPromise = this.blockCache
+        .getByHeight(height)
+        .then((block) => {
+          // Return cached block if it exists
+          if (block) {
+            return block;
           }
-          return response;
+
+          return this.trustedNodeRequestQueue
+            .push({
+              method: 'GET',
+              url: `/block/height/${height}`,
+            })
+            .then((response) => {
+              // Delete POA to reduce cache size
+              if (response?.data?.poa) {
+                delete response.data.poa;
+              }
+              return response.data;
+            });
+        })
+        .then((block) => {
+          sanityCheckBlock(block);
+          this.blockCache.set(
+            block,
+            this.maxPrefetchHeight - block.height > MAX_FORK_DEPTH
+              ? block.height
+              : undefined,
+          );
+          return block;
         })
         .catch((error) => {
           this.log.error(`Block prefetch failed:`, {
@@ -341,18 +374,16 @@ export class ArweaveCompositeClient implements ChainSource {
             message: error.message,
           });
         });
-      this.blockByHeightPromiseCache.set(height, responsePromise);
+
+      this.blockByHeightPromiseCache.set(height, blockPromise);
     }
 
     try {
-      const response = (await responsePromise) as AxiosResponse<JsonBlock>;
+      const block = (await blockPromise) as JsonBlock;
 
       if (prefetchTxs) {
-        response.data.txs.forEach(async (txId: string) => {
-          // Only prefetch TXs that are not cached
-          if (!(await this.txCache.has(txId))) {
-            this.prefetchTx(txId);
-          }
+        block.txs.forEach(async (txId: string) => {
+          this.prefetchTx(txId);
         });
       }
     } catch (error) {
@@ -365,11 +396,6 @@ export class ArweaveCompositeClient implements ChainSource {
     height: number,
     shouldPrefetch = false,
   ): Promise<JsonBlock> {
-    const cachedBlock = await this.blockCache.getByHeight(height);
-    if (cachedBlock) {
-      return cachedBlock;
-    }
-
     // Prefetch the requested block
     this.prefetchBlockByHeight(height);
 
@@ -394,30 +420,20 @@ export class ArweaveCompositeClient implements ChainSource {
     }
 
     try {
-      const response = (await this.blockByHeightPromiseCache.get(
+      const block = (await this.blockByHeightPromiseCache.get(
         height,
-      )) as AxiosResponse;
+      )) as JsonBlock;
 
       // Check that a response was returned
-      if (!response) {
+      if (!block) {
         throw new Error('Prefetched block request failed');
       }
 
-      const block = response.data as JsonBlock;
-
       // Sanity check block format
-      if (!block?.indep_hash) {
-        throw new Error(`Invalid block`);
-      }
+      sanityCheckBlock(block);
 
       // Remove prefetched request from cache so forks are handled correctly
       this.blockByHeightPromiseCache.del(height);
-
-      // Save block in cache
-      this.blockCache.set(
-        response.data,
-        this.maxPrefetchHeight - height > MAX_FORK_DEPTH ? height : undefined,
-      );
 
       return block;
     } catch (error) {
@@ -455,21 +471,35 @@ export class ArweaveCompositeClient implements ChainSource {
       return;
     }
 
-    const responsePromise = this.peerGetTx(txId)
-      .catch(async () => {
-        // Request TX from trusted node if peer fetch failed
-        return this.trustedNodeRequestQueue.push({
-          method: 'GET',
-          url: `/tx/${txId}`,
-        });
-      })
-      .then((response) => {
-        // Delete TX data to reduce response cache size
-        if (response?.data?.data) {
-          delete response.data.data;
+    const responsePromise = this.txCache
+      .get(txId)
+      .then((tx) => {
+        // Return cached tx if it exists
+        if (tx) {
+          return tx;
         }
 
-        return response;
+        return this.peerGetTx(txId)
+          .catch(async () => {
+            // Request TX from trusted node if peer fetch failed
+            return this.trustedNodeRequestQueue.push({
+              method: 'GET',
+              url: `/tx/${txId}`,
+            });
+          })
+          .then((response) => {
+            // Delete TX data to reduce response cache size
+            if (response?.data?.data) {
+              delete response.data.data;
+            }
+
+            return response.data;
+          });
+      })
+      .then((tx) => {
+        sanityCheckTx(tx);
+        this.txCache.set(tx);
+        return tx;
       })
       .catch((error) => {
         this.log.error('Transaction prefetch failed:', {
@@ -481,31 +511,17 @@ export class ArweaveCompositeClient implements ChainSource {
   }
 
   async getTx(txId: string): Promise<JsonTransaction> {
-    // Return cached TX if it exists
-    const cachedTx = await this.txCache.get(txId);
-    if (cachedTx) {
-      return cachedTx;
-    }
-
     // Prefetch TX
     this.prefetchTx(txId);
 
     try {
       // Wait for TX response
-      const response = (await this.txPromiseCache.get(txId)) as AxiosResponse;
+      const tx = (await this.txPromiseCache.get(txId)) as JsonTransaction;
 
       // Check that a response was returned
-      if (!response) {
+      if (!tx) {
         throw new Error('Prefetched transaction request failed');
       }
-
-      const tx = response.data as JsonTransaction;
-
-      // Sanity check TX format
-      checkTx(tx);
-
-      // Save TX in cache
-      this.txCache.set(response.data);
 
       return tx;
     } catch (error: any) {
