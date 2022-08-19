@@ -1,9 +1,7 @@
-export type JsonTag = {
+export type B64uTag = {
   name: string;
   value: string;
 };
-
-export type JsonTags = JsonTag[];
 
 export interface PartialJsonBlock {
   indep_hash: string;
@@ -24,7 +22,7 @@ export interface PartialJsonBlock {
   hash_list_merkle?: string;
   wallet_list: string;
   tx_root: string;
-  tags: JsonTags;
+  tags: B64uTag[];
   txs: string[];
 }
 
@@ -39,10 +37,10 @@ export interface PartialJsonTransaction {
   reward: string;
   data_size: string;
   data_root: string;
-  tags: JsonTags;
+  tags: B64uTag[];
 }
 
-export type MsgpackTag = {
+export type BinaryTag = {
   name: Buffer;
   value: Buffer;
 };
@@ -66,7 +64,7 @@ export interface PartialMsgpackBlock {
   hash_list_merkle?: Buffer;
   wallet_list: Buffer;
   tx_root: Buffer;
-  tags: MsgpackTag[];
+  tags: BinaryTag[];
   txs: Buffer[];
 }
 
@@ -81,16 +79,8 @@ export interface PartialMsgpackTransaction {
   reward: string;
   data_size: string;
   data_root: Buffer;
-  tags: MsgpackTag[];
+  tags: BinaryTag[];
 }
-
-// TODO rename to DataItemTag
-export type Tag = {
-  name: Buffer;
-  value: Buffer;
-};
-
-export type Tags = Tag[];
 
 export interface DataItem {
   parentTxId: Buffer;
@@ -100,7 +90,7 @@ export interface DataItem {
   owner_address: Buffer;
   target: Buffer;
   anchor: Buffer;
-  tags: Tags;
+  tags: BinaryTag[];
   data_size: bigint;
 }
 

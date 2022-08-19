@@ -2,7 +2,7 @@ import arbundles from 'arbundles/stream/index.js';
 import stream from 'stream';
 import * as winston from 'winston';
 
-import { BundleDatabase, DataItem, Tags } from '../types.js';
+import { BundleDatabase, DataItem } from '../types.js';
 import { fromB64Url, sha256B64Url } from './encoding.js';
 
 /* eslint-disable */
@@ -65,7 +65,7 @@ export async function importAns104Bundle({
     }
 
     // data-items don't have tags b64 encoded
-    const tags: Tags = (dataItem.tags || []).map(
+    const tags = (dataItem.tags || []).map(
       (tag: { name: string; value: string }) => ({
         name: fromB64Url(tag.name),
         value: fromB64Url(tag.value),
