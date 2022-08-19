@@ -4,6 +4,7 @@ import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
 import fs from 'fs';
 import { default as NodeCache } from 'node-cache';
+import path from 'path';
 import * as rax from 'retry-axios';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
@@ -31,7 +32,7 @@ function sanityCheckTx(tx: JsonTransaction) {
 
 function txCacheDir(txId: string) {
   const txPrefix = `${txId.substring(0, 2)}/${txId.substring(2, 4)}`;
-  return `data/headers/txs/${txPrefix}`;
+  return `data/headers/partial-txs/${txPrefix}`;
 }
 
 function txCachePath(txId: string) {
@@ -82,7 +83,7 @@ function sanityCheckBlock(block: JsonBlock) {
 
 function blockCacheHashDir(hash: string) {
   const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
-  return `data/headers/blocks/hash/${blockPrefix}`;
+  return `data/headers/partial-blocks/hash/${blockPrefix}`;
 }
 
 function blockCacheHashPath(hash: string) {
@@ -90,7 +91,7 @@ function blockCacheHashPath(hash: string) {
 }
 
 function blockCacheHeightDir(height: number) {
-  return `data/headers/blocks/height/${height % 1000}`;
+  return `data/headers/partial-blocks/height/${height % 1000}`;
 }
 
 function blockCacheHeightPath(height: number) {
@@ -165,10 +166,11 @@ class FsBlockCache implements JsonBlockCache {
           recursive: true,
         });
 
-        await fs.promises.symlink(
+        const targetPath = path.relative(
+          `${process.cwd()}/${blockCacheHeightDir(height)}`,
           `${process.cwd()}/${blockCacheHashPath(block.indep_hash)}`,
-          blockCacheHeightPath(height),
         );
+        await fs.promises.symlink(targetPath, blockCacheHeightPath(height));
       }
     } catch (error) {
       // TODO log error
