@@ -1,7 +1,11 @@
 import fs from 'fs';
 import stream from 'stream';
 
-import { ChainSource, JsonBlock, JsonTransaction } from '../src/types.js';
+import {
+  ChainSource,
+  PartialJsonBlock,
+  PartialJsonTransaction,
+} from '../src/types.js';
 
 export const stubTxID = '0000000000000000000000000000000000000000000';
 export const stubAns104Bundle = async (): Promise<stream.Readable> => {
@@ -17,7 +21,7 @@ export class ArweaveChainSourceStub implements ChainSource {
     this.tempBlockIdOverrides[height.toString()] = id;
   }
 
-  async getBlockByHeight(height: number): Promise<JsonBlock> {
+  async getBlockByHeight(height: number): Promise<PartialJsonBlock> {
     const heightToId = JSON.parse(
       fs.readFileSync('test/mock_files/block_height_to_id.json', 'utf8'),
     );
@@ -43,7 +47,7 @@ export class ArweaveChainSourceStub implements ChainSource {
     this.missingTxIds = this.missingTxIds.concat(txIds);
   }
 
-  async getTx(txId: string): Promise<JsonTransaction> {
+  async getTx(txId: string): Promise<PartialJsonTransaction> {
     if (fs.existsSync(`test/mock_files/txs/${txId}.json`)) {
       return JSON.parse(
         fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),

@@ -7,8 +7,8 @@ import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import {
   ChainDatabase,
   ChainSource,
-  JsonBlock,
-  JsonTransaction,
+  PartialJsonBlock,
+  PartialJsonTransaction,
 } from '../types.js';
 
 const DEFAULT_HEIGHT_POLLING_INTERVAL_MS = 5000;
@@ -105,8 +105,8 @@ export class BlockImporter {
     height: number,
     forkDepth = 0,
   ): Promise<{
-    block: JsonBlock;
-    txs: JsonTransaction[];
+    block: PartialJsonBlock;
+    txs: PartialJsonTransaction[];
     missingTxIds: string[];
   }> {
     // Stop importing if fork depth exceeeds max fork depth

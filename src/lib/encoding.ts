@@ -2,10 +2,10 @@ import { createHash } from 'crypto';
 import { Packr } from 'msgpackr';
 
 import {
-  JsonBlock,
-  JsonTransaction,
-  MsgpackBlock,
-  MsgpackTransaction,
+  PartialJsonBlock,
+  PartialJsonTransaction,
+  PartialMsgpackBlock,
+  PartialMsgpackTransaction,
 } from '../types.js';
 
 // Base64 encoding and decoding
@@ -52,7 +52,9 @@ export function fromMsgpack(buffer: Buffer): any {
 
 // Block MessagePack encoding and decoding
 
-export function jsonBlockToMsgpackBlock(jsonBlock: JsonBlock): MsgpackBlock {
+export function jsonBlockToMsgpackBlock(
+  jsonBlock: PartialJsonBlock,
+): PartialMsgpackBlock {
   return {
     indep_hash: fromB64Url(jsonBlock.indep_hash),
     height: jsonBlock.height,
@@ -86,7 +88,9 @@ export function jsonBlockToMsgpackBlock(jsonBlock: JsonBlock): MsgpackBlock {
   };
 }
 
-export function msgpackBlockToJsonBlock(msgpackBlock: MsgpackBlock): JsonBlock {
+export function msgpackBlockToJsonBlock(
+  msgpackBlock: PartialMsgpackBlock,
+): PartialJsonBlock {
   return {
     indep_hash: toB64Url(msgpackBlock.indep_hash),
     height: msgpackBlock.height,
@@ -120,17 +124,19 @@ export function msgpackBlockToJsonBlock(msgpackBlock: MsgpackBlock): JsonBlock {
   };
 }
 
-export function jsonBlockToMsgpack(jsonBlock: JsonBlock): Buffer {
+export function jsonBlockToMsgpack(jsonBlock: PartialJsonBlock): Buffer {
   return toMsgpack(jsonBlockToMsgpackBlock(jsonBlock));
 }
 
-export function msgpackToJsonBlock(msgpack: Buffer): JsonBlock {
+export function msgpackToJsonBlock(msgpack: Buffer): PartialJsonBlock {
   return msgpackBlockToJsonBlock(fromMsgpack(msgpack));
 }
 
 // Transaction MessagePack encoding and decoding
 
-export function jsonTxToMsgpackTx(jsonTx: JsonTransaction): MsgpackTransaction {
+export function jsonTxToMsgpackTx(
+  jsonTx: PartialJsonTransaction,
+): PartialMsgpackTransaction {
   return {
     id: fromB64Url(jsonTx.id),
     signature: fromB64Url(jsonTx.signature),
@@ -150,8 +156,8 @@ export function jsonTxToMsgpackTx(jsonTx: JsonTransaction): MsgpackTransaction {
 }
 
 export function msgpackTxToJsonTx(
-  msgpackTx: MsgpackTransaction,
-): JsonTransaction {
+  msgpackTx: PartialMsgpackTransaction,
+): PartialJsonTransaction {
   return {
     id: toB64Url(msgpackTx.id),
     signature: toB64Url(msgpackTx.signature),
@@ -170,10 +176,10 @@ export function msgpackTxToJsonTx(
   };
 }
 
-export function jsonTxToMsgpack(jsonTx: JsonTransaction): Buffer {
+export function jsonTxToMsgpack(jsonTx: PartialJsonTransaction): Buffer {
   return toMsgpack(jsonTxToMsgpackTx(jsonTx));
 }
 
-export function msgpackToJsonTx(buffer: Buffer): JsonTransaction {
+export function msgpackToJsonTx(buffer: Buffer): PartialJsonTransaction {
   return msgpackTxToJsonTx(fromMsgpack(buffer));
 }

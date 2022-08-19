@@ -17,14 +17,14 @@ import {
 } from '../lib/encoding.js';
 import {
   ChainSource,
-  JsonBlock,
-  JsonBlockCache,
-  JsonTransaction,
-  JsonTxCache,
+  PartialJsonBlock,
+  PartialJsonBlockCache,
+  PartialJsonTransaction,
+  PartialJsonTxCache,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
-function sanityCheckTx(tx: JsonTransaction) {
+function sanityCheckTx(tx: PartialJsonTransaction) {
   if (!tx?.id) {
     throw new Error('Invalid transaction');
   }
@@ -39,7 +39,7 @@ function txCachePath(txId: string) {
   return `${txCacheDir(txId)}/${txId}.msgpack`;
 }
 
-class FsTxCache implements JsonTxCache {
+class FsTxCache implements PartialJsonTxCache {
   async has(txId: string) {
     try {
       await fs.promises.access(txCachePath(txId), fs.constants.F_OK);
@@ -59,7 +59,7 @@ class FsTxCache implements JsonTxCache {
     }
   }
 
-  async set(tx: JsonTransaction) {
+  async set(tx: PartialJsonTransaction) {
     try {
       await fs.promises.mkdir(txCacheDir(tx.id), { recursive: true });
       const txData = jsonTxToMsgpack(tx);
@@ -70,7 +70,7 @@ class FsTxCache implements JsonTxCache {
   }
 }
 
-function sanityCheckBlock(block: JsonBlock) {
+function sanityCheckBlock(block: PartialJsonBlock) {
   if (!block?.indep_hash) {
     throw new Error('Invalid block: missing indep_hash');
   }
@@ -98,7 +98,7 @@ function blockCacheHeightPath(height: number) {
   return `${blockCacheHeightDir(height)}/${height}.msgpack`;
 }
 
-class FsBlockCache implements JsonBlockCache {
+class FsBlockCache implements PartialJsonBlockCache {
   async hasHash(hash: string) {
     try {
       await fs.promises.access(blockCacheHashPath(hash), fs.constants.F_OK);
@@ -147,7 +147,7 @@ class FsBlockCache implements JsonBlockCache {
     }
   }
 
-  async set(block: JsonBlock, height?: number) {
+  async set(block: PartialJsonBlock, height?: number) {
     try {
       if (!(await this.hasHash(block.indep_hash))) {
         await fs.promises.mkdir(blockCacheHashDir(block.indep_hash), {
@@ -188,8 +188,8 @@ type Peer = {
 export class ArweaveCompositeClient implements ChainSource {
   private arweave: Arweave;
   private log: winston.Logger;
-  private txCache: JsonTxCache;
-  private blockCache: JsonBlockCache;
+  private txCache: PartialJsonTxCache;
+  private blockCache: PartialJsonBlockCache;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -381,7 +381,7 @@ export class ArweaveCompositeClient implements ChainSource {
     }
 
     try {
-      const block = (await blockPromise) as JsonBlock;
+      const block = (await blockPromise) as PartialJsonBlock;
 
       if (prefetchTxs) {
         block.txs.forEach(async (txId: string) => {
@@ -397,7 +397,7 @@ export class ArweaveCompositeClient implements ChainSource {
   async getBlockByHeight(
     height: number,
     shouldPrefetch = false,
-  ): Promise<JsonBlock> {
+  ): Promise<PartialJsonBlock> {
     // Prefetch the requested block
     this.prefetchBlockByHeight(height);
 
@@ -424,7 +424,7 @@ export class ArweaveCompositeClient implements ChainSource {
     try {
       const block = (await this.blockByHeightPromiseCache.get(
         height,
-      )) as JsonBlock;
+      )) as PartialJsonBlock;
 
       // Check that a response was returned
       if (!block) {
@@ -512,13 +512,15 @@ export class ArweaveCompositeClient implements ChainSource {
     this.txPromiseCache.set(txId, responsePromise);
   }
 
-  async getTx(txId: string): Promise<JsonTransaction> {
+  async getTx(txId: string): Promise<PartialJsonTransaction> {
     // Prefetch TX
     this.prefetchTx(txId);
 
     try {
       // Wait for TX response
-      const tx = (await this.txPromiseCache.get(txId)) as JsonTransaction;
+      const tx = (await this.txPromiseCache.get(
+        txId,
+      )) as PartialJsonTransaction;
 
       // Check that a response was returned
       if (!tx) {
@@ -544,15 +546,15 @@ export class ArweaveCompositeClient implements ChainSource {
     height: number,
     shouldPrefetch = true,
   ): Promise<{
-    block: JsonBlock;
-    txs: JsonTransaction[];
+    block: PartialJsonBlock;
+    txs: PartialJsonTransaction[];
     missingTxIds: string[];
   }> {
     const block = await this.getBlockByHeight(height, shouldPrefetch);
 
     // Retrieve block transactions
     const missingTxIds: string[] = [];
-    const txs: JsonTransaction[] = [];
+    const txs: PartialJsonTransaction[] = [];
     await Promise.all(
       block.txs.map(async (txId) => {
         try {

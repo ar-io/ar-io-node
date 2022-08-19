@@ -5,7 +5,7 @@ export type JsonTag = {
 
 export type JsonTags = JsonTag[];
 
-export interface JsonBlock {
+export interface PartialJsonBlock {
   indep_hash: string;
   height: number;
   nonce: string;
@@ -28,7 +28,7 @@ export interface JsonBlock {
   txs: string[];
 }
 
-export interface JsonTransaction {
+export interface PartialJsonTransaction {
   id: string;
   signature: string;
   format: number;
@@ -47,7 +47,7 @@ export type MsgpackTag = {
   value: Buffer;
 };
 
-export interface MsgpackBlock {
+export interface PartialMsgpackBlock {
   indep_hash: Buffer;
   height: number;
   nonce: Buffer;
@@ -70,7 +70,7 @@ export interface MsgpackBlock {
   txs: Buffer[];
 }
 
-export interface MsgpackTransaction {
+export interface PartialMsgpackTransaction {
   id: Buffer;
   signature: Buffer;
   format: number;
@@ -104,26 +104,26 @@ export interface DataItem {
   data_size: bigint;
 }
 
-export interface JsonBlockCache {
+export interface PartialJsonBlockCache {
   hasHash(blockHash: string): Promise<boolean>;
   hasHeight(height: number): Promise<boolean>;
-  getByHash(blockHash: string): Promise<JsonBlock | undefined>;
-  getByHeight(number: number): Promise<JsonBlock | undefined>;
-  set(block: JsonBlock, height?: number): Promise<void>;
+  getByHash(blockHash: string): Promise<PartialJsonBlock | undefined>;
+  getByHeight(number: number): Promise<PartialJsonBlock | undefined>;
+  set(block: PartialJsonBlock, height?: number): Promise<void>;
 }
 
-export interface JsonTxCache {
+export interface PartialJsonTxCache {
   has(txId: string): Promise<boolean>;
-  get(txId: string): Promise<JsonTransaction | undefined>;
-  set(tx: JsonTransaction): Promise<void>;
+  get(txId: string): Promise<PartialJsonTransaction | undefined>;
+  set(tx: PartialJsonTransaction): Promise<void>;
 }
 
 export interface ChainSource {
-  getBlockByHeight(height: number): Promise<JsonBlock>;
-  getTx(txId: string): Promise<JsonTransaction>;
+  getBlockByHeight(height: number): Promise<PartialJsonBlock>;
+  getTx(txId: string): Promise<PartialJsonTransaction>;
   getBlockAndTxsByHeight(height: number): Promise<{
-    block: JsonBlock;
-    txs: JsonTransaction[];
+    block: PartialJsonBlock;
+    txs: PartialJsonTransaction[];
     missingTxIds: string[];
   }>;
   getHeight(): Promise<number>;
@@ -135,8 +135,8 @@ export interface ChainDatabase {
   getNewBlockHashByHeight(height: number): Promise<string | undefined>;
   resetToHeight(height: number): Promise<void>;
   saveBlockAndTxs(
-    block: JsonBlock,
-    txs: JsonTransaction[],
+    block: PartialJsonBlock,
+    txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void>;
 }

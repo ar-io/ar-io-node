@@ -13,8 +13,8 @@ import {
 import {
   ChainDatabase,
   GqlQueryable,
-  JsonBlock,
-  JsonTransaction,
+  PartialJsonBlock,
+  PartialJsonTransaction,
 } from '../types.js';
 
 const STABLE_FLUSH_INTERVAL = 50;
@@ -391,7 +391,11 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     // Transactions
     this.insertBlockAndTxsFn = this.db.transaction(
-      (block: JsonBlock, txs: JsonTransaction[], missingTxIds: string[]) => {
+      (
+        block: PartialJsonBlock,
+        txs: PartialJsonTransaction[],
+        missingTxIds: string[],
+      ) => {
         const indepHash = Buffer.from(block.indep_hash, 'base64');
         const previousBlock = Buffer.from(block.previous_block ?? '', 'base64');
         const nonce = Buffer.from(block.nonce, 'base64');
@@ -603,8 +607,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async saveBlockAndTxs(
-    block: JsonBlock,
-    txs: JsonTransaction[],
+    block: PartialJsonBlock,
+    txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void> {
     // TODO add metrics to track timing
