@@ -11,7 +11,7 @@ import { default as wait } from 'wait';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
-import { ArweaveChainSourceStub } from '../stubs.js';
+import { ArweaveChainSourceStub } from '../../test/stubs.js';
 
 chai.use(chaiAsPromised);
 chai.use(sinonChai);

@@ -14,7 +14,7 @@ import {
   toMsgpack,
   utf8ToB64Url,
 } from '../../src/lib/encoding.js';
-import { ArweaveChainSourceStub } from '../stubs.js';
+import { ArweaveChainSourceStub } from '../../test/stubs.js';
 
 const TEST_STRING = 'http://test.com';
 const TEST_BASE_64_URL_ENCODED_STRING = 'aHR0cDovL3Rlc3QuY29t';

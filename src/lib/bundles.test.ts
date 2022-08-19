@@ -6,7 +6,7 @@ import * as winston from 'winston';
 import { importAns104Bundle } from '../../src/lib/bundles.js';
 import logger from '../../src/log.js';
 import { BundleDatabase, DataItem } from '../../src/types.js';
-import { stubAns104Bundle, stubTxID } from '../stubs.js';
+import { stubAns104Bundle, stubTxID } from '../../test/stubs.js';
 
 export class BundleDatabaseStub implements BundleDatabase {
   private log: winston.Logger;

@@ -13,7 +13,7 @@ import {
   toSqliteParams,
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
-import { ArweaveChainSourceStub } from '../stubs.js';
+import { ArweaveChainSourceStub } from '../../test/stubs.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
