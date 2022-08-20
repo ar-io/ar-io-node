@@ -5,7 +5,7 @@
 
 set -e
 
-loglevel="${loglevel:-}"
+loglevel="${LOG_LEVEL:-}"
 USERID=$(id -u)
 
 /generate_config.clj /etc/envoy/envoy.yaml.template > /etc/envoy/envoy.yaml

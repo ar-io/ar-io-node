@@ -26,6 +26,11 @@ Starting at an arbitrary block (only works immediately after a DB reset):
 
 `START_HEIGHT=800000 yarn start`
 
+## Envoy
+Envoy is used to proxy routes to `arweave.net` not yet implemented in the ar.io node. To run both together:
+
+`docker compose up`
+
 ## Design Principles
 
 1. Code to interfaces.

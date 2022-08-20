@@ -12,6 +12,9 @@
 (defn getenv-hosts [s]
   (-> s System/getenv extract-hosts))
 
+(def ario-gateways
+  ( getenv-hosts "ARIO_GATEWAYS"))
+
 (def full-chain-nodes
   (or (getenv-hosts "ARWEAVE_FULL_CHAIN_NODES")
       (getenv-hosts "ARWEAVE_NODES")))
@@ -24,14 +27,11 @@
   (or (getenv-hosts "ARWEAVE_CHUNK_NODES")
       (getenv-hosts "ARWEAVE_NODES")))
 
-(def ario-gateways
-  ( getenv-hosts "ARIO_GATEWAYS"))
-
 (when *command-line-args*
+  (assert ario-gateways "No ario gateways found")
   (assert full-chain-nodes "No full chain nodes found")
   (assert partial-chain-nodes "No partial chain nodes found")
   (assert chunk-nodes "No chunk nodes found")
-  (assert ario-gateways "No ario gateways found")
 
   (-> *command-line-args*
       first
@@ -54,5 +54,6 @@
                   :ario_gateways (extract-hosts "a:1,b:2,c:3")
                   :full_chain_nodes (extract-hosts "d:1,e:2,f:3")
                   :partial_chain_nodes (extract-hosts "g:4,h:5,i:6")
-                  :chunk_nodes (extract-hosts "j:7,k:8,l:9")})
+                  :chunk_nodes (extract-hosts "j:7,k:8,l:9")
+                  })
 )

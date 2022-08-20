@@ -22,47 +22,6 @@ static_resources:
                     - name: local_service
                       domains: ["*"]
                       routes:
-                        - match: {prefix: "/chunk"}
-                          route:
-                            cluster: chunk_nodes
-                            retry_policy:
-                              retry_on: "5xx,reset,retriable-status-codes"
-                              retriable_status_codes: 404
-                              num_retries: 5
-                        - match:
-                            safe_regex:
-                              google_re2: {}
-                              regex: "\/tx\/.*\/data.*"
-                          route:
-                            cluster: chunk_nodes
-                            retry_policy:
-                              retry_on: "5xx,reset,retriable-status-codes"
-                              retriable_status_codes: 404
-                              num_retries: 5
-                        - match: {prefix: "/price"}
-                          route:
-                            cluster: partial_chain_nodes_with_fallback
-                            retry_policy:
-                              retry_on: "5xx,reset"
-                              num_retries: 5
-                        - match: {prefix: "/height"}
-                          route:
-                            cluster: partial_chain_nodes_with_fallback
-                            retry_policy:
-                              retry_on: "5xx,reset"
-                              num_retries: 5
-                        - match: {prefix: "/wallet"}
-                          route:
-                            cluster: partial_chain_nodes_with_fallback
-                            retry_policy:
-                              retry_on: "5xx,reset"
-                              num_retries: 5
-                        - match: {prefix: "/block/current"}
-                          route:
-                            cluster: partial_chain_nodes_with_fallback
-                            retry_policy:
-                              retry_on: "5xx,reset"
-                              num_retries: 5
                         - match: {prefix: "/graphql"}
                           route:
                             cluster: ario_gateways
@@ -72,16 +31,16 @@ static_resources:
                               num_retries: 5
                         - match: {prefix: "/"}
                           route:
-                            cluster: full_chain_nodes_with_fallback
+                            cluster: legacy_gateways
                             retry_policy:
                               retry_on: "5xx,reset,retriable-status-codes"
-                              retriable_status_codes: 404
                               num_retries: 5
+                            host_rewrite_literal: arweave.net
 
                 http_filters:
                   - name: envoy.filters.http.router
   clusters:
-    - name: partial_chain_nodes_with_fallback
+    - name: arweave_gateways
       connect_timeout: 1s
       lb_policy: CLUSTER_PROVIDED
       cluster_type:
@@ -90,9 +49,7 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
           clusters:
           - ario_gateways
-          - chunk_nodes
-          - full_chain_nodes
-          - partial_chain_nodes
+          - legacy_gateways
     - name: ario_gateways
       connect_timeout: 1s
       type: STRICT_DNS
@@ -109,89 +66,32 @@ static_resources:
         cluster_name: ario_gateways
         endpoints:
           - lb_endpoints:
-              {% for node in ario_gateways %}
+              {% for gateway in ario_gateways %}
               - endpoint:
                   address:
                     socket_address:
-                      address: {{ node.hostname }}
-                      port_value: {{ node.port }}
+                      address: {{ gateway.hostname }}
+                      port_value: {{ gateway.port }}
               {% endfor %}
-    - name: partial_chain_nodes
+    - name: legacy_gateways
       connect_timeout: 1s
       type: STRICT_DNS
       lb_policy: LEAST_REQUEST
-      health_checks:
-        - timeout: 1s
-          interval: 20s
-          interval_jitter: 1s
-          unhealthy_threshold: 3
-          healthy_threshold: 1
-          http_health_check:
-            path: /height
       load_assignment:
-        cluster_name: partial_chain_nodes
+        cluster_name: legacy_gateways
         endpoints:
           - lb_endpoints:
-              {% for node in partial_chain_nodes %}
               - endpoint:
                   address:
                     socket_address:
-                      address: {{ node.hostname }}
-                      port_value: {{ node.port }}
-              {% endfor %}
-    - name: full_chain_nodes_with_fallback
-      connect_timeout: 1s
-      lb_policy: CLUSTER_PROVIDED
-      cluster_type:
-        name: envoy.clusters.aggregate
+                      address: arweave.net
+                      port_value: 443
+      transport_socket:
+        name: envoy.transport_sockets.tls
         typed_config:
-          "@type": type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
-          clusters:
-          - full_chain_nodes
-          - chunk_nodes
-    - name: full_chain_nodes
-      connect_timeout: 1s
-      type: STRICT_DNS
-      lb_policy: LEAST_REQUEST
-      health_checks:
-        - timeout: 1s
-          interval: 20s
-          interval_jitter: 1s
-          unhealthy_threshold: 3
-          healthy_threshold: 1
-          http_health_check:
-            path: /height
-      load_assignment:
-        cluster_name: full_chain_nodes
-        endpoints:
-          - lb_endpoints:
-              {% for node in full_chain_nodes %}
-              - endpoint:
-                  address:
-                    socket_address:
-                      address: {{ node.hostname }}
-                      port_value: {{ node.port }}
-              {% endfor %}
-    - name: chunk_nodes
-      connect_timeout: 1s
-      type: STRICT_DNS
-      lb_policy: LEAST_REQUEST
-      health_checks:
-        - timeout: 1s
-          interval: 20s
-          interval_jitter: 1s
-          unhealthy_threshold: 3
-          healthy_threshold: 1
-          http_health_check:
-            path: /height
-      load_assignment:
-        cluster_name: chunk_nodes
-        endpoints:
-          - lb_endpoints:
-              {% for node in chunk_nodes %}
-              - endpoint:
-                  address:
-                    socket_address:
-                      address: {{ node.hostname }}
-                      port_value: {{ node.port }}
-              {% endfor %}
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: arweave.net
+          common_tls_context: 
+            validation_context:
+              trusted_ca:
+                filename: /etc/ssl/certs/ca-certificates.crt
