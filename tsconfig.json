@@ -18,5 +18,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
+  "ts-node": {
+    "swc": true
+  },
   "include": ["src", "tests"]
 }
