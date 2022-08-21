@@ -27,6 +27,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - 3000:3000
+    volumes:
+      - ./data/standalone.db:/data/standalone.db
     networks:
       ario:
         aliases:

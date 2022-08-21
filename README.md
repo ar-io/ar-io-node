@@ -31,6 +31,8 @@ Envoy is used to proxy routes to `arweave.net` not yet implemented in the ar.io 
 
 `docker compose up`
 
+Once running, requests can be directed to envoy server at `localhost:1984`.
+
 ## Design Principles
 
 1. Code to interfaces.
