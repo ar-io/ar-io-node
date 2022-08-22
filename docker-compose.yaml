@@ -14,6 +14,8 @@ services:
       - '9901:9901'
     networks:
       - ario
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml
     environment:
       - ARIO_GATEWAYS=ar.io:3000
       - ARWEAVE_NODES=node-ny-247rack-1.ar.io:1984,node-ny-247rack-2.ar.io:1984,chain-ny-247rack-1.ar.io:1984
@@ -28,7 +30,7 @@ services:
     ports:
       - 3000:3000
     volumes:
-      - ./data/standalone.db:/data/standalone.db
+      - ./data/sqlite/standalone.db:/data/sqlite/standalone.db
     networks:
       ario:
         aliases:
