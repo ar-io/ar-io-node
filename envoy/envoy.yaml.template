@@ -35,7 +35,20 @@ static_resources:
                             retry_policy:
                               retry_on: "5xx,reset,retriable-status-codes"
                               num_retries: 5
-                            host_rewrite_literal: arweave.net
+                            auto_host_rewrite: true
+                            internal_redirect_action: HANDLE_INTERNAL_REDIRECT
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [ 301, 302, 303, 307, 308 ]
+                              predicates:
+                              - name: envoy.internal_redirect_predicates.allow_listed_routes
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.internal_redirect.allow_listed_routes.v3.AllowListedRoutesConfig
+                                  allowed_route_names: ["*"]
+                              - name: envoy.internal_redirect_predicates.safe_cross_scheme
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.internal_redirect.safe_cross_scheme.v3.SafeCrossSchemeConfig
 
                 http_filters:
                   - name: envoy.filters.http.router
