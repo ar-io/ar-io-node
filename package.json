@@ -27,6 +27,7 @@
     "retry-axios": "^3.0.0",
     "sql-bricks": "^3.0.0",
     "sql-bricks-sqlite": "^0.1.0",
+    "umzug": "^3.2.1",
     "wait": "^0.4.2",
     "winston": "^3.7.2"
   },
@@ -69,6 +70,7 @@
     "clean": "npx rimraf [ .nyc_output coverage dist ]",
     "start": "ts-node-esm ./src/app.ts",
     "watch": "nodemon",
+    "db:migrate": "ts-node-esm ./src/migrate.ts",
     "test": "mocha --no-warnings",
     "test:watch": "mocha --no-warnings --watch --parallel",
     "test:coverage": "npx c8 -r text -r html mocha --no-warnings"
