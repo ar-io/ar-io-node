@@ -31,7 +31,7 @@ const arweaveClient = new ArweaveCompositeClient({
   arweave,
   trustedNodeUrl: arweaveUrl,
 });
-const db = new Sqlite('data/sqlite/standalone.db');
+const db = new Sqlite('data/sqlite/core.db');
 const chainDb = new StandaloneSqliteDatabase(db);
 const blockImporter = new BlockImporter({
   log,
