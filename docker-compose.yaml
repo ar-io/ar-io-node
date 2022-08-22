@@ -19,7 +19,7 @@ services:
       - ARWEAVE_NODES=node-ny-247rack-1.ar.io:1984,node-ny-247rack-2.ar.io:1984,chain-ny-247rack-1.ar.io:1984
       - ECS_PROMETHEUS_EXPORTER_PORT=9901
       - ECS_PROMETHEUS_EXPORTER_METRICS_PATH=/stats/prometheus
-      - LOG_LEVEL=debug
+      - LOG_LEVEL=info
 
   ario:
     build:

@@ -40,18 +40,12 @@ static_resources:
                             internal_redirect_policy:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
-                              redirect_response_codes: [ 301, 302, 303, 307, 308 ]
-                              predicates:
-                              - name: envoy.internal_redirect_predicates.allow_listed_routes
-                                typed_config:
-                                  "@type": type.googleapis.com/envoy.extensions.internal_redirect.allow_listed_routes.v3.AllowListedRoutesConfig
-                                  allowed_route_names: ["*"]
-                              - name: envoy.internal_redirect_predicates.safe_cross_scheme
-                                typed_config:
-                                  "@type": type.googleapis.com/envoy.extensions.internal_redirect.safe_cross_scheme.v3.SafeCrossSchemeConfig
+                              redirect_response_codes: [ 301, 302 ]
 
                 http_filters:
                   - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   clusters:
     - name: arweave_gateways
       connect_timeout: 1s
@@ -67,14 +61,6 @@ static_resources:
       connect_timeout: 1s
       type: STRICT_DNS
       lb_policy: LEAST_REQUEST
-      health_checks:
-        - timeout: 3s
-          interval: 20s
-          interval_jitter: 1s
-          unhealthy_threshold: 3
-          healthy_threshold: 1
-          http_health_check:
-            path: /healthcheck
       load_assignment:
         cluster_name: ario_gateways
         endpoints:
