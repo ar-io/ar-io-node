@@ -1,0 +1,9 @@
+{
+  "src/*.ts": {
+    "alternate": "src/{}.test.ts"
+  },
+  "src/*.test.ts": {
+    "alternate": "src/{}.ts",
+    "dispatch": "yarn test -c"
+  }
+}
