@@ -67,7 +67,7 @@ const app = express();
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
 
 // Healthcheck
-app.get('/healthcheck', async (_req, res) => {
+app.get('/healthcheck', (_req, res) => {
   const data = {
     uptime: process.uptime(),
     message: 'Welcome to the permaweb.',
