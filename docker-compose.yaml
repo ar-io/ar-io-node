@@ -8,7 +8,6 @@ services:
   envoy:
     build:
         context: envoy/
-        dockerfile: Dockerfile
     ports:
       - '1984:1984'
       - '9901:9901'
@@ -23,7 +22,6 @@ services:
   ario:
     build:
       context: .
-      dockerfile: Dockerfile
     ports:
       - 3000:3000
     volumes:
