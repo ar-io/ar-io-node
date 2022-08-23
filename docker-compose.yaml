@@ -4,6 +4,9 @@ version: '3.0'
 networks:
   ario:
 
+volumes:
+  ario-data:
+
 services:
   envoy:
     build:
