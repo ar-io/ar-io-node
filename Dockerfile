@@ -15,7 +15,7 @@ COPY --from=builder /app/package.json /app/schema.sql /app/reset-db.sh /app/setu
 COPY --from=builder /app/dist/ ./dist/
 
 # SETUP DB - TODO: this will be replaced with migration library
-RUN apk add --no-cache sqlite
+RUN apk add --no-cache sqlite curl
 RUN mkdir -p data/sqlite
 RUN sh setup-db.sh
 
