@@ -1,20 +1,21 @@
-FROM node:17 as builder
+FROM node:16-alpine as builder
 
 # BUILD
 WORKDIR /app
+RUN apk --no-cache add git 
 COPY . .
 RUN yarn install
 RUN yarn build
 
 # EXTRACT DIST
-FROM node:17
+FROM node:16-alpine
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules/
 COPY --from=builder /app/package.json /app/schema.sql /app/reset-db.sh /app/setup-db.sh ./
 COPY --from=builder /app/dist/ ./dist/
 
-# SETUP DB
-RUN apt-get update -y && apt-get install sqlite3 -y
+# SETUP DB - TODO: this will be replaced with migration library
+RUN apk add --no-cache sqlite
 RUN mkdir -p data/sqlite
 RUN sh setup-db.sh
 
