@@ -8,7 +8,8 @@ set -e
 loglevel="${LOG_LEVEL:-}"
 USERID=$(id -u)
 
-/generate_config.clj /etc/envoy/envoy.yaml.template > /etc/envoy/envoy.yaml
+# Update env vars
+envsubst < /etc/envoy/envoy.template.yaml >  /etc/envoy/envoy.yaml
 chmod go+r /etc/envoy/envoy.yaml
 
 # if the first argument look like a parameter (i.e. start with '-'), run Envoy

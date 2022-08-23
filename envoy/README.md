@@ -8,11 +8,5 @@ Testing the templating script:
 
 ```
 docker build . -t arweave-envoy-proxy:latest
-docker run -it -e ARWEAVE_NODES="a:1" --entrypoint /generate_config.clj arweave-envoy-proxy:latest /etc/envoy/envoy.yaml.template
+docker run -it -e ARIO_HOST="localhost" -e ARIO_POST="3000" -e ARWEAVE_GATEWAY="arweave.dev" arweave-envoy-proxy:latest
 ```
-
-## Why Babashka?
-
-Babashka (a version of Clojure) is used for templating because it is
-distributed as a single self-contained static binary that is easy to include in
-the container.

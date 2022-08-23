@@ -1,9 +1,7 @@
 ---
-
 admin:
   address:
     socket_address: {address: 0.0.0.0, port_value: 9901}
-
 static_resources:
   listeners:
     - name: arweave_listener
@@ -23,7 +21,7 @@ static_resources:
                       domains: ["*"]
                       routes:
                         - match: {prefix: "/gateway_metrics"}
-                          route: 
+                          route:
                             cluster: ario_gateways
                             retry_policy:
                               retry_on: "5xx,reset,retriable-status-codes"
@@ -44,11 +42,11 @@ static_resources:
                               num_retries: 5
                             auto_host_rewrite: true
                             internal_redirect_action: HANDLE_INTERNAL_REDIRECT
+                            max_internal_redirects: 10
                             internal_redirect_policy:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
-                              redirect_response_codes: [ 301, 302 ]
-
+                              redirect_response_codes: [301, 302, 303]
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
@@ -62,8 +60,8 @@ static_resources:
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
           clusters:
-          - ario_gateways
-          - legacy_gateways
+            - ario_gateways
+            - legacy_gateways
     - name: ario_gateways
       connect_timeout: 1s
       type: STRICT_DNS
@@ -72,13 +70,11 @@ static_resources:
         cluster_name: ario_gateways
         endpoints:
           - lb_endpoints:
-              {% for gateway in ario_gateways %}
               - endpoint:
                   address:
                     socket_address:
-                      address: {{ gateway.hostname }}
-                      port_value: {{ gateway.port }}
-              {% endfor %}
+                      address: ${ARIO_HOST}
+                      port_value: ${ARIO_PORT}
     - name: legacy_gateways
       connect_timeout: 1s
       type: STRICT_DNS
@@ -90,14 +86,14 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: arweave.net
+                      address: ${ARWEAVE_GATEWAY}
                       port_value: 443
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
           sni: arweave.net
-          common_tls_context: 
+          common_tls_context:
             validation_context:
               trusted_ca:
                 filename: /etc/ssl/certs/ca-certificates.crt

@@ -1,19 +1,11 @@
 FROM envoyproxy/envoy:v1.22-latest
 
-RUN apt-get update -y && apt-get install -y curl 
-
-# Download and install babashka
-ARG BABASHKA_VERSION="0.8.0"
-RUN curl -sLO https://github.com/babashka/babashka/releases/download/v${BABASHKA_VERSION}/babashka-${BABASHKA_VERSION}-linux-amd64-static.tar.gz \
-    && tar -xzf babashka-${BABASHKA_VERSION}-linux-amd64-static.tar.gz \
-    && mv bb /usr/local/bin \
-    && rm babashka-${BABASHKA_VERSION}-linux-amd64-static.tar.gz
+RUN apt-get update -y && apt-get install -y gettext-base && apt-get -y install sqlite3
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-COPY envoy.yaml.template /etc/envoy/envoy.yaml.template
-COPY generate_config.clj /generate_config.clj
+COPY envoy.template.yaml /etc/envoy/envoy.template.yaml
 
 LABEL ECS_PROMETHEUS_EXPORTER_PORT 9901
 LABEL ECS_PROMETHEUS_EXPORTER_METRICS_PATH /stats/prometheus
 
-RUN chmod 777 /generate_config.clj /docker-entrypoint.sh
+RUN chmod 755 /docker-entrypoint.sh
