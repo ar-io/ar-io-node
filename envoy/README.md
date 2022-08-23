@@ -1,6 +1,6 @@
 # Arweave Envoy Proxy
 
-A simple Dockerized Envoy config for proxying requests to Arweave nodes.
+A simple Dockerized Envoy config for proxying requests to Arweave gateways.
 
 ## Development
 
