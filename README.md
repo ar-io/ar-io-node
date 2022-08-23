@@ -27,10 +27,35 @@ Starting at an arbitrary block (only works immediately after a DB reset):
 `START_HEIGHT=800000 yarn start`
 
 ## Docker
-Envoy is used to proxy routes to `arweave.net` not yet implemented in the ar.io node. To run both Envoy and the ario-node together:
+### Standalone AR.IO Node
+You can run the ar.io gateway as a standalone docker:
 
-`docker compose up --build`
+To run:
+```shell
+docker build . -t ario-node
+docker run -p 3000:3000 -v data/sqlite:./app/data/sqlite ario-node:latest
+```
 
+To reset the db:
+```shell
+docker run -v data/sqlite:./app/data/sqlite ario-node:latest sh reset-db.sh
+```
+
+To run with a specified start height (after a reset):
+```shell
+docker run -e START_HEIGHT=800000 -v data/sqlite:./app/data/sqlite ario-node:latest
+```
+
+### Envoy & AR.IO Node
+Envoy is available to proxy routes to `arweave.net` not yet implemented in the ar.io node via [Docker Compose]. To run both Envoy and the ario-node together:
+
+```shell
+docker compose up --build
+```
+or:
+```shell
+docker-compose up --build
+```
 Once running, requests can be directed to envoy server at `localhost:1984`.
 
 ## Design Principles
@@ -48,3 +73,6 @@ Once running, requests can be directed to envoy server at `localhost:1984`.
 11. Make liberal use of [metrics](https://github.com/siimon/prom-client) to aid in monitoring and debugging.
 12. Follow the Prometheus [metrics namings recommendations](https://prometheus.io/docs/practices/naming/).
 13. Commit messages should describe both the what and why of the change being made.
+
+
+[Docker Compose]:https://docs.docker.com/compose/install/

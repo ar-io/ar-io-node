@@ -27,7 +27,7 @@ services:
     ports:
       - 3000:3000
     volumes:
-      - ./data/sqlite:/data/sqlite
+      - ./data/sqlite:/app/data/sqlite
     networks:
       ario:
         aliases:
