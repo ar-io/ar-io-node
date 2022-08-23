@@ -1,9 +1,9 @@
-CREATE TABLE wallets (
+CREATE TABLE IF NOT EXISTS wallets (
   address BLOB PRIMARY KEY,
   public_modulus BLOB
 );
 
-CREATE TABLE stable_blocks (
+CREATE TABLE IF NOT EXISTS stable_blocks (
   -- Identity
   height INTEGER PRIMARY KEY,
   indep_hash BLOB UNIQUE,
@@ -45,16 +45,16 @@ CREATE TABLE stable_blocks (
   missing_tx_count INTEGER NOT NULL
 );
 
-CREATE INDEX stable_blocks_missing_tx_count_idx ON stable_blocks (missing_tx_count);
+CREATE INDEX IF NOT EXISTS stable_blocks_missing_tx_count_idx ON stable_blocks (missing_tx_count);
 
-CREATE TABLE stable_block_transactions (
+CREATE TABLE IF NOT EXISTS stable_block_transactions (
   block_indep_hash BYTEA,
   transaction_id BYTEA NOT NULL,
   block_transaction_index INTEGER NOT NULL,
   PRIMARY KEY(block_indep_hash, transaction_id, block_transaction_index)
 );
 
-CREATE TABLE stable_transactions (
+CREATE TABLE IF NOT EXISTS stable_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
   height INTEGER NOT NULL,
@@ -80,30 +80,30 @@ CREATE TABLE stable_transactions (
   tag_count INTEGER NOT NULL
 );
 
-CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
-CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
-CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
+CREATE INDEX IF NOT EXISTS stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
+CREATE INDEX IF NOT EXISTS stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
+CREATE INDEX IF NOT EXISTS stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
 
-CREATE TABLE missing_transactions (
+CREATE TABLE IF NOT EXISTS missing_transactions (
   block_indep_hash BLOB NOT NULL,
   transaction_id BLOB NOT NULL,
   height INTEGER NOT NULL,
   PRIMARY KEY (block_indep_hash, transaction_id)
 );
 
-CREATE INDEX missing_transactions_height_idx ON missing_transactions (height);
+CREATE INDEX IF NOT EXISTS missing_transactions_height_idx ON missing_transactions (height);
 
-CREATE TABLE tag_names (
+CREATE TABLE IF NOT EXISTS tag_names (
   hash BLOB PRIMARY KEY,
   name BLOB NOT NULL
 );
 
-CREATE TABLE tag_values (
+CREATE TABLE IF NOT EXISTS tag_values (
   hash BLOB PRIMARY KEY,
   value BLOB NOT NULL
 );
 
-CREATE TABLE stable_transaction_tags (
+CREATE TABLE IF NOT EXISTS stable_transaction_tags (
   tag_name_hash BLOB NOT NULL,
   tag_value_hash BLOB NOT NULL,
   height INTEGER NOT NULL,
@@ -113,9 +113,9 @@ CREATE TABLE stable_transaction_tags (
   PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, transaction_tag_index)
 );
 
-CREATE INDEX stable_transaction_tags_transaction_id_idx ON stable_transaction_tags (transaction_id);
+CREATE INDEX IF NOT EXISTS stable_transaction_tags_transaction_id_idx ON stable_transaction_tags (transaction_id);
 
-CREATE TABLE new_blocks (
+CREATE TABLE IF NOT EXISTS new_blocks (
   -- Identity
   indep_hash BLOB PRIMARY KEY,
   height INTEGER NOT NULL,
@@ -157,16 +157,16 @@ CREATE TABLE new_blocks (
   missing_tx_count INTEGER NOT NULL
 );
 
-CREATE INDEX new_blocks_height_idx ON new_blocks (height);
+CREATE INDEX IF NOT EXISTS new_blocks_height_idx ON new_blocks (height);
 
-CREATE TABLE new_block_heights (
+CREATE TABLE IF NOT EXISTS new_block_heights (
   height INTEGER PRIMARY KEY,
   block_indep_hash BLOB NOT NULL
 );
 
-CREATE INDEX new_block_heights_block_indep_hash_idx ON new_block_heights (height, block_indep_hash);
+CREATE INDEX IF NOT EXISTS new_block_heights_block_indep_hash_idx ON new_block_heights (height, block_indep_hash);
 
-CREATE TABLE new_transactions (
+CREATE TABLE IF NOT EXISTS new_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
   signature BLOB NOT NULL,
@@ -191,18 +191,18 @@ CREATE TABLE new_transactions (
   created_at INTEGER NOT NULL
 );
 
-CREATE INDEX new_transactions_target_id_idx ON new_transactions (target, id);
-CREATE INDEX new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
-CREATE INDEX new_transactions_created_at_idx ON new_transactions (created_at);
+CREATE INDEX IF NOT EXISTS new_transactions_target_id_idx ON new_transactions (target, id);
+CREATE INDEX IF NOT EXISTS new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
+CREATE INDEX IF NOT EXISTS new_transactions_created_at_idx ON new_transactions (created_at);
 
-CREATE TABLE new_block_transactions (
+CREATE TABLE IF NOT EXISTS new_block_transactions (
   block_indep_hash BYTEA,
   transaction_id BYTEA NOT NULL,
   block_transaction_index INTEGER NOT NULL,
   PRIMARY KEY(block_indep_hash, transaction_id, block_transaction_index)
 );
 
-CREATE TABLE new_transaction_tags (
+CREATE TABLE IF NOT EXISTS new_transaction_tags (
   tag_name_hash BLOB NOT NULL,
   tag_value_hash BLOB NOT NULL,
   transaction_id BLOB NOT NULL,
@@ -210,12 +210,12 @@ CREATE TABLE new_transaction_tags (
   PRIMARY KEY (tag_name_hash, tag_value_hash, transaction_id, transaction_tag_index)
 );
 
---CREATE TABLE data_item_owners (
+--CREATE TABLE IF NOT EXISTS data_item_owners (
 --  address BLOB PRIMARY KEY,
 --  owner BLOB
 --);
 --
---CREATE TABLE stable_data_items (
+--CREATE TABLE IF NOT EXISTS stable_data_items (
 --  id BLOB NOT NULL,
 --  parent_transaction_id BLOB NOT NULL,
 --  height INTEGER NOT NULL,
@@ -229,10 +229,10 @@ CREATE TABLE new_transaction_tags (
 --  PRIMARY KEY (id, parent_transaction_id)
 --);
 --
---CREATE INDEX stable_data_items_lookup_idx ON stable_data_items (id, height, block_transaction_index, bundle_data_item_index);
---CREATE INDEX stable_data_items_sort_idx ON stable_data_items (height, block_transaction_index, bundle_data_item_index);
+--CREATE INDEX IF NOT EXISTS stable_data_items_lookup_idx ON stable_data_items (id, height, block_transaction_index, bundle_data_item_index);
+--CREATE INDEX IF NOT EXISTS stable_data_items_sort_idx ON stable_data_items (height, block_transaction_index, bundle_data_item_index);
 --
---CREATE TABLE stable_data_item_tags (
+--CREATE TABLE IF NOT EXISTS stable_data_item_tags (
 --  tag_name_hash BLOB NOT NULL,
 --  tag_value_hash BLOB NOT NULL,
 --  height INTEGER NOT NULL,
@@ -243,7 +243,7 @@ CREATE TABLE new_transaction_tags (
 --  PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, bundle_data_item_index, data_item_tag_index)
 --);
 --
---CREATE TABLE new_data_items (
+--CREATE TABLE IF NOT EXISTS new_data_items (
 --  parent_transaction_id BLOB NOT NULL,
 --  id BLOB NOT NULL,
 --  bundle_data_item_index INTEGER NOT NULL,
@@ -255,7 +255,7 @@ CREATE TABLE new_transaction_tags (
 --  PRIMARY KEY (parent_transaction_id, id)
 --);
 --
---CREATE TABLE new_data_item_tags (
+--CREATE TABLE IF NOT EXISTS new_data_item_tags (
 --  tag_name_hash BLOB NOT NULL,
 --  tag_value_hash BLOB NOT NULL,
 --  parent_transaction_id BLOB NOT NULL,
@@ -264,7 +264,7 @@ CREATE TABLE new_transaction_tags (
 --  PRIMARY KEY (tag_name_hash, tag_value_hash, parent_transaction_id, data_item_id, data_item_tag_index)
 --);
 --
---CREATE TABLE chunks (
+--CREATE TABLE IF NOT EXISTS chunks (
 --  data_root BLOB NOT NULL,
 --  data_size INTEGER NOT NULL,
 --  offset INTEGER NOT NULL,
@@ -274,4 +274,4 @@ CREATE TABLE new_transaction_tags (
 --  PRIMARY KEY (data_root, data_size, offset)
 --);
 --
---CREATE INDEX chunks_last_exported_at_idx ON chunks (last_exported_at);
+--CREATE INDEX IF NOT EXISTS chunks_last_exported_at_idx ON chunks (last_exported_at);

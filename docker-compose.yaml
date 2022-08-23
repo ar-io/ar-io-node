@@ -28,7 +28,7 @@ services:
     ports:
       - 3000:3000
     volumes:
-      - ./data/sqlite/standalone.db:/data/sqlite/standalone.db
+      - ./data/sqlite:/data/sqlite
     networks:
       ario:
         aliases:
