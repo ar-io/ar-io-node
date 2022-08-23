@@ -15,11 +15,10 @@ services:
     networks:
       - ario
     environment:
-      - ARIO_GATEWAYS=ar.io:3000
-      - ARWEAVE_NODES=node-ny-247rack-1.ar.io:1984,node-ny-247rack-2.ar.io:1984,chain-ny-247rack-1.ar.io:1984
-      - ECS_PROMETHEUS_EXPORTER_PORT=9901
-      - ECS_PROMETHEUS_EXPORTER_METRICS_PATH=/stats/prometheus
-      - LOG_LEVEL=info
+      - ARIO_HOST=ar.io
+      - ARIO_PORT=3000
+      - ARWEAVE_GATEWAY=arweave.net
+      - LOG_LEVEL=trace
 
   ario:
     build:

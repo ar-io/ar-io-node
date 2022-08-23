@@ -41,8 +41,6 @@ static_resources:
                               retry_on: "5xx,reset,retriable-status-codes"
                               num_retries: 5
                             auto_host_rewrite: true
-                            internal_redirect_action: HANDLE_INTERNAL_REDIRECT
-                            max_internal_redirects: 10
                             internal_redirect_policy:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true

@@ -1,7 +1,8 @@
 FROM envoyproxy/envoy:v1.22-latest
 
-RUN apt-get update -y && apt-get install -y gettext-base && apt-get -y install sqlite3
+RUN apt-get update -y && apt-get install -y gettext-base
 
+# Copy files
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 COPY envoy.template.yaml /etc/envoy/envoy.template.yaml
 
