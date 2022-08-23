@@ -10,13 +10,16 @@ RUN yarn build
 # EXTRACT DIST
 FROM node:16-alpine
 WORKDIR /app
+RUN apk add --no-cache sqlite curl
+
 COPY --from=builder /app/node_modules ./node_modules/
 COPY --from=builder /app/package.json /app/schema.sql /app/reset-db.sh /app/setup-db.sh ./
 COPY --from=builder /app/dist/ ./dist/
 
+# CREATE VOLUME
+VOLUME /app/data
+
 # SETUP DB - TODO: this will be replaced with migration library
-RUN apk add --no-cache sqlite curl
-RUN mkdir -p data/sqlite
 RUN sh setup-db.sh
 
 # START

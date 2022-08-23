@@ -27,7 +27,7 @@ services:
     ports:
       - 3000:3000
     volumes:
-      - ./data:/app/data
+      - ario-data:/app/data
     networks:
       ario:
         aliases:

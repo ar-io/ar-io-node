@@ -28,21 +28,22 @@ Starting at an arbitrary block (only works immediately after a DB reset):
 
 ## Docker
 ### Standalone AR.IO Node
-You can run the ar.io gateway as a standalone docker:
+You can run the ar.io gateway as a standalone docker with a persisted volume:
 
 ```shell
-docker build . -t ario-node
-docker run -p 3000:3000 -v  $PWD/data:/app/data ario-node:latest
+docker create volume ario-data
+docker build . -t ario-node:latest
+docker run -p 3000:3000 -v ario-data:/app/data ario-node:latest
 ```
 
 To reset the db:
 ```shell
-docker run -v  $PWD/data:/app/data ario-node:latest sh reset-db.sh
+docker run -v  ario-data:/app/data ario-node:latest sh reset-db.sh
 ```
 
 To run with a specified start height (after a reset):
 ```shell
-docker run -e START_HEIGHT=800000 -v $PWD/data:/app/data ario-node:latest
+docker run -e START_HEIGHT=800000 -v ario-data:/app/data ario-node:latest
 ```
 
 ### Envoy & AR.IO Node
