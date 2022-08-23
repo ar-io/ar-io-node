@@ -22,6 +22,13 @@ static_resources:
                     - name: local_service
                       domains: ["*"]
                       routes:
+                        - match: {prefix: "/gateway_metrics"}
+                          route: 
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: "5xx,reset,retriable-status-codes"
+                              retriable_status_codes: 404
+                              num_retries: 5
                         - match: {prefix: "/graphql"}
                           route:
                             cluster: ario_gateways

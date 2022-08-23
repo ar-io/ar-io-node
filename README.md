@@ -26,10 +26,10 @@ Starting at an arbitrary block (only works immediately after a DB reset):
 
 `START_HEIGHT=800000 yarn start`
 
-## Envoy
-Envoy is used to proxy routes to `arweave.net` not yet implemented in the ar.io node. To run both together:
+## Docker
+Envoy is used to proxy routes to `arweave.net` not yet implemented in the ar.io node. To run both Envoy and the ario-node together:
 
-`docker compose up`
+`docker compose up --build`
 
 Once running, requests can be directed to envoy server at `localhost:1984`.
 
