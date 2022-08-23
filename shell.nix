@@ -3,6 +3,6 @@ with pkgs;
 mkShell {
   buildInputs = [
     nodejs
-    sqlite
+    sqlite-interactive
   ];
 }
