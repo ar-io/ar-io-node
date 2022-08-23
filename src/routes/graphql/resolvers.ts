@@ -16,25 +16,15 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { IResolvers } from '@graphql-tools/utils';
-import ArModule from 'arweave/node/ar.js';
 
+import { winstonToAr } from '../../lib/encoding.js';
 import { GqlTransaction } from '../../types.js';
-
-/* eslint-disable */
-// @ts-ignore
-const { default: Ar } = ArModule;
 
 export const DEFAULT_PAGE_SIZE = 10;
 export const MAX_PAGE_SIZE = 100;
 
 export function getPageSize({ first }: { first?: number }) {
   return Math.min(first || DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
-}
-
-const ar = new Ar();
-
-function winstonToAr(amount: string) {
-  return ar.winstonToAr(amount);
 }
 
 export function resolveTxRecipient(tx: GqlTransaction) {

@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import ArModule from 'arweave/node/ar.js';
 import { createHash } from 'crypto';
 import { Packr } from 'msgpackr';
 
@@ -199,4 +200,15 @@ export function jsonTxToMsgpack(jsonTx: PartialJsonTransaction): Buffer {
 
 export function msgpackToJsonTx(buffer: Buffer): PartialJsonTransaction {
   return msgpackTxToJsonTx(fromMsgpack(buffer));
+}
+
+// AR/Winston conversion
+
+/* eslint-disable */
+// @ts-ignore
+const { default: Ar } = ArModule;
+const ar = new Ar();
+
+export function winstonToAr(amount: string) {
+  return ar.winstonToAr(amount);
 }
