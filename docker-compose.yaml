@@ -1,9 +1,6 @@
 ---
 version: '3.0'
 
-volumes:
-  ario-data:
-
 services:
   envoy:
     build:
@@ -23,6 +20,6 @@ services:
     ports:
       - 3000:3000
     volumes:
-      - ario-data:/app/data
+      - ./data:/app/data
     environment:
       ENV: development
