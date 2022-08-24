@@ -1,0 +1,19 @@
+# Docker
+docker-compose.yaml
+
+# Envoy
+envoy/
+
+# Databases
+*.db*
+
+# Node
+node_modules/
+
+# Other
+.vscode/
+.github/
+
+# Test
+test/
+coverage/

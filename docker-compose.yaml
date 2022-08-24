@@ -1,10 +1,25 @@
 ---
-
 version: '3.0'
+
 services:
   envoy:
-    image: envoyproxy/envoy:v1.20-latest
+    build:
+        context: envoy/
     ports:
-      - ${ARWEAVE0_PORT}:1984
+      - '1984:1984'
+      - '9901:9901'
+    environment:
+      - ARIO_HOST=ario
+      - ARIO_PORT=3000
+      - ARWEAVE_GATEWAY=arweave.net
+      - LOG_LEVEL=trace
+
+  ario:
+    build:
+      context: .
+    ports:
+      - 3000:3000
     volumes:
-      - ./config/envoy.yaml:/etc/envoy/envoy.yaml
+      - ./data:/app/data
+    environment:
+      ENV: development

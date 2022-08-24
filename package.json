@@ -66,9 +66,10 @@
     "typescript-eslint": "^0.0.1-alpha.0"
   },
   "scripts": {
-    "build": "yarn clean && npx tsc --project ./tsconfig.prod.json",
+    "build": "yarn clean && npx tsc --project ./tsconfig.prod.json && cp -r src/routes/graphql/schema dist/routes/graphql/schema",
     "clean": "npx rimraf [ .nyc_output coverage dist ]",
     "start": "ts-node-esm ./src/app.ts",
+    "start:prod": "yarn build && node dist/app.js",
     "watch": "nodemon",
     "db:migrate": "ts-node-esm ./src/migrate.ts",
     "test": "mocha --no-warnings",

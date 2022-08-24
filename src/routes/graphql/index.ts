@@ -31,7 +31,10 @@ import { resolvers } from './resolvers.js';
 
 // TODO make path relative to file in stead of cwd
 const typeDefs = gql(
-  readFileSync('./src/routes/graphql/schema/types.graphql', 'utf8'),
+  readFileSync(
+    `${new URL('.', import.meta.url).pathname}schema/types.graphql`,
+    'utf8',
+  ),
 );
 
 const apolloServer = (
