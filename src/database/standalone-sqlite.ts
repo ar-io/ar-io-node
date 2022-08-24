@@ -97,6 +97,75 @@ export function toSqliteParams(sqlBricksParams: { values: any[] }) {
     }, {} as { [key: string]: any });
 }
 
+export function txToDbRows(tx: PartialJsonTransaction) {
+  const tagNames = [] as { name: Buffer; hash: Buffer }[];
+  const tagValues = [] as { value: Buffer; hash: Buffer }[];
+  const newTxTags = [] as {
+    tag_name_hash: Buffer;
+    tag_value_hash: Buffer;
+    transaction_id: Buffer;
+    transaction_tag_index: number;
+  }[];
+  const wallets = [] as { address: Buffer; public_modulus: Buffer }[];
+
+  let contentType: string | undefined;
+  const txId = Buffer.from(tx.id, 'base64');
+
+  let transactionTagIndex = 0;
+  for (const tag of tx.tags) {
+    const tagName = Buffer.from(tag.name, 'base64');
+    const tagNameHash = crypto.createHash('sha1').update(tagName).digest();
+    tagNames.push({ name: tagName, hash: tagNameHash });
+
+    const tagValue = Buffer.from(tag.value, 'base64');
+    const tagValueHash = crypto.createHash('sha1').update(tagValue).digest();
+    tagValues.push({ value: tagValue, hash: tagValueHash });
+
+    if (tagName.toString('utf8').toLowerCase() === 'content-type') {
+      contentType = tagValue.toString('utf8');
+    }
+
+    newTxTags.push({
+      tag_name_hash: tagNameHash,
+      tag_value_hash: tagValueHash,
+      transaction_id: txId,
+      transaction_tag_index: transactionTagIndex,
+    });
+
+    transactionTagIndex++;
+  }
+
+  const ownerBuffer = Buffer.from(tx.owner, 'base64');
+  const ownerAddressBuffer = crypto
+    .createHash('sha256')
+    .update(ownerBuffer)
+    .digest();
+
+  wallets.push({ address: ownerAddressBuffer, public_modulus: ownerBuffer });
+
+  return {
+    tagNames,
+    tagValues,
+    newTxTags,
+    wallets,
+    newTx: {
+      id: txId,
+      signature: Buffer.from(tx.signature, 'base64'),
+      format: tx.format,
+      last_tx: Buffer.from(tx.last_tx, 'base64'),
+      owner_address: ownerAddressBuffer,
+      target: Buffer.from(tx.target, 'base64'),
+      quantity: tx.quantity,
+      reward: tx.reward,
+      data_size: tx.data_size,
+      data_root: Buffer.from(tx.data_root, 'base64'),
+      content_type: contentType,
+      tag_count: tx.tags.length,
+      created_at: (Date.now() / 1000).toFixed(0),
+    },
+  };
+}
+
 export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private db: Sqlite.Database;
 
@@ -484,73 +553,25 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         }
 
         for (const tx of txs) {
-          let contentType: string | undefined;
-          const txId = Buffer.from(tx.id, 'base64');
+          const rows = txToDbRows(tx);
 
-          let transactionTagIndex = 0;
-          for (const tag of tx.tags) {
-            const tagName = Buffer.from(tag.name, 'base64');
-            const tagNameHash = crypto
-              .createHash('sha1')
-              .update(tagName)
-              .digest();
-
-            this.tagNamesInsertStmt.run({
-              hash: tagNameHash,
-              name: tagName,
-            });
-
-            const tagValue = Buffer.from(tag.value, 'base64');
-            const tagValueHash = crypto
-              .createHash('sha1')
-              .update(tagValue)
-              .digest();
-
-            this.tagValuesInsertStmt.run({
-              hash: tagValueHash,
-              value: tagValue,
-            });
-
-            if (tagName.toString('utf8').toLowerCase() === 'content-type') {
-              contentType = tagValue.toString('utf8');
-            }
-
-            this.newTxTagsInsertStmt.run({
-              tag_name_hash: tagNameHash,
-              tag_value_hash: tagValueHash,
-              transaction_id: txId,
-              transaction_tag_index: transactionTagIndex,
-            });
-
-            transactionTagIndex++;
+          for (const row of rows.tagNames) {
+            this.tagNamesInsertStmt.run(row);
           }
 
-          const ownerBuffer = Buffer.from(tx.owner, 'base64');
-          const ownerAddressBuffer = crypto
-            .createHash('sha256')
-            .update(ownerBuffer)
-            .digest();
+          for (const row of rows.tagValues) {
+            this.tagValuesInsertStmt.run(row);
+          }
 
-          this.walletInsertStmt.run({
-            address: ownerAddressBuffer,
-            public_modulus: ownerBuffer,
-          });
+          for (const row of rows.newTxTags) {
+            this.newTxTagsInsertStmt.run(row);
+          }
 
-          this.newTxsInsertStmt.run({
-            id: txId,
-            signature: Buffer.from(tx.signature, 'base64'),
-            format: tx.format,
-            last_tx: Buffer.from(tx.last_tx, 'base64'),
-            owner_address: ownerAddressBuffer,
-            target: Buffer.from(tx.target, 'base64'),
-            quantity: tx.quantity,
-            reward: tx.reward,
-            data_size: tx.data_size,
-            data_root: Buffer.from(tx.data_root, 'base64'),
-            content_type: contentType,
-            tag_count: tx.tags.length,
-            created_at: (Date.now() / 1000).toFixed(0),
-          });
+          for (const row of rows.wallets) {
+            this.walletInsertStmt.run(row);
+          }
+
+          this.newTxsInsertStmt.run(rows.newTx);
         }
 
         for (const txIdStr of missingTxIds) {
