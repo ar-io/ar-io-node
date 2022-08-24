@@ -12,7 +12,7 @@ services:
       - ARIO_HOST=ario
       - ARIO_PORT=3000
       - ARWEAVE_GATEWAY=arweave.net
-      - LOG_LEVEL=trace
+      - LOG_LEVEL=info
 
   ario:
     build:
