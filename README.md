@@ -28,7 +28,7 @@ Starting at an arbitrary block (only works immediately after a DB reset):
 
 ## Docker
 ### Standalone AR.IO Node
-You can run the ar.io gateway as a standalone docker with a persisted volume:
+You can run the ar.io gateway as a standalone docker container with a persisted volume:
 
 ```shell
 docker create volume ario-data

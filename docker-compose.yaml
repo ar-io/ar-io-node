@@ -17,7 +17,7 @@ services:
     networks:
       - ario
     environment:
-      - ARIO_HOST=ar.io
+      - ARIO_HOST=ario
       - ARIO_PORT=3000
       - ARWEAVE_GATEWAY=arweave.net
       - LOG_LEVEL=trace
@@ -31,13 +31,5 @@ services:
       - ario-data:/app/data
     networks:
       ario:
-        aliases:
-            - ar.io
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
     environment:
       ENV: development

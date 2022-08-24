@@ -70,7 +70,7 @@ app.use(promMid({ metricsPath: '/gateway_metrics' }));
 app.get('/healthcheck', (_req, res) => {
   const data = {
     uptime: process.uptime(),
-    message: 'Welcome to the permaweb.',
+    message: 'Welcome to the Permaweb.',
     date: new Date(),
   };
 

@@ -57,16 +57,6 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   clusters:
-    - name: arweave_gateways
-      connect_timeout: 1s
-      lb_policy: CLUSTER_PROVIDED
-      cluster_type:
-        name: envoy.clusters.aggregate
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
-          clusters:
-            - ario_gateways
-            - legacy_gateways
     - name: ario_gateways
       connect_timeout: 1s
       type: STRICT_DNS

@@ -22,5 +22,9 @@ VOLUME /app/data
 # SETUP DB - TODO: this will be replaced with migration library
 RUN sh setup-db.sh
 
+# EXPOSE PORT AND SETUP HEALTHCHECK
+EXPOSE 3000
+HEALTHCHECK CMD curl --fail http://localhost:3000 || exit 1   
+
 # START
 CMD [ "node", "dist/app.js" ]
