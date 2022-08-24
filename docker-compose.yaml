@@ -1,9 +1,6 @@
 ---
 version: '3.0'
 
-networks:
-  ario:
-
 volumes:
   ario-data:
 
@@ -14,8 +11,6 @@ services:
     ports:
       - '1984:1984'
       - '9901:9901'
-    networks:
-      - ario
     environment:
       - ARIO_HOST=ario
       - ARIO_PORT=3000
@@ -29,7 +24,5 @@ services:
       - 3000:3000
     volumes:
       - ario-data:/app/data
-    networks:
-      ario:
     environment:
       ENV: development
