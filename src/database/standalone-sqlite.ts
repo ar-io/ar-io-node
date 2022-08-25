@@ -131,6 +131,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private resetToHeightStmt: Sqlite.Statement;
 
   // GraphQL
+  private getMaxStableBlockHeightStmt: Sqlite.Statement;
   private getNewTransactionTagsStmt: Sqlite.Statement;
   private getStableTransactionTagsStmt: Sqlite.Statement;
 
@@ -386,6 +387,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.resetToHeightStmt = this.db.prepare(`
       DELETE FROM new_block_heights
       WHERE height > @height
+    `);
+
+    // Max stable block height (for GQL)
+    this.getMaxStableBlockHeightStmt = this.db.prepare(`
+      SELECT MAX(height) AS height
+      FROM stable_blocks
     `);
 
     // Get new transaction tags (for GQL)
@@ -836,9 +843,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       tagsTable = 'stable_transaction_tags';
       heightSortTableAlias = 'st';
       blockTransactionIndexSortTableAlias = 'st';
-      maxDbHeight = this.db
-        .prepare('SELECT MAX(height) AS max_height FROM stable_blocks')
-        .get().max_height as number;
+      maxDbHeight = this.getMaxStableBlockHeightStmt.get().height as number;
     } else {
       txTableAlias = 'nt';
       heightTableAlias = 'nb';
