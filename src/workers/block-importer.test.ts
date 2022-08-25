@@ -70,7 +70,7 @@ describe('BlockImporter', () => {
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
     db = new Sqlite(':memory:');
-    const schema = fs.readFileSync('schema.sql', 'utf8');
+    const schema = fs.readFileSync('test/schema.sql', 'utf8');
     db.exec(schema);
     chainDb = new StandaloneSqliteDatabase(db);
   });

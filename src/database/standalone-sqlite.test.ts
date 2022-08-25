@@ -118,7 +118,7 @@ describe('StandaloneSqliteDatabase', () => {
 
   beforeEach(async () => {
     db = new Sqlite(':memory:');
-    const schema = fs.readFileSync('schema.sql', 'utf8');
+    const schema = fs.readFileSync('test/schema.sql', 'utf8');
     db.exec(schema);
     chainDb = new StandaloneSqliteDatabase(db);
     chainSource = new ArweaveChainSourceStub();
@@ -592,16 +592,12 @@ describe('StandaloneSqliteDatabase', () => {
         expect(dbBlock[field]).to.equal((block as any)[field]);
       }
 
-      // TODO convert last_retarget to an INTEGER in the DB
-      expect(dbBlock.last_retarget).to.be.a('string');
-      expect(dbBlock.last_retarget).to.equal(block?.last_retarget?.toString());
-
       // Note: 'timestamp' is renamed to 'block_timestamp' to avoid collision
       // with the SQLite timestamp data type
       expect(dbBlock.block_timestamp).to.be.a('number');
       expect(dbBlock.block_timestamp).to.equal(block.timestamp);
 
-      const integerFields = ['height'];
+      const integerFields = ['height', 'last_retarget'];
       for (const field of integerFields) {
         expect(dbBlock[field]).to.be.a('number');
         expect(dbBlock[field]).to.equal((block as any)[field]);

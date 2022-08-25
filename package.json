@@ -72,6 +72,7 @@
     "start:prod": "yarn build && node dist/app.js",
     "watch": "nodemon",
     "db:migrate": "ts-node-esm ./src/migrate.ts",
+    "db:dump-test-schema": "sqlite3 data/sqlite/core.db < test/dump-schema.sql",
     "test": "mocha --no-warnings",
     "test:watch": "mocha --no-warnings --watch --parallel",
     "test:coverage": "npx c8 -r text -r html mocha --no-warnings"
