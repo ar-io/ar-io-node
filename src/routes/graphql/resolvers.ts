@@ -18,6 +18,7 @@
 import { IResolvers } from '@graphql-tools/utils';
 
 import { winstonToAr } from '../../lib/encoding.js';
+import log from '../../log.js';
 import { GqlTransaction } from '../../types.js';
 
 export const DEFAULT_PAGE_SIZE = 10;
@@ -80,11 +81,13 @@ export function resolveTxBundledIn(_tx: GqlTransaction) {
 export const resolvers: IResolvers = {
   Query: {
     transaction: async (_, queryParams, { db }) => {
+      log.info('GraphQL transaction query', { queryParams });
       return await db.getGqlTransaction({
         id: queryParams.id,
       });
     },
     transactions: (_, queryParams, { db }) => {
+      log.info('GraphQL transactions query', { queryParams });
       return db.getGqlTransactions({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
@@ -98,11 +101,13 @@ export const resolvers: IResolvers = {
       });
     },
     block: async (_, queryParams, { db }) => {
+      log.info('GraphQL block query', { queryParams });
       return await db.getGqlBlock({
         id: queryParams.id,
       });
     },
     blocks: (_, queryParams, { db }) => {
+      log.info('GraphQL blocks query', { queryParams });
       return db.getGqlBlocks({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
