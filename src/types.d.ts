@@ -15,6 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { Readable } from 'stream';
+
 export type B64uTag = {
   name: string;
   value: string;
@@ -225,4 +227,15 @@ export interface GqlQueryable {
     minHeight?: number;
     maxHeight?: number;
   }): Promise<GqlBlocksResult>;
+}
+
+export interface Chunk {
+  data: Buffer;
+  data_path: string;
+  tx_path: string;
+}
+
+export interface ChunkRetrieval {
+  getChunkByAbsoluteOffset(offset: number): Promise<Chunk>;
+  getChunkDataByAbsoluteOffset(offset: number): Promise<Readable>;
 }
