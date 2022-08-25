@@ -827,6 +827,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     let tagsTable: string;
     let heightSortTableAlias: string;
     let blockTransactionIndexSortTableAlias: string;
+    let maxDbHeight = Infinity;
 
     if (source === 'stable') {
       txTableAlias = 'st';
@@ -835,6 +836,9 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       tagsTable = 'stable_transaction_tags';
       heightSortTableAlias = 'st';
       blockTransactionIndexSortTableAlias = 'st';
+      maxDbHeight = this.db
+        .prepare('SELECT MAX(height) AS max_height FROM stable_blocks')
+        .get().max_height as number;
     } else {
       txTableAlias = 'nt';
       heightTableAlias = 'nb';
@@ -910,11 +914,11 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       });
     }
 
-    if (minHeight >= 0) {
+    if (minHeight > 0) {
       query.where(sql.gte(`${heightTableAlias}.height`, minHeight));
     }
 
-    if (maxHeight >= 0) {
+    if (maxHeight >= 0 && maxHeight < maxDbHeight) {
       query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
     }
 
