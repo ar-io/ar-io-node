@@ -64,15 +64,15 @@ export function resolveTxOwner(tx: GqlTransaction) {
   };
 }
 
-// TODO implement
-export function resolveTxParent(_tx: GqlTransaction) {
+// TODO implement when L2 data is added
+export function resolveTxParent() {
   return {
     id: '',
   };
 }
 
-// TODO implement
-export function resolveTxBundledIn(_tx: GqlTransaction) {
+// TODO implement when L2 data is added
+export function resolveTxBundledIn() {
   return {
     id: '',
   };
@@ -81,13 +81,19 @@ export function resolveTxBundledIn(_tx: GqlTransaction) {
 export const resolvers: IResolvers = {
   Query: {
     transaction: async (_, queryParams, { db }) => {
-      log.info('GraphQL transaction query', { queryParams });
+      log.info('GraphQL transaction query', {
+        resolver: 'transaction',
+        queryParams,
+      });
       return await db.getGqlTransaction({
         id: queryParams.id,
       });
     },
     transactions: (_, queryParams, { db }) => {
-      log.info('GraphQL transactions query', { queryParams });
+      log.info('GraphQL transactions query', {
+        resolver: 'transactions',
+        queryParams,
+      });
       return db.getGqlTransactions({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
@@ -101,13 +107,13 @@ export const resolvers: IResolvers = {
       });
     },
     block: async (_, queryParams, { db }) => {
-      log.info('GraphQL block query', { queryParams });
+      log.info('GraphQL block query', { resolver: 'block', queryParams });
       return await db.getGqlBlock({
         id: queryParams.id,
       });
     },
     blocks: (_, queryParams, { db }) => {
-      log.info('GraphQL blocks query', { queryParams });
+      log.info('GraphQL blocks query', { resolver: 'blocks', queryParams });
       return db.getGqlBlocks({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
