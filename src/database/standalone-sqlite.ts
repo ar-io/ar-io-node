@@ -911,11 +911,11 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     if (minHeight >= 0) {
-      query.where(sql.gte(`${heightSortTableAlias}.height`, minHeight));
+      query.where(sql.gte(`${heightTableAlias}.height`, minHeight));
     }
 
     if (maxHeight >= 0) {
-      query.where(sql.lte(`${heightSortTableAlias}.height`, maxHeight));
+      query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
     }
 
     const {
