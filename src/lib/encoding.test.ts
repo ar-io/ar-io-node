@@ -22,8 +22,12 @@ import {
   b64UrlToUtf8,
   fromB64Url,
   fromMsgpack,
+  jsonBlockToMsgpack,
+  jsonBlockToMsgpackBlock,
   jsonTxToMsgpack,
   jsonTxToMsgpackTx,
+  msgpackBlockToJsonBlock,
+  msgpackToJsonBlock,
   msgpackToJsonTx,
   msgpackTxToJsonTx,
   sha256B64Url,
@@ -92,7 +96,7 @@ describe('Base64 URL encoding functions', () => {
 
 describe('Message pack encoding and decoding functions', () => {
   describe('toMsgpack and fromMsgpack', () => {
-    it('should round trip to and from MessagePack', () => {
+    it('should round trip to and from MessagePack binary data', () => {
       const testObject = {
         test: 'test',
         test2: [1, 2, 3],
@@ -104,7 +108,7 @@ describe('Message pack encoding and decoding functions', () => {
       expect(testObject2).to.deep.equal(testObject);
     });
 
-    it("should preserve compatibility with 'standard' Message Pack", () => {
+    it("should preserve compatibility with 'standard' MessagePack", () => {
       const testObject = {
         test: 'test',
         test2: [1, 2, 3],
@@ -119,6 +123,94 @@ describe('Message pack encoding and decoding functions', () => {
       const testObject3 = fromMsgpack(testBuffer2);
 
       expect(testObject3).to.deep.equal(testObject);
+    });
+  });
+});
+
+describe('Block message pack encoding and decoding functions', () => {
+  describe('jsonBlockToMsgpackBlock and msgpackBlockToJsonBlock', () => {
+    it('should round trip to and from a MsgpackBlock', async () => {
+      const chainSource = new ArweaveChainSourceStub();
+      const block1 = await chainSource.getBlockByHeight(1);
+
+      // Remove extranious header fields
+      delete (block1 as any).poa;
+      delete (block1 as any).tx_tree;
+
+      const msgpackBlock1 = jsonBlockToMsgpackBlock(block1);
+      const jsonBlock1 = msgpackBlockToJsonBlock(msgpackBlock1);
+
+      // Check keys individual since some may be present with undefined values
+      // on the jsonBlock but missing on the block
+      for (const key in jsonBlock1) {
+        if ((block1 as any)[key] !== undefined) {
+          expect((jsonBlock1 as any)[key]).to.deep.equal((block1 as any)[key]);
+        } else {
+          expect((jsonBlock1 as any)[key]).to.be.undefined;
+        }
+      }
+
+      const block2 = await chainSource.getBlockByHeight(982575);
+
+      // Remove extranious header fields
+      delete (block2 as any).poa;
+      delete (block2 as any).tx_tree;
+
+      const msgpackBlock2 = jsonBlockToMsgpackBlock(block2);
+      const jsonBlock2 = msgpackBlockToJsonBlock(msgpackBlock2);
+
+      // Check keys individual since some may be present with undefined values
+      // on the jsonBlock but missing on the block
+      for (const key in jsonBlock2) {
+        if ((block2 as any)[key] !== undefined) {
+          expect((jsonBlock2 as any)[key]).to.deep.equal((block2 as any)[key]);
+        } else {
+          expect((jsonBlock2 as any)[key]).to.be.undefined;
+        }
+      }
+    });
+  });
+
+  describe('jsonBlockToMsgpack and msgpackToJsonBlock', () => {
+    it('should round trip to and from MessagePack binary data', async () => {
+      const chainSource = new ArweaveChainSourceStub();
+      const block1 = await chainSource.getBlockByHeight(1);
+
+      // Remove extranious header fields
+      delete (block1 as any).poa;
+      delete (block1 as any).tx_tree;
+
+      const buffer1 = jsonBlockToMsgpack(block1);
+      const jsonBlock1 = msgpackToJsonBlock(buffer1);
+
+      // Check keys individual since some may be present with undefined values
+      // on the jsonBlock but missing on the block
+      for (const key in jsonBlock1) {
+        if ((block1 as any)[key] !== undefined) {
+          expect((jsonBlock1 as any)[key]).to.deep.equal((block1 as any)[key]);
+        } else {
+          expect((jsonBlock1 as any)[key]).to.be.undefined;
+        }
+      }
+
+      const block2 = await chainSource.getBlockByHeight(982575);
+
+      // Remove extranious header fields
+      delete (block2 as any).poa;
+      delete (block2 as any).tx_tree;
+
+      const buffer2 = jsonBlockToMsgpack(block2);
+      const jsonBlock2 = msgpackToJsonBlock(buffer2);
+
+      // Check keys individual since some may be present with undefined values
+      // on the jsonBlock but missing on the block
+      for (const key in jsonBlock2) {
+        if ((block2 as any)[key] !== undefined) {
+          expect((jsonBlock2 as any)[key]).to.deep.equal((block2 as any)[key]);
+        } else {
+          expect((jsonBlock2 as any)[key]).to.be.undefined;
+        }
+      }
     });
   });
 });
@@ -145,7 +237,7 @@ describe('Transaction message pack encoding and decoding functions', () => {
   });
 
   describe('jsonTxToMsgpack and msgpackToJsonTx', () => {
-    it('should round trip to and from a MessagePack', async () => {
+    it('should round trip to and from MessagePack binary data', async () => {
       // TODO add transactions with more fields
 
       const chainSource = new ArweaveChainSourceStub();
