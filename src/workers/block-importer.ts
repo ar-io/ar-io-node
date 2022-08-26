@@ -69,7 +69,7 @@ export class BlockImporter {
     heightPollingIntervalMs?: number;
   }) {
     // Dependencies
-    this.log = log.child({ module: 'block-importer' });
+    this.log = log.child({ worker: 'block-importer' });
     this.chainSource = chainSource;
     this.chainDb = chainDb;
     this.eventEmitter = eventEmitter;
