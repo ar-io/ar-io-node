@@ -27,12 +27,8 @@ import { Readable } from 'stream';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
-import {
-  jsonBlockToMsgpack,
-  jsonTxToMsgpack,
-  msgpackToJsonBlock,
-  msgpackToJsonTx,
-} from '../lib/encoding.js';
+import { FsBlockCache } from '../cache/fs-block-cache.js';
+import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
 import {
   sanityCheckBlock,
   sanityCheckChunk,
@@ -45,146 +41,9 @@ import {
   PartialJsonBlock,
   PartialJsonBlockCache,
   PartialJsonTransaction,
-  PartialJsonTxCache,
+  PartialJsonTransactionCache,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
-
-function txCacheDir(txId: string) {
-  const txPrefix = `${txId.substring(0, 2)}/${txId.substring(2, 4)}`;
-  return `data/headers/partial-txs/${txPrefix}`;
-}
-
-function txCachePath(txId: string) {
-  return `${txCacheDir(txId)}/${txId}.msgpack`;
-}
-
-class FsTxCache implements PartialJsonTxCache {
-  async has(txId: string) {
-    try {
-      await fs.promises.access(txCachePath(txId), fs.constants.F_OK);
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  async get(txId: string) {
-    try {
-      const txData = await fs.promises.readFile(txCachePath(txId));
-      return msgpackToJsonTx(txData);
-    } catch (error) {
-      // TODO log error
-      return undefined;
-    }
-  }
-
-  async set(tx: PartialJsonTransaction) {
-    try {
-      await fs.promises.mkdir(txCacheDir(tx.id), { recursive: true });
-      const txData = jsonTxToMsgpack(tx);
-      await fs.promises.writeFile(txCachePath(tx.id), txData);
-    } catch (error) {
-      // TODO log error
-    }
-  }
-}
-
-function blockCacheHashDir(hash: string) {
-  const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
-  return `data/headers/partial-blocks/hash/${blockPrefix}`;
-}
-
-function blockCacheHashPath(hash: string) {
-  return `${blockCacheHashDir(hash)}/${hash}.msgpack`;
-}
-
-function blockCacheHeightDir(height: number) {
-  return `data/headers/partial-blocks/height/${height % 1000}`;
-}
-
-function blockCacheHeightPath(height: number) {
-  return `${blockCacheHeightDir(height)}/${height}.msgpack`;
-}
-
-class FsBlockCache implements PartialJsonBlockCache {
-  async hasHash(hash: string) {
-    try {
-      await fs.promises.access(blockCacheHashPath(hash), fs.constants.F_OK);
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  async hasHeight(height: number) {
-    try {
-      await fs.promises.access(blockCacheHeightPath(height), fs.constants.F_OK);
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  async getByHash(hash: string) {
-    try {
-      if (await this.hasHash(hash)) {
-        const blockData = await fs.promises.readFile(blockCacheHashPath(hash));
-        return msgpackToJsonBlock(blockData);
-      }
-
-      return undefined;
-    } catch (error) {
-      // TODO log error
-      return undefined;
-    }
-  }
-
-  async getByHeight(height: number) {
-    try {
-      if (await this.hasHeight(height)) {
-        const blockData = await fs.promises.readFile(
-          blockCacheHeightPath(height),
-        );
-        return msgpackToJsonBlock(blockData);
-      }
-
-      return undefined;
-    } catch (error) {
-      // TODO log error
-      return undefined;
-    }
-  }
-
-  async set(block: PartialJsonBlock, height?: number) {
-    try {
-      if (!(await this.hasHash(block.indep_hash))) {
-        await fs.promises.mkdir(blockCacheHashDir(block.indep_hash), {
-          recursive: true,
-        });
-
-        const blockData = jsonBlockToMsgpack(block);
-        await fs.promises.writeFile(
-          blockCacheHashPath(block.indep_hash),
-          blockData,
-        );
-      }
-
-      if (height && !(await this.hasHeight(height))) {
-        await fs.promises.mkdir(blockCacheHeightDir(height), {
-          recursive: true,
-        });
-
-        const targetPath = path.relative(
-          `${process.cwd()}/${blockCacheHeightDir(height)}`,
-          `${process.cwd()}/${blockCacheHashPath(block.indep_hash)}`,
-        );
-        await fs.promises.symlink(targetPath, blockCacheHeightPath(height));
-      }
-    } catch (error) {
-      // TODO log error
-    }
-  }
-}
 
 type Peer = {
   url: string;
@@ -196,7 +55,7 @@ type Peer = {
 export class ArweaveCompositeClient implements ChainSource, ChunkSource {
   private arweave: Arweave;
   private log: winston.Logger;
-  private txCache: PartialJsonTxCache;
+  private txCache: PartialJsonTransactionCache;
   private blockCache: PartialJsonBlockCache;
 
   // Trusted node
@@ -259,7 +118,7 @@ export class ArweaveCompositeClient implements ChainSource, ChunkSource {
     this.log = log;
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
-    this.txCache = new FsTxCache();
+    this.txCache = new FsTransactionCache();
     this.blockCache = new FsBlockCache();
 
     // Initialize trusted node Axios with automatic retries

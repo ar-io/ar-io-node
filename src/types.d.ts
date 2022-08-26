@@ -121,7 +121,7 @@ export interface PartialJsonBlockCache {
   set(block: PartialJsonBlock, height?: number): Promise<void>;
 }
 
-export interface PartialJsonTxCache {
+export interface PartialJsonTransactionCache {
   has(txId: string): Promise<boolean>;
   get(txId: string): Promise<PartialJsonTransaction | undefined>;
   set(tx: PartialJsonTransaction): Promise<void>;
