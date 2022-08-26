@@ -594,14 +594,18 @@ export class ArweaveCompositeClient implements ChainSource, ChunkRetrieval {
         method: 'GET',
         url: `/chunk/${offset}`,
       });
-      const { chunk, ...metadata } = response.data;
+      const { chunk, data_path, tx_path } = response.data;
 
       // TODO: validate its a valid chunk via validatePath
 
       if (!chunk) {
         throw new Error('Chunk not defined');
       }
-      return { ...metadata, data: Buffer.from(chunk, 'base64') };
+
+      if (!data_path || !tx_path) {
+        throw new Error('Chunk metadata missing');
+      }
+      return { data_path, tx_path, data: Buffer.from(chunk, 'base64') };
     } catch (error: any) {
       this.log.error('Failed to retrieve chunk:', {
         offset,
