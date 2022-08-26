@@ -229,13 +229,13 @@ export interface GqlQueryable {
   }): Promise<GqlBlocksResult>;
 }
 
-export interface RetrievedChunk {
-  data: Buffer;
+export interface JsonChunk {
+  chunk: string;
   data_path: string;
   tx_path: string;
 }
 
-export interface ChunkRetrieval {
-  getChunkByAbsoluteOffset(offset: number): Promise<RetrievedChunk>;
+export interface ChunkSource {
+  getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk>;
   getChunkDataByAbsoluteOffset(offset: number): Promise<Readable>;
 }

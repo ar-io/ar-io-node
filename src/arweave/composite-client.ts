@@ -33,15 +33,19 @@ import {
   msgpackToJsonBlock,
   msgpackToJsonTx,
 } from '../lib/encoding.js';
-import { sanityCheckBlock, sanityCheckTx } from '../lib/validation.js';
+import {
+  sanityCheckBlock,
+  sanityCheckChunk,
+  sanityCheckTx,
+} from '../lib/validation.js';
 import {
   ChainSource,
-  ChunkRetrieval,
+  ChunkSource,
+  JsonChunk,
   PartialJsonBlock,
   PartialJsonBlockCache,
   PartialJsonTransaction,
   PartialJsonTxCache,
-  RetrievedChunk,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -189,7 +193,7 @@ type Peer = {
   lastSeen: number;
 };
 
-export class ArweaveCompositeClient implements ChainSource, ChunkRetrieval {
+export class ArweaveCompositeClient implements ChainSource, ChunkSource {
   private arweave: Arweave;
   private log: winston.Logger;
   private txCache: PartialJsonTxCache;
@@ -588,24 +592,18 @@ export class ArweaveCompositeClient implements ChainSource, ChunkRetrieval {
     return response.data;
   }
 
-  async getChunkByAbsoluteOffset(offset: number): Promise<RetrievedChunk> {
+  async getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk> {
     try {
       const response = await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/chunk/${offset}`,
       });
-      const { chunk, data_path, tx_path } = response.data;
+      const chunk = response.data;
 
       // TODO: validate its a valid chunk via validatePath
+      sanityCheckChunk(chunk);
 
-      if (!chunk) {
-        throw new Error('Chunk not defined');
-      }
-
-      if (!data_path || !tx_path) {
-        throw new Error('Chunk metadata missing');
-      }
-      return { data_path, tx_path, data: Buffer.from(chunk, 'base64') };
+      return chunk;
     } catch (error: any) {
       this.log.error('Failed to retrieve chunk:', {
         offset,
@@ -616,7 +614,8 @@ export class ArweaveCompositeClient implements ChainSource, ChunkRetrieval {
   }
 
   async getChunkDataByAbsoluteOffset(offset: number): Promise<Readable> {
-    const { data } = await this.getChunkByAbsoluteOffset(offset);
+    const { chunk } = await this.getChunkByAbsoluteOffset(offset);
+    const data = Buffer.from(chunk, 'base64');
     return Readable.from(data);
   }
 }
