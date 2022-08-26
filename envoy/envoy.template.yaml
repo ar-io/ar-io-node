@@ -41,6 +41,18 @@ static_resources:
                               retry_on: "5xx,reset,retriable-status-codes"
                               retriable_status_codes: 404
                               num_retries: 5
+                        - match: {prefix: "/api-docs"}
+                          route:
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: "5xx,reset"
+                              num_retries: 5
+                        - match: {prefix: "/openapi.json"}
+                          route:
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: "5xx,reset"
+                              num_retries: 5
                         - match: {prefix: "/"}
                           route:
                             cluster: legacy_gateways

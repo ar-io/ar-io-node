@@ -17,6 +17,7 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/dist/ ./dist/
 COPY ./migrations /app/migrations
 COPY ./docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY ./docs/openapi.yaml /app/docs/openapi.yaml
 
 # CREATE VOLUME
 VOLUME /app/data

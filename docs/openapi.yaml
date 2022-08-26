@@ -1,0 +1,37 @@
+openapi: 3.0.3
+
+info:
+  title: AR.IO Gateway API
+  version: 0.0.1
+
+paths:
+  /:
+    get:
+      summary: Returns Arweave node info
+      responses:
+        '200':    # status code
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  network:
+                    type: string
+                  version:
+                    type: integer
+                  release:
+                    type: integer
+                  height:
+                    type: integer
+                  current:
+                    type: string
+                  blocks:
+                    type: integer
+                  peers:
+                    type: integer
+                  queue_length:
+                    type: integer
+                  node_state_latency:
+                    type: integer
+
+

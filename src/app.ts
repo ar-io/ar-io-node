@@ -20,7 +20,10 @@ import Sqlite from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import express from 'express';
 import promMid from 'express-prometheus-middleware';
+import fs from 'fs';
 import * as promClient from 'prom-client';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -66,6 +69,24 @@ blockImporter.start();
 const app = express();
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
 
+// OpenAPI Spec
+const openapiDocument = YAML.parse(
+  fs.readFileSync('docs/openapi.yaml', 'utf8'),
+);
+app.get('/openapi.json', (_req, res) => {
+  res.json(openapiDocument);
+});
+
+// Swagger UI
+const options = {
+  explorer: true,
+};
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(openapiDocument, options),
+);
+
 // Healthcheck
 app.get('/healthcheck', (_req, res) => {
   const data = {
@@ -83,6 +104,8 @@ app.get('/debug', async (_req, res) => {
     db: await chainDb.getDebugInfo(),
   });
 });
+
+// GraphQL
 const apolloServerInstanceGql = apolloServer(chainDb, {
   introspection: true,
 });
