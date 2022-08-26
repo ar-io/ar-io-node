@@ -184,41 +184,43 @@ describe('Block message pack encoding and decoding functions', () => {
 describe('Transaction message pack encoding and decoding functions', () => {
   describe('jsonTxToMsgpackTx and msgpackTxToJsonTx', () => {
     it('should round trip to and from a MsgpackTransaction', async () => {
-      // TODO add transactions with more fields
-
-      const chainSource = new ArweaveChainSourceStub();
-      const tx = await chainSource.getTx(
+      [
         'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
-      );
+        '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
+      ].forEach(async (txId) => {
+        const chainSource = new ArweaveChainSourceStub();
+        const tx = await chainSource.getTx(txId);
 
-      // Remove extranious header fields
-      delete (tx as any).data;
-      delete (tx as any).data_tree;
+        // Remove extranious header fields
+        delete (tx as any).data;
+        delete (tx as any).data_tree;
 
-      const msgpackTx = jsonTxToMsgpackTx(tx);
-      const jsonTx = msgpackTxToJsonTx(msgpackTx);
+        const msgpackTx = jsonTxToMsgpackTx(tx);
+        const jsonTx = msgpackTxToJsonTx(msgpackTx);
 
-      expect(jsonTx).to.deep.equal(tx);
+        expect(jsonTx).to.deep.equal(tx);
+      });
     });
   });
 
   describe('jsonTxToMsgpack and msgpackToJsonTx', () => {
     it('should round trip to and from MessagePack binary data', async () => {
-      // TODO add transactions with more fields
-
-      const chainSource = new ArweaveChainSourceStub();
-      const tx = await chainSource.getTx(
+      [
         'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
-      );
+        '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
+      ].forEach(async (txId) => {
+        const chainSource = new ArweaveChainSourceStub();
+        const tx = await chainSource.getTx(txId);
 
-      // Remove extranious header fields
-      delete (tx as any).data;
-      delete (tx as any).data_tree;
+        // Remove extranious header fields
+        delete (tx as any).data;
+        delete (tx as any).data_tree;
 
-      const buffer = jsonTxToMsgpack(tx);
-      const jsonTx = msgpackToJsonTx(buffer);
+        const buffer = jsonTxToMsgpack(tx);
+        const jsonTx = msgpackToJsonTx(buffer);
 
-      expect(jsonTx).to.deep.equal(tx);
+        expect(jsonTx).to.deep.equal(tx);
+      });
     });
   });
 });
