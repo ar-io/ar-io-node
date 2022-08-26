@@ -36,12 +36,12 @@ import {
 import { sanityCheckBlock, sanityCheckTx } from '../lib/validation.js';
 import {
   ChainSource,
-  Chunk,
   ChunkRetrieval,
   PartialJsonBlock,
   PartialJsonBlockCache,
   PartialJsonTransaction,
   PartialJsonTxCache,
+  RetrievedChunk,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -588,17 +588,27 @@ export class ArweaveCompositeClient implements ChainSource, ChunkRetrieval {
     return response.data;
   }
 
-  async getChunkByAbsoluteOffset(offset: number): Promise<Chunk> {
-    const response = await this.trustedNodeRequestQueue.push({
-      method: 'GET',
-      url: `/chunk/${offset}`,
-    });
-    // response.data is typeof ChunkResponse
-    const { chunk, ...metadata } = response.data;
+  async getChunkByAbsoluteOffset(offset: number): Promise<RetrievedChunk> {
+    try {
+      const response = await this.trustedNodeRequestQueue.push({
+        method: 'GET',
+        url: `/chunk/${offset}`,
+      });
+      const { chunk, ...metadata } = response.data;
 
-    // TODO: validate its a valid chunk via validatePath
+      // TODO: validate its a valid chunk via validatePath
 
-    return { ...metadata, data: Buffer.from(chunk, 'base64') };
+      if (!chunk) {
+        throw new Error('Chunk not defined');
+      }
+      return { ...metadata, data: Buffer.from(chunk, 'base64') };
+    } catch (error: any) {
+      this.log.error('Failed to retrieve chunk:', {
+        offset,
+        message: error.message,
+      });
+      throw error;
+    }
   }
 
   async getChunkDataByAbsoluteOffset(offset: number): Promise<Readable> {
