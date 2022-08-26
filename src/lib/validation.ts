@@ -1,4 +1,8 @@
-import { PartialJsonBlock, PartialJsonTransaction } from '../types.js';
+import {
+  JsonChunk,
+  PartialJsonBlock,
+  PartialJsonTransaction,
+} from '../types.js';
 
 export function sanityCheckBlock(block: PartialJsonBlock) {
   if (!block?.indep_hash) {
@@ -14,5 +18,15 @@ export function sanityCheckBlock(block: PartialJsonBlock) {
 export function sanityCheckTx(tx: PartialJsonTransaction) {
   if (!tx?.id) {
     throw new Error('Invalid transaction');
+  }
+}
+
+export function sanityCheckChunk(chunk: JsonChunk) {
+  if (!chunk.chunk) {
+    throw new Error('Chunk not defined');
+  }
+
+  if (!chunk.data_path || !chunk.tx_path) {
+    throw new Error('Chunk metadata missing');
   }
 }

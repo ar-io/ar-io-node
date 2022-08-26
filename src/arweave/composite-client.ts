@@ -23,6 +23,7 @@ import fs from 'fs';
 import { default as NodeCache } from 'node-cache';
 import path from 'path';
 import * as rax from 'retry-axios';
+import { Readable } from 'stream';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
@@ -32,9 +33,15 @@ import {
   msgpackToJsonBlock,
   msgpackToJsonTx,
 } from '../lib/encoding.js';
-import { sanityCheckBlock, sanityCheckTx } from '../lib/validation.js';
+import {
+  sanityCheckBlock,
+  sanityCheckChunk,
+  sanityCheckTx,
+} from '../lib/validation.js';
 import {
   ChainSource,
+  ChunkSource,
+  JsonChunk,
   PartialJsonBlock,
   PartialJsonBlockCache,
   PartialJsonTransaction,
@@ -186,7 +193,7 @@ type Peer = {
   lastSeen: number;
 };
 
-export class ArweaveCompositeClient implements ChainSource {
+export class ArweaveCompositeClient implements ChainSource, ChunkSource {
   private arweave: Arweave;
   private log: winston.Logger;
   private txCache: PartialJsonTxCache;
@@ -583,5 +590,32 @@ export class ArweaveCompositeClient implements ChainSource {
         : this.maxPrefetchHeight;
 
     return response.data;
+  }
+
+  async getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk> {
+    try {
+      const response = await this.trustedNodeRequestQueue.push({
+        method: 'GET',
+        url: `/chunk/${offset}`,
+      });
+      const chunk = response.data;
+
+      // TODO: validate its a valid chunk via validatePath
+      sanityCheckChunk(chunk);
+
+      return chunk;
+    } catch (error: any) {
+      this.log.error('Failed to retrieve chunk:', {
+        offset,
+        message: error.message,
+      });
+      throw error;
+    }
+  }
+
+  async getChunkDataByAbsoluteOffset(offset: number): Promise<Readable> {
+    const { chunk } = await this.getChunkByAbsoluteOffset(offset);
+    const data = Buffer.from(chunk, 'base64');
+    return Readable.from(data);
   }
 }
