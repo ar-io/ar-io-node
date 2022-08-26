@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 
 import { jsonBlockToMsgpack, msgpackToJsonBlock } from '../lib/encoding.js';
 import { PartialJsonBlock, PartialJsonBlockCache } from '../types.js';
