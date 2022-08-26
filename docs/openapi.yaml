@@ -1,37 +1,644 @@
-openapi: 3.0.3
-
+---
+openapi: 3.0.0
 info:
-  title: AR.IO Gateway API
+  title: AR.IO Gateway
   version: 0.0.1
-
+  x-logo:
+    url: "https://ar.io/wp-content/uploads/2022/02/ar-io-FINAL-LOGO-SHADOW.png"
+  description: |
+    AR.IO Gateways are the interface between users and the Permaweb. Each Gateway acts like a “Permaweb Service
+    Provider” and supports multiple, value-added, low-trust services for users and applications.
+    
+    The AR.IO HTTP API is served by all AR.IO Gateways, and is used by all Arweave clients looking to read, write and query data.  It supports the following capabilities
+    - seeding layer one transactions to the greater Arweave network
+    - caching and serving chain and transaction data
+    - resolving friendly names to transaction data with the Arweave Name System
+    - indexing and querying layer one and two transactions
+    - proxy for Arweave nodes serving the Arweave HTTP API
+    
+    # Errors
+    
+    The API uses standard HTTP status codes to indicate the success or failure of the API call.
+    
+    # Authentication
+    
+    All inbound transactions to the Arweave network must contain a valid signature from an Arweave wallet with appropriate amount of AR tokens.  At this time, clients are not required to sign their requests for outbound data from the Arweave network.
+tags:
+  - name: Network
+    description: |
+      Get Arweave node info, peers and nework status
+  - name: Pricing
+    description: |
+      Get the price (in winston) for an amount of bytes
+  - name: Wallets
+    description: | 
+      Get Arweave wallet balance and last transaction information
+  - name: Blocks
+    description: |
+      Get current or historical Arweave block information
+  - name: Transactions
+    description: |
+      Submit a new Arweave transaction or get existing transaction information
+  - name: Cache
+    description: |
+      Get data from the AR.IO Gateway cache
+  - name: Chunks
+    description: |
+      Upload Arweave data chunks or get existing chunk offset information
+  - name: Index Querying
+    description: |
+      Get data from the AR.IO Gateway index using GQL
+components:
+  schemas:
+    Block:
+      type: object
+      properties:
+        usd_to_ar_rate:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: string
+            pattern: '^[0-9]+$'
+        scheduled_usd_to_ar_rate:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: string
+            pattern: '^[0-9]+$'
+        packing_2_5_threshold:
+          type: string
+          pattern: '^[0-9]+$'
+        strict_data_split_threshold:
+          type: string
+          pattern: '^[0-9]+$'
+        nonce:
+          type: string
+          # TODO restrict length (not sure about max, it depends on height)
+          pattern: '^[0-9a-zA-Z_-]+$'
+        previous_block:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{64}$'
+        timestamp:
+          type: integer
+        last_retarget:
+          type: integer
+        diff:
+          anyOf:
+            - type: integer
+            - type: string
+              pattern: '^[0-9]+$'
+        height:
+          type: integer
+        hash:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{43}$|^[0-9a-zA-Z_-]{64}$'
+        txs:
+          type: array
+          minItems: 0
+          maxItems: 1000
+          items:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+        tx_root:
+          type: string
+          pattern: '^$|^[0-9a-zA-Z_-]{43}$'
+        tx_tree:
+          type: array
+          maxItems: 0
+          items:
+            type: string
+        wallet_list:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{43}$|^[0-9a-zA-Z_-]{64}$'
+        reward_addr:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{43}$'
+        tags:
+          type: array
+          maxItems: 2048
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+              value:
+                type: string
+                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+        reward_pool:
+          anyOf:
+            - type: integer
+            - type: string
+              # TODO add length restriction
+              pattern: '^[0-9]+$'
+        weave_size:
+          anyOf:
+            - type: integer
+            - type: string
+              pattern: '^[0-9]+$'
+        block_size:
+          anyOf:
+            - type: integer
+            - type: string
+              pattern: '^[0-9]+$'
+        cumulative_diff:
+          type: string
+          pattern: '^[0-9]+$'
+        hash_list_merkle:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{64}$'
+        poa:
+          type: object
+          properties:
+            option:
+              type: string
+              pattern: '^[0-9]+$'
+            tx_path:
+              type: string
+              # TODO specify length
+              pattern: '^[0-9a-zA-Z_-]*$'
+            data_path:
+              type: string
+              # TODO specify length
+              pattern: '^[0-9a-zA-Z_-]*$'
+            chunk:
+              type: string
+              # TODO specify length
+              pattern: '^[0-9a-zA-Z_-]*$'
+      required:
+        - nonce
+        - previous_block
+        - timestamp
+        - last_retarget
+        - diff
+        - height
+        - hash
+        - indep_hash
+        - txs
+        - tx_root
+        - wallet_list
+        - reward_addr
+        - tags
+        - reward_pool
+        - weave_size
+        - block_size
+        - poa
+    Chunk:
+      type: object
+      properties:
+        tx_path:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]+$'
+        packing:
+          type: string
+          # TODO add all types
+          pattern: '^unpacked$'
+        data_path:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]+$'
+        chunk:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]+$'
+      required:
+        - tx_path
+        - packing
+        - data_path
+        - chunk
+    Transaction:
+      type: object
+      properties:
+        format:
+          type: integer
+        id:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{43}$'
+        last_tx:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{43}|[0-9a-zA-Z_-]{64}$'
+        owner:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{1,683}$'
+        tags:
+          type: array
+          maxItems: 2048
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+              value:
+                type: string
+                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+        target:
+          type: string
+          pattern: '^$|^[0-9a-zA-Z_-]{43}$'
+        quantity:
+          type: string
+          pattern: '^[0-9]{1,21}$'
+        data:
+          # TODO determine limit (if any)
+          type: string
+          pattern: '^[0-9a-zA-Z_-]*$'
+        data_tree:
+          type: array
+          items:
+            # TODO determine contents of array (is this just for v1?)
+            type: string
+        data_root:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]*$'
+        reward:
+          type: string
+          pattern: '^[0-9]{1,21}$'
+        signature:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{1,683}$'
+      required:
+        - format
+        - id
+        - last_tx
+        - owner
+        - tags
+        - target
+        - quantity
+        - data
+        - data_tree
+        - data_root
+        - reward
+        - signature
+    TransactionOffset:
+      type: object
+      properties:
+        size:
+          type: string
+          pattern: '^[0-9]+$'
+        offset:
+          type: string
+          pattern: '^[0-9]+$'
+      required:
+        - size
+        - offset
+    TransactionStatus:
+      type: object
+      properties:
+        block_height:
+          type: integer
+        block_indep_hash:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{64}$'
+        number_of_confirmations:
+          type: integer
+      required:
+        - block_height
+        - block_indep_hash
+        - number_of_confirmations
+    Mempool:
+      type: array
+      items:
+        type: string
+        pattern: '^[0-9a-zA-Z_-]{43}$'
+    NetworkInfo:
+      type: object
+      properties:
+        network:
+          type: string
+        version:
+          type: integer
+        release:
+          type: integer
+        current:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{64}$'
+        blocks:
+          type: integer
+        peers:
+          type: integer
+        queue_length:
+          type: integer
+        node_state_latency:
+          type: integer
+      required:
+        - network
+        - version
+        - release
+        - current
+        - blocks
+        - peers
+        - queue_length
+        - node_state_latency
+    PeerList:
+      type: array
+      items:
+        type: string
+        pattern: '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:\d+$'
+    Height:
+      type: string
+      pattern: '^[0-9]{16}$'
 paths:
-  /:
+  # Network and Node Status
+  "/":
     get:
-      summary: Returns Arweave node info
+      tags: [Network]
       responses:
-        '200':    # status code
+        '200':
+          description: |-
+            200 response
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  network:
-                    type: string
-                  version:
-                    type: integer
-                  release:
-                    type: integer
-                  height:
-                    type: integer
-                  current:
-                    type: string
-                  blocks:
-                    type: integer
-                  peers:
-                    type: integer
-                  queue_length:
-                    type: integer
-                  node_state_latency:
-                    type: integer
+                '$ref': '#/components/schemas/NetworkInfo'
+  "/info":
+    get:
+      tags: [Network]
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/NetworkInfo'
+  "/peers":
+    get:
+      tags: [Network]
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/PeerList'
+  "/height":
+    get:
+      tags: [Network]
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Height'
+  # "/metrics"
+  # "/tx_anchor"
+  # "/hash_list"
+  # "/data_sync_record"
+  # "/data_sync_record/{start}/{limit}""
+  # "/time"
+  # "/sync_buckets"
 
+  # Pricing
+  "/price/{size}":
+    get:
+      tags: [Pricing]
+      parameters:
+        - name: size
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]+$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            # TODO text/plain ?
+            text/html:
+              schema:
+                type: integer
+  "/price/{size}/target":
+    get:
+      tags: [Pricing]
+      parameters:
+        - name: size
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]+$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            text/html:
+              schema:
+                type: integer
 
+  # Wallets
+  "/wallet/{address}/balance":
+    get:
+      tags: [Wallets]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            # TODO text/plain ?
+            text/html:
+              schema:
+                type: integer
+  "/wallet/{address}/last_tx":
+    get:
+      tags: [Wallets]
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            # TODO text/plain ?
+            text/html:
+              schema:
+                type: string
+                pattern: '^$|^[0-9a-zA-Z_-]{43}$'
+
+  # Blocks
+  "/current_block":
+    get:
+      tags: [Blocks]
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Block'
+  "/block/height/{height}":
+    get:
+      tags: [Blocks]
+      parameters:
+        - name: height
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]+$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Block'
+  "/block/hash/{hash}":
+    get:
+      tags: [Blocks]
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{64}$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Block'
+  "/block/current":
+    get:
+      tags: [Blocks]
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Block'
+  # "/block/hash/{block hash}/wallet_list"
+                
+  # Transactions
+  "/tx/pending":
+    get:
+      tags: [Transactions]
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Mempool'
+  "/tx/{txId}":
+    get:
+      tags: [Transactions]
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Transaction'
+  "/tx/{txId}/offset":
+    get:
+      tags: [Transactions]
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/TransactionOffset'
+  "/tx/{txId}/status":
+    get:
+      tags: [Transactions]
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/TransactionStatus'
+  # "/tx/{txId}/field"            
+  # "/unconfirmed_tx/{txId}"
+                
+  # Cache
+  "/{txId}":
+    get:
+      tags: [Cache]
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Transaction'
+
+  # Chunks
+  "/chunk/{offset}":
+    get:
+      tags: [Chunks]
+      parameters:
+        - name: offset
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Chunk'
+                
+  # Index
+  # "/graphql"
