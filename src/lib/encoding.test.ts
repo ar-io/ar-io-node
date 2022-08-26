@@ -130,87 +130,53 @@ describe('Message pack encoding and decoding functions', () => {
 describe('Block message pack encoding and decoding functions', () => {
   describe('jsonBlockToMsgpackBlock and msgpackBlockToJsonBlock', () => {
     it('should round trip to and from a MsgpackBlock', async () => {
-      const chainSource = new ArweaveChainSourceStub();
-      const block1 = await chainSource.getBlockByHeight(1);
+      [1, 982575].forEach(async (height) => {
+        const chainSource = new ArweaveChainSourceStub();
+        const block = await chainSource.getBlockByHeight(height);
 
-      // Remove extranious header fields
-      delete (block1 as any).poa;
-      delete (block1 as any).tx_tree;
+        // Remove extranious header fields
+        delete (block as any).poa;
+        delete (block as any).tx_tree;
 
-      const msgpackBlock1 = jsonBlockToMsgpackBlock(block1);
-      const jsonBlock1 = msgpackBlockToJsonBlock(msgpackBlock1);
+        const msgpackBlock = jsonBlockToMsgpackBlock(block);
+        const jsonBlock = msgpackBlockToJsonBlock(msgpackBlock);
 
-      // Check keys individual since some may be present with undefined values
-      // on the jsonBlock but missing on the block
-      for (const key in jsonBlock1) {
-        if ((block1 as any)[key] !== undefined) {
-          expect((jsonBlock1 as any)[key]).to.deep.equal((block1 as any)[key]);
-        } else {
-          expect((jsonBlock1 as any)[key]).to.be.undefined;
+        // Check keys individual since some may be present with undefined values
+        // on the jsonBlock but missing on the block
+        for (const key in jsonBlock) {
+          if ((block as any)[key] !== undefined) {
+            expect((jsonBlock as any)[key]).to.deep.equal((block as any)[key]);
+          } else {
+            expect((jsonBlock as any)[key]).to.be.undefined;
+          }
         }
-      }
-
-      const block2 = await chainSource.getBlockByHeight(982575);
-
-      // Remove extranious header fields
-      delete (block2 as any).poa;
-      delete (block2 as any).tx_tree;
-
-      const msgpackBlock2 = jsonBlockToMsgpackBlock(block2);
-      const jsonBlock2 = msgpackBlockToJsonBlock(msgpackBlock2);
-
-      // Check keys individual since some may be present with undefined values
-      // on the jsonBlock but missing on the block
-      for (const key in jsonBlock2) {
-        if ((block2 as any)[key] !== undefined) {
-          expect((jsonBlock2 as any)[key]).to.deep.equal((block2 as any)[key]);
-        } else {
-          expect((jsonBlock2 as any)[key]).to.be.undefined;
-        }
-      }
+      });
     });
   });
 
   describe('jsonBlockToMsgpack and msgpackToJsonBlock', () => {
     it('should round trip to and from MessagePack binary data', async () => {
-      const chainSource = new ArweaveChainSourceStub();
-      const block1 = await chainSource.getBlockByHeight(1);
+      [1, 982575].forEach(async (height) => {
+        const chainSource = new ArweaveChainSourceStub();
+        const block = await chainSource.getBlockByHeight(height);
 
-      // Remove extranious header fields
-      delete (block1 as any).poa;
-      delete (block1 as any).tx_tree;
+        // Remove extranious header fields
+        delete (block as any).poa;
+        delete (block as any).tx_tree;
 
-      const buffer1 = jsonBlockToMsgpack(block1);
-      const jsonBlock1 = msgpackToJsonBlock(buffer1);
+        const buffer = jsonBlockToMsgpack(block);
+        const jsonBlock = msgpackToJsonBlock(buffer);
 
-      // Check keys individual since some may be present with undefined values
-      // on the jsonBlock but missing on the block
-      for (const key in jsonBlock1) {
-        if ((block1 as any)[key] !== undefined) {
-          expect((jsonBlock1 as any)[key]).to.deep.equal((block1 as any)[key]);
-        } else {
-          expect((jsonBlock1 as any)[key]).to.be.undefined;
+        // Check keys individual since some may be present with undefined values
+        // on the jsonBlock but missing on the block
+        for (const key in jsonBlock) {
+          if ((block as any)[key] !== undefined) {
+            expect((jsonBlock as any)[key]).to.deep.equal((block as any)[key]);
+          } else {
+            expect((jsonBlock as any)[key]).to.be.undefined;
+          }
         }
-      }
-
-      const block2 = await chainSource.getBlockByHeight(982575);
-
-      // Remove extranious header fields
-      delete (block2 as any).poa;
-      delete (block2 as any).tx_tree;
-
-      const buffer2 = jsonBlockToMsgpack(block2);
-      const jsonBlock2 = msgpackToJsonBlock(buffer2);
-
-      // Check keys individual since some may be present with undefined values
-      // on the jsonBlock but missing on the block
-      for (const key in jsonBlock2) {
-        if ((block2 as any)[key] !== undefined) {
-          expect((jsonBlock2 as any)[key]).to.deep.equal((block2 as any)[key]);
-        } else {
-          expect((jsonBlock2 as any)[key]).to.be.undefined;
-        }
-      }
+      });
     });
   });
 });
