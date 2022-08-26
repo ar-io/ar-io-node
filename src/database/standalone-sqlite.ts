@@ -18,6 +18,7 @@
 import { ValidationError } from 'apollo-server-express';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
+import * as R from 'ramda';
 import sql from 'sql-bricks';
 
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
@@ -36,6 +37,12 @@ import {
 
 const STABLE_FLUSH_INTERVAL = 50;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
+
+const JOIN_LAST_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
+
+function tagJoinSortPriority(tag: { name: string; values: string[] }) {
+  return JOIN_LAST_TAG_NAMES.has(tag.name) ? 1 : 0;
+}
 
 export function encodeTransactionGqlCursor({
   height,
@@ -881,7 +888,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     if (tags) {
-      tags.forEach((tag, index) => {
+      const sortByTagJoinPriority = R.sortBy(tagJoinSortPriority);
+      sortByTagJoinPriority(tags).forEach((tag, index) => {
         const tagAlias = `"${index}_${index}"`;
         let joinCond: { [key: string]: string };
         if (source === 'stable') {

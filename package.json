@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@types/express-prometheus-middleware": "^1.2.1",
+    "@types/ramda": "^0.28.15",
     "apollo-server-express": "^3.9.0",
     "arbundles": "^0.6.19",
     "arweave": "^1.11.4",
@@ -24,6 +25,8 @@
     "node-cache": "^5.1.2",
     "node-fetch": "2",
     "prom-client": "^14.0.1",
+    "rambda": "^7.2.1",
+    "ramda": "^0.28.0",
     "retry-axios": "^3.0.0",
     "sql-bricks": "^3.0.0",
     "sql-bricks-sqlite": "^0.1.0",
