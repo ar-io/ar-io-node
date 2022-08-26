@@ -48,7 +48,7 @@ const TEST_BASE_64_SHA_256_STRING =
 
 describe('Base64 URL encoding functions', () => {
   describe('fromB64Url', () => {
-    it('should convert a base64 url encoded string to buffer', () => {
+    it('should convert a Base64 URL encoded string to a Buffer', () => {
       expect(fromB64Url(TEST_BASE_64_URL_ENCODED_STRING)).to.deep.equal(
         TEST_BASE_64_BUFFER,
       );
@@ -56,13 +56,13 @@ describe('Base64 URL encoding functions', () => {
   });
 
   describe('toB64Url', () => {
-    it('should convert a buffer to a base64url encoded string', () => {
+    it('should convert a Buffer to a Base64 URL encoded string', () => {
       expect(toB64Url(TEST_BASE_64_BUFFER)).to.equal(
         TEST_BASE_64_URL_ENCODED_STRING,
       );
     });
 
-    it('should convert a buffer with padding to base64 url encoded string', () => {
+    it('should convert a Buffer with padding to Base64 URL encoded string', () => {
       expect(toB64Url(TEST_BASE_64_BUFFER_WITH_PADDING)).to.deep.equal(
         TEST_BASE_64_URL_ENCODED_STRING,
       );
@@ -70,7 +70,7 @@ describe('Base64 URL encoding functions', () => {
   });
 
   describe('sha256B64Url', () => {
-    it('should convert a buffer to a base 64 url encoded sha256 string', () => {
+    it('should convert a Buffer to a Base64 URL encoded SHA256 string', () => {
       expect(sha256B64Url(TEST_BASE_64_BUFFER)).to.deep.equal(
         TEST_BASE_64_SHA_256_STRING,
       );
@@ -78,7 +78,7 @@ describe('Base64 URL encoding functions', () => {
   });
 
   describe('utf8ToB64Url', () => {
-    it('should convet a utf8 string to a base64 url encoded string', () => {
+    it('should convet a UTF8 string to a Base64 URL encoded string', () => {
       expect(utf8ToB64Url(TEST_STRING)).to.deep.equal(
         TEST_BASE_64_URL_ENCODED_STRING,
       );
@@ -86,7 +86,7 @@ describe('Base64 URL encoding functions', () => {
   });
 
   describe('b64UrlToUtf8', () => {
-    it('should convert a base64 url encoded string to utf8', () => {
+    it('should convert a Base64 URL encoded string to UTF8', () => {
       expect(b64UrlToUtf8(TEST_BASE_64_URL_ENCODED_STRING)).to.deep.equal(
         TEST_STRING,
       );
