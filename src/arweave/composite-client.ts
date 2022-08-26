@@ -32,6 +32,7 @@ import {
   msgpackToJsonBlock,
   msgpackToJsonTx,
 } from '../lib/encoding.js';
+import { sanityCheckBlock, sanityCheckTx } from '../lib/validation.js';
 import {
   ChainSource,
   PartialJsonBlock,
@@ -40,12 +41,6 @@ import {
   PartialJsonTxCache,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
-
-function sanityCheckTx(tx: PartialJsonTransaction) {
-  if (!tx?.id) {
-    throw new Error('Invalid transaction');
-  }
-}
 
 function txCacheDir(txId: string) {
   const txPrefix = `${txId.substring(0, 2)}/${txId.substring(2, 4)}`;
@@ -84,17 +79,6 @@ class FsTxCache implements PartialJsonTxCache {
     } catch (error) {
       // TODO log error
     }
-  }
-}
-
-function sanityCheckBlock(block: PartialJsonBlock) {
-  if (!block?.indep_hash) {
-    throw new Error('Invalid block: missing indep_hash');
-  }
-
-  if (!block?.height === undefined) {
-    console.log(block);
-    throw new Error('Invalid block: missing height');
   }
 }
 
