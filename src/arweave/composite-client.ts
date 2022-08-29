@@ -482,6 +482,7 @@ export class ArweaveCompositeClient
 
   async getTxData(txId: string): Promise<Readable> {
     try {
+<<<<<<< HEAD
       const [dataResponse, dataSizeResponse] = await Promise.all([
         this.trustedNodeRequestQueue.push({
           method: 'GET',
