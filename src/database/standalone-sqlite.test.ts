@@ -214,17 +214,17 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       const sql = `
-      SELECT
-      nbh.height AS height,
-      nt.*,
-      wo.public_modulus AS owner
-      FROM new_transactions nt
-      JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
-      JOIN new_blocks nb ON nb.indep_hash = nbt.block_indep_hash
-      JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
-      JOIN wallets wo ON wo.address = nt.owner_address
-      WHERE nbh.height = ${height}
-      ORDER BY nbh.height, nbt.block_transaction_index
+        SELECT
+        nbh.height AS height,
+        nt.*,
+        wo.public_modulus AS owner
+        FROM new_transactions nt
+        JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+        JOIN new_blocks nb ON nb.indep_hash = nbt.block_indep_hash
+        JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
+        JOIN wallets wo ON wo.address = nt.owner_address
+        WHERE nbh.height = ${height}
+        ORDER BY nbh.height, nbt.block_transaction_index
       `;
 
       const dbTransactions = db.prepare(sql).all();
@@ -284,15 +284,15 @@ describe('StandaloneSqliteDatabase', () => {
         }
 
         const sql = `
-        SELECT ntt.*, tn.name, tv.value
-        FROM new_transaction_tags ntt
-        JOIN tag_names tn ON tn.hash = ntt.tag_name_hash
-        JOIN tag_values tv ON tv.hash = ntt.tag_value_hash
-        JOIN new_transactions nt ON nt.id = ntt.transaction_id
-        JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
-        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-        WHERE ntt.transaction_id = @transaction_id
-        ORDER BY nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
+          SELECT ntt.*, tn.name, tv.value
+          FROM new_transaction_tags ntt
+          JOIN tag_names tn ON tn.hash = ntt.tag_name_hash
+          JOIN tag_values tv ON tv.hash = ntt.tag_value_hash
+          JOIN new_transactions nt ON nt.id = ntt.transaction_id
+          JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
+          JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
+          WHERE ntt.transaction_id = @transaction_id
+          ORDER BY nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
         `;
 
         const dbTags = db
@@ -323,8 +323,8 @@ describe('StandaloneSqliteDatabase', () => {
       }
 
       const sql = `
-      SELECT * FROM missing_transactions
-      ORDER BY block_indep_hash, transaction_id
+        SELECT * FROM missing_transactions
+        ORDER BY block_indep_hash, transaction_id
       `;
 
       const dbMissingTxs = db.prepare(sql).all();
@@ -457,8 +457,8 @@ describe('StandaloneSqliteDatabase', () => {
       }
 
       const sql = `
-      SELECT * FROM stable_block_transactions
-      ORDER BY block_indep_hash, transaction_id
+        SELECT * FROM stable_block_transactions
+        ORDER BY block_indep_hash, transaction_id
       `;
 
       const dbStableBlockTransactions = db.prepare(sql).all();
@@ -562,7 +562,7 @@ describe('StandaloneSqliteDatabase', () => {
         await chainSource.getBlockAndTxsByHeight(height);
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDb.saveStableBlockRangeFn(height, height + 1);
+      chainDb.saveStableDataFn(height + 1);
 
       const stats = await chainDb.getDebugInfo();
       expect(stats.counts.stableBlocks).to.equal(1);
@@ -645,14 +645,14 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDb.saveStableBlockRangeFn(height, height + 1);
+      chainDb.saveStableDataFn(height + 1);
 
       const sql = `
-      SELECT sb.*, wo.public_modulus AS owner
-      FROM stable_transactions sb
-      JOIN wallets wo ON wo.address = sb.owner_address
-      WHERE sb.height = ${height}
-      ORDER BY sb.height, sb.block_transaction_index
+        SELECT sb.*, wo.public_modulus AS owner
+        FROM stable_transactions sb
+        JOIN wallets wo ON wo.address = sb.owner_address
+        WHERE sb.height = ${height}
+        ORDER BY sb.height, sb.block_transaction_index
       `;
 
       const dbTransactions = db.prepare(sql).all();
@@ -712,13 +712,13 @@ describe('StandaloneSqliteDatabase', () => {
         }
 
         const sql = `
-        SELECT stt.*, tn.name, tv.value
-        FROM stable_transaction_tags stt
-        JOIN tag_names tn ON tn.hash = stt.tag_name_hash
-        JOIN tag_values tv ON tv.hash = stt.tag_value_hash
-        JOIN stable_transactions st ON st.id = stt.transaction_id
-        WHERE stt.transaction_id = @transaction_id
-        ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
+          SELECT stt.*, tn.name, tv.value
+          FROM stable_transaction_tags stt
+          JOIN tag_names tn ON tn.hash = stt.tag_name_hash
+          JOIN tag_values tv ON tv.hash = stt.tag_value_hash
+          JOIN stable_transactions st ON st.id = stt.transaction_id
+          WHERE stt.transaction_id = @transaction_id
+          ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
         `;
 
         const dbTags = db
@@ -752,14 +752,14 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDb.saveStableBlockRangeFn(height, height + 1);
+      chainDb.saveStableDataFn(height + 1);
 
       const sql = `
-      SELECT sb.*, wo.public_modulus AS owner
-      FROM stable_transactions sb
-      JOIN wallets wo ON wo.address = sb.owner_address
-      WHERE sb.height = ${height}
-      ORDER BY sb.height, sb.block_transaction_index
+        SELECT sb.*, wo.public_modulus AS owner
+        FROM stable_transactions sb
+        JOIN wallets wo ON wo.address = sb.owner_address
+        WHERE sb.height = ${height}
+        ORDER BY sb.height, sb.block_transaction_index
       `;
 
       const dbTransactions = db.prepare(sql).all();
@@ -815,13 +815,13 @@ describe('StandaloneSqliteDatabase', () => {
         }
 
         const sql = `
-        SELECT stt.*, tn.name, tv.value
-        FROM stable_transaction_tags stt
-        JOIN tag_names tn ON tn.hash = stt.tag_name_hash
-        JOIN tag_values tv ON tv.hash = stt.tag_value_hash
-        JOIN stable_transactions st ON st.id = stt.transaction_id
-        WHERE stt.transaction_id = @transaction_id
-        ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
+          SELECT stt.*, tn.name, tv.value
+          FROM stable_transaction_tags stt
+          JOIN tag_names tn ON tn.hash = stt.tag_name_hash
+          JOIN tag_values tv ON tv.hash = stt.tag_value_hash
+          JOIN stable_transactions st ON st.id = stt.transaction_id
+          WHERE stt.transaction_id = @transaction_id
+          ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
         `;
 
         const dbTags = db

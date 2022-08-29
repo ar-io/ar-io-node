@@ -30,6 +30,8 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { BlockImporter } from './workers/block-importer.js';
+import { TransactionFetcher } from './workers/transaction-fetcher.js';
+import { TransactionImporter } from './workers/transaction-importer.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
@@ -60,6 +62,18 @@ const blockImporter = new BlockImporter({
   chainDb,
   eventEmitter,
   startHeight: startHeight,
+});
+new TransactionFetcher({
+  log,
+  chainSource: arweaveClient,
+  eventEmitter,
+  fetchEvents: ['block-tx-fetch-failed'],
+});
+new TransactionImporter({
+  log,
+  chainDb,
+  eventEmitter,
+  importEvents: ['tx-fetched'],
 });
 
 arweaveClient.refreshPeers();

@@ -143,6 +143,7 @@ export interface ChainDatabase {
   getMaxHeight(): Promise<number>;
   getNewBlockHashByHeight(height: number): Promise<string | undefined>;
   resetToHeight(height: number): Promise<void>;
+  saveTx(txs: PartialJsonTransaction): Promise<void>;
   saveBlockAndTxs(
     block: PartialJsonBlock,
     txs: PartialJsonTransaction[],
