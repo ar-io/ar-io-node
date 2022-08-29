@@ -10,11 +10,11 @@
 
 `yarn test`
 
-### Initialize/reset the Sqlite DB
+### Initialize the Sqlite DB
 
 Note: this erases the DB!
 
-`./reset-db.sh`
+`yarn db:migrate`
 
 ### Run the service
 
