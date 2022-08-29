@@ -239,3 +239,7 @@ export interface ChunkSource {
   getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk>;
   getChunkDataByAbsoluteOffset(offset: number): Promise<Readable>;
 }
+
+export interface TxDataSource {
+  getTxData(id: string): Promise<Readable>;
+}
