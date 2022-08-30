@@ -27,6 +27,7 @@ import * as winston from 'winston';
 
 import { FsBlockCache } from '../cache/fs-block-cache.js';
 import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
+import { fromB64Url } from '../lib/encoding.js';
 import {
   sanityCheckBlock,
   sanityCheckChunk,
@@ -40,6 +41,7 @@ import {
   PartialJsonBlockCache,
   PartialJsonTransaction,
   PartialJsonTransactionCache,
+  TxDataSource,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -50,7 +52,9 @@ type Peer = {
   lastSeen: number;
 };
 
-export class ArweaveCompositeClient implements ChainSource, ChunkSource {
+export class ArweaveCompositeClient
+  implements ChainSource, ChunkSource, TxDataSource
+{
   private arweave: Arweave;
   private log: winston.Logger;
   private txCache: PartialJsonTransactionCache;
@@ -472,7 +476,40 @@ export class ArweaveCompositeClient implements ChainSource, ChunkSource {
 
   async getChunkDataByAbsoluteOffset(offset: number): Promise<Readable> {
     const { chunk } = await this.getChunkByAbsoluteOffset(offset);
-    const data = Buffer.from(chunk, 'base64');
+    const data = fromB64Url(chunk);
     return Readable.from(data);
+  }
+
+  async getTxData(txId: string): Promise<Readable> {
+    try {
+      const [dataResponse, dataSizeResponse] = await Promise.all([
+        this.trustedNodeRequestQueue.push({
+          method: 'GET',
+          url: `/tx/${txId}/data`,
+        }),
+        this.trustedNodeRequestQueue.push({
+          method: 'GET',
+          url: `/tx/${txId}/data_size`,
+        }),
+      ]);
+
+      if (!dataResponse.data) {
+        throw Error('No transaction data');
+      }
+
+      const txData = fromB64Url(dataResponse.data);
+
+      if (txData.byteLength !== +dataSizeResponse.data) {
+        throw Error('Transaction data is incorrect size');
+      }
+
+      return Readable.from(txData);
+    } catch (error: any) {
+      this.log.error('Failed to get transaction data:', {
+        txId,
+        message: error.message,
+      });
+      throw error;
+    }
   }
 }
