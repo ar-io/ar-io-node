@@ -21,7 +21,7 @@ export class TxClient implements TxDataSource {
     requestTimeout: number;
     trustedNodeUrl: string;
   }) {
-    this.log = log;
+    this.log = log.child({ client: 'tx-client' });
     this.chunkSource = chunkSource;
     this.trustedNodeUrl = trustedNodeUrl;
     this.trustedNodeAxios = axios.create({
@@ -65,7 +65,7 @@ export class TxClient implements TxDataSource {
       }
 
       if (data.byteLength !== +size) {
-        throw Error('Transaction data is invalid size');
+        throw Error('Transaction data is incorrect size');
       }
       return Readable.from(data);
     } catch (error: any) {
