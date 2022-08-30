@@ -33,36 +33,47 @@ export class TxChunkClient implements TxDataSource {
   async getTxData(txId: string): Promise<Readable> {
     this.log.info('Fetching chunk data for tx', { txId });
 
-    const response = await this.trustedNodeAxios({
-      method: 'GET',
-      url: `/tx/${txId}/offset`,
-    });
+    try {
+      const response = await this.trustedNodeAxios({
+        method: 'GET',
+        url: `/tx/${txId}/offset`,
+      });
 
-    const { offset, size } = response.data;
-    const startOffset = +offset - +size + 1;
-    const data = Buffer.alloc(size);
-    let bytes = 0;
-    while (bytes < +size) {
-      const currentOffset = startOffset + bytes;
-      try {
-        const chunkData = await this.chunkSource.getChunkDataByAbsoluteOffset(
-          currentOffset,
-        );
+      const { offset, size } = response.data;
+      const startOffset = +offset - +size + 1;
+      const data = Buffer.alloc(size);
+      let bytes = 0;
+      while (bytes < +size) {
+        const currentOffset = startOffset + bytes;
+        try {
+          const chunkData = await this.chunkSource.getChunkDataByAbsoluteOffset(
+            currentOffset,
+          );
 
-        chunkData.on('data', (chunk) => {
-          data.set(chunk, bytes);
-          bytes += chunk.length;
-        });
-      } catch (error: any) {
-        this.log.error('Failed to retrieve chunk at offset', {
-          txId,
-          offset: currentOffset,
-          message: error.message,
-        });
-        throw error;
+          chunkData.on('data', (chunk) => {
+            data.set(chunk, bytes);
+            bytes += chunk.length;
+          });
+        } catch (error: any) {
+          this.log.error('Failed to retrieve chunk at offset', {
+            txId,
+            offset: currentOffset,
+            message: error.message,
+          });
+          throw error;
+        }
       }
-    }
 
-    return Readable.from(data);
+      if (data.byteLength !== +size) {
+        throw Error('Transaction data is invalid size');
+      }
+      return Readable.from(data);
+    } catch (error: any) {
+      this.log.error('Failed to retrieve transaction data', {
+        txId,
+        message: error.message,
+      });
+      throw error;
+    }
   }
 }
