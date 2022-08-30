@@ -2,9 +2,9 @@ import axios, { AxiosInstance } from 'axios';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import { ChunkSource, TxDataSource } from './types.js';
+import { ChunkSource, TxDataSource } from '../types.js';
 
-export class TxChunkClient implements TxDataSource {
+export class TxClient implements TxDataSource {
   private log: winston.Logger;
   private chunkSource: ChunkSource;
   private trustedNodeUrl: string;
@@ -45,23 +45,23 @@ export class TxChunkClient implements TxDataSource {
       let bytes = 0;
       while (bytes < +size) {
         const currentOffset = startOffset + bytes;
-        try {
-          const chunkData = await this.chunkSource.getChunkDataByAbsoluteOffset(
-            currentOffset,
-          );
+        const chunkData = await this.chunkSource.getChunkDataByAbsoluteOffset(
+          currentOffset,
+        );
 
-          chunkData.on('data', (chunk) => {
-            data.set(chunk, bytes);
-            bytes += chunk.length;
-          });
-        } catch (error: any) {
-          this.log.error('Failed to retrieve chunk at offset', {
+        chunkData.on('data', (chunk) => {
+          data.set(chunk, bytes);
+          bytes += chunk.length;
+        });
+
+        chunkData.on('error', (error) => {
+          this.log.error('Unable to read chunk data at offset', {
             txId,
             offset: currentOffset,
             message: error.message,
           });
           throw error;
-        }
+        });
       }
 
       if (data.byteLength !== +size) {
