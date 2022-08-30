@@ -482,18 +482,28 @@ export class ArweaveCompositeClient
 
   async getTxData(txId: string): Promise<Readable> {
     try {
-      const response = await this.trustedNodeRequestQueue.push({
-        method: 'GET',
-        url: `/tx/${txId}/data`,
-      });
+      const [dataResponse, dataSizeResponse] = await Promise.all([
+        this.trustedNodeRequestQueue.push({
+          method: 'GET',
+          url: `/tx/${txId}/data`,
+        }),
+        this.trustedNodeRequestQueue.push({
+          method: 'GET',
+          url: `/tx/${txId}/data_size`,
+        }),
+      ]);
 
-      if (!response.data) {
+      if (!dataResponse.data) {
         throw Error('No transaction data');
       }
 
-      const data = fromB64Url(response.data);
+      const txData = fromB64Url(dataResponse.data);
 
-      return Readable.from(data);
+      if (txData.byteLength !== +dataSizeResponse.data) {
+        throw Error('Transaction data is incorrect size');
+      }
+
+      return Readable.from(txData);
     } catch (error: any) {
       this.log.error('Failed to get transaction data:', {
         txId,
