@@ -83,7 +83,7 @@ export class ArweaveClientStub implements ChainSource, ChunkSource {
         fs.readFileSync(`test/mock_files/txs/offsets/${txId}.json`, 'utf8'),
       );
     } else {
-      throw new Error(`Offsets for ${txId} not found`);
+      throw new Error(`Offset for ${txId} not found`);
     }
   }
 
@@ -121,13 +121,13 @@ export class ArweaveClientStub implements ChainSource, ChunkSource {
         fs.readFileSync(`test/mock_files/chunks/${offset}.json`, 'utf8'),
       );
     } else {
-      throw new Error(`Offsets for ${offset} not found`);
+      throw new Error(`Chunk at offset ${offset} not found`);
     }
   }
 
   async getChunkDataByAbsoluteOffset(offset: number): Promise<any> {
-    const { chunk } = await this.getChunkByAbsoluteOffset(offset);
-    const data = Buffer.from(chunk, 'base64');
+    const chunkResponse = await this.getChunkByAbsoluteOffset(offset);
+    const data = Buffer.from(chunkResponse.chunk, 'base64');
     return Readable.from(data);
   }
 }

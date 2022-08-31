@@ -40,7 +40,6 @@ export class TxClient implements TxDataSource {
             if (!chunkPromise) {
               return;
             }
-
             const chunkData = await chunkPromise;
             chunkData.on('data', (chunk) => {
               this.push(chunk);
