@@ -26,41 +26,23 @@ describe('TxClient', () => {
         await expect(txClient.getTxData('bad-tx-id')).to.be.rejected;
       });
     });
-    // describe('a single chunk transaction', () => {
-    //   const SMALL_TX_ID = '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw';
-    //   it('should fetch tx data by chunks', async () => {
-    //     const { data, size } = await txClient.getTxData(SMALL_TX_ID);
-    //     expect(size).not.to.be.undefined;
-    //     expect(data.readable).to.be.true;
-    //   });
-    //   it('fetched chunks should be correct size', async () => {
-    //     const { data, size } = await txClient.getTxData(SMALL_TX_ID);
-    //     expect(size).not.to.be.undefined;
-    //     data.on('error', () => {
-    //       console.log('welp, here is the errorr');
-    //     });
-    //     data.on('end', () => {
-    //       console.log('done!');
-    //     });
-    //     data.pipe(log);
-    //   });
-    // });
-    describe('a multi chunk transaction', () => {
-      const MULTI_CHUNK_TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
-      it('should fetch tx data by chunks', async function (done) {
-        const { data, size } = await txClient.getTxData(MULTI_CHUNK_TX_ID);
-        let bytes = 0;
-        data.on('error', (err: any) => {
-          done(err);
+    describe('a single chunk transaction', () => {
+      const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
+      it('should fetch tx data by chunks', (done) => {
+        txClient.getTxData(TX_ID).then((res) => {
+          const { data, size } = res;
+          let bytes = 0;
+          data.on('error', (err: any) => {
+            done(err);
+          });
+          data.on('data', (c) => {
+            bytes += c.length;
+          });
+          data.on('end', () => {
+            expect(bytes).to.equal(size);
+            done();
+          });
         });
-        data.on('data', (c) => {
-          bytes += c.length;
-        });
-        data.on('end', () => {
-          expect(bytes).to.equal(size);
-          done();
-        });
-        data.pipe(log);
       });
     });
   });

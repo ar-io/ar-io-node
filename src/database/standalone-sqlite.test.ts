@@ -30,8 +30,7 @@ import {
   toSqliteParams,
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
-import { ArweaveChainSourceStub } from '../../test/stubs.js';
-import { PartialJsonTransaction } from '../types.js';
+import { ArweaveClientStub } from '../../test/stubs.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -114,7 +113,7 @@ describe('SQLite GraphQL cursor functions', () => {
 
 describe('StandaloneSqliteDatabase', () => {
   let db: Sqlite.Database;
-  let chainSource: ArweaveChainSourceStub;
+  let chainSource: ArweaveClientStub;
   let chainDb: StandaloneSqliteDatabase;
 
   beforeEach(async () => {
@@ -122,7 +121,7 @@ describe('StandaloneSqliteDatabase', () => {
     const schema = fs.readFileSync('test/schema.sql', 'utf8');
     db.exec(schema);
     chainDb = new StandaloneSqliteDatabase(db);
-    chainSource = new ArweaveChainSourceStub();
+    chainSource = new ArweaveClientStub();
   });
 
   describe('saveBlockAndTxs', () => {

@@ -45,7 +45,7 @@ export class TxClient implements TxDataSource {
             const chunk = chunkData.read();
             this.push(chunk);
             bytes += chunk.length;
-            console.log(bytes, size);
+            // check if we're done
             if (bytes < size) {
               chunkPromise = getChunkDataByAbsoluteOffset(startOffset + bytes);
             } else {
