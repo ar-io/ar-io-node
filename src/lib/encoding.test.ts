@@ -35,7 +35,7 @@ import {
   toMsgpack,
   utf8ToB64Url,
 } from '../../src/lib/encoding.js';
-import { ArweaveChainSourceStub } from '../../test/stubs.js';
+import { ArweaveClientStub } from '../../test/stubs.js';
 
 const TEST_STRING = 'http://test.com';
 const TEST_BASE_64_URL_ENCODED_STRING = 'aHR0cDovL3Rlc3QuY29t';
@@ -131,7 +131,7 @@ describe('Block message pack encoding and decoding functions', () => {
   describe('jsonBlockToMsgpackBlock and msgpackBlockToJsonBlock', () => {
     it('should round trip to and from a MsgpackBlock', async () => {
       [1, 982575].forEach(async (height) => {
-        const chainSource = new ArweaveChainSourceStub();
+        const chainSource = new ArweaveClientStub();
         const block = await chainSource.getBlockByHeight(height);
 
         // Remove extranious header fields
@@ -157,7 +157,7 @@ describe('Block message pack encoding and decoding functions', () => {
   describe('jsonBlockToMsgpack and msgpackToJsonBlock', () => {
     it('should round trip to and from MessagePack binary data', async () => {
       [1, 982575].forEach(async (height) => {
-        const chainSource = new ArweaveChainSourceStub();
+        const chainSource = new ArweaveClientStub();
         const block = await chainSource.getBlockByHeight(height);
 
         // Remove extranious header fields
@@ -188,7 +188,7 @@ describe('Transaction message pack encoding and decoding functions', () => {
         'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
         '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
       ].forEach(async (txId) => {
-        const chainSource = new ArweaveChainSourceStub();
+        const chainSource = new ArweaveClientStub();
         const tx = await chainSource.getTx(txId);
 
         // Remove extranious header fields
@@ -209,7 +209,7 @@ describe('Transaction message pack encoding and decoding functions', () => {
         'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
         '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
       ].forEach(async (txId) => {
-        const chainSource = new ArweaveChainSourceStub();
+        const chainSource = new ArweaveClientStub();
         const tx = await chainSource.getTx(txId);
 
         // Remove extranious header fields

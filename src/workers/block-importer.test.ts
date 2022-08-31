@@ -28,7 +28,7 @@ import { default as wait } from 'wait';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
-import { ArweaveChainSourceStub } from '../../test/stubs.js';
+import { ArweaveClientStub } from '../../test/stubs.js';
 
 chai.use(chaiAsPromised);
 chai.use(sinonChai);
@@ -37,7 +37,7 @@ describe('BlockImporter', () => {
   let metricsRegistry: promClient.Registry;
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
-  let chainSource: ArweaveChainSourceStub;
+  let chainSource: ArweaveClientStub;
   let db: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
   let sandbox: sinon.SinonSandbox;
@@ -68,7 +68,7 @@ describe('BlockImporter', () => {
     metricsRegistry.clear();
     promClient.collectDefaultMetrics({ register: metricsRegistry });
     eventEmitter = new EventEmitter();
-    chainSource = new ArweaveChainSourceStub();
+    chainSource = new ArweaveClientStub();
     db = new Sqlite(':memory:');
     const schema = fs.readFileSync('test/schema.sql', 'utf8');
     db.exec(schema);

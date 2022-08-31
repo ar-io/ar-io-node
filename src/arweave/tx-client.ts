@@ -28,8 +28,8 @@ export class TxClient implements TxDataSource {
       const offset = +offsetResponse.offset;
       const startOffset = offset - size + 1;
       // we lose scope in the readable, so set to internal function
-      const getChunkDataByAbsoluteOffset =
-        this.client.getChunkDataByAbsoluteOffset;
+      const getChunkDataByAbsoluteOffset = (offset: number) =>
+        this.client.getChunkDataByAbsoluteOffset(offset);
       let chunkPromise: Promise<Readable> | undefined =
         getChunkDataByAbsoluteOffset(startOffset);
       let bytes = 0;
@@ -52,7 +52,7 @@ export class TxClient implements TxDataSource {
             } else {
               chunkPromise = undefined;
             }
-          } catch (error) {
+          } catch (error: any) {
             this.destroy();
           }
         },

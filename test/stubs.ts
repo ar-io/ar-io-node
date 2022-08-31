@@ -16,10 +16,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import fs from 'fs';
-import stream from 'stream';
+import stream, { Readable } from 'stream';
 
 import {
   ChainSource,
+  ChunkSource,
+  JsonChunk,
+  JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonTransaction,
 } from '../src/types.js';
@@ -29,7 +32,7 @@ export const stubAns104Bundle = async (): Promise<stream.Readable> => {
   return await fs.createReadStream(`./test/mock_files/ans104_bundle`);
 };
 
-export class ArweaveChainSourceStub implements ChainSource {
+export class ArweaveClientStub implements ChainSource, ChunkSource {
   private height = 10000000;
   private missingTxIds: string[] = [];
   private tempBlockIdOverrides: { [key: string]: string } = {};
@@ -74,6 +77,16 @@ export class ArweaveChainSourceStub implements ChainSource {
     }
   }
 
+  async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
+    if (fs.existsSync(`test/mock_files/txs/offsets/${txId}.json`)) {
+      return JSON.parse(
+        fs.readFileSync(`test/mock_files/txs/offsets/${txId}.json`, 'utf8'),
+      );
+    } else {
+      throw new Error(`Offsets for ${txId} not found`);
+    }
+  }
+
   async getBlockAndTxsByHeight(height: number) {
     const block = await this.getBlockByHeight(height);
     const txs = [];
@@ -100,5 +113,21 @@ export class ArweaveChainSourceStub implements ChainSource {
 
   setHeight(height: number) {
     this.height = height;
+  }
+
+  async getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk> {
+    if (fs.existsSync(`test/mock_files/chunks/${offset}.json`)) {
+      return JSON.parse(
+        fs.readFileSync(`test/mock_files/chunks/${offset}.json`, 'utf8'),
+      );
+    } else {
+      throw new Error(`Offsets for ${offset} not found`);
+    }
+  }
+
+  async getChunkDataByAbsoluteOffset(offset: number): Promise<any> {
+    const { chunk } = await this.getChunkByAbsoluteOffset(offset);
+    const data = Buffer.from(chunk, 'base64');
+    return Readable.from(data);
   }
 }
