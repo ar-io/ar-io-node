@@ -413,7 +413,7 @@ export class ArweaveCompositeClient
 
   async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
     try {
-      const response = await this.trustedNodeAxios({
+      const response = await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/offset`,
       });

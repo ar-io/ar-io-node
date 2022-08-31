@@ -1,73 +1,67 @@
-import axios, { AxiosInstance } from 'axios';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import { ChunkSource, TxDataSource } from '../types.js';
+import { ChainSource, ChunkSource, TxDataSource } from '../types.js';
 
 export class TxClient implements TxDataSource {
   private log: winston.Logger;
   private chunkSource: ChunkSource;
-  private trustedNodeUrl: string;
-  private trustedNodeAxios: AxiosInstance;
+  private chainSource: ChainSource;
 
   constructor({
     log,
+    chainSource,
     chunkSource,
-    requestTimeout = 500,
-    trustedNodeUrl,
   }: {
     log: winston.Logger;
+    chainSource: ChainSource;
     chunkSource: ChunkSource;
-    requestTimeout: number;
-    trustedNodeUrl: string;
   }) {
     this.log = log.child({ client: 'tx-client' });
+    this.chainSource = chainSource;
     this.chunkSource = chunkSource;
-    this.trustedNodeUrl = trustedNodeUrl;
-    this.trustedNodeAxios = axios.create({
-      baseURL: this.trustedNodeUrl,
-      timeout: requestTimeout,
-    });
   }
 
-  async getTxData(txId: string): Promise<Readable> {
+  async getTxData(txId: string): Promise<{ data: Readable; size: number }> {
     this.log.info('Fetching chunk data for tx', { txId });
 
     try {
-      const response = await this.trustedNodeAxios({
-        method: 'GET',
-        url: `/tx/${txId}/offset`,
-      });
-
-      const { offset, size } = response.data;
+      const { offset, size } = await this.chainSource.getTxOffset(txId);
       const startOffset = +offset - +size + 1;
-      const data = Buffer.alloc(size);
+      let chunkPromise =
+        this.chunkSource.getChunkDataByAbsoluteOffset(startOffset);
       let bytes = 0;
-      while (bytes < +size) {
-        const currentOffset = startOffset + bytes;
-        const chunkData = await this.chunkSource.getChunkDataByAbsoluteOffset(
-          currentOffset,
-        );
+      const data = new Readable({
+        autoDestroy: true,
+        read: async function () {
+          try {
+            if (!chunkPromise) {
+              return;
+            }
 
-        chunkData.on('data', (chunk) => {
-          data.set(chunk, bytes);
-          bytes += chunk.length;
-        });
+            const chunkData = await chunkPromise;
+            // TODO: is this the best way to read the process returned stream
+            const chunk = chunkData.read();
+            bytes += chunk.length;
 
-        chunkData.on('error', (error) => {
-          this.log.error('Unable to read chunk data at offset', {
-            txId,
-            offset: currentOffset,
-            message: error.message,
-          });
-          throw error;
-        });
-      }
+            // we're not done gatehering all chunks yet
+            if (bytes < size) {
+              // TODO: fix scoping issue
+              chunkPromise = this.chunkSource
+                .getChunkDataByAbsoluteOffset(startOffset + bytes)
+                .catch(() => ({}));
+            }
 
-      if (data.byteLength !== +size) {
-        throw Error('Transaction data is incorrect size');
-      }
-      return Readable.from(data);
+            this.push(chunk);
+          } catch (error) {
+            this.destroy();
+          }
+        },
+      });
+      return {
+        data,
+        size,
+      };
     } catch (error: any) {
       this.log.error('Failed to retrieve transaction data', {
         txId,
