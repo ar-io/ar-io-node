@@ -23,13 +23,15 @@ export class TxClient implements TxDataSource {
     this.log.info('Fetching chunk data for tx', { txId });
 
     try {
-      const { offset, size } = await this.client.getTxOffset(txId);
-      const startOffset = +offset - +size + 1;
+      const offsetResponse = await this.client.getTxOffset(txId);
+      const size = +offsetResponse.size;
+      const offset = +offsetResponse.offset;
+      const startOffset = offset - size + 1;
       // we lose scope in the readable, so set to internal function
       const getChunkDataByAbsoluteOffset =
         this.client.getChunkDataByAbsoluteOffset;
       let chunkPromise: Promise<Readable> | undefined =
-        this.client.getChunkDataByAbsoluteOffset(startOffset);
+        getChunkDataByAbsoluteOffset(startOffset);
       let bytes = 0;
       const data = new Readable({
         autoDestroy: true,
@@ -45,12 +47,8 @@ export class TxClient implements TxDataSource {
               bytes += chunk.length;
             });
 
-            // we're not done gatehering all chunks yet
             if (bytes < size) {
-              // TODO: fix scoping issue
-              chunkPromise = getChunkDataByAbsoluteOffset(
-                startOffset + bytes,
-              ).catch();
+              chunkPromise = getChunkDataByAbsoluteOffset(startOffset + bytes);
             } else {
               chunkPromise = undefined;
             }
