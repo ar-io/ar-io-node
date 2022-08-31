@@ -1,8 +1,7 @@
 import chai, { expect } from 'chai';
-import { assert } from 'console';
+import fs from 'fs';
 import { stdout } from 'process';
 import sinonChai from 'sinon-chai';
-import { PassThrough, finished, pipeline } from 'stream';
 import * as winston from 'winston';
 
 import { ArweaveClientStub } from '../../test/stubs.js';
@@ -27,20 +26,41 @@ describe('TxClient', () => {
         await expect(txClient.getTxData('bad-tx-id')).to.be.rejected;
       });
     });
-    describe('a single chunk transaction', () => {
-      const SMALL_TX_ID = '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw';
-      it('should fetch tx data by chunks', async () => {
-        const { data, size } = await txClient.getTxData(SMALL_TX_ID);
-        expect(size).not.to.be.undefined;
-        expect(data.pipe(log)).not.to.throw;
-      });
-    });
+    // describe('a single chunk transaction', () => {
+    //   const SMALL_TX_ID = '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw';
+    //   it('should fetch tx data by chunks', async () => {
+    //     const { data, size } = await txClient.getTxData(SMALL_TX_ID);
+    //     expect(size).not.to.be.undefined;
+    //     expect(data.readable).to.be.true;
+    //   });
+    //   it('fetched chunks should be correct size', async () => {
+    //     const { data, size } = await txClient.getTxData(SMALL_TX_ID);
+    //     expect(size).not.to.be.undefined;
+    //     data.on('error', () => {
+    //       console.log('welp, here is the errorr');
+    //     });
+    //     data.on('end', () => {
+    //       console.log('done!');
+    //     });
+    //     data.pipe(log);
+    //   });
+    // });
     describe('a multi chunk transaction', () => {
-      const MULTI_CHUNK_TX_ID = '--1KPv3FTumifIQ2vbGHqqsWh2sKr_H-u8ticjVK08A';
-      it('should fetch tx data by chunks', async () => {
+      const MULTI_CHUNK_TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
+      it('should fetch tx data by chunks', async function (done) {
         const { data, size } = await txClient.getTxData(MULTI_CHUNK_TX_ID);
-        expect(size).not.to.be.undefined;
-        expect(data.pipe(log)).not.to.throw;
+        let bytes = 0;
+        data.on('error', (err: any) => {
+          done(err);
+        });
+        data.on('data', (c) => {
+          bytes += c.length;
+        });
+        data.on('end', () => {
+          expect(bytes).to.equal(size);
+          done();
+        });
+        data.pipe(log);
       });
     });
   });
