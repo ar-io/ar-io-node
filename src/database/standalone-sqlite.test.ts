@@ -31,6 +31,7 @@ import {
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
+import { PartialJsonTransaction } from '../types.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -841,6 +842,66 @@ describe('StandaloneSqliteDatabase', () => {
           expect(toB64Url(dbTags[j].value)).to.equal(tag.value);
         });
       });
+    });
+  });
+
+  describe('saveTx', () => {
+    const txId = 'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA';
+
+    beforeEach(async () => {
+      const tx = JSON.parse(
+        fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
+      );
+
+      await chainDb.saveTx(tx);
+    });
+
+    it('should insert into new_transactions', async () => {
+      const sql = `
+        SELECT COUNT(*) AS cnt
+        FROM new_transactions
+        WHERE id = @transaction_id
+      `;
+
+      expect(
+        db.prepare(sql).get({ transaction_id: fromB64Url(txId) }).cnt,
+      ).to.be.equal(1);
+    });
+
+    it('should insert into tag_names', async () => {
+      const sql = `
+        SELECT COUNT(*) AS cnt
+        FROM tag_names
+      `;
+
+      expect(db.prepare(sql).get().cnt).to.be.equal(12);
+    });
+
+    it('should insert into tag_values', async () => {
+      const sql = `
+        SELECT COUNT(*) AS cnt
+        FROM tag_values
+      `;
+
+      expect(db.prepare(sql).get().cnt).to.be.equal(12);
+    });
+
+    it('should insert into new_transaction_tags', async () => {
+      const sql = `
+        SELECT COUNT(*) AS cnt
+        FROM new_transaction_tags
+      `;
+
+      expect(db.prepare(sql).get().cnt).to.be.equal(12);
+    });
+
+    it('should insert into wallets', async () => {
+      const sql = `
+        SELECT COUNT(*) AS cnt
+        FROM wallets
+      `;
+
+      expect(db.prepare(sql).get().cnt).to.be.equal(1);
     });
   });
 });
