@@ -13,7 +13,6 @@ export class TxClient implements TxDataSource {
     client,
   }: {
     log: winston.Logger;
-    // TODO: these could be one client that implements both (e.g. composite)
     client: ChainSource & ChunkSource;
   }) {
     this.log = log.child({ client: 'tx-client' });
@@ -26,7 +25,11 @@ export class TxClient implements TxDataSource {
     try {
       const { offset, size } = await this.client.getTxOffset(txId);
       const startOffset = +offset - +size + 1;
-      let chunkPromise = this.client.getChunkDataByAbsoluteOffset(startOffset);
+      // we lose scope in the readable, so set to internal function
+      const getChunkDataByAbsoluteOffset =
+        this.client.getChunkDataByAbsoluteOffset;
+      let chunkPromise: Promise<Readable> | undefined =
+        this.client.getChunkDataByAbsoluteOffset(startOffset);
       let bytes = 0;
       const data = new Readable({
         autoDestroy: true,
@@ -45,9 +48,11 @@ export class TxClient implements TxDataSource {
             // we're not done gatehering all chunks yet
             if (bytes < size) {
               // TODO: fix scoping issue
-              chunkPromise = this.client
-                .getChunkDataByAbsoluteOffset(startOffset + bytes)
-                .catch(() => ({}));
+              chunkPromise = getChunkDataByAbsoluteOffset(
+                startOffset + bytes,
+              ).catch();
+            } else {
+              chunkPromise = undefined;
             }
           } catch (error) {
             this.destroy();
