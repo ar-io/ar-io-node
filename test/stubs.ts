@@ -32,7 +32,7 @@ export const stubAns104Bundle = async (): Promise<stream.Readable> => {
   return await fs.createReadStream(`./test/mock_files/ans104_bundle`);
 };
 
-export class ArweaveClientStub implements ChainSource, ChunkSource {
+export class ArweaveChainSourceStub implements ChainSource {
   private height = 10000000;
   private missingTxIds: string[] = [];
   private tempBlockIdOverrides: { [key: string]: string } = {};
@@ -114,7 +114,9 @@ export class ArweaveClientStub implements ChainSource, ChunkSource {
   setHeight(height: number) {
     this.height = height;
   }
+}
 
+export class ArweaveChunkSourceStub implements ChunkSource {
   async getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk> {
     if (fs.existsSync(`test/mock_files/chunks/${offset}.json`)) {
       return JSON.parse(

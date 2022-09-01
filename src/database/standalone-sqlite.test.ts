@@ -30,7 +30,7 @@ import {
   toSqliteParams,
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
-import { ArweaveClientStub } from '../../test/stubs.js';
+import { ArweaveChainSourceStub } from '../../test/stubs.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -113,7 +113,7 @@ describe('SQLite GraphQL cursor functions', () => {
 
 describe('StandaloneSqliteDatabase', () => {
   let db: Sqlite.Database;
-  let chainSource: ArweaveClientStub;
+  let chainSource: ArweaveChainSourceStub;
   let chainDb: StandaloneSqliteDatabase;
 
   beforeEach(async () => {
@@ -121,7 +121,7 @@ describe('StandaloneSqliteDatabase', () => {
     const schema = fs.readFileSync('test/schema.sql', 'utf8');
     db.exec(schema);
     chainDb = new StandaloneSqliteDatabase(db);
-    chainSource = new ArweaveClientStub();
+    chainSource = new ArweaveChainSourceStub();
   });
 
   describe('saveBlockAndTxs', () => {
@@ -632,7 +632,6 @@ describe('StandaloneSqliteDatabase', () => {
         (block.scheduled_usd_to_ar_rate ?? [])[1],
       );
     });
-
     it('should copy all the transaction fields to the stable_transactions table', async () => {
       const height = 982575;
 
