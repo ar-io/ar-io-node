@@ -30,12 +30,12 @@ jobs:
         if: success()
         env:
           SLACK_TITLE: AR.IO tests succeeded!
-          SLACK_WEBHOOK: ${{ secrets.SLACK_BUILDS_WEBHOOK }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: rtCamp/action-slack-notify@v2
       - name: Send Slack failure notification
         if: failure()
         env:
           SLACK_TITLE: AR.IO tests succeeded!
           SLACK_COLOR: danger
-          SLACK_WEBHOOK: ${{ secrets.SLACK_BUILD_FAILURES_WEBHOOK }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: rtCamp/action-slack-notify@v2
