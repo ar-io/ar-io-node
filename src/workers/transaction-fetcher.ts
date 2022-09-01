@@ -24,7 +24,7 @@ import * as winston from 'winston';
 import { ChainSource, PartialJsonTransaction } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
-const DEFAULT_MAX_ATTEMPTS = 10;
+const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_RETRY_WAIT_MS = 5000;
 
 export class TransactionFetcher {
@@ -73,7 +73,7 @@ export class TransactionFetcher {
   }
 
   async queueTxId(txId: string): Promise<void> {
-    this.log.info(`Queuing TX ${txId} for fetch`, { txId });
+    this.log.info(`Queuing TX to fetch`, { txId });
     this.txFetchQueue.push(txId);
   }
 
@@ -82,11 +82,11 @@ export class TransactionFetcher {
     let tx: PartialJsonTransaction | undefined;
     while (attempts < this.maxAttempts && !tx) {
       try {
-        this.log.info(`Fetching TX ${txId}`, { txId });
+        this.log.info(`Fetching TX`, { txId });
         tx = await this.chainSource.getTx(txId);
         this.eventEmitter.emit('tx-fetched', tx);
       } catch (error) {
-        this.log.warn(`Failed to fetch TX ${txId}`, { txId, error });
+        this.log.warn(`Failed to fetch TX`, { txId, error });
         await wait(this.retryWaitMs);
         attempts++;
       }

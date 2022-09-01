@@ -207,6 +207,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   // Public accessors
   private getMaxHeightStmt: Sqlite.Statement;
   private getNewBlockHashByHeightStmt: Sqlite.Statement;
+  private getMissingTxIdsStmt: Sqlite.Statement;
 
   // Height reset
   private resetToHeightStmt: Sqlite.Statement;
@@ -491,6 +492,12 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       WHERE height = @height
     `);
 
+    this.getMissingTxIdsStmt = this.db.prepare(`
+      SELECT transaction_id
+      FROM missing_transactions
+      LIMIT @limit
+    `);
+
     // Height reset
     this.resetToHeightStmt = this.db.prepare(`
       DELETE FROM new_block_heights
@@ -715,6 +722,14 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       height,
     })?.block_indep_hash;
     return hash ? hash.toString('base64url') : undefined;
+  }
+
+  async getMissingTxIds(limit = 20): Promise<string[]> {
+    const missingTxIds = this.getMissingTxIdsStmt.all({
+      limit,
+    });
+
+    return missingTxIds.map((row): string => toB64Url(row.transaction_id));
   }
 
   async resetToHeight(height: number): Promise<void> {

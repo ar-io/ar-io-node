@@ -16,62 +16,46 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import * as EventEmitter from 'events';
-import { default as fastq } from 'fastq';
-import type { queueAsPromised } from 'fastq';
 import * as winston from 'winston';
 
-import { ChainDatabase, PartialJsonTransaction } from '../types.js';
+import { ChainDatabase } from '../types.js';
 
-const DEFAULT_WORKER_COUNT = 1;
+const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 
-export class TransactionImporter {
+export class TransactionRetrier {
   // Dependencies
   private log: winston.Logger;
   private chainDb: ChainDatabase;
   private eventEmitter: EventEmitter;
 
-  // TX fetch queue
-  private txImportQueue: queueAsPromised<PartialJsonTransaction, void>;
-
   constructor({
     log,
     chainDb,
     eventEmitter,
-    importEvents,
-    workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
     chainDb: ChainDatabase;
     eventEmitter: EventEmitter;
-    importEvents: string[];
-    workerCount?: number;
   }) {
-    this.log = log.child({ worker: 'transaction-importer' });
+    this.log = log.child({ worker: 'transaction-retrier' });
     this.eventEmitter = eventEmitter;
     this.chainDb = chainDb;
-
-    for (const event of importEvents) {
-      this.eventEmitter.addListener(event, this.queueTx.bind(this));
-    }
-
-    // Initialize TX import queue
-    this.txImportQueue = fastq.promise(this.importTx.bind(this), workerCount);
   }
 
-  async importTx(tx: PartialJsonTransaction): Promise<void> {
-    const txId = tx.id;
+  async start(): Promise<void> {
+    setInterval(this.retryMissingTransactions.bind(this), DEFAULT_INTERVAL_MS);
+  }
+
+  async retryMissingTransactions() {
     try {
-      this.log.info(`Importing TX`, { txId });
-      await this.chainDb.saveTx(tx);
-      this.eventEmitter.emit('tx-imported', tx);
+      const missingTxIds = await this.chainDb.getMissingTxIds();
+      for (const txId of missingTxIds) {
+        this.log.info(`Retrying missing transaction`, { txId });
+        // FIXME temporary hack to wire this to the transaction fetcher
+        this.eventEmitter.emit('block-tx-fetch-failed', txId);
+      }
     } catch (error) {
-      this.log.error(`Failed to import`, { txId, error });
+      this.log.error(`Error retrying missing transactions: ${error}`);
     }
-  }
-
-  async queueTx(tx: PartialJsonTransaction): Promise<void> {
-    const txId = tx.id;
-    this.log.info(`Queuing TX to import`, { txId });
-    this.txImportQueue.push(tx);
   }
 }
