@@ -4,7 +4,7 @@ version: '3.0'
 services:
   envoy:
     build:
-        context: envoy/
+      context: envoy/
     ports:
       - '1984:1984'
       - '9901:9901'

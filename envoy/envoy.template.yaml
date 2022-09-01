@@ -1,63 +1,63 @@
 ---
 admin:
   address:
-    socket_address: {address: 0.0.0.0, port_value: 9901}
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
 static_resources:
   listeners:
     - name: arweave_listener
       address:
-        socket_address: {address: 0.0.0.0, port_value: 1984}
+        socket_address: { address: 0.0.0.0, port_value: 1984 }
       filter_chains:
         - filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:
-                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: ingress_http
                 codec_type: AUTO
                 route_config:
                   name: local_route
                   virtual_hosts:
                     - name: local_service
-                      domains: ["*"]
+                      domains: ['*']
                       routes:
-                        - match: {prefix: "/gateway_metrics"}
+                        - match: { prefix: '/gateway_metrics' }
                           route:
                             cluster: ario_gateways
                             retry_policy:
-                              retry_on: "5xx,reset,retriable-status-codes"
+                              retry_on: '5xx,reset,retriable-status-codes'
                               retriable_status_codes: 404
                               num_retries: 5
-                        - match: {prefix: "/healthcheck"}
+                        - match: { prefix: '/healthcheck' }
                           route:
                             cluster: ario_gateways
                             retry_policy:
-                              retry_on: "5xx,reset,retriable-status-codes"
+                              retry_on: '5xx,reset,retriable-status-codes'
                               retriable_status_codes: 404
                               num_retries: 5
-                        - match: {prefix: "/graphql"}
+                        - match: { prefix: '/graphql' }
                           route:
                             cluster: ario_gateways
                             retry_policy:
-                              retry_on: "5xx,reset,retriable-status-codes"
+                              retry_on: '5xx,reset,retriable-status-codes'
                               retriable_status_codes: 404
                               num_retries: 5
-                        - match: {prefix: "/api-docs"}
+                        - match: { prefix: '/api-docs' }
                           route:
                             cluster: ario_gateways
                             retry_policy:
-                              retry_on: "5xx,reset"
+                              retry_on: '5xx,reset'
                               num_retries: 5
-                        - match: {prefix: "/openapi.json"}
+                        - match: { prefix: '/openapi.json' }
                           route:
                             cluster: ario_gateways
                             retry_policy:
-                              retry_on: "5xx,reset"
+                              retry_on: '5xx,reset'
                               num_retries: 5
-                        - match: {prefix: "/"}
+                        - match: { prefix: '/' }
                           route:
                             cluster: legacy_gateways
                             retry_policy:
-                              retry_on: "5xx,reset,retriable-status-codes"
+                              retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
                             auto_host_rewrite: true
                             internal_redirect_policy:
@@ -67,7 +67,7 @@ static_resources:
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
-                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                      '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   clusters:
     - name: ario_gateways
       connect_timeout: 1s
@@ -98,7 +98,7 @@ static_resources:
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:
-          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
           sni: arweave.net
           common_tls_context:
             validation_context:

@@ -4,24 +4,24 @@ info:
   title: AR.IO Gateway
   version: 0.0.1
   x-logo:
-    url: "https://ar.io/wp-content/uploads/2022/02/ar-io-FINAL-LOGO-SHADOW.png"
+    url: 'https://ar.io/wp-content/uploads/2022/02/ar-io-FINAL-LOGO-SHADOW.png'
   description: |
     AR.IO Gateways are the interface between users and the Permaweb. Each Gateway acts like a “Permaweb Service
     Provider” and supports multiple, value-added, low-trust services for users and applications.
-    
+
     The AR.IO HTTP API is served by all AR.IO Gateways, and is used by all Arweave clients looking to read, write and query data.  It supports the following capabilities
     - seeding layer one transactions to the greater Arweave network
     - caching and serving chain and transaction data
     - resolving friendly names to transaction data with the Arweave Name System
     - indexing and querying layer one and two transactions
     - proxy for Arweave nodes serving the Arweave HTTP API
-    
+
     # Errors
-    
+
     The API uses standard HTTP status codes to indicate the success or failure of the API call.
-    
+
     # Authentication
-    
+
     All inbound transactions to the Arweave network must contain a valid signature from an Arweave wallet with appropriate amount of AR tokens.  At this time, clients are not required to sign their requests for outbound data from the Arweave network.
 tags:
   - name: Network
@@ -31,7 +31,7 @@ tags:
     description: |
       Get the price (in winston) for an amount of bytes
   - name: Wallets
-    description: | 
+    description: |
       Get Arweave wallet balance and last transaction information
   - name: Blocks
     description: |
@@ -339,7 +339,7 @@ components:
       pattern: '^[0-9]{16}$'
 paths:
   # Network and Node Status
-  "/":
+  '/':
     get:
       tags: [Network]
       responses:
@@ -350,7 +350,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/NetworkInfo'
-  "/info":
+  '/info':
     get:
       tags: [Network]
       responses:
@@ -361,7 +361,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/NetworkInfo'
-  "/peers":
+  '/peers':
     get:
       tags: [Network]
       responses:
@@ -372,7 +372,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/PeerList'
-  "/height":
+  '/height':
     get:
       tags: [Network]
       responses:
@@ -392,7 +392,7 @@ paths:
   # "/sync_buckets"
 
   # Pricing
-  "/price/{size}":
+  '/price/{size}':
     get:
       tags: [Pricing]
       parameters:
@@ -411,7 +411,7 @@ paths:
             text/html:
               schema:
                 type: integer
-  "/price/{size}/target":
+  '/price/{size}/target':
     get:
       tags: [Pricing]
       parameters:
@@ -431,7 +431,7 @@ paths:
                 type: integer
 
   # Wallets
-  "/wallet/{address}/balance":
+  '/wallet/{address}/balance':
     get:
       tags: [Wallets]
       parameters:
@@ -450,7 +450,7 @@ paths:
             text/html:
               schema:
                 type: integer
-  "/wallet/{address}/last_tx":
+  '/wallet/{address}/last_tx':
     get:
       tags: [Wallets]
       parameters:
@@ -472,7 +472,7 @@ paths:
                 pattern: '^$|^[0-9a-zA-Z_-]{43}$'
 
   # Blocks
-  "/current_block":
+  '/current_block':
     get:
       tags: [Blocks]
       responses:
@@ -483,7 +483,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Block'
-  "/block/height/{height}":
+  '/block/height/{height}':
     get:
       tags: [Blocks]
       parameters:
@@ -501,7 +501,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Block'
-  "/block/hash/{hash}":
+  '/block/hash/{hash}':
     get:
       tags: [Blocks]
       parameters:
@@ -519,7 +519,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Block'
-  "/block/current":
+  '/block/current':
     get:
       tags: [Blocks]
       responses:
@@ -531,9 +531,9 @@ paths:
               schema:
                 '$ref': '#/components/schemas/Block'
   # "/block/hash/{block hash}/wallet_list"
-                
+
   # Transactions
-  "/tx/pending":
+  '/tx/pending':
     get:
       tags: [Transactions]
       responses:
@@ -544,7 +544,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Mempool'
-  "/tx/{txId}":
+  '/tx/{txId}':
     get:
       tags: [Transactions]
       parameters:
@@ -562,7 +562,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Transaction'
-  "/tx/{txId}/offset":
+  '/tx/{txId}/offset':
     get:
       tags: [Transactions]
       parameters:
@@ -580,7 +580,7 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/TransactionOffset'
-  "/tx/{txId}/status":
+  '/tx/{txId}/status':
     get:
       tags: [Transactions]
       parameters:
@@ -598,11 +598,11 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/TransactionStatus'
-  # "/tx/{txId}/field"            
+  # "/tx/{txId}/field"
   # "/unconfirmed_tx/{txId}"
-                
+
   # Cache
-  "/{txId}":
+  '/{txId}':
     get:
       tags: [Cache]
       parameters:
@@ -622,7 +622,7 @@ paths:
                 '$ref': '#/components/schemas/Transaction'
 
   # Chunks
-  "/chunk/{offset}":
+  '/chunk/{offset}':
     get:
       tags: [Chunks]
       parameters:
@@ -639,6 +639,6 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Chunk'
-                
+
   # Index
   # "/graphql"
