@@ -57,7 +57,7 @@ describe('importAns104Bundle', () => {
     ans104Bundle = await stubAns104Bundle();
   });
 
-  afterEach(function () {
+  afterEach(() => {
     sinon.restore();
   });
 

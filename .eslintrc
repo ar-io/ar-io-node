@@ -1,11 +1,12 @@
 {
   "root": true,
   "parser": "@typescript-eslint/parser",
-  "plugins": ["@typescript-eslint", "prettier"],
+  "plugins": ["@typescript-eslint", "prettier", "mocha", "jest-formatting"],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/eslint-recommended",
     "plugin:@typescript-eslint/recommended",
+    "plugin:mocha/recommended",
     "prettier"
   ],
   "rules": {
@@ -13,6 +14,11 @@
     "prettier/prettier": 2,
     "no-unused-vars": "off",
     "@typescript-eslint/no-unused-vars": ["error"],
-    "@typescript-eslint/no-explicit-any": ["off"]
+    "@typescript-eslint/no-explicit-any": ["off"],
+    "mocha/max-top-level-suites": "off",
+    "mocha/no-exports": "off",
+    "mocha/no-mocha-arrows": "off",
+    "jest-formatting/padding-around-describe-blocks": 2,
+    "jest-formatting/padding-around-test-blocks": 2
   }
 }
