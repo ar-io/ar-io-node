@@ -12,6 +12,12 @@ jobs:
         node-version: [16.x]
 
     steps:
+      - name: Send Slack start notification
+        env:
+          SLACK_TITLE: Running AR.IO tests...
+          SLACK_COLOR: warning
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
       - uses: actions/checkout@v3
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v3
@@ -20,3 +26,16 @@ jobs:
       - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn test
+      - name: Send Slack success notification
+        if: success()
+        env:
+          SLACK_TITLE: AR.IO tests succeeded!
+          SLACK_WEBHOOK: ${{ secrets.SLACK_BUILDS_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
+      - name: Send Slack failure notification
+        if: failure()
+        env:
+          SLACK_TITLE: AR.IO tests succeeded!
+          SLACK_COLOR: danger
+          SLACK_WEBHOOK: ${{ secrets.SLACK_BUILD_FAILURES_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
