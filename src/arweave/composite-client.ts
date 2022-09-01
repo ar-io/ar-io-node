@@ -37,6 +37,7 @@ import {
   ChainSource,
   ChunkSource,
   JsonChunk,
+  JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockCache,
   PartialJsonTransaction,
@@ -410,6 +411,22 @@ export class ArweaveCompositeClient
     }
   }
 
+  async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
+    try {
+      const response = await this.trustedNodeRequestQueue.push({
+        method: 'GET',
+        url: `/tx/${txId}/offset`,
+      });
+      return response.data;
+    } catch (error: any) {
+      this.log.error('Failed to get transaction offset', {
+        txId,
+        message: error.message,
+      });
+      throw error;
+    }
+  }
+
   // TODO make second arg an options object
   async getBlockAndTxsByHeight(
     height: number,
@@ -480,7 +497,7 @@ export class ArweaveCompositeClient
     return Readable.from(data);
   }
 
-  async getTxData(txId: string): Promise<Readable> {
+  async getTxData(txId: string): Promise<{ data: Readable; size: number }> {
     try {
       const [dataResponse, dataSizeResponse] = await Promise.all([
         this.trustedNodeRequestQueue.push({
@@ -497,13 +514,9 @@ export class ArweaveCompositeClient
         throw Error('No transaction data');
       }
 
+      const size = +dataSizeResponse.data;
       const txData = fromB64Url(dataResponse.data);
-
-      if (txData.byteLength !== +dataSizeResponse.data) {
-        throw Error('Transaction data is incorrect size');
-      }
-
-      return Readable.from(txData);
+      return { data: Readable.from(txData), size };
     } catch (error: any) {
       this.log.error('Failed to get transaction data:', {
         txId,

@@ -59,6 +59,11 @@ export interface PartialJsonTransaction {
   tags: B64uTag[];
 }
 
+export interface JsonTransactionOffset {
+  offset: number;
+  size: number;
+}
+
 export type BinaryTag = {
   name: Buffer;
   value: Buffer;
@@ -130,6 +135,7 @@ export interface PartialJsonTransactionCache {
 export interface ChainSource {
   getBlockByHeight(height: number): Promise<PartialJsonBlock>;
   getTx(txId: string): Promise<PartialJsonTransaction>;
+  getTxOffset(txId: string): Promise<JsonTransactionOffset>;
   getBlockAndTxsByHeight(height: number): Promise<{
     block: PartialJsonBlock;
     txs: PartialJsonTransaction[];
@@ -242,5 +248,5 @@ export interface ChunkSource {
 }
 
 export interface TxDataSource {
-  getTxData(id: string): Promise<Readable>;
+  getTxData(id: string): Promise<{ data: Readable; size: number }>;
 }
