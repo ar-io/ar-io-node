@@ -42,15 +42,25 @@ export class TxClient implements TxDataSource {
               return;
             }
             const chunkData = await chunkPromise;
-            const chunk = chunkData.read();
-            this.push(chunk);
-            bytes += chunk.length;
-            // check if we're done
-            if (bytes < size) {
-              chunkPromise = getChunkDataByAbsoluteOffset(startOffset + bytes);
-            } else {
-              chunkPromise = undefined;
-            }
+            chunkData.on('data', (chunk) => {
+              this.push(chunk);
+              bytes += chunk.length;
+            });
+
+            chunkData.on('end', () => {
+              // check if we're done
+              if (bytes < size) {
+                chunkPromise = getChunkDataByAbsoluteOffset(
+                  startOffset + bytes,
+                );
+              } else {
+                chunkPromise = undefined;
+              }
+            });
+
+            chunkData.on('error', (error) => {
+              this.emit('error', error);
+            });
           } catch (error: any) {
             this.destroy(error);
           }

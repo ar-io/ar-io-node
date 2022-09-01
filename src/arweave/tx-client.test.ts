@@ -1,6 +1,7 @@
 import chai, { expect } from 'chai';
 import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
+import { Readable } from 'stream';
 import * as winston from 'winston';
 
 import { ArweaveClientStub } from '../../test/stubs.js';
@@ -48,11 +49,28 @@ describe('TxClient', () => {
         });
       });
     });
-    describe('a missing piece of chunk data for a transaction', () => {
-      it('should throw an error', async () => {
+    describe('a bad piece of chunk data', () => {
+      it('should throw an error', function (done) {
         const error = new Error('missing chunk');
-        sinon.stub(clientStub, 'getChunkDataByAbsoluteOffset').throws(error);
-        await expect(txClient.getTxData(TX_ID)).to.be.rejectedWith(error);
+        const badReadable = new Readable({
+          read: function () {
+            this.emit('error', error);
+          },
+        });
+        sinon
+          .stub(clientStub, 'getChunkDataByAbsoluteOffset')
+          .resolves(badReadable);
+        txClient.getTxData(TX_ID).then((res) => {
+          const { data } = res;
+          data.on('error', (error) => {
+            expect(error).to.deep.equal(error);
+            done();
+          });
+          // do nothing
+          data.on('data', () => {
+            return;
+          });
+        });
       });
     });
   });
