@@ -37,7 +37,7 @@ export class TransactionRepairWorker {
     chainDb: ChainDatabase;
     txFetcher: TransactionFetcher;
   }) {
-    this.log = log.child({ class: 'transaction-repair-worker' });
+    this.log = log.child({ class: 'TransactionRepairWorker' });
     this.chainDb = chainDb;
     this.txFetcher = txFetcher;
   }

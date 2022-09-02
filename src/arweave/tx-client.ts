@@ -5,7 +5,6 @@ import { ChainSource, ChunkSource, TxDataSource } from '../types.js';
 
 export class TxDataChunksRetriever implements TxDataSource {
   private log: winston.Logger;
-  // TODO: could make this a speicifc type
   private chainSource: ChainSource;
   private chunkSource: ChunkSource;
 
@@ -18,7 +17,7 @@ export class TxDataChunksRetriever implements TxDataSource {
     chainSource: ChainSource;
     chunkSource: ChunkSource;
   }) {
-    this.log = log.child({ client: 'tx-client' });
+    this.log = log.child({ class: 'TxDataChunksRetriever' });
     this.chainSource = chainSource;
     this.chunkSource = chunkSource;
   }

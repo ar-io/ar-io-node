@@ -46,7 +46,7 @@ export class TransactionImporter {
     importEvents: string[];
     workerCount?: number;
   }) {
-    this.log = log.child({ class: 'transaction-importer' });
+    this.log = log.child({ class: 'TransactionImporter' });
     this.eventEmitter = eventEmitter;
     this.chainDb = chainDb;
 

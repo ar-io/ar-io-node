@@ -124,8 +124,7 @@ export class ArweaveCompositeClient
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
   }) {
-    // TODO add context to logger
-    this.log = log;
+    this.log = log.child({ class: 'ArweaveCompositeClient' });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.txCache = new FsTransactionCache();

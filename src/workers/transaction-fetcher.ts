@@ -57,7 +57,7 @@ export class TransactionFetcher {
     maxAttempts?: number;
     retryWaitMs?: number;
   }) {
-    this.log = log.child({ class: 'transaction-fetcher' });
+    this.log = log.child({ class: 'TransactionFetcher' });
     this.chainSource = chainSource;
     this.eventEmitter = eventEmitter;
 
