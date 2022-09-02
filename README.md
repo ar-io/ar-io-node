@@ -27,7 +27,9 @@ Starting at an arbitrary block (only works immediately after a DB reset):
 `START_HEIGHT=800000 yarn start`
 
 ## Docker
+
 ### Standalone AR.IO Node
+
 You can run the ar.io gateway as a standalone docker container:
 
 ```shell
@@ -36,25 +38,31 @@ docker run -p 3000:3000 -v ario-data:/app/data ario-node:latest
 ```
 
 To reset the db:
+
 ```shell
 docker run -v  $PWD/data:/app/data ario-node:latest sh reset-db.sh
 ```
 
 To run with a specified start height (after a reset):
+
 ```shell
 docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ario-node:latest
 ```
 
 ### Envoy & AR.IO Node
+
 You can also run [Envoy] along side an `ar.io` node via [Docker Compose]. Envoy will proxy routes to `arweave.net` not yet implemented in the ar.io node.
 
 ```shell
 docker compose up --build
 ```
+
 or:
+
 ```shell
 docker-compose up --build
 ```
+
 Once running, requests can be directed to envoy server at `localhost:1984`.
 
 ## Design Principles
@@ -73,9 +81,8 @@ Once running, requests can be directed to envoy server at `localhost:1984`.
 12. Follow the Prometheus [metrics namings recommendations].
 13. Commit messages should describe both the what and why of the change being made.
 
-
-[Docker Compose]:https://docs.docker.com/compose/install/
-[Envoy]:https://www.envoyproxy.io/
-[idempotent]:https://en.wikipedia.org/wiki/Idempotence
-[metrics]:https://github.com/siimon/prom-client
-[metrics namings recommendations]:https://prometheus.io/docs/practices/naming/
+[docker compose]: https://docs.docker.com/compose/install/
+[envoy]: https://www.envoyproxy.io/
+[idempotent]: https://en.wikipedia.org/wiki/Idempotence
+[metrics]: https://github.com/siimon/prom-client
+[metrics namings recommendations]: https://prometheus.io/docs/practices/naming/

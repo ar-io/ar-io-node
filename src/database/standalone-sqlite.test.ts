@@ -632,6 +632,7 @@ describe('StandaloneSqliteDatabase', () => {
         (block.scheduled_usd_to_ar_rate ?? [])[1],
       );
     });
+
     it('should copy all the transaction fields to the stable_transactions table', async () => {
       const height = 982575;
 
