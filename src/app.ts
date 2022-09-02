@@ -39,9 +39,19 @@ const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
 const arweaveUrl = process.env.ARWEAVE_URL ?? 'https://arweave.net';
 const port = parseInt(process.env.PORT ?? '4000');
 
+// Global errors counter
+const errorsCounter = new promClient.Counter({
+  name: 'errors_total',
+  help: 'Total error count',
+});
+
 // Uncaught exception handler
+const uncaughtExceptionCounter = new promClient.Counter({
+  name: 'uncaught_exceptions_total',
+  help: 'Count of uncaught exceptions',
+});
 process.on('uncaughtException', (error) => {
-  // TODO track metrics
+  uncaughtExceptionCounter.inc();
   log.error('Uncaught exception:', error);
 });
 
@@ -59,6 +69,7 @@ const chainDb = new StandaloneSqliteDatabase(db);
 const blockImporter = new BlockImporter({
   log,
   metricsRegistry: promClient.register,
+  errorsCounter,
   chainSource: arweaveClient,
   chainDb,
   eventEmitter,

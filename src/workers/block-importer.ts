@@ -45,15 +45,19 @@ export class BlockImporter {
   private shouldRun: boolean;
 
   // Metrics
+  private errorsCounter: promClient.Counter<string>;
+  private blockImporterRunningGauge: promClient.Gauge<string>;
   private forksCounter: promClient.Counter<string>;
   private lastForkDepthGauge: promClient.Gauge<string>;
   private blocksImportedCounter: promClient.Counter<string>;
   private transactionsImportedCounter: promClient.Counter<string>;
+  private missingTransactionsCounter: promClient.Counter<string>;
   private blockImportErrorsCounter: promClient.Counter<string>;
 
   constructor({
     log,
     metricsRegistry,
+    errorsCounter,
     chainSource,
     chainDb,
     eventEmitter,
@@ -62,6 +66,7 @@ export class BlockImporter {
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
+    errorsCounter: promClient.Counter<string>;
     chainSource: ChainSource;
     chainDb: ChainDatabase;
     eventEmitter: EventEmitter;
@@ -82,14 +87,17 @@ export class BlockImporter {
 
     // Metrics
 
-    // TODO add errors_total metric
-    // TODO add fatal_errors_total metric
-    // TODO metric to indicate if the block importer is running
-    // TODO missing transaction count
+    this.errorsCounter = errorsCounter;
+
+    this.blockImporterRunningGauge = new promClient.Gauge({
+      name: 'block_importer_running',
+      help: 'Depth of the last observed chain fork',
+    });
+    metricsRegistry.registerMetric(this.blockImporterRunningGauge);
 
     this.forksCounter = new promClient.Counter({
       name: 'forks_total',
-      help: 'Number of chain forks observed',
+      help: 'Count of chain forks observed',
     });
     metricsRegistry.registerMetric(this.forksCounter);
 
@@ -101,19 +109,25 @@ export class BlockImporter {
 
     this.blocksImportedCounter = new promClient.Counter({
       name: 'blocks_imported_total',
-      help: 'Number of blocks imported',
+      help: 'Count of blocks imported',
     });
     metricsRegistry.registerMetric(this.blocksImportedCounter);
 
     this.transactionsImportedCounter = new promClient.Counter({
       name: 'transactions_imported_total',
-      help: 'Number of transactions imported',
+      help: 'Count of transactions imported',
     });
     metricsRegistry.registerMetric(this.transactionsImportedCounter);
 
+    this.missingTransactionsCounter = new promClient.Counter({
+      name: 'missing_transactions_total',
+      help: 'Count of block transactions that could not be immediately fetched',
+    });
+    metricsRegistry.registerMetric(this.missingTransactionsCounter);
+
     this.blockImportErrorsCounter = new promClient.Counter({
       name: 'block_import_errors_total',
-      help: 'Number of block import errors',
+      help: 'Count of block import errors',
     });
     metricsRegistry.registerMetric(this.blockImportErrorsCounter);
   }
@@ -131,7 +145,7 @@ export class BlockImporter {
       this.log.error(
         `Maximum fork depth of ${MAX_FORK_DEPTH} exceeded. Stopping block import process.`,
       );
-      this.shouldRun = false;
+      await this.stop();
       throw new Error('Maximum fork depth exceeded');
     }
 
@@ -197,6 +211,7 @@ export class BlockImporter {
     // Record import count metrics
     this.blocksImportedCounter.inc();
     this.transactionsImportedCounter.inc(txs.length);
+    this.missingTransactionsCounter.inc(missingTxIds.length);
 
     this.log.info(`Block imported`, {
       height: block.height,
@@ -225,6 +240,7 @@ export class BlockImporter {
 
   public async start() {
     this.shouldRun = true;
+    this.blockImporterRunningGauge.set(1);
     let nextHeight;
 
     // Run until stop is called or an unrecoverable error occurs
@@ -241,6 +257,7 @@ export class BlockImporter {
         await this.importBlock(nextHeight);
       } catch (error) {
         this.log.error(`Error importing block at height ${nextHeight}`, error);
+        this.errorsCounter.inc();
         this.blockImportErrorsCounter.inc();
         await wait(BLOCK_ERROR_RETRY_INTERVAL_MS);
       }
@@ -249,5 +266,6 @@ export class BlockImporter {
 
   public async stop() {
     this.shouldRun = false;
+    this.blockImporterRunningGauge.set(0);
   }
 }
