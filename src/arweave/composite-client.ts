@@ -46,6 +46,13 @@ import {
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_REQUEST_RETRY_COUNT = 5;
+const DEFAULT_MAX_REQUESTS_PER_SECOND = 15;
+const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
+const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
+const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
+
 type Peer = {
   url: string;
   blocks: number;
@@ -99,12 +106,12 @@ export class ArweaveCompositeClient
     log,
     arweave,
     trustedNodeUrl,
-    requestTimeout = 15000,
-    requestRetryCount = 5,
-    maxRequestsPerSecond = 20,
-    maxConcurrentRequests = 100,
-    blockPrefetchCount = 50,
-    blockTxPrefetchCount = 1,
+    requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
+    requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
+    maxRequestsPerSecond = DEFAULT_MAX_REQUESTS_PER_SECOND,
+    maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS,
+    blockPrefetchCount = DEFAULT_BLOCK_PREFETCH_COUNT,
+    blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
   }: {
     log: winston.Logger;
     arweave: Arweave;
