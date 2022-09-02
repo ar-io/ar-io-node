@@ -32,7 +32,7 @@ import { apolloServer } from './routes/graphql/index.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
-import { TransactionRepairWorker } from './workers/transaction-retrier.js';
+import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
