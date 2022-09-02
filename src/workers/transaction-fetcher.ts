@@ -57,7 +57,7 @@ export class TransactionFetcher {
     maxAttempts?: number;
     retryWaitMs?: number;
   }) {
-    this.log = log.child({ worker: 'transaction-fetcher' });
+    this.log = log.child({ class: 'transaction-fetcher' });
     this.chainSource = chainSource;
     this.eventEmitter = eventEmitter;
 
@@ -78,15 +78,19 @@ export class TransactionFetcher {
   }
 
   async fetchTx(txId: string): Promise<void> {
+    const log = this.log.child({ txId });
+
     let attempts = 0;
     let tx: PartialJsonTransaction | undefined;
     while (attempts < this.maxAttempts && !tx) {
       try {
-        this.log.info(`Fetching TX`, { txId });
+        log.info(`Fetching transaction`);
         tx = await this.chainSource.getTx(txId);
         this.eventEmitter.emit('tx-fetched', tx);
-      } catch (error) {
-        this.log.warn(`Failed to fetch TX`, { txId, error });
+      } catch (error: any) {
+        log.warn(`Failed to fetch transaction`, {
+          message: error.message,
+        });
         await wait(this.retryWaitMs);
         attempts++;
       }

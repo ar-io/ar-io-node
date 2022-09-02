@@ -46,7 +46,7 @@ export class TransactionImporter {
     importEvents: string[];
     workerCount?: number;
   }) {
-    this.log = log.child({ worker: 'transaction-importer' });
+    this.log = log.child({ class: 'transaction-importer' });
     this.eventEmitter = eventEmitter;
     this.chainDb = chainDb;
 
@@ -58,20 +58,21 @@ export class TransactionImporter {
     this.txImportQueue = fastq.promise(this.importTx.bind(this), workerCount);
   }
 
-  async importTx(tx: PartialJsonTransaction): Promise<void> {
-    const txId = tx.id;
-    try {
-      this.log.info(`Importing TX`, { txId });
-      await this.chainDb.saveTx(tx);
-      this.eventEmitter.emit('tx-imported', tx);
-    } catch (error) {
-      this.log.error(`Failed to import`, { txId, error });
-    }
+  async queueTx(tx: PartialJsonTransaction): Promise<void> {
+    this.log.info(`Queuing TX to import`, { txId: tx.id });
+    this.txImportQueue.push(tx);
   }
 
-  async queueTx(tx: PartialJsonTransaction): Promise<void> {
-    const txId = tx.id;
-    this.log.info(`Queuing TX to import`, { txId });
-    this.txImportQueue.push(tx);
+  async importTx(tx: PartialJsonTransaction): Promise<void> {
+    const log = this.log.child({ txId: tx.id });
+    try {
+      log.info(`Importing TX`);
+      await this.chainDb.saveTx(tx);
+      this.eventEmitter.emit('tx-imported', tx);
+    } catch (error: any) {
+      log.error(`Failed to import`, {
+        messsage: error.message,
+      });
+    }
   }
 }

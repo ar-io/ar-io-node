@@ -15,31 +15,31 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import * as EventEmitter from 'events';
 import * as winston from 'winston';
 
 import { ChainDatabase } from '../types.js';
+import { TransactionFetcher } from './transaction-fetcher.js';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 
-export class TransactionRetrier {
+export class TransactionRepairWorker {
   // Dependencies
   private log: winston.Logger;
   private chainDb: ChainDatabase;
-  private eventEmitter: EventEmitter;
+  private txFetcher: TransactionFetcher;
 
   constructor({
     log,
     chainDb,
-    eventEmitter,
+    txFetcher,
   }: {
     log: winston.Logger;
     chainDb: ChainDatabase;
-    eventEmitter: EventEmitter;
+    txFetcher: TransactionFetcher;
   }) {
-    this.log = log.child({ worker: 'transaction-retrier' });
-    this.eventEmitter = eventEmitter;
+    this.log = log.child({ class: 'transaction-repair-worker' });
     this.chainDb = chainDb;
+    this.txFetcher = txFetcher;
   }
 
   async start(): Promise<void> {
@@ -50,12 +50,13 @@ export class TransactionRetrier {
     try {
       const missingTxIds = await this.chainDb.getMissingTxIds();
       for (const txId of missingTxIds) {
-        this.log.info(`Retrying missing transaction`, { txId });
-        // FIXME temporary hack to wire this to the transaction fetcher
-        this.eventEmitter.emit('block-tx-fetch-failed', txId);
+        this.log.info('Retrying missing transaction', { txId });
+        await this.txFetcher.queueTxId(txId);
       }
-    } catch (error) {
-      this.log.error(`Error retrying missing transactions: ${error}`);
+    } catch (error: any) {
+      this.log.error('Error retrying missing transactions', {
+        message: error.message,
+      });
     }
   }
 }

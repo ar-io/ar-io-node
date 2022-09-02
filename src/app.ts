@@ -32,7 +32,7 @@ import { apolloServer } from './routes/graphql/index.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
-import { TransactionRetrier } from './workers/transaction-retrier.js';
+import { TransactionRepairWorker } from './workers/transaction-retrier.js';
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
@@ -64,7 +64,7 @@ const blockImporter = new BlockImporter({
   eventEmitter,
   startHeight: startHeight,
 });
-new TransactionFetcher({
+const txFetcher = new TransactionFetcher({
   log,
   chainSource: arweaveClient,
   eventEmitter,
@@ -76,15 +76,15 @@ new TransactionImporter({
   eventEmitter,
   importEvents: ['tx-fetched'],
 });
-const txRetrier = new TransactionRetrier({
+const txRepairWorker = new TransactionRepairWorker({
   log,
   chainDb,
-  eventEmitter,
+  txFetcher,
 });
 
 arweaveClient.refreshPeers();
 blockImporter.start();
-txRetrier.start();
+txRepairWorker.start();
 
 // HTTP server
 const app = express();
