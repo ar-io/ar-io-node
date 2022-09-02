@@ -52,6 +52,10 @@ describe('BlockImporter', () => {
     return new BlockImporter({
       log: log,
       metricsRegistry,
+      errorsCounter: new promClient.Counter({
+        name: 'errors_total',
+        help: 'Total error count',
+      }),
       chainSource,
       chainDb,
       eventEmitter,
