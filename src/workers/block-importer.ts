@@ -177,7 +177,7 @@ export class BlockImporter {
       height,
     );
 
-    // Emit events
+    // Emit fetch events
     this.eventEmitter.emit('block-fetched', block);
     txs.forEach((tx) => {
       this.eventEmitter.emit('block-tx-fetched', tx);
@@ -186,9 +186,13 @@ export class BlockImporter {
       this.eventEmitter.emit('block-tx-fetch-failed', txId);
     });
 
-    this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+    await this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
 
-    // TODO emit events for imported blocks and transactions
+    // Emit save events
+    this.eventEmitter.emit('block-saved', block);
+    txs.forEach((tx) => {
+      this.eventEmitter.emit('block-tx-saved', tx);
+    });
 
     // Record import count metrics
     this.blocksImportedCounter.inc();
