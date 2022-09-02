@@ -6,11 +6,11 @@ services:
     build:
       context: envoy/
     ports:
-      - '1984:1984'
+      - '3000:3000'
       - '9901:9901'
     environment:
       - ARIO_HOST=ario
-      - ARIO_PORT=3000
+      - ARIO_PORT=4000
       - ARWEAVE_GATEWAY=arweave.net
       - LOG_LEVEL=info
 
@@ -18,7 +18,7 @@ services:
     build:
       context: .
     ports:
-      - 3000:3000
+      - 4000:4000
     volumes:
       - ./data:/app/data
     environment:
