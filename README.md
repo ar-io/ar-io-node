@@ -35,7 +35,7 @@ You can run the ar.io gateway as a standalone docker container:
 
 ```shell
 docker build . -t ario-node:latest
-docker run -p 3000:3000 -v ario-data:/app/data ario-node:latest
+docker run -p 4000:4000 -v ario-data:/app/data ario-node:latest
 ```
 
 To reset the db:
@@ -52,7 +52,8 @@ docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ario-node:latest
 
 ### Envoy & AR.IO Node
 
-You can also run [Envoy] along side an `ar.io` node via [Docker Compose]. Envoy will proxy routes to `arweave.net` not yet implemented in the ar.io node.
+You can also run [Envoy] along side an `ar.io` node via [Docker Compose]. Envoy
+will proxy routes to `arweave.net` not yet implemented in the ar.io node.
 
 ```shell
 docker compose up --build
@@ -64,7 +65,7 @@ or:
 docker-compose up --build
 ```
 
-Once running, requests can be directed to envoy server at `localhost:1984`.
+Once running, requests can be directed to envoy server at `localhost:3000`.
 
 ## Design Principles
 
