@@ -65,24 +65,35 @@ docker-compose up --build
 
 Once running, requests can be directed to envoy server at `localhost:3000`.
 
-## Design Principles
+## Principles and Practices
 
-1. Code to interfaces.
-2. Separate IO from logic.
-3. Make processes [idempotent].
-4. All components must be runnable in a single process.
-5. All components should be runnable independently.
-6. Seperate mutable from immutable data.
-7. Keep regression tests blazingly fast.
-8. Prefer integration over unit tests.
-9. Prefer in-memory implementations over mocks and stubs.
-10. Avoid naively trusting data when the cost to validate it is low.
-11. Make liberal use of [metrics] to aid in monitoring and debugging.
-12. Follow the Prometheus [metrics namings recommendations].
-13. Commit messages should describe both the what and why of the change being made.
+### Architecture
+
+- Code to interfaces.
+- Separate IO from application logic.
+- Make processes [idempotent] whenever possible.
+- Separate mutable from immutable data.
+- Avoid trusting data when the cost to validate it is low.
+
+### Development and Testing
+
+- To support rapid development iteration, All system components _must_ be
+  runnable in a single process.
+- Keep the [compile test suite] blazingly fast.
+- In general, prefer in-memory implementations over mocks and stubs.
+- In general, prefer [sociable over solitary tests].
+- Commit messages should describe both what is being changed and why it is
+  being changed.
+
+### Monitoring and Observability
+
+- Make liberal use of [Prometheus metrics] to aid in monitoring and debugging.
+- Follow the Prometheus [metrics naming recommendations].
 
 [docker compose]: https://docs.docker.com/compose/install/
 [envoy]: https://www.envoyproxy.io/
 [idempotent]: https://en.wikipedia.org/wiki/Idempotence
+[compile test suite]: https://martinfowler.com/bliki/UnitTest.html
+[sociable over solitary tests]: https://martinfowler.com/bliki/UnitTest.html
 [metrics]: https://github.com/siimon/prom-client
 [metrics namings recommendations]: https://prometheus.io/docs/practices/naming/
