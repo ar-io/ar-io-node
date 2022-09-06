@@ -23,8 +23,8 @@ COPY ./docs/openapi.yaml /app/docs/openapi.yaml
 VOLUME /app/data
 
 # EXPOSE PORT AND SETUP HEALTHCHECK
-EXPOSE 3000
-HEALTHCHECK CMD curl --fail http://localhost:3000 || exit 1
+EXPOSE 4000
+HEALTHCHECK CMD curl --fail http://localhost:4000 || exit 1
 
 # START
 ENTRYPOINT [ "/bin/sh", "docker-entrypoint.sh" ]
