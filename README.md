@@ -32,20 +32,14 @@ migration):
 You can run the ar.io gateway as a standalone docker container:
 
 ```shell
-docker build . -t ario-node:latest
-docker run -p 4000:4000 -v ario-data:/app/data ario-node:latest
+docker build . -t ar-io-core:latest
+docker run -p 4000:4000 -v ar-io-data:/app/data ar-io-node:latest
 ```
 
-To reset the db:
+To run with a specified start height (sets height on first run only):
 
 ```shell
-docker run -v  $PWD/data:/app/data ario-node:latest sh reset-db.sh
-```
-
-To run with a specified start height (after a reset):
-
-```shell
-docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ario-node:latest
+docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ar-io-node:latest
 ```
 
 ### Envoy & AR.IO Node
@@ -63,7 +57,7 @@ or:
 docker-compose up --build
 ```
 
-Once running, requests can be directed to envoy server at `localhost:3000`.
+Once running, requests can be directed to Envoy server at `localhost:3000`.
 
 ## Principles and Practices
 

@@ -3,18 +3,20 @@ version: '3.0'
 
 services:
   envoy:
+    image: ghcr.io/ar-io/ar-io-envoy:latest
     build:
       context: envoy/
     ports:
       - '3000:3000'
       - '9901:9901'
     environment:
-      - ARIO_HOST=ario
+      - ARIO_HOST=ar-io-core
       - ARIO_PORT=4000
       - ARWEAVE_GATEWAY=arweave.net
       - LOG_LEVEL=info
 
-  ario:
+  ar-io-core:
+    image: ghcr.io/ar-io/ar-io-core:latest
     build:
       context: .
     ports:
