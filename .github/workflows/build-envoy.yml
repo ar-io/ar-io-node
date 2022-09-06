@@ -27,7 +27,7 @@ jobs:
         if: ${{ github.ref == 'refs/heads/main' }}
         uses: docker/build-push-action@v3
         with:
-          file: envoy/Dockerfile
+          context: envoy/
           push: true
           tags: |
             ghcr.io/ar-io/ar-io-envoy:latest
