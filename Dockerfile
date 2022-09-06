@@ -4,7 +4,7 @@ FROM node:16-alpine as builder
 WORKDIR /app
 RUN apk --no-cache add g++ git python3 make
 COPY . .
-RUN yarn install
+RUN yarn install --production
 RUN yarn build
 
 # EXTRACT DIST
