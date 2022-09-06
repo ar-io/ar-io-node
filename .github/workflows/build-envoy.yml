@@ -1,6 +1,11 @@
-name: Test and build AR.IO core
+name: Build AR.IO Envoy container image
 
-on: [push]
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'envoy/**'
 
 jobs:
   build:
@@ -13,15 +18,6 @@ jobs:
     steps:
       # Setup
       - uses: actions/checkout@v3
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v3
-        with:
-          node-version: ${{ matrix.node-version }}
-
-      # Build and test TypeScript
-      - run: yarn --immutable --immutable-cache
-      - run: yarn build
-      - run: yarn test
 
       # Build and push container image (only on main)
       - name: Log in to the GitHub Container Registry
@@ -35,10 +31,11 @@ jobs:
         if: ${{ github.ref == 'refs/heads/main' }}
         uses: docker/build-push-action@v3
         with:
+          file: envoy/Dockerfile
           push: true
           tags: |
-            ghcr.io/ar-io/ar-io-core:latest
-            ghcr.io/ar-io/ar-io-core:${{ github.sha }}
+            ghcr.io/ar-io/ar-io-envoy:latest
+            ghcr.io/ar-io/ar-io-envoy:${{ github.sha }}
 
       # Success notification
       - name: Send Slack success notification
