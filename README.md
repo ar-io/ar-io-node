@@ -10,9 +10,7 @@
 
 `yarn test`
 
-### Initialize the Sqlite DB
-
-Note: this erases the DB!
+### Initialize the SQLite DB
 
 `yarn db:migrate`
 
