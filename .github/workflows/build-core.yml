@@ -1,4 +1,4 @@
-name: Node.js CI
+name: Test and build AR.IO core
 
 on: [push]
 
@@ -11,24 +11,48 @@ jobs:
         node-version: [16.x]
 
     steps:
+      # Setup
       - uses: actions/checkout@v3
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v3
         with:
           node-version: ${{ matrix.node-version }}
+
+      # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn test
+
+      # Build and push container image (only on main)
+      - name: Log in to the GitHub Container Registry
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push container image
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: |
+            ghcr.io/ar-io/ar-io-core:latest
+            ghcr.io/ar-io/ar-io-core:${{ github.sha }}
+
+      # Success notification
       - name: Send Slack success notification
         if: success()
         env:
           SLACK_TITLE: AR.IO tests succeeded!
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: rtCamp/action-slack-notify@v2
+
+      # Failure notification
       - name: Send Slack failure notification
         if: failure()
         env:
-          SLACK_TITLE: AR.IO tests succeeded!
+          SLACK_TITLE: AR.IO tests failed!
           SLACK_COLOR: danger
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: rtCamp/action-slack-notify@v2
