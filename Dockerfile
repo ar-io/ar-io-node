@@ -2,7 +2,7 @@ FROM node:16-alpine as builder
 
 # BUILD
 WORKDIR /app
-RUN apk --no-cache add git
+RUN apk --no-cache add g++ git python3 make
 COPY . .
 RUN yarn install
 RUN yarn build
