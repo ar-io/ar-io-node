@@ -22,7 +22,8 @@ With defaults:
 
 `yarn start`
 
-Starting at an arbitrary block (only works immediately after a DB reset):
+Starting at an arbitrary block (only works immediately after initial DB
+migration):
 
 `START_HEIGHT=800000 yarn start`
 
