@@ -114,13 +114,13 @@ export class BlockImporter {
     metricsRegistry.registerMetric(this.blocksImportedCounter);
 
     this.transactionsImportedCounter = new promClient.Counter({
-      name: 'transactions_imported_total',
+      name: 'block_transactions_imported_total',
       help: 'Count of transactions imported',
     });
     metricsRegistry.registerMetric(this.transactionsImportedCounter);
 
     this.missingTransactionsCounter = new promClient.Counter({
-      name: 'missing_transactions_total',
+      name: 'missing_block_transactions_total',
       help: 'Count of block transactions that could not be immediately fetched',
     });
     metricsRegistry.registerMetric(this.missingTransactionsCounter);
