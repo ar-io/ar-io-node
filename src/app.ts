@@ -61,6 +61,7 @@ const arweave = Arweave.init({});
 const eventEmitter = new EventEmitter();
 const arweaveClient = new ArweaveCompositeClient({
   log,
+  metricsRegistry: promClient.register,
   arweave,
   trustedNodeUrl: arweaveUrl,
 });

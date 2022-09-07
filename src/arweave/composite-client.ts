@@ -20,6 +20,7 @@ import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
 import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
 import { default as NodeCache } from 'node-cache';
+import * as promClient from 'prom-client';
 import * as rax from 'retry-axios';
 import { Readable } from 'stream';
 import { default as wait } from 'wait';
@@ -102,8 +103,13 @@ export class ArweaveCompositeClient
   private blockTxPrefetchCount;
   private maxPrefetchHeight = -1;
 
+  // Metrics
+  private arweavePeerInfoErrorCounter: promClient.Counter<string>;
+  private arweavePeerRefreshErrorCounter: promClient.Counter<string>;
+
   constructor({
     log,
+    metricsRegistry,
     arweave,
     trustedNodeUrl,
     requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -114,6 +120,7 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
   }: {
     log: winston.Logger;
+    metricsRegistry: promClient.Registry;
     arweave: Arweave;
     trustedNodeUrl: string;
     requestTimeout?: number;
@@ -164,6 +171,19 @@ export class ArweaveCompositeClient
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
+
+    // Metrics
+    this.arweavePeerInfoErrorCounter = new promClient.Counter({
+      name: 'arweave_peer_info_errors_total',
+      help: 'Count of failed Arweave peer info requests',
+    });
+    metricsRegistry.registerMetric(this.arweavePeerInfoErrorCounter);
+
+    this.arweavePeerRefreshErrorCounter = new promClient.Counter({
+      name: 'arweave_peer_referesh_errors_total',
+      help: 'Count of errors refreshing the Arweave peers list',
+    });
+    metricsRegistry.registerMetric(this.arweavePeerRefreshErrorCounter);
   }
 
   async refreshPeers(): Promise<void> {
@@ -192,13 +212,13 @@ export class ArweaveCompositeClient
               this.preferredPeers.add(this.peers[peerHost]);
             }
           } catch (error) {
-            // TODO track metric
+            this.arweavePeerInfoErrorCounter.inc();
           }
           return;
         }),
       );
     } catch (error) {
-      // TODO track metric
+      this.arweavePeerRefreshErrorCounter.inc();
     }
   }
 
