@@ -74,7 +74,7 @@ export class TxChunksDataSource implements TxDataSource {
         size,
       };
     } catch (error: any) {
-      this.log.error('Failed to retrieve transaction data', {
+      this.log.error('Failed to retrieve transaction data:', {
         txId,
         message: error.message,
       });

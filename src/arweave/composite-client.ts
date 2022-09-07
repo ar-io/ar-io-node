@@ -266,7 +266,7 @@ export class ArweaveCompositeClient
           return block;
         })
         .catch((error) => {
-          this.log.error('Block prefetch failed', {
+          this.log.error('Block prefetch failed:', {
             height: height,
             message: error.message,
           });
@@ -284,7 +284,7 @@ export class ArweaveCompositeClient
         });
       }
     } catch (error: any) {
-      this.log.error('Error prefetching block transactions', {
+      this.log.error('Error prefetching block transactions:', {
         height: height,
         message: error.message,
       });
@@ -402,7 +402,7 @@ export class ArweaveCompositeClient
         return tx;
       })
       .catch((error) => {
-        this.log.error('Transaction prefetch failed', {
+        this.log.error('Transaction prefetch failed:', {
           txId: txId,
           message: error.message,
         });
@@ -430,7 +430,7 @@ export class ArweaveCompositeClient
       // Remove failed requests from the cache
       this.txPromiseCache.del(txId);
 
-      this.log.error('Failed to get transaction', {
+      this.log.error('Failed to get transaction:', {
         txId: txId,
         message: error.message,
       });
@@ -447,7 +447,7 @@ export class ArweaveCompositeClient
       });
       return response.data;
     } catch (error: any) {
-      this.log.error('Failed to get transaction offset', {
+      this.log.error('Failed to get transaction offset:', {
         txId,
         message: error.message,
       });
@@ -511,7 +511,7 @@ export class ArweaveCompositeClient
 
       return chunk;
     } catch (error: any) {
-      this.log.error('Failed to get chunk', {
+      this.log.error('Failed to get chunk:', {
         offset,
         message: error.message,
       });
@@ -546,7 +546,7 @@ export class ArweaveCompositeClient
       const txData = fromB64Url(dataResponse.data);
       return { data: Readable.from(txData), size };
     } catch (error: any) {
-      this.log.error('Failed to get transaction data', {
+      this.log.error('Failed to get transaction data:', {
         txId,
         message: error.message,
       });

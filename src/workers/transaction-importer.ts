@@ -53,18 +53,18 @@ export class TransactionImporter {
   }
 
   async queueTx(tx: PartialJsonTransaction): Promise<void> {
-    this.log.info(`Queuing TX to import`, { txId: tx.id });
+    this.log.info('Queuing transaction to import', { txId: tx.id });
     this.txImportQueue.push(tx);
   }
 
   async importTx(tx: PartialJsonTransaction): Promise<void> {
     const log = this.log.child({ txId: tx.id });
     try {
-      log.info(`Importing TX`);
+      log.info('Importing transaction');
       await this.chainDb.saveTx(tx);
       this.eventEmitter.emit('tx-saved', tx);
     } catch (error: any) {
-      log.error(`Failed to import`, {
+      log.error('Failed to import transaction:', {
         messsage: error.message,
       });
     }

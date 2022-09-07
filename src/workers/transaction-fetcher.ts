@@ -82,7 +82,7 @@ export class TransactionFetcher {
         tx = await this.chainSource.getTx(txId);
         this.eventEmitter.emit('tx-fetched', tx);
       } catch (error: any) {
-        log.warn(`Failed to fetch transaction`, {
+        log.warn(`Failed to fetch transaction:`, {
           message: error.message,
         });
         await wait(this.retryWaitMs);
