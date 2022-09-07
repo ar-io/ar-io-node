@@ -80,8 +80,8 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: ${ARIO_HOST}
-                      port_value: ${ARIO_PORT}
+                      address: ${AR_IO_HOST}
+                      port_value: ${AR_IO_PORT}
     - name: legacy_gateways
       connect_timeout: 1s
       type: STRICT_DNS

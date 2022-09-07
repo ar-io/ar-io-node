@@ -10,12 +10,12 @@ services:
       - '3000:3000'
       - '9901:9901'
     environment:
-      - ARIO_HOST=ar-io-core
-      - ARIO_PORT=4000
+      - AR_IO_HOST=core
+      - AR_IO_PORT=4000
       - ARWEAVE_GATEWAY=arweave.net
       - LOG_LEVEL=info
 
-  ar-io-core:
+  core:
     image: ghcr.io/ar-io/ar-io-core:latest
     build:
       context: .
