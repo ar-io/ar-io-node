@@ -8,22 +8,22 @@ import {
   ArweaveChainSourceStub,
   ArweaveChunkSourceStub,
 } from '../../test/stubs.js';
-import { TxDataChunksRetriever } from './tx-client.js';
+import { TxChunksDataSource } from './tx-chunks-data-source.js';
 
 chai.use(sinonChai);
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 
-describe('txChunkRetriever', () => {
+describe('TxChunksDataSource', () => {
   let log: winston.Logger;
   let chainSource: ArweaveChainSourceStub;
   let chunkSource: ArweaveChunkSourceStub;
-  let txChunkRetriever: TxDataChunksRetriever;
+  let txChunkRetriever: TxChunksDataSource;
 
   before(() => {
     log = winston.createLogger({ silent: true });
     chainSource = new ArweaveChainSourceStub();
     chunkSource = new ArweaveChunkSourceStub();
-    txChunkRetriever = new TxDataChunksRetriever({
+    txChunkRetriever = new TxChunksDataSource({
       log,
       chainSource,
       chunkSource,

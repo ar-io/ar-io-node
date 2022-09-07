@@ -3,7 +3,7 @@ import winston from 'winston';
 
 import { ChainSource, ChunkSource, TxDataSource } from '../types.js';
 
-export class TxDataChunksRetriever implements TxDataSource {
+export class TxChunksDataSource implements TxDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
   private chunkSource: ChunkSource;
