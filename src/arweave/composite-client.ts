@@ -166,7 +166,6 @@ export class ArweaveCompositeClient
     this.blockTxPrefetchCount = blockTxPrefetchCount;
   }
 
-  // TODO recursively traverse peers
   async refreshPeers(): Promise<void> {
     try {
       const response = await this.trustedNodeRequest({
@@ -247,7 +246,7 @@ export class ArweaveCompositeClient
           return block;
         })
         .catch((error) => {
-          this.log.error(`Block prefetch failed:`, {
+          this.log.error('Block prefetch failed', {
             height: height,
             message: error.message,
           });
@@ -264,8 +263,11 @@ export class ArweaveCompositeClient
           this.prefetchTx(txId);
         });
       }
-    } catch (error) {
-      // TODO log error
+    } catch (error: any) {
+      this.log.error('Error prefetching block transactions', {
+        height: height,
+        message: error.message,
+      });
     }
   }
 
@@ -335,7 +337,7 @@ export class ArweaveCompositeClient
       const tx = this.arweave.transactions.fromRaw(response.data);
       const isValid = await this.arweave.transactions.verify(tx);
       if (!isValid) {
-        throw new Error(`Invalid transaction`);
+        throw new Error('Invalid transaction');
       }
       return response;
     });
@@ -380,7 +382,7 @@ export class ArweaveCompositeClient
         return tx;
       })
       .catch((error) => {
-        this.log.error('Transaction prefetch failed:', {
+        this.log.error('Transaction prefetch failed', {
           txId: txId,
           message: error.message,
         });
@@ -408,7 +410,7 @@ export class ArweaveCompositeClient
       // Remove failed requests from the cache
       this.txPromiseCache.del(txId);
 
-      this.log.error('Failed to get transaction:', {
+      this.log.error('Failed to get transaction', {
         txId: txId,
         message: error.message,
       });
@@ -489,7 +491,7 @@ export class ArweaveCompositeClient
 
       return chunk;
     } catch (error: any) {
-      this.log.error('Failed to retrieve chunk:', {
+      this.log.error('Failed to get chunk', {
         offset,
         message: error.message,
       });
@@ -524,7 +526,7 @@ export class ArweaveCompositeClient
       const txData = fromB64Url(dataResponse.data);
       return { data: Readable.from(txData), size };
     } catch (error: any) {
-      this.log.error('Failed to get transaction data:', {
+      this.log.error('Failed to get transaction data', {
         txId,
         message: error.message,
       });
