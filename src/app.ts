@@ -59,12 +59,14 @@ const arweave = Arweave.init({});
 
 // Workers
 const eventEmitter = new EventEmitter();
+
 const arweaveClient = new ArweaveCompositeClient({
   log,
   metricsRegistry: promClient.register,
   arweave,
   trustedNodeUrl: arweaveUrl,
 });
+
 const db = new Sqlite('data/sqlite/core.db');
 const chainDb = new StandaloneSqliteDatabase(db);
 const blockImporter = new BlockImporter({
@@ -76,18 +78,29 @@ const blockImporter = new BlockImporter({
   eventEmitter,
   startHeight: startHeight,
 });
+
 const txFetcher = new TransactionFetcher({
   log,
   chainSource: arweaveClient,
   eventEmitter,
-  fetchEvents: ['block-tx-fetch-failed'],
 });
-new TransactionImporter({
+
+// Async fetch block TXs that failed sync fetch
+eventEmitter.addListener('block-tx-fetch-failed', (txId) => {
+  txFetcher.queueTxId(txId);
+});
+
+const txImporter = new TransactionImporter({
   log,
   chainDb,
   eventEmitter,
-  importEvents: ['tx-fetched'],
 });
+
+// Queue fetched TXs to
+eventEmitter.addListener('tx-fetched', (tx) => {
+  txImporter.queueTx(tx);
+});
+
 const txRepairWorker = new TransactionRepairWorker({
   log,
   chainDb,

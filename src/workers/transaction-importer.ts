@@ -37,22 +37,16 @@ export class TransactionImporter {
     log,
     chainDb,
     eventEmitter,
-    importEvents,
     workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
     chainDb: ChainDatabase;
     eventEmitter: EventEmitter;
-    importEvents: string[];
     workerCount?: number;
   }) {
     this.log = log.child({ class: 'TransactionImporter' });
     this.eventEmitter = eventEmitter;
     this.chainDb = chainDb;
-
-    for (const event of importEvents) {
-      this.eventEmitter.addListener(event, this.queueTx.bind(this));
-    }
 
     // Initialize TX import queue
     this.txImportQueue = fastq.promise(this.importTx.bind(this), workerCount);

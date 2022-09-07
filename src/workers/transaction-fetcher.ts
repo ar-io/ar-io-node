@@ -44,7 +44,6 @@ export class TransactionFetcher {
     log,
     chainSource,
     eventEmitter,
-    fetchEvents,
     workerCount = DEFAULT_WORKER_COUNT,
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
     retryWaitMs = DEFAULT_RETRY_WAIT_MS,
@@ -52,7 +51,6 @@ export class TransactionFetcher {
     log: winston.Logger;
     chainSource: ChainSource;
     eventEmitter: EventEmitter;
-    fetchEvents: string[];
     workerCount?: number;
     maxAttempts?: number;
     retryWaitMs?: number;
@@ -63,10 +61,6 @@ export class TransactionFetcher {
 
     this.maxAttempts = maxAttempts;
     this.retryWaitMs = retryWaitMs;
-
-    for (const event of fetchEvents) {
-      this.eventEmitter.addListener(event, this.queueTxId.bind(this));
-    }
 
     // Initialize TX ID fetch queue
     this.txFetchQueue = fastq.promise(this.fetchTx.bind(this), workerCount);
