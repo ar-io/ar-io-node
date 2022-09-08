@@ -93,7 +93,7 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: ${ARWEAVE_GATEWAY}
+                      address: ${GATEWAY_URL}
                       port_value: 443
       transport_socket:
         name: envoy.transport_sockets.tls

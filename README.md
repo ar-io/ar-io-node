@@ -33,13 +33,13 @@ You can run the ar.io gateway as a standalone docker container:
 
 ```shell
 docker build . -t ar-io-core:latest
-docker run -p 4000:4000 -v ar-io-data:/app/data ar-io-node:latest
+docker run -p 4000:4000 -v ar-io-data:/app/data ar-io-core:latest
 ```
 
 To run with a specified start height (sets height on first run only):
 
 ```shell
-docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ar-io-node:latest
+docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ar-io-core:latest
 ```
 
 ### Envoy & AR.IO Node
@@ -89,5 +89,5 @@ Once running, requests can be directed to Envoy server at `localhost:3000`.
 [idempotent]: https://en.wikipedia.org/wiki/Idempotence
 [compile test suite]: https://martinfowler.com/bliki/UnitTest.html
 [sociable over solitary tests]: https://martinfowler.com/bliki/UnitTest.html
-[metrics]: https://github.com/siimon/prom-client
-[metrics namings recommendations]: https://prometheus.io/docs/practices/naming/
+[prometheus metrics]: https://github.com/siimon/prom-client
+[metrics naming recommendations]: https://prometheus.io/docs/practices/naming/

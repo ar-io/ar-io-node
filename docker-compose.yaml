@@ -12,7 +12,7 @@ services:
     environment:
       - AR_IO_HOST=core
       - AR_IO_PORT=4000
-      - ARWEAVE_GATEWAY=arweave.net
+      - GATEWAY_URL=arweave.net
       - LOG_LEVEL=info
 
   core:

@@ -36,7 +36,7 @@ import { TransactionRepairWorker } from './workers/transaction-repair-worker.js'
 
 // Configuration
 const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
-const arweaveUrl = process.env.ARWEAVE_URL ?? 'https://arweave.net';
+const trustedNodeUrl = process.env.TRUSTED_NODE_URL ?? 'https://arweave.net';
 const port = parseInt(process.env.PORT ?? '4000');
 
 // Global errors counter
@@ -64,7 +64,7 @@ const arweaveClient = new ArweaveCompositeClient({
   log,
   metricsRegistry: promClient.register,
   arweave,
-  trustedNodeUrl: arweaveUrl,
+  trustedNodeUrl,
 });
 
 const db = new Sqlite('data/sqlite/core.db');
