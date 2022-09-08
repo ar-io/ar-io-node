@@ -12,7 +12,7 @@
 
 ### Initialize the SQLite DB
 
-`yarn db:migrate`
+`yarn db:migrate up`
 
 ### Run the service
 
