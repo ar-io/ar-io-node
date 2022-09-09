@@ -21,10 +21,10 @@ jobs:
       # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
       - run: yarn build
-      - run: yarn test --reporter > test-results.json
+      - run: yarn test --reporter json > test-results.json
 
-      # Test Results Reporter
-      - name: Test Reporter
+      # Test results report
+      - name: Report test results
         uses: dorny/test-reporter@v1
         if: success() || failure()
         with:
