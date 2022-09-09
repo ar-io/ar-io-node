@@ -21,7 +21,16 @@ jobs:
       # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
       - run: yarn build
-      - run: yarn test
+      - run: yarn -s test --reporter json > test-results.json
+
+      # Test results report
+      - name: Report test results
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Mocha tests
+          path: test-results.json
+          reporter: mocha-json
 
       # Build and push container image (only on main)
       - name: Log in to the GitHub Container Registry
