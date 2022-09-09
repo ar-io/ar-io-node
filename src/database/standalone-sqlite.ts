@@ -195,6 +195,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private deleteStaleNewBlockTxsStmt: Sqlite.Statement;
   private deleteStaleNewBlocksStmt: Sqlite.Statement;
   private deleteStaleNewBlockHeightsStmt: Sqlite.Statement;
+  private deleteStaleMissingTxsStmt: Sqlite.Statement;
 
   // Async TX import
   private newBlockTxInsertStmt: Sqlite.Statement;
@@ -438,6 +439,18 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.deleteStaleNewTxsByTimestampStmt = this.db.prepare(`
       DELETE FROM new_transactions
       WHERE created_at < @created_at_threshold
+    `);
+
+    this.deleteStaleMissingTxsStmt = this.db.prepare(`
+      DELETE FROM missing_transactions
+      WHERE transaction_id IN (
+        SELECT mt.transaction_id
+        FROM missing_transactions mt
+        LEFT JOIN stable_block_transactions sbt ON
+          sbt.block_indep_hash = mt.block_indep_hash
+          AND sbt.transaction_id = mt.transaction_id
+        WHERE mt.height < @height_threshold AND sbt.transaction_id IS NULL
+      )
     `);
 
     this.newBlockHeightInsertStmt = this.db.prepare(`
@@ -705,6 +718,10 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
         this.deleteStaleNewTxsByTimestampStmt.run({
           created_at_threshold: createdAtThreshold,
+        });
+
+        this.deleteStaleMissingTxsStmt.run({
+          height_threshold: heightThreshold,
         });
       },
     );
