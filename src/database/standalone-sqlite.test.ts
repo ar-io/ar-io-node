@@ -49,7 +49,6 @@ describe('SQLite helper functions', () => {
 describe('SQLite GraphQL cursor functions', () => {
   describe('encodeTransactionGqlCursor', () => {
     it('should encode a cursor given a height and blockTransactionIndex', () => {
-      expect(1).to.equal(0);
       expect(
         encodeTransactionGqlCursor({
           height: HEIGHT,
