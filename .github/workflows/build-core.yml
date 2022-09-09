@@ -21,7 +21,7 @@ jobs:
       # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
       - run: yarn build
-      - run: yarn test --reporter json > test-results.json
+      - run: yarn -s test --reporter json > test-results.json
 
       # Test results report
       - name: Report test results
