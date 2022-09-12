@@ -67,8 +67,8 @@ const arweaveClient = new ArweaveCompositeClient({
   trustedNodeUrl,
 });
 
-const db = new Sqlite('data/sqlite/core.db');
-const chainDb = new StandaloneSqliteDatabase(db);
+const coreDb = new Sqlite('data/sqlite/core.db');
+const chainDb = new StandaloneSqliteDatabase({ coreDb });
 const blockImporter = new BlockImporter({
   log,
   metricsRegistry: promClient.register,

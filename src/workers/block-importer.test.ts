@@ -38,7 +38,7 @@ describe('BlockImporter', () => {
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
-  let db: Sqlite.Database;
+  let coreDb: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
   let sandbox: sinon.SinonSandbox;
 
@@ -73,10 +73,10 @@ describe('BlockImporter', () => {
     promClient.collectDefaultMetrics({ register: metricsRegistry });
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
-    db = new Sqlite(':memory:');
+    coreDb = new Sqlite(':memory:');
     const schema = fs.readFileSync('test/schema.sql', 'utf8');
-    db.exec(schema);
-    chainDb = new StandaloneSqliteDatabase(db);
+    coreDb.exec(schema);
+    chainDb = new StandaloneSqliteDatabase({ coreDb });
   });
 
   after(() => {

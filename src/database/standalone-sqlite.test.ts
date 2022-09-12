@@ -112,15 +112,15 @@ describe('SQLite GraphQL cursor functions', () => {
 });
 
 describe('StandaloneSqliteDatabase', () => {
-  let db: Sqlite.Database;
+  let coreDb: Sqlite.Database;
   let chainSource: ArweaveChainSourceStub;
   let chainDb: StandaloneSqliteDatabase;
 
   beforeEach(async () => {
-    db = new Sqlite(':memory:');
+    coreDb = new Sqlite(':memory:');
     const schema = fs.readFileSync('test/schema.sql', 'utf8');
-    db.exec(schema);
-    chainDb = new StandaloneSqliteDatabase(db);
+    coreDb.exec(schema);
+    chainDb = new StandaloneSqliteDatabase({ coreDb });
     chainSource = new ArweaveChainSourceStub();
   });
 
@@ -136,7 +136,7 @@ describe('StandaloneSqliteDatabase', () => {
       const stats = await chainDb.getDebugInfo();
       expect(stats.counts.newBlocks).to.equal(1);
 
-      const dbBlock = db
+      const dbBlock = coreDb
         .prepare(`SELECT * FROM new_blocks WHERE height = ${height}`)
         .get();
 
@@ -227,7 +227,7 @@ describe('StandaloneSqliteDatabase', () => {
         ORDER BY nbh.height, nbt.block_transaction_index
       `;
 
-      const dbTransactions = db.prepare(sql).all();
+      const dbTransactions = coreDb.prepare(sql).all();
 
       const txIds = [
         'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA',
@@ -295,7 +295,7 @@ describe('StandaloneSqliteDatabase', () => {
           ORDER BY nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
         `;
 
-        const dbTags = db
+        const dbTags = coreDb
           .prepare(sql)
           .all({ transaction_id: fromB64Url(txId) });
 
@@ -327,7 +327,7 @@ describe('StandaloneSqliteDatabase', () => {
         ORDER BY block_indep_hash, transaction_id
       `;
 
-      const dbMissingTxs = db.prepare(sql).all();
+      const dbMissingTxs = coreDb.prepare(sql).all();
 
       const missingTxs = [
         {
@@ -461,7 +461,7 @@ describe('StandaloneSqliteDatabase', () => {
         ORDER BY block_indep_hash, transaction_id
       `;
 
-      const dbStableBlockTransactions = db.prepare(sql).all();
+      const dbStableBlockTransactions = coreDb.prepare(sql).all();
 
       const stableBlockTransactions = [
         {
@@ -567,7 +567,7 @@ describe('StandaloneSqliteDatabase', () => {
       const stats = await chainDb.getDebugInfo();
       expect(stats.counts.stableBlocks).to.equal(1);
 
-      const dbBlock = db
+      const dbBlock = coreDb
         .prepare(`SELECT * FROM stable_blocks WHERE height = ${height}`)
         .get();
 
@@ -655,7 +655,7 @@ describe('StandaloneSqliteDatabase', () => {
         ORDER BY sb.height, sb.block_transaction_index
       `;
 
-      const dbTransactions = db.prepare(sql).all();
+      const dbTransactions = coreDb.prepare(sql).all();
 
       const txIds = [
         'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA',
@@ -721,7 +721,7 @@ describe('StandaloneSqliteDatabase', () => {
           ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
         `;
 
-        const dbTags = db
+        const dbTags = coreDb
           .prepare(sql)
           .all({ transaction_id: fromB64Url(txId) });
 
@@ -762,7 +762,7 @@ describe('StandaloneSqliteDatabase', () => {
         ORDER BY sb.height, sb.block_transaction_index
       `;
 
-      const dbTransactions = db.prepare(sql).all();
+      const dbTransactions = coreDb.prepare(sql).all();
 
       const txIds = ['glHacTmLlPSw55wUOU-MMaknJjWWHBLN16U8f3YuOd4'];
 
@@ -824,7 +824,7 @@ describe('StandaloneSqliteDatabase', () => {
           ORDER BY st.height, st.block_transaction_index, stt.transaction_tag_index
         `;
 
-        const dbTags = db
+        const dbTags = coreDb
           .prepare(sql)
           .all({ transaction_id: fromB64Url(txId) });
 
@@ -863,7 +863,7 @@ describe('StandaloneSqliteDatabase', () => {
       `;
 
       expect(
-        db.prepare(sql).get({ transaction_id: fromB64Url(txId) }).cnt,
+        coreDb.prepare(sql).get({ transaction_id: fromB64Url(txId) }).cnt,
       ).to.be.equal(1);
     });
 
@@ -873,7 +873,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM tag_names
       `;
 
-      expect(db.prepare(sql).get().cnt).to.be.equal(12);
+      expect(coreDb.prepare(sql).get().cnt).to.be.equal(12);
     });
 
     it('should insert into tag_values', async () => {
@@ -882,7 +882,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM tag_values
       `;
 
-      expect(db.prepare(sql).get().cnt).to.be.equal(12);
+      expect(coreDb.prepare(sql).get().cnt).to.be.equal(12);
     });
 
     it('should insert into new_transaction_tags', async () => {
@@ -891,7 +891,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM new_transaction_tags
       `;
 
-      expect(db.prepare(sql).get().cnt).to.be.equal(12);
+      expect(coreDb.prepare(sql).get().cnt).to.be.equal(12);
     });
 
     it('should insert into wallets', async () => {
@@ -900,7 +900,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM wallets
       `;
 
-      expect(db.prepare(sql).get().cnt).to.be.equal(1);
+      expect(coreDb.prepare(sql).get().cnt).to.be.equal(1);
     });
   });
 });

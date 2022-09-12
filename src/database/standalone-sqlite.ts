@@ -167,7 +167,9 @@ export function txToDbRows(tx: PartialJsonTransaction) {
 }
 
 export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
-  private db: Sqlite.Database;
+  private dbs: {
+    core: Sqlite.Database;
+  };
 
   // Lookup table inserts
   private walletInsertStmt: Sqlite.Statement;
@@ -224,25 +226,25 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   saveStableDataFn: Sqlite.Transaction;
   deleteStaleNewDataFn: Sqlite.Transaction;
 
-  constructor(db: Sqlite.Database) {
-    this.db = db;
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('page_size = 4096'); // may depend on OS and FS
+  constructor({ coreDb }: { coreDb: Sqlite.Database }) {
+    this.dbs = { core: coreDb };
+    this.dbs.core.pragma('journal_mode = WAL');
+    this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
 
     // Lookup table inserts
-    this.walletInsertStmt = this.db.prepare(`
+    this.walletInsertStmt = this.dbs.core.prepare(`
       INSERT INTO wallets (address, public_modulus)
       VALUES (@address, @public_modulus)
       ON CONFLICT DO NOTHING
     `);
 
-    this.tagNamesInsertStmt = this.db.prepare(`
+    this.tagNamesInsertStmt = this.dbs.core.prepare(`
       INSERT INTO tag_names (hash, name)
       VALUES (@hash, @name)
       ON CONFLICT DO NOTHING
     `);
 
-    this.tagValuesInsertStmt = this.db.prepare(`
+    this.tagValuesInsertStmt = this.dbs.core.prepare(`
       INSERT INTO tag_values (hash, value)
       VALUES (@hash, @value)
       ON CONFLICT DO NOTHING
@@ -250,7 +252,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     // "new_*" (and related) inserts
     // TODO are the CASTs necessary
-    this.newBlocksInsertStmt = this.db.prepare(`
+    this.newBlocksInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_blocks (
         indep_hash, height, previous_block, nonce, hash,
         block_timestamp, diff,
@@ -278,7 +280,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ) ON CONFLICT DO NOTHING
     `);
 
-    this.newBlockHeightsInsertStmt = this.db.prepare(`
+    this.newBlockHeightsInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_block_heights (
         height, block_indep_hash
       ) VALUES (
@@ -286,7 +288,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ) ON CONFLICT DO NOTHING
     `);
 
-    this.newBlockTxsInsertStmt = this.db.prepare(`
+    this.newBlockTxsInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_block_transactions (
         block_indep_hash, transaction_id, block_transaction_index
       ) VALUES (
@@ -294,7 +296,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ) ON CONFLICT DO NOTHING
     `);
 
-    this.newTxTagsInsertStmt = this.db.prepare(`
+    this.newTxTagsInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_transaction_tags (
         tag_name_hash, tag_value_hash,
         transaction_id, transaction_tag_index
@@ -304,7 +306,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ) ON CONFLICT DO NOTHING
     `);
 
-    this.newTxsInsertStmt = this.db.prepare(`
+    this.newTxsInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_transactions (
         id, signature, format, last_tx, owner_address,
         target, quantity, reward, data_size, data_root,
@@ -316,7 +318,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ) ON CONFLICT DO NOTHING
     `);
 
-    this.missingTxsInsertStmt = this.db.prepare(`
+    this.missingTxsInsertStmt = this.dbs.core.prepare(`
       INSERT INTO missing_transactions (
         block_indep_hash, transaction_id, height
       ) VALUES (
@@ -325,7 +327,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     `);
 
     // "new_*" to "stable_*" copy
-    this.saveStableBlocksStmt = this.db.prepare(`
+    this.saveStableBlocksStmt = this.dbs.core.prepare(`
       INSERT INTO stable_blocks (
         height, indep_hash, previous_block, nonce, hash,
         block_timestamp, diff, cumulative_diff, last_retarget,
@@ -348,7 +350,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ON CONFLICT DO NOTHING
     `);
 
-    this.saveStableBlockTxsStmt = this.db.prepare(`
+    this.saveStableBlockTxsStmt = this.dbs.core.prepare(`
       INSERT INTO stable_block_transactions (
         block_indep_hash, transaction_id, block_transaction_index
       ) SELECT
@@ -359,7 +361,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ON CONFLICT DO NOTHING
     `);
 
-    this.saveStableTxsStmt = this.db.prepare(`
+    this.saveStableTxsStmt = this.dbs.core.prepare(`
       INSERT INTO stable_transactions (
         id, height, block_transaction_index, signature,
         format, last_tx, owner_address, target, quantity,
@@ -375,7 +377,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ON CONFLICT DO NOTHING
     `);
 
-    this.saveStableTxTagsStmt = this.db.prepare(`
+    this.saveStableTxTagsStmt = this.dbs.core.prepare(`
       INSERT INTO stable_transaction_tags (
         tag_name_hash, tag_value_hash, height,
         block_transaction_index, transaction_tag_index,
@@ -392,7 +394,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     `);
 
     // Stale "new_*" data cleanup
-    this.deleteStaleNewTxTagsStmt = this.db.prepare(`
+    this.deleteStaleNewTxTagsStmt = this.dbs.core.prepare(`
       DELETE FROM new_transaction_tags
       WHERE transaction_id IN (
         SELECT nbt.transaction_id
@@ -402,7 +404,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       )
     `);
 
-    this.deleteStaleNewTxsByHeightStmt = this.db.prepare(`
+    this.deleteStaleNewTxsByHeightStmt = this.dbs.core.prepare(`
       DELETE FROM new_transactions
       WHERE id IN (
         SELECT nbt.transaction_id
@@ -412,7 +414,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       )
     `);
 
-    this.deleteStaleNewBlockTxsStmt = this.db.prepare(`
+    this.deleteStaleNewBlockTxsStmt = this.dbs.core.prepare(`
       DELETE FROM new_block_transactions
       WHERE transaction_id IN (
         SELECT nbt.transaction_id
@@ -426,22 +428,22 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       )
     `);
 
-    this.deleteStaleNewBlocksStmt = this.db.prepare(`
+    this.deleteStaleNewBlocksStmt = this.dbs.core.prepare(`
       DELETE FROM new_blocks
       WHERE height < @height_threshold
     `);
 
-    this.deleteStaleNewBlockHeightsStmt = this.db.prepare(`
+    this.deleteStaleNewBlockHeightsStmt = this.dbs.core.prepare(`
       DELETE FROM new_block_heights
       WHERE height < @height_threshold
     `);
 
-    this.deleteStaleNewTxsByTimestampStmt = this.db.prepare(`
+    this.deleteStaleNewTxsByTimestampStmt = this.dbs.core.prepare(`
       DELETE FROM new_transactions
       WHERE created_at < @created_at_threshold
     `);
 
-    this.deleteStaleMissingTxsStmt = this.db.prepare(`
+    this.deleteStaleMissingTxsStmt = this.dbs.core.prepare(`
       DELETE FROM missing_transactions
       WHERE transaction_id IN (
         SELECT mt.transaction_id
@@ -453,7 +455,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       )
     `);
 
-    this.newBlockHeightInsertStmt = this.db.prepare(`
+    this.newBlockHeightInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_block_heights (
         height, block_indep_hash
       )
@@ -464,7 +466,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ON CONFLICT DO NOTHING
     `);
 
-    this.newBlockTxInsertStmt = this.db.prepare(`
+    this.newBlockTxInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_block_transactions (
         block_indep_hash, transaction_id, block_transaction_index
       )
@@ -474,13 +476,13 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       ON CONFLICT DO NOTHING
     `);
 
-    this.deleteMissingTxsStmt = this.db.prepare(`
+    this.deleteMissingTxsStmt = this.dbs.core.prepare(`
       DELETE FROM missing_transactions
       WHERE transaction_id = @transaction_id
     `);
 
     // Internal accessors
-    this.getMaxStableHeightAndTimestampStmt = this.db.prepare(`
+    this.getMaxStableHeightAndTimestampStmt = this.dbs.core.prepare(`
       SELECT
         IFNULL(MAX(height), -1) AS height,
         IFNULL(MAX(block_timestamp), 0) AS block_timestamp
@@ -488,7 +490,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     `);
 
     // Public accessors
-    this.getMaxHeightStmt = this.db.prepare(`
+    this.getMaxHeightStmt = this.dbs.core.prepare(`
       SELECT MAX(height) AS height
       FROM (
         SELECT MAX(height) AS height
@@ -499,32 +501,32 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       )
     `);
 
-    this.getNewBlockHashByHeightStmt = this.db.prepare(`
+    this.getNewBlockHashByHeightStmt = this.dbs.core.prepare(`
       SELECT block_indep_hash
       FROM new_block_heights
       WHERE height = @height
     `);
 
-    this.getMissingTxIdsStmt = this.db.prepare(`
+    this.getMissingTxIdsStmt = this.dbs.core.prepare(`
       SELECT transaction_id
       FROM missing_transactions
       LIMIT @limit
     `);
 
     // Height reset
-    this.resetToHeightStmt = this.db.prepare(`
+    this.resetToHeightStmt = this.dbs.core.prepare(`
       DELETE FROM new_block_heights
       WHERE height > @height
     `);
 
     // Max stable block height (for GQL)
-    this.getMaxStableBlockHeightStmt = this.db.prepare(`
+    this.getMaxStableBlockHeightStmt = this.dbs.core.prepare(`
       SELECT MAX(height) AS height
       FROM stable_blocks
     `);
 
     // Get new transaction tags (for GQL)
-    this.getNewTransactionTagsStmt = this.db.prepare(`
+    this.getNewTransactionTagsStmt = this.dbs.core.prepare(`
       SELECT name, value
       FROM new_transaction_tags
       JOIN tag_names ON tag_name_hash = tag_names.hash
@@ -533,7 +535,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     `);
 
     // Get stable transaction tags (for GQL)
-    this.getStableTransactionTagsStmt = this.db.prepare(`
+    this.getStableTransactionTagsStmt = this.dbs.core.prepare(`
       SELECT name, value
       FROM stable_transaction_tags
       JOIN tag_names ON tag_name_hash = tag_names.hash
@@ -542,44 +544,46 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     `);
 
     // Transactions
-    this.insertTxFn = this.db.transaction((tx: PartialJsonTransaction) => {
-      // Insert the transaction
-      const rows = txToDbRows(tx);
+    this.insertTxFn = this.dbs.core.transaction(
+      (tx: PartialJsonTransaction) => {
+        // Insert the transaction
+        const rows = txToDbRows(tx);
 
-      for (const row of rows.tagNames) {
-        this.tagNamesInsertStmt.run(row);
-      }
+        for (const row of rows.tagNames) {
+          this.tagNamesInsertStmt.run(row);
+        }
 
-      for (const row of rows.tagValues) {
-        this.tagValuesInsertStmt.run(row);
-      }
+        for (const row of rows.tagValues) {
+          this.tagValuesInsertStmt.run(row);
+        }
 
-      for (const row of rows.newTxTags) {
-        this.newTxTagsInsertStmt.run(row);
-      }
+        for (const row of rows.newTxTags) {
+          this.newTxTagsInsertStmt.run(row);
+        }
 
-      for (const row of rows.wallets) {
-        this.walletInsertStmt.run(row);
-      }
+        for (const row of rows.wallets) {
+          this.walletInsertStmt.run(row);
+        }
 
-      this.newTxsInsertStmt.run(rows.newTx);
+        this.newTxsInsertStmt.run(rows.newTx);
 
-      // Upsert the transaction to block assocation
-      this.newBlockTxInsertStmt.run({
-        transaction_id: rows.newTx.id,
-      });
+        // Upsert the transaction to block assocation
+        this.newBlockTxInsertStmt.run({
+          transaction_id: rows.newTx.id,
+        });
 
-      this.newBlockHeightInsertStmt.run({
-        transaction_id: rows.newTx.id,
-      });
+        this.newBlockHeightInsertStmt.run({
+          transaction_id: rows.newTx.id,
+        });
 
-      // Remove missing transaction ID if it exists
-      this.deleteMissingTxsStmt.run({
-        transaction_id: rows.newTx.id,
-      });
-    });
+        // Remove missing transaction ID if it exists
+        this.deleteMissingTxsStmt.run({
+          transaction_id: rows.newTx.id,
+        });
+      },
+    );
 
-    this.insertBlockAndTxsFn = this.db.transaction(
+    this.insertBlockAndTxsFn = this.dbs.core.transaction(
       (
         block: PartialJsonBlock,
         txs: PartialJsonTransaction[],
@@ -675,7 +679,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       },
     );
 
-    this.saveStableDataFn = this.db.transaction((endHeight: number) => {
+    this.saveStableDataFn = this.dbs.core.transaction((endHeight: number) => {
       this.saveStableBlocksStmt.run({
         end_height: endHeight,
       });
@@ -693,7 +697,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       });
     });
 
-    this.deleteStaleNewDataFn = this.db.transaction(
+    this.deleteStaleNewDataFn = this.dbs.core.transaction(
       (heightThreshold: number, createdAtThreshold: number) => {
         this.deleteStaleNewTxTagsStmt.run({
           height_threshold: heightThreshold,
@@ -785,43 +789,43 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getDebugInfo() {
-    const walletCount = this.db
+    const walletCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM wallets')
       .get().cnt as number;
-    const tagNameCount = this.db
+    const tagNameCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM tag_names')
       .get().cnt as number;
-    const tagValueCount = this.db
+    const tagValueCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM tag_values')
       .get().cnt as number;
-    const stableTxCount = this.db
+    const stableTxCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM stable_transactions')
       .get().cnt as number;
-    const stableBlockCount = this.db
+    const stableBlockCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM stable_blocks')
       .get().cnt as number;
-    const stableBlockTxCount = this.db
+    const stableBlockTxCount = this.dbs.core
       .prepare('SELECT SUM(tx_count) AS cnt FROM stable_blocks')
       .get().cnt as number;
-    const newTxCount = this.db
+    const newTxCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM new_transactions')
       .get().cnt as number;
-    const newBlockCount = this.db
+    const newBlockCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM new_blocks')
       .get().cnt as number;
-    const missingTxCount = this.db
+    const missingTxCount = this.dbs.core
       .prepare('SELECT COUNT(*) AS cnt FROM missing_transactions')
       .get().cnt as number;
-    const minStableHeight = this.db
+    const minStableHeight = this.dbs.core
       .prepare('SELECT MIN(height) AS min_height FROM stable_blocks')
       .get().min_height as number;
-    const maxStableHeight = this.db
+    const maxStableHeight = this.dbs.core
       .prepare('SELECT MAX(height) AS max_height FROM stable_blocks')
       .get().max_height as number;
-    const minNewBlockHeight = this.db
+    const minNewBlockHeight = this.dbs.core
       .prepare('SELECT MIN(height) AS min_height FROM new_block_heights')
       .get().min_height as number;
-    const maxNewBlockHeight = this.db
+    const maxNewBlockHeight = this.dbs.core
       .prepare('SELECT MAX(height) AS max_height FROM new_block_heights')
       .get().max_height as number;
 
@@ -1129,7 +1133,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const sql = queryParams.text;
     const sqliteParams = toSqliteParams(queryParams);
 
-    return this.db
+    return this.dbs.core
       .prepare(`${sql} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
       .map((tx) => ({
@@ -1192,7 +1196,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const sql = queryParams.text;
     const sqliteParams = toSqliteParams(queryParams);
 
-    return this.db
+    return this.dbs.core
       .prepare(`${sql} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
       .map((tx) => ({
@@ -1424,7 +1428,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const sql = queryParams.text;
     const sqliteParams = toSqliteParams(queryParams);
 
-    const blocks = this.db
+    const blocks = this.dbs.core
       .prepare(`${sql} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
       .map((block) => ({
@@ -1467,7 +1471,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const sql = queryParams.text;
     const sqliteParams = toSqliteParams(queryParams);
 
-    return this.db
+    return this.dbs.core
       .prepare(`${sql} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
       .map((block) => ({
