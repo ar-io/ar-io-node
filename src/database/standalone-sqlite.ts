@@ -21,6 +21,11 @@ import crypto from 'crypto';
 import * as R from 'ramda';
 import sql from 'sql-bricks';
 
+/* eslint-disable */
+// @ts-ignore
+// TODO sort out types
+import { default as yesql } from 'yesql';
+
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import {
   b64UrlToUtf8,
@@ -170,19 +175,9 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private dbs: {
     core: Sqlite.Database;
   };
-
-  // Lookup table inserts
-  private walletInsertStmt: Sqlite.Statement;
-  private tagNamesInsertStmt: Sqlite.Statement;
-  private tagValuesInsertStmt: Sqlite.Statement;
-
-  // "new_*" (and related) inserts
-  private newBlocksInsertStmt: Sqlite.Statement;
-  private newBlockHeightsInsertStmt: Sqlite.Statement;
-  private newBlockTxsInsertStmt: Sqlite.Statement;
-  private newTxTagsInsertStmt: Sqlite.Statement;
-  private newTxsInsertStmt: Sqlite.Statement;
-  private missingTxsInsertStmt: Sqlite.Statement;
+  private stmts: {
+    core: { [key: string]: Sqlite.Statement };
+  };
 
   // "new_*" to "stable_*" copy
   private saveStableBlocksStmt: Sqlite.Statement;
@@ -231,100 +226,13 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.dbs.core.pragma('journal_mode = WAL');
     this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
 
-    // Lookup table inserts
-    this.walletInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO wallets (address, public_modulus)
-      VALUES (@address, @public_modulus)
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.tagNamesInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO tag_names (hash, name)
-      VALUES (@hash, @name)
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.tagValuesInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO tag_values (hash, value)
-      VALUES (@hash, @value)
-      ON CONFLICT DO NOTHING
-    `);
-
-    // "new_*" (and related) inserts
-    // TODO are the CASTs necessary
-    this.newBlocksInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO new_blocks (
-        indep_hash, height, previous_block, nonce, hash,
-        block_timestamp, diff,
-        cumulative_diff, last_retarget,
-        reward_addr, reward_pool,
-        block_size, weave_size,
-        usd_to_ar_rate_dividend,
-        usd_to_ar_rate_divisor,
-        scheduled_usd_to_ar_rate_dividend,
-        scheduled_usd_to_ar_rate_divisor,
-        hash_list_merkle, wallet_list, tx_root,
-        tx_count, missing_tx_count
-      ) VALUES (
-        @indep_hash, @height, @previous_block, @nonce, @hash,
-        CAST(@block_timestamp AS INTEGER), @diff,
-        @cumulative_diff, CAST(@last_retarget AS INTEGER),
-        @reward_addr, CAST(@reward_pool AS INTEGER),
-        CAST(@block_size AS INTEGER), CAST(@weave_size AS INTEGER),
-        CAST(@usd_to_ar_rate_dividend AS INTEGER),
-        CAST(@usd_to_ar_rate_divisor AS INTEGER),
-        CAST(@scheduled_usd_to_ar_rate_dividend AS INTEGER),
-        CAST(@scheduled_usd_to_ar_rate_divisor AS INTEGER),
-        @hash_list_merkle, @wallet_list, @tx_root,
-        @tx_count, @missing_tx_count
-      ) ON CONFLICT DO NOTHING
-    `);
-
-    this.newBlockHeightsInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO new_block_heights (
-        height, block_indep_hash
-      ) VALUES (
-        @height, @block_indep_hash
-      ) ON CONFLICT DO NOTHING
-    `);
-
-    this.newBlockTxsInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO new_block_transactions (
-        block_indep_hash, transaction_id, block_transaction_index
-      ) VALUES (
-        @block_indep_hash, @transaction_id, @block_transaction_index
-      ) ON CONFLICT DO NOTHING
-    `);
-
-    this.newTxTagsInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO new_transaction_tags (
-        tag_name_hash, tag_value_hash,
-        transaction_id, transaction_tag_index
-      ) VALUES (
-        @tag_name_hash, @tag_value_hash,
-        @transaction_id, @transaction_tag_index
-      ) ON CONFLICT DO NOTHING
-    `);
-
-    this.newTxsInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO new_transactions (
-        id, signature, format, last_tx, owner_address,
-        target, quantity, reward, data_size, data_root,
-        tag_count, content_type, created_at
-      ) VALUES (
-        @id, @signature, @format, @last_tx, @owner_address,
-        @target, @quantity, @reward, @data_size, @data_root,
-        @tag_count, @content_type, @created_at
-      ) ON CONFLICT DO NOTHING
-    `);
-
-    this.missingTxsInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO missing_transactions (
-        block_indep_hash, transaction_id, height
-      ) VALUES (
-        @block_indep_hash, @transaction_id, @height
-      ) ON CONFLICT DO NOTHING
-    `);
+    this.stmts = { core: {} };
+    const coreSql = yesql('./sql/core/') as { [key: string]: string };
+    for (const [k, sql] of Object.entries(coreSql)) {
+      if (!k.endsWith('.sql')) {
+        this.stmts.core[k] = this.dbs.core.prepare(sql);
+      }
+    }
 
     // "new_*" to "stable_*" copy
     this.saveStableBlocksStmt = this.dbs.core.prepare(`
@@ -550,22 +458,22 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         const rows = txToDbRows(tx);
 
         for (const row of rows.tagNames) {
-          this.tagNamesInsertStmt.run(row);
+          this.stmts.core.insertOrIgnoreTagName.run(row);
         }
 
         for (const row of rows.tagValues) {
-          this.tagValuesInsertStmt.run(row);
+          this.stmts.core.insertOrIgnoreTagValue.run(row);
         }
 
         for (const row of rows.newTxTags) {
-          this.newTxTagsInsertStmt.run(row);
+          this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
         }
 
         for (const row of rows.wallets) {
-          this.walletInsertStmt.run(row);
+          this.stmts.core.insertOrIgnoreWallet.run(row);
         }
 
-        this.newTxsInsertStmt.run(rows.newTx);
+        this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
 
         // Upsert the transaction to block assocation
         this.newBlockTxInsertStmt.run({
@@ -600,7 +508,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         const walletList = Buffer.from(block.wallet_list, 'base64');
         const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
 
-        this.newBlocksInsertStmt.run({
+        this.stmts.core.insertOrIgnoreNewBlock.run({
           indep_hash: indepHash,
           height: block.height,
           previous_block: previousBlock,
@@ -627,7 +535,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           missing_tx_count: missingTxIds.length,
         });
 
-        this.newBlockHeightsInsertStmt.run({
+        this.stmts.core.insertOrIgnoreNewBlockHeight.run({
           height: block.height,
           block_indep_hash: indepHash,
         });
@@ -636,7 +544,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         for (const txIdStr of block.txs) {
           const txId = Buffer.from(txIdStr, 'base64');
 
-          this.newBlockTxsInsertStmt.run({
+          this.stmts.core.insertOrIgnoreNewBlockTransaction.run({
             transaction_id: txId,
             block_indep_hash: indepHash,
             block_transaction_index: blockTransactionIndex,
@@ -649,28 +557,28 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           const rows = txToDbRows(tx);
 
           for (const row of rows.tagNames) {
-            this.tagNamesInsertStmt.run(row);
+            this.stmts.core.insertOrIgnoreTagName.run(row);
           }
 
           for (const row of rows.tagValues) {
-            this.tagValuesInsertStmt.run(row);
+            this.stmts.core.insertOrIgnoreTagValue.run(row);
           }
 
           for (const row of rows.newTxTags) {
-            this.newTxTagsInsertStmt.run(row);
+            this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
           }
 
           for (const row of rows.wallets) {
-            this.walletInsertStmt.run(row);
+            this.stmts.core.insertOrIgnoreWallet.run(row);
           }
 
-          this.newTxsInsertStmt.run(rows.newTx);
+          this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
         }
 
         for (const txIdStr of missingTxIds) {
           const txId = Buffer.from(txIdStr, 'base64');
 
-          this.missingTxsInsertStmt.run({
+          this.stmts.core.insertOrIgnoreMissingTransaction.run({
             block_indep_hash: indepHash,
             transaction_id: txId,
             height: block.height,

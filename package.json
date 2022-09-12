@@ -35,7 +35,8 @@
     "umzug": "^3.2.1",
     "wait": "^0.4.2",
     "winston": "^3.7.2",
-    "yaml": "^2.1.1"
+    "yaml": "^2.1.1",
+    "yesql": "^5.0.0"
   },
   "devDependencies": {
     "@swc/core": "^1.2.241",
