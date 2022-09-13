@@ -244,8 +244,16 @@ export interface JsonChunk {
 }
 
 export interface ChunkSource {
-  getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk>;
-  getChunkDataByAbsoluteOffset(offset: number): Promise<Readable>;
+  getChunkByAbsoluteOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<JsonChunk>;
+  getChunkDataByAbsoluteOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<Readable>;
 }
 
 export interface TxDataSource {

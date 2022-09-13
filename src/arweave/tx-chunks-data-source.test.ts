@@ -89,6 +89,27 @@ describe('TxChunksDataSource', () => {
             });
           });
       });
+      describe('an invalid chunk', () => {
+        it('should throw an error', function (done) {
+          const error = new Error('Invalid chunk');
+          sinon
+            .stub(chunkSource, 'getChunkDataByAbsoluteOffset')
+            .rejects(error);
+          txChunkRetriever
+            .getTxData(TX_ID)
+            .then((res: { data: Readable; size: number }) => {
+              const { data } = res;
+              data.on('error', (error: any) => {
+                expect(error).to.deep.equal(error);
+                done();
+              });
+              // do nothing
+              data.on('data', () => {
+                return;
+              });
+            });
+        });
+      });
     });
   });
 });

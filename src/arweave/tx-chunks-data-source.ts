@@ -1,6 +1,7 @@
 import { Readable } from 'stream';
 import winston from 'winston';
 
+import { fromB64Url } from '../lib/encoding.js';
 import { ChainSource, ChunkSource, TxDataSource } from '../types.js';
 
 export class TxChunksDataSource implements TxDataSource {
@@ -26,16 +27,28 @@ export class TxChunksDataSource implements TxDataSource {
     this.log.info('Fetching chunk data for tx', { txId });
 
     try {
-      const offsetResponse = await this.chainSource.getTxOffset(txId);
-      const size = +offsetResponse.size;
-      const offset = +offsetResponse.offset;
+      const [txData, txOffset] = await Promise.all([
+        this.chainSource.getTx(txId),
+        this.chainSource.getTxOffset(txId),
+      ]);
+      const size = +txOffset.size;
+      const offset = +txOffset.offset;
       const startOffset = offset - size + 1;
-      // we lose scope in the readable, so set to internal function
-      const getChunkDataByAbsoluteOffset = (offset: number) =>
-        this.chunkSource.getChunkDataByAbsoluteOffset(offset);
-      let chunkPromise: Promise<Readable> | undefined =
-        getChunkDataByAbsoluteOffset(startOffset);
+      const dataRoot = fromB64Url(txData.data_root);
       let bytes = 0;
+      // we lose scope in the readable, so set to internal function
+      const getChunkDataByAbsoluteOffset = (
+        absoluteOffset: number,
+        dataRoot: Buffer,
+        relativeOffset: number,
+      ) =>
+        this.chunkSource.getChunkDataByAbsoluteOffset(
+          absoluteOffset,
+          dataRoot,
+          relativeOffset,
+        );
+      let chunkPromise: Promise<Readable> | undefined =
+        getChunkDataByAbsoluteOffset(startOffset, dataRoot, bytes);
       const data = new Readable({
         autoDestroy: true,
         read: async function () {
@@ -55,6 +68,8 @@ export class TxChunksDataSource implements TxDataSource {
               if (bytes < size) {
                 chunkPromise = getChunkDataByAbsoluteOffset(
                   startOffset + bytes,
+                  dataRoot,
+                  bytes,
                 );
               } else {
                 chunkPromise = undefined;

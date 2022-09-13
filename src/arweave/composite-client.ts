@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { default as Arweave } from 'arweave';
+import { validatePath } from 'arweave/node/lib/merkle.js';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
 import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
@@ -498,29 +499,56 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
-  async getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk> {
+  async getChunkByAbsoluteOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<JsonChunk> {
     try {
       const response = await this.trustedNodeRequestQueue.push({
         method: 'GET',
-        url: `/chunk/${offset}`,
+        url: `/chunk/${absoluteOffset}`,
       });
       const chunk = response.data;
 
-      // TODO: validate its a valid chunk via validatePath
       sanityCheckChunk(chunk);
+
+      const validChunk = await validatePath(
+        dataRoot,
+        absoluteOffset,
+        0,
+        +chunk.data_size,
+        fromB64Url(chunk.data_path),
+      );
+
+      if (!validChunk) {
+        throw Error(
+          `Invalid chunk based on absolute offset, data_root and data_path: ${chunk}`,
+        );
+      }
 
       return chunk;
     } catch (error: any) {
       this.log.error('Failed to get chunk:', {
-        offset,
+        absoluteOffset,
+        dataRoot,
+        relativeOffset,
         message: error.message,
       });
       throw error;
     }
   }
 
-  async getChunkDataByAbsoluteOffset(offset: number): Promise<Readable> {
-    const { chunk } = await this.getChunkByAbsoluteOffset(offset);
+  async getChunkDataByAbsoluteOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<Readable> {
+    const { chunk } = await this.getChunkByAbsoluteOffset(
+      absoluteOffset,
+      dataRoot,
+      relativeOffset,
+    );
     const data = fromB64Url(chunk);
     return Readable.from(data);
   }
