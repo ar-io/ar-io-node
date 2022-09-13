@@ -15,9 +15,11 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { validatePath } from 'arweave/node/lib/merkle.js';
 import fs from 'fs';
 import stream, { Readable } from 'stream';
 
+import { fromB64Url } from '../src/lib/encoding.js';
 import {
   ChainSource,
   ChunkSource,
@@ -117,18 +119,44 @@ export class ArweaveChainSourceStub implements ChainSource {
 }
 
 export class ArweaveChunkSourceStub implements ChunkSource {
-  async getChunkByAbsoluteOffset(offset: number): Promise<JsonChunk> {
-    if (fs.existsSync(`test/mock_files/chunks/${offset}.json`)) {
-      return JSON.parse(
-        fs.readFileSync(`test/mock_files/chunks/${offset}.json`, 'utf8'),
+  async getChunkByAbsoluteOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<JsonChunk> {
+    if (fs.existsSync(`test/mock_files/chunks/${absoluteOffset}.json`)) {
+      const chunk = JSON.parse(
+        fs.readFileSync(
+          `test/mock_files/chunks/${absoluteOffset}.json`,
+          'utf8',
+        ),
       );
+      const validChunk = await validatePath(
+        dataRoot,
+        absoluteOffset,
+        relativeOffset,
+        chunk.data_size,
+        fromB64Url(chunk.data_path),
+      );
+      if (!validChunk) {
+        throw new Error('Invalid chunk!');
+      }
+      return chunk;
     } else {
-      throw new Error(`Chunk at offset ${offset} not found`);
+      throw new Error(`Chunk at offset ${absoluteOffset} not found`);
     }
   }
 
-  async getChunkDataByAbsoluteOffset(offset: number): Promise<any> {
-    const chunkResponse = await this.getChunkByAbsoluteOffset(offset);
+  async getChunkDataByAbsoluteOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<any> {
+    const chunkResponse = await this.getChunkByAbsoluteOffset(
+      absoluteOffset,
+      dataRoot,
+      relativeOffset,
+    );
     const data = Buffer.from(chunkResponse.chunk, 'base64');
     return Readable.from(data);
   }
