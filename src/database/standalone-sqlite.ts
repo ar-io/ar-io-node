@@ -114,15 +114,15 @@ export function txToDbRows(tx: PartialJsonTransaction) {
   const wallets = [] as { address: Buffer; public_modulus: Buffer }[];
 
   let contentType: string | undefined;
-  const txId = Buffer.from(tx.id, 'base64');
+  const txId = fromB64Url(tx.id);
 
   let transactionTagIndex = 0;
   for (const tag of tx.tags) {
-    const tagName = Buffer.from(tag.name, 'base64');
+    const tagName = fromB64Url(tag.name);
     const tagNameHash = crypto.createHash('sha1').update(tagName).digest();
     tagNames.push({ name: tagName, hash: tagNameHash });
 
-    const tagValue = Buffer.from(tag.value, 'base64');
+    const tagValue = fromB64Url(tag.value);
     const tagValueHash = crypto.createHash('sha1').update(tagValue).digest();
     tagValues.push({ value: tagValue, hash: tagValueHash });
 
@@ -140,7 +140,7 @@ export function txToDbRows(tx: PartialJsonTransaction) {
     transactionTagIndex++;
   }
 
-  const ownerBuffer = Buffer.from(tx.owner, 'base64');
+  const ownerBuffer = fromB64Url(tx.owner);
   const ownerAddressBuffer = crypto
     .createHash('sha256')
     .update(ownerBuffer)
@@ -498,16 +498,15 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         txs: PartialJsonTransaction[],
         missingTxIds: string[],
       ) => {
-        const indepHash = Buffer.from(block.indep_hash, 'base64');
-        const previousBlock = Buffer.from(block.previous_block ?? '', 'base64');
-        const nonce = Buffer.from(block.nonce, 'base64');
-        const hash = Buffer.from(block.hash, 'base64');
-        const rewardAddr = Buffer.from(block.reward_addr ?? '', 'base64');
+        const indepHash = fromB64Url(block.indep_hash);
+        const previousBlock = fromB64Url(block.previous_block ?? '');
+        const nonce = fromB64Url(block.nonce);
+        const hash = fromB64Url(block.hash);
+        const rewardAddr = fromB64Url(block.reward_addr ?? '');
         const hashListMerkle =
-          block.hash_list_merkle &&
-          Buffer.from(block.hash_list_merkle, 'base64');
-        const walletList = Buffer.from(block.wallet_list, 'base64');
-        const txRoot = block.tx_root && Buffer.from(block.tx_root, 'base64');
+          block.hash_list_merkle && fromB64Url(block.hash_list_merkle);
+        const walletList = fromB64Url(block.wallet_list);
+        const txRoot = block.tx_root && fromB64Url(block.tx_root);
 
         this.stmts.core.insertOrIgnoreNewBlock.run({
           indep_hash: indepHash,
@@ -543,7 +542,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
         let blockTransactionIndex = 0;
         for (const txIdStr of block.txs) {
-          const txId = Buffer.from(txIdStr, 'base64');
+          const txId = fromB64Url(txIdStr);
 
           this.stmts.core.insertOrIgnoreNewBlockTransaction.run({
             transaction_id: txId,
@@ -577,7 +576,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         }
 
         for (const txIdStr of missingTxIds) {
-          const txId = Buffer.from(txIdStr, 'base64');
+          const txId = fromB64Url(txIdStr);
 
           this.stmts.core.insertOrIgnoreMissingTransaction.run({
             block_indep_hash: indepHash,
@@ -651,7 +650,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const hash = this.getNewBlockHashByHeightStmt.get({
       height,
     })?.block_indep_hash;
-    return hash ? hash.toString('base64url') : undefined;
+    return hash ? toB64Url(hash) : undefined;
   }
 
   async getMissingTxIds(limit = 20): Promise<string[]> {
@@ -896,29 +895,16 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     if (ids.length > 0) {
-      query.where(
-        sql.in(
-          `${txTableAlias}.id`,
-          ids.map((v) => Buffer.from(v, 'base64')),
-        ),
-      );
+      query.where(sql.in(`${txTableAlias}.id`, ids.map(fromB64Url)));
     }
 
     if (recipients.length > 0) {
-      query.where(
-        sql.in(
-          `${txTableAlias}.target`,
-          recipients.map((v) => Buffer.from(v, 'base64')),
-        ),
-      );
+      query.where(sql.in(`${txTableAlias}.target`, recipients.map(fromB64Url)));
     }
 
     if (owners.length > 0) {
       query.where(
-        sql.in(
-          `${txTableAlias}.owner_address`,
-          owners.map((v) => Buffer.from(v, 'base64')),
-        ),
+        sql.in(`${txTableAlias}.owner_address`, owners.map(fromB64Url)),
       );
     }
 
@@ -1048,20 +1034,20 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
-        id: tx.id.toString('base64url'),
-        anchor: tx.last_tx.toString('base64url'),
-        signature: tx.signature.toString('base64url'),
-        recipient: tx.target?.toString('base64url'),
-        ownerAddress: tx.owner_address.toString('base64url'),
-        ownerKey: tx.public_modulus.toString('base64url'),
+        id: toB64Url(tx.id),
+        anchor: toB64Url(tx.last_tx),
+        signature: toB64Url(tx.signature),
+        recipient: tx.target ? toB64Url(tx.target) : undefined,
+        ownerAddress: toB64Url(tx.owner_address),
+        ownerKey: toB64Url(tx.public_modulus),
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
         tags: this.getGqlNewTransactionTags(tx.id),
         contentType: tx.content_type,
-        blockIndepHash: tx.block_indep_hash.toString('base64url'),
+        blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
-        blockPreviousBlock: tx.block_previous_block.toString('base64url'),
+        blockPreviousBlock: toB64Url(tx.block_previous_block),
       }));
   }
 
@@ -1111,20 +1097,20 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
-        id: tx.id.toString('base64url'),
-        anchor: tx.last_tx.toString('base64url'),
-        signature: tx.signature.toString('base64url'),
-        recipient: tx.target?.toString('base64url'),
-        ownerAddress: tx.owner_address.toString('base64url'),
-        ownerKey: tx.public_modulus.toString('base64url'),
+        id: toB64Url(tx.id),
+        anchor: toB64Url(tx.last_tx),
+        signature: toB64Url(tx.signature),
+        recipient: tx.target ? toB64Url(tx.target) : undefined,
+        ownerAddress: toB64Url(tx.owner_address),
+        ownerKey: toB64Url(tx.public_modulus),
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
         tags: this.getGqlStableTransactionTags(tx.id),
         contentType: tx.content_type,
-        blockIndepHash: tx.block_indep_hash.toString('base64url'),
+        blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
-        blockPreviousBlock: tx.block_previous_block.toString('base64url'),
+        blockPreviousBlock: toB64Url(tx.block_previous_block),
       }));
   }
 
