@@ -179,21 +179,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     core: { [key: string]: Sqlite.Statement };
   };
 
-  // "new_*" to "stable_*" copy
-  private saveStableBlocksStmt: Sqlite.Statement;
-  private saveStableBlockTxsStmt: Sqlite.Statement;
-  private saveStableTxsStmt: Sqlite.Statement;
-  private saveStableTxTagsStmt: Sqlite.Statement;
-
-  // Stale "new_*" data cleanup
-  private deleteStaleNewTxTagsStmt: Sqlite.Statement;
-  private deleteStaleNewTxsByHeightStmt: Sqlite.Statement;
-  private deleteStaleNewTxsByTimestampStmt: Sqlite.Statement;
-  private deleteStaleNewBlockTxsStmt: Sqlite.Statement;
-  private deleteStaleNewBlocksStmt: Sqlite.Statement;
-  private deleteStaleNewBlockHeightsStmt: Sqlite.Statement;
-  private deleteStaleMissingTxsStmt: Sqlite.Statement;
-
   // Async TX import
   private newBlockTxInsertStmt: Sqlite.Statement;
   private newBlockHeightInsertStmt: Sqlite.Statement;
@@ -235,135 +220,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       }
     }
 
-    // "new_*" to "stable_*" copy
-    this.saveStableBlocksStmt = this.dbs.core.prepare(`
-      INSERT INTO stable_blocks (
-        height, indep_hash, previous_block, nonce, hash,
-        block_timestamp, diff, cumulative_diff, last_retarget,
-        reward_addr, reward_pool, block_size, weave_size,
-        usd_to_ar_rate_dividend, usd_to_ar_rate_divisor,
-        scheduled_usd_to_ar_rate_dividend, scheduled_usd_to_ar_rate_divisor,
-        hash_list_merkle, wallet_list, tx_root,
-        tx_count, missing_tx_count
-      ) SELECT
-        nbh.height, nb.indep_hash, nb.previous_block, nb.nonce, nb.hash,
-        nb.block_timestamp, nb.diff, nb.cumulative_diff, nb.last_retarget,
-        nb.reward_addr, nb.reward_pool, nb.block_size, nb.weave_size,
-        nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
-        nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
-        nb.hash_list_merkle, nb.wallet_list, nb.tx_root,
-        nb.tx_count, missing_tx_count
-      FROM new_blocks nb
-      JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
-      WHERE nbh.height < @end_height
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.saveStableBlockTxsStmt = this.dbs.core.prepare(`
-      INSERT INTO stable_block_transactions (
-        block_indep_hash, transaction_id, block_transaction_index
-      ) SELECT
-        nbt.block_indep_hash, nbt.transaction_id, nbt.block_transaction_index
-      FROM new_block_transactions nbt
-      JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-      WHERE nbh.height < @end_height
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.saveStableTxsStmt = this.dbs.core.prepare(`
-      INSERT INTO stable_transactions (
-        id, height, block_transaction_index, signature,
-        format, last_tx, owner_address, target, quantity,
-        reward, data_size, data_root, content_type, tag_count
-      ) SELECT
-        nt.id, nbh.height, nbt.block_transaction_index, nt.signature,
-        nt.format, nt.last_tx, nt.owner_address, nt.target, nt.quantity,
-        nt.reward, nt.data_size, nt.data_root, nt.content_type, nt.tag_count
-      FROM new_transactions nt
-      JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
-      JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-      WHERE nbh.height < @end_height
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.saveStableTxTagsStmt = this.dbs.core.prepare(`
-      INSERT INTO stable_transaction_tags (
-        tag_name_hash, tag_value_hash, height,
-        block_transaction_index, transaction_tag_index,
-        transaction_id
-      ) SELECT
-        ntt.tag_name_hash, ntt.tag_value_hash, nbh.height,
-        nbt.block_transaction_index, ntt.transaction_tag_index,
-        ntt.transaction_id
-      FROM new_transaction_tags ntt
-      JOIN new_block_transactions nbt ON nbt.transaction_id = ntt.transaction_id
-      JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-      WHERE nbh.height < @end_height
-      ON CONFLICT DO NOTHING
-    `);
-
-    // Stale "new_*" data cleanup
-    this.deleteStaleNewTxTagsStmt = this.dbs.core.prepare(`
-      DELETE FROM new_transaction_tags
-      WHERE transaction_id IN (
-        SELECT nbt.transaction_id
-        FROM new_block_transactions nbt
-        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-        WHERE nbh.height < @height_threshold
-      )
-    `);
-
-    this.deleteStaleNewTxsByHeightStmt = this.dbs.core.prepare(`
-      DELETE FROM new_transactions
-      WHERE id IN (
-        SELECT nbt.transaction_id
-        FROM new_block_transactions nbt
-        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-        WHERE nbh.height < @height_threshold
-      )
-    `);
-
-    this.deleteStaleNewBlockTxsStmt = this.dbs.core.prepare(`
-      DELETE FROM new_block_transactions
-      WHERE transaction_id IN (
-        SELECT nbt.transaction_id
-        FROM new_block_transactions nbt
-        JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-        WHERE nbh.height < @height_threshold
-      ) OR transaction_id IN (
-        SELECT transaction_id
-        FROM new_transactions
-        WHERE created_at < @created_at_threshold
-      )
-    `);
-
-    this.deleteStaleNewBlocksStmt = this.dbs.core.prepare(`
-      DELETE FROM new_blocks
-      WHERE height < @height_threshold
-    `);
-
-    this.deleteStaleNewBlockHeightsStmt = this.dbs.core.prepare(`
-      DELETE FROM new_block_heights
-      WHERE height < @height_threshold
-    `);
-
-    this.deleteStaleNewTxsByTimestampStmt = this.dbs.core.prepare(`
-      DELETE FROM new_transactions
-      WHERE created_at < @created_at_threshold
-    `);
-
-    this.deleteStaleMissingTxsStmt = this.dbs.core.prepare(`
-      DELETE FROM missing_transactions
-      WHERE transaction_id IN (
-        SELECT mt.transaction_id
-        FROM missing_transactions mt
-        LEFT JOIN stable_block_transactions sbt ON
-          sbt.block_indep_hash = mt.block_indep_hash
-          AND sbt.transaction_id = mt.transaction_id
-        WHERE mt.height < @height_threshold AND sbt.transaction_id IS NULL
-      )
-    `);
-
+    // Async import
     this.newBlockHeightInsertStmt = this.dbs.core.prepare(`
       INSERT INTO new_block_heights (
         height, block_indep_hash
@@ -588,51 +445,51 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     );
 
     this.saveStableDataFn = this.dbs.core.transaction((endHeight: number) => {
-      this.saveStableBlocksStmt.run({
+      this.stmts.core.insertOrIgnoreStableBlocks.run({
         end_height: endHeight,
       });
 
-      this.saveStableBlockTxsStmt.run({
+      this.stmts.core.insertOrIgnoreStableBlockTransactions.run({
         end_height: endHeight,
       });
 
-      this.saveStableTxsStmt.run({
+      this.stmts.core.insertOrIgnoreStableTransactions.run({
         end_height: endHeight,
       });
 
-      this.saveStableTxTagsStmt.run({
+      this.stmts.core.insertOrIgnoreStableTransactionTags.run({
         end_height: endHeight,
       });
     });
 
     this.deleteStaleNewDataFn = this.dbs.core.transaction(
       (heightThreshold: number, createdAtThreshold: number) => {
-        this.deleteStaleNewTxTagsStmt.run({
+        this.stmts.core.deleteStaleNewTransactionTags.run({
           height_threshold: heightThreshold,
         });
 
-        this.deleteStaleNewTxsByHeightStmt.run({
+        this.stmts.core.deleteStaleNewTransactionsByHeight.run({
           height_threshold: heightThreshold,
         });
 
-        this.deleteStaleNewBlockTxsStmt.run({
+        this.stmts.core.deleteStaleNewBlockTransactions.run({
           height_threshold: heightThreshold,
           created_at_threshold: createdAtThreshold,
         });
 
-        this.deleteStaleNewBlocksStmt.run({
+        this.stmts.core.deleteStaleNewBlocks.run({
           height_threshold: heightThreshold,
         });
 
-        this.deleteStaleNewBlockHeightsStmt.run({
+        this.stmts.core.deleteStaleNewBlockHeights.run({
           height_threshold: heightThreshold,
         });
 
-        this.deleteStaleNewTxsByTimestampStmt.run({
+        this.stmts.core.deleteStaleNewTransactionsByCreatedAt.run({
           created_at_threshold: createdAtThreshold,
         });
 
-        this.deleteStaleMissingTxsStmt.run({
+        this.stmts.core.deleteForkedOutMissingTransactions.run({
           height_threshold: heightThreshold,
         });
       },
