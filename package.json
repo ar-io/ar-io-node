@@ -54,6 +54,7 @@
     "c8": "^7.11.3",
     "chai": "^4.3.6",
     "chai-as-promised": "^7.1.1",
+    "copyfiles": "^2.4.1",
     "eslint": "^8.16.0",
     "eslint-config-prettier": "^8.5.0",
     "eslint-plugin-jest-formatting": "^3.1.0",
@@ -72,7 +73,8 @@
     "typescript": "^4.7.3"
   },
   "scripts": {
-    "build": "yarn clean && npx tsc --project ./tsconfig.prod.json && cp -r src/routes/graphql/schema dist/routes/graphql/schema",
+    "build": "yarn clean && npx tsc --project ./tsconfig.prod.json && yarn copy-files",
+    "copy-files": "copyfiles -u 1 src/**/*.graphql src/**/*.sql dist",
     "clean": "npx rimraf [ .nyc_output coverage dist ]",
     "start": "ts-node-esm ./src/app.ts",
     "start:prod": "yarn build && node dist/app.js",

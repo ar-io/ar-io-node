@@ -4,8 +4,10 @@ FROM node:16-alpine as builder
 WORKDIR /app
 RUN apk --no-cache add g++ git python3 make
 COPY . .
-RUN yarn install --production
+RUN yarn install
 RUN yarn build
+RUN rm -rf node_modules # remove dev deps to reduce image size
+RUN yarn install --production
 
 # EXTRACT DIST
 FROM node:16-alpine

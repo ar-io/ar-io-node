@@ -227,7 +227,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
 
     this.stmts = { core: {} };
-    const coreSql = yesql('./sql/core/') as { [key: string]: string };
+    const sqlUrl = new URL('./sql/core', import.meta.url);
+    const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
     for (const [k, sql] of Object.entries(coreSql)) {
       if (!k.endsWith('.sql')) {
         this.stmts.core[k] = this.dbs.core.prepare(sql);
