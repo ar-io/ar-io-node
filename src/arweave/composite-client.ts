@@ -499,7 +499,7 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
-  async getChunkByAbsoluteOffset(
+  async getChunkByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
@@ -516,7 +516,7 @@ export class ArweaveCompositeClient
       const validChunk = await validatePath(
         dataRoot,
         absoluteOffset,
-        0,
+        relativeOffset,
         +chunk.data_size,
         fromB64Url(chunk.data_path),
       );
@@ -539,12 +539,12 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getChunkDataByAbsoluteOffset(
+  async getChunkDataByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<Readable> {
-    const { chunk } = await this.getChunkByAbsoluteOffset(
+    const { chunk } = await this.getChunkByRelativeOrAbsoluteOffset(
       absoluteOffset,
       dataRoot,
       relativeOffset,

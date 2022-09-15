@@ -244,12 +244,12 @@ export interface JsonChunk {
 }
 
 export interface ChunkSource {
-  getChunkByAbsoluteOffset(
+  getChunkByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<JsonChunk>;
-  getChunkDataByAbsoluteOffset(
+  getChunkDataByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,

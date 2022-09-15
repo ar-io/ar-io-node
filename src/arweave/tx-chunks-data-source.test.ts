@@ -73,7 +73,7 @@ describe('TxChunksDataSource', () => {
           },
         });
         sinon
-          .stub(chunkSource, 'getChunkDataByAbsoluteOffset')
+          .stub(chunkSource, 'getChunkDataByRelativeOrAbsoluteOffset')
           .resolves(badReadable);
         txChunkRetriever
           .getTxData(TX_ID)
@@ -89,11 +89,12 @@ describe('TxChunksDataSource', () => {
             });
           });
       });
+
       describe('an invalid chunk', () => {
         it('should throw an error', function (done) {
           const error = new Error('Invalid chunk');
           sinon
-            .stub(chunkSource, 'getChunkDataByAbsoluteOffset')
+            .stub(chunkSource, 'getChunkByRelativeOrAbsoluteOffset')
             .rejects(error);
           txChunkRetriever
             .getTxData(TX_ID)
