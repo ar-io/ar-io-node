@@ -192,8 +192,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
   // GraphQL
   private getMaxStableBlockHeightStmt: Sqlite.Statement;
-  private getNewTransactionTagsStmt: Sqlite.Statement;
-  private getStableTransactionTagsStmt: Sqlite.Statement;
 
   // Transactions
   insertTxFn: Sqlite.Transaction;
@@ -257,24 +255,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.getMaxStableBlockHeightStmt = this.dbs.core.prepare(`
       SELECT MAX(height) AS height
       FROM stable_blocks
-    `);
-
-    // Get new transaction tags (for GQL)
-    this.getNewTransactionTagsStmt = this.dbs.core.prepare(`
-      SELECT name, value
-      FROM new_transaction_tags
-      JOIN tag_names ON tag_name_hash = tag_names.hash
-      JOIN tag_values ON tag_value_hash = tag_values.hash
-      WHERE transaction_id = @transaction_id
-    `);
-
-    // Get stable transaction tags (for GQL)
-    this.getStableTransactionTagsStmt = this.dbs.core.prepare(`
-      SELECT name, value
-      FROM stable_transaction_tags
-      JOIN tag_names ON tag_name_hash = tag_names.hash
-      JOIN tag_values ON tag_value_hash = tag_values.hash
-      WHERE transaction_id = @transaction_id
     `);
 
     // Transactions
@@ -588,7 +568,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
-    const tags = this.getNewTransactionTagsStmt.all({
+    const tags = this.stmts.core.getNewTransactionTags.all({
       transaction_id: txId,
     });
 
@@ -599,7 +579,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   getGqlStableTransactionTags(txId: Buffer) {
-    const tags = this.getStableTransactionTagsStmt.all({
+    const tags = this.stmts.core.getStableTransactionTags.all({
       transaction_id: txId,
     });
 
