@@ -119,7 +119,7 @@ export class ArweaveChainSourceStub implements ChainSource {
 }
 
 export class ArweaveChunkSourceStub implements ChunkSource {
-  async getChunkByAbsoluteOffset(
+  async getChunkByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
@@ -147,12 +147,12 @@ export class ArweaveChunkSourceStub implements ChunkSource {
     }
   }
 
-  async getChunkDataByAbsoluteOffset(
+  async getChunkDataByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<any> {
-    const chunkResponse = await this.getChunkByAbsoluteOffset(
+    const chunkResponse = await this.getChunkByRelativeOrAbsoluteOffset(
       absoluteOffset,
       dataRoot,
       relativeOffset,

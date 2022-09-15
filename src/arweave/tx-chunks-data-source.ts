@@ -37,18 +37,18 @@ export class TxChunksDataSource implements TxDataSource {
       const dataRoot = fromB64Url(txData.data_root);
       let bytes = 0;
       // we lose scope in the readable, so set to internal function
-      const getChunkDataByAbsoluteOffset = (
+      const getChunkDataByRelativeOrAbsoluteOffset = (
         absoluteOffset: number,
         dataRoot: Buffer,
         relativeOffset: number,
       ) =>
-        this.chunkSource.getChunkDataByAbsoluteOffset(
+        this.chunkSource.getChunkDataByRelativeOrAbsoluteOffset(
           absoluteOffset,
           dataRoot,
           relativeOffset,
         );
       let chunkPromise: Promise<Readable> | undefined =
-        getChunkDataByAbsoluteOffset(startOffset, dataRoot, bytes);
+        getChunkDataByRelativeOrAbsoluteOffset(startOffset, dataRoot, bytes);
       const data = new Readable({
         autoDestroy: true,
         read: async function () {
@@ -66,7 +66,7 @@ export class TxChunksDataSource implements TxDataSource {
             chunkData.on('end', () => {
               // check if we're done
               if (bytes < size) {
-                chunkPromise = getChunkDataByAbsoluteOffset(
+                chunkPromise = getChunkDataByRelativeOrAbsoluteOffset(
                   startOffset + bytes,
                   dataRoot,
                   bytes,
