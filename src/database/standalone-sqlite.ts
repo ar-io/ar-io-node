@@ -179,11 +179,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     core: { [key: string]: Sqlite.Statement };
   };
 
-  // Async TX import
-  private newBlockTxInsertStmt: Sqlite.Statement;
-  private newBlockHeightInsertStmt: Sqlite.Statement;
-  private deleteMissingTxsStmt: Sqlite.Statement;
-
   // Internal accessors
   private getMaxStableHeightAndTimestampStmt: Sqlite.Statement;
 
@@ -219,33 +214,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         this.stmts.core[k] = this.dbs.core.prepare(sql);
       }
     }
-
-    // Async import
-    this.newBlockHeightInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO new_block_heights (
-        height, block_indep_hash
-      )
-      SELECT sb.height, sb.indep_hash
-      FROM stable_block_transactions sbt
-      JOIN stable_blocks sb ON sb.indep_hash = sbt.block_indep_hash
-      WHERE sbt.transaction_id = @transaction_id
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.newBlockTxInsertStmt = this.dbs.core.prepare(`
-      INSERT INTO new_block_transactions (
-        block_indep_hash, transaction_id, block_transaction_index
-      )
-      SELECT block_indep_hash, transaction_id, block_transaction_index
-      FROM stable_block_transactions
-      WHERE transaction_id = @transaction_id
-      ON CONFLICT DO NOTHING
-    `);
-
-    this.deleteMissingTxsStmt = this.dbs.core.prepare(`
-      DELETE FROM missing_transactions
-      WHERE transaction_id = @transaction_id
-    `);
 
     // Internal accessors
     this.getMaxStableHeightAndTimestampStmt = this.dbs.core.prepare(`
@@ -334,16 +302,16 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
 
         // Upsert the transaction to block assocation
-        this.newBlockTxInsertStmt.run({
+        this.stmts.core.insertAsyncNewBlockTransaction.run({
           transaction_id: rows.newTx.id,
         });
 
-        this.newBlockHeightInsertStmt.run({
+        this.stmts.core.insertAsyncNewBlockHeight.run({
           transaction_id: rows.newTx.id,
         });
 
         // Remove missing transaction ID if it exists
-        this.deleteMissingTxsStmt.run({
+        this.stmts.core.deleteMissingTransaction.run({
           transaction_id: rows.newTx.id,
         });
       },
