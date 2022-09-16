@@ -161,16 +161,20 @@ export class BlockImporter {
       );
 
       if (!previousDbBlockHash) {
-        // If a gap is found, rewind the the index to the last known block
+        // If a gap is found, rewind the index to the last known block
         this.log.error(
-          `Gap found at height ${height}. Reseting index to height ${previousHeight}...`,
+          `Gap found at height ${height}. Reseting index to height ${
+            previousHeight - 1
+          }...`,
         );
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       } else if (block.previous_block !== previousDbBlockHash) {
         // If there is a fork, rewind the index to the fork point
         this.log.info(
-          `Fork detected at height ${height}. Reseting index to height ${previousHeight}...`,
+          `Fork detected at height ${height}. Reseting index to height ${
+            previousHeight - 1
+          }...`,
         );
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
