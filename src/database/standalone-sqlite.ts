@@ -187,9 +187,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private getNewBlockHashByHeightStmt: Sqlite.Statement;
   private getMissingTxIdsStmt: Sqlite.Statement;
 
-  // Height reset
-  private resetToHeightStmt: Sqlite.Statement;
-
   // GraphQL
   private getMaxStableBlockHeightStmt: Sqlite.Statement;
 
@@ -243,12 +240,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       SELECT transaction_id
       FROM missing_transactions
       LIMIT @limit
-    `);
-
-    // Height reset
-    this.resetToHeightStmt = this.dbs.core.prepare(`
-      DELETE FROM new_block_heights
-      WHERE height > @height
     `);
 
     // Max stable block height (for GQL)
@@ -467,7 +458,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async resetToHeight(height: number): Promise<void> {
-    this.resetToHeightStmt.run({ height });
+    this.stmts.core.truncateNewBlockHeightsAt.run({ height });
   }
 
   async saveTx(tx: PartialJsonTransaction): Promise<void> {
