@@ -1,3 +1,7 @@
+-- selectMaxStableBlockTimestamp
+SELECT IFNULL(MAX(block_timestamp), 0) AS block_timestamp
+FROM stable_blocks
+
 -- insertOrIgnoreStableBlocks
 INSERT INTO stable_blocks (
   height, indep_hash, previous_block, nonce, hash,

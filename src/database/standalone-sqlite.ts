@@ -179,9 +179,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     core: { [key: string]: Sqlite.Statement };
   };
 
-  // Internal accessors
-  private getMaxStableTimestampStmt: Sqlite.Statement;
-
   // Public accessors
   private getMaxHeightStmt: Sqlite.Statement;
   private getNewBlockHashByHeightStmt: Sqlite.Statement;
@@ -209,12 +206,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         this.stmts.core[k] = this.dbs.core.prepare(sql);
       }
     }
-
-    // Internal accessors
-    this.getMaxStableTimestampStmt = this.dbs.core.prepare(`
-      SELECT IFNULL(MAX(block_timestamp), 0) AS block_timestamp
-      FROM stable_blocks
-    `);
 
     // Public accessors
     this.getMaxHeightStmt = this.dbs.core.prepare(`
@@ -473,16 +464,15 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.insertBlockAndTxsFn(block, txs, missingTxIds);
 
     if (block.height % STABLE_FLUSH_INTERVAL === 0) {
-      const {
-        block_timestamp: maxDbStableTimestamp,
-      } = this.getMaxStableTimestampStmt.get();
+      const { block_timestamp: maxStableBlockTimestamp } =
+        this.stmts.core.selectMaxStableBlockTimestamp.get();
       const endHeight = block.height - MAX_FORK_DEPTH;
 
       this.saveStableDataFn(endHeight);
 
       this.deleteStaleNewDataFn(
         endHeight,
-        maxDbStableTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
+        maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
       );
     }
   }
