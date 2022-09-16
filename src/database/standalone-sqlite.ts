@@ -179,11 +179,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     core: { [key: string]: Sqlite.Statement };
   };
 
-  // Public accessors
-  private getMaxHeightStmt: Sqlite.Statement;
-  private getNewBlockHashByHeightStmt: Sqlite.Statement;
-  private getMissingTxIdsStmt: Sqlite.Statement;
-
   // Transactions
   insertTxFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
@@ -203,30 +198,6 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         this.stmts.core[k] = this.dbs.core.prepare(sql);
       }
     }
-
-    // Public accessors
-    this.getMaxHeightStmt = this.dbs.core.prepare(`
-      SELECT MAX(height) AS height
-      FROM (
-        SELECT MAX(height) AS height
-        FROM new_block_heights
-        UNION
-        SELECT MAX(height) AS height
-        FROM stable_blocks
-      )
-    `);
-
-    this.getNewBlockHashByHeightStmt = this.dbs.core.prepare(`
-      SELECT block_indep_hash
-      FROM new_block_heights
-      WHERE height = @height
-    `);
-
-    this.getMissingTxIdsStmt = this.dbs.core.prepare(`
-      SELECT transaction_id
-      FROM missing_transactions
-      LIMIT @limit
-    `);
 
     // Transactions
     this.insertTxFn = this.dbs.core.transaction(
@@ -416,21 +387,21 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getMaxHeight(): Promise<number> {
-    return this.getMaxHeightStmt.get().height ?? -1;
+    return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
 
   async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
     if (height < 0) {
       throw new Error(`Invalid height ${height}, must be >= 0.`);
     }
-    const hash = this.getNewBlockHashByHeightStmt.get({
+    const hash = this.stmts.core.selectNewBlockHashByHeight.get({
       height,
     })?.block_indep_hash;
     return hash ? toB64Url(hash) : undefined;
   }
 
   async getMissingTxIds(limit = 20): Promise<string[]> {
-    const missingTxIds = this.getMissingTxIdsStmt.all({
+    const missingTxIds = this.stmts.core.selectMissingTransactionIds.all({
       limit,
     });
 
