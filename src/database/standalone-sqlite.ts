@@ -440,67 +440,37 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getDebugInfo() {
-    const walletCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM wallets')
-      .get().cnt as number;
-    const tagNameCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM tag_names')
-      .get().cnt as number;
-    const tagValueCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM tag_values')
-      .get().cnt as number;
-    const stableTxCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM stable_transactions')
-      .get().cnt as number;
-    const stableBlockCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM stable_blocks')
-      .get().cnt as number;
-    const stableBlockTxCount = this.dbs.core
-      .prepare('SELECT SUM(tx_count) AS cnt FROM stable_blocks')
-      .get().cnt as number;
-    const newTxCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM new_transactions')
-      .get().cnt as number;
-    const newBlockCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM new_blocks')
-      .get().cnt as number;
-    const missingTxCount = this.dbs.core
-      .prepare('SELECT COUNT(*) AS cnt FROM missing_transactions')
-      .get().cnt as number;
-    const minStableHeight = this.dbs.core
-      .prepare('SELECT MIN(height) AS min_height FROM stable_blocks')
-      .get().min_height as number;
-    const maxStableHeight = this.dbs.core
-      .prepare('SELECT MAX(height) AS max_height FROM stable_blocks')
-      .get().max_height as number;
-    const minNewBlockHeight = this.dbs.core
-      .prepare('SELECT MIN(height) AS min_height FROM new_block_heights')
-      .get().min_height as number;
-    const maxNewBlockHeight = this.dbs.core
-      .prepare('SELECT MAX(height) AS max_height FROM new_block_heights')
-      .get().max_height as number;
-
+    const minStableHeight = this.stmts.core.selectMinStableHeight.get().min_height;
+    const maxStableHeight = this.stmts.core.selectMaxStableHeight.get().max_height;
+    const stableTxsCount = this.stmts.core.selectStableTransactionsCount.get().count;
+    const stableBlocksCount =
+      this.stmts.core.selectStableBlockCount.get().count;
+    const stableBlockTxsCount =
+      this.stmts.core.selectStableBlockTransactionCount.get().count;
     const missingStableBlockCount =
-      maxStableHeight - (minStableHeight - 1) - stableBlockCount;
+      maxStableHeight - (minStableHeight - 1) - stableBlocksCount;
+    const missingStableTxCount = stableBlockTxsCount - stableTxsCount;
 
     return {
       counts: {
-        wallets: walletCount,
-        tagNames: tagNameCount,
-        tagValues: tagValueCount,
-        stableTxs: stableTxCount,
-        stableBlocks: stableBlockCount,
-        stableBlockTxs: stableBlockTxCount,
+        wallets: this.stmts.core.selectWalletsCount.get().count,
+        tagNames: this.stmts.core.selectTagNamesCount.get().count,
+        tagValues: this.stmts.core.selectTagValuesCount.get().count,
+        stableTxs: stableTxsCount,
+        stableBlocks: stableBlocksCount,
+        stableBlockTxs:
+          this.stmts.core.selectStableBlockTransactionCount.get().count,
         missingStableBlocks: missingStableBlockCount,
-        missingTxs: missingTxCount,
-        newTxs: newTxCount,
-        newBlocks: newBlockCount,
+        missingStableTxs: missingStableTxCount,
+        missingTxs: this.stmts.core.selectMissingTransactionsCount.get().count,
+        newBlocks: this.stmts.core.selectNewBlocksCount.get().count,
+        newTxs: this.stmts.core.selectNewTransactionsCount.get().count,
       },
       heights: {
         minStable: minStableHeight,
         maxStable: maxStableHeight,
-        minNew: minNewBlockHeight,
-        maxNew: maxNewBlockHeight,
+        minNew: this.stmts.core.selectMinNewHeight.get().min_height,
+        maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
       },
     };
   }
@@ -627,7 +597,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       tagsTable = 'stable_transaction_tags';
       heightSortTableAlias = 'st';
       blockTransactionIndexSortTableAlias = 'st';
-      maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get().height as number;
+      maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
+        .height as number;
     } else {
       txTableAlias = 'nt';
       heightTableAlias = 'nb';
