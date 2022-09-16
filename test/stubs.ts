@@ -133,9 +133,9 @@ export class ArweaveChunkSourceStub implements ChunkSource {
       );
       const validChunk = await validatePath(
         dataRoot,
-        absoluteOffset,
         relativeOffset,
-        chunk.data_size,
+        0,
+        +chunk.data_size,
         fromB64Url(chunk.data_path),
       );
       if (!validChunk) {

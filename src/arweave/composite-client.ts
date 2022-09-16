@@ -515,8 +515,8 @@ export class ArweaveCompositeClient
 
       const validChunk = await validatePath(
         dataRoot,
-        absoluteOffset,
         relativeOffset,
+        0,
         +chunk.data_size,
         fromB64Url(chunk.data_path),
       );
