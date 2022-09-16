@@ -180,7 +180,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   };
 
   // Internal accessors
-  private getMaxStableHeightAndTimestampStmt: Sqlite.Statement;
+  private getMaxStableTimestampStmt: Sqlite.Statement;
 
   // Public accessors
   private getMaxHeightStmt: Sqlite.Statement;
@@ -211,10 +211,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
 
     // Internal accessors
-    this.getMaxStableHeightAndTimestampStmt = this.dbs.core.prepare(`
-      SELECT
-        IFNULL(MAX(height), -1) AS height,
-        IFNULL(MAX(block_timestamp), 0) AS block_timestamp
+    this.getMaxStableTimestampStmt = this.dbs.core.prepare(`
+      SELECT IFNULL(MAX(block_timestamp), 0) AS block_timestamp
       FROM stable_blocks
     `);
 
@@ -476,14 +474,11 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     if (block.height % STABLE_FLUSH_INTERVAL === 0) {
       const {
-        height: maxDbStableHeight,
         block_timestamp: maxDbStableTimestamp,
-      } = this.getMaxStableHeightAndTimestampStmt.get();
+      } = this.getMaxStableTimestampStmt.get();
       const endHeight = block.height - MAX_FORK_DEPTH;
 
-      if (maxDbStableHeight < endHeight) {
-        this.saveStableDataFn(endHeight);
-      }
+      this.saveStableDataFn(endHeight);
 
       this.deleteStaleNewDataFn(
         endHeight,
