@@ -170,6 +170,10 @@ export class BlockImporter {
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       } else if (block.previous_block !== previousDbBlockHash) {
+        // Only increment the fork counter once per fork
+        if (forkDepth === 0) {
+          this.forksCounter.inc();
+        }
         // If there is a fork, rewind the index to the fork point
         this.log.info(
           `Fork detected at height ${height}. Reseting index to height ${
@@ -183,7 +187,6 @@ export class BlockImporter {
 
     // Record fork count and depth metrics
     if (forkDepth > 0) {
-      this.forksCounter.inc();
       this.lastForkDepthGauge.set(forkDepth);
     }
 
