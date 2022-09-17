@@ -375,7 +375,7 @@ export class ArweaveCompositeClient
     const responsePromise = this.txCache
       .get(txId)
       .then((tx) => {
-        // Return cached tx if it exists
+        // Return cached TX if it exists
         if (tx) {
           return tx;
         }
