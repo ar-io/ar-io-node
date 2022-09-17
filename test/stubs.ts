@@ -93,14 +93,8 @@ export class ArweaveChainSourceStub implements ChainSource {
     txId: string,
     field: keyof PartialJsonTransaction,
   ): Promise<T> {
-    if (fs.existsSync(`test/mock_files/txs/${txId}.json`)) {
-      const tx = JSON.parse(
-        fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
-      );
-      return tx[field];
-    } else {
-      throw new Error(`Transaction ${txId} not found`);
-    }
+    const tx = await this.getTx(txId);
+    return tx[field] as T;
   }
 
   async getBlockAndTxsByHeight(height: number) {
