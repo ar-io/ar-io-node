@@ -456,6 +456,25 @@ export class ArweaveCompositeClient
     }
   }
 
+  async getTxField<T>(
+    txId: string,
+    field: keyof PartialJsonTransaction,
+  ): Promise<T> {
+    try {
+      const response = await this.trustedNodeRequestQueue.push({
+        method: 'GET',
+        url: `/tx/${txId}/${field}`,
+      });
+      return response.data;
+    } catch (error: any) {
+      this.log.error(`Failed to get transaction ${field}:`, {
+        txId,
+        message: error.message,
+      });
+      throw error;
+    }
+  }
+
   // TODO make second arg an options object
   async getBlockAndTxsByHeight(
     height: number,

@@ -27,14 +27,14 @@ export class TxChunksDataSource implements TxDataSource {
     this.log.info('Fetching chunk data for tx', { txId });
 
     try {
-      const [txData, txOffset] = await Promise.all([
-        this.chainSource.getTx(txId),
+      const [txDataRoot, txOffset] = await Promise.all([
+        this.chainSource.getTxField<string>(txId, 'data_root'),
         this.chainSource.getTxOffset(txId),
       ]);
       const size = +txOffset.size;
       const offset = +txOffset.offset;
       const startOffset = offset - size + 1;
-      const dataRoot = fromB64Url(txData.data_root);
+      const dataRoot = fromB64Url(txDataRoot);
       let bytes = 0;
       // we lose scope in the readable, so set to internal function
       const getChunkDataByRelativeOrAbsoluteOffset = (
