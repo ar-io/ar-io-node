@@ -136,6 +136,7 @@ export interface ChainSource {
   getBlockByHeight(height: number): Promise<PartialJsonBlock>;
   getTx(txId: string): Promise<PartialJsonTransaction>;
   getTxOffset(txId: string): Promise<JsonTransactionOffset>;
+  getTxField<T>(txId: string, field: keyof PartialJsonTransaction): Promise<T>;
   getBlockAndTxsByHeight(height: number): Promise<{
     block: PartialJsonBlock;
     txs: PartialJsonTransaction[];
