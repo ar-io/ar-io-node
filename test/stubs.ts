@@ -15,11 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { validatePath } from 'arweave/node/lib/merkle.js';
 import fs from 'fs';
 import stream, { Readable } from 'stream';
 
-import { fromB64Url } from '../src/lib/encoding.js';
 import { validateChunk } from '../src/lib/validation.js';
 import {
   ChainSource,
