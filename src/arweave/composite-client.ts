@@ -16,7 +16,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { default as Arweave } from 'arweave';
-import { validatePath } from 'arweave/node/lib/merkle.js';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
 import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
@@ -34,6 +33,7 @@ import {
   sanityCheckBlock,
   sanityCheckChunk,
   sanityCheckTx,
+  validateChunk,
 } from '../lib/validation.js';
 import {
   ChainSource,
@@ -532,19 +532,7 @@ export class ArweaveCompositeClient
 
       sanityCheckChunk(chunk);
 
-      const validChunk = await validatePath(
-        dataRoot,
-        relativeOffset,
-        0,
-        +chunk.data_size,
-        fromB64Url(chunk.data_path),
-      );
-
-      if (!validChunk) {
-        throw Error(
-          `Invalid chunk based on absolute offset, data_root and data_path: ${chunk}`,
-        );
-      }
+      await validateChunk(chunk, dataRoot, relativeOffset);
 
       return chunk;
     } catch (error: any) {
