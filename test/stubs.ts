@@ -20,6 +20,7 @@ import fs from 'fs';
 import stream, { Readable } from 'stream';
 
 import { fromB64Url } from '../src/lib/encoding.js';
+import { validateChunk } from '../src/lib/validation.js';
 import {
   ChainSource,
   ChunkSource,
@@ -139,16 +140,9 @@ export class ArweaveChunkSourceStub implements ChunkSource {
           'utf8',
         ),
       );
-      const validChunk = await validatePath(
-        dataRoot,
-        relativeOffset,
-        0,
-        +chunk.data_size,
-        fromB64Url(chunk.data_path),
-      );
-      if (!validChunk) {
-        throw new Error('Invalid chunk!');
-      }
+
+      await validateChunk(chunk, dataRoot, relativeOffset);
+
       return chunk;
     } else {
       throw new Error(`Chunk at offset ${absoluteOffset} not found`);
