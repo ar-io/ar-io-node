@@ -84,7 +84,7 @@ describe('BlockImporter', () => {
     });
   });
 
-  after(() => {
+  afterEach(async () => {
     sandbox.restore();
     coreDb.close();
     fs.unlinkSync(coreDbPath);
