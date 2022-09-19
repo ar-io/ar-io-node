@@ -18,8 +18,10 @@
 import { ValidationError } from 'apollo-server-express';
 import Sqlite from 'better-sqlite3';
 import crypto from 'crypto';
+import os from 'os';
 import * as R from 'ramda';
 import sql from 'sql-bricks';
+import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 
 /* eslint-disable */
 // @ts-ignore
@@ -40,9 +42,8 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
-const STABLE_FLUSH_INTERVAL = 50;
+const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 24;
-
 const JOIN_LAST_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
 
 function tagJoinSortPriority(tag: { name: string; values: string[] }) {
@@ -171,7 +172,7 @@ export function txToDbRows(tx: PartialJsonTransaction) {
   };
 }
 
-export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
+export class StandaloneSqliteDatabaseWorker {
   private dbs: {
     core: Sqlite.Database;
   };
@@ -196,6 +197,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     const sqlUrl = new URL('./sql/core', import.meta.url);
     const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
     for (const [k, sql] of Object.entries(coreSql)) {
+      // TODO explain if
       if (!k.endsWith('.sql')) {
         this.stmts.core[k] = this.dbs.core.prepare(sql);
       }
@@ -388,6 +390,167 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     );
   }
 
+  saveBlockAndTxs(
+    block: PartialJsonBlock,
+    txs: PartialJsonTransaction[],
+    missingTxIds: string[],
+  ) {
+    this.insertBlockAndTxsFn(block, txs, missingTxIds);
+
+    if (block.height % STABLE_FLUSH_INTERVAL === 0) {
+      const { block_timestamp: maxStableBlockTimestamp } =
+        this.stmts.core.selectMaxStableBlockTimestamp.get();
+      const endHeight = block.height - MAX_FORK_DEPTH;
+
+      this.saveStableDataFn(endHeight);
+
+      this.deleteStaleNewDataFn(
+        endHeight,
+        maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
+      );
+    }
+  }
+}
+
+export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
+  private dbs: {
+    core: Sqlite.Database;
+  };
+  private stmts: {
+    core: { [key: string]: Sqlite.Statement };
+  };
+  private workers: any[] = [];
+  private workQueue: any[] = [];
+
+  // Transactions
+  insertTxFn: Sqlite.Transaction;
+
+  constructor({ coreDbPath }: { coreDbPath: string }) {
+    this.dbs = {
+      core: new Sqlite(coreDbPath),
+    };
+    this.dbs.core.pragma('journal_mode = WAL');
+    this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
+
+    this.stmts = { core: {} };
+    const sqlUrl = new URL('./sql/core', import.meta.url);
+    const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
+    for (const [k, sql] of Object.entries(coreSql)) {
+      if (!k.endsWith('.sql')) {
+        this.stmts.core[k] = this.dbs.core.prepare(sql);
+      }
+    }
+
+    // Transactions
+    this.insertTxFn = this.dbs.core.transaction(
+      (tx: PartialJsonTransaction) => {
+        // Insert the transaction
+        const rows = txToDbRows(tx);
+
+        for (const row of rows.tagNames) {
+          this.stmts.core.insertOrIgnoreTagName.run(row);
+        }
+
+        for (const row of rows.tagValues) {
+          this.stmts.core.insertOrIgnoreTagValue.run(row);
+        }
+
+        for (const row of rows.newTxTags) {
+          this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
+        }
+
+        for (const row of rows.wallets) {
+          this.stmts.core.insertOrIgnoreWallet.run(row);
+        }
+
+        this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
+
+        // Upsert the transaction to block assocation
+        this.stmts.core.insertAsyncNewBlockTransaction.run({
+          transaction_id: rows.newTx.id,
+        });
+
+        this.stmts.core.insertAsyncNewBlockHeight.run({
+          transaction_id: rows.newTx.id,
+        });
+
+        // Remove missing transaction ID if it exists
+        this.stmts.core.deleteMissingTransaction.run({
+          transaction_id: rows.newTx.id,
+        });
+      },
+    );
+
+    const self = this;
+
+    // Spawn workers that try to drain the queue.
+    os.cpus().forEach(function spawn() {
+      const workerUrl = new URL('./standalone-sqlite.js', import.meta.url);
+      const worker = new Worker(workerUrl, {
+        workerData: {
+          coreDbPath,
+        },
+      });
+
+      let job: any = null; // Current item from the queue
+      let error: any = null; // Error that caused the worker to crash
+
+      function takeWork() {
+        if (!job && self.workQueue.length) {
+          // If there's a job in the queue, send it to the worker
+          job = self.workQueue.shift();
+          worker.postMessage(job.message);
+        }
+      }
+
+      worker
+        .on('online', () => {
+          self.workers.push({ takeWork });
+          takeWork();
+        })
+        .on('message', (result) => {
+          job.resolve(result);
+          job = null;
+          takeWork(); // Check if there's more work to do
+        })
+        .on('error', (err) => {
+          console.error(err);
+          error = err;
+        })
+        .on('exit', (code) => {
+          self.workers = self.workers.filter((w) => w.takeWork !== takeWork);
+          if (job) {
+            job.reject(error || new Error('worker died'));
+          }
+          if (code !== 0) {
+            console.error(`worker exited with code ${code}`);
+            spawn(); // Worker died, so spawn a new one
+          }
+        });
+    });
+  }
+
+  stop() {
+    this.workers.forEach(() => {
+      return new Promise((resolve, reject) => {
+        this.workQueue.push({
+          resolve,
+          reject,
+          message: {
+            method: 'terminate',
+          },
+        });
+        this.drainQueue();
+      });
+    });
+  }
+
+  drainQueue() {
+    for (const worker of this.workers) {
+      worker.takeWork();
+    }
+  }
+
   async getMaxHeight(): Promise<number> {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
@@ -418,33 +581,33 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.insertTxFn(tx);
   }
 
-  async saveBlockAndTxs(
+  saveBlockAndTxs(
     block: PartialJsonBlock,
     txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void> {
     // TODO add metrics to track timing
 
-    this.insertBlockAndTxsFn(block, txs, missingTxIds);
-
-    if (block.height % STABLE_FLUSH_INTERVAL === 0) {
-      const { block_timestamp: maxStableBlockTimestamp } =
-        this.stmts.core.selectMaxStableBlockTimestamp.get();
-      const endHeight = block.height - MAX_FORK_DEPTH;
-
-      this.saveStableDataFn(endHeight);
-
-      this.deleteStaleNewDataFn(
-        endHeight,
-        maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
-      );
-    }
+    return new Promise((resolve, reject) => {
+      this.workQueue.push({
+        resolve,
+        reject,
+        message: {
+          method: 'saveBlockAndTxs',
+          parameters: [block, txs, missingTxIds],
+        },
+      });
+      this.drainQueue();
+    });
   }
 
   async getDebugInfo() {
-    const minStableHeight = this.stmts.core.selectMinStableHeight.get().min_height;
-    const maxStableHeight = this.stmts.core.selectMaxStableHeight.get().max_height;
-    const stableTxsCount = this.stmts.core.selectStableTransactionsCount.get().count;
+    const minStableHeight =
+      this.stmts.core.selectMinStableHeight.get().min_height;
+    const maxStableHeight =
+      this.stmts.core.selectMaxStableHeight.get().max_height;
+    const stableTxsCount =
+      this.stmts.core.selectStableTransactionsCount.get().count;
     const stableBlocksCount =
       this.stmts.core.selectStableBlockCount.get().count;
     const stableBlockTxsCount =
@@ -1183,4 +1346,21 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
     return block;
   }
+}
+
+if (!isMainThread) {
+  const db = new StandaloneSqliteDatabaseWorker({
+    coreDbPath: workerData.coreDbPath,
+  });
+
+  parentPort?.on('message', ({ method, parameters }) => {
+    if (method === 'saveBlockAndTxs') {
+      const [block, txs, missingTxIds] = parameters;
+      db.saveBlockAndTxs(block, txs, missingTxIds);
+      parentPort?.postMessage(null);
+    }
+    if (method === 'terminate') {
+      process.exit(0);
+    }
+  });
 }

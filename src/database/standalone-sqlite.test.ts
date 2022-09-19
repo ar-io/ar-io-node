@@ -16,13 +16,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { ValidationError } from 'apollo-server-express';
-import Sqlite from 'better-sqlite3';
 import { expect } from 'chai';
 import crypto from 'crypto';
 import fs from 'fs';
 
 import {
   StandaloneSqliteDatabase,
+  StandaloneSqliteDatabaseWorker,
   decodeBlockGqlCursor,
   decodeTransactionGqlCursor,
   encodeBlockGqlCursor,
@@ -30,6 +30,7 @@ import {
   toSqliteParams,
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
+import { coreDb, coreDbPath } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
 
 const HEIGHT = 1138;
@@ -112,25 +113,22 @@ describe('SQLite GraphQL cursor functions', () => {
 });
 
 describe('StandaloneSqliteDatabase', () => {
-  let coreDbPath: string;
-  let coreDb: Sqlite.Database;
   let chainSource: ArweaveChainSourceStub;
   let chainDb: StandaloneSqliteDatabase;
+  let chainDbWorker: StandaloneSqliteDatabaseWorker;
 
-  beforeEach(async () => {
-    coreDbPath = `test/tmp/core-${crypto.randomBytes(8).toString('hex')}.db`;
-    coreDb = new Sqlite(coreDbPath);
-    const schema = fs.readFileSync('test/schema.sql', 'utf8');
-    coreDb.exec(schema);
+  before(() => {
     chainDb = new StandaloneSqliteDatabase({
+      coreDbPath: coreDbPath,
+    });
+    chainDbWorker = new StandaloneSqliteDatabaseWorker({
       coreDbPath: coreDbPath,
     });
     chainSource = new ArweaveChainSourceStub();
   });
 
-  afterEach(async () => {
-    coreDb.close();
-    fs.unlinkSync(coreDbPath);
+  after(async () => {
+    chainDb.stop();
   });
 
   describe('saveBlockAndTxs', () => {
@@ -571,7 +569,7 @@ describe('StandaloneSqliteDatabase', () => {
         await chainSource.getBlockAndTxsByHeight(height);
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDb.saveStableDataFn(height + 1);
+      chainDbWorker.saveStableDataFn(height + 1);
 
       const stats = await chainDb.getDebugInfo();
       expect(stats.counts.stableBlocks).to.equal(1);
@@ -654,7 +652,7 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDb.saveStableDataFn(height + 1);
+      chainDbWorker.saveStableDataFn(height + 1);
 
       const sql = `
         SELECT sb.*, wo.public_modulus AS owner
@@ -761,7 +759,7 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDb.saveStableDataFn(height + 1);
+      chainDbWorker.saveStableDataFn(height + 1);
 
       const sql = `
         SELECT sb.*, wo.public_modulus AS owner

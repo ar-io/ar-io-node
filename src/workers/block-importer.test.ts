@@ -15,12 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import Sqlite from 'better-sqlite3';
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
-import crypto from 'crypto';
 import { EventEmitter } from 'events';
-import fs from 'fs';
 import * as promClient from 'prom-client';
 import * as sinon from 'sinon';
 import sinonChai from 'sinon-chai';
@@ -29,6 +26,7 @@ import { default as wait } from 'wait';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
+import { coreDbPath } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
 
 chai.use(chaiAsPromised);
@@ -39,8 +37,6 @@ describe('BlockImporter', () => {
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
-  let coreDbPath: string;
-  let coreDb: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
   let sandbox: sinon.SinonSandbox;
 
@@ -66,28 +62,26 @@ describe('BlockImporter', () => {
     });
   };
 
+  before(async () => {
+    eventEmitter = new EventEmitter();
+    chainSource = new ArweaveChainSourceStub();
+    chainDb = new StandaloneSqliteDatabase({ coreDbPath });
+  });
+
+  after(async () => {
+    chainDb.stop();
+    sandbox.restore();
+  });
+
   beforeEach(async () => {
     sandbox = sinon.createSandbox();
-
-    log.transports.forEach((t) => (t.silent = true));
     metricsRegistry = promClient.register;
     metricsRegistry.clear();
     promClient.collectDefaultMetrics({ register: metricsRegistry });
-    eventEmitter = new EventEmitter();
-    chainSource = new ArweaveChainSourceStub();
-    coreDbPath = `test/tmp/core-${crypto.randomBytes(8).toString('hex')}.db`;
-    coreDb = new Sqlite(coreDbPath);
-    const schema = fs.readFileSync('test/schema.sql', 'utf8');
-    coreDb.exec(schema);
-    chainDb = new StandaloneSqliteDatabase({
-      coreDbPath: coreDbPath,
-    });
   });
 
   afterEach(async () => {
     sandbox.restore();
-    coreDb.close();
-    fs.unlinkSync(coreDbPath);
   });
 
   describe('importBlock', () => {
