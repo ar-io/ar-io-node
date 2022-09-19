@@ -112,16 +112,25 @@ describe('SQLite GraphQL cursor functions', () => {
 });
 
 describe('StandaloneSqliteDatabase', () => {
+  let coreDbPath: string;
   let coreDb: Sqlite.Database;
   let chainSource: ArweaveChainSourceStub;
   let chainDb: StandaloneSqliteDatabase;
 
   beforeEach(async () => {
-    coreDb = new Sqlite(':memory:');
+    coreDbPath = `test/tmp/core-${crypto.randomBytes(8).toString('hex')}.db`;
+    coreDb = new Sqlite(coreDbPath);
     const schema = fs.readFileSync('test/schema.sql', 'utf8');
     coreDb.exec(schema);
-    chainDb = new StandaloneSqliteDatabase({ coreDb });
+    chainDb = new StandaloneSqliteDatabase({
+      coreDbPath: coreDbPath,
+    });
     chainSource = new ArweaveChainSourceStub();
+  });
+
+  afterEach(async () => {
+    coreDb.close();
+    fs.unlinkSync(coreDbPath);
   });
 
   describe('saveBlockAndTxs', () => {

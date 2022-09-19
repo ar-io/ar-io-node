@@ -18,6 +18,7 @@
 import Sqlite from 'better-sqlite3';
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
+import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import * as promClient from 'prom-client';
@@ -38,6 +39,7 @@ describe('BlockImporter', () => {
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
+  let coreDbPath: string;
   let coreDb: Sqlite.Database;
   let chainDb: StandaloneSqliteDatabase;
   let sandbox: sinon.SinonSandbox;
@@ -73,14 +75,19 @@ describe('BlockImporter', () => {
     promClient.collectDefaultMetrics({ register: metricsRegistry });
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
-    coreDb = new Sqlite(':memory:');
+    coreDbPath = `test/tmp/core-${crypto.randomBytes(8).toString('hex')}.db`;
+    coreDb = new Sqlite(coreDbPath);
     const schema = fs.readFileSync('test/schema.sql', 'utf8');
     coreDb.exec(schema);
-    chainDb = new StandaloneSqliteDatabase({ coreDb });
+    chainDb = new StandaloneSqliteDatabase({
+      coreDbPath: coreDbPath,
+    });
   });
 
   after(() => {
     sandbox.restore();
+    coreDb.close();
+    fs.unlinkSync(coreDbPath);
   });
 
   describe('importBlock', () => {

@@ -185,8 +185,10 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   saveStableDataFn: Sqlite.Transaction;
   deleteStaleNewDataFn: Sqlite.Transaction;
 
-  constructor({ coreDb }: { coreDb: Sqlite.Database }) {
-    this.dbs = { core: coreDb };
+  constructor({ coreDbPath }: { coreDbPath: string }) {
+    this.dbs = {
+      core: new Sqlite(coreDbPath),
+    };
     this.dbs.core.pragma('journal_mode = WAL');
     this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
 
