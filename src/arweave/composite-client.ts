@@ -17,7 +17,7 @@
  */
 import { default as Arweave } from 'arweave';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
-import { queueAsPromised } from 'fastq';
+import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
 import { default as NodeCache } from 'node-cache';
 import * as promClient from 'prom-client';
@@ -40,10 +40,10 @@ import {
   ChainSource,
   ChunkSource,
   JsonChunk,
+  JsonChunkCache,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockCache,
-  PartialJsonChunkCache,
   PartialJsonTransaction,
   PartialJsonTransactionCache,
   TxDataSource,
@@ -79,7 +79,7 @@ export class ArweaveCompositeClient
 
   // Caches
   private blockCache: PartialJsonBlockCache;
-  private chunkCache: PartialJsonChunkCache;
+  private chunkCache: JsonChunkCache;
   private txCache: PartialJsonTransactionCache;
 
   // Trusted node

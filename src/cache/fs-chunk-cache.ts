@@ -19,7 +19,7 @@ export class FsChunkCache implements JsonChunkCache {
   private log: winston.Logger;
 
   constructor({ log }: { log: winston.Logger }) {
-    this.log = log.child({ class: 'FsChunkCache' });;
+    this.log = log.child({ class: this.constructor.name });
   }
 
   async has(dataRoot: string, relativeOffset: number) {
