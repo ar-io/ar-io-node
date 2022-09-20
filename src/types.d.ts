@@ -106,6 +106,12 @@ export interface PartialMsgpackTransaction {
   tags: BinaryTag[];
 }
 
+export interface PartialMsgpackChunk {
+  chunk: Buffer;
+  data_path: Buffer;
+  tx_path: Buffer;
+}
+
 export interface DataItem {
   parentTxId: Buffer;
   id: Buffer;
@@ -130,6 +136,16 @@ export interface PartialJsonTransactionCache {
   has(txId: string): Promise<boolean>;
   get(txId: string): Promise<PartialJsonTransaction | undefined>;
   set(tx: PartialJsonTransaction): Promise<void>;
+}
+
+export interface ChunkDataCache {
+  has(dataRoot: string, relativeOffset: number): Promise<boolean>;
+  get(dataRoot: string, relativeOffset: number): Promise<JsonChunk | undefined>;
+  set(
+    chunk: JsonChunk,
+    dataRoot: string,
+    relativeOffset: number,
+  ): Promise<void>;
 }
 
 export interface ChainSource {
