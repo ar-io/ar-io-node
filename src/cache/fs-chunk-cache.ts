@@ -8,7 +8,6 @@ import {
   msgpackToJsonChunk,
   toB64Url,
 } from '../lib/encoding.js';
-import { sanityCheckChunk, validateChunk } from '../lib/validation.js';
 import { ChunkSource, JsonChunk, JsonChunkCache } from '../types.js';
 
 function chunkCacheDir(dataRoot: Buffer, relativeOffset: number) {
