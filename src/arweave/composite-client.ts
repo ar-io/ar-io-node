@@ -27,9 +27,8 @@ import { default as wait } from 'wait';
 import * as winston from 'winston';
 
 import { FsBlockCache } from '../cache/fs-block-cache.js';
-import { FsChunkCache } from '../cache/fs-chunk-cache.js';
 import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { fromB64Url } from '../lib/encoding.js';
 import {
   sanityCheckBlock,
   sanityCheckChunk,
@@ -40,7 +39,6 @@ import {
   ChainSource,
   ChunkSource,
   JsonChunk,
-  JsonChunkCache,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockCache,
@@ -76,11 +74,8 @@ export class ArweaveCompositeClient
 {
   private arweave: Arweave;
   private log: winston.Logger;
-
-  // Caches
-  private blockCache: PartialJsonBlockCache;
-  private chunkCache: JsonChunkCache;
   private txCache: PartialJsonTransactionCache;
+  private blockCache: PartialJsonBlockCache;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -141,7 +136,6 @@ export class ArweaveCompositeClient
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.txCache = new FsTransactionCache();
     this.blockCache = new FsBlockCache();
-    this.chunkCache = new FsChunkCache({ log });
 
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
@@ -529,44 +523,19 @@ export class ArweaveCompositeClient
     relativeOffset: number,
   ): Promise<JsonChunk> {
     try {
-      const b64DataRoot = toB64Url(dataRoot);
-      const chunkPromise = this.chunkCache
-        .get(b64DataRoot, relativeOffset)
-        .then((chunk) => {
-          // Chunk is cached
-          if (chunk) {
-            this.log.info('Found cached chunk', {
-              dataRoot: b64DataRoot,
-              relativeOffset,
-            });
-            return chunk;
-          }
+      const response = await this.trustedNodeRequestQueue.push({
+        method: 'GET',
+        url: `/chunk/${absoluteOffset}`,
+      });
+      const chunk = response.data;
 
-          // Fetch from nodes
-          return this.trustedNodeRequestQueue
-            .push({
-              method: 'GET',
-              url: `/chunk/${absoluteOffset}`,
-            })
-            .then((response) => {
-              this.log.info('Fetched chunk', {
-                dataRoot: b64DataRoot,
-                relativeOffset,
-              });
-              const chunk = response.data;
-              this.chunkCache.set(chunk, b64DataRoot, relativeOffset);
-              return response.data;
-            });
-        });
-
-      const chunk = await chunkPromise;
       sanityCheckChunk(chunk);
 
       await validateChunk(chunk, dataRoot, relativeOffset);
 
       return chunk;
     } catch (error: any) {
-      this.log.error('Failed to retrieve chunk:', {
+      this.log.error('Failed to get chunk:', {
         absoluteOffset,
         dataRoot,
         relativeOffset,
