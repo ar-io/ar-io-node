@@ -89,7 +89,7 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
       });
     } catch (error: any) {
       this.log.error('Failed to set chunk in cache', {
-        dataRoot,
+        dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
       });
@@ -134,7 +134,7 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     } catch (error: any) {
       this.log.error('Failed to fetch chunk', {
         absoluteOffset,
-        dataRoot,
+        dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
       });
