@@ -86,8 +86,10 @@ export class ArweaveCompositeClient
   private preferredPeers: Set<Peer> = new Set();
 
   // Block and TX promise caches used for prefetching
-  private blockByHeightPromiseCache: NodeCache = createNodeCache();
-  private txPromiseCache: NodeCache = createNodeCache();
+  private blockByHeightPromiseCache: NodeCache = createNodeCache({
+    stdTTL: 30,
+  });
+  private txPromiseCache: NodeCache = createNodeCache({ stdTTL: 60 });
 
   // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<

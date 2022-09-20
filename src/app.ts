@@ -26,9 +26,7 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
-import { FsChunkCache } from './cache/fs-chunk-cache.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
-import { fromB64Url } from './lib/encoding.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { BlockImporter } from './workers/block-importer.js';
