@@ -102,35 +102,32 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     relativeOffset: number,
   ): Promise<JsonChunk> {
     try {
-      const chunkPromise = this.get(dataRoot, relativeOffset).then((chunk) => {
-        // Chunk is cached
-        if (chunk) {
-          this.log.info('Successfully fetched chunk from cache', {
-            dataRoot: toB64Url(dataRoot),
-            relativeOffset,
-          });
-          return chunk;
-        }
-
-        // Fetch from ChunkSource
-        return this.chunkSource
-          .getChunkByRelativeOrAbsoluteOffset(
-            absoluteOffset,
-            dataRoot,
-            relativeOffset,
-          )
-          .then((chunk: JsonChunk) => {
-            this.set(chunk, dataRoot, relativeOffset);
+      const chunkPromise = this.get(dataRoot, relativeOffset).then(
+        async (chunk) => {
+          // Chunk is cached
+          if (chunk) {
+            this.log.info('Successfully fetched chunk from cache', {
+              dataRoot: toB64Url(dataRoot),
+              relativeOffset,
+            });
             return chunk;
-          });
-      });
+          }
 
-      const chunk = await chunkPromise;
-      sanityCheckChunk(chunk);
+          // Fetch from ChunkSource
+          return this.chunkSource
+            .getChunkByRelativeOrAbsoluteOffset(
+              absoluteOffset,
+              dataRoot,
+              relativeOffset,
+            )
+            .then((chunk: JsonChunk) => {
+              this.set(chunk, dataRoot, relativeOffset);
+              return chunk;
+            });
+        },
+      );
 
-      await validateChunk(chunk, dataRoot, relativeOffset);
-
-      return chunk;
+      return await chunkPromise;
     } catch (error: any) {
       this.log.error('Failed to fetch chunk', {
         absoluteOffset,
