@@ -11,11 +11,12 @@ import {
 import { sanityCheckChunk, validateChunk } from '../lib/validation.js';
 import { ChunkSource, JsonChunk, JsonChunkCache } from '../types.js';
 
-function chunkCacheDir(dataRoot: string, relativeOffset: number) {
-  return `data/chunks/${dataRoot}/data/${relativeOffset}`;
+function chunkCacheDir(dataRoot: Buffer, relativeOffset: number) {
+  const b64DataRoot = toB64Url(dataRoot);
+  return `data/chunks/${b64DataRoot}/data/${relativeOffset}`;
 }
 
-function chunkCachePath(dataRoot: string, relativeOffset: number) {
+function chunkCachePath(dataRoot: Buffer, relativeOffset: number) {
   return `${chunkCacheDir(dataRoot, relativeOffset)}/${relativeOffset}.msgpack`;
 }
 
@@ -34,7 +35,7 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     this.chunkSource = chunkSource;
   }
 
-  async has(dataRoot: string, relativeOffset: number) {
+  async has(dataRoot: Buffer, relativeOffset: number) {
     try {
       await fs.promises.access(
         chunkCachePath(dataRoot, relativeOffset),
@@ -47,7 +48,7 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
   }
 
   async get(
-    dataRoot: string,
+    dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<JsonChunk | undefined> {
     try {
@@ -70,7 +71,7 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
 
   async set(
     chunk: JsonChunk,
-    dataRoot: string,
+    dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<void> {
     try {
@@ -83,7 +84,7 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
         msgpackChunk,
       );
       this.log.info('Successfully cached chunk', {
-        dataRoot,
+        dataRoot: toB64Url(dataRoot),
         relativeOffset,
       });
     } catch (error: any) {
@@ -101,31 +102,28 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     relativeOffset: number,
   ): Promise<JsonChunk> {
     try {
-      const b64DataRoot = toB64Url(dataRoot);
-      const chunkPromise = this.get(b64DataRoot, relativeOffset).then(
-        (chunk) => {
-          // Chunk is cached
-          if (chunk) {
-            this.log.info('Found cached chunk', {
-              dataRoot: b64DataRoot,
-              relativeOffset,
-            });
-            return chunk;
-          }
+      const chunkPromise = this.get(dataRoot, relativeOffset).then((chunk) => {
+        // Chunk is cached
+        if (chunk) {
+          this.log.info('Successfully fetched chunk from cache', {
+            dataRoot: toB64Url(dataRoot),
+            relativeOffset,
+          });
+          return chunk;
+        }
 
-          // Fetch from nodes
-          return this.chunkSource
-            .getChunkByRelativeOrAbsoluteOffset(
-              absoluteOffset,
-              dataRoot,
-              relativeOffset,
-            )
-            .then((chunk: JsonChunk) => {
-              this.set(chunk, b64DataRoot, relativeOffset);
-              return chunk;
-            });
-        },
-      );
+        // Fetch from ChunkSource
+        return this.chunkSource
+          .getChunkByRelativeOrAbsoluteOffset(
+            absoluteOffset,
+            dataRoot,
+            relativeOffset,
+          )
+          .then((chunk: JsonChunk) => {
+            this.set(chunk, dataRoot, relativeOffset);
+            return chunk;
+          });
+      });
 
       const chunk = await chunkPromise;
       sanityCheckChunk(chunk);

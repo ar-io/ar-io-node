@@ -139,11 +139,11 @@ export interface PartialJsonTransactionCache {
 }
 
 export interface JsonChunkCache {
-  has(dataRoot: string, relativeOffset: number): Promise<boolean>;
-  get(dataRoot: string, relativeOffset: number): Promise<JsonChunk | undefined>;
+  has(dataRoot: Buffer, relativeOffset: number): Promise<boolean>;
+  get(dataRoot: Buffer, relativeOffset: number): Promise<JsonChunk | undefined>;
   set(
     chunk: JsonChunk,
-    dataRoot: string,
+    dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<void>;
 }
