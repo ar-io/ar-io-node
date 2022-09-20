@@ -5,6 +5,7 @@
 /.direnv
 /coverage
 /data/headers
+/data/chunks
 /dist
 /node_modules
 

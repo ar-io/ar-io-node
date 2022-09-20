@@ -138,7 +138,7 @@ export interface PartialJsonTransactionCache {
   set(tx: PartialJsonTransaction): Promise<void>;
 }
 
-export interface ChunkDataCache {
+export interface JsonChunkCache {
   has(dataRoot: string, relativeOffset: number): Promise<boolean>;
   get(dataRoot: string, relativeOffset: number): Promise<JsonChunk | undefined>;
   set(

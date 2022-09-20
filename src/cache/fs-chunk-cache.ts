@@ -1,28 +1,25 @@
 import fs from 'fs';
-import * as winston from 'winston';
+import winston from 'winston';
 
 import {
   jsonChunkToMsgpackChunk,
   msgpackToJsonChunk,
 } from '../lib/encoding.js';
-import { ChunkDataCache, JsonChunk } from '../types.js';
+import { JsonChunk, JsonChunkCache } from '../types.js';
 
-function chunkCachePath(dataRoot: string, relativeOffset: number) {
+function chunkCacheDir(dataRoot: string, relativeOffset: number) {
   return `data/chunks/${dataRoot}/data/${relativeOffset}`;
 }
 
-function chunkCacheDir(dataRoot: string, relativeOffset: number) {
-  return `${chunkCachePath(
-    dataRoot,
-    relativeOffset,
-  )}/${relativeOffset}.msgpack`;
+function chunkCachePath(dataRoot: string, relativeOffset: number) {
+  return `${chunkCacheDir(dataRoot, relativeOffset)}/${relativeOffset}.msgpack`;
 }
 
-export class FsChunkCache implements ChunkDataCache {
+export class FsChunkCache implements JsonChunkCache {
   private log: winston.Logger;
 
-  constructor(log: winston.Logger) {
-    this.log = log.child({ class: 'FsChunkCache' });
+  constructor({ log }: { log: winston.Logger }) {
+    this.log = log.child({ class: 'FsChunkCache' });;
   }
 
   async has(dataRoot: string, relativeOffset: number) {
@@ -65,12 +62,18 @@ export class FsChunkCache implements ChunkDataCache {
     relativeOffset: number,
   ): Promise<void> {
     try {
-      const chunkDir = chunkCacheDir(dataRoot, relativeOffset);
-      await fs.promises.mkdir(chunkDir, {
+      await fs.promises.mkdir(chunkCacheDir(dataRoot, relativeOffset), {
         recursive: true,
       });
-      const chunkData = jsonChunkToMsgpackChunk(chunk);
-      await fs.promises.writeFile(chunkDir, chunkData);
+      const msgpackChunk = jsonChunkToMsgpackChunk(chunk);
+      await fs.promises.writeFile(
+        chunkCachePath(dataRoot, relativeOffset),
+        msgpackChunk,
+      );
+      this.log.info('Successfully cached chunk', {
+        dataRoot,
+        relativeOffset,
+      });
     } catch (error: any) {
       this.log.error('Failed to set chunk in cache', {
         dataRoot,

@@ -17,7 +17,7 @@
  */
 import { default as Arweave } from 'arweave';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
-import type { queueAsPromised } from 'fastq';
+import { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
 import { default as NodeCache } from 'node-cache';
 import * as promClient from 'prom-client';
@@ -27,8 +27,9 @@ import { default as wait } from 'wait';
 import * as winston from 'winston';
 
 import { FsBlockCache } from '../cache/fs-block-cache.js';
+import { FsChunkCache } from '../cache/fs-chunk-cache.js';
 import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
-import { fromB64Url } from '../lib/encoding.js';
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import {
   sanityCheckBlock,
   sanityCheckChunk,
@@ -42,6 +43,7 @@ import {
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockCache,
+  PartialJsonChunkCache,
   PartialJsonTransaction,
   PartialJsonTransactionCache,
   TxDataSource,
@@ -54,6 +56,13 @@ const DEFAULT_MAX_REQUESTS_PER_SECOND = 15;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
+const createNodeCache = (options: NodeCache.Options = {}) =>
+  new NodeCache({
+    checkperiod: 10,
+    stdTTL: 30,
+    useClones: false, // cloning promises is unsafe
+    ...options,
+  });
 
 type Peer = {
   url: string;
@@ -67,8 +76,11 @@ export class ArweaveCompositeClient
 {
   private arweave: Arweave;
   private log: winston.Logger;
-  private txCache: PartialJsonTransactionCache;
+
+  // Caches
   private blockCache: PartialJsonBlockCache;
+  private chunkCache: PartialJsonChunkCache;
+  private txCache: PartialJsonTransactionCache;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -78,17 +90,9 @@ export class ArweaveCompositeClient
   private peers: Record<string, Peer> = {};
   private preferredPeers: Set<Peer> = new Set();
 
-  // Block and TX promise caches
-  private blockByHeightPromiseCache = new NodeCache({
-    checkperiod: 10,
-    stdTTL: 30,
-    useClones: false, // cloning promises is unsafe
-  });
-  private txPromiseCache = new NodeCache({
-    checkperiod: 10,
-    stdTTL: 60,
-    useClones: false, // cloning promises is unsafe
-  });
+  // Block and TX promise caches used for prefetching
+  private blockByHeightPromiseCache: NodeCache = createNodeCache();
+  private txPromiseCache: NodeCache = createNodeCache();
 
   // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<
@@ -137,6 +141,7 @@ export class ArweaveCompositeClient
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.txCache = new FsTransactionCache();
     this.blockCache = new FsBlockCache();
+    this.chunkCache = new FsChunkCache({ log });
 
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
@@ -524,19 +529,44 @@ export class ArweaveCompositeClient
     relativeOffset: number,
   ): Promise<JsonChunk> {
     try {
-      const response = await this.trustedNodeRequestQueue.push({
-        method: 'GET',
-        url: `/chunk/${absoluteOffset}`,
-      });
-      const chunk = response.data;
+      const b64DataRoot = toB64Url(dataRoot);
+      const chunkPromise = this.chunkCache
+        .get(b64DataRoot, relativeOffset)
+        .then((chunk) => {
+          // Chunk is cached
+          if (chunk) {
+            this.log.info('Found cached chunk', {
+              dataRoot: b64DataRoot,
+              relativeOffset,
+            });
+            return chunk;
+          }
 
+          // Fetch from nodes
+          return this.trustedNodeRequestQueue
+            .push({
+              method: 'GET',
+              url: `/chunk/${absoluteOffset}`,
+            })
+            .then((response) => {
+              this.log.info('Fetched chunk', {
+                dataRoot: b64DataRoot,
+                relativeOffset,
+              });
+              const chunk = response.data;
+              this.chunkCache.set(chunk, b64DataRoot, relativeOffset);
+              return response.data;
+            });
+        });
+
+      const chunk = await chunkPromise;
       sanityCheckChunk(chunk);
 
       await validateChunk(chunk, dataRoot, relativeOffset);
 
       return chunk;
     } catch (error: any) {
-      this.log.error('Failed to get chunk:', {
+      this.log.error('Failed to retrieve chunk:', {
         absoluteOffset,
         dataRoot,
         relativeOffset,
