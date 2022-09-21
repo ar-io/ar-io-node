@@ -54,7 +54,7 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
       }
       return undefined;
     } catch (error: any) {
-      this.log.error('Failed to fetch chunk from cache', {
+      this.log.error('Failed to fetch chunk data from cache', {
         dataRoot,
         relativeOffset,
         message: error.message,
