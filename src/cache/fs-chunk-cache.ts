@@ -117,31 +117,41 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<Readable> {
-    const chunkDataPromise = this.getChunkData(dataRoot, relativeOffset).then(
-      async (chunkData) => {
-        // Chunk is cached
-        if (chunkData) {
-          this.log.info('Successfully fetched chunk data from cache', {
-            dataRoot: toB64Url(dataRoot),
-            relativeOffset,
-          });
-          return chunkData;
-        }
+    try {
+      const chunkDataPromise = this.getChunkData(dataRoot, relativeOffset).then(
+        async (chunkData) => {
+          // Chunk is cached
+          if (chunkData) {
+            this.log.info('Successfully fetched chunk data from cache', {
+              dataRoot: toB64Url(dataRoot),
+              relativeOffset,
+            });
+            return chunkData;
+          }
 
-        // Fetch from ChunkSource
-        return this.getChunkByRelativeOrAbsoluteOffset(
-          absoluteOffset,
-          dataRoot,
-          relativeOffset,
-        ).then((chunk: JsonChunk) => {
-          // cache the unencoded buffer
-          const chunkData = fromB64Url(chunk.chunk);
-          this.setChunkData(chunkData, dataRoot, relativeOffset);
-          return chunkData;
-        });
-      },
-    );
-    const chunkData = await chunkDataPromise;
-    return Readable.from(chunkData);
+          // Fetch from ChunkSource
+          return this.getChunkByRelativeOrAbsoluteOffset(
+            absoluteOffset,
+            dataRoot,
+            relativeOffset,
+          ).then((chunk: JsonChunk) => {
+            // cache the unencoded buffer
+            const chunkData = fromB64Url(chunk.chunk);
+            this.setChunkData(chunkData, dataRoot, relativeOffset);
+            return chunkData;
+          });
+        },
+      );
+      const chunkData = await chunkDataPromise;
+      return Readable.from(chunkData);
+    } catch (error: any) {
+      this.log.error('Failed to fetch chunk data', {
+        absoluteOffset,
+        dataRoot: toB64Url(dataRoot),
+        relativeOffset,
+        message: error.message,
+      });
+      throw error;
+    }
   }
 }
