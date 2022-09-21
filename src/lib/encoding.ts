@@ -20,11 +20,9 @@ import { createHash } from 'crypto';
 import { Packr } from 'msgpackr';
 
 import {
-  JsonChunk,
   PartialJsonBlock,
   PartialJsonTransaction,
   PartialMsgpackBlock,
-  PartialMsgpackChunk,
   PartialMsgpackTransaction,
 } from '../types.js';
 
@@ -196,23 +194,12 @@ export function msgpackTxToJsonTx(
   };
 }
 
-export function jsonChunkToMsgPackChunk(chunk: JsonChunk): PartialMsgpackChunk {
-  return {
-    data_path: fromB64Url(chunk.data_path),
-    tx_path: fromB64Url(chunk.tx_path),
-  };
-}
-
 export function jsonTxToMsgpack(jsonTx: PartialJsonTransaction): Buffer {
   return toMsgpack(jsonTxToMsgpackTx(jsonTx));
 }
 
 export function msgpackToJsonTx(buffer: Buffer): PartialJsonTransaction {
   return msgpackTxToJsonTx(fromMsgpack(buffer));
-}
-
-export function jsonChunkToMsgpackChunk(chunk: JsonChunk): Buffer {
-  return toMsgpack(jsonChunkToMsgPackChunk(chunk));
 }
 
 // AR/Winston conversion
