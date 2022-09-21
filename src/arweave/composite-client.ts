@@ -54,13 +54,6 @@ const DEFAULT_MAX_REQUESTS_PER_SECOND = 15;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
-const createNodeCache = (options: NodeCache.Options = {}) =>
-  new NodeCache({
-    checkperiod: 10,
-    stdTTL: 30,
-    useClones: false, // cloning promises is unsafe
-    ...options,
-  });
 
 type Peer = {
   url: string;
@@ -86,10 +79,16 @@ export class ArweaveCompositeClient
   private preferredPeers: Set<Peer> = new Set();
 
   // Block and TX promise caches used for prefetching
-  private blockByHeightPromiseCache: NodeCache = createNodeCache({
+  private blockByHeightPromiseCache: NodeCache = new NodeCache({
+    checkperiod: 10,
     stdTTL: 30,
+    useClones: false, // cloning promises is unsafe
   });
-  private txPromiseCache: NodeCache = createNodeCache({ stdTTL: 60 });
+  private txPromiseCache: NodeCache = new NodeCache({
+    checkperiod: 10,
+    stdTTL: 60,
+    useClones: false, // cloning promises is unsafe
+  });
 
   // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<
