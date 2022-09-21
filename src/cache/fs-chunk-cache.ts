@@ -2,24 +2,19 @@ import fs from 'fs';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import {
-  fromB64Url,
-  jsonChunkToMsgpackChunk,
-  msgpackToJsonChunk,
-  toB64Url,
-} from '../lib/encoding.js';
-import { ChunkSource, JsonChunk, JsonChunkCache } from '../types.js';
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { ChunkDataCache, ChunkSource, JsonChunk } from '../types.js';
 
-function chunkCacheDir(dataRoot: Buffer, relativeOffset: number) {
+function chunkCacheDir(dataRoot: Buffer) {
   const b64DataRoot = toB64Url(dataRoot);
-  return `data/chunks/${b64DataRoot}/data/${relativeOffset}`;
+  return `data/chunks/${b64DataRoot}/data/`;
 }
 
 function chunkCachePath(dataRoot: Buffer, relativeOffset: number) {
-  return `${chunkCacheDir(dataRoot, relativeOffset)}/${relativeOffset}.msgpack`;
+  return `${chunkCacheDir(dataRoot)}/${relativeOffset}`;
 }
 
-export class FsChunkCache implements ChunkSource, JsonChunkCache {
+export class FsChunkCache implements ChunkSource, ChunkDataCache {
   private log: winston.Logger;
   private chunkSource: ChunkSource;
 
@@ -34,7 +29,7 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     this.chunkSource = chunkSource;
   }
 
-  async has(dataRoot: Buffer, relativeOffset: number) {
+  async hasChunkData(dataRoot: Buffer, relativeOffset: number) {
     try {
       await fs.promises.access(
         chunkCachePath(dataRoot, relativeOffset),
@@ -46,16 +41,16 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     }
   }
 
-  async get(
+  async getChunkData(
     dataRoot: Buffer,
     relativeOffset: number,
-  ): Promise<JsonChunk | undefined> {
+  ): Promise<Buffer | undefined> {
     try {
-      if (await this.has(dataRoot, relativeOffset)) {
+      if (await this.hasChunkData(dataRoot, relativeOffset)) {
         const chunk = await fs.promises.readFile(
           chunkCachePath(dataRoot, relativeOffset),
         );
-        return msgpackToJsonChunk(chunk);
+        return chunk;
       }
       return undefined;
     } catch (error: any) {
@@ -68,26 +63,25 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     }
   }
 
-  async set(
-    chunk: JsonChunk,
+  async setChunkData(
+    data: Buffer,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<void> {
     try {
-      await fs.promises.mkdir(chunkCacheDir(dataRoot, relativeOffset), {
+      await fs.promises.mkdir(chunkCacheDir(dataRoot), {
         recursive: true,
       });
-      const msgpackChunk = jsonChunkToMsgpackChunk(chunk);
       await fs.promises.writeFile(
         chunkCachePath(dataRoot, relativeOffset),
-        msgpackChunk,
+        data,
       );
-      this.log.info('Successfully cached chunk', {
+      this.log.info('Successfully cached chunk data', {
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
       });
     } catch (error: any) {
-      this.log.error('Failed to set chunk in cache', {
+      this.log.error('Failed to set chunk data in cache', {
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
@@ -101,32 +95,12 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     relativeOffset: number,
   ): Promise<JsonChunk> {
     try {
-      const chunkPromise = this.get(dataRoot, relativeOffset).then(
-        async (chunk) => {
-          // Chunk is cached
-          if (chunk) {
-            this.log.info('Successfully fetched chunk from cache', {
-              dataRoot: toB64Url(dataRoot),
-              relativeOffset,
-            });
-            return chunk;
-          }
-
-          // Fetch from ChunkSource
-          return this.chunkSource
-            .getChunkByRelativeOrAbsoluteOffset(
-              absoluteOffset,
-              dataRoot,
-              relativeOffset,
-            )
-            .then((chunk: JsonChunk) => {
-              this.set(chunk, dataRoot, relativeOffset);
-              return chunk;
-            });
-        },
+      const chunk = this.chunkSource.getChunkByRelativeOrAbsoluteOffset(
+        absoluteOffset,
+        dataRoot,
+        relativeOffset,
       );
-
-      return await chunkPromise;
+      return chunk;
     } catch (error: any) {
       this.log.error('Failed to fetch chunk', {
         absoluteOffset,
@@ -143,12 +117,31 @@ export class FsChunkCache implements ChunkSource, JsonChunkCache {
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<Readable> {
-    const { chunk } = await this.getChunkByRelativeOrAbsoluteOffset(
-      absoluteOffset,
-      dataRoot,
-      relativeOffset,
+    const chunkDataPromise = this.getChunkData(dataRoot, relativeOffset).then(
+      async (chunkData) => {
+        // Chunk is cached
+        if (chunkData) {
+          this.log.info('Successfully fetched chunk data from cache', {
+            dataRoot: toB64Url(dataRoot),
+            relativeOffset,
+          });
+          return chunkData;
+        }
+
+        // Fetch from ChunkSource
+        return this.getChunkByRelativeOrAbsoluteOffset(
+          absoluteOffset,
+          dataRoot,
+          relativeOffset,
+        ).then((chunk: JsonChunk) => {
+          // cache the unencoded buffer
+          const chunkData = fromB64Url(chunk.chunk);
+          this.setChunkData(chunkData, dataRoot, relativeOffset);
+          return chunkData;
+        });
+      },
     );
-    const data = fromB64Url(chunk);
-    return Readable.from(data);
+    const chunkData = await chunkDataPromise;
+    return Readable.from(chunkData);
   }
 }
