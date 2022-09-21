@@ -196,19 +196,8 @@ export function msgpackTxToJsonTx(
   };
 }
 
-export function msgpackChunkToJsonChunk(
-  msgpackChunk: PartialMsgpackChunk,
-): JsonChunk {
-  return {
-    chunk: toB64Url(msgpackChunk.chunk),
-    data_path: toB64Url(msgpackChunk.data_path),
-    tx_path: toB64Url(msgpackChunk.tx_path),
-  };
-}
-
 export function jsonChunkToMsgPackChunk(chunk: JsonChunk): PartialMsgpackChunk {
   return {
-    chunk: fromB64Url(chunk.chunk),
     data_path: fromB64Url(chunk.data_path),
     tx_path: fromB64Url(chunk.tx_path),
   };
@@ -224,10 +213,6 @@ export function msgpackToJsonTx(buffer: Buffer): PartialJsonTransaction {
 
 export function jsonChunkToMsgpackChunk(chunk: JsonChunk): Buffer {
   return toMsgpack(jsonChunkToMsgPackChunk(chunk));
-}
-
-export function msgpackToJsonChunk(buffer: Buffer): JsonChunk {
-  return msgpackChunkToJsonChunk(fromMsgpack(buffer));
 }
 
 // AR/Winston conversion
