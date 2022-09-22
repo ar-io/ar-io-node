@@ -28,7 +28,7 @@ import * as winston from 'winston';
 
 import { FsBlockCache } from '../cache/fs-block-cache.js';
 import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
-import { fromB64Url } from '../lib/encoding.js';
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import {
   sanityCheckBlock,
   sanityCheckChunk,
@@ -78,7 +78,7 @@ export class ArweaveCompositeClient
   private peers: Record<string, Peer> = {};
   private preferredPeers: Set<Peer> = new Set();
 
-  // Block and TX promise caches
+  // Block and TX promise caches used for prefetching
   private blockByHeightPromiseCache = new NodeCache({
     checkperiod: 10,
     stdTTL: 30,
@@ -538,7 +538,7 @@ export class ArweaveCompositeClient
     } catch (error: any) {
       this.log.error('Failed to get chunk:', {
         absoluteOffset,
-        dataRoot,
+        dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
       });

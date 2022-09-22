@@ -132,6 +132,19 @@ export interface PartialJsonTransactionCache {
   set(tx: PartialJsonTransaction): Promise<void>;
 }
 
+export interface ChunkDataCache {
+  hasChunkData(dataRoot: Buffer, relativeOffset: number): Promise<boolean>;
+  getChunkData(
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<Buffer | undefined>;
+  setChunkData(
+    data: Buffer,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<void>;
+}
+
 export interface ChainSource {
   getBlockByHeight(height: number): Promise<PartialJsonBlock>;
   getTx(txId: string): Promise<PartialJsonTransaction>;

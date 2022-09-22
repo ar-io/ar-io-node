@@ -51,8 +51,6 @@ export async function validateChunk(
   );
 
   if (!validChunk) {
-    throw Error(
-      `Invalid chunk based on absolute offset, data_root and data_path: ${chunk}`,
-    );
+    throw Error('Invalid chunk based on offset, data_root and data_path');
   }
 }
