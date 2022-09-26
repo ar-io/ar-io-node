@@ -394,6 +394,16 @@ export class StandaloneSqliteDatabaseWorker {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
 
+  getNewBlockHashByHeight(height: number) {
+    if (height < 0) {
+      throw new Error(`Invalid height ${height}, must be >= 0.`);
+    }
+    const hash = this.stmts.core.selectNewBlockHashByHeight.get({
+      height,
+    })?.block_indep_hash;
+    return hash ? toB64Url(hash) : undefined;
+  }
+
   saveTx(tx: PartialJsonTransaction) {
     this.insertTxFn(tx);
   }
@@ -1283,13 +1293,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
-    if (height < 0) {
-      throw new Error(`Invalid height ${height}, must be >= 0.`);
-    }
-    const hash = this.stmts.core.selectNewBlockHashByHeight.get({
-      height,
-    })?.block_indep_hash;
-    return hash ? toB64Url(hash) : undefined;
+    return this.queueWork('getNewBlockHashByHeight', height);
   }
 
   async getMissingTxIds(limit = 20): Promise<string[]> {
@@ -1433,6 +1437,11 @@ if (!isMainThread) {
       case 'getMaxHeight':
         const maxHeight = worker.getMaxHeight();
         parentPort?.postMessage(maxHeight);
+        break;
+      case 'getNewBlockHashByHeight':
+        const height = args;
+        const newBlockHahsh = worker.getNewBlockHashByHeight(height);
+        parentPort?.postMessage(newBlockHahsh);
         break;
       case 'saveBlockAndTxs':
         const [block, txs, missingTxIds] = args;
