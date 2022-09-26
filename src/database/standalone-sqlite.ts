@@ -414,237 +414,6 @@ export class StandaloneSqliteDatabaseWorker {
       );
     }
   }
-}
-
-export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
-  private dbs: {
-    core: Sqlite.Database;
-  };
-  private stmts: {
-    core: { [key: string]: Sqlite.Statement };
-  };
-  private workers: any[] = [];
-  private workQueue: any[] = [];
-
-  // Transactions
-  insertTxFn: Sqlite.Transaction;
-
-  constructor({ coreDbPath }: { coreDbPath: string }) {
-    this.dbs = {
-      core: new Sqlite(coreDbPath),
-    };
-    this.dbs.core.pragma('journal_mode = WAL');
-    this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
-
-    this.stmts = { core: {} };
-    const sqlUrl = new URL('./sql/core', import.meta.url);
-    const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
-    for (const [k, sql] of Object.entries(coreSql)) {
-      if (!k.endsWith('.sql')) {
-        this.stmts.core[k] = this.dbs.core.prepare(sql);
-      }
-    }
-
-    // Transactions
-    this.insertTxFn = this.dbs.core.transaction(
-      (tx: PartialJsonTransaction) => {
-        // Insert the transaction
-        const rows = txToDbRows(tx);
-
-        for (const row of rows.tagNames) {
-          this.stmts.core.insertOrIgnoreTagName.run(row);
-        }
-
-        for (const row of rows.tagValues) {
-          this.stmts.core.insertOrIgnoreTagValue.run(row);
-        }
-
-        for (const row of rows.newTxTags) {
-          this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
-        }
-
-        for (const row of rows.wallets) {
-          this.stmts.core.insertOrIgnoreWallet.run(row);
-        }
-
-        this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
-
-        // Upsert the transaction to block assocation
-        this.stmts.core.insertAsyncNewBlockTransaction.run({
-          transaction_id: rows.newTx.id,
-        });
-
-        this.stmts.core.insertAsyncNewBlockHeight.run({
-          transaction_id: rows.newTx.id,
-        });
-
-        // Remove missing transaction ID if it exists
-        this.stmts.core.deleteMissingTransaction.run({
-          transaction_id: rows.newTx.id,
-        });
-      },
-    );
-
-    const self = this;
-
-    // Spawn workers that try to drain the queue.
-    os.cpus().forEach(function spawn() {
-      const workerUrl = new URL('./standalone-sqlite.js', import.meta.url);
-      const worker = new Worker(workerUrl, {
-        workerData: {
-          coreDbPath,
-        },
-      });
-
-      let job: any = null; // Current item from the queue
-      let error: any = null; // Error that caused the worker to crash
-
-      function takeWork() {
-        if (!job && self.workQueue.length) {
-          // If there's a job in the queue, send it to the worker
-          job = self.workQueue.shift();
-          worker.postMessage(job.message);
-        }
-      }
-
-      worker
-        .on('online', () => {
-          self.workers.push({ takeWork });
-          takeWork();
-        })
-        .on('message', (result) => {
-          job.resolve(result);
-          job = null;
-          takeWork(); // Check if there's more work to do
-        })
-        .on('error', (err) => {
-          console.error(err);
-          error = err;
-        })
-        .on('exit', (code) => {
-          self.workers = self.workers.filter((w) => w.takeWork !== takeWork);
-          if (job) {
-            job.reject(error || new Error('worker died'));
-          }
-          if (code !== 0) {
-            console.error(`worker exited with code ${code}`);
-            spawn(); // Worker died, so spawn a new one
-          }
-        });
-    });
-  }
-
-  stop() {
-    this.workers.forEach(() => {
-      return new Promise((resolve, reject) => {
-        this.workQueue.push({
-          resolve,
-          reject,
-          message: {
-            method: 'terminate',
-          },
-        });
-        this.drainQueue();
-      });
-    });
-  }
-
-  drainQueue() {
-    for (const worker of this.workers) {
-      worker.takeWork();
-    }
-  }
-
-  queueWork(method: string, args: any[]): Promise<any> {
-    return new Promise((resolve, reject) => {
-      this.workQueue.push({
-        resolve,
-        reject,
-        message: {
-          method,
-          args,
-        },
-      });
-      this.drainQueue();
-    });
-  }
-
-  async getMaxHeight(): Promise<number> {
-    return this.stmts.core.selectMaxHeight.get().height ?? -1;
-  }
-
-  async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
-    if (height < 0) {
-      throw new Error(`Invalid height ${height}, must be >= 0.`);
-    }
-    const hash = this.stmts.core.selectNewBlockHashByHeight.get({
-      height,
-    })?.block_indep_hash;
-    return hash ? toB64Url(hash) : undefined;
-  }
-
-  async getMissingTxIds(limit = 20): Promise<string[]> {
-    const missingTxIds = this.stmts.core.selectMissingTransactionIds.all({
-      limit,
-    });
-
-    return missingTxIds.map((row): string => toB64Url(row.transaction_id));
-  }
-
-  async resetToHeight(height: number): Promise<void> {
-    this.stmts.core.truncateNewBlockHeightsAt.run({ height });
-  }
-
-  async saveTx(tx: PartialJsonTransaction): Promise<void> {
-    return this.queueWork('saveTx', [tx]);
-  }
-
-  saveBlockAndTxs(
-    block: PartialJsonBlock,
-    txs: PartialJsonTransaction[],
-    missingTxIds: string[],
-  ): Promise<void> {
-    return this.queueWork('saveBlockAndTxs', [block, txs, missingTxIds]);
-  }
-
-  async getDebugInfo() {
-    const minStableHeight =
-      this.stmts.core.selectMinStableHeight.get().min_height;
-    const maxStableHeight =
-      this.stmts.core.selectMaxStableHeight.get().max_height;
-    const stableTxsCount =
-      this.stmts.core.selectStableTransactionsCount.get().count;
-    const stableBlocksCount =
-      this.stmts.core.selectStableBlockCount.get().count;
-    const stableBlockTxsCount =
-      this.stmts.core.selectStableBlockTransactionCount.get().count;
-    const missingStableBlockCount =
-      maxStableHeight - (minStableHeight - 1) - stableBlocksCount;
-    const missingStableTxCount = stableBlockTxsCount - stableTxsCount;
-
-    return {
-      counts: {
-        wallets: this.stmts.core.selectWalletsCount.get().count,
-        tagNames: this.stmts.core.selectTagNamesCount.get().count,
-        tagValues: this.stmts.core.selectTagValuesCount.get().count,
-        stableTxs: stableTxsCount,
-        stableBlocks: stableBlocksCount,
-        stableBlockTxs:
-          this.stmts.core.selectStableBlockTransactionCount.get().count,
-        missingStableBlocks: missingStableBlockCount,
-        missingStableTxs: missingStableTxCount,
-        missingTxs: this.stmts.core.selectMissingTransactionsCount.get().count,
-        newBlocks: this.stmts.core.selectNewBlocksCount.get().count,
-        newTxs: this.stmts.core.selectNewTransactionsCount.get().count,
-      },
-      heights: {
-        minStable: minStableHeight,
-        maxStable: maxStableHeight,
-        minNew: this.stmts.core.selectMinNewHeight.get().min_height,
-        maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
-      },
-    };
-  }
 
   getGqlNewTransactionTags(txId: Buffer) {
     const tags = this.stmts.core.selectNewTransactionTags.all({
@@ -873,7 +642,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
   }
 
-  async getGqlNewTransactions({
+  getGqlNewTransactions({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -936,7 +705,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       }));
   }
 
-  async getGqlStableTransactions({
+  getGqlStableTransactions({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -999,7 +768,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       }));
   }
 
-  async getGqlTransactions({
+  getGqlTransactions({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -1023,7 +792,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     let txs;
 
     if (sortOrder === 'HEIGHT_DESC') {
-      txs = await this.getGqlNewTransactions({
+      txs = this.getGqlNewTransactions({
         pageSize,
         cursor,
         sortOrder,
@@ -1037,7 +806,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
       if (txs.length < pageSize) {
         txs = txs.concat(
-          await this.getGqlStableTransactions({
+          this.getGqlStableTransactions({
             pageSize,
             cursor,
             sortOrder,
@@ -1052,7 +821,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         );
       }
     } else {
-      txs = await this.getGqlStableTransactions({
+      txs = this.getGqlStableTransactions({
         pageSize,
         cursor,
         sortOrder,
@@ -1066,7 +835,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
       if (txs.length < pageSize) {
         txs = txs.concat(
-          await this.getGqlNewTransactions({
+          this.getGqlNewTransactions({
             pageSize,
             cursor,
             sortOrder,
@@ -1095,12 +864,10 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     };
   }
 
-  async getGqlTransaction({ id }: { id: string }) {
-    let tx = (
-      await this.getGqlStableTransactions({ pageSize: 1, ids: [id] })
-    )[0];
+  getGqlTransaction({ id }: { id: string }) {
+    let tx = this.getGqlStableTransactions({ pageSize: 1, ids: [id] })[0];
     if (!tx) {
-      tx = (await this.getGqlNewTransactions({ pageSize: 1, ids: [id] }))[0];
+      tx = this.getGqlNewTransactions({ pageSize: 1, ids: [id] })[0];
     }
 
     return tx;
@@ -1178,7 +945,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
   }
 
-  async getGqlNewBlocks({
+  getGqlNewBlocks({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -1221,7 +988,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     return blocks;
   }
 
-  async getGqlStableBlocks({
+  getGqlStableBlocks({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -1262,7 +1029,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
       }));
   }
 
-  async getGqlBlocks({
+  getGqlBlocks({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -1280,7 +1047,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     let blocks;
 
     if (sortOrder === 'HEIGHT_DESC') {
-      blocks = await this.getGqlNewBlocks({
+      blocks = this.getGqlNewBlocks({
         pageSize,
         cursor,
         sortOrder,
@@ -1291,7 +1058,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
       if (blocks.length < pageSize) {
         blocks = blocks.concat(
-          await this.getGqlStableBlocks({
+          this.getGqlStableBlocks({
             pageSize,
             cursor,
             sortOrder,
@@ -1305,7 +1072,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
         );
       }
     } else {
-      blocks = await this.getGqlStableBlocks({
+      blocks = this.getGqlStableBlocks({
         pageSize,
         cursor,
         sortOrder,
@@ -1316,7 +1083,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
 
       if (blocks.length < pageSize) {
         blocks = blocks.concat(
-          await this.getGqlNewBlocks({
+          this.getGqlNewBlocks({
             pageSize,
             cursor,
             sortOrder,
@@ -1344,18 +1111,316 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     };
   }
 
-  async getGqlBlock({ id }: { id: string }) {
-    let block = (await this.getGqlStableBlocks({ pageSize: 1, ids: [id] }))[0];
+  getGqlBlock({ id }: { id: string }) {
+    let block = this.getGqlStableBlocks({ pageSize: 1, ids: [id] })[0];
     if (!block) {
-      block = (await this.getGqlNewBlocks({ pageSize: 1, ids: [id] }))[0];
+      block = this.getGqlNewBlocks({ pageSize: 1, ids: [id] })[0];
     }
 
     return block;
   }
 }
 
+export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
+  private dbs: {
+    core: Sqlite.Database;
+  };
+  private stmts: {
+    core: { [key: string]: Sqlite.Statement };
+  };
+  private workers: any[] = [];
+  private workQueue: any[] = [];
+
+  // Transactions
+  insertTxFn: Sqlite.Transaction;
+
+  constructor({ coreDbPath }: { coreDbPath: string }) {
+    this.dbs = {
+      core: new Sqlite(coreDbPath),
+    };
+    this.dbs.core.pragma('journal_mode = WAL');
+    this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
+
+    this.stmts = { core: {} };
+    const sqlUrl = new URL('./sql/core', import.meta.url);
+    const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
+    for (const [k, sql] of Object.entries(coreSql)) {
+      if (!k.endsWith('.sql')) {
+        this.stmts.core[k] = this.dbs.core.prepare(sql);
+      }
+    }
+
+    // Transactions
+    this.insertTxFn = this.dbs.core.transaction(
+      (tx: PartialJsonTransaction) => {
+        // Insert the transaction
+        const rows = txToDbRows(tx);
+
+        for (const row of rows.tagNames) {
+          this.stmts.core.insertOrIgnoreTagName.run(row);
+        }
+
+        for (const row of rows.tagValues) {
+          this.stmts.core.insertOrIgnoreTagValue.run(row);
+        }
+
+        for (const row of rows.newTxTags) {
+          this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
+        }
+
+        for (const row of rows.wallets) {
+          this.stmts.core.insertOrIgnoreWallet.run(row);
+        }
+
+        this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
+
+        // Upsert the transaction to block assocation
+        this.stmts.core.insertAsyncNewBlockTransaction.run({
+          transaction_id: rows.newTx.id,
+        });
+
+        this.stmts.core.insertAsyncNewBlockHeight.run({
+          transaction_id: rows.newTx.id,
+        });
+
+        // Remove missing transaction ID if it exists
+        this.stmts.core.deleteMissingTransaction.run({
+          transaction_id: rows.newTx.id,
+        });
+      },
+    );
+
+    const self = this;
+
+    // Spawn workers that try to drain the queue.
+    os.cpus().forEach(function spawn() {
+      const workerUrl = new URL('./standalone-sqlite.js', import.meta.url);
+      const worker = new Worker(workerUrl, {
+        workerData: {
+          coreDbPath,
+        },
+      });
+
+      let job: any = null; // Current item from the queue
+      let error: any = null; // Error that caused the worker to crash
+
+      function takeWork() {
+        if (!job && self.workQueue.length) {
+          // If there's a job in the queue, send it to the worker
+          job = self.workQueue.shift();
+          worker.postMessage(job.message);
+        }
+      }
+
+      worker
+        .on('online', () => {
+          self.workers.push({ takeWork });
+          takeWork();
+        })
+        .on('message', (result) => {
+          job.resolve(result);
+          job = null;
+          takeWork(); // Check if there's more work to do
+        })
+        .on('error', (err) => {
+          console.error(err);
+          error = err;
+        })
+        .on('exit', (code) => {
+          self.workers = self.workers.filter((w) => w.takeWork !== takeWork);
+          if (job) {
+            job.reject(error || new Error('worker died'));
+          }
+          if (code !== 0) {
+            console.error(`worker exited with code ${code}`);
+            spawn(); // Worker died, so spawn a new one
+          }
+        });
+    });
+  }
+
+  stop() {
+    this.workers.forEach(() => {
+      return new Promise((resolve, reject) => {
+        this.workQueue.push({
+          resolve,
+          reject,
+          message: {
+            method: 'terminate',
+          },
+        });
+        this.drainQueue();
+      });
+    });
+  }
+
+  drainQueue() {
+    for (const worker of this.workers) {
+      worker.takeWork();
+    }
+  }
+
+  queueWork(method: string, args: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      this.workQueue.push({
+        resolve,
+        reject,
+        message: {
+          method,
+          args,
+        },
+      });
+      this.drainQueue();
+    });
+  }
+
+  async getMaxHeight(): Promise<number> {
+    return this.stmts.core.selectMaxHeight.get().height ?? -1;
+  }
+
+  async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
+    if (height < 0) {
+      throw new Error(`Invalid height ${height}, must be >= 0.`);
+    }
+    const hash = this.stmts.core.selectNewBlockHashByHeight.get({
+      height,
+    })?.block_indep_hash;
+    return hash ? toB64Url(hash) : undefined;
+  }
+
+  async getMissingTxIds(limit = 20): Promise<string[]> {
+    const missingTxIds = this.stmts.core.selectMissingTransactionIds.all({
+      limit,
+    });
+
+    return missingTxIds.map((row): string => toB64Url(row.transaction_id));
+  }
+
+  async resetToHeight(height: number): Promise<void> {
+    this.stmts.core.truncateNewBlockHeightsAt.run({ height });
+  }
+
+  async saveTx(tx: PartialJsonTransaction): Promise<void> {
+    return this.queueWork('saveTx', [tx]);
+  }
+
+  saveBlockAndTxs(
+    block: PartialJsonBlock,
+    txs: PartialJsonTransaction[],
+    missingTxIds: string[],
+  ): Promise<void> {
+    return this.queueWork('saveBlockAndTxs', [block, txs, missingTxIds]);
+  }
+
+  async getDebugInfo() {
+    const minStableHeight =
+      this.stmts.core.selectMinStableHeight.get().min_height;
+    const maxStableHeight =
+      this.stmts.core.selectMaxStableHeight.get().max_height;
+    const stableTxsCount =
+      this.stmts.core.selectStableTransactionsCount.get().count;
+    const stableBlocksCount =
+      this.stmts.core.selectStableBlockCount.get().count;
+    const stableBlockTxsCount =
+      this.stmts.core.selectStableBlockTransactionCount.get().count;
+    const missingStableBlockCount =
+      maxStableHeight - (minStableHeight - 1) - stableBlocksCount;
+    const missingStableTxCount = stableBlockTxsCount - stableTxsCount;
+
+    return {
+      counts: {
+        wallets: this.stmts.core.selectWalletsCount.get().count,
+        tagNames: this.stmts.core.selectTagNamesCount.get().count,
+        tagValues: this.stmts.core.selectTagValuesCount.get().count,
+        stableTxs: stableTxsCount,
+        stableBlocks: stableBlocksCount,
+        stableBlockTxs:
+          this.stmts.core.selectStableBlockTransactionCount.get().count,
+        missingStableBlocks: missingStableBlockCount,
+        missingStableTxs: missingStableTxCount,
+        missingTxs: this.stmts.core.selectMissingTransactionsCount.get().count,
+        newBlocks: this.stmts.core.selectNewBlocksCount.get().count,
+        newTxs: this.stmts.core.selectNewTransactionsCount.get().count,
+      },
+      heights: {
+        minStable: minStableHeight,
+        maxStable: maxStableHeight,
+        minNew: this.stmts.core.selectMinNewHeight.get().min_height,
+        maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
+      },
+    };
+  }
+
+  getGqlTransactions({
+    pageSize,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    recipients = [],
+    owners = [],
+    minHeight = -1,
+    maxHeight = -1,
+    tags = [],
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    recipients?: string[];
+    owners?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+    tags?: { name: string; values: string[] }[];
+  }) {
+    return this.queueWork('getGqlTransactions', {
+      pageSize,
+      cursor,
+      sortOrder,
+      ids,
+      recipients,
+      owners,
+      minHeight,
+      maxHeight,
+      tags,
+    });
+  }
+
+  async getGqlTransaction({ id }: { id: string }) {
+    return this.queueWork('getGqlTransaction', { id });
+  }
+
+  getGqlBlocks({
+    pageSize,
+    cursor,
+    sortOrder = 'HEIGHT_DESC',
+    ids = [],
+    minHeight = -1,
+    maxHeight = -1,
+  }: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }) {
+    return this.queueWork('getGqlBlocks', {
+      pageSize,
+      cursor,
+      sortOrder,
+      ids,
+      minHeight,
+      maxHeight,
+    });
+  }
+
+  getGqlBlock({ id }: { id: string }) {
+    return this.queueWork('getGqlBlock', { id });
+  }
+}
+
 if (!isMainThread) {
-  const db = new StandaloneSqliteDatabaseWorker({
+  const worker = new StandaloneSqliteDatabaseWorker({
     coreDbPath: workerData.coreDbPath,
   });
 
@@ -1363,13 +1428,29 @@ if (!isMainThread) {
     switch (method) {
       case 'saveBlockAndTxs':
         const [block, txs, missingTxIds] = args;
-        db.saveBlockAndTxs(block, txs, missingTxIds);
+        worker.saveBlockAndTxs(block, txs, missingTxIds);
         parentPort?.postMessage(null);
         break;
       case 'saveTx':
         const [tx] = args;
-        db.saveTx(tx);
+        worker.saveTx(tx);
         parentPort?.postMessage(null);
+        break;
+      case 'getGqlTransactions':
+        const gqlTransactions = worker.getGqlTransactions(args);
+        parentPort?.postMessage(gqlTransactions);
+        break;
+      case 'getGqlTransaction':
+        const gqlTransaction = worker.getGqlTransaction(args);
+        parentPort?.postMessage(gqlTransaction);
+        break;
+      case 'getGqlBlocks':
+        const gqlBlocks = worker.getGqlBlocks(args);
+        parentPort?.postMessage(gqlBlocks);
+        break;
+      case 'getGqlBlock':
+        const gqlBlock = worker.getGqlBlock(args);
+        parentPort?.postMessage(gqlBlock);
         break;
       case 'terminate':
         process.exit(0);
