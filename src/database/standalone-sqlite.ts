@@ -390,6 +390,10 @@ export class StandaloneSqliteDatabaseWorker {
     );
   }
 
+  saveTx(tx: PartialJsonTransaction) {
+    this.insertTxFn(tx);
+  }
+
   saveBlockAndTxs(
     block: PartialJsonBlock,
     txs: PartialJsonTransaction[],
@@ -551,6 +555,20 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     }
   }
 
+  queueWork(method: string, args: any[]): Promise<any> {
+    return new Promise((resolve, reject) => {
+      this.workQueue.push({
+        resolve,
+        reject,
+        message: {
+          method,
+          args,
+        },
+      });
+      this.drainQueue();
+    });
+  }
+
   async getMaxHeight(): Promise<number> {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
@@ -578,7 +596,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async saveTx(tx: PartialJsonTransaction): Promise<void> {
-    this.insertTxFn(tx);
+    return this.queueWork('saveTx', [tx]);
   }
 
   saveBlockAndTxs(
@@ -586,19 +604,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void> {
-    // TODO add metrics to track timing
-
-    return new Promise((resolve, reject) => {
-      this.workQueue.push({
-        resolve,
-        reject,
-        message: {
-          method: 'saveBlockAndTxs',
-          parameters: [block, txs, missingTxIds],
-        },
-      });
-      this.drainQueue();
-    });
+    return this.queueWork('saveBlockAndTxs', [block, txs, missingTxIds]);
   }
 
   async getDebugInfo() {
@@ -1353,14 +1359,20 @@ if (!isMainThread) {
     coreDbPath: workerData.coreDbPath,
   });
 
-  parentPort?.on('message', ({ method, parameters }) => {
-    if (method === 'saveBlockAndTxs') {
-      const [block, txs, missingTxIds] = parameters;
-      db.saveBlockAndTxs(block, txs, missingTxIds);
-      parentPort?.postMessage(null);
-    }
-    if (method === 'terminate') {
-      process.exit(0);
+  parentPort?.on('message', ({ method, args }) => {
+    switch (method) {
+      case 'saveBlockAndTxs':
+        const [block, txs, missingTxIds] = args;
+        db.saveBlockAndTxs(block, txs, missingTxIds);
+        parentPort?.postMessage(null);
+        break;
+      case 'saveTx':
+        const [tx] = args;
+        db.saveTx(tx);
+        parentPort?.postMessage(null);
+        break;
+      case 'terminate':
+        process.exit(0);
     }
   });
 }
