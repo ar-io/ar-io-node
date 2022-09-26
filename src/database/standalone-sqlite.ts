@@ -1293,7 +1293,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
-    return this.queueWork('getNewBlockHashByHeight', height);
+    return this.queueWork('getNewBlockHashByHeight', [height]);
   }
 
   async getMissingTxIds(limit = 20): Promise<string[]> {
@@ -1380,21 +1380,23 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     maxHeight?: number;
     tags?: { name: string; values: string[] }[];
   }) {
-    return this.queueWork('getGqlTransactions', {
-      pageSize,
-      cursor,
-      sortOrder,
-      ids,
-      recipients,
-      owners,
-      minHeight,
-      maxHeight,
-      tags,
-    });
+    return this.queueWork('getGqlTransactions', [
+      {
+        pageSize,
+        cursor,
+        sortOrder,
+        ids,
+        recipients,
+        owners,
+        minHeight,
+        maxHeight,
+        tags,
+      },
+    ]);
   }
 
   async getGqlTransaction({ id }: { id: string }) {
-    return this.queueWork('getGqlTransaction', { id });
+    return this.queueWork('getGqlTransaction', [{ id }]);
   }
 
   getGqlBlocks({
@@ -1412,18 +1414,20 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     minHeight?: number;
     maxHeight?: number;
   }) {
-    return this.queueWork('getGqlBlocks', {
-      pageSize,
-      cursor,
-      sortOrder,
-      ids,
-      minHeight,
-      maxHeight,
-    });
+    return this.queueWork('getGqlBlocks', [
+      {
+        pageSize,
+        cursor,
+        sortOrder,
+        ids,
+        minHeight,
+        maxHeight,
+      },
+    ]);
   }
 
   getGqlBlock({ id }: { id: string }) {
-    return this.queueWork('getGqlBlock', { id });
+    return this.queueWork('getGqlBlock', [{ id }]);
   }
 }
 
@@ -1439,9 +1443,8 @@ if (!isMainThread) {
         parentPort?.postMessage(maxHeight);
         break;
       case 'getNewBlockHashByHeight':
-        const height = args;
-        const newBlockHahsh = worker.getNewBlockHashByHeight(height);
-        parentPort?.postMessage(newBlockHahsh);
+        const newBlockHash = worker.getNewBlockHashByHeight(args[0]);
+        parentPort?.postMessage(newBlockHash);
         break;
       case 'saveBlockAndTxs':
         const [block, txs, missingTxIds] = args;
@@ -1449,24 +1452,23 @@ if (!isMainThread) {
         parentPort?.postMessage(null);
         break;
       case 'saveTx':
-        const [tx] = args;
-        worker.saveTx(tx);
+        worker.saveTx(args[0]);
         parentPort?.postMessage(null);
         break;
       case 'getGqlTransactions':
-        const gqlTransactions = worker.getGqlTransactions(args);
+        const gqlTransactions = worker.getGqlTransactions(args[0]);
         parentPort?.postMessage(gqlTransactions);
         break;
       case 'getGqlTransaction':
-        const gqlTransaction = worker.getGqlTransaction(args);
+        const gqlTransaction = worker.getGqlTransaction(args[0]);
         parentPort?.postMessage(gqlTransaction);
         break;
       case 'getGqlBlocks':
-        const gqlBlocks = worker.getGqlBlocks(args);
+        const gqlBlocks = worker.getGqlBlocks(args[0]);
         parentPort?.postMessage(gqlBlocks);
         break;
       case 'getGqlBlock':
-        const gqlBlock = worker.getGqlBlock(args);
+        const gqlBlock = worker.getGqlBlock(args[0]);
         parentPort?.postMessage(gqlBlock);
         break;
       case 'terminate':
