@@ -390,6 +390,10 @@ export class StandaloneSqliteDatabaseWorker {
     );
   }
 
+  getMaxHeight() {
+    return this.stmts.core.selectMaxHeight.get().height ?? -1;
+  }
+
   saveTx(tx: PartialJsonTransaction) {
     this.insertTxFn(tx);
   }
@@ -1275,7 +1279,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   }
 
   async getMaxHeight(): Promise<number> {
-    return this.stmts.core.selectMaxHeight.get().height ?? -1;
+    return this.queueWork('getMaxHeight', undefined);
   }
 
   async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
@@ -1300,7 +1304,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     this.stmts.core.truncateNewBlockHeightsAt.run({ height });
   }
 
-  async saveTx(tx: PartialJsonTransaction): Promise<void> {
+  saveTx(tx: PartialJsonTransaction): Promise<void> {
     return this.queueWork('saveTx', [tx]);
   }
 
@@ -1426,6 +1430,10 @@ if (!isMainThread) {
 
   parentPort?.on('message', ({ method, args }) => {
     switch (method) {
+      case 'getMaxHeight':
+        const maxHeight = worker.getMaxHeight();
+        parentPort?.postMessage(maxHeight);
+        break;
       case 'saveBlockAndTxs':
         const [block, txs, missingTxIds] = args;
         worker.saveBlockAndTxs(block, txs, missingTxIds);
