@@ -188,7 +188,9 @@ export class StandaloneSqliteDatabaseWorker {
 
   constructor({ coreDbPath }: { coreDbPath: string }) {
     this.dbs = {
-      core: new Sqlite(coreDbPath),
+      core: new Sqlite(coreDbPath, {
+        timeout: 30000,
+      }),
     };
     this.dbs.core.pragma('journal_mode = WAL');
     this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
