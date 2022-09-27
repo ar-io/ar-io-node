@@ -204,6 +204,7 @@ export class StandaloneSqliteDatabaseWorker {
   };
 
   // Transactions
+  resetToHeightFn: Sqlite.Transaction;
   insertTxFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
   saveStableDataFn: Sqlite.Transaction;
@@ -229,6 +230,13 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     // Transactions
+    this.resetToHeightFn = this.dbs.core.transaction(
+      (height: number) => {
+        this.stmts.core.clearHeightsOnNewBlocks.run({ height });
+        this.stmts.core.truncateNewBlockHeightsAt.run({ height });
+      }
+    );
+
     this.insertTxFn = this.dbs.core.transaction(
       (tx: PartialJsonTransaction) => {
         // Insert the transaction
@@ -437,12 +445,12 @@ export class StandaloneSqliteDatabaseWorker {
     return missingTxIds.map((row): string => toB64Url(row.transaction_id));
   }
 
-  saveTx(tx: PartialJsonTransaction) {
-    this.insertTxFn(tx);
+  resetToHeight(height: number) {
+    this.resetToHeightFn(height);
   }
 
-  resetToHeight(height: number) {
-    this.stmts.core.truncateNewBlockHeightsAt.run({ height });
+  saveTx(tx: PartialJsonTransaction) {
+    this.insertTxFn(tx);
   }
 
   saveBlockAndTxs(
