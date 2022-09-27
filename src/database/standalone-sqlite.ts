@@ -440,6 +440,10 @@ export class StandaloneSqliteDatabaseWorker {
     this.insertTxFn(tx);
   }
 
+  resetToHeight(height: number) {
+    this.stmts.core.truncateNewBlockHeightsAt.run({ height });
+  }
+
   saveBlockAndTxs(
     block: PartialJsonBlock,
     txs: PartialJsonTransaction[],
@@ -1371,8 +1375,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     return this.queueWork('getMissingTxIds', [limit]);
   }
 
-  async resetToHeight(height: number): Promise<void> {
-    this.stmts.core.truncateNewBlockHeightsAt.run({ height });
+  resetToHeight(height: number): Promise<void> {
+    return this.queueWork('resetToHeight', [height]);
   }
 
   saveTx(tx: PartialJsonTransaction): Promise<void> {
@@ -1481,6 +1485,10 @@ if (!isMainThread) {
       case 'getMissingTxIds':
         const missingTxIdsRes = worker.getMissingTxIds(args[0]);
         parentPort?.postMessage(missingTxIdsRes);
+        break;
+      case 'resetToHeight':
+        worker.resetToHeight(args[0]);
+        parentPort?.postMessage(undefined);
         break;
       case 'saveTx':
         worker.saveTx(args[0]);
