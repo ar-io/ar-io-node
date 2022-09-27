@@ -3,8 +3,7 @@ DELETE FROM new_transaction_tags
 WHERE transaction_id IN (
   SELECT nbt.transaction_id
   FROM new_block_transactions nbt
-  JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-  WHERE nbh.height < @height_threshold
+  WHERE nbt.height < @height_threshold
 )
 
 -- deleteStaleNewTransactionsByHeight
@@ -12,22 +11,12 @@ DELETE FROM new_transactions
 WHERE id IN (
   SELECT nbt.transaction_id
   FROM new_block_transactions nbt
-  JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-  WHERE nbh.height < @height_threshold
+  WHERE nbt.height < @height_threshold
 )
 
 -- deleteStaleNewBlockTransactions
 DELETE FROM new_block_transactions
-WHERE transaction_id IN (
-  SELECT nbt.transaction_id
-  FROM new_block_transactions nbt
-  LEFT JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
-  LEFT JOIN new_transactions nt ON nt.id = nbt.transaction_id
-  WHERE nbh.height < @height_threshold OR (
-      nt.created_at < @created_at_threshold AND
-      nbh.height IS NULL
-    )
-)
+WHERE height < @height_threshold
 
 -- deleteStaleNewBlocks
 DELETE FROM new_blocks

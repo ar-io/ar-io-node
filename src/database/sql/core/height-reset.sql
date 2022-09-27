@@ -3,9 +3,8 @@ UPDATE new_blocks
 SET height = NULL
 WHERE height > @height
 
--- clearHeightsOnNewBlockTransactions
-UPDATE new_block_transactions
-SET height = NULL
+-- truncateNewBlockTransactionsAt
+DELETE FROM new_block_transactions
 WHERE height > @height
 
 -- truncateNewBlockHeightsAt
