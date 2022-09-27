@@ -172,6 +172,28 @@ export function txToDbRows(tx: PartialJsonTransaction) {
   };
 }
 
+type DebugInfo = {
+  counts: {
+    wallets: number;
+    tagNames: number;
+    tagValues: number;
+    stableTxs: number;
+    stableBlocks: number;
+    stableBlockTxs: number;
+    missingStableBlocks: number;
+    missingStableTxs: number;
+    missingTxs: number;
+    newBlocks: number;
+    newTxs: number;
+  };
+  heights: {
+    minStable: number;
+    maxStable: number;
+    minNew: number;
+    maxNew: number;
+  };
+};
+
 export class StandaloneSqliteDatabaseWorker {
   private dbs: {
     core: Sqlite.Database;
@@ -406,7 +428,7 @@ export class StandaloneSqliteDatabaseWorker {
     return hash ? toB64Url(hash) : undefined;
   }
 
-  getMissingTxIds(limit = 20) {
+  getMissingTxIds(limit: number) {
     const missingTxIds = this.stmts.core.selectMissingTransactionIds.all({
       limit,
     });
@@ -437,6 +459,45 @@ export class StandaloneSqliteDatabaseWorker {
         maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
       );
     }
+  }
+
+  getDebugInfo() {
+    const minStableHeight =
+      this.stmts.core.selectMinStableHeight.get().min_height;
+    const maxStableHeight =
+      this.stmts.core.selectMaxStableHeight.get().max_height;
+    const stableTxsCount =
+      this.stmts.core.selectStableTransactionsCount.get().count;
+    const stableBlocksCount =
+      this.stmts.core.selectStableBlockCount.get().count;
+    const stableBlockTxsCount =
+      this.stmts.core.selectStableBlockTransactionCount.get().count;
+    const missingStableBlockCount =
+      maxStableHeight - (minStableHeight - 1) - stableBlocksCount;
+    const missingStableTxCount = stableBlockTxsCount - stableTxsCount;
+
+    return {
+      counts: {
+        wallets: this.stmts.core.selectWalletsCount.get().count,
+        tagNames: this.stmts.core.selectTagNamesCount.get().count,
+        tagValues: this.stmts.core.selectTagValuesCount.get().count,
+        stableTxs: stableTxsCount,
+        stableBlocks: stableBlocksCount,
+        stableBlockTxs:
+          this.stmts.core.selectStableBlockTransactionCount.get().count,
+        missingStableBlocks: missingStableBlockCount,
+        missingStableTxs: missingStableTxCount,
+        missingTxs: this.stmts.core.selectMissingTransactionsCount.get().count,
+        newBlocks: this.stmts.core.selectNewBlocksCount.get().count,
+        newTxs: this.stmts.core.selectNewTransactionsCount.get().count,
+      },
+      heights: {
+        minStable: minStableHeight,
+        maxStable: maxStableHeight,
+        minNew: this.stmts.core.selectMinNewHeight.get().min_height,
+        maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
+      },
+    };
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
@@ -1298,15 +1359,15 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     });
   }
 
-  async getMaxHeight(): Promise<number> {
+  getMaxHeight(): Promise<number> {
     return this.queueWork('getMaxHeight', undefined);
   }
 
-  async getNewBlockHashByHeight(height: number): Promise<string | undefined> {
+  getNewBlockHashByHeight(height: number): Promise<string | undefined> {
     return this.queueWork('getNewBlockHashByHeight', [height]);
   }
 
-  async getMissingTxIds(limit = 20): Promise<string[]> {
+  getMissingTxIds(limit = 20): Promise<string[]> {
     return this.queueWork('getMissingTxIds', [limit]);
   }
 
@@ -1326,43 +1387,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     return this.queueWork('saveBlockAndTxs', [block, txs, missingTxIds]);
   }
 
-  async getDebugInfo() {
-    const minStableHeight =
-      this.stmts.core.selectMinStableHeight.get().min_height;
-    const maxStableHeight =
-      this.stmts.core.selectMaxStableHeight.get().max_height;
-    const stableTxsCount =
-      this.stmts.core.selectStableTransactionsCount.get().count;
-    const stableBlocksCount =
-      this.stmts.core.selectStableBlockCount.get().count;
-    const stableBlockTxsCount =
-      this.stmts.core.selectStableBlockTransactionCount.get().count;
-    const missingStableBlockCount =
-      maxStableHeight - (minStableHeight - 1) - stableBlocksCount;
-    const missingStableTxCount = stableBlockTxsCount - stableTxsCount;
-
-    return {
-      counts: {
-        wallets: this.stmts.core.selectWalletsCount.get().count,
-        tagNames: this.stmts.core.selectTagNamesCount.get().count,
-        tagValues: this.stmts.core.selectTagValuesCount.get().count,
-        stableTxs: stableTxsCount,
-        stableBlocks: stableBlocksCount,
-        stableBlockTxs:
-          this.stmts.core.selectStableBlockTransactionCount.get().count,
-        missingStableBlocks: missingStableBlockCount,
-        missingStableTxs: missingStableTxCount,
-        missingTxs: this.stmts.core.selectMissingTransactionsCount.get().count,
-        newBlocks: this.stmts.core.selectNewBlocksCount.get().count,
-        newTxs: this.stmts.core.selectNewTransactionsCount.get().count,
-      },
-      heights: {
-        minStable: minStableHeight,
-        maxStable: maxStableHeight,
-        minNew: this.stmts.core.selectMinNewHeight.get().min_height,
-        maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
-      },
-    };
+  getDebugInfo(): Promise<DebugInfo> {
+    return this.queueWork('getDebugInfo', undefined);
   }
 
   getGqlTransactions({
@@ -1456,14 +1482,18 @@ if (!isMainThread) {
         const missingTxIdsRes = worker.getMissingTxIds(args[0]);
         parentPort?.postMessage(missingTxIdsRes);
         break;
+      case 'saveTx':
+        worker.saveTx(args[0]);
+        parentPort?.postMessage(null);
+        break;
       case 'saveBlockAndTxs':
         const [block, txs, missingTxIds] = args;
         worker.saveBlockAndTxs(block, txs, missingTxIds);
         parentPort?.postMessage(null);
         break;
-      case 'saveTx':
-        worker.saveTx(args[0]);
-        parentPort?.postMessage(null);
+      case 'getDebugInfo':
+        const debugInfo = worker.getDebugInfo();
+        parentPort?.postMessage(debugInfo);
         break;
       case 'getGqlTransactions':
         const gqlTransactions = worker.getGqlTransactions(args[0]);
