@@ -29,13 +29,8 @@ import { readFileSync } from 'fs';
 import { GqlQueryable } from '../../types.js';
 import { resolvers } from './resolvers.js';
 
-// TODO make path relative to file in stead of cwd
-const typeDefs = gql(
-  readFileSync(
-    `${new URL('.', import.meta.url).pathname}schema/types.graphql`,
-    'utf8',
-  ),
-);
+const typeDefsUrl = new URL('./schema/types.graphql', import.meta.url);
+const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
 
 const apolloServer = (
   db: GqlQueryable,
