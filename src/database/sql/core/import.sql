@@ -49,9 +49,9 @@ INSERT INTO new_block_heights (
 
 -- insertOrIgnoreNewBlockTransaction
 INSERT INTO new_block_transactions (
-  block_indep_hash, transaction_id, block_transaction_index
+  block_indep_hash, transaction_id, block_transaction_index, height
 ) VALUES (
-  @block_indep_hash, @transaction_id, @block_transaction_index
+  @block_indep_hash, @transaction_id, @block_transaction_index, @height
 ) ON CONFLICT DO NOTHING
 
 -- insertOrIgnoreNewTransactionTag

@@ -233,6 +233,7 @@ export class StandaloneSqliteDatabaseWorker {
     this.resetToHeightFn = this.dbs.core.transaction(
       (height: number) => {
         this.stmts.core.clearHeightsOnNewBlocks.run({ height });
+        this.stmts.core.clearHeightsOnNewBlockTransactions.run({ height });
         this.stmts.core.truncateNewBlockHeightsAt.run({ height });
       }
     );
@@ -329,9 +330,10 @@ export class StandaloneSqliteDatabaseWorker {
           const txId = fromB64Url(txIdStr);
 
           this.stmts.core.insertOrIgnoreNewBlockTransaction.run({
-            transaction_id: txId,
             block_indep_hash: indepHash,
+            transaction_id: txId,
             block_transaction_index: blockTransactionIndex,
+            height: block.height,
           });
 
           blockTransactionIndex++;
