@@ -32,6 +32,7 @@ import {
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import { coreDb, coreDbPath } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
+import log from '../log.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -119,6 +120,7 @@ describe('StandaloneSqliteDatabase', () => {
 
   before(() => {
     chainDb = new StandaloneSqliteDatabase({
+      log,
       coreDbPath: coreDbPath,
     });
     chainDbWorker = new StandaloneSqliteDatabaseWorker({

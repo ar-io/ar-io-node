@@ -21,6 +21,7 @@ import crypto from 'crypto';
 import os from 'os';
 import * as R from 'ramda';
 import sql from 'sql-bricks';
+import * as winston from 'winston';
 import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 
 /* eslint-disable */
@@ -1211,73 +1212,12 @@ export class StandaloneSqliteDatabaseWorker {
 }
 
 export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
-  private dbs: {
-    core: Sqlite.Database;
-  };
-  private stmts: {
-    core: { [key: string]: Sqlite.Statement };
-  };
+  log: winston.Logger;
   private workers: any[] = [];
   private workQueue: any[] = [];
 
-  // Transactions
-  insertTxFn: Sqlite.Transaction;
-
-  constructor({ coreDbPath }: { coreDbPath: string }) {
-    this.dbs = {
-      core: new Sqlite(coreDbPath),
-    };
-    this.dbs.core.pragma('journal_mode = WAL');
-    this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
-
-    this.stmts = { core: {} };
-    const sqlUrl = new URL('./sql/core', import.meta.url);
-    const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
-    for (const [k, sql] of Object.entries(coreSql)) {
-      if (!k.endsWith('.sql')) {
-        this.stmts.core[k] = this.dbs.core.prepare(sql);
-      }
-    }
-
-    // Transactions
-    this.insertTxFn = this.dbs.core.transaction(
-      (tx: PartialJsonTransaction) => {
-        // Insert the transaction
-        const rows = txToDbRows(tx);
-
-        for (const row of rows.tagNames) {
-          this.stmts.core.insertOrIgnoreTagName.run(row);
-        }
-
-        for (const row of rows.tagValues) {
-          this.stmts.core.insertOrIgnoreTagValue.run(row);
-        }
-
-        for (const row of rows.newTxTags) {
-          this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
-        }
-
-        for (const row of rows.wallets) {
-          this.stmts.core.insertOrIgnoreWallet.run(row);
-        }
-
-        this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
-
-        // Upsert the transaction to block assocation
-        this.stmts.core.insertAsyncNewBlockTransaction.run({
-          transaction_id: rows.newTx.id,
-        });
-
-        this.stmts.core.insertAsyncNewBlockHeight.run({
-          transaction_id: rows.newTx.id,
-        });
-
-        // Remove missing transaction ID if it exists
-        this.stmts.core.deleteMissingTransaction.run({
-          transaction_id: rows.newTx.id,
-        });
-      },
-    );
+  constructor({ log, coreDbPath }: { log: winston.Logger, coreDbPath: string }) {
+    this.log = log.child({ class: 'StandaloneSqliteDatabaseWorker' });
 
     const self = this;
 
@@ -1312,7 +1252,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           takeWork(); // Check if there's more work to do
         })
         .on('error', (err) => {
-          console.error(err);
+          self.log.error('Worker error', { error: err });
           error = err;
         })
         .on('exit', (code) => {
@@ -1321,7 +1261,9 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
             job.reject(error || new Error('worker died'));
           }
           if (code !== 0) {
-            console.error(`worker exited with code ${code}`);
+            self.log.error('Worker stopped with exit code ' + code, {
+              exitCode: code,
+            });
             spawn(); // Worker died, so spawn a new one
           }
         });

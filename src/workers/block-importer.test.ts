@@ -48,7 +48,7 @@ describe('BlockImporter', () => {
     heightPollingIntervalMs?: number;
   }) => {
     return new BlockImporter({
-      log: log,
+      log,
       metricsRegistry,
       errorsCounter: new promClient.Counter({
         name: 'errors_total',
@@ -65,7 +65,7 @@ describe('BlockImporter', () => {
   before(async () => {
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
-    chainDb = new StandaloneSqliteDatabase({ coreDbPath });
+    chainDb = new StandaloneSqliteDatabase({ log, coreDbPath });
   });
 
   after(async () => {
