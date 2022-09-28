@@ -67,12 +67,12 @@ INSERT INTO new_transaction_tags (
 INSERT INTO new_transactions (
   id, signature, format, last_tx, owner_address,
   target, quantity, reward, data_size, data_root,
-  tag_count, content_type, created_at
+  tag_count, content_type, created_at, height
 ) VALUES (
   @id, @signature, @format, @last_tx, @owner_address,
   @target, @quantity, @reward, @data_size, @data_root,
-  @tag_count, @content_type, @created_at
-) ON CONFLICT DO NOTHING
+  @tag_count, @content_type, @created_at, @height
+) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
 
 -- insertOrIgnoreMissingTransaction
 INSERT INTO missing_transactions (

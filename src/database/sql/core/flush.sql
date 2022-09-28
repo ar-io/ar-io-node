@@ -18,7 +18,7 @@ INSERT INTO stable_blocks (
   nb.usd_to_ar_rate_dividend, nb.usd_to_ar_rate_divisor,
   nb.scheduled_usd_to_ar_rate_dividend, nb.scheduled_usd_to_ar_rate_divisor,
   nb.hash_list_merkle, nb.wallet_list, nb.tx_root,
-  nb.tx_count, missing_tx_count
+  nb.tx_count, nb.missing_tx_count
 FROM new_blocks nb
 WHERE nb.height < @end_height
 ON CONFLICT DO NOTHING

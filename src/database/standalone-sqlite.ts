@@ -104,7 +104,7 @@ export function toSqliteParams(sqlBricksParams: { values: any[] }) {
     }, {} as { [key: string]: any });
 }
 
-export function txToDbRows(tx: PartialJsonTransaction) {
+export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
   const tagNames = [] as { name: Buffer; hash: Buffer }[];
   const tagValues = [] as { value: Buffer; hash: Buffer }[];
   const newTxTags = [] as {
@@ -169,6 +169,7 @@ export function txToDbRows(tx: PartialJsonTransaction) {
       content_type: contentType,
       tag_count: tx.tags.length,
       created_at: (Date.now() / 1000).toFixed(0),
+      height: height,
     },
   };
 }
@@ -233,6 +234,7 @@ export class StandaloneSqliteDatabaseWorker {
     this.resetToHeightFn = this.dbs.core.transaction(
       (height: number) => {
         this.stmts.core.clearHeightsOnNewBlocks.run({ height });
+        this.stmts.core.clearHeightsOnNewTransactions.run({ height });
         this.stmts.core.truncateNewBlockTransactionsAt.run({ height });
         this.stmts.core.truncateNewBlockHeightsAt.run({ height });
       }
@@ -270,6 +272,7 @@ export class StandaloneSqliteDatabaseWorker {
           transaction_id: rows.newTx.id,
         });
 
+        // TODO handle cleanup with stale deletes to avoid races with flushing
         // Remove missing transaction ID if it exists
         this.stmts.core.deleteMissingTransaction.run({
           transaction_id: rows.newTx.id,
@@ -277,6 +280,7 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
+    // TODO add height to missing txs
     this.insertBlockAndTxsFn = this.dbs.core.transaction(
       (
         block: PartialJsonBlock,
@@ -340,7 +344,7 @@ export class StandaloneSqliteDatabaseWorker {
         }
 
         for (const tx of txs) {
-          const rows = txToDbRows(tx);
+          const rows = txToDbRows(tx, block.height);
 
           for (const row of rows.tagNames) {
             this.stmts.core.insertOrIgnoreTagName.run(row);
@@ -393,17 +397,22 @@ export class StandaloneSqliteDatabaseWorker {
 
     this.deleteStaleNewDataFn = this.dbs.core.transaction(
       (heightThreshold: number, createdAtThreshold: number) => {
+        // TODO add height to missing_transactions
+        // TODO review optimality of new indexes
+        // TODO remove new_block_heights table
+        // TODO delete stale new_transaction_tags not attached to block transactions
         this.stmts.core.deleteStaleNewTransactionTags.run({
           height_threshold: heightThreshold,
+          created_at_threshold: createdAtThreshold,
         });
 
-        this.stmts.core.deleteStaleNewTransactionsByHeight.run({
+        this.stmts.core.deleteStaleNewTransactions.run({
           height_threshold: heightThreshold,
+          created_at_threshold: createdAtThreshold,
         });
 
         this.stmts.core.deleteStaleNewBlockTransactions.run({
           height_threshold: heightThreshold,
-          created_at_threshold: createdAtThreshold,
         });
 
         this.stmts.core.deleteStaleNewBlocks.run({
@@ -412,10 +421,6 @@ export class StandaloneSqliteDatabaseWorker {
 
         this.stmts.core.deleteStaleNewBlockHeights.run({
           height_threshold: heightThreshold,
-        });
-
-        this.stmts.core.deleteStaleNewTransactionsByCreatedAt.run({
-          created_at_threshold: createdAtThreshold,
         });
 
         this.stmts.core.deleteForkedOutMissingTransactions.run({
@@ -1424,6 +1429,7 @@ if (!isMainThread) {
     coreDbPath: workerData.coreDbPath,
   });
 
+  // TODO add types for messages
   parentPort?.on('message', ({ method, args }) => {
     switch (method) {
       case 'getMaxHeight':
