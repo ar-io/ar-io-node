@@ -545,7 +545,7 @@ export class StandaloneSqliteDatabaseWorker {
   getGqlNewTransactionsBaseSql() {
     return sql
       .select(
-        'nbh.height AS height',
+        'nt.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         'id',
         'last_tx',
@@ -567,9 +567,6 @@ export class StandaloneSqliteDatabaseWorker {
       })
       .join('new_blocks nb', {
         'nb.indep_hash': 'nbt.block_indep_hash',
-      })
-      .join('new_block_heights nbh', {
-        'nbh.block_indep_hash': 'nb.indep_hash',
       })
       .join('wallets w', {
         'nt.owner_address': 'w.address',
@@ -646,10 +643,10 @@ export class StandaloneSqliteDatabaseWorker {
         .height as number;
     } else {
       txTableAlias = 'nt';
-      heightTableAlias = 'nb';
+      heightTableAlias = 'nt';
       blockTransactionIndexTableAlias = 'nbt';
       tagsTable = 'new_transaction_tags';
-      heightSortTableAlias = 'nb';
+      heightSortTableAlias = 'nt';
       blockTransactionIndexSortTableAlias = 'nbt';
     }
 
@@ -998,9 +995,6 @@ export class StandaloneSqliteDatabaseWorker {
         'b.height AS height',
       )
       .from('new_blocks AS b')
-      .join('new_block_heights nbh', {
-        'b.indep_hash': 'nbh.block_indep_hash',
-      });
   }
 
   addGqlBlockFilters({
