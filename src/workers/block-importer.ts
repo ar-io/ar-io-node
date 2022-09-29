@@ -28,6 +28,8 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
+const DEFAULT_START_HEIGHT = 0;
+const DEFAULT_STOP_HEIGHT = Infinity;
 const DEFAULT_HEIGHT_POLLING_INTERVAL_MS = 5000;
 const BLOCK_ERROR_RETRY_INTERVAL_MS = 50;
 
@@ -40,6 +42,7 @@ export class BlockImporter {
 
   // State
   private startHeight: number;
+  private stopHeight: number;
   private heightPollingIntervalMs: number;
   private maxChainHeight: number;
   private shouldRun: boolean;
@@ -61,7 +64,8 @@ export class BlockImporter {
     chainSource,
     chainDb,
     eventEmitter,
-    startHeight = 0,
+    startHeight = DEFAULT_START_HEIGHT,
+    stopHeight = DEFAULT_STOP_HEIGHT,
     heightPollingIntervalMs = DEFAULT_HEIGHT_POLLING_INTERVAL_MS,
   }: {
     log: winston.Logger;
@@ -70,7 +74,8 @@ export class BlockImporter {
     chainSource: ChainSource;
     chainDb: ChainDatabase;
     eventEmitter: EventEmitter;
-    startHeight: number;
+    startHeight?: number;
+    stopHeight?: number;
     heightPollingIntervalMs?: number;
   }) {
     // Dependencies
@@ -84,6 +89,7 @@ export class BlockImporter {
     this.heightPollingIntervalMs = heightPollingIntervalMs;
     this.shouldRun = false;
     this.startHeight = startHeight;
+    this.stopHeight = stopHeight;
 
     // Metrics
 
@@ -248,10 +254,17 @@ export class BlockImporter {
   public async start() {
     this.shouldRun = true;
     this.blockImporterRunningGauge.set(1);
-    let nextHeight;
+    let nextHeight = -1;
 
     // Run until stop is called or an unrecoverable error occurs
     while (this.shouldRun) {
+      if (nextHeight >= this.stopHeight) {
+        this.log.info('Stop height reached. Stopping block import process.', {
+          stopHeight: this.stopHeight,
+        });
+        process.exit(0);
+      }
+
       try {
         nextHeight = await this.getNextHeight();
         if (nextHeight == 0 && this.startHeight != 0) {

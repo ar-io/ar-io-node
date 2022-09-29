@@ -34,9 +34,10 @@ import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 
 // Configuration
-const startHeight = parseInt(process.env.START_HEIGHT ?? '0');
+const startHeight = +(process.env.START_HEIGHT ?? 0);
+const stopHeight = +(process.env.STOP_HEIGHT ?? Infinity);
 const trustedNodeUrl = process.env.TRUSTED_NODE_URL ?? 'https://arweave.net';
-const port = parseInt(process.env.PORT ?? '4000');
+const port = +(process.env.PORT ?? 4000);
 
 // Global errors counter
 const errorsCounter = new promClient.Counter({
@@ -78,6 +79,7 @@ const blockImporter = new BlockImporter({
   chainDb,
   eventEmitter,
   startHeight: startHeight,
+  stopHeight: stopHeight,
 });
 
 const txFetcher = new TransactionFetcher({
