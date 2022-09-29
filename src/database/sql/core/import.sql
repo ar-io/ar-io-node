@@ -40,13 +40,6 @@ INSERT INTO new_blocks (
   @tx_count, @missing_tx_count
 ) ON CONFLICT DO NOTHING
 
--- insertOrIgnoreNewBlockHeight
-INSERT INTO new_block_heights (
-  height, block_indep_hash
-) VALUES (
-  @height, @block_indep_hash
-) ON CONFLICT DO NOTHING
-
 -- insertOrIgnoreNewBlockTransaction
 INSERT INTO new_block_transactions (
   block_indep_hash, transaction_id, block_transaction_index, height

@@ -233,10 +233,9 @@ export class StandaloneSqliteDatabaseWorker {
     // Transactions
     this.resetToHeightFn = this.dbs.core.transaction(
       (height: number) => {
-        this.stmts.core.clearHeightsOnNewBlocks.run({ height });
         this.stmts.core.clearHeightsOnNewTransactions.run({ height });
+        this.stmts.core.truncateNewBlocksAt.run({ height });
         this.stmts.core.truncateNewBlockTransactionsAt.run({ height });
-        this.stmts.core.truncateNewBlockHeightsAt.run({ height });
       }
     );
 
@@ -265,10 +264,6 @@ export class StandaloneSqliteDatabaseWorker {
 
         // Upsert the transaction to block assocation
         this.stmts.core.insertAsyncNewBlockTransaction.run({
-          transaction_id: rows.newTx.id,
-        });
-
-        this.stmts.core.insertAsyncNewBlockHeight.run({
           transaction_id: rows.newTx.id,
         });
 
@@ -322,11 +317,6 @@ export class StandaloneSqliteDatabaseWorker {
           tx_root: txRoot,
           tx_count: block.txs.length,
           missing_tx_count: missingTxIds.length,
-        });
-
-        this.stmts.core.insertOrIgnoreNewBlockHeight.run({
-          height: block.height,
-          block_indep_hash: indepHash,
         });
 
         let blockTransactionIndex = 0;
@@ -419,10 +409,6 @@ export class StandaloneSqliteDatabaseWorker {
           height_threshold: heightThreshold,
         });
 
-        this.stmts.core.deleteStaleNewBlockHeights.run({
-          height_threshold: heightThreshold,
-        });
-
         this.stmts.core.deleteForkedOutMissingTransactions.run({
           height_threshold: heightThreshold,
         });
@@ -440,7 +426,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
     const hash = this.stmts.core.selectNewBlockHashByHeight.get({
       height,
-    })?.block_indep_hash;
+    })?.indep_hash;
     return hash ? toB64Url(hash) : undefined;
   }
 

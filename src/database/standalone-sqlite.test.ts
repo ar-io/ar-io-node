@@ -224,16 +224,15 @@ describe('StandaloneSqliteDatabase', () => {
 
       const sql = `
         SELECT
-        nbh.height AS height,
+        nbt.height AS height,
         nt.*,
         wo.public_modulus AS owner
         FROM new_transactions nt
         JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
         JOIN new_blocks nb ON nb.indep_hash = nbt.block_indep_hash
-        JOIN new_block_heights nbh ON nbh.block_indep_hash = nb.indep_hash
         JOIN wallets wo ON wo.address = nt.owner_address
-        WHERE nbh.height = ${height}
-        ORDER BY nbh.height, nbt.block_transaction_index
+        WHERE nbt.height = ${height}
+        ORDER BY nbt.height, nbt.block_transaction_index
       `;
 
       const dbTransactions = coreDb.prepare(sql).all();
@@ -299,9 +298,8 @@ describe('StandaloneSqliteDatabase', () => {
           JOIN tag_values tv ON tv.hash = ntt.tag_value_hash
           JOIN new_transactions nt ON nt.id = ntt.transaction_id
           JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
-          JOIN new_block_heights nbh ON nbh.block_indep_hash = nbt.block_indep_hash
           WHERE ntt.transaction_id = @transaction_id
-          ORDER BY nbh.height, nbt.block_transaction_index, ntt.transaction_tag_index
+          ORDER BY nbt.height, nbt.block_transaction_index, ntt.transaction_tag_index
         `;
 
         const dbTags = coreDb

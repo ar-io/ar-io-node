@@ -24,10 +24,6 @@ WHERE height < @height_threshold
 DELETE FROM new_blocks
 WHERE height < @height_threshold
 
--- deleteStaleNewBlockHeights
-DELETE FROM new_block_heights
-WHERE height < @height_threshold
-
 -- deleteForkedOutMissingTransactions
 DELETE FROM missing_transactions
 WHERE transaction_id IN (

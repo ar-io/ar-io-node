@@ -107,11 +107,6 @@ CREATE TABLE new_blocks (
   missing_tx_count INTEGER NOT NULL
 );
 CREATE INDEX new_blocks_height_idx ON new_blocks (height);
-CREATE TABLE new_block_heights (
-  height INTEGER PRIMARY KEY,
-  block_indep_hash BLOB NOT NULL
-);
-CREATE INDEX new_block_heights_block_indep_hash_idx ON new_block_heights (height, block_indep_hash);
 CREATE TABLE new_transactions (
   -- Identity
   id BLOB PRIMARY KEY,
