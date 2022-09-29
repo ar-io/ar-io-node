@@ -187,7 +187,7 @@ describe('BlockImporter', () => {
       });
 
       it('should throw an exception', async () => {
-        expect(blockImporter.importBlock(51)).to.be.rejectedWith(
+        await expect(blockImporter.importBlock(51)).to.be.rejectedWith(
           'Maximum fork depth exceeded',
         );
       });
@@ -263,7 +263,7 @@ describe('BlockImporter', () => {
     it('should not throw an exception when called (smoke test)', async () => {
       blockImporter.start();
       await wait(5);
-      blockImporter.stop();
+      await blockImporter.stop();
     });
   });
 
