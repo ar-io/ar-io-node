@@ -46,6 +46,8 @@ export class BlockImporter {
   private heightPollingIntervalMs: number;
   private maxChainHeight: number;
   private shouldRun: boolean;
+  private startedAt = 0;
+  private transactionsImported = 0;
 
   // Metrics
   private errorsCounter: promClient.Counter<string>;
@@ -92,7 +94,6 @@ export class BlockImporter {
     this.stopHeight = stopHeight;
 
     // Metrics
-
     this.errorsCounter = errorsCounter;
 
     this.blockImporterRunningGauge = new promClient.Gauge({
@@ -224,12 +225,15 @@ export class BlockImporter {
     // Record import count metrics
     this.blocksImportedCounter.inc();
     this.transactionsImportedCounter.inc(txs.length);
+    this.transactionsImported += txs.length;
     this.missingTransactionsCounter.inc(missingTxIds.length);
 
     this.log.info(`Block imported`, {
       height: block.height,
       txCount: txs.length,
       missingTxCount: missingTxIds.length,
+      txsImportedPerSecond:
+        (this.transactionsImported * 1000) / (Date.now() - this.startedAt),
     });
   }
 
@@ -253,6 +257,7 @@ export class BlockImporter {
 
   public async start() {
     this.shouldRun = true;
+    this.startedAt = Date.now();
     this.blockImporterRunningGauge.set(1);
     let nextHeight = -1;
 
