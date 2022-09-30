@@ -10,3 +10,7 @@ WHERE height > @height
 -- truncateNewBlockTransactionsAt
 DELETE FROM new_block_transactions
 WHERE height > @height
+
+-- truncateMissingTransactionsAt
+DELETE FROM missing_transactions
+WHERE height > @height

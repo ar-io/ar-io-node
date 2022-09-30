@@ -1,0 +1,1 @@
+DROP INDEX missing_transactions_height_transaction_id_idx;

@@ -236,6 +236,7 @@ export class StandaloneSqliteDatabaseWorker {
         this.stmts.core.clearHeightsOnNewTransactions.run({ height });
         this.stmts.core.truncateNewBlocksAt.run({ height });
         this.stmts.core.truncateNewBlockTransactionsAt.run({ height });
+        this.stmts.core.truncateMissingTransactionsAt.run({ height });
       }
     );
 
@@ -387,10 +388,12 @@ export class StandaloneSqliteDatabaseWorker {
 
     this.deleteStaleNewDataFn = this.dbs.core.transaction(
       (heightThreshold: number, createdAtThreshold: number) => {
-        // TODO add height to missing_transactions
-        // TODO review optimality of new indexes
-        // TODO remove new_block_heights table
-        // TODO delete stale new_transaction_tags not attached to block transactions
+        // TODO add height and created_at to new_transaction_tags to speed up cleanup
+        // Deletes missing_transactions that have been inserted asyncronously
+        this.stmts.core.deleteStaleMissingTransactions.run({
+          height_threshold: heightThreshold,
+        });
+
         this.stmts.core.deleteStaleNewTransactionTags.run({
           height_threshold: heightThreshold,
           created_at_threshold: createdAtThreshold,
@@ -406,10 +409,6 @@ export class StandaloneSqliteDatabaseWorker {
         });
 
         this.stmts.core.deleteStaleNewBlocks.run({
-          height_threshold: heightThreshold,
-        });
-
-        this.stmts.core.deleteForkedOutMissingTransactions.run({
           height_threshold: heightThreshold,
         });
       },

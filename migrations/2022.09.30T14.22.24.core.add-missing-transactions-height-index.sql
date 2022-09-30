@@ -1,0 +1,1 @@
+CREATE INDEX missing_transactions_height_transaction_id_idx ON missing_transactions (height, transaction_id);
