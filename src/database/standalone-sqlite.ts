@@ -444,10 +444,12 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   saveTx(tx: PartialJsonTransaction) {
+    const txId = fromB64Url(tx.id);
     const maybeTxHeight = this.stmts.core.selectMissingTransactionHeight.get({
-      transaction_id: fromB64Url(tx.id),
+      transaction_id: txId
     })?.height;
     this.insertTxFn(tx, maybeTxHeight);
+    this.stmts.core.deleteNewMissingTransaction.run({ transaction_id: txId });
   }
 
   saveBlockAndTxs(
