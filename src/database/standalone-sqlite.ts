@@ -255,7 +255,7 @@ export class StandaloneSqliteDatabaseWorker {
         }
 
         for (const row of rows.newTxTags) {
-          this.stmts.core.insertOrIgnoreNewTransactionTag.run({
+          this.stmts.core.upsertNewTransactionTag.run({
             ...row,
             height
           });
@@ -265,7 +265,7 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.core.insertOrIgnoreWallet.run(row);
         }
 
-        this.stmts.core.insertOrIgnoreNewTransaction.run({
+        this.stmts.core.upsertNewTransaction.run({
           ...rows.newTx,
           height
         });
@@ -346,7 +346,7 @@ export class StandaloneSqliteDatabaseWorker {
           }
 
           for (const row of rows.newTxTags) {
-            this.stmts.core.insertOrIgnoreNewTransactionTag.run({
+            this.stmts.core.upsertNewTransactionTag.run({
               ...row,
               height: block.height,
             });
@@ -356,7 +356,7 @@ export class StandaloneSqliteDatabaseWorker {
             this.stmts.core.insertOrIgnoreWallet.run(row);
           }
 
-          this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
+          this.stmts.core.upsertNewTransaction.run(rows.newTx);
         }
 
         for (const txIdStr of missingTxIds) {

@@ -47,7 +47,7 @@ INSERT INTO new_block_transactions (
   @block_indep_hash, @transaction_id, @block_transaction_index, @height
 ) ON CONFLICT DO NOTHING
 
--- insertOrIgnoreNewTransactionTag
+-- upsertNewTransactionTag
 INSERT INTO new_transaction_tags (
   tag_name_hash, tag_value_hash,
   transaction_id, transaction_tag_index,
@@ -58,7 +58,7 @@ INSERT INTO new_transaction_tags (
   @height, @created_at
 ) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
 
--- insertOrIgnoreNewTransaction
+-- upsertNewTransaction
 INSERT INTO new_transactions (
   id, signature, format, last_tx, owner_address,
   target, quantity, reward, data_size, data_root,
