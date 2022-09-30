@@ -9,14 +9,10 @@ WHERE height < @height_threshold AND
 
 -- deleteStaleNewTransactionTags
 DELETE FROM new_transaction_tags
-WHERE transaction_id IN (
-  SELECT nt.id
-  FROM new_transactions nt
-  WHERE nt.height < @height_threshold OR (
-      nt.height IS NULL
-      AND nt.created_at < @created_at_threshold
-    )
-)
+WHERE height < @height_threshold OR (
+    height IS NULL AND
+    created_at < @created_at_threshold
+  )
 
 -- deleteStaleNewTransactions
 DELETE FROM new_transactions

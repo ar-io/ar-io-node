@@ -112,6 +112,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
     tag_value_hash: Buffer;
     transaction_id: Buffer;
     transaction_tag_index: number;
+    created_at: number;
   }[];
   const wallets = [] as { address: Buffer; public_modulus: Buffer }[];
 
@@ -137,6 +138,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       tag_value_hash: tagValueHash,
       transaction_id: txId,
       transaction_tag_index: transactionTagIndex,
+      created_at: +(Date.now() / 1000).toFixed(0),
     });
 
     transactionTagIndex++;
@@ -168,7 +170,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       data_root: fromB64Url(tx.data_root),
       content_type: contentType,
       tag_count: tx.tags.length,
-      created_at: (Date.now() / 1000).toFixed(0),
+      created_at: +(Date.now() / 1000).toFixed(0),
       height: height,
     },
   };
@@ -344,7 +346,10 @@ export class StandaloneSqliteDatabaseWorker {
           }
 
           for (const row of rows.newTxTags) {
-            this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
+            this.stmts.core.insertOrIgnoreNewTransactionTag.run({
+              ...row,
+              height: block.height,
+            });
           }
 
           for (const row of rows.wallets) {

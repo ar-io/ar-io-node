@@ -50,11 +50,13 @@ INSERT INTO new_block_transactions (
 -- insertOrIgnoreNewTransactionTag
 INSERT INTO new_transaction_tags (
   tag_name_hash, tag_value_hash,
-  transaction_id, transaction_tag_index
+  transaction_id, transaction_tag_index,
+  height, created_at
 ) VALUES (
   @tag_name_hash, @tag_value_hash,
-  @transaction_id, @transaction_tag_index
-) ON CONFLICT DO NOTHING
+  @transaction_id, @transaction_tag_index,
+  @height, @created_at
+) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
 
 -- insertOrIgnoreNewTransaction
 INSERT INTO new_transactions (

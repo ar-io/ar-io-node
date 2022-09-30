@@ -143,7 +143,7 @@ CREATE TABLE new_transaction_tags (
   tag_name_hash BLOB NOT NULL,
   tag_value_hash BLOB NOT NULL,
   transaction_id BLOB NOT NULL,
-  transaction_tag_index INTEGER NOT NULL,
+  transaction_tag_index INTEGER NOT NULL, height INTEGER, created_at INTEGER,
   PRIMARY KEY (tag_name_hash, tag_value_hash, transaction_id, transaction_tag_index)
 );
 CREATE TABLE IF NOT EXISTS "stable_blocks" (
@@ -190,3 +190,5 @@ CREATE TABLE IF NOT EXISTS "stable_blocks" (
 CREATE INDEX stable_blocks_missing_tx_count_idx ON stable_blocks (missing_tx_count);
 CREATE INDEX new_block_transactions_height_idx ON new_block_transactions (height);
 CREATE INDEX new_transactions_height_created_at_idx ON new_transactions (height, created_at);
+CREATE INDEX missing_transactions_height_transaction_id_idx ON missing_transactions (height, transaction_id);
+CREATE INDEX new_transaction_tags_height_created_at_idx ON new_transaction_tags (height, created_at);
