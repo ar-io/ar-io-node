@@ -3,6 +3,11 @@ UPDATE new_transactions
 SET height = NULL
 WHERE height > @height
 
+-- clearHeightsOnNewTransactionTags
+UPDATE new_transaction_tags
+SET height = NULL
+WHERE height > @height
+
 -- truncateNewBlocksAt
 DELETE FROM new_blocks
 WHERE height > @height

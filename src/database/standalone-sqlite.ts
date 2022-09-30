@@ -235,6 +235,7 @@ export class StandaloneSqliteDatabaseWorker {
     // Transactions
     this.resetToHeightFn = this.dbs.core.transaction((height: number) => {
       this.stmts.core.clearHeightsOnNewTransactions.run({ height });
+      this.stmts.core.clearHeightsOnNewTransactionTags.run({ height });
       this.stmts.core.truncateNewBlocksAt.run({ height });
       this.stmts.core.truncateNewBlockTransactionsAt.run({ height });
       this.stmts.core.truncateMissingTransactionsAt.run({ height });
