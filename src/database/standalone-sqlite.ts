@@ -241,7 +241,7 @@ export class StandaloneSqliteDatabaseWorker {
     });
 
     this.insertTxFn = this.dbs.core.transaction(
-      (tx: PartialJsonTransaction) => {
+      (tx: PartialJsonTransaction, height?: number) => {
         // Insert the transaction
         const rows = txToDbRows(tx);
 
@@ -254,23 +254,22 @@ export class StandaloneSqliteDatabaseWorker {
         }
 
         for (const row of rows.newTxTags) {
-          this.stmts.core.insertOrIgnoreNewTransactionTag.run(row);
+          this.stmts.core.insertOrIgnoreNewTransactionTag.run({
+            ...row,
+            height
+          });
         }
 
         for (const row of rows.wallets) {
           this.stmts.core.insertOrIgnoreWallet.run(row);
         }
 
-        this.stmts.core.insertOrIgnoreNewTransaction.run(rows.newTx);
-
-        // Upsert the transaction to block assocation
-        this.stmts.core.insertAsyncNewBlockTransaction.run({
-          transaction_id: rows.newTx.id,
+        this.stmts.core.insertOrIgnoreNewTransaction.run({
+          ...rows.newTx,
+          height
         });
 
-        // TODO handle cleanup with stale deletes to avoid races with flushing
-        // Remove missing transaction ID if it exists
-        this.stmts.core.deleteMissingTransaction.run({
+        this.stmts.core.insertAsyncNewBlockTransaction.run({
           transaction_id: rows.newTx.id,
         });
       },
@@ -445,7 +444,10 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   saveTx(tx: PartialJsonTransaction) {
-    this.insertTxFn(tx);
+    const maybeTxHeight = this.stmts.core.selectMissingTransactionHeight.get({
+      transaction_id: fromB64Url(tx.id),
+    })?.height;
+    this.insertTxFn(tx, maybeTxHeight);
   }
 
   saveBlockAndTxs(
