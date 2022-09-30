@@ -231,14 +231,12 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     // Transactions
-    this.resetToHeightFn = this.dbs.core.transaction(
-      (height: number) => {
-        this.stmts.core.clearHeightsOnNewTransactions.run({ height });
-        this.stmts.core.truncateNewBlocksAt.run({ height });
-        this.stmts.core.truncateNewBlockTransactionsAt.run({ height });
-        this.stmts.core.truncateMissingTransactionsAt.run({ height });
-      }
-    );
+    this.resetToHeightFn = this.dbs.core.transaction((height: number) => {
+      this.stmts.core.clearHeightsOnNewTransactions.run({ height });
+      this.stmts.core.truncateNewBlocksAt.run({ height });
+      this.stmts.core.truncateNewBlockTransactionsAt.run({ height });
+      this.stmts.core.truncateMissingTransactionsAt.run({ height });
+    });
 
     this.insertTxFn = this.dbs.core.transaction(
       (tx: PartialJsonTransaction) => {
@@ -979,7 +977,7 @@ export class StandaloneSqliteDatabaseWorker {
         'b.block_timestamp AS "timestamp"',
         'b.height AS height',
       )
-      .from('new_blocks AS b')
+      .from('new_blocks AS b');
   }
 
   addGqlBlockFilters({
@@ -1210,7 +1208,13 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
   private workers: any[] = [];
   private workQueue: any[] = [];
 
-  constructor({ log, coreDbPath }: { log: winston.Logger, coreDbPath: string }) {
+  constructor({
+    log,
+    coreDbPath,
+  }: {
+    log: winston.Logger;
+    coreDbPath: string;
+  }) {
     this.log = log.child({ class: 'StandaloneSqliteDatabaseWorker' });
 
     const self = this;
