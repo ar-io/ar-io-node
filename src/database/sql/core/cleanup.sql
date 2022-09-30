@@ -1,10 +1,10 @@
 -- deleteStaleMissingTransactions
 DELETE FROM missing_transactions
 WHERE height < @height_threshold AND
-  transaction_id IN (
-    SELECT nt.id
-    FROM new_transactions nt
-    WHERE nt.height < @height_threshold
+  EXISTS (
+    SELECT 1
+    FROM stable_transactions st
+    WHERE st.id = missing_transactions.transaction_id
   )
 
 -- deleteStaleNewTransactionTags
