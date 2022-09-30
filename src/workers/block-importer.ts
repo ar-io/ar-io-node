@@ -205,16 +205,18 @@ export class BlockImporter {
       height,
     );
 
-    // Emit fetch events
+    // Emit sucessful fetch events
     this.eventEmitter.emit('block-fetched', block);
     txs.forEach((tx) => {
       this.eventEmitter.emit('block-tx-fetched', tx);
     });
+
+    await this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+
+    // Emit failed TX fetch events after DB is populated
     missingTxIds.forEach((txId) => {
       this.eventEmitter.emit('block-tx-fetch-failed', txId);
     });
-
-    await this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
 
     // Emit save events
     this.eventEmitter.emit('block-saved', block);
