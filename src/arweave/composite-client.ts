@@ -441,12 +441,6 @@ export class ArweaveCompositeClient
     } catch (error: any) {
       // Remove failed requests from the cache so they get retried
       this.txPromiseCache.del(txId);
-
-      this.log.error('Failed to get transaction:', {
-        txId: txId,
-        message: error.message,
-      });
-
       throw error;
     }
   }
