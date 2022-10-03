@@ -344,6 +344,7 @@ export class ArweaveCompositeClient
     } catch (error) {
       // Remove failed requests from the cache so they get retried
       this.blockByHeightPromiseCache.del(height);
+
       throw error;
     }
   }
@@ -441,6 +442,7 @@ export class ArweaveCompositeClient
     } catch (error: any) {
       // Remove failed requests from the cache so they get retried
       this.txPromiseCache.del(txId);
+
       throw error;
     }
   }
