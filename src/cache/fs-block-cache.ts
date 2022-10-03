@@ -99,4 +99,29 @@ export class FsBlockCache implements PartialJsonBlockCache {
       // TODO log error
     }
   }
+
+  async delByHash(hash: string) {
+    try {
+      if (await this.hasHash(hash)) {
+        await fs.promises.unlink(blockCacheHashPath(hash));
+      }
+    } catch (error) {
+      // TODO log error
+    }
+  }
+
+  async delByHeight(height: number) {
+    try {
+      if (height && !(await this.hasHeight(height))) {
+        const block = await this.getByHeight(height);
+        const hash = block?.indep_hash;
+        if (hash) {
+          await fs.promises.unlink(blockCacheHashPath(hash));
+        }
+        await fs.promises.unlink(blockCacheHeightPath(height));
+      }
+    } catch (error) {
+      // TODO log error
+    }
+  }
 }

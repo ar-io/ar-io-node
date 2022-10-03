@@ -119,10 +119,12 @@ export interface DataItem {
 }
 
 export interface PartialJsonBlockCache {
-  hasHash(blockHash: string): Promise<boolean>;
+  hasHash(hash: string): Promise<boolean>;
   hasHeight(height: number): Promise<boolean>;
-  getByHash(blockHash: string): Promise<PartialJsonBlock | undefined>;
+  getByHash(hash: string): Promise<PartialJsonBlock | undefined>;
   getByHeight(number: number): Promise<PartialJsonBlock | undefined>;
+  delByHash(hash: string): Promise<void>;
+  delByHeight(number: number): Promise<void>;
   set(block: PartialJsonBlock, height?: number): Promise<void>;
 }
 
@@ -130,6 +132,7 @@ export interface PartialJsonTransactionCache {
   has(txId: string): Promise<boolean>;
   get(txId: string): Promise<PartialJsonTransaction | undefined>;
   set(tx: PartialJsonTransaction): Promise<void>;
+  del(txId: string): Promise<void>;
 }
 
 export interface ChunkDataCache {

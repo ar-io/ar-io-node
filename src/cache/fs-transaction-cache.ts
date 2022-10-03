@@ -44,4 +44,14 @@ export class FsTransactionCache implements PartialJsonTransactionCache {
       // TODO log error
     }
   }
+
+  async del(txId: string) {
+    try {
+      if (await this.has(txId)) {
+        await fs.promises.unlink(txCachePath(txId));
+      }
+    } catch (error) {
+      // TODO log error
+    }
+  }
 }

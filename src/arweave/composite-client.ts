@@ -257,15 +257,20 @@ export class ArweaveCompositeClient
             });
         })
         .then(async (block) => {
-          sanityCheckBlock(block);
-          await this.blockCache.set(
-            block,
-            // Only cache height for stable blocks
-            this.maxPrefetchHeight - block.height > MAX_FORK_DEPTH
-              ? block.height
-              : undefined,
-          );
-          return block;
+          try {
+            sanityCheckBlock(block);
+            await this.blockCache.set(
+              block,
+              // Only cache height for stable blocks (where height doesn't change)
+              this.maxPrefetchHeight - block.height > MAX_FORK_DEPTH
+                ? block.height
+                : undefined,
+            );
+            return block;
+          } catch (error) {
+            this.blockCache.delByHeight(height);
+            this.blockCache.delByHash(block.indep_hash);
+          }
         })
         .catch((error) => {
           this.log.error('Block prefetch failed:', {
@@ -399,9 +404,13 @@ export class ArweaveCompositeClient
           });
       })
       .then(async (tx) => {
-        sanityCheckTx(tx);
-        await this.txCache.set(tx);
-        return tx;
+        try {
+          sanityCheckTx(tx);
+          await this.txCache.set(tx);
+          return tx;
+        } catch (error) {
+          this.txCache.del(txId);
+        }
       })
       .catch((error) => {
         this.log.error('Transaction prefetch failed:', {
