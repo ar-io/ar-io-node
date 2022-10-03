@@ -364,7 +364,7 @@ export class ArweaveCompositeClient
       const tx = this.arweave.transactions.fromRaw(response.data);
       const isValid = await this.arweave.transactions.verify(tx);
       if (!isValid) {
-        throw new Error('Invalid transaction');
+        throw new Error('Invalid peer fetched transaction');
       }
       return response;
     });
