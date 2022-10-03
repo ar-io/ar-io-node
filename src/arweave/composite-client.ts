@@ -331,20 +331,18 @@ export class ArweaveCompositeClient
         height,
       )) as PartialJsonBlock;
 
-      // Check that a response was returned
+      // Check that a response was returned since the promise returns undefined
+      // on failure
       if (!block) {
         throw new Error('Prefetched block request failed');
       }
-
-      // Sanity check block format
-      sanityCheckBlock(block);
 
       // Remove prefetched request from cache so forks are handled correctly
       this.blockByHeightPromiseCache.del(height);
 
       return block;
     } catch (error) {
-      // Remove failed requests from the cache
+      // Remove failed requests from the cache so they get retried
       this.blockByHeightPromiseCache.del(height);
       throw error;
     }
@@ -419,6 +417,8 @@ export class ArweaveCompositeClient
         });
       });
     this.txPromiseCache.set(txId, responsePromise);
+
+    // TODO return the promise?
   }
 
   async getTx(txId: string): Promise<PartialJsonTransaction> {
@@ -431,14 +431,15 @@ export class ArweaveCompositeClient
         txId,
       )) as PartialJsonTransaction;
 
-      // Check that a response was returned
+      // Check that a response was returned since the promise returns undefined
+      // on failure
       if (!tx) {
         throw new Error('Prefetched transaction request failed');
       }
 
       return tx;
     } catch (error: any) {
-      // Remove failed requests from the cache
+      // Remove failed requests from the cache so they get retried
       this.txPromiseCache.del(txId);
 
       this.log.error('Failed to get transaction:', {
