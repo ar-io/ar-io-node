@@ -231,7 +231,10 @@ export class ArweaveCompositeClient
     return this.trustedNodeAxios(request);
   }
 
-  async prefetchBlockByHeight(height: number, prefetchTxs = false) {
+  async prefetchBlockByHeight(
+    height: number,
+    prefetchTxs = true,
+  ): Promise<PartialJsonBlock | undefined> {
     let blockPromise = this.blockByHeightPromiseCache.get(height);
 
     if (!blockPromise) {
@@ -259,6 +262,7 @@ export class ArweaveCompositeClient
         .then(async (block) => {
           try {
             sanityCheckBlock(block);
+
             await this.blockCache.set(
               block,
               // Only cache height for stable blocks (where height doesn't change)
@@ -266,6 +270,14 @@ export class ArweaveCompositeClient
                 ? block.height
                 : undefined,
             );
+
+            // Prefetch transactions
+            if (prefetchTxs) {
+              block.txs.forEach(async (txId: string) => {
+                this.prefetchTx(txId);
+              });
+            }
+
             return block;
           } catch (error) {
             this.blockCache.delByHeight(height);
@@ -282,20 +294,7 @@ export class ArweaveCompositeClient
       this.blockByHeightPromiseCache.set(height, blockPromise);
     }
 
-    try {
-      const block = (await blockPromise) as PartialJsonBlock;
-
-      if (prefetchTxs) {
-        block.txs.forEach(async (txId: string) => {
-          this.prefetchTx(txId);
-        });
-      }
-    } catch (error: any) {
-      this.log.error('Error prefetching block transactions:', {
-        height: height,
-        message: error.message,
-      });
-    }
+    return blockPromise as Promise<PartialJsonBlock | undefined>;
   }
 
   // TODO make second arg an options object
@@ -303,8 +302,7 @@ export class ArweaveCompositeClient
     height: number,
     shouldPrefetch = false,
   ): Promise<PartialJsonBlock> {
-    // Prefetch the requested block
-    this.prefetchBlockByHeight(height);
+    const blockPromise = this.prefetchBlockByHeight(height);
 
     // Prefetch the next N blocks
     if (shouldPrefetch && height < this.maxPrefetchHeight) {
@@ -327,9 +325,7 @@ export class ArweaveCompositeClient
     }
 
     try {
-      const block = (await this.blockByHeightPromiseCache.get(
-        height,
-      )) as PartialJsonBlock;
+      const block = await blockPromise;
 
       // Check that a response was returned since the promise returns undefined
       // on failure
@@ -369,12 +365,14 @@ export class ArweaveCompositeClient
     });
   }
 
-  prefetchTx(txId: string) {
+  prefetchTx(txId: string): Promise<PartialJsonTransaction | undefined> {
     const cachedResponsePromise = this.txPromiseCache.get(txId);
     if (cachedResponsePromise) {
       // Update TTL if block promise is already cached
       this.txPromiseCache.set(txId, cachedResponsePromise);
-      return;
+      return cachedResponsePromise as Promise<
+        PartialJsonTransaction | undefined
+      >;
     }
 
     const responsePromise = this.txCache
@@ -417,20 +415,16 @@ export class ArweaveCompositeClient
           message: error.message,
         });
       });
+
     this.txPromiseCache.set(txId, responsePromise);
 
-    // TODO return the promise?
+    return responsePromise as Promise<PartialJsonTransaction | undefined>;
   }
 
   async getTx(txId: string): Promise<PartialJsonTransaction> {
-    // Prefetch TX
-    this.prefetchTx(txId);
-
     try {
       // Wait for TX response
-      const tx = (await this.txPromiseCache.get(
-        txId,
-      )) as PartialJsonTransaction;
+      const tx = await this.prefetchTx(txId);
 
       // Check that a response was returned since the promise returns undefined
       // on failure
