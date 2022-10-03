@@ -256,10 +256,11 @@ export class ArweaveCompositeClient
               return response.data;
             });
         })
-        .then((block) => {
+        .then(async (block) => {
           sanityCheckBlock(block);
-          this.blockCache.set(
+          await this.blockCache.set(
             block,
+            // Only cache height for stable blocks
             this.maxPrefetchHeight - block.height > MAX_FORK_DEPTH
               ? block.height
               : undefined,
@@ -397,9 +398,9 @@ export class ArweaveCompositeClient
             return response.data;
           });
       })
-      .then((tx) => {
+      .then(async (tx) => {
         sanityCheckTx(tx);
-        this.txCache.set(tx);
+        await this.txCache.set(tx);
         return tx;
       })
       .catch((error) => {
