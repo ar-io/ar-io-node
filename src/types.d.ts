@@ -164,7 +164,7 @@ export interface ChainSource {
 // TODO consider renaming to ChainIndexer
 export interface ChainDatabase {
   getMaxHeight(): Promise<number>;
-  getNewBlockHashByHeight(height: number): Promise<string | undefined>;
+  getBlockHashByHeight(height: number): Promise<string | undefined>;
   getMissingTxIds(limit?: number): Promise<string[]>;
   resetToHeight(height: number): Promise<void>;
   saveTx(txs: PartialJsonTransaction): Promise<void>;

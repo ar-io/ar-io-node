@@ -422,11 +422,11 @@ export class StandaloneSqliteDatabaseWorker {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
 
-  getNewBlockHashByHeight(height: number) {
+  getBlockHashByHeight(height: number) {
     if (height < 0) {
       throw new Error(`Invalid height ${height}, must be >= 0.`);
     }
-    const hash = this.stmts.core.selectNewBlockHashByHeight.get({
+    const hash = this.stmts.core.selectBlockHashByHeight.get({
       height,
     })?.indep_hash;
     return hash ? toB64Url(hash) : undefined;
@@ -1317,8 +1317,8 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     return this.queueWork('getMaxHeight', undefined);
   }
 
-  getNewBlockHashByHeight(height: number): Promise<string | undefined> {
-    return this.queueWork('getNewBlockHashByHeight', [height]);
+  getBlockHashByHeight(height: number): Promise<string | undefined> {
+    return this.queueWork('getBlockHashByHeight', [height]);
   }
 
   getMissingTxIds(limit = 20): Promise<string[]> {
@@ -1429,8 +1429,8 @@ if (!isMainThread) {
         const maxHeight = worker.getMaxHeight();
         parentPort?.postMessage(maxHeight);
         break;
-      case 'getNewBlockHashByHeight':
-        const newBlockHash = worker.getNewBlockHashByHeight(args[0]);
+      case 'getBlockHashByHeight':
+        const newBlockHash = worker.getBlockHashByHeight(args[0]);
         parentPort?.postMessage(newBlockHash);
         break;
       case 'getMissingTxIds':

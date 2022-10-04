@@ -163,7 +163,7 @@ export class BlockImporter {
     if (height > this.startHeight) {
       // Retrieve expected previous block hash from the DB
       const previousHeight = height - 1;
-      const previousDbBlockHash = await this.chainDb.getNewBlockHashByHeight(
+      const previousDbBlockHash = await this.chainDb.getBlockHashByHeight(
         previousHeight,
       );
 

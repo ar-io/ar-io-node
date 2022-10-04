@@ -8,10 +8,18 @@ FROM (
   FROM stable_blocks
 )
 
--- selectNewBlockHashByHeight
+-- selectBlockHashByHeight
 SELECT indep_hash
-FROM new_blocks
-WHERE height = @height
+FROM (
+  SELECT indep_hash
+  FROM new_blocks
+  WHERE height = @height
+  UNION
+  SELECT indep_hash
+  FROM stable_blocks
+  WHERE height = @height
+)
+LIMIT 1
 
 -- selectMissingTransactionIds
 SELECT transaction_id
