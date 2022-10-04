@@ -4,11 +4,13 @@
 *.log
 /.direnv
 /coverage
-/data/headers
-/data/chunks
+/data
 /dist
 /node_modules
 
 # VS Code
 /.vscode
 .DS_Store
+
+# Exceptions
+!/data/.gitkeep
