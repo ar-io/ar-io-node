@@ -269,7 +269,8 @@ export class BlockImporter {
         this.log.info('Stop height reached. Stopping block import process.', {
           stopHeight: this.stopHeight,
         });
-        process.exit(0);
+        await this.stop();
+        break;
       }
 
       try {
