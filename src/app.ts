@@ -89,7 +89,7 @@ const txFetcher = new TransactionFetcher({
 });
 
 // Async fetch block TXs that failed sync fetch
-eventEmitter.addListener('block-tx-fetch-failed', (txId) => {
+eventEmitter.addListener('block-tx-fetch-failed', ({ id: txId }) => {
   txFetcher.queueTxId(txId);
 });
 

@@ -215,7 +215,7 @@ export class BlockImporter {
 
     // Emit failed TX fetch events after DB is populated
     missingTxIds.forEach((txId) => {
-      this.eventEmitter.emit('block-tx-fetch-failed', txId);
+      this.eventEmitter.emit('block-tx-fetch-failed', { id: txId });
     });
 
     // Emit save events
