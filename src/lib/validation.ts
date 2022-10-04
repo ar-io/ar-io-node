@@ -21,6 +21,10 @@ export function sanityCheckTx(tx: PartialJsonTransaction) {
   if (!tx.id) {
     throw new Error("Invalid transaction: missing 'id'");
   }
+
+  if (!tx.id.match(/^[a-zA-Z0-9_-]{43}/)) {
+    throw new Error("Invalid transaction: invalid 'id' format");
+  }
 }
 
 export function sanityCheckChunk(chunk: JsonChunk) {
