@@ -69,6 +69,7 @@ export class ArweaveCompositeClient
   private log: winston.Logger;
   private txCache: PartialJsonTransactionCache;
   private blockCache: PartialJsonBlockCache;
+  private skipCache: boolean;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -119,6 +120,7 @@ export class ArweaveCompositeClient
     maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS,
     blockPrefetchCount = DEFAULT_BLOCK_PREFETCH_COUNT,
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
+    skipCache = false,
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
@@ -131,12 +133,14 @@ export class ArweaveCompositeClient
     maxConcurrentRequests?: number;
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
+    skipCache?: boolean;
   }) {
     this.log = log.child({ class: 'ArweaveCompositeClient' });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.txCache = new FsTransactionCache();
     this.blockCache = new FsBlockCache();
+    this.skipCache = skipCache;
 
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
@@ -242,7 +246,7 @@ export class ArweaveCompositeClient
         .getByHeight(height)
         .then((block) => {
           // Return cached block if it exists
-          if (block) {
+          if (!this.skipCache && block) {
             return block;
           }
 
@@ -379,7 +383,7 @@ export class ArweaveCompositeClient
       .get(txId)
       .then((tx) => {
         // Return cached TX if it exists
-        if (tx) {
+        if (!this.skipCache && tx) {
           return tx;
         }
 
