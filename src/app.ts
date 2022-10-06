@@ -26,6 +26,7 @@ import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { BlockImporter } from './workers/block-importer.js';
@@ -39,6 +40,9 @@ const stopHeight = +(process.env.STOP_HEIGHT ?? Infinity);
 const trustedNodeUrl = process.env.TRUSTED_NODE_URL ?? 'https://arweave.net';
 const skipCache = (process.env.SKIP_CACHE || 'false') === 'true';
 const port = +(process.env.PORT ?? 4000);
+const simulatedRequestFailureRate = +(
+  process.env.SIMULATED_REQUEST_FAILURE_RATE ?? 0
+);
 
 // Global errors counter
 const errorsCounter = new promClient.Counter({
@@ -67,6 +71,9 @@ const arweaveClient = new ArweaveCompositeClient({
   arweave,
   trustedNodeUrl,
   skipCache,
+  failureSimulator: new UniformFailureSimulator({
+    failureRate: simulatedRequestFailureRate,
+  }),
 });
 
 const chainDb = new StandaloneSqliteDatabase({

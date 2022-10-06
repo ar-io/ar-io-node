@@ -28,6 +28,7 @@ import * as winston from 'winston';
 
 import { FsBlockCache } from '../cache/fs-block-cache.js';
 import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
+import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 import {
   sanityCheckBlock,
@@ -67,6 +68,7 @@ export class ArweaveCompositeClient
 {
   private arweave: Arweave;
   private log: winston.Logger;
+  private failureSimulator: FailureSimulator;
   private txCache: PartialJsonTransactionCache;
   private blockCache: PartialJsonBlockCache;
   private skipCache: boolean;
@@ -114,6 +116,7 @@ export class ArweaveCompositeClient
     metricsRegistry,
     arweave,
     trustedNodeUrl,
+    failureSimulator,
     requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
     requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
     maxRequestsPerSecond = DEFAULT_MAX_REQUESTS_PER_SECOND,
@@ -126,6 +129,7 @@ export class ArweaveCompositeClient
     metricsRegistry: promClient.Registry;
     arweave: Arweave;
     trustedNodeUrl: string;
+    failureSimulator: FailureSimulator;
     requestTimeout?: number;
     requestRetryCount?: number;
     requestPerSecond?: number;
@@ -138,6 +142,7 @@ export class ArweaveCompositeClient
     this.log = log.child({ class: 'ArweaveCompositeClient' });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
+    this.failureSimulator = failureSimulator;
     this.txCache = new FsTransactionCache();
     this.blockCache = new FsBlockCache();
     this.skipCache = skipCache;
@@ -245,6 +250,8 @@ export class ArweaveCompositeClient
       blockPromise = this.blockCache
         .getByHeight(height)
         .then((block) => {
+          this.failureSimulator.maybeFail();
+
           // Return cached block if it exists
           if (!this.skipCache && block) {
             return block;
@@ -382,6 +389,8 @@ export class ArweaveCompositeClient
     const responsePromise = this.txCache
       .get(txId)
       .then((tx) => {
+        this.failureSimulator.maybeFail();
+
         // Return cached TX if it exists
         if (!this.skipCache && tx) {
           return tx;
@@ -447,6 +456,8 @@ export class ArweaveCompositeClient
 
   async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
     try {
+      this.failureSimulator.maybeFail();
+
       const response = await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/offset`,
@@ -466,6 +477,8 @@ export class ArweaveCompositeClient
     field: keyof PartialJsonTransaction,
   ): Promise<T> {
     try {
+      this.failureSimulator.maybeFail();
+
       const response = await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/${field}`,
@@ -529,6 +542,8 @@ export class ArweaveCompositeClient
     relativeOffset: number,
   ): Promise<JsonChunk> {
     try {
+      this.failureSimulator.maybeFail();
+
       const response = await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/chunk/${absoluteOffset}`,
@@ -567,6 +582,8 @@ export class ArweaveCompositeClient
 
   async getTxData(txId: string): Promise<{ data: Readable; size: number }> {
     try {
+      this.failureSimulator.maybeFail();
+
       const [dataResponse, dataSizeResponse] = await Promise.all([
         this.trustedNodeRequestQueue.push({
           method: 'GET',
