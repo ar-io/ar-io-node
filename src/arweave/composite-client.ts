@@ -296,9 +296,10 @@ export class ArweaveCompositeClient
           }
         })
         .catch((error) => {
-          this.log.error('Block prefetch failed:', {
+          this.log.warn('Block prefetch failed:', {
             height: height,
             message: error.message,
+            stack: error.stack,
           });
         });
 
@@ -423,9 +424,10 @@ export class ArweaveCompositeClient
         }
       })
       .catch((error) => {
-        this.log.error('Transaction prefetch failed:', {
+        this.log.warn('Transaction prefetch failed:', {
           txId: txId,
           message: error.message,
+          stack: error.stack,
         });
       });
 
@@ -467,6 +469,7 @@ export class ArweaveCompositeClient
       this.log.error('Failed to get transaction offset:', {
         txId,
         message: error.message,
+        stack: error.stack,
       });
       throw error;
     }
@@ -488,6 +491,7 @@ export class ArweaveCompositeClient
       this.log.error(`Failed to get transaction ${field}:`, {
         txId,
         message: error.message,
+        stack: error.stack,
       });
       throw error;
     }
@@ -561,6 +565,7 @@ export class ArweaveCompositeClient
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
+        stack: error.stack,
       });
       throw error;
     }
@@ -606,6 +611,7 @@ export class ArweaveCompositeClient
       this.log.error('Failed to get transaction data:', {
         txId,
         message: error.message,
+        stack: error.stack,
       });
       throw error;
     }

@@ -1260,7 +1260,7 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
           takeWork(); // Check if there's more work to do
         })
         .on('error', (err) => {
-          self.log.error('Worker error', { error: err });
+          self.log.error('Worker error', err);
           error = err;
         })
         .on('exit', (code) => {

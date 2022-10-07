@@ -64,9 +64,7 @@ export class TransactionImporter {
       await this.chainDb.saveTx(tx);
       this.eventEmitter.emit('tx-saved', tx);
     } catch (error: any) {
-      log.error('Failed to import transaction:', {
-        messsage: error.message,
-      });
+      log.error('Failed to import transaction:', error);
     }
   }
 }

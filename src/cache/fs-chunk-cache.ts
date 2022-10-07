@@ -58,6 +58,7 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
         dataRoot,
         relativeOffset,
         message: error.message,
+        stack: error.stack,
       });
       return undefined;
     }
@@ -85,6 +86,7 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
+        stack: error.stack,
       });
     }
   }
@@ -107,6 +109,7 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
+        stack: error.stack,
       });
       throw error;
     }
@@ -150,6 +153,7 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
+        stack: error.stack,
       });
       throw error;
     }

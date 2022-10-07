@@ -54,9 +54,7 @@ export class TransactionRepairWorker {
         await this.txFetcher.queueTxId(txId);
       }
     } catch (error: any) {
-      this.log.error('Error retrying missing transactions:', {
-        message: error.message,
-      });
+      this.log.error('Error retrying missing transactions:', error);
     }
   }
 }
