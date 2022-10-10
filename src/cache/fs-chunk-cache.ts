@@ -47,12 +47,10 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
   ): Promise<Buffer | undefined> {
     try {
       if (await this.hasChunkData(dataRoot, relativeOffset)) {
-        const chunk = await fs.promises.readFile(
+        return await fs.promises.readFile(
           chunkCachePath(dataRoot, relativeOffset),
         );
-        return chunk;
       }
-      return undefined;
     } catch (error: any) {
       this.log.error('Failed to fetch chunk data from cache', {
         dataRoot,
@@ -60,8 +58,9 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
         message: error.message,
         stack: error.stack,
       });
-      return undefined;
     }
+
+    return undefined;
   }
 
   async setChunkData(
