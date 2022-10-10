@@ -2,8 +2,11 @@ import fs from 'fs';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
-import { ChunkDataCache, ChunkSource, JsonChunk } from '../types.js';
+import { toB64Url } from '../lib/encoding.js';
+import {
+  ChunkDataByRelativeOrAbsoluteOffsetSource,
+  ChunkDataCache,
+} from '../types.js';
 
 function chunkCacheDir(dataRoot: Buffer) {
   const b64DataRoot = toB64Url(dataRoot);
@@ -14,16 +17,18 @@ function chunkCachePath(dataRoot: Buffer, relativeOffset: number) {
   return `${chunkCacheDir(dataRoot)}/${relativeOffset}`;
 }
 
-export class FsChunkCache implements ChunkSource, ChunkDataCache {
+export class FsChunkCache
+  implements ChunkDataByRelativeOrAbsoluteOffsetSource, ChunkDataCache
+{
   private log: winston.Logger;
-  private chunkSource: ChunkSource;
+  private chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
 
   constructor({
     log,
     chunkSource,
   }: {
     log: winston.Logger;
-    chunkSource: ChunkSource;
+    chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.chunkSource = chunkSource;
@@ -90,30 +95,6 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
     }
   }
 
-  async getChunkByRelativeOrAbsoluteOffset(
-    absoluteOffset: number,
-    dataRoot: Buffer,
-    relativeOffset: number,
-  ): Promise<JsonChunk> {
-    try {
-      const chunk = this.chunkSource.getChunkByRelativeOrAbsoluteOffset(
-        absoluteOffset,
-        dataRoot,
-        relativeOffset,
-      );
-      return chunk;
-    } catch (error: any) {
-      this.log.error('Failed to fetch chunk', {
-        absoluteOffset,
-        dataRoot: toB64Url(dataRoot),
-        relativeOffset,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
-  }
-
   async getChunkDataByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
@@ -132,16 +113,11 @@ export class FsChunkCache implements ChunkSource, ChunkDataCache {
           }
 
           // Fetch from ChunkSource
-          return this.getChunkByRelativeOrAbsoluteOffset(
+          return this.chunkSource.getChunkDataByRelativeOrAbsoluteOffset(
             absoluteOffset,
             dataRoot,
             relativeOffset,
-          ).then((chunk: JsonChunk) => {
-            // cache the unencoded buffer
-            const chunkData = fromB64Url(chunk.chunk);
-            this.setChunkData(chunkData, dataRoot, relativeOffset);
-            return chunkData;
-          });
+          );
         },
       );
       const chunkData = await chunkDataPromise;

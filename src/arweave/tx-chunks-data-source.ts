@@ -2,12 +2,16 @@ import { Readable } from 'stream';
 import winston from 'winston';
 
 import { fromB64Url } from '../lib/encoding.js';
-import { ChainSource, ChunkSource, TxDataSource } from '../types.js';
+import {
+  ChainSource,
+  ChunkDataByRelativeOrAbsoluteOffsetSource,
+  TxDataSource,
+} from '../types.js';
 
 export class TxChunksDataSource implements TxDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
-  private chunkSource: ChunkSource;
+  private chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
 
   constructor({
     log,
@@ -16,7 +20,7 @@ export class TxChunksDataSource implements TxDataSource {
   }: {
     log: winston.Logger;
     chainSource: ChainSource;
-    chunkSource: ChunkSource;
+    chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
   }) {
     this.log = log.child({ class: 'TxDataChunksRetriever' });
     this.chainSource = chainSource;

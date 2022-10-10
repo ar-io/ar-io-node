@@ -38,7 +38,8 @@ import {
 } from '../lib/validation.js';
 import {
   ChainSource,
-  ChunkSource,
+  ChunkByRelativeOrAbsoluteOffsetSource,
+  ChunkDataByRelativeOrAbsoluteOffsetSource,
   JsonChunk,
   JsonTransactionOffset,
   PartialJsonBlock,
@@ -64,7 +65,11 @@ type Peer = {
 };
 
 export class ArweaveCompositeClient
-  implements ChainSource, ChunkSource, TxDataSource
+  implements
+    ChainSource,
+    ChunkByRelativeOrAbsoluteOffsetSource,
+    TxDataSource,
+    ChunkDataByRelativeOrAbsoluteOffsetSource
 {
   private arweave: Arweave;
   private log: winston.Logger;

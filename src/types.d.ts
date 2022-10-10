@@ -260,12 +260,15 @@ export interface JsonChunk {
   tx_path: string;
 }
 
-export interface ChunkSource {
+export interface ChunkByRelativeOrAbsoluteOffsetSource {
   getChunkByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<JsonChunk>;
+}
+
+export interface ChunkDataByRelativeOrAbsoluteOffsetSource {
   getChunkDataByRelativeOrAbsoluteOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
