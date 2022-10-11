@@ -86,7 +86,7 @@ export class FsChunkCache
         relativeOffset,
       });
     } catch (error: any) {
-      this.log.error('Failed to set chunk data in cache', {
+      this.log.error('Failed to set chunk data in cache:', {
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
         message: error.message,
@@ -123,7 +123,7 @@ export class FsChunkCache
       const chunkData = await chunkDataPromise;
       return Readable.from(chunkData);
     } catch (error: any) {
-      this.log.error('Failed to fetch chunk data', {
+      this.log.error('Failed to fetch chunk data:', {
         absoluteOffset,
         dataRoot: toB64Url(dataRoot),
         relativeOffset,
