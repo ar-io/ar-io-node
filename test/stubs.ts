@@ -21,7 +21,8 @@ import stream, { Readable } from 'stream';
 import { validateChunk } from '../src/lib/validation.js';
 import {
   ChainSource,
-  ChunkSource,
+  ChunkByAbsoluteOrRelativeOffsetSource,
+  ChunkDataByAbsoluteOrRelativeOffsetSource,
   JsonChunk,
   JsonTransactionOffset,
   PartialJsonBlock,
@@ -125,8 +126,12 @@ export class ArweaveChainSourceStub implements ChainSource {
   }
 }
 
-export class ArweaveChunkSourceStub implements ChunkSource {
-  async getChunkByRelativeOrAbsoluteOffset(
+export class ArweaveChunkSourceStub
+  implements
+    ChunkByAbsoluteOrRelativeOffsetSource,
+    ChunkDataByAbsoluteOrRelativeOffsetSource
+{
+  async getChunkByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
@@ -147,12 +152,12 @@ export class ArweaveChunkSourceStub implements ChunkSource {
     }
   }
 
-  async getChunkDataByRelativeOrAbsoluteOffset(
+  async getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<any> {
-    const chunkResponse = await this.getChunkByRelativeOrAbsoluteOffset(
+    const chunkResponse = await this.getChunkByAbsoluteOrRelativeOffset(
       absoluteOffset,
       dataRoot,
       relativeOffset,

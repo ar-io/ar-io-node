@@ -37,7 +37,7 @@ describe('FsChunkCache', () => {
     sandbox.restore();
   });
 
-  describe('getChunkDataByRelativeOrAbsoluteOffset', () => {
+  describe('getChunkDataByAbsoluteOrRelativeOffset', () => {
     let mockedJsonChunk: JsonChunk;
     let mockedChunkData: Buffer;
 
@@ -60,9 +60,9 @@ describe('FsChunkCache', () => {
         .resolves(mockedChunkData);
       const networkSpy = sandbox.spy(
         chunkSource,
-        'getChunkByRelativeOrAbsoluteOffset',
+        'getChunkByAbsoluteOrRelativeOffset',
       );
-      await chunkCache.getChunkDataByRelativeOrAbsoluteOffset(
+      await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
         fromB64Url(B64_DATA_ROOT),
         0,
@@ -78,9 +78,9 @@ describe('FsChunkCache', () => {
         .resolves(false);
       const cacheGetSpy = sandbox.spy(chunkCache, 'getChunkData');
       const networkSpy = sandbox
-        .stub(chunkSource, 'getChunkByRelativeOrAbsoluteOffset')
+        .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
         .resolves(mockedJsonChunk);
-      await chunkCache.getChunkDataByRelativeOrAbsoluteOffset(
+      await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
         fromB64Url(B64_DATA_ROOT),
         0,
@@ -94,9 +94,9 @@ describe('FsChunkCache', () => {
       const cacheHasSpy = sandbox.stub(chunkCache, 'hasChunkData').rejects();
       const cacheGetSpy = sandbox.spy(chunkCache, 'getChunkData');
       const networkSpy = sandbox
-        .stub(chunkSource, 'getChunkByRelativeOrAbsoluteOffset')
+        .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
         .resolves(mockedJsonChunk);
-      await chunkCache.getChunkDataByRelativeOrAbsoluteOffset(
+      await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
         fromB64Url(B64_DATA_ROOT),
         0,

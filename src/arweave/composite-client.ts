@@ -38,8 +38,8 @@ import {
 } from '../lib/validation.js';
 import {
   ChainSource,
-  ChunkByRelativeOrAbsoluteOffsetSource,
-  ChunkDataByRelativeOrAbsoluteOffsetSource,
+  ChunkByAbsoluteOrRelativeOffsetSource,
+  ChunkDataByAbsoluteOrRelativeOffsetSource,
   JsonChunk,
   JsonTransactionOffset,
   PartialJsonBlock,
@@ -67,9 +67,9 @@ type Peer = {
 export class ArweaveCompositeClient
   implements
     ChainSource,
-    ChunkByRelativeOrAbsoluteOffsetSource,
-    TxDataSource,
-    ChunkDataByRelativeOrAbsoluteOffsetSource
+    ChunkByAbsoluteOrRelativeOffsetSource,
+    ChunkDataByAbsoluteOrRelativeOffsetSource,
+    TxDataSource
 {
   private arweave: Arweave;
   private log: winston.Logger;
@@ -545,7 +545,7 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
-  async getChunkByRelativeOrAbsoluteOffset(
+  async getChunkByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
@@ -576,12 +576,12 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getChunkDataByRelativeOrAbsoluteOffset(
+  async getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<Readable> {
-    const { chunk } = await this.getChunkByRelativeOrAbsoluteOffset(
+    const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
       absoluteOffset,
       dataRoot,
       relativeOffset,

@@ -4,7 +4,7 @@ import winston from 'winston';
 
 import { toB64Url } from '../lib/encoding.js';
 import {
-  ChunkDataByRelativeOrAbsoluteOffsetSource,
+  ChunkDataByAbsoluteOrRelativeOffsetSource,
   ChunkDataCache,
 } from '../types.js';
 
@@ -18,17 +18,17 @@ function chunkCachePath(dataRoot: Buffer, relativeOffset: number) {
 }
 
 export class FsChunkCache
-  implements ChunkDataByRelativeOrAbsoluteOffsetSource, ChunkDataCache
+  implements ChunkDataByAbsoluteOrRelativeOffsetSource, ChunkDataCache
 {
   private log: winston.Logger;
-  private chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
+  private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
 
   constructor({
     log,
     chunkSource,
   }: {
     log: winston.Logger;
-    chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
+    chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.chunkSource = chunkSource;
@@ -95,7 +95,7 @@ export class FsChunkCache
     }
   }
 
-  async getChunkDataByRelativeOrAbsoluteOffset(
+  async getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
@@ -113,7 +113,7 @@ export class FsChunkCache
           }
 
           // Fetch from ChunkSource
-          return this.chunkSource.getChunkDataByRelativeOrAbsoluteOffset(
+          return this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
             absoluteOffset,
             dataRoot,
             relativeOffset,

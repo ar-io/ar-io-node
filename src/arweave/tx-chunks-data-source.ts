@@ -4,14 +4,14 @@ import winston from 'winston';
 import { fromB64Url } from '../lib/encoding.js';
 import {
   ChainSource,
-  ChunkDataByRelativeOrAbsoluteOffsetSource,
+  ChunkDataByAbsoluteOrRelativeOffsetSource,
   TxDataSource,
 } from '../types.js';
 
 export class TxChunksDataSource implements TxDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
-  private chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
+  private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
 
   constructor({
     log,
@@ -20,7 +20,7 @@ export class TxChunksDataSource implements TxDataSource {
   }: {
     log: winston.Logger;
     chainSource: ChainSource;
-    chunkSource: ChunkDataByRelativeOrAbsoluteOffsetSource;
+    chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
   }) {
     this.log = log.child({ class: 'TxDataChunksRetriever' });
     this.chainSource = chainSource;
@@ -46,7 +46,7 @@ export class TxChunksDataSource implements TxDataSource {
         dataRoot: Buffer,
         relativeOffset: number,
       ) =>
-        this.chunkSource.getChunkDataByRelativeOrAbsoluteOffset(
+        this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
           absoluteOffset,
           dataRoot,
           relativeOffset,
