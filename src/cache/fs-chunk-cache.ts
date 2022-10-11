@@ -2,11 +2,28 @@ import fs from 'fs';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import { toB64Url } from '../lib/encoding.js';
 import {
+  fromB64Url,
+  fromMsgpack,
+  toB64Url,
+  toMsgpack,
+} from '../lib/encoding.js';
+import {
+  ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
   ChunkDataCache,
+  ChunkMetadata,
+  ChunkMetadataByAbsoluteOrRelativeOffsetSource,
 } from '../types.js';
+
+function chunkMetadataCacheDir(dataRoot: Buffer) {
+  const b64DataRoot = toB64Url(dataRoot);
+  return `data/chunks/${b64DataRoot}/metadata/`;
+}
+
+function chunkMetadataCachePath(dataRoot: Buffer, relativeOffset: number) {
+  return `${chunkMetadataCacheDir(dataRoot)}/${relativeOffset}`;
+}
 
 function chunkCacheDir(dataRoot: Buffer) {
   const b64DataRoot = toB64Url(dataRoot);
@@ -122,6 +139,128 @@ export class FsChunkCache
       );
       const chunkData = await chunkDataPromise;
       return Readable.from(chunkData);
+    } catch (error: any) {
+      this.log.error('Failed to fetch chunk data:', {
+        absoluteOffset,
+        dataRoot: toB64Url(dataRoot),
+        relativeOffset,
+        message: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
+  }
+}
+
+export class FsChunkMetadataCache
+  implements ChunkMetadataByAbsoluteOrRelativeOffsetSource
+{
+  private log: winston.Logger;
+  private chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
+
+  constructor({
+    log,
+    chunkSource,
+  }: {
+    log: winston.Logger;
+    chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
+  }) {
+    this.log = log.child({ class: this.constructor.name });
+    this.chunkSource = chunkSource;
+  }
+
+  async hasChunkMetadata(dataRoot: Buffer, relativeOffset: number) {
+    try {
+      await fs.promises.access(
+        chunkCachePath(dataRoot, relativeOffset),
+        fs.constants.F_OK,
+      );
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async getChunkMetadata(
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<ChunkMetadata | undefined> {
+    try {
+      if (await this.hasChunkMetadata(dataRoot, relativeOffset)) {
+        const msgpack = await fs.promises.readFile(
+          chunkMetadataCachePath(dataRoot, relativeOffset),
+        );
+        return fromMsgpack(msgpack) as ChunkMetadata;
+      }
+    } catch (error: any) {
+      this.log.error('Failed to fetch chunk data from cache', {
+        dataRoot,
+        relativeOffset,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+
+    return undefined;
+  }
+
+  async setChunkMetadata(chunkMetadata: ChunkMetadata): Promise<void> {
+    const { data_root, offset } = chunkMetadata;
+    try {
+      await fs.promises.mkdir(chunkMetadataCacheDir(data_root), {
+        recursive: true,
+      });
+      const msgpack = toMsgpack(chunkMetadata);
+      await fs.promises.writeFile(chunkCachePath(data_root, offset), msgpack);
+      this.log.info('Successfully cached chunk metadata', {
+        dataRoot: toB64Url(data_root),
+        relativeOffset: offset,
+      });
+    } catch (error: any) {
+      this.log.error('Failed to set chunk data in metacache:', {
+        dataRoot: toB64Url(data_root),
+        relativeOffset: offset,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+  }
+
+  async getChunkMetadataByAbsoluteOrRelativeOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<ChunkMetadata> {
+    try {
+      const chunkMetadataPromise = this.getChunkMetadata(
+        dataRoot,
+        relativeOffset,
+      ).then(async (chunkMetadata) => {
+        // Chunk is cached
+        if (chunkMetadata) {
+          this.log.info('Successfully fetched chunk data from cache', {
+            dataRoot: toB64Url(dataRoot),
+            relativeOffset,
+          });
+          return chunkMetadata;
+        }
+
+        // Fetch from ChunkSource
+        const chunk = await this.chunkSource.getChunkByAbsoluteOrRelativeOffset(
+          absoluteOffset,
+          dataRoot,
+          relativeOffset,
+        );
+
+        return {
+          data_root: dataRoot,
+          data_size: fromB64Url(chunk.chunk).length,
+          offset: relativeOffset,
+          data_path: fromB64Url(chunk.data_path),
+        };
+      });
+
+      return await chunkMetadataPromise;
     } catch (error: any) {
       this.log.error('Failed to fetch chunk data:', {
         absoluteOffset,

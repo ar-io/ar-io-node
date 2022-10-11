@@ -260,12 +260,27 @@ export interface JsonChunk {
   tx_path: string;
 }
 
+export interface ChunkMetadata {
+  data_root: Buffer;
+  data_size: number;
+  offset: number;
+  data_path: Buffer;
+}
+
 export interface ChunkByAbsoluteOrRelativeOffsetSource {
   getChunkByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<JsonChunk>;
+}
+
+export interface ChunkMetadataByAbsoluteOrRelativeOffsetSource {
+  getChunkMetadataByAbsoluteOrRelativeOffset(
+    absoluteOffset: number,
+    dataRoot: Buffer,
+    relativeOffset: number,
+  ): Promise<ChunkMetadata>;
 }
 
 export interface ChunkDataByAbsoluteOrRelativeOffsetSource {
