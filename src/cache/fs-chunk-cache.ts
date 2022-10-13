@@ -25,13 +25,13 @@ function chunkMetadataCachePath(dataRoot: Buffer, relativeOffset: number) {
   return `${chunkMetadataCacheDir(dataRoot)}/${relativeOffset}`;
 }
 
-function chunkCacheDir(dataRoot: Buffer) {
+function chunkDataCacheDir(dataRoot: Buffer) {
   const b64DataRoot = toB64Url(dataRoot);
   return `data/chunks/${b64DataRoot}/data/`;
 }
 
-function chunkCachePath(dataRoot: Buffer, relativeOffset: number) {
-  return `${chunkCacheDir(dataRoot)}/${relativeOffset}`;
+function chunkDataCachePath(dataRoot: Buffer, relativeOffset: number) {
+  return `${chunkDataCacheDir(dataRoot)}/${relativeOffset}`;
 }
 
 export class FsChunkCache
@@ -54,7 +54,7 @@ export class FsChunkCache
   async hasChunkData(dataRoot: Buffer, relativeOffset: number) {
     try {
       await fs.promises.access(
-        chunkCachePath(dataRoot, relativeOffset),
+        chunkDataCachePath(dataRoot, relativeOffset),
         fs.constants.F_OK,
       );
       return true;
@@ -70,7 +70,7 @@ export class FsChunkCache
     try {
       if (await this.hasChunkData(dataRoot, relativeOffset)) {
         return await fs.promises.readFile(
-          chunkCachePath(dataRoot, relativeOffset),
+          chunkDataCachePath(dataRoot, relativeOffset),
         );
       }
     } catch (error: any) {
@@ -91,11 +91,11 @@ export class FsChunkCache
     relativeOffset: number,
   ): Promise<void> {
     try {
-      await fs.promises.mkdir(chunkCacheDir(dataRoot), {
+      await fs.promises.mkdir(chunkDataCacheDir(dataRoot), {
         recursive: true,
       });
       await fs.promises.writeFile(
-        chunkCachePath(dataRoot, relativeOffset),
+        chunkDataCachePath(dataRoot, relativeOffset),
         data,
       );
       this.log.info('Successfully cached chunk data', {
@@ -172,7 +172,7 @@ export class FsChunkMetadataCache
   async hasChunkMetadata(dataRoot: Buffer, relativeOffset: number) {
     try {
       await fs.promises.access(
-        chunkCachePath(dataRoot, relativeOffset),
+        chunkMetadataCachePath(dataRoot, relativeOffset),
         fs.constants.F_OK,
       );
       return true;
@@ -211,7 +211,10 @@ export class FsChunkMetadataCache
         recursive: true,
       });
       const msgpack = toMsgpack(chunkMetadata);
-      await fs.promises.writeFile(chunkCachePath(data_root, offset), msgpack);
+      await fs.promises.writeFile(
+        chunkMetadataCachePath(data_root, offset),
+        msgpack,
+      );
       this.log.info('Successfully cached chunk metadata', {
         dataRoot: toB64Url(data_root),
         relativeOffset: offset,
