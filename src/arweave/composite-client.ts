@@ -38,9 +38,9 @@ import {
 } from '../lib/validation.js';
 import {
   ChainSource,
+  Chunk,
   ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
-  JsonChunk,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockCache,
@@ -549,7 +549,7 @@ export class ArweaveCompositeClient
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
-  ): Promise<JsonChunk> {
+  ): Promise<Chunk> {
     try {
       this.failureSimulator.maybeFail();
 
@@ -557,13 +557,17 @@ export class ArweaveCompositeClient
         method: 'GET',
         url: `/chunk/${absoluteOffset}`,
       });
-      const chunk = response.data;
+      const jsonChunk = response.data;
 
-      sanityCheckChunk(chunk);
+      sanityCheckChunk(jsonChunk);
 
-      await validateChunk(chunk, dataRoot, relativeOffset);
+      await validateChunk(jsonChunk, dataRoot, relativeOffset);
 
-      return chunk;
+      return {
+        chunk: fromB64Url(jsonChunk.chunk),
+        data_path: fromB64Url(jsonChunk.data_path),
+        tx_path: fromB64Url(jsonChunk.tx_path),
+      };
     } catch (error: any) {
       this.log.error('Failed to get chunk:', {
         absoluteOffset,
@@ -586,8 +590,7 @@ export class ArweaveCompositeClient
       dataRoot,
       relativeOffset,
     );
-    const data = fromB64Url(chunk);
-    return Readable.from(data);
+    return Readable.from(chunk);
   }
 
   async getTxData(txId: string): Promise<{ data: Readable; size: number }> {

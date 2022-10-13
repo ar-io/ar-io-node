@@ -2,12 +2,7 @@ import fs from 'fs';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import {
-  fromB64Url,
-  fromMsgpack,
-  toB64Url,
-  toMsgpack,
-} from '../lib/encoding.js';
+import { fromMsgpack, toB64Url, toMsgpack } from '../lib/encoding.js';
 import {
   ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
@@ -257,9 +252,9 @@ export class FsChunkMetadataCache
 
         return {
           data_root: dataRoot,
-          data_size: fromB64Url(chunk.chunk).length,
+          data_size: chunk.chunk.length,
           offset: relativeOffset,
-          data_path: fromB64Url(chunk.data_path),
+          data_path: chunk.data_path,
         };
       });
 
