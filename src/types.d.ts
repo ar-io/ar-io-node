@@ -142,7 +142,7 @@ export interface ChunkDataCache {
     relativeOffset: number,
   ): Promise<Buffer | undefined>;
   setChunkData(
-    data: Buffer,
+    data: Readable,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<void>;

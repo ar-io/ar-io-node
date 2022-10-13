@@ -81,7 +81,7 @@ export class FsChunkCache
   }
 
   async setChunkData(
-    data: Buffer,
+    data: Readable,
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<void> {
@@ -114,22 +114,27 @@ export class FsChunkCache
   ): Promise<Readable> {
     try {
       const chunkDataPromise = this.getChunkData(dataRoot, relativeOffset).then(
-        async (chunkData) => {
+        async (cachedChunkData) => {
           // Chunk is cached
-          if (chunkData) {
+          if (cachedChunkData) {
             this.log.info('Successfully fetched chunk data from cache', {
               dataRoot: toB64Url(dataRoot),
               relativeOffset,
             });
-            return chunkData;
+            return cachedChunkData;
           }
 
           // Fetch from ChunkSource
-          return this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
-            absoluteOffset,
-            dataRoot,
-            relativeOffset,
-          );
+          const chunkData =
+            await this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
+              absoluteOffset,
+              dataRoot,
+              relativeOffset,
+            );
+
+          await this.setChunkData(chunkData, dataRoot, relativeOffset);
+
+          return chunkData;
         },
       );
       const chunkData = await chunkDataPromise;
@@ -215,7 +220,7 @@ export class FsChunkMetadataCache
         relativeOffset: offset,
       });
     } catch (error: any) {
-      this.log.error('Failed to set chunk data in metacache:', {
+      this.log.error('Failed to set chunk metadata in cache:', {
         dataRoot: toB64Url(data_root),
         relativeOffset: offset,
         message: error.message,
@@ -233,14 +238,14 @@ export class FsChunkMetadataCache
       const chunkMetadataPromise = this.getChunkMetadata(
         dataRoot,
         relativeOffset,
-      ).then(async (chunkMetadata) => {
-        // Chunk is cached
-        if (chunkMetadata) {
+      ).then(async (cachedChunkMetadata) => {
+        // Chunk metadata is cached
+        if (cachedChunkMetadata) {
           this.log.info('Successfully fetched chunk data from cache', {
             dataRoot: toB64Url(dataRoot),
             relativeOffset,
           });
-          return chunkMetadata;
+          return cachedChunkMetadata;
         }
 
         // Fetch from ChunkSource
@@ -250,12 +255,16 @@ export class FsChunkMetadataCache
           relativeOffset,
         );
 
-        return {
+        const chunkMetadata = {
           data_root: dataRoot,
           data_size: chunk.chunk.length,
           offset: relativeOffset,
           data_path: chunk.data_path,
         };
+
+        await this.setChunkMetadata(chunkMetadata);
+
+        return chunkMetadata;
       });
 
       return await chunkMetadataPromise;

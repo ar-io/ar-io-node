@@ -2,6 +2,7 @@ import chai, { expect } from 'chai';
 import fs from 'fs';
 import sinon, { SinonSandbox } from 'sinon';
 import sinonChai from 'sinon-chai';
+import { Readable } from 'stream';
 import * as winston from 'winston';
 
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
