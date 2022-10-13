@@ -6,7 +6,7 @@ import * as winston from 'winston';
 
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
 import { fromB64Url } from '../lib/encoding.js';
-import { JsonChunk } from '../types.js';
+import { Chunk } from '../types.js';
 import { FsChunkCache } from './fs-chunk-cache.js';
 
 chai.use(sinonChai);
@@ -38,16 +38,21 @@ describe('FsChunkCache', () => {
   });
 
   describe('getChunkDataByAbsoluteOrRelativeOffset', () => {
-    let mockedJsonChunk: JsonChunk;
+    let mockedChunk: Chunk;
     let mockedChunkData: Buffer;
 
     before(() => {
-      mockedJsonChunk = JSON.parse(
+      const jsonChunk = JSON.parse(
         fs.readFileSync(
           `test/mock_files/chunks/${ABSOLUTE_OFFSET}.json`,
           'utf-8',
         ),
       );
+      mockedChunk = {
+        chunk: fromB64Url(jsonChunk.chunk),
+        data_path: fromB64Url(jsonChunk.data_path),
+        tx_path: fromB64Url(jsonChunk.tx_path),
+      };
       mockedChunkData = fs.readFileSync(
         `test/mock_files/chunks/${B64_DATA_ROOT}/data/${RELATIVE_OFFSET}`,
       );
@@ -79,7 +84,7 @@ describe('FsChunkCache', () => {
       const cacheGetSpy = sandbox.spy(chunkCache, 'getChunkData');
       const networkSpy = sandbox
         .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
-        .resolves(mockedJsonChunk);
+        .resolves(mockedChunk);
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
         fromB64Url(B64_DATA_ROOT),
@@ -95,7 +100,7 @@ describe('FsChunkCache', () => {
       const cacheGetSpy = sandbox.spy(chunkCache, 'getChunkData');
       const networkSpy = sandbox
         .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
-        .resolves(mockedJsonChunk);
+        .resolves(mockedChunk);
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
         fromB64Url(B64_DATA_ROOT),

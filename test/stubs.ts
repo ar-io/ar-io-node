@@ -18,12 +18,13 @@
 import fs from 'fs';
 import stream, { Readable } from 'stream';
 
+import { fromB64Url } from '../src/lib/encoding.js';
 import { validateChunk } from '../src/lib/validation.js';
 import {
   ChainSource,
+  Chunk,
   ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
-  JsonChunk,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonTransaction,
@@ -135,18 +136,22 @@ export class ArweaveChunkSourceStub
     absoluteOffset: number,
     dataRoot: Buffer,
     relativeOffset: number,
-  ): Promise<JsonChunk> {
+  ): Promise<Chunk> {
     if (fs.existsSync(`test/mock_files/chunks/${absoluteOffset}.json`)) {
-      const chunk = JSON.parse(
+      const jsonChunk = JSON.parse(
         fs.readFileSync(
           `test/mock_files/chunks/${absoluteOffset}.json`,
           'utf8',
         ),
       );
 
-      await validateChunk(chunk, dataRoot, relativeOffset);
+      await validateChunk(jsonChunk, dataRoot, relativeOffset);
 
-      return chunk;
+      return {
+        chunk: fromB64Url(jsonChunk.chunk),
+        data_path: fromB64Url(jsonChunk.data_path),
+        tx_path: fromB64Url(jsonChunk.tx_path),
+      };
     } else {
       throw new Error(`Chunk at offset ${absoluteOffset} not found`);
     }
@@ -157,12 +162,11 @@ export class ArweaveChunkSourceStub
     dataRoot: Buffer,
     relativeOffset: number,
   ): Promise<any> {
-    const chunkResponse = await this.getChunkByAbsoluteOrRelativeOffset(
+    const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
       absoluteOffset,
       dataRoot,
       relativeOffset,
     );
-    const data = Buffer.from(chunkResponse.chunk, 'base64');
-    return Readable.from(data);
+    return Readable.from(chunk);
   }
 }
