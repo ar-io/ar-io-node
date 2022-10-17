@@ -1,7 +1,6 @@
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import { fromB64Url } from '../lib/encoding.js';
 import {
   ChainSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
@@ -38,12 +37,11 @@ export class TxChunksDataSource implements TxDataSource {
       const size = +txOffset.size;
       const offset = +txOffset.offset;
       const startOffset = offset - size + 1;
-      const dataRoot = fromB64Url(txDataRoot);
       let bytes = 0;
       // we lose scope in the readable, so set to internal function
       const getChunkDataByRelativeOrAbsoluteOffset = (
         absoluteOffset: number,
-        dataRoot: Buffer,
+        dataRoot: string,
         relativeOffset: number,
       ) =>
         this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
@@ -52,7 +50,7 @@ export class TxChunksDataSource implements TxDataSource {
           relativeOffset,
         );
       let chunkPromise: Promise<Readable> | undefined =
-        getChunkDataByRelativeOrAbsoluteOffset(startOffset, dataRoot, bytes);
+        getChunkDataByRelativeOrAbsoluteOffset(startOffset, txDataRoot, bytes);
       const data = new Readable({
         autoDestroy: true,
         read: async function () {
@@ -72,7 +70,7 @@ export class TxChunksDataSource implements TxDataSource {
               if (bytes < size) {
                 chunkPromise = getChunkDataByRelativeOrAbsoluteOffset(
                   startOffset + bytes,
-                  dataRoot,
+                  txDataRoot,
                   bytes,
                 );
               } else {

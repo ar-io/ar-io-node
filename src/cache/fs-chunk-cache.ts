@@ -2,7 +2,12 @@ import fs from 'fs';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import { fromMsgpack, toB64Url, toMsgpack } from '../lib/encoding.js';
+import {
+  fromB64Url,
+  fromMsgpack,
+  toB64Url,
+  toMsgpack,
+} from '../lib/encoding.js';
 import {
   ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
@@ -11,24 +16,24 @@ import {
   ChunkMetadataByAbsoluteOrRelativeOffsetSource,
 } from '../types.js';
 
-function chunkMetadataCacheDir(dataRoot: Buffer) {
-  const b64DataRoot = toB64Url(dataRoot);
-  return `data/chunks/${b64DataRoot}/metadata/`;
+function chunkMetadataCacheDir(dataRoot: string) {
+  return `data/chunks/${dataRoot}/metadata/`;
 }
 
-function chunkMetadataCachePath(dataRoot: Buffer, relativeOffset: number) {
+function chunkMetadataCachePath(dataRoot: string, relativeOffset: number) {
   return `${chunkMetadataCacheDir(dataRoot)}/${relativeOffset}`;
 }
 
-function chunkDataCacheDir(dataRoot: Buffer) {
-  const b64DataRoot = toB64Url(dataRoot);
-  return `data/chunks/${b64DataRoot}/data/`;
+function chunkDataCacheDir(dataRoot: string) {
+  return `data/chunks/${dataRoot}/data/`;
 }
 
-function chunkDataCachePath(dataRoot: Buffer, relativeOffset: number) {
+function chunkDataCachePath(dataRoot: string, relativeOffset: number) {
   return `${chunkDataCacheDir(dataRoot)}/${relativeOffset}`;
 }
 
+// TODO decouple read through source and cache
+// TODO rename to include something about being a read through cache
 export class FsChunkCache
   implements ChunkDataByAbsoluteOrRelativeOffsetSource, ChunkDataCache
 {
@@ -46,7 +51,7 @@ export class FsChunkCache
     this.chunkSource = chunkSource;
   }
 
-  async hasChunkData(dataRoot: Buffer, relativeOffset: number) {
+  async hasChunkData(dataRoot: string, relativeOffset: number) {
     try {
       await fs.promises.access(
         chunkDataCachePath(dataRoot, relativeOffset),
@@ -59,7 +64,7 @@ export class FsChunkCache
   }
 
   async getChunkData(
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Buffer | undefined> {
     try {
@@ -82,7 +87,7 @@ export class FsChunkCache
 
   async setChunkData(
     data: Readable,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<void> {
     try {
@@ -94,12 +99,12 @@ export class FsChunkCache
         data,
       );
       this.log.info('Successfully cached chunk data', {
-        dataRoot: toB64Url(dataRoot),
+        dataRoot,
         relativeOffset,
       });
     } catch (error: any) {
       this.log.error('Failed to set chunk data in cache:', {
-        dataRoot: toB64Url(dataRoot),
+        dataRoot,
         relativeOffset,
         message: error.message,
         stack: error.stack,
@@ -109,7 +114,7 @@ export class FsChunkCache
 
   async getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Readable> {
     try {
@@ -118,7 +123,7 @@ export class FsChunkCache
           // Chunk is cached
           if (cachedChunkData) {
             this.log.info('Successfully fetched chunk data from cache', {
-              dataRoot: toB64Url(dataRoot),
+              dataRoot,
               relativeOffset,
             });
             return cachedChunkData;
@@ -142,7 +147,7 @@ export class FsChunkCache
     } catch (error: any) {
       this.log.error('Failed to fetch chunk data:', {
         absoluteOffset,
-        dataRoot: toB64Url(dataRoot),
+        dataRoot,
         relativeOffset,
         message: error.message,
         stack: error.stack,
@@ -169,7 +174,7 @@ export class FsChunkMetadataCache
     this.chunkSource = chunkSource;
   }
 
-  async hasChunkMetadata(dataRoot: Buffer, relativeOffset: number) {
+  async hasChunkMetadata(dataRoot: string, relativeOffset: number) {
     try {
       await fs.promises.access(
         chunkMetadataCachePath(dataRoot, relativeOffset),
@@ -182,7 +187,7 @@ export class FsChunkMetadataCache
   }
 
   async getChunkMetadata(
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkMetadata | undefined> {
     try {
@@ -206,22 +211,23 @@ export class FsChunkMetadataCache
 
   async setChunkMetadata(chunkMetadata: ChunkMetadata): Promise<void> {
     const { data_root, offset } = chunkMetadata;
+    const b64uDataRoot = toB64Url(data_root);
     try {
-      await fs.promises.mkdir(chunkMetadataCacheDir(data_root), {
+      await fs.promises.mkdir(chunkMetadataCacheDir(b64uDataRoot), {
         recursive: true,
       });
       const msgpack = toMsgpack(chunkMetadata);
       await fs.promises.writeFile(
-        chunkMetadataCachePath(data_root, offset),
+        chunkMetadataCachePath(toB64Url(data_root), offset),
         msgpack,
       );
       this.log.info('Successfully cached chunk metadata', {
-        dataRoot: toB64Url(data_root),
+        dataRoot: b64uDataRoot,
         relativeOffset: offset,
       });
     } catch (error: any) {
       this.log.error('Failed to set chunk metadata in cache:', {
-        dataRoot: toB64Url(data_root),
+        dataRoot: b64uDataRoot,
         relativeOffset: offset,
         message: error.message,
         stack: error.stack,
@@ -231,7 +237,7 @@ export class FsChunkMetadataCache
 
   async getChunkMetadataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkMetadata> {
     try {
@@ -242,7 +248,7 @@ export class FsChunkMetadataCache
         // Chunk metadata is cached
         if (cachedChunkMetadata) {
           this.log.info('Successfully fetched chunk data from cache', {
-            dataRoot: toB64Url(dataRoot),
+            dataRoot,
             relativeOffset,
           });
           return cachedChunkMetadata;
@@ -256,7 +262,7 @@ export class FsChunkMetadataCache
         );
 
         const chunkMetadata = {
-          data_root: dataRoot,
+          data_root: fromB64Url(dataRoot),
           data_size: chunk.chunk.length,
           offset: relativeOffset,
           data_path: chunk.data_path,
@@ -271,7 +277,7 @@ export class FsChunkMetadataCache
     } catch (error: any) {
       this.log.error('Failed to fetch chunk data:', {
         absoluteOffset,
-        dataRoot: toB64Url(dataRoot),
+        dataRoot,
         relativeOffset,
         message: error.message,
         stack: error.stack,

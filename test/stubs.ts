@@ -134,7 +134,7 @@ export class ArweaveChunkSourceStub
 {
   async getChunkByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Chunk> {
     if (fs.existsSync(`test/mock_files/chunks/${absoluteOffset}.json`)) {
@@ -151,7 +151,7 @@ export class ArweaveChunkSourceStub
         tx_path: fromB64Url(jsonChunk.tx_path),
       };
 
-      await validateChunk(chunk, dataRoot, relativeOffset);
+      await validateChunk(chunk, fromB64Url(dataRoot), relativeOffset);
 
       return chunk;
     } else {
@@ -161,7 +161,7 @@ export class ArweaveChunkSourceStub
 
   async getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<any> {
     const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(

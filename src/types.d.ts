@@ -136,14 +136,14 @@ export interface PartialJsonTransactionCache {
 }
 
 export interface ChunkDataCache {
-  hasChunkData(dataRoot: Buffer, relativeOffset: number): Promise<boolean>;
+  hasChunkData(dataRoot: string, relativeOffset: number): Promise<boolean>;
   getChunkData(
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Buffer | undefined>;
   setChunkData(
     data: Readable,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<void>;
 }
@@ -279,7 +279,7 @@ export interface ChunkMetadata {
 export interface ChunkByAbsoluteOrRelativeOffsetSource {
   getChunkByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Chunk>;
 }
@@ -287,7 +287,7 @@ export interface ChunkByAbsoluteOrRelativeOffsetSource {
 export interface ChunkMetadataByAbsoluteOrRelativeOffsetSource {
   getChunkMetadataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkMetadata>;
 }
@@ -295,7 +295,7 @@ export interface ChunkMetadataByAbsoluteOrRelativeOffsetSource {
 export interface ChunkDataByAbsoluteOrRelativeOffsetSource {
   getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Readable>;
 }

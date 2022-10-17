@@ -29,7 +29,7 @@ import * as winston from 'winston';
 import { FsBlockCache } from '../cache/fs-block-cache.js';
 import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
 import { FailureSimulator } from '../lib/chaos.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { fromB64Url } from '../lib/encoding.js';
 import {
   sanityCheckBlock,
   sanityCheckChunk,
@@ -547,7 +547,7 @@ export class ArweaveCompositeClient
 
   async getChunkByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Chunk> {
     try {
@@ -567,13 +567,13 @@ export class ArweaveCompositeClient
         tx_path: fromB64Url(jsonChunk.tx_path),
       };
 
-      await validateChunk(chunk, dataRoot, relativeOffset);
+      await validateChunk(chunk, fromB64Url(dataRoot), relativeOffset);
 
       return chunk;
     } catch (error: any) {
       this.log.error('Failed to get chunk:', {
         absoluteOffset,
-        dataRoot: toB64Url(dataRoot),
+        dataRoot,
         relativeOffset,
         message: error.message,
         stack: error.stack,
@@ -584,7 +584,7 @@ export class ArweaveCompositeClient
 
   async getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
-    dataRoot: Buffer,
+    dataRoot: string,
     relativeOffset: number,
   ): Promise<Readable> {
     const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
