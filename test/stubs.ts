@@ -145,13 +145,15 @@ export class ArweaveChunkSourceStub
         ),
       );
 
-      await validateChunk(jsonChunk, dataRoot, relativeOffset);
-
-      return {
+      const chunk = {
         chunk: fromB64Url(jsonChunk.chunk),
         data_path: fromB64Url(jsonChunk.data_path),
         tx_path: fromB64Url(jsonChunk.tx_path),
       };
+
+      await validateChunk(chunk, dataRoot, relativeOffset);
+
+      return chunk;
     } else {
       throw new Error(`Chunk at offset ${absoluteOffset} not found`);
     }

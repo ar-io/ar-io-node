@@ -1,11 +1,11 @@
 import { validatePath } from 'arweave/node/lib/merkle.js';
 
 import {
+  Chunk,
   JsonChunk,
   PartialJsonBlock,
   PartialJsonTransaction,
 } from '../types.js';
-import { fromB64Url } from './encoding.js';
 
 export function sanityCheckBlock(block: PartialJsonBlock) {
   if (!block.indep_hash) {
@@ -42,7 +42,7 @@ export function sanityCheckChunk(chunk: JsonChunk) {
 }
 
 export async function validateChunk(
-  chunk: JsonChunk,
+  chunk: Chunk,
   dataRoot: Buffer,
   relativeOffset: number,
 ) {
@@ -50,8 +50,8 @@ export async function validateChunk(
     dataRoot,
     relativeOffset,
     0,
-    fromB64Url(chunk.chunk).byteLength,
-    fromB64Url(chunk.data_path),
+    chunk.chunk.byteLength,
+    chunk.data_path,
   );
 
   if (!validChunk) {
