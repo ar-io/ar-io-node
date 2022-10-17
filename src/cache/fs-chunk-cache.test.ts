@@ -2,13 +2,12 @@ import chai, { expect } from 'chai';
 import fs from 'fs';
 import sinon, { SinonSandbox } from 'sinon';
 import sinonChai from 'sinon-chai';
-import { Readable } from 'stream';
 import * as winston from 'winston';
 
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
 import { fromB64Url } from '../lib/encoding.js';
-import { Chunk } from '../types.js';
-import { FsChunkCache } from './fs-chunk-cache.js';
+import { Chunk, ChunkDataStore } from '../types.js';
+import { FsChunkCache, FsChunkDataStore } from './fs-chunk-cache.js';
 
 chai.use(sinonChai);
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
@@ -18,15 +17,18 @@ const RELATIVE_OFFSET = 0;
 describe('FsChunkCache', () => {
   let log: winston.Logger;
   let chunkSource: ArweaveChunkSourceStub;
+  let chunkDataStore: ChunkDataStore;
   let chunkCache: FsChunkCache;
   let sandbox: SinonSandbox;
 
   before(() => {
     log = winston.createLogger({ silent: true });
     chunkSource = new ArweaveChunkSourceStub();
+    chunkDataStore = new FsChunkDataStore({ log });
     chunkCache = new FsChunkCache({
       log,
       chunkSource,
+      chunkDataStore,
     });
   });
 
@@ -61,8 +63,8 @@ describe('FsChunkCache', () => {
 
     it('should fetch chunk data from cache when available', async () => {
       // mock the file exists
-      const cacheGetSpy = sandbox
-        .stub(chunkCache, 'getChunkData')
+      const storeGetSpy = sandbox
+        .stub(chunkDataStore, 'get')
         .resolves(mockedChunkData);
       const networkSpy = sandbox.spy(
         chunkSource,
@@ -70,45 +72,43 @@ describe('FsChunkCache', () => {
       );
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
-        fromB64Url(B64_DATA_ROOT),
+        B64_DATA_ROOT,
         0,
       );
       expect(networkSpy).not.to.have.been.called;
-      expect(cacheGetSpy).to.have.been.called;
+      expect(storeGetSpy).to.have.been.called;
     });
 
     it('should fetch chunk data from network when not in local cache', async () => {
       // mock file does not exist
-      const cacheHasSpy = sandbox
-        .stub(chunkCache, 'hasChunkData')
-        .resolves(false);
-      const cacheGetSpy = sandbox.spy(chunkCache, 'getChunkData');
+      const storeHasSpy = sandbox.stub(chunkDataStore, 'has').resolves(false);
+      const storeGetSpy = sandbox.spy(chunkDataStore, 'get');
       const networkSpy = sandbox
         .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
         .resolves(mockedChunk);
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
-        fromB64Url(B64_DATA_ROOT),
+        B64_DATA_ROOT,
         0,
       );
-      expect(cacheGetSpy).to.have.been.called;
-      expect(cacheHasSpy).to.have.been.called;
+      expect(storeGetSpy).to.have.been.called;
+      expect(storeHasSpy).to.have.been.called;
       expect(networkSpy).to.have.been.called;
     });
 
     it('should fetch chunk data from network when an error occurs fetching from local cache', async () => {
-      const cacheHasSpy = sandbox.stub(chunkCache, 'hasChunkData').rejects();
-      const cacheGetSpy = sandbox.spy(chunkCache, 'getChunkData');
+      const storeHasSpy = sandbox.stub(chunkDataStore, 'has').rejects();
+      const storeGetSpy = sandbox.spy(chunkDataStore, 'get');
       const networkSpy = sandbox
         .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
         .resolves(mockedChunk);
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
         ABSOLUTE_OFFSET,
-        fromB64Url(B64_DATA_ROOT),
+        B64_DATA_ROOT,
         0,
       );
-      expect(cacheGetSpy).to.have.been.called;
-      expect(cacheHasSpy).to.have.been.called;
+      expect(storeGetSpy).to.have.been.called;
+      expect(storeHasSpy).to.have.been.called;
       expect(networkSpy).to.have.been.called;
     });
   });

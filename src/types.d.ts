@@ -135,17 +135,19 @@ export interface PartialJsonTransactionCache {
   del(txId: string): Promise<void>;
 }
 
-export interface ChunkDataCache {
-  hasChunkData(dataRoot: string, relativeOffset: number): Promise<boolean>;
-  getChunkData(
+export interface ChunkDataStore {
+  has(dataRoot: string, relativeOffset: number): Promise<boolean>;
+  get(dataRoot: string, relativeOffset: number): Promise<Buffer | undefined>;
+  set(data: Readable, dataRoot: string, relativeOffset: number): Promise<void>;
+}
+
+export interface ChunkMetadataStore {
+  has(dataRoot: string, relativeOffset: number): Promise<boolean>;
+  get(
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<Buffer | undefined>;
-  setChunkData(
-    data: Readable,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<void>;
+  ): Promise<ChunkMetadata | undefined>;
+  set(chunkMetadata: ChunkMetadata): Promise<void>;
 }
 
 export interface ChainSource {

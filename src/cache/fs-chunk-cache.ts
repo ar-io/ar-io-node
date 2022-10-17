@@ -11,9 +11,10 @@ import {
 import {
   ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
-  ChunkDataCache,
+  ChunkDataStore,
   ChunkMetadata,
   ChunkMetadataByAbsoluteOrRelativeOffsetSource,
+  ChunkMetadataStore,
 } from '../types.js';
 
 function chunkMetadataCacheDir(dataRoot: string) {
@@ -32,26 +33,14 @@ function chunkDataCachePath(dataRoot: string, relativeOffset: number) {
   return `${chunkDataCacheDir(dataRoot)}/${relativeOffset}`;
 }
 
-// TODO decouple read through source and cache
-// TODO rename to include something about being a read through cache
-export class FsChunkCache
-  implements ChunkDataByAbsoluteOrRelativeOffsetSource, ChunkDataCache
-{
+export class FsChunkDataStore implements ChunkDataStore {
   private log: winston.Logger;
-  private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
 
-  constructor({
-    log,
-    chunkSource,
-  }: {
-    log: winston.Logger;
-    chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
-  }) {
+  constructor({ log }: { log: winston.Logger }) {
     this.log = log.child({ class: this.constructor.name });
-    this.chunkSource = chunkSource;
   }
 
-  async hasChunkData(dataRoot: string, relativeOffset: number) {
+  async has(dataRoot: string, relativeOffset: number) {
     try {
       await fs.promises.access(
         chunkDataCachePath(dataRoot, relativeOffset),
@@ -63,12 +52,12 @@ export class FsChunkCache
     }
   }
 
-  async getChunkData(
+  async get(
     dataRoot: string,
     relativeOffset: number,
   ): Promise<Buffer | undefined> {
     try {
-      if (await this.hasChunkData(dataRoot, relativeOffset)) {
+      if (await this.has(dataRoot, relativeOffset)) {
         return await fs.promises.readFile(
           chunkDataCachePath(dataRoot, relativeOffset),
         );
@@ -85,7 +74,7 @@ export class FsChunkCache
     return undefined;
   }
 
-  async setChunkData(
+  async set(
     data: Readable,
     dataRoot: string,
     relativeOffset: number,
@@ -111,6 +100,26 @@ export class FsChunkCache
       });
     }
   }
+}
+
+export class FsChunkCache implements ChunkDataByAbsoluteOrRelativeOffsetSource {
+  private log: winston.Logger;
+  private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
+  private chunkStore: ChunkDataStore;
+
+  constructor({
+    log,
+    chunkSource,
+    chunkDataStore,
+  }: {
+    log: winston.Logger;
+    chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
+    chunkDataStore: ChunkDataStore;
+  }) {
+    this.log = log.child({ class: this.constructor.name });
+    this.chunkSource = chunkSource;
+    this.chunkStore = chunkDataStore;
+  }
 
   async getChunkDataByAbsoluteOrRelativeOffset(
     absoluteOffset: number,
@@ -118,8 +127,9 @@ export class FsChunkCache
     relativeOffset: number,
   ): Promise<Readable> {
     try {
-      const chunkDataPromise = this.getChunkData(dataRoot, relativeOffset).then(
-        async (cachedChunkData) => {
+      const chunkDataPromise = this.chunkStore
+        .get(dataRoot, relativeOffset)
+        .then(async (cachedChunkData) => {
           // Chunk is cached
           if (cachedChunkData) {
             this.log.info('Successfully fetched chunk data from cache', {
@@ -137,11 +147,10 @@ export class FsChunkCache
               relativeOffset,
             );
 
-          await this.setChunkData(chunkData, dataRoot, relativeOffset);
+          await this.chunkStore.set(chunkData, dataRoot, relativeOffset);
 
           return chunkData;
-        },
-      );
+        });
       const chunkData = await chunkDataPromise;
       return Readable.from(chunkData);
     } catch (error: any) {
@@ -157,24 +166,14 @@ export class FsChunkCache
   }
 }
 
-export class FsChunkMetadataCache
-  implements ChunkMetadataByAbsoluteOrRelativeOffsetSource
-{
+export class FsChunkMetadataStore implements ChunkMetadataStore {
   private log: winston.Logger;
-  private chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
 
-  constructor({
-    log,
-    chunkSource,
-  }: {
-    log: winston.Logger;
-    chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
-  }) {
+  constructor({ log }: { log: winston.Logger }) {
     this.log = log.child({ class: this.constructor.name });
-    this.chunkSource = chunkSource;
   }
 
-  async hasChunkMetadata(dataRoot: string, relativeOffset: number) {
+  async has(dataRoot: string, relativeOffset: number) {
     try {
       await fs.promises.access(
         chunkMetadataCachePath(dataRoot, relativeOffset),
@@ -186,12 +185,12 @@ export class FsChunkMetadataCache
     }
   }
 
-  async getChunkMetadata(
+  async get(
     dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkMetadata | undefined> {
     try {
-      if (await this.hasChunkMetadata(dataRoot, relativeOffset)) {
+      if (await this.has(dataRoot, relativeOffset)) {
         const msgpack = await fs.promises.readFile(
           chunkMetadataCachePath(dataRoot, relativeOffset),
         );
@@ -209,11 +208,11 @@ export class FsChunkMetadataCache
     return undefined;
   }
 
-  async setChunkMetadata(chunkMetadata: ChunkMetadata): Promise<void> {
+  async set(chunkMetadata: ChunkMetadata): Promise<void> {
     const { data_root, offset } = chunkMetadata;
-    const b64uDataRoot = toB64Url(data_root);
+    const dataRoot = toB64Url(data_root);
     try {
-      await fs.promises.mkdir(chunkMetadataCacheDir(b64uDataRoot), {
+      await fs.promises.mkdir(chunkMetadataCacheDir(dataRoot), {
         recursive: true,
       });
       const msgpack = toMsgpack(chunkMetadata);
@@ -222,17 +221,39 @@ export class FsChunkMetadataCache
         msgpack,
       );
       this.log.info('Successfully cached chunk metadata', {
-        dataRoot: b64uDataRoot,
+        dataRoot,
         relativeOffset: offset,
       });
     } catch (error: any) {
       this.log.error('Failed to set chunk metadata in cache:', {
-        dataRoot: b64uDataRoot,
+        dataRoot,
         relativeOffset: offset,
         message: error.message,
         stack: error.stack,
       });
     }
+  }
+}
+
+export class FsChunkMetadataCache
+  implements ChunkMetadataByAbsoluteOrRelativeOffsetSource
+{
+  private log: winston.Logger;
+  private chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
+  private chunkMetadataStore: ChunkMetadataStore;
+
+  constructor({
+    log,
+    chunkSource,
+    chunkMetadataStore,
+  }: {
+    log: winston.Logger;
+    chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
+    chunkMetadataStore: ChunkMetadataStore;
+  }) {
+    this.log = log.child({ class: this.constructor.name });
+    this.chunkSource = chunkSource;
+    this.chunkMetadataStore = chunkMetadataStore;
   }
 
   async getChunkMetadataByAbsoluteOrRelativeOffset(
@@ -241,37 +262,37 @@ export class FsChunkMetadataCache
     relativeOffset: number,
   ): Promise<ChunkMetadata> {
     try {
-      const chunkMetadataPromise = this.getChunkMetadata(
-        dataRoot,
-        relativeOffset,
-      ).then(async (cachedChunkMetadata) => {
-        // Chunk metadata is cached
-        if (cachedChunkMetadata) {
-          this.log.info('Successfully fetched chunk data from cache', {
-            dataRoot,
-            relativeOffset,
-          });
-          return cachedChunkMetadata;
-        }
+      const chunkMetadataPromise = this.chunkMetadataStore
+        .get(dataRoot, relativeOffset)
+        .then(async (cachedChunkMetadata) => {
+          // Chunk metadata is cached
+          if (cachedChunkMetadata) {
+            this.log.info('Successfully fetched chunk data from cache', {
+              dataRoot,
+              relativeOffset,
+            });
+            return cachedChunkMetadata;
+          }
 
-        // Fetch from ChunkSource
-        const chunk = await this.chunkSource.getChunkByAbsoluteOrRelativeOffset(
-          absoluteOffset,
-          dataRoot,
-          relativeOffset,
-        );
+          // Fetch from ChunkSource
+          const chunk =
+            await this.chunkSource.getChunkByAbsoluteOrRelativeOffset(
+              absoluteOffset,
+              dataRoot,
+              relativeOffset,
+            );
 
-        const chunkMetadata = {
-          data_root: fromB64Url(dataRoot),
-          data_size: chunk.chunk.length,
-          offset: relativeOffset,
-          data_path: chunk.data_path,
-        };
+          const chunkMetadata = {
+            data_root: fromB64Url(dataRoot),
+            data_size: chunk.chunk.length,
+            offset: relativeOffset,
+            data_path: chunk.data_path,
+          };
 
-        await this.setChunkMetadata(chunkMetadata);
+          await this.chunkMetadataStore.set(chunkMetadata);
 
-        return chunkMetadata;
-      });
+          return chunkMetadata;
+        });
 
       return await chunkMetadataPromise;
     } catch (error: any) {
