@@ -257,7 +257,7 @@ export class StandaloneSqliteDatabaseWorker {
         for (const row of rows.newTxTags) {
           this.stmts.core.upsertNewTransactionTag.run({
             ...row,
-            height
+            height,
           });
         }
 
@@ -267,7 +267,7 @@ export class StandaloneSqliteDatabaseWorker {
 
         this.stmts.core.upsertNewTransaction.run({
           ...rows.newTx,
-          height
+          height,
         });
 
         this.stmts.core.insertAsyncNewBlockTransaction.run({
@@ -447,7 +447,7 @@ export class StandaloneSqliteDatabaseWorker {
   saveTx(tx: PartialJsonTransaction) {
     const txId = fromB64Url(tx.id);
     const maybeTxHeight = this.stmts.core.selectMissingTransactionHeight.get({
-      transaction_id: txId
+      transaction_id: txId,
     })?.height;
     this.insertTxFn(tx, maybeTxHeight);
     this.stmts.core.deleteNewMissingTransaction.run({ transaction_id: txId });
