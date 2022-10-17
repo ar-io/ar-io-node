@@ -10,7 +10,9 @@ export let coreDb: Sqlite.Database;
 before(async () => {
   log.transports.forEach((t) => (t.silent = true));
   fs.readdirSync('test/tmp').forEach((file) => {
-    fs.unlinkSync(`test/tmp/${file}`);
+    if (file !== '.gitkeep') {
+      fs.unlinkSync(`test/tmp/${file}`);
+    }
   });
   coreDb = new Sqlite(coreDbPath);
   const schema = fs.readFileSync('test/schema.sql', 'utf8');
