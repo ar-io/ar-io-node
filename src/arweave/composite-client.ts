@@ -480,10 +480,10 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getTxField<T>(
+  async getTxField<K extends keyof PartialJsonTransaction>(
     txId: string,
-    field: keyof PartialJsonTransaction,
-  ): Promise<T> {
+    field: K,
+  ): Promise<PartialJsonTransaction[K]> {
     try {
       this.failureSimulator.maybeFail();
 

@@ -32,7 +32,7 @@ export class TxChunksDataSource implements TxDataSource {
 
     try {
       const [txDataRoot, txOffset] = await Promise.all([
-        this.chainSource.getTxField<string>(txId, 'data_root'),
+        this.chainSource.getTxField(txId, 'data_root'),
         this.chainSource.getTxOffset(txId),
       ]);
       const size = +txOffset.size;

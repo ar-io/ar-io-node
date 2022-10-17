@@ -90,12 +90,12 @@ export class ArweaveChainSourceStub implements ChainSource {
     }
   }
 
-  async getTxField<T>(
+  async getTxField<K extends keyof PartialJsonTransaction>(
     txId: string,
-    field: keyof PartialJsonTransaction,
-  ): Promise<T> {
+    field: K,
+  ): Promise<PartialJsonTransaction[K]> {
     const tx = await this.getTx(txId);
-    return tx[field] as T;
+    return tx[field];
   }
 
   async getBlockAndTxsByHeight(height: number) {
