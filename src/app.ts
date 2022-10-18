@@ -25,6 +25,8 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
+import { FsBlockStore } from './cache/fs-block-cache.js';
+import { FsTransactionStore } from './cache/fs-transaction-cache.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
@@ -71,6 +73,8 @@ const arweaveClient = new ArweaveCompositeClient({
   arweave,
   trustedNodeUrl,
   skipCache,
+  blockStore: new FsBlockStore({ log }),
+  txStore: new FsTransactionStore({ log }),
   failureSimulator: new UniformFailureSimulator({
     failureRate: simulatedRequestFailureRate,
   }),

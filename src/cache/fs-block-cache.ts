@@ -1,10 +1,17 @@
 import fs from 'fs';
 import path from 'path';
+import winston from 'winston';
 
 import { jsonBlockToMsgpack, msgpackToJsonBlock } from '../lib/encoding.js';
 import { PartialJsonBlock, PartialJsonBlockStore } from '../types.js';
 
 export class FsBlockStore implements PartialJsonBlockStore {
+  private log: winston.Logger;
+
+  constructor({ log }: { log: winston.Logger }) {
+    this.log = log.child({ class: this.constructor.name });
+  }
+
   private blockHashDir(hash: string) {
     const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
     return `data/headers/partial-blocks/hash/${blockPrefix}`;
@@ -46,12 +53,14 @@ export class FsBlockStore implements PartialJsonBlockStore {
         const blockData = await fs.promises.readFile(this.blockHashPath(hash));
         return msgpackToJsonBlock(blockData);
       }
-
-      return undefined;
-    } catch (error) {
-      // TODO log error
-      return undefined;
+    } catch (error: any) {
+      this.log.error('Failed to get block by hash', {
+        hash,
+        message: error.message,
+        stack: error.stack,
+      });
     }
+    return undefined;
   }
 
   async getByHeight(height: number) {
@@ -62,12 +71,14 @@ export class FsBlockStore implements PartialJsonBlockStore {
         );
         return msgpackToJsonBlock(blockData);
       }
-
-      return undefined;
-    } catch (error) {
-      // TODO log error
-      return undefined;
+    } catch (error: any) {
+      this.log.error('Failed to get block by height', {
+        height,
+        message: error.message,
+        stack: error.stack,
+      });
     }
+    return undefined;
   }
 
   async set(block: PartialJsonBlock, height?: number) {
@@ -95,8 +106,13 @@ export class FsBlockStore implements PartialJsonBlockStore {
         );
         await fs.promises.symlink(targetPath, this.blockHeightPath(height));
       }
-    } catch (error) {
-      // TODO log error
+    } catch (error: any) {
+      this.log.error('Failed to set block', {
+        hash: block.indep_hash,
+        height,
+        message: error.message,
+        stack: error.stack,
+      });
     }
   }
 
@@ -105,8 +121,12 @@ export class FsBlockStore implements PartialJsonBlockStore {
       if (await this.hasHash(hash)) {
         await fs.promises.unlink(this.blockHashPath(hash));
       }
-    } catch (error) {
-      // TODO log error
+    } catch (error: any) {
+      this.log.error('Failed to delete block by hash', {
+        hash: hash,
+        message: error.message,
+        stack: error.stack,
+      });
     }
   }
 
@@ -120,8 +140,12 @@ export class FsBlockStore implements PartialJsonBlockStore {
         }
         await fs.promises.unlink(this.blockHeightPath(height));
       }
-    } catch (error) {
-      // TODO log error
+    } catch (error: any) {
+      this.log.error('Failed to delete block by height', {
+        height: height,
+        message: error.message,
+        stack: error.stack,
+      });
     }
   }
 }

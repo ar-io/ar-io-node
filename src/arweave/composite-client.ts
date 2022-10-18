@@ -26,8 +26,6 @@ import { Readable } from 'stream';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
-import { FsBlockStore } from '../cache/fs-block-cache.js';
-import { FsTransactionStore } from '../cache/fs-transaction-cache.js';
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
 import {
@@ -74,8 +72,8 @@ export class ArweaveCompositeClient
   private arweave: Arweave;
   private log: winston.Logger;
   private failureSimulator: FailureSimulator;
-  private txCache: PartialJsonTransactionStore;
-  private blockCache: PartialJsonBlockStore;
+  private txStore: PartialJsonTransactionStore;
+  private blockStore: PartialJsonBlockStore;
   private skipCache: boolean;
 
   // Trusted node
@@ -121,6 +119,8 @@ export class ArweaveCompositeClient
     metricsRegistry,
     arweave,
     trustedNodeUrl,
+    blockStore,
+    txStore,
     failureSimulator,
     requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
     requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
@@ -134,6 +134,8 @@ export class ArweaveCompositeClient
     metricsRegistry: promClient.Registry;
     arweave: Arweave;
     trustedNodeUrl: string;
+    blockStore: PartialJsonBlockStore;
+    txStore: PartialJsonTransactionStore;
     failureSimulator: FailureSimulator;
     requestTimeout?: number;
     requestRetryCount?: number;
@@ -148,8 +150,8 @@ export class ArweaveCompositeClient
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.failureSimulator = failureSimulator;
-    this.txCache = new FsTransactionStore();
-    this.blockCache = new FsBlockStore();
+    this.txStore = txStore;
+    this.blockStore = blockStore;
     this.skipCache = skipCache;
 
     // Initialize trusted node Axios with automatic retries
@@ -252,7 +254,7 @@ export class ArweaveCompositeClient
     let blockPromise = this.blockByHeightPromiseCache.get(height);
 
     if (!blockPromise) {
-      blockPromise = this.blockCache
+      blockPromise = this.blockStore
         .getByHeight(height)
         .then((block) => {
           this.failureSimulator.maybeFail();
@@ -279,7 +281,7 @@ export class ArweaveCompositeClient
           try {
             sanityCheckBlock(block);
 
-            await this.blockCache.set(
+            await this.blockStore.set(
               block,
               // Only cache height for stable blocks (where height doesn't change)
               this.maxPrefetchHeight - block.height > MAX_FORK_DEPTH
@@ -296,8 +298,8 @@ export class ArweaveCompositeClient
 
             return block;
           } catch (error) {
-            this.blockCache.delByHeight(height);
-            this.blockCache.delByHash(block.indep_hash);
+            this.blockStore.delByHeight(height);
+            this.blockStore.delByHash(block.indep_hash);
           }
         })
         .catch((error) => {
@@ -392,7 +394,7 @@ export class ArweaveCompositeClient
       >;
     }
 
-    const responsePromise = this.txCache
+    const responsePromise = this.txStore
       .get(txId)
       .then((tx) => {
         this.failureSimulator.maybeFail();
@@ -422,10 +424,10 @@ export class ArweaveCompositeClient
       .then(async (tx) => {
         try {
           sanityCheckTx(tx);
-          await this.txCache.set(tx);
+          await this.txStore.set(tx);
           return tx;
         } catch (error) {
-          this.txCache.del(txId);
+          this.txStore.del(txId);
         }
       })
       .catch((error) => {

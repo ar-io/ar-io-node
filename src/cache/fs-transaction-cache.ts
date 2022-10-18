@@ -1,4 +1,5 @@
 import fs from 'fs';
+import winston from 'winston';
 
 import { jsonTxToMsgpack, msgpackToJsonTx } from '../lib/encoding.js';
 import {
@@ -7,6 +8,12 @@ import {
 } from '../types.js';
 
 export class FsTransactionStore implements PartialJsonTransactionStore {
+  private log: winston.Logger;
+
+  constructor({ log }: { log: winston.Logger }) {
+    this.log = log.child({ class: this.constructor.name });
+  }
+
   private txDir(txId: string) {
     const txPrefix = `${txId.substring(0, 2)}/${txId.substring(2, 4)}`;
     return `data/headers/partial-txs/${txPrefix}`;
@@ -29,10 +36,14 @@ export class FsTransactionStore implements PartialJsonTransactionStore {
     try {
       const txData = await fs.promises.readFile(this.txPath(txId));
       return msgpackToJsonTx(txData);
-    } catch (error) {
-      // TODO log error
-      return undefined;
+    } catch (error: any) {
+      this.log.error('Failed to get transaction', {
+        txId,
+        message: error.message,
+        stack: error.stack,
+      });
     }
+    return undefined;
   }
 
   async set(tx: PartialJsonTransaction) {
@@ -40,8 +51,12 @@ export class FsTransactionStore implements PartialJsonTransactionStore {
       await fs.promises.mkdir(this.txDir(tx.id), { recursive: true });
       const txData = jsonTxToMsgpack(tx);
       await fs.promises.writeFile(this.txPath(tx.id), txData);
-    } catch (error) {
-      // TODO log error
+    } catch (error: any) {
+      this.log.error('Failed to set transaction', {
+        txId: tx.id,
+        message: error.message,
+        stack: error.stack,
+      });
     }
   }
 
@@ -50,8 +65,12 @@ export class FsTransactionStore implements PartialJsonTransactionStore {
       if (await this.has(txId)) {
         await fs.promises.unlink(this.txPath(txId));
       }
-    } catch (error) {
-      // TODO log error
+    } catch (error: any) {
+      this.log.error('Failed to delete transaction', {
+        txId,
+        message: error.message,
+        stack: error.stack,
+      });
     }
   }
 }
