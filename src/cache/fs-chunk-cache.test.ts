@@ -7,7 +7,7 @@ import * as winston from 'winston';
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
 import { fromB64Url } from '../lib/encoding.js';
 import { Chunk, ChunkDataStore } from '../types.js';
-import { FsChunkCache, FsChunkDataStore } from './fs-chunk-cache.js';
+import { FsChunkDataStore, FsChunkStore } from './fs-chunk-cache.js';
 
 chai.use(sinonChai);
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
@@ -18,14 +18,14 @@ describe('FsChunkCache', () => {
   let log: winston.Logger;
   let chunkSource: ArweaveChunkSourceStub;
   let chunkDataStore: ChunkDataStore;
-  let chunkCache: FsChunkCache;
+  let chunkCache: FsChunkStore;
   let sandbox: SinonSandbox;
 
   before(() => {
     log = winston.createLogger({ silent: true });
     chunkSource = new ArweaveChunkSourceStub();
     chunkDataStore = new FsChunkDataStore({ log });
-    chunkCache = new FsChunkCache({
+    chunkCache = new FsChunkStore({
       log,
       chunkSource,
       chunkDataStore,

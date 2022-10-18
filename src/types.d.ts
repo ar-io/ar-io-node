@@ -118,7 +118,7 @@ export interface DataItem {
   data_size: bigint;
 }
 
-export interface PartialJsonBlockCache {
+export interface PartialJsonBlockStore {
   hasHash(hash: string): Promise<boolean>;
   hasHeight(height: number): Promise<boolean>;
   getByHash(hash: string): Promise<PartialJsonBlock | undefined>;
@@ -128,7 +128,7 @@ export interface PartialJsonBlockCache {
   set(block: PartialJsonBlock, height?: number): Promise<void>;
 }
 
-export interface PartialJsonTransactionCache {
+export interface PartialJsonTransactionStore {
   has(txId: string): Promise<boolean>;
   get(txId: string): Promise<PartialJsonTransaction | undefined>;
   set(tx: PartialJsonTransaction): Promise<void>;

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { jsonBlockToMsgpack, msgpackToJsonBlock } from '../lib/encoding.js';
-import { PartialJsonBlock, PartialJsonBlockCache } from '../types.js';
+import { PartialJsonBlock, PartialJsonBlockStore } from '../types.js';
 
 function blockCacheHashDir(hash: string) {
   const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
@@ -21,7 +21,7 @@ function blockCacheHeightPath(height: number) {
   return `${blockCacheHeightDir(height)}/${height}.msgpack`;
 }
 
-export class FsBlockCache implements PartialJsonBlockCache {
+export class FsBlockCache implements PartialJsonBlockStore {
   async hasHash(hash: string) {
     try {
       await fs.promises.access(blockCacheHashPath(hash), fs.constants.F_OK);

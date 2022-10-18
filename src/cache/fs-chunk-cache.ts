@@ -102,7 +102,7 @@ export class FsChunkDataStore implements ChunkDataStore {
   }
 }
 
-export class FsChunkCache implements ChunkDataByAbsoluteOrRelativeOffsetSource {
+export class FsChunkStore implements ChunkDataByAbsoluteOrRelativeOffsetSource {
   private log: winston.Logger;
   private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
   private chunkStore: ChunkDataStore;

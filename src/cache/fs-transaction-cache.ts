@@ -3,7 +3,7 @@ import fs from 'fs';
 import { jsonTxToMsgpack, msgpackToJsonTx } from '../lib/encoding.js';
 import {
   PartialJsonTransaction,
-  PartialJsonTransactionCache,
+  PartialJsonTransactionStore,
 } from '../types.js';
 
 function txCacheDir(txId: string) {
@@ -15,7 +15,7 @@ function txCachePath(txId: string) {
   return `${txCacheDir(txId)}/${txId}.msgpack`;
 }
 
-export class FsTransactionCache implements PartialJsonTransactionCache {
+export class FsTransactionCache implements PartialJsonTransactionStore {
   async has(txId: string) {
     try {
       await fs.promises.access(txCachePath(txId), fs.constants.F_OK);

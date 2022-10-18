@@ -43,9 +43,9 @@ import {
   ChunkDataByAbsoluteOrRelativeOffsetSource,
   JsonTransactionOffset,
   PartialJsonBlock,
-  PartialJsonBlockCache,
+  PartialJsonBlockStore,
   PartialJsonTransaction,
-  PartialJsonTransactionCache,
+  PartialJsonTransactionStore,
   TxDataSource,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
@@ -74,8 +74,8 @@ export class ArweaveCompositeClient
   private arweave: Arweave;
   private log: winston.Logger;
   private failureSimulator: FailureSimulator;
-  private txCache: PartialJsonTransactionCache;
-  private blockCache: PartialJsonBlockCache;
+  private txCache: PartialJsonTransactionStore;
+  private blockCache: PartialJsonBlockStore;
   private skipCache: boolean;
 
   // Trusted node
