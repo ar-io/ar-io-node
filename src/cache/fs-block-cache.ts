@@ -4,27 +4,30 @@ import path from 'path';
 import { jsonBlockToMsgpack, msgpackToJsonBlock } from '../lib/encoding.js';
 import { PartialJsonBlock, PartialJsonBlockStore } from '../types.js';
 
-function blockCacheHashDir(hash: string) {
-  const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
-  return `data/headers/partial-blocks/hash/${blockPrefix}`;
-}
-
-function blockCacheHashPath(hash: string) {
-  return `${blockCacheHashDir(hash)}/${hash}.msgpack`;
-}
-
-function blockCacheHeightDir(height: number) {
-  return `data/headers/partial-blocks/height/${height % 1000}`;
-}
-
-function blockCacheHeightPath(height: number) {
-  return `${blockCacheHeightDir(height)}/${height}.msgpack`;
-}
-
 export class FsBlockCache implements PartialJsonBlockStore {
+  private blockCacheHashDir(hash: string) {
+    const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
+    return `data/headers/partial-blocks/hash/${blockPrefix}`;
+  }
+
+  private blockCacheHashPath(hash: string) {
+    return `${this.blockCacheHashDir(hash)}/${hash}.msgpack`;
+  }
+
+  private blockCacheHeightDir(height: number) {
+    return `data/headers/partial-blocks/height/${height % 1000}`;
+  }
+
+  private blockCacheHeightPath(height: number) {
+    return `${this.blockCacheHeightDir(height)}/${height}.msgpack`;
+  }
+
   async hasHash(hash: string) {
     try {
-      await fs.promises.access(blockCacheHashPath(hash), fs.constants.F_OK);
+      await fs.promises.access(
+        this.blockCacheHashPath(hash),
+        fs.constants.F_OK,
+      );
       return true;
     } catch (error) {
       return false;
@@ -33,7 +36,10 @@ export class FsBlockCache implements PartialJsonBlockStore {
 
   async hasHeight(height: number) {
     try {
-      await fs.promises.access(blockCacheHeightPath(height), fs.constants.F_OK);
+      await fs.promises.access(
+        this.blockCacheHeightPath(height),
+        fs.constants.F_OK,
+      );
       return true;
     } catch (error) {
       return false;
@@ -43,7 +49,9 @@ export class FsBlockCache implements PartialJsonBlockStore {
   async getByHash(hash: string) {
     try {
       if (await this.hasHash(hash)) {
-        const blockData = await fs.promises.readFile(blockCacheHashPath(hash));
+        const blockData = await fs.promises.readFile(
+          this.blockCacheHashPath(hash),
+        );
         return msgpackToJsonBlock(blockData);
       }
 
@@ -58,7 +66,7 @@ export class FsBlockCache implements PartialJsonBlockStore {
     try {
       if (await this.hasHeight(height)) {
         const blockData = await fs.promises.readFile(
-          blockCacheHeightPath(height),
+          this.blockCacheHeightPath(height),
         );
         return msgpackToJsonBlock(blockData);
       }
@@ -73,27 +81,30 @@ export class FsBlockCache implements PartialJsonBlockStore {
   async set(block: PartialJsonBlock, height?: number) {
     try {
       if (!(await this.hasHash(block.indep_hash))) {
-        await fs.promises.mkdir(blockCacheHashDir(block.indep_hash), {
+        await fs.promises.mkdir(this.blockCacheHashDir(block.indep_hash), {
           recursive: true,
         });
 
         const blockData = jsonBlockToMsgpack(block);
         await fs.promises.writeFile(
-          blockCacheHashPath(block.indep_hash),
+          this.blockCacheHashPath(block.indep_hash),
           blockData,
         );
       }
 
       if (height && !(await this.hasHeight(height))) {
-        await fs.promises.mkdir(blockCacheHeightDir(height), {
+        await fs.promises.mkdir(this.blockCacheHeightDir(height), {
           recursive: true,
         });
 
         const targetPath = path.relative(
-          `${process.cwd()}/${blockCacheHeightDir(height)}`,
-          `${process.cwd()}/${blockCacheHashPath(block.indep_hash)}`,
+          `${process.cwd()}/${this.blockCacheHeightDir(height)}`,
+          `${process.cwd()}/${this.blockCacheHashPath(block.indep_hash)}`,
         );
-        await fs.promises.symlink(targetPath, blockCacheHeightPath(height));
+        await fs.promises.symlink(
+          targetPath,
+          this.blockCacheHeightPath(height),
+        );
       }
     } catch (error) {
       // TODO log error
@@ -103,7 +114,7 @@ export class FsBlockCache implements PartialJsonBlockStore {
   async delByHash(hash: string) {
     try {
       if (await this.hasHash(hash)) {
-        await fs.promises.unlink(blockCacheHashPath(hash));
+        await fs.promises.unlink(this.blockCacheHashPath(hash));
       }
     } catch (error) {
       // TODO log error
@@ -116,9 +127,9 @@ export class FsBlockCache implements PartialJsonBlockStore {
         const block = await this.getByHeight(height);
         const hash = block?.indep_hash;
         if (hash) {
-          await fs.promises.unlink(blockCacheHashPath(hash));
+          await fs.promises.unlink(this.blockCacheHashPath(hash));
         }
-        await fs.promises.unlink(blockCacheHeightPath(height));
+        await fs.promises.unlink(this.blockCacheHeightPath(height));
       }
     } catch (error) {
       // TODO log error

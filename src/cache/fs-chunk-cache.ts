@@ -17,22 +17,6 @@ import {
   ChunkMetadataStore,
 } from '../types.js';
 
-function chunkMetadataCacheDir(dataRoot: string) {
-  return `data/chunks/${dataRoot}/metadata/`;
-}
-
-function chunkMetadataCachePath(dataRoot: string, relativeOffset: number) {
-  return `${chunkMetadataCacheDir(dataRoot)}/${relativeOffset}`;
-}
-
-function chunkDataCacheDir(dataRoot: string) {
-  return `data/chunks/${dataRoot}/data/`;
-}
-
-function chunkDataCachePath(dataRoot: string, relativeOffset: number) {
-  return `${chunkDataCacheDir(dataRoot)}/${relativeOffset}`;
-}
-
 export class FsChunkDataStore implements ChunkDataStore {
   private log: winston.Logger;
 
@@ -40,10 +24,18 @@ export class FsChunkDataStore implements ChunkDataStore {
     this.log = log.child({ class: this.constructor.name });
   }
 
+  private chunkDataCacheDir(dataRoot: string) {
+    return `data/chunks/${dataRoot}/data/`;
+  }
+
+  private chunkDataCachePath(dataRoot: string, relativeOffset: number) {
+    return `${this.chunkDataCacheDir(dataRoot)}/${relativeOffset}`;
+  }
+
   async has(dataRoot: string, relativeOffset: number) {
     try {
       await fs.promises.access(
-        chunkDataCachePath(dataRoot, relativeOffset),
+        this.chunkDataCachePath(dataRoot, relativeOffset),
         fs.constants.F_OK,
       );
       return true;
@@ -59,7 +51,7 @@ export class FsChunkDataStore implements ChunkDataStore {
     try {
       if (await this.has(dataRoot, relativeOffset)) {
         return await fs.promises.readFile(
-          chunkDataCachePath(dataRoot, relativeOffset),
+          this.chunkDataCachePath(dataRoot, relativeOffset),
         );
       }
     } catch (error: any) {
@@ -80,11 +72,11 @@ export class FsChunkDataStore implements ChunkDataStore {
     relativeOffset: number,
   ): Promise<void> {
     try {
-      await fs.promises.mkdir(chunkDataCacheDir(dataRoot), {
+      await fs.promises.mkdir(this.chunkDataCacheDir(dataRoot), {
         recursive: true,
       });
       await fs.promises.writeFile(
-        chunkDataCachePath(dataRoot, relativeOffset),
+        this.chunkDataCachePath(dataRoot, relativeOffset),
         data,
       );
       this.log.info('Successfully cached chunk data', {
@@ -173,10 +165,18 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
     this.log = log.child({ class: this.constructor.name });
   }
 
+  private chunkMetadataCacheDir(dataRoot: string) {
+    return `data/chunks/${dataRoot}/metadata/`;
+  }
+
+  private chunkMetadataCachePath(dataRoot: string, relativeOffset: number) {
+    return `${this.chunkMetadataCacheDir(dataRoot)}/${relativeOffset}`;
+  }
+
   async has(dataRoot: string, relativeOffset: number) {
     try {
       await fs.promises.access(
-        chunkMetadataCachePath(dataRoot, relativeOffset),
+        this.chunkMetadataCachePath(dataRoot, relativeOffset),
         fs.constants.F_OK,
       );
       return true;
@@ -192,7 +192,7 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
     try {
       if (await this.has(dataRoot, relativeOffset)) {
         const msgpack = await fs.promises.readFile(
-          chunkMetadataCachePath(dataRoot, relativeOffset),
+          this.chunkMetadataCachePath(dataRoot, relativeOffset),
         );
         return fromMsgpack(msgpack) as ChunkMetadata;
       }
@@ -212,12 +212,12 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
     const { data_root, offset } = chunkMetadata;
     const dataRoot = toB64Url(data_root);
     try {
-      await fs.promises.mkdir(chunkMetadataCacheDir(dataRoot), {
+      await fs.promises.mkdir(this.chunkMetadataCacheDir(dataRoot), {
         recursive: true,
       });
       const msgpack = toMsgpack(chunkMetadata);
       await fs.promises.writeFile(
-        chunkMetadataCachePath(toB64Url(data_root), offset),
+        this.chunkMetadataCachePath(toB64Url(data_root), offset),
         msgpack,
       );
       this.log.info('Successfully cached chunk metadata', {
