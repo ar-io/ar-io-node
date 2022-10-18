@@ -9,14 +9,16 @@ import {
 
 export class FsTransactionStore implements PartialJsonTransactionStore {
   private log: winston.Logger;
+  private baseDir: string;
 
-  constructor({ log }: { log: winston.Logger }) {
+  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
     this.log = log.child({ class: this.constructor.name });
+    this.baseDir = baseDir;
   }
 
   private txDir(txId: string) {
     const txPrefix = `${txId.substring(0, 2)}/${txId.substring(2, 4)}`;
-    return `data/headers/partial-txs/${txPrefix}`;
+    return `${this.baseDir}/${txPrefix}`;
   }
 
   private txPath(txId: string) {

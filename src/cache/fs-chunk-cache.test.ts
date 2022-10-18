@@ -24,7 +24,10 @@ describe('FsChunkCache', () => {
   before(() => {
     log = winston.createLogger({ silent: true });
     chunkSource = new ArweaveChunkSourceStub();
-    chunkDataStore = new FsChunkDataStore({ log });
+    chunkDataStore = new FsChunkDataStore({
+      log,
+      baseDir: 'data/chunks',
+    });
     chunkCache = new FsChunkStore({
       log,
       chunkSource,

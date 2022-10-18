@@ -7,14 +7,16 @@ import { PartialJsonBlock, PartialJsonBlockStore } from '../types.js';
 
 export class FsBlockStore implements PartialJsonBlockStore {
   private log: winston.Logger;
+  private baseDir: string;
 
-  constructor({ log }: { log: winston.Logger }) {
+  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
     this.log = log.child({ class: this.constructor.name });
+    this.baseDir = baseDir;
   }
 
   private blockHashDir(hash: string) {
     const blockPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
-    return `data/headers/partial-blocks/hash/${blockPrefix}`;
+    return `${this.baseDir}/hash/${blockPrefix}`;
   }
 
   private blockHashPath(hash: string) {

@@ -19,13 +19,15 @@ import {
 
 export class FsChunkDataStore implements ChunkDataStore {
   private log: winston.Logger;
+  private baseDir: string;
 
-  constructor({ log }: { log: winston.Logger }) {
+  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
     this.log = log.child({ class: this.constructor.name });
+    this.baseDir = baseDir;
   }
 
   private chunkDataDir(dataRoot: string) {
-    return `data/chunks/${dataRoot}/data/`;
+    return `${this.baseDir}/${dataRoot}/data/`;
   }
 
   private chunkDataPath(dataRoot: string, relativeOffset: number) {
