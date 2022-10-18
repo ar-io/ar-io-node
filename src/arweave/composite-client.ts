@@ -26,8 +26,8 @@ import { Readable } from 'stream';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
-import { FsBlockCache } from '../cache/fs-block-cache.js';
-import { FsTransactionCache } from '../cache/fs-transaction-cache.js';
+import { FsBlockStore } from '../cache/fs-block-cache.js';
+import { FsTransactionStore } from '../cache/fs-transaction-cache.js';
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
 import {
@@ -148,8 +148,8 @@ export class ArweaveCompositeClient
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.failureSimulator = failureSimulator;
-    this.txCache = new FsTransactionCache();
-    this.blockCache = new FsBlockCache();
+    this.txCache = new FsTransactionStore();
+    this.blockCache = new FsBlockStore();
     this.skipCache = skipCache;
 
     // Initialize trusted node Axios with automatic retries
