@@ -1,13 +1,7 @@
-import fs from 'fs';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import {
-  fromB64Url,
-  fromMsgpack,
-  toB64Url,
-  toMsgpack,
-} from '../lib/encoding.js';
+import { fromB64Url } from '../lib/encoding.js';
 import {
   ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
@@ -17,86 +11,9 @@ import {
   ChunkMetadataStore,
 } from '../types.js';
 
-export class FsChunkDataStore implements ChunkDataStore {
-  private log: winston.Logger;
-  private baseDir: string;
-
-  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
-    this.log = log.child({ class: this.constructor.name });
-    this.baseDir = baseDir;
-  }
-
-  private chunkDataDir(dataRoot: string) {
-    return `${this.baseDir}/${dataRoot}/data/`;
-  }
-
-  private chunkDataPath(dataRoot: string, relativeOffset: number) {
-    return `${this.chunkDataDir(dataRoot)}/${relativeOffset}`;
-  }
-
-  async has(dataRoot: string, relativeOffset: number) {
-    try {
-      await fs.promises.access(
-        this.chunkDataPath(dataRoot, relativeOffset),
-        fs.constants.F_OK,
-      );
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  async get(
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<Buffer | undefined> {
-    try {
-      if (await this.has(dataRoot, relativeOffset)) {
-        return await fs.promises.readFile(
-          this.chunkDataPath(dataRoot, relativeOffset),
-        );
-      }
-    } catch (error: any) {
-      this.log.error('Failed to fetch chunk data from cache', {
-        dataRoot,
-        relativeOffset,
-        message: error.message,
-        stack: error.stack,
-      });
-    }
-
-    return undefined;
-  }
-
-  async set(
-    data: Readable,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<void> {
-    try {
-      await fs.promises.mkdir(this.chunkDataDir(dataRoot), {
-        recursive: true,
-      });
-      await fs.promises.writeFile(
-        this.chunkDataPath(dataRoot, relativeOffset),
-        data,
-      );
-      this.log.info('Successfully cached chunk data', {
-        dataRoot,
-        relativeOffset,
-      });
-    } catch (error: any) {
-      this.log.error('Failed to set chunk data in cache:', {
-        dataRoot,
-        relativeOffset,
-        message: error.message,
-        stack: error.stack,
-      });
-    }
-  }
-}
-
-export class FsChunkStore implements ChunkDataByAbsoluteOrRelativeOffsetSource {
+export class ReadThroughChunkCache
+  implements ChunkDataByAbsoluteOrRelativeOffsetSource
+{
   private log: winston.Logger;
   private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
   private chunkStore: ChunkDataStore;
@@ -160,84 +77,7 @@ export class FsChunkStore implements ChunkDataByAbsoluteOrRelativeOffsetSource {
   }
 }
 
-export class FsChunkMetadataStore implements ChunkMetadataStore {
-  private log: winston.Logger;
-
-  constructor({ log }: { log: winston.Logger }) {
-    this.log = log.child({ class: this.constructor.name });
-  }
-
-  private chunkMetadataDir(dataRoot: string) {
-    return `data/chunks/${dataRoot}/metadata/`;
-  }
-
-  private chunkMetadataPath(dataRoot: string, relativeOffset: number) {
-    return `${this.chunkMetadataDir(dataRoot)}/${relativeOffset}`;
-  }
-
-  async has(dataRoot: string, relativeOffset: number) {
-    try {
-      await fs.promises.access(
-        this.chunkMetadataPath(dataRoot, relativeOffset),
-        fs.constants.F_OK,
-      );
-      return true;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  async get(
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<ChunkMetadata | undefined> {
-    try {
-      if (await this.has(dataRoot, relativeOffset)) {
-        const msgpack = await fs.promises.readFile(
-          this.chunkMetadataPath(dataRoot, relativeOffset),
-        );
-        return fromMsgpack(msgpack) as ChunkMetadata;
-      }
-    } catch (error: any) {
-      this.log.error('Failed to fetch chunk data from cache', {
-        dataRoot,
-        relativeOffset,
-        message: error.message,
-        stack: error.stack,
-      });
-    }
-
-    return undefined;
-  }
-
-  async set(chunkMetadata: ChunkMetadata): Promise<void> {
-    const { data_root, offset } = chunkMetadata;
-    const dataRoot = toB64Url(data_root);
-    try {
-      await fs.promises.mkdir(this.chunkMetadataDir(dataRoot), {
-        recursive: true,
-      });
-      const msgpack = toMsgpack(chunkMetadata);
-      await fs.promises.writeFile(
-        this.chunkMetadataPath(toB64Url(data_root), offset),
-        msgpack,
-      );
-      this.log.info('Successfully cached chunk metadata', {
-        dataRoot,
-        relativeOffset: offset,
-      });
-    } catch (error: any) {
-      this.log.error('Failed to set chunk metadata in cache:', {
-        dataRoot,
-        relativeOffset: offset,
-        message: error.message,
-        stack: error.stack,
-      });
-    }
-  }
-}
-
-export class FsChunkMetadataCache
+export class ReadThroughChunkMetadataCache
   implements ChunkMetadataByAbsoluteOrRelativeOffsetSource
 {
   private log: winston.Logger;

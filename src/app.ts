@@ -25,12 +25,12 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
-import { FsBlockStore } from './cache/fs-block-cache.js';
-import { FsTransactionStore } from './cache/fs-transaction-cache.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
+import { FsBlockStore } from './store/fs-block-store.js';
+import { FsTransactionStore } from './store/fs-transaction-store.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';

@@ -6,19 +6,20 @@ import * as winston from 'winston';
 
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
 import { fromB64Url } from '../lib/encoding.js';
+import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
 import { Chunk, ChunkDataStore } from '../types.js';
-import { FsChunkDataStore, FsChunkStore } from './fs-chunk-cache.js';
+import { ReadThroughChunkCache } from './fs-chunk-cache.js';
 
 chai.use(sinonChai);
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
 const ABSOLUTE_OFFSET = 51530681327863;
 const RELATIVE_OFFSET = 0;
 
-describe('FsChunkCache', () => {
+describe('ReadThroughChunkCache', () => {
   let log: winston.Logger;
   let chunkSource: ArweaveChunkSourceStub;
   let chunkDataStore: ChunkDataStore;
-  let chunkCache: FsChunkStore;
+  let chunkCache: ReadThroughChunkCache;
   let sandbox: SinonSandbox;
 
   before(() => {
@@ -28,7 +29,7 @@ describe('FsChunkCache', () => {
       log,
       baseDir: 'data/chunks',
     });
-    chunkCache = new FsChunkStore({
+    chunkCache = new ReadThroughChunkCache({
       log,
       chunkSource,
       chunkDataStore,
