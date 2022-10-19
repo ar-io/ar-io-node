@@ -24,7 +24,7 @@ export class FsBlockStore implements PartialJsonBlockStore {
   }
 
   private blockHeightDir(height: number) {
-    return `data/headers/partial-blocks/height/${height % 1000}`;
+    return `${this.baseDir}/height/${height % 1000}`;
   }
 
   private blockHeightPath(height: number) {
