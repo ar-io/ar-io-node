@@ -8,18 +8,18 @@ import { ArweaveChunkSourceStub } from '../../test/stubs.js';
 import { fromB64Url } from '../lib/encoding.js';
 import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
 import { Chunk, ChunkDataStore } from '../types.js';
-import { ReadThroughChunkCache } from './fs-chunk-cache.js';
+import { ReadThroughChunkDataCache } from './read-through-chunk-data-cache.js';
 
 chai.use(sinonChai);
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
 const ABSOLUTE_OFFSET = 51530681327863;
 const RELATIVE_OFFSET = 0;
 
-describe('ReadThroughChunkCache', () => {
+describe('ReadThroughChunkDataCache', () => {
   let log: winston.Logger;
   let chunkSource: ArweaveChunkSourceStub;
   let chunkDataStore: ChunkDataStore;
-  let chunkCache: ReadThroughChunkCache;
+  let chunkCache: ReadThroughChunkDataCache;
   let sandbox: SinonSandbox;
 
   before(() => {
@@ -29,7 +29,7 @@ describe('ReadThroughChunkCache', () => {
       log,
       baseDir: 'data/chunks',
     });
-    chunkCache = new ReadThroughChunkCache({
+    chunkCache = new ReadThroughChunkDataCache({
       log,
       chunkSource,
       chunkDataStore,
@@ -43,6 +43,8 @@ describe('ReadThroughChunkCache', () => {
   afterEach(() => {
     sandbox.restore();
   });
+
+  // TODO remove mocks from tests
 
   describe('getChunkDataByAbsoluteOrRelativeOffset', () => {
     let mockedChunk: Chunk;
