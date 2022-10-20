@@ -1,6 +1,5 @@
 import winston from 'winston';
 
-import { fromB64Url } from '../lib/encoding.js';
 import {
   ChunkByAbsoluteOrRelativeOffsetSource,
   ChunkMetadata,
@@ -58,10 +57,11 @@ export class ReadThroughChunkMetadataCache
           // TODO extract chunk data sha256 from data_path
 
           const chunkMetadata = {
-            data_root: fromB64Url(dataRoot),
+            data_root: chunk.tx_path.slice(-64, -32),
             data_size: chunk.chunk.length,
             offset: relativeOffset,
             data_path: chunk.data_path,
+            sha256: chunk.data_path.slice(-64, -32),
           };
 
           await this.chunkMetadataStore.set(chunkMetadata);

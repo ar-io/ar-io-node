@@ -276,6 +276,7 @@ export interface ChunkMetadata {
   data_size: number;
   offset: number;
   data_path: Buffer;
+  sha256: Buffer;
 }
 
 export interface ChunkByAbsoluteOrRelativeOffsetSource {
