@@ -464,44 +464,28 @@ export class ArweaveCompositeClient
   }
 
   async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
-    try {
-      this.failureSimulator.maybeFail();
+    this.failureSimulator.maybeFail();
 
-      const response = await this.trustedNodeRequestQueue.push({
+    return (
+      await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/offset`,
-      });
-      return response.data;
-    } catch (error: any) {
-      this.log.error('Failed to get transaction offset:', {
-        txId,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
+      })
+    ).data;
   }
 
   async getTxField<K extends keyof PartialJsonTransaction>(
     txId: string,
     field: K,
   ): Promise<PartialJsonTransaction[K]> {
-    try {
-      this.failureSimulator.maybeFail();
+    this.failureSimulator.maybeFail();
 
-      const response = await this.trustedNodeRequestQueue.push({
+    return (
+      await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/${field}`,
-      });
-      return response.data;
-    } catch (error: any) {
-      this.log.error(`Failed to get transaction ${field}:`, {
-        txId,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
+      })
+    ).data;
   }
 
   // TODO make second arg an options object
@@ -553,36 +537,25 @@ export class ArweaveCompositeClient
     dataRoot: string,
     relativeOffset: number,
   ): Promise<Chunk> {
-    try {
-      this.failureSimulator.maybeFail();
+    this.failureSimulator.maybeFail();
 
-      const response = await this.trustedNodeRequestQueue.push({
-        method: 'GET',
-        url: `/chunk/${absoluteOffset}`,
-      });
-      const jsonChunk = response.data;
+    const response = await this.trustedNodeRequestQueue.push({
+      method: 'GET',
+      url: `/chunk/${absoluteOffset}`,
+    });
+    const jsonChunk = response.data;
 
-      sanityCheckChunk(jsonChunk);
+    sanityCheckChunk(jsonChunk);
 
-      const chunk = {
-        chunk: fromB64Url(jsonChunk.chunk),
-        data_path: fromB64Url(jsonChunk.data_path),
-        tx_path: fromB64Url(jsonChunk.tx_path),
-      };
+    const chunk = {
+      chunk: fromB64Url(jsonChunk.chunk),
+      data_path: fromB64Url(jsonChunk.data_path),
+      tx_path: fromB64Url(jsonChunk.tx_path),
+    };
 
-      await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
+    await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
 
-      return chunk;
-    } catch (error: any) {
-      this.log.error('Failed to get chunk:', {
-        absoluteOffset,
-        dataRoot,
-        relativeOffset,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
+    return chunk;
   }
 
   async getChunkDataByAbsoluteOrRelativeOffset(
@@ -601,34 +574,25 @@ export class ArweaveCompositeClient
   }
 
   async getTxData(txId: string): Promise<{ data: Readable; size: number }> {
-    try {
-      this.failureSimulator.maybeFail();
+    this.failureSimulator.maybeFail();
 
-      const [dataResponse, dataSizeResponse] = await Promise.all([
-        this.trustedNodeRequestQueue.push({
-          method: 'GET',
-          url: `/tx/${txId}/data`,
-        }),
-        this.trustedNodeRequestQueue.push({
-          method: 'GET',
-          url: `/tx/${txId}/data_size`,
-        }),
-      ]);
+    const [dataResponse, dataSizeResponse] = await Promise.all([
+      this.trustedNodeRequestQueue.push({
+        method: 'GET',
+        url: `/tx/${txId}/data`,
+      }),
+      this.trustedNodeRequestQueue.push({
+        method: 'GET',
+        url: `/tx/${txId}/data_size`,
+      }),
+    ]);
 
-      if (!dataResponse.data) {
-        throw Error('No transaction data');
-      }
-
-      const size = +dataSizeResponse.data;
-      const txData = fromB64Url(dataResponse.data);
-      return { data: Readable.from(txData), size };
-    } catch (error: any) {
-      this.log.error('Failed to get transaction data:', {
-        txId,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
+    if (!dataResponse.data) {
+      throw Error('No transaction data');
     }
+
+    const size = +dataSizeResponse.data;
+    const txData = fromB64Url(dataResponse.data);
+    return { data: Readable.from(txData), size };
   }
 }
