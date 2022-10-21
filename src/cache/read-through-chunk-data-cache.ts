@@ -33,43 +33,32 @@ export class ReadThroughChunkDataCache
     dataRoot: string,
     relativeOffset: number,
   ): Promise<Readable> {
-    try {
-      const chunkDataPromise = this.chunkStore
-        .get(dataRoot, relativeOffset)
-        .then(async (cachedChunkData) => {
-          // Chunk is cached
-          if (cachedChunkData) {
-            this.log.info('Successfully fetched chunk data from cache', {
-              dataRoot,
-              relativeOffset,
-            });
-            return cachedChunkData;
-          }
+    const chunkDataPromise = this.chunkStore
+      .get(dataRoot, relativeOffset)
+      .then(async (cachedChunkData) => {
+        // Chunk is cached
+        if (cachedChunkData) {
+          this.log.info('Successfully fetched chunk data from cache', {
+            dataRoot,
+            relativeOffset,
+          });
+          return cachedChunkData;
+        }
 
-          // Fetch from ChunkSource
-          const chunkData =
-            await this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
-              txSize,
-              absoluteOffset,
-              dataRoot,
-              relativeOffset,
-            );
+        // Fetch from ChunkSource
+        const chunkData =
+          await this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
+            txSize,
+            absoluteOffset,
+            dataRoot,
+            relativeOffset,
+          );
 
-          await this.chunkStore.set(chunkData, dataRoot, relativeOffset);
+        await this.chunkStore.set(chunkData, dataRoot, relativeOffset);
 
-          return chunkData;
-        });
-      const chunkData = await chunkDataPromise;
-      return Readable.from(chunkData);
-    } catch (error: any) {
-      this.log.error('Failed to fetch chunk data:', {
-        absoluteOffset,
-        dataRoot,
-        relativeOffset,
-        message: error.message,
-        stack: error.stack,
+        return chunkData;
       });
-      throw error;
-    }
+    const chunkData = await chunkDataPromise;
+    return Readable.from(chunkData);
   }
 }
