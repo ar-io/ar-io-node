@@ -570,7 +570,6 @@ export class ArweaveCompositeClient
         tx_path: fromB64Url(jsonChunk.tx_path),
       };
 
-      // TODO verify that chunk hash matches hash in data path
       await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
 
       return chunk;

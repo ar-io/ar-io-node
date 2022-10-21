@@ -1,4 +1,5 @@
 import { validatePath } from 'arweave/node/lib/merkle.js';
+import crypto from 'crypto';
 
 import {
   Chunk,
@@ -47,6 +48,12 @@ export async function validateChunk(
   dataRoot: Buffer,
   relativeOffset: number,
 ) {
+  const chunkHash = crypto.createHash('sha256').update(chunk.chunk).digest();
+
+  if (!chunkHash.equals(chunk.data_path.slice(-64, -32))) {
+    throw new Error('Invalid chunk: hash does not match data_path');
+  }
+
   const validChunk = await validatePath(
     dataRoot,
     relativeOffset,
@@ -56,6 +63,6 @@ export async function validateChunk(
   );
 
   if (!validChunk) {
-    throw Error('Invalid chunk based on offset, data_root and data_path');
+    throw Error('Invalid chunk: bad data_path');
   }
 }
