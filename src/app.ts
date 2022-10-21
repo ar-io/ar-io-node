@@ -25,6 +25,7 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
+import { TxChunksDataSource } from './arweave/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
@@ -123,6 +124,13 @@ const txRepairWorker = new TransactionRepairWorker({
   txFetcher,
 });
 
+// Configure transaction data source
+const txDataSource = new TxChunksDataSource({
+  log,
+  chainSource: arweaveClient,
+  chunkSource: arweaveClient,
+});
+
 arweaveClient.refreshPeers();
 blockImporter.start();
 txRepairWorker.start();
@@ -179,4 +187,11 @@ apolloServerInstanceGql.start().then(() => {
   app.listen(port, () => {
     log.info(`Listening on port ${port}`);
   });
+});
+
+const dataPathRegex =
+  /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
+
+app.get(dataPathRegex, async (req, res) => {
+  (await txDataSource.getTxData(req.path)).data.pipe(res);
 });
