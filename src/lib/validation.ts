@@ -42,6 +42,7 @@ export function sanityCheckChunk(chunk: JsonChunk) {
 }
 
 export async function validateChunk(
+  txSize: number,
   chunk: Chunk,
   dataRoot: Buffer,
   relativeOffset: number,
@@ -50,7 +51,7 @@ export async function validateChunk(
     dataRoot,
     relativeOffset,
     0,
-    chunk.chunk.byteLength,
+    txSize,
     chunk.data_path,
   );
 

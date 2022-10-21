@@ -281,6 +281,7 @@ export interface ChunkMetadata {
 
 export interface ChunkByAbsoluteOrRelativeOffsetSource {
   getChunkByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
@@ -289,6 +290,7 @@ export interface ChunkByAbsoluteOrRelativeOffsetSource {
 
 export interface ChunkMetadataByAbsoluteOrRelativeOffsetSource {
   getChunkMetadataByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
@@ -297,6 +299,7 @@ export interface ChunkMetadataByAbsoluteOrRelativeOffsetSource {
 
 export interface ChunkDataByAbsoluteOrRelativeOffsetSource {
   getChunkDataByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,

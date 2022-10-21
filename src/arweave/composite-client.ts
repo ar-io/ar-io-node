@@ -548,6 +548,7 @@ export class ArweaveCompositeClient
   }
 
   async getChunkByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
@@ -569,7 +570,8 @@ export class ArweaveCompositeClient
         tx_path: fromB64Url(jsonChunk.tx_path),
       };
 
-      await validateChunk(chunk, fromB64Url(dataRoot), relativeOffset);
+      // TODO verify that chunk hash matches hash in data path
+      await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
 
       return chunk;
     } catch (error: any) {
@@ -585,11 +587,13 @@ export class ArweaveCompositeClient
   }
 
   async getChunkDataByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
   ): Promise<Readable> {
     const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
+      txSize,
       absoluteOffset,
       dataRoot,
       relativeOffset,

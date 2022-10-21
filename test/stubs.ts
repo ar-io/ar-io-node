@@ -133,6 +133,7 @@ export class ArweaveChunkSourceStub
     ChunkDataByAbsoluteOrRelativeOffsetSource
 {
   async getChunkByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
@@ -151,7 +152,7 @@ export class ArweaveChunkSourceStub
         tx_path: fromB64Url(jsonChunk.tx_path),
       };
 
-      await validateChunk(chunk, fromB64Url(dataRoot), relativeOffset);
+      await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
 
       return chunk;
     } else {
@@ -160,11 +161,13 @@ export class ArweaveChunkSourceStub
   }
 
   async getChunkDataByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
   ): Promise<any> {
     const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
+      txSize,
       absoluteOffset,
       dataRoot,
       relativeOffset,

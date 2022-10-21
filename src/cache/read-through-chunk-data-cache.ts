@@ -28,6 +28,7 @@ export class ReadThroughChunkDataCache
   }
 
   async getChunkDataByAbsoluteOrRelativeOffset(
+    txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
@@ -48,6 +49,7 @@ export class ReadThroughChunkDataCache
           // Fetch from ChunkSource
           const chunkData =
             await this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
+              txSize,
               absoluteOffset,
               dataRoot,
               relativeOffset,

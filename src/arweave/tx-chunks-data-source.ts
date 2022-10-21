@@ -45,6 +45,7 @@ export class TxChunksDataSource implements TxDataSource {
         relativeOffset: number,
       ) =>
         this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
+          size,
           absoluteOffset,
           dataRoot,
           relativeOffset,

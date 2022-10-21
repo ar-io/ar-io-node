@@ -12,6 +12,7 @@ import { ReadThroughChunkDataCache } from './read-through-chunk-data-cache.js';
 
 chai.use(sinonChai);
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
+const TX_SIZE = 256000;
 const ABSOLUTE_OFFSET = 51530681327863;
 const RELATIVE_OFFSET = 0;
 
@@ -77,6 +78,7 @@ describe('ReadThroughChunkDataCache', () => {
         'getChunkByAbsoluteOrRelativeOffset',
       );
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
+        TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
         0,
@@ -93,6 +95,7 @@ describe('ReadThroughChunkDataCache', () => {
         .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
         .resolves(mockedChunk);
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
+        TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
         0,
@@ -109,6 +112,7 @@ describe('ReadThroughChunkDataCache', () => {
         .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
         .resolves(mockedChunk);
       await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
+        TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
         0,
