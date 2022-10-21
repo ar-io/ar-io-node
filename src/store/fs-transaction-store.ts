@@ -36,8 +36,10 @@ export class FsTransactionStore implements PartialJsonTransactionStore {
 
   async get(txId: string) {
     try {
-      const txData = await fs.promises.readFile(this.txPath(txId));
-      return msgpackToJsonTx(txData);
+      if (await this.has(txId)) {
+        const txData = await fs.promises.readFile(this.txPath(txId));
+        return msgpackToJsonTx(txData);
+      }
     } catch (error: any) {
       this.log.error('Failed to get transaction', {
         txId,
