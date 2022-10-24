@@ -65,9 +65,6 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 
-// Workers
-const eventEmitter = new EventEmitter();
-
 const arweaveClient = new ArweaveCompositeClient({
   log,
   metricsRegistry: promClient.register,
@@ -85,6 +82,10 @@ const chainDb = new StandaloneSqliteDatabase({
   log,
   coreDbPath: 'data/sqlite/core.db',
 });
+
+// Workers
+const eventEmitter = new EventEmitter();
+
 const blockImporter = new BlockImporter({
   log,
   metricsRegistry: promClient.register,

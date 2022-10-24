@@ -159,7 +159,7 @@ export class BlockImporter {
     const { block, txs, missingTxIds } =
       await this.chainSource.getBlockAndTxsByHeight(height);
 
-    // Detect gaps and forks
+    // Detect gaps and forks (only after the first block)
     if (height > this.startHeight) {
       // Retrieve expected previous block hash from the DB
       const previousHeight = height - 1;
