@@ -193,5 +193,10 @@ const dataPathRegex =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 
 app.get(dataPathRegex, async (req, res) => {
-  (await txDataSource.getTxData(req.path)).data.pipe(res);
+  try {
+    (await txDataSource.getTxData(req.path)).data.pipe(res);
+  } catch (e) {
+    // TODO handle 500s separately
+    res.status(404).send('Not found');
+  }
 });

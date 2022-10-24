@@ -53,6 +53,16 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
+                        - match:
+                            safe_regex:
+                              google_re2: { max_program_size: 200 }
+                              regex: "^\/[a-zA-Z0-9_-]{43}$"
+                          route:
+                            cluster: ario_gateways_and_legacy_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              retriable_status_codes: 404
+                              num_retries: 1
                         - match: { prefix: '/' }
                           route:
                             cluster: legacy_gateways
@@ -82,6 +92,24 @@ static_resources:
                     socket_address:
                       address: ${AR_IO_HOST}
                       port_value: ${AR_IO_PORT}
+    - name: ario_gateways_and_legacy_gateways
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: ario_gateways_and_legacy_gateways
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${AR_IO_HOST}
+                      port_value: ${AR_IO_PORT}
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${GATEWAY_URL}
+                      port_value: 443
     - name: legacy_gateways
       connect_timeout: 1s
       type: STRICT_DNS
