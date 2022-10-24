@@ -50,7 +50,7 @@ export class TxChunksDataSource implements TxDataSource {
           dataRoot,
           relativeOffset,
         );
-      let chunkPromise: Promise<Readable> | undefined =
+      let chunkPromise: Promise<Buffer> | undefined =
         getChunkDataByRelativeOrAbsoluteOffset(startOffset, txDataRoot, bytes);
       const data = new Readable({
         autoDestroy: true,
@@ -60,28 +60,20 @@ export class TxChunksDataSource implements TxDataSource {
               this.push(null);
               return;
             }
-            const chunkData = await chunkPromise;
-            chunkData.on('data', (chunk) => {
-              this.push(chunk);
-              bytes += chunk.length;
-            });
 
-            chunkData.on('end', () => {
-              // check if we're done
-              if (bytes < size) {
-                chunkPromise = getChunkDataByRelativeOrAbsoluteOffset(
-                  startOffset + bytes,
-                  txDataRoot,
-                  bytes,
-                );
-              } else {
-                chunkPromise = undefined;
-              }
-            });
+            const chunk = await chunkPromise;
+            this.push(chunk);
+            bytes += chunk.length;
 
-            chunkData.on('error', (error) => {
-              this.emit('error', error);
-            });
+            if (bytes < size) {
+              chunkPromise = getChunkDataByRelativeOrAbsoluteOffset(
+                startOffset + bytes,
+                txDataRoot,
+                bytes,
+              );
+            } else {
+              chunkPromise = undefined;
+            }
           } catch (error: any) {
             this.destroy(error);
           }

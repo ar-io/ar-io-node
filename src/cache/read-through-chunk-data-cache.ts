@@ -1,4 +1,3 @@
-import { Readable } from 'stream';
 import winston from 'winston';
 
 import {
@@ -32,7 +31,7 @@ export class ReadThroughChunkDataCache
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<Readable> {
+  ): Promise<Buffer> {
     const chunkDataPromise = this.chunkStore
       .get(dataRoot, relativeOffset)
       .then(async (cachedChunkData) => {
@@ -54,11 +53,11 @@ export class ReadThroughChunkDataCache
             relativeOffset,
           );
 
-        await this.chunkStore.set(chunkData, dataRoot, relativeOffset);
+        await this.chunkStore.set(dataRoot, relativeOffset, chunkData);
 
         return chunkData;
       });
     const chunkData = await chunkDataPromise;
-    return Readable.from(chunkData);
+    return chunkData;
   }
 }

@@ -138,7 +138,7 @@ export interface PartialJsonTransactionStore {
 export interface ChunkDataStore {
   has(dataRoot: string, relativeOffset: number): Promise<boolean>;
   get(dataRoot: string, relativeOffset: number): Promise<Buffer | undefined>;
-  set(data: Readable, dataRoot: string, relativeOffset: number): Promise<void>;
+  set(dataRoot: string, relativeOffset: number, data: Buffer): Promise<void>;
 }
 
 export interface ChunkMetadataStore {
@@ -303,7 +303,7 @@ export interface ChunkDataByAbsoluteOrRelativeOffsetSource {
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<Readable>;
+  ): Promise<Buffer>;
 }
 
 export interface TxDataSource {

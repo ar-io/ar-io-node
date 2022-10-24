@@ -563,14 +563,14 @@ export class ArweaveCompositeClient
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<Readable> {
+  ): Promise<Buffer> {
     const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
       txSize,
       absoluteOffset,
       dataRoot,
       relativeOffset,
     );
-    return Readable.from(chunk);
+    return chunk;
   }
 
   async getTxData(txId: string): Promise<{ data: Readable; size: number }> {

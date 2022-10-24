@@ -1,5 +1,4 @@
 import fs from 'fs';
-import { Readable } from 'stream';
 import winston from 'winston';
 
 import { ChunkDataStore } from '../types.js';
@@ -56,9 +55,9 @@ export class FsChunkDataStore implements ChunkDataStore {
   }
 
   async set(
-    data: Readable,
     dataRoot: string,
     relativeOffset: number,
+    data: Buffer,
   ): Promise<void> {
     try {
       await fs.promises.mkdir(this.chunkDataDir(dataRoot), {

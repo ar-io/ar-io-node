@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import fs from 'fs';
-import stream, { Readable } from 'stream';
+import { Readable } from 'stream';
 
 import { fromB64Url } from '../src/lib/encoding.js';
 import { validateChunk } from '../src/lib/validation.js';
@@ -31,7 +31,7 @@ import {
 } from '../src/types.js';
 
 export const stubTxID = '0000000000000000000000000000000000000000000';
-export const stubAns104Bundle = async (): Promise<stream.Readable> => {
+export const stubAns104Bundle = async (): Promise<Readable> => {
   return fs.createReadStream(`./test/mock_files/ans104_bundle`);
 };
 
@@ -172,6 +172,6 @@ export class ArweaveChunkSourceStub
       dataRoot,
       relativeOffset,
     );
-    return Readable.from(chunk);
+    return chunk;
   }
 }
