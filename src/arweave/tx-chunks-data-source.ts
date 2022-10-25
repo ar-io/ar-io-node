@@ -3,6 +3,7 @@ import winston from 'winston';
 
 import {
   ChainSource,
+  ChunkData,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
   TxDataSource,
 } from '../types.js';
@@ -50,29 +51,29 @@ export class TxChunksDataSource implements TxDataSource {
           dataRoot,
           relativeOffset,
         );
-      let chunkPromise: Promise<Buffer> | undefined =
+      let chunkDataPromise: Promise<ChunkData> | undefined =
         getChunkDataByRelativeOrAbsoluteOffset(startOffset, txDataRoot, bytes);
       const data = new Readable({
         autoDestroy: true,
         read: async function () {
           try {
-            if (!chunkPromise) {
+            if (!chunkDataPromise) {
               this.push(null);
               return;
             }
 
-            const chunk = await chunkPromise;
-            this.push(chunk);
-            bytes += chunk.length;
+            const chunkData = await chunkDataPromise;
+            this.push(chunkData.chunk);
+            bytes += chunkData.chunk.length;
 
             if (bytes < size) {
-              chunkPromise = getChunkDataByRelativeOrAbsoluteOffset(
+              chunkDataPromise = getChunkDataByRelativeOrAbsoluteOffset(
                 startOffset + bytes,
                 txDataRoot,
                 bytes,
               );
             } else {
-              chunkPromise = undefined;
+              chunkDataPromise = undefined;
             }
           } catch (error: any) {
             this.destroy(error);

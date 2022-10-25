@@ -7,7 +7,7 @@ import * as winston from 'winston';
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
 import { fromB64Url } from '../lib/encoding.js';
 import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
-import { Chunk, ChunkDataStore } from '../types.js';
+import { Chunk, ChunkData, ChunkDataStore } from '../types.js';
 import { ReadThroughChunkDataCache } from './read-through-chunk-data-cache.js';
 
 chai.use(sinonChai);
@@ -49,7 +49,7 @@ describe('ReadThroughChunkDataCache', () => {
 
   describe('getChunkDataByAbsoluteOrRelativeOffset', () => {
     let mockedChunk: Chunk;
-    let mockedChunkData: Buffer;
+    let mockedChunkData: ChunkData;
 
     before(() => {
       const jsonChunk = JSON.parse(
@@ -58,14 +58,26 @@ describe('ReadThroughChunkDataCache', () => {
           'utf-8',
         ),
       );
+      const txPath = fromB64Url(jsonChunk.tx_path);
+      const dataRootBuffer = txPath.slice(-64, -32);
+      const dataPath = fromB64Url(jsonChunk.data_path);
+      const hash = dataPath.slice(-64, -32);
       mockedChunk = {
+        tx_path: txPath,
+        data_root: dataRootBuffer,
+        data_size: TX_SIZE,
+        data_path: dataPath,
+        offset: RELATIVE_OFFSET,
+        hash,
         chunk: fromB64Url(jsonChunk.chunk),
-        data_path: fromB64Url(jsonChunk.data_path),
-        tx_path: fromB64Url(jsonChunk.tx_path),
       };
-      mockedChunkData = fs.readFileSync(
+      const chunk = fs.readFileSync(
         `test/mock_files/chunks/${B64_DATA_ROOT}/data/${RELATIVE_OFFSET}`,
       );
+      mockedChunkData = {
+        hash,
+        chunk,
+      };
     });
 
     it('should fetch chunk data from cache when available', async () => {

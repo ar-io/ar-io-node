@@ -62,7 +62,7 @@ export class ReadThroughChunkMetadataCache
           data_size: chunk.chunk.length,
           offset: relativeOffset,
           data_path: chunk.data_path,
-          sha256: chunk.data_path.slice(-64, -32),
+          hash: chunk.data_path.slice(-64, -32),
         };
 
         await this.chunkMetadataStore.set(chunkMetadata);

@@ -137,8 +137,12 @@ export interface PartialJsonTransactionStore {
 
 export interface ChunkDataStore {
   has(dataRoot: string, relativeOffset: number): Promise<boolean>;
-  get(dataRoot: string, relativeOffset: number): Promise<Buffer | undefined>;
-  set(dataRoot: string, relativeOffset: number, data: Buffer): Promise<void>;
+  get(dataRoot: string, relativeOffset: number): Promise<ChunkData | undefined>;
+  set(
+    dataRoot: string,
+    relativeOffset: number,
+    chunkData: ChunkData,
+  ): Promise<void>;
 }
 
 export interface ChunkMetadataStore {
@@ -260,23 +264,32 @@ export interface GqlQueryable {
 }
 
 export interface JsonChunk {
-  chunk: string;
-  data_path: string;
   tx_path: string;
+  data_path: string;
+  chunk: string;
 }
 
 export interface Chunk {
-  chunk: Buffer;
-  data_path: Buffer;
   tx_path: Buffer;
+  data_root: Buffer;
+  data_size: number;
+  data_path: Buffer;
+  offset: number;
+  hash: Buffer;
+  chunk: Buffer;
+}
+
+export interface ChunkData {
+  hash: Buffer;
+  chunk: Buffer;
 }
 
 export interface ChunkMetadata {
   data_root: Buffer;
   data_size: number;
-  offset: number;
   data_path: Buffer;
-  sha256: Buffer;
+  offset: number;
+  hash: Buffer;
 }
 
 export interface ChunkByAbsoluteOrRelativeOffsetSource {
@@ -303,7 +316,7 @@ export interface ChunkDataByAbsoluteOrRelativeOffsetSource {
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<Buffer>;
+  ): Promise<ChunkData>;
 }
 
 export interface TxDataSource {

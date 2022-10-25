@@ -1,6 +1,7 @@
 import winston from 'winston';
 
 import {
+  ChunkData,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
   ChunkDataStore,
 } from '../types.js';
@@ -31,7 +32,7 @@ export class ReadThroughChunkDataCache
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<Buffer> {
+  ): Promise<ChunkData> {
     const chunkDataPromise = this.chunkStore
       .get(dataRoot, relativeOffset)
       .then(async (cachedChunkData) => {

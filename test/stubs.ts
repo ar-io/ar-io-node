@@ -24,6 +24,7 @@ import {
   ChainSource,
   Chunk,
   ChunkByAbsoluteOrRelativeOffsetSource,
+  ChunkData,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
   JsonTransactionOffset,
   PartialJsonBlock,
@@ -146,10 +147,19 @@ export class ArweaveChunkSourceStub
         ),
       );
 
+      const txPath = fromB64Url(jsonChunk.tx_path);
+      const dataRootBuffer = txPath.slice(-64, -32);
+      const dataPath = fromB64Url(jsonChunk.data_path);
+      const hash = dataPath.slice(-64, -32);
+
       const chunk = {
+        tx_path: txPath,
+        data_root: dataRootBuffer,
+        data_size: txSize,
+        data_path: dataPath,
+        offset: relativeOffset,
+        hash,
         chunk: fromB64Url(jsonChunk.chunk),
-        data_path: fromB64Url(jsonChunk.data_path),
-        tx_path: fromB64Url(jsonChunk.tx_path),
       };
 
       await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
@@ -165,13 +175,16 @@ export class ArweaveChunkSourceStub
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<any> {
-    const { chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
+  ): Promise<ChunkData> {
+    const { hash, chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
       txSize,
       absoluteOffset,
       dataRoot,
       relativeOffset,
     );
-    return chunk;
+    return {
+      hash,
+      chunk,
+    };
   }
 }

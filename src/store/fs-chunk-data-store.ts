@@ -1,7 +1,10 @@
+import crypto from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import winston from 'winston';
 
-import { ChunkDataStore } from '../types.js';
+import { toB64Url } from '../lib/encoding.js';
+import { ChunkData, ChunkDataStore } from '../types.js';
 
 export class FsChunkDataStore implements ChunkDataStore {
   private log: winston.Logger;
@@ -12,18 +15,29 @@ export class FsChunkDataStore implements ChunkDataStore {
     this.baseDir = baseDir;
   }
 
-  private chunkDataDir(dataRoot: string) {
-    return `${this.baseDir}/${dataRoot}/data/`;
+  private chunkDataRootDir(dataRoot: string) {
+    return `${this.baseDir}/data/by-dataroot/${dataRoot}`;
   }
 
-  private chunkDataPath(dataRoot: string, relativeOffset: number) {
-    return `${this.chunkDataDir(dataRoot)}/${relativeOffset}`;
+  private chunkDataRootPath(dataRoot: string, relativeOffset: number) {
+    return `${this.chunkDataRootDir(dataRoot)}/${relativeOffset}`;
+  }
+
+  private chunkHashDir(hash: Buffer) {
+    const b64hash = toB64Url(hash);
+    const chunkPrefix = `${b64hash.substring(0, 2)}/${b64hash.substring(2, 4)}`;
+    return `${this.baseDir}/data/by-hash/${chunkPrefix}`;
+  }
+
+  private chunkHashPath(hash: Buffer) {
+    const b64hash = toB64Url(hash);
+    return `${this.chunkHashDir(hash)}/${b64hash}`;
   }
 
   async has(dataRoot: string, relativeOffset: number) {
     try {
       await fs.promises.access(
-        this.chunkDataPath(dataRoot, relativeOffset),
+        this.chunkDataRootPath(dataRoot, relativeOffset),
         fs.constants.F_OK,
       );
       return true;
@@ -35,12 +49,19 @@ export class FsChunkDataStore implements ChunkDataStore {
   async get(
     dataRoot: string,
     relativeOffset: number,
-  ): Promise<Buffer | undefined> {
+  ): Promise<ChunkData | undefined> {
     try {
       if (await this.has(dataRoot, relativeOffset)) {
-        return await fs.promises.readFile(
-          this.chunkDataPath(dataRoot, relativeOffset),
+        const chunk = await fs.promises.readFile(
+          this.chunkDataRootPath(dataRoot, relativeOffset),
         );
+        // compute sha256 of chunk
+        const hash = crypto.createHash('sha256').update(chunk).digest();
+
+        return {
+          hash,
+          chunk,
+        };
       }
     } catch (error: any) {
       this.log.error('Failed to fetch chunk data from cache', {
@@ -57,15 +78,26 @@ export class FsChunkDataStore implements ChunkDataStore {
   async set(
     dataRoot: string,
     relativeOffset: number,
-    data: Buffer,
+    chunkData: ChunkData,
   ): Promise<void> {
     try {
-      await fs.promises.mkdir(this.chunkDataDir(dataRoot), {
+      const chunkDataRootDir = this.chunkDataRootDir(dataRoot);
+      await fs.promises.mkdir(chunkDataRootDir, { recursive: true });
+
+      await fs.promises.mkdir(this.chunkHashDir(chunkData.hash), {
         recursive: true,
       });
-      await fs.promises.writeFile(
-        this.chunkDataPath(dataRoot, relativeOffset),
-        data,
+
+      const chunkHashPath = this.chunkHashPath(chunkData.hash);
+      await fs.promises.writeFile(chunkHashPath, chunkData.chunk);
+      const targetPath = path.relative(
+        `${process.cwd()}/${chunkDataRootDir}`,
+        `${process.cwd()}/${chunkHashPath}`,
+      );
+
+      await fs.promises.symlink(
+        targetPath,
+        this.chunkDataRootPath(dataRoot, relativeOffset),
       );
       this.log.info('Successfully cached chunk data', {
         dataRoot,
