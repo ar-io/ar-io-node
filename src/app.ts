@@ -26,11 +26,13 @@ import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { TxChunksDataSource } from './arweave/tx-chunks-data-source.js';
+import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
+import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -126,10 +128,16 @@ const txRepairWorker = new TransactionRepairWorker({
 });
 
 // Configure transaction data source
+const txChunkDataSource = new ReadThroughChunkDataCache({
+  log,
+  chunkSource: arweaveClient,
+  chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
+});
+
 const txDataSource = new TxChunksDataSource({
   log,
   chainSource: arweaveClient,
-  chunkSource: arweaveClient,
+  chunkSource: txChunkDataSource,
 });
 
 arweaveClient.refreshPeers();
