@@ -58,6 +58,7 @@ static_resources:
                               google_re2: { max_program_size: 200 }
                               regex: "^\/raw\/[a-zA-Z0-9_-]{43}$"
                           route:
+                            timeout: 0s
                             cluster: ario_gateways
                             retry_policy:
                               retry_on: '5xx,reset'
