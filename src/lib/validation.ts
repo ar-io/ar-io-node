@@ -62,7 +62,7 @@ export async function validateChunk(
     chunk.data_path,
   );
 
-  if (!validChunk) {
+  if (typeof validChunk !== 'object') {
     throw Error('Invalid chunk: bad data_path');
   }
 }

@@ -97,7 +97,7 @@ export class FsBlockStore implements PartialJsonBlockStore {
         );
       }
 
-      if (height && !(await this.hasHeight(height))) {
+      if (height !== undefined && !(await this.hasHeight(height))) {
         await fs.promises.mkdir(this.blockHeightDir(height), {
           recursive: true,
         });

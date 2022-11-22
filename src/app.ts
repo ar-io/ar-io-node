@@ -43,7 +43,7 @@ import { TransactionRepairWorker } from './workers/transaction-repair-worker.js'
 const startHeight = +(process.env.START_HEIGHT ?? 0);
 const stopHeight = +(process.env.STOP_HEIGHT ?? Infinity);
 const trustedNodeUrl = process.env.TRUSTED_NODE_URL ?? 'https://arweave.net';
-const skipCache = (process.env.SKIP_CACHE || 'false') === 'true';
+const skipCache = (process.env.SKIP_CACHE ?? 'false') === 'true';
 const port = +(process.env.PORT ?? 4000);
 const simulatedRequestFailureRate = +(
   process.env.SIMULATED_REQUEST_FAILURE_RATE ?? 0

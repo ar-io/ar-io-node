@@ -1,6 +1,11 @@
 {
   "root": true,
   "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "project": "tsconfig.json",
+    "tsconfigRootDir": ".",
+    "sourceType": "module"
+  },
   "plugins": ["@typescript-eslint", "prettier", "mocha", "jest-formatting"],
   "extends": [
     "eslint:recommended",
@@ -15,6 +20,14 @@
     "no-unused-vars": "off",
     "@typescript-eslint/no-unused-vars": ["off"],
     "@typescript-eslint/no-explicit-any": ["off"],
+    "@typescript-eslint/strict-boolean-expressions": [
+      2,
+      {
+        "allowNullableObject": true,
+        "allowNullableBoolean": true,
+        "allowAny": true
+      }
+    ],
     "mocha/max-top-level-suites": "off",
     "mocha/no-exports": "off",
     "mocha/no-mocha-arrows": "off",
