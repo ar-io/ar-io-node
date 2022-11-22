@@ -16,7 +16,11 @@ export class FsChunkDataStore implements ChunkDataStore {
   }
 
   private chunkDataRootDir(dataRoot: string) {
-    return `${this.baseDir}/data/by-dataroot/${dataRoot}`;
+    const dataRootPrefix = `${dataRoot.substring(0, 2)}/${dataRoot.substring(
+      2,
+      4,
+    )}`;
+    return `${this.baseDir}/data/by-dataroot/${dataRootPrefix}`;
   }
 
   private chunkDataRootPath(dataRoot: string, relativeOffset: number) {
@@ -25,8 +29,8 @@ export class FsChunkDataStore implements ChunkDataStore {
 
   private chunkHashDir(hash: Buffer) {
     const b64hash = toB64Url(hash);
-    const chunkPrefix = `${b64hash.substring(0, 2)}/${b64hash.substring(2, 4)}`;
-    return `${this.baseDir}/data/by-hash/${chunkPrefix}`;
+    const hashPrefix = `${b64hash.substring(0, 2)}/${b64hash.substring(2, 4)}`;
+    return `${this.baseDir}/data/by-hash/${hashPrefix}`;
   }
 
   private chunkHashPath(hash: Buffer) {
@@ -55,7 +59,6 @@ export class FsChunkDataStore implements ChunkDataStore {
         const chunk = await fs.promises.readFile(
           this.chunkDataRootPath(dataRoot, relativeOffset),
         );
-        // compute sha256 of chunk
         const hash = crypto.createHash('sha256').update(chunk).digest();
 
         return {

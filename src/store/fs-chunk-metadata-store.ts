@@ -6,13 +6,19 @@ import { ChunkMetadata, ChunkMetadataStore } from '../types.js';
 
 export class FsChunkMetadataStore implements ChunkMetadataStore {
   private log: winston.Logger;
+  private baseDir: string;
 
-  constructor({ log }: { log: winston.Logger }) {
+  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
     this.log = log.child({ class: this.constructor.name });
+    this.baseDir = baseDir;
   }
 
   private chunkMetadataDir(dataRoot: string) {
-    return `data/chunks/${dataRoot}/metadata/`;
+    const dataRootPrefix = `${dataRoot.substring(0, 2)}/${dataRoot.substring(
+      2,
+      4,
+    )}`;
+    return `${this.baseDir}/${dataRootPrefix}/metadata/`;
   }
 
   private chunkMetadataPath(dataRoot: string, relativeOffset: number) {
