@@ -45,7 +45,7 @@ import {
   PartialJsonBlockStore,
   PartialJsonTransaction,
   PartialJsonTransactionStore,
-  TxDataSource,
+  ContiguousDataSource,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -68,7 +68,7 @@ export class ArweaveCompositeClient
     ChainSource,
     ChunkByAbsoluteOrRelativeOffsetSource,
     ChunkDataByAbsoluteOrRelativeOffsetSource,
-    TxDataSource
+    ContiguousDataSource
 {
   private arweave: Arweave;
   private log: winston.Logger;

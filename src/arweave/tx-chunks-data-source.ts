@@ -5,10 +5,10 @@ import {
   ChainSource,
   ChunkData,
   ChunkDataByAbsoluteOrRelativeOffsetSource,
-  TxDataSource,
+  ContiguousDataSource,
 } from '../types.js';
 
-export class TxChunksDataSource implements TxDataSource {
+export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
   private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;

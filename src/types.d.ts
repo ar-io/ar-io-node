@@ -319,6 +319,6 @@ export interface ChunkDataByAbsoluteOrRelativeOffsetSource {
   ): Promise<ChunkData>;
 }
 
-export interface TxDataSource {
+export interface ContiguousDataSource {
   getTxData(id: string): Promise<{ data: Readable; size: number }>;
 }
