@@ -275,7 +275,7 @@ export class BlockImporter {
 
       try {
         nextHeight = await this.getNextHeight();
-        if (nextHeight == 0 && this.startHeight != 0) {
+        if (nextHeight === 0 && this.startHeight !== 0) {
           nextHeight = this.startHeight;
         }
         this.log.info(`Importing block...`, {
