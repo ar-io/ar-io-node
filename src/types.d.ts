@@ -269,16 +269,6 @@ export interface JsonChunk {
   chunk: string;
 }
 
-export interface Chunk {
-  tx_path: Buffer;
-  data_root: Buffer;
-  data_size: number;
-  data_path: Buffer;
-  offset: number;
-  hash: Buffer;
-  chunk: Buffer;
-}
-
 export interface ChunkData {
   hash: Buffer;
   chunk: Buffer;
@@ -292,6 +282,9 @@ export interface ChunkMetadata {
   hash: Buffer;
 }
 
+export interface Chunk extends ChunkMetadata, ChunkData {
+  tx_path: Buffer;
+}
 export interface ChunkByAbsoluteOrRelativeOffsetSource {
   getChunkByAbsoluteOrRelativeOffset(
     txSize: number,
