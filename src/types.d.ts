@@ -285,8 +285,9 @@ export interface ChunkMetadata {
 export interface Chunk extends ChunkMetadata, ChunkData {
   tx_path: Buffer;
 }
-export interface ChunkByAbsoluteOrRelativeOffsetSource {
-  getChunkByAbsoluteOrRelativeOffset(
+
+export interface ChunkByAnySource {
+  getChunkByAny(
     txSize: number,
     absoluteOffset: number,
     dataRoot: string,
@@ -294,8 +295,8 @@ export interface ChunkByAbsoluteOrRelativeOffsetSource {
   ): Promise<Chunk>;
 }
 
-export interface ChunkMetadataByAbsoluteOrRelativeOffsetSource {
-  getChunkMetadataByAbsoluteOrRelativeOffset(
+export interface ChunkMetadataByAnySource {
+  getChunkMetadataByAny(
     txSize: number,
     absoluteOffset: number,
     dataRoot: string,
@@ -303,8 +304,8 @@ export interface ChunkMetadataByAbsoluteOrRelativeOffsetSource {
   ): Promise<ChunkMetadata>;
 }
 
-export interface ChunkDataByAbsoluteOrRelativeOffsetSource {
-  getChunkDataByAbsoluteOrRelativeOffset(
+export interface ChunkDataByAnySource {
+  getChunkDataByAny(
     txSize: number,
     absoluteOffset: number,
     dataRoot: string,

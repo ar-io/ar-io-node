@@ -67,20 +67,13 @@ describe('TxChunksDataSource', () => {
     describe('a bad piece of chunk data', () => {
       it('should throw an error', function (done) {
         const error = new Error('missing chunk');
-        const badReadable = new Readable({
-          read: function () {
-            this.emit('error', error);
-          },
-        });
-        sinon
-          .stub(chunkSource, 'getChunkDataByAbsoluteOrRelativeOffset')
-          .resolves(badReadable);
+        sinon.stub(chunkSource, 'getChunkDataByAny').rejects(error);
         txChunkRetriever
           .getTxData(TX_ID)
           .then((res: { data: Readable; size: number }) => {
             const { data } = res;
-            data.on('error', (error: any) => {
-              expect(error).to.deep.equal(error);
+            data.on('error', (e: any) => {
+              expect(e).to.deep.equal(error);
               done();
             });
             // do nothing
@@ -93,9 +86,7 @@ describe('TxChunksDataSource', () => {
       describe('an invalid chunk', () => {
         it('should throw an error', function (done) {
           const error = new Error('Invalid chunk');
-          sinon
-            .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
-            .rejects(error);
+          sinon.stub(chunkSource, 'getChunkByAny').rejects(error);
           txChunkRetriever
             .getTxData(TX_ID)
             .then((res: { data: Readable; size: number }) => {

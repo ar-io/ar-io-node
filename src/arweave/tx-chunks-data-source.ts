@@ -4,14 +4,14 @@ import winston from 'winston';
 import {
   ChainSource,
   ChunkData,
-  ChunkDataByAbsoluteOrRelativeOffsetSource,
+  ChunkDataByAnySource,
   ContiguousDataSource,
 } from '../types.js';
 
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
-  private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
+  private chunkSource: ChunkDataByAnySource;
 
   constructor({
     log,
@@ -20,7 +20,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
   }: {
     log: winston.Logger;
     chainSource: ChainSource;
-    chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
+    chunkSource: ChunkDataByAnySource;
   }) {
     this.log = log.child({ class: 'TxDataChunksRetriever' });
     this.chainSource = chainSource;
@@ -40,19 +40,22 @@ export class TxChunksDataSource implements ContiguousDataSource {
       const startOffset = offset - size + 1;
       let bytes = 0;
       // we lose scope in the readable, so set to internal function
-      const getChunkDataByRelativeOrAbsoluteOffset = (
+      const getChunkDataByAny = (
         absoluteOffset: number,
         dataRoot: string,
         relativeOffset: number,
       ) =>
-        this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
+        this.chunkSource.getChunkDataByAny(
           size,
           absoluteOffset,
           dataRoot,
           relativeOffset,
         );
-      let chunkDataPromise: Promise<ChunkData> | undefined =
-        getChunkDataByRelativeOrAbsoluteOffset(startOffset, txDataRoot, bytes);
+      let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
+        startOffset,
+        txDataRoot,
+        bytes,
+      );
       const data = new Readable({
         autoDestroy: true,
         read: async function () {
@@ -67,7 +70,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
             bytes += chunkData.chunk.length;
 
             if (bytes < size) {
-              chunkDataPromise = getChunkDataByRelativeOrAbsoluteOffset(
+              chunkDataPromise = getChunkDataByAny(
                 startOffset + bytes,
                 txDataRoot,
                 bytes,

@@ -1,16 +1,10 @@
 import winston from 'winston';
 
-import {
-  ChunkData,
-  ChunkDataByAbsoluteOrRelativeOffsetSource,
-  ChunkDataStore,
-} from '../types.js';
+import { ChunkData, ChunkDataByAnySource, ChunkDataStore } from '../types.js';
 
-export class ReadThroughChunkDataCache
-  implements ChunkDataByAbsoluteOrRelativeOffsetSource
-{
+export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
   private log: winston.Logger;
-  private chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
+  private chunkSource: ChunkDataByAnySource;
   private chunkStore: ChunkDataStore;
 
   constructor({
@@ -19,7 +13,7 @@ export class ReadThroughChunkDataCache
     chunkDataStore,
   }: {
     log: winston.Logger;
-    chunkSource: ChunkDataByAbsoluteOrRelativeOffsetSource;
+    chunkSource: ChunkDataByAnySource;
     chunkDataStore: ChunkDataStore;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -27,7 +21,7 @@ export class ReadThroughChunkDataCache
     this.chunkStore = chunkDataStore;
   }
 
-  async getChunkDataByAbsoluteOrRelativeOffset(
+  async getChunkDataByAny(
     txSize: number,
     absoluteOffset: number,
     dataRoot: string,
@@ -46,13 +40,12 @@ export class ReadThroughChunkDataCache
         }
 
         // Fetch from ChunkSource
-        const chunkData =
-          await this.chunkSource.getChunkDataByAbsoluteOrRelativeOffset(
-            txSize,
-            absoluteOffset,
-            dataRoot,
-            relativeOffset,
-          );
+        const chunkData = await this.chunkSource.getChunkDataByAny(
+          txSize,
+          absoluteOffset,
+          dataRoot,
+          relativeOffset,
+        );
 
         await this.chunkStore.set(dataRoot, relativeOffset, chunkData);
 

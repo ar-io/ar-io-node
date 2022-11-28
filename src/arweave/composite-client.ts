@@ -37,15 +37,15 @@ import {
 import {
   ChainSource,
   Chunk,
-  ChunkByAbsoluteOrRelativeOffsetSource,
+  ChunkByAnySource,
   ChunkData,
-  ChunkDataByAbsoluteOrRelativeOffsetSource,
+  ChunkDataByAnySource,
+  ContiguousDataSource,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockStore,
   PartialJsonTransaction,
   PartialJsonTransactionStore,
-  ContiguousDataSource,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -66,8 +66,8 @@ type Peer = {
 export class ArweaveCompositeClient
   implements
     ChainSource,
-    ChunkByAbsoluteOrRelativeOffsetSource,
-    ChunkDataByAbsoluteOrRelativeOffsetSource,
+    ChunkByAnySource,
+    ChunkDataByAnySource,
     ContiguousDataSource
 {
   private arweave: Arweave;
@@ -532,7 +532,7 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
-  async getChunkByAbsoluteOrRelativeOffset(
+  async getChunkByAny(
     txSize: number,
     absoluteOffset: number,
     dataRoot: string,
@@ -568,13 +568,13 @@ export class ArweaveCompositeClient
     return chunk;
   }
 
-  async getChunkDataByAbsoluteOrRelativeOffset(
+  async getChunkDataByAny(
     txSize: number,
     absoluteOffset: number,
     dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkData> {
-    const { hash, chunk } = await this.getChunkByAbsoluteOrRelativeOffset(
+    const { hash, chunk } = await this.getChunkByAny(
       txSize,
       absoluteOffset,
       dataRoot,

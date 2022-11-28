@@ -1,17 +1,15 @@
 import winston from 'winston';
 
 import {
-  ChunkByAbsoluteOrRelativeOffsetSource,
+  ChunkByAnySource,
   ChunkMetadata,
-  ChunkMetadataByAbsoluteOrRelativeOffsetSource,
+  ChunkMetadataByAnySource,
   ChunkMetadataStore,
 } from '../types.js';
 
-export class ReadThroughChunkMetadataCache
-  implements ChunkMetadataByAbsoluteOrRelativeOffsetSource
-{
+export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
   private log: winston.Logger;
-  private chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
+  private chunkSource: ChunkByAnySource;
   private chunkMetadataStore: ChunkMetadataStore;
 
   constructor({
@@ -20,7 +18,7 @@ export class ReadThroughChunkMetadataCache
     chunkMetadataStore,
   }: {
     log: winston.Logger;
-    chunkSource: ChunkByAbsoluteOrRelativeOffsetSource;
+    chunkSource: ChunkByAnySource;
     chunkMetadataStore: ChunkMetadataStore;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -28,7 +26,7 @@ export class ReadThroughChunkMetadataCache
     this.chunkMetadataStore = chunkMetadataStore;
   }
 
-  async getChunkMetadataByAbsoluteOrRelativeOffset(
+  async getChunkMetadataByAny(
     txSize: number,
     absoluteOffset: number,
     dataRoot: string,
@@ -47,7 +45,7 @@ export class ReadThroughChunkMetadataCache
         }
 
         // Fetch from ChunkSource
-        const chunk = await this.chunkSource.getChunkByAbsoluteOrRelativeOffset(
+        const chunk = await this.chunkSource.getChunkByAny(
           txSize,
           absoluteOffset,
           dataRoot,

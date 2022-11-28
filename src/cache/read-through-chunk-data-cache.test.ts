@@ -47,7 +47,7 @@ describe('ReadThroughChunkDataCache', () => {
 
   // TODO remove mocks from tests
 
-  describe('getChunkDataByAbsoluteOrRelativeOffset', () => {
+  describe('getChunkDataByAny', () => {
     let mockedChunk: Chunk;
     let mockedChunkData: ChunkData;
 
@@ -85,11 +85,8 @@ describe('ReadThroughChunkDataCache', () => {
       const storeGetSpy = sandbox
         .stub(chunkDataStore, 'get')
         .resolves(mockedChunkData);
-      const networkSpy = sandbox.spy(
-        chunkSource,
-        'getChunkByAbsoluteOrRelativeOffset',
-      );
-      await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
+      const networkSpy = sandbox.spy(chunkSource, 'getChunkByAny');
+      await chunkCache.getChunkDataByAny(
         TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
@@ -104,9 +101,9 @@ describe('ReadThroughChunkDataCache', () => {
       const storeHasSpy = sandbox.stub(chunkDataStore, 'has').resolves(false);
       const storeGetSpy = sandbox.spy(chunkDataStore, 'get');
       const networkSpy = sandbox
-        .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
+        .stub(chunkSource, 'getChunkByAny')
         .resolves(mockedChunk);
-      await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
+      await chunkCache.getChunkDataByAny(
         TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
@@ -121,9 +118,9 @@ describe('ReadThroughChunkDataCache', () => {
       const storeHasSpy = sandbox.stub(chunkDataStore, 'has').rejects();
       const storeGetSpy = sandbox.spy(chunkDataStore, 'get');
       const networkSpy = sandbox
-        .stub(chunkSource, 'getChunkByAbsoluteOrRelativeOffset')
+        .stub(chunkSource, 'getChunkByAny')
         .resolves(mockedChunk);
-      await chunkCache.getChunkDataByAbsoluteOrRelativeOffset(
+      await chunkCache.getChunkDataByAny(
         TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
