@@ -68,6 +68,6 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
         return chunkMetadata;
       });
 
-    return await chunkMetadataPromise;
+    return chunkMetadataPromise;
   }
 }

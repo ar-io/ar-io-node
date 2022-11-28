@@ -51,7 +51,7 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
 
         return chunkData;
       });
-    const chunkData = await chunkDataPromise;
-    return chunkData;
+
+    return chunkDataPromise;
   }
 }
