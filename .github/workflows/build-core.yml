@@ -66,6 +66,19 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_BUILD_INVOCATION_ROLE }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Login to AWS ECR image repo
+        run: |
+          aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+      - name: Push image to AWS ECR
+        id: build-image
+        run: |
+          docker build . -t ar-io-core
+          docker tag ar-io-core "$ECR_REGISTRY/ar-io-core:$GITHUB_SHA"
+          aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_REGISTRY
+          docker push "$ECR_REGISTRY/ar-io-core:$GITHUB_SHA"
+          echo "::set-output name=image::"$ECR_REGISTRY/ar-io-core:$GITHUB_SHA""
+
       # Success notification
       - name: Send Slack success notification
         if: success()
