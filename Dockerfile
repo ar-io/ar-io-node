@@ -28,5 +28,8 @@ VOLUME /app/data
 EXPOSE 4000
 HEALTHCHECK CMD curl --fail http://localhost:4000/healthcheck || exit 1
 
+# ADD LABELS
+LABEL org.opencontainers.image.title="ar.io Core Service"
+
 # START
 ENTRYPOINT [ "/bin/sh", "docker-entrypoint.sh" ]
