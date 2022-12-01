@@ -6,13 +6,13 @@
 
 `yarn install`
 
-### Run tests
-
-`yarn test`
-
 ### Initialize the SQLite DB
 
 `yarn db:migrate up`
+
+### Run tests
+
+`yarn test`
 
 ### Run the service
 
