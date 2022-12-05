@@ -29,7 +29,7 @@ export function getPageSize({ first }: { first?: number }) {
 }
 
 export function resolveTxRecipient(tx: GqlTransaction) {
-  if (tx.recipient) {
+  if (tx.recipient !== undefined) {
     return tx.recipient;
   } else {
     return '';
@@ -126,14 +126,14 @@ export const resolvers: IResolvers = {
   },
   Transaction: {
     block: (parent: GqlTransaction) => {
-      return parent.blockIndepHash
+      return parent.blockIndepHash !== undefined
         ? {
             id: parent.blockIndepHash,
             timestamp: parent.blockTimestamp,
             height: parent.height,
             previous: parent.blockPreviousBlock,
           }
-        : null;
+        : undefined;
     },
     recipient: resolveTxRecipient,
     data: resolveTxData,

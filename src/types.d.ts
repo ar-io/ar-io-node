@@ -32,7 +32,7 @@ export interface PartialJsonBlock {
   diff: string;
   cumulative_diff?: string;
   last_retarget?: string;
-  reward_addr?: string; // undefined for block 0
+  reward_addr: string;
   reward_pool: string;
   block_size: string;
   weave_size: string;
@@ -79,7 +79,7 @@ export interface PartialMsgpackBlock {
   diff: string;
   cumulative_diff?: string;
   last_retarget?: string;
-  reward_addr?: Buffer; // undefined for block 0
+  reward_addr?: Buffer;
   reward_pool: string;
   block_size: string;
   weave_size: string;

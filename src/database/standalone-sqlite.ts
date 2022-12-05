@@ -287,7 +287,7 @@ export class StandaloneSqliteDatabaseWorker {
         const previousBlock = fromB64Url(block.previous_block ?? '');
         const nonce = fromB64Url(block.nonce);
         const hash = fromB64Url(block.hash);
-        const rewardAddr = fromB64Url(block.reward_addr ?? '');
+        const rewardAddr = fromB64Url(block.reward_addr !== 'unclaimed' ? block.reward_addr : '');
         const hashListMerkle =
           block.hash_list_merkle && fromB64Url(block.hash_list_merkle);
         const walletList = fromB64Url(block.wallet_list);
@@ -422,7 +422,7 @@ export class StandaloneSqliteDatabaseWorker {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
 
-  getBlockHashByHeight(height: number) {
+  getBlockHashByHeight(height: number): string | undefined {
     if (height < 0) {
       throw new Error(`Invalid height ${height}, must be >= 0.`);
     }

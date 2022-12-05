@@ -137,7 +137,7 @@ export class FsBlockStore implements PartialJsonBlockStore {
       if (height && !(await this.hasHeight(height))) {
         const block = await this.getByHeight(height);
         const hash = block?.indep_hash;
-        if (hash) {
+        if (hash !== undefined) {
           await fs.promises.unlink(this.blockHashPath(hash));
         }
         await fs.promises.unlink(this.blockHeightPath(height));

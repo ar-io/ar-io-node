@@ -167,7 +167,7 @@ export class BlockImporter {
         previousHeight,
       );
 
-      if (!previousDbBlockHash) {
+      if (previousDbBlockHash === undefined) {
         // If a gap is found, rewind the index to the last known block
         this.log.error(
           `Gap found at height ${height}. Reseting index to height ${

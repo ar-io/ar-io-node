@@ -78,24 +78,27 @@ export function jsonBlockToMsgpackBlock(
     height: jsonBlock.height,
     nonce: fromB64Url(jsonBlock.nonce),
     hash: fromB64Url(jsonBlock.hash),
-    previous_block: jsonBlock.previous_block
-      ? fromB64Url(jsonBlock.previous_block)
-      : undefined,
+    previous_block:
+      jsonBlock.previous_block === ''
+        ? fromB64Url(jsonBlock.previous_block)
+        : undefined,
     timestamp: jsonBlock.timestamp,
     diff: jsonBlock.diff,
     cumulative_diff: jsonBlock.cumulative_diff,
     last_retarget: jsonBlock.last_retarget,
-    reward_addr: jsonBlock.reward_addr
-      ? fromB64Url(jsonBlock.reward_addr)
-      : undefined,
+    reward_addr:
+      jsonBlock.reward_addr === 'unclaimed'
+        ? fromB64Url(jsonBlock.reward_addr)
+        : undefined,
     reward_pool: jsonBlock.reward_pool,
     block_size: jsonBlock.block_size,
     weave_size: jsonBlock.weave_size,
     usd_to_ar_rate: jsonBlock.usd_to_ar_rate,
     scheduled_usd_to_ar_rate: jsonBlock.scheduled_usd_to_ar_rate,
-    hash_list_merkle: jsonBlock.hash_list_merkle
-      ? fromB64Url(jsonBlock.hash_list_merkle)
-      : undefined,
+    hash_list_merkle:
+      jsonBlock.hash_list_merkle !== undefined
+        ? fromB64Url(jsonBlock.hash_list_merkle)
+        : undefined,
     wallet_list: fromB64Url(jsonBlock.wallet_list),
     tx_root: fromB64Url(jsonBlock.tx_root),
     tags: jsonBlock.tags.map((tag) => ({
@@ -123,7 +126,7 @@ export function msgpackBlockToJsonBlock(
     last_retarget: msgpackBlock.last_retarget,
     reward_addr: msgpackBlock.reward_addr
       ? toB64Url(msgpackBlock.reward_addr)
-      : undefined,
+      : 'unclaimed',
     reward_pool: msgpackBlock.reward_pool,
     block_size: msgpackBlock.block_size,
     weave_size: msgpackBlock.weave_size,

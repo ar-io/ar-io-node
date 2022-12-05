@@ -20,7 +20,6 @@
       {
         "allowNullableObject": true,
         "allowNullableBoolean": true,
-        "allowNullableString": true,
         "allowAny": true
       }
     ],
