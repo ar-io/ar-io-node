@@ -34,7 +34,7 @@ export class BundleDatabaseStub implements BundleDatabase {
 
   async saveDataItems(dataItems: DataItem[]): Promise<void> {
     this.log.info(`Saving ${dataItems.length} data items to bundle database`);
-    return await new Promise((resolve) => resolve());
+    return new Promise((resolve) => resolve());
   }
 }
 

@@ -85,7 +85,7 @@ export const resolvers: IResolvers = {
         resolver: 'transaction',
         queryParams,
       });
-      return await db.getGqlTransaction({
+      return db.getGqlTransaction({
         id: queryParams.id,
       });
     },
@@ -108,7 +108,7 @@ export const resolvers: IResolvers = {
     },
     block: async (_, queryParams, { db }) => {
       log.info('GraphQL block query', { resolver: 'block', queryParams });
-      return await db.getGqlBlock({
+      return db.getGqlBlock({
         id: queryParams.id,
       });
     },
