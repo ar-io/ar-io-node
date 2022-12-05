@@ -13,13 +13,8 @@
     "prettier"
   ],
   "rules": {
-    "eqeqeq": 2,
-    "no-console": 0,
-    "no-return-await": 2,
-    "prettier/prettier": 2,
-    "no-unused-vars": "off",
-    "@typescript-eslint/no-unused-vars": ["off"],
     "@typescript-eslint/no-explicit-any": ["off"],
+    "@typescript-eslint/no-unused-vars": ["off"],
     "@typescript-eslint/strict-boolean-expressions": [
       2,
       {
@@ -29,10 +24,16 @@
         "allowAny": true
       }
     ],
+    "eqeqeq": 2,
+    "jest-formatting/padding-around-describe-blocks": 2,
+    "jest-formatting/padding-around-test-blocks": 2,
     "mocha/max-top-level-suites": "off",
     "mocha/no-exports": "off",
     "mocha/no-mocha-arrows": "off",
-    "jest-formatting/padding-around-describe-blocks": 2,
-    "jest-formatting/padding-around-test-blocks": 2
+    "no-console": 0,
+    "no-return-await": 2,
+    "no-unneeded-ternary": 2,
+    "no-unused-vars": "off",
+    "prettier/prettier": 2
   }
 }
