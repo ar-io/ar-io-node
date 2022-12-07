@@ -11,11 +11,11 @@ container=$(
     -e START_HEIGHT \
     -e STOP_HEIGHT \
     -v $PWD/data/:/app/data \
-    ar-io-node-core
+    $IMAGE_URI
 )
 
 function max_height() {
-  sqlite data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
+  sqlite3 data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
 }
 
 while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
