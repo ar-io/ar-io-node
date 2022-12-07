@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+start_time=$(date +%s)
+
+export START_HEIGHT=0
+export STOP_HEIGHT=10
+
+container=$(
+  docker run -d \
+    -p 4000:4000 \
+    -e START_HEIGHT \
+    -e STOP_HEIGHT \
+    -v $PWD/data/:/app/data \
+    ar-io-node-core
+)
+
+function max_height() {
+  sqlite3 data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
+}
+
+while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
+  echo $(max_height)
+  if [ $(($(date +%s) - $start_time)) -gt 30 ]; then
+    echo "Timed out waiting for blocks to import."
+    docker stop $container
+    exit 1
+  fi
+
+  echo "Waiting for blocks to import..."
+  sleep 5
+done
+
+echo "Blocks imported successfully."
+docker stop $container
