@@ -15,7 +15,7 @@ container=$(
 )
 
 function max_height() {
-  sqlite3 data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
+  sqlite data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
 }
 
 while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
