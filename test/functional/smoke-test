@@ -20,7 +20,7 @@ function max_height() {
 
 while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
   echo $(max_height)
-  if [ $(($(date +%s) - $start_time)) -gt 30 ]; then
+  if [ $(($(date +%s) - $start_time)) -gt 180 ]; then
     echo "Timed out waiting for blocks to import."
     docker stop $container
     exit 1
