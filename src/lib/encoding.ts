@@ -18,6 +18,10 @@
 import ArModule from 'arweave/node/ar.js';
 import { createHash } from 'crypto';
 import { Packr } from 'msgpackr';
+import { Readable } from 'stream';
+import { default as Chain } from 'stream-chain';
+import parser from 'stream-json';
+import emit from 'stream-json/utils/emit.js';
 
 import {
   PartialJsonBlock,
@@ -214,4 +218,82 @@ const ar = new Ar();
 
 export function winstonToAr(amount: string) {
   return ar.winstonToAr(amount);
+}
+
+// Manifests
+
+// TODO add optional manifest format validation
+export function resolveManifestStreamPath(
+  stream: Readable,
+  path?: string,
+): Promise<String | undefined> {
+  return new Promise((resolve, reject) => {
+    let currentKey: string | undefined;
+    const keyPath: Array<string | number> = [];
+    let indexPath: string | undefined;
+    let paths: { [k: string]: string } = {};
+
+    const pipeline = new Chain([stream, parser()]);
+    emit(pipeline);
+
+    pipeline.on('error', (err) => {
+      reject(err);
+    });
+
+    pipeline.on('end', () => {
+      resolve(undefined);
+    });
+
+    pipeline.on('keyValue', (data) => {
+      currentKey = data;
+    });
+
+    pipeline.on('startObject', () => {
+      if (currentKey !== undefined) {
+        keyPath.push(currentKey);
+      }
+    });
+
+    pipeline.on('endObject', () => {
+      if (keyPath.length > 0) {
+        keyPath.pop();
+      }
+    });
+
+    pipeline.on('stringValue', (data) => {
+      // Index
+      if (
+        keyPath.length === 1 &&
+        keyPath[0] === 'index' &&
+        currentKey === 'path'
+      ) {
+        indexPath = data;
+        // Resolve if the path id is already known
+        if (indexPath !== undefined && paths[indexPath] !== undefined) {
+          resolve(paths[indexPath]);
+          paths = {};
+        }
+      }
+
+      // Paths
+      if (
+        keyPath.length === 2 &&
+        keyPath[0] === 'paths' &&
+        typeof keyPath[1] === 'string' &&
+        currentKey === 'id'
+      ) {
+        const p = keyPath[1];
+        if (path === undefined) {
+          if (indexPath === undefined) {
+            paths[p] = data; // Maintain map of paths for use later
+          } else if (p === indexPath) {
+            resolve(data);
+            paths = {};
+          }
+        } else if (p === path) {
+          resolve(data);
+        }
+      }
+    });
+  });
 }

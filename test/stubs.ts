@@ -35,6 +35,11 @@ export const stubTxID = '0000000000000000000000000000000000000000000';
 export const stubAns104Bundle = async (): Promise<Readable> => {
   return fs.createReadStream(`./test/mock_files/ans104_bundle`);
 };
+export const exampleManifestStream = (): Readable => {
+  return fs.createReadStream(
+    './test/mock_files/manifests/example_manifest.json',
+  );
+};
 
 export class ArweaveChainSourceStub implements ChainSource {
   private height = 10000000;

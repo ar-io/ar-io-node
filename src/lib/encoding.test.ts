@@ -30,12 +30,16 @@ import {
   msgpackToJsonBlock,
   msgpackToJsonTx,
   msgpackTxToJsonTx,
+  resolveManifestStreamPath,
   sha256B64Url,
   toB64Url,
   toMsgpack,
   utf8ToB64Url,
 } from '../../src/lib/encoding.js';
-import { ArweaveChainSourceStub } from '../../test/stubs.js';
+import {
+  ArweaveChainSourceStub,
+  exampleManifestStream,
+} from '../../test/stubs.js';
 
 const TEST_STRING = 'http://test.com';
 const TEST_BASE_64_URL_ENCODED_STRING = 'aHR0cDovL3Rlc3QuY29t';
@@ -221,6 +225,39 @@ describe('Transaction message pack encoding and decoding functions', () => {
 
         expect(jsonTx).to.deep.equal(tx);
       });
+    });
+  });
+});
+
+// TODO add test with index last
+describe('Manifest parsing', () => {
+  describe('resolveManifestStreamPath', () => {
+    it('should return the ID for the index path', async () => {
+      const id = await resolveManifestStreamPath(exampleManifestStream());
+      expect(id).to.equal('cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+    });
+
+    it('should return the ID for non-index paths', async () => {
+      // TODO use an array here
+      const id1 = await resolveManifestStreamPath(
+        exampleManifestStream(),
+        'css/mobile.css',
+      );
+      expect(id1).to.equal('fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
+
+      const id2 = await resolveManifestStreamPath(
+        exampleManifestStream(),
+        'assets/img/icon.png',
+      );
+      expect(id2).to.equal('0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
+    });
+
+    it('should return undefined if the path is not found', async () => {
+      const id = await resolveManifestStreamPath(
+        exampleManifestStream(),
+        'missing',
+      );
+      expect(id).to.be.undefined;
     });
   });
 });
