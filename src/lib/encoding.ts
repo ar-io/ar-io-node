@@ -17,6 +17,7 @@
  */
 import ArModule from 'arweave/node/ar.js';
 import { createHash } from 'crypto';
+import { EventEmitter } from 'events';
 import { Packr } from 'msgpackr';
 import { Readable } from 'stream';
 import { default as Chain } from 'stream-chain';
@@ -222,77 +223,126 @@ export function winstonToAr(amount: string) {
 
 // Manifests
 
-// TODO add optional manifest format validation
+export function parseManifestStream(stream: Readable): EventEmitter {
+  const emitter = new EventEmitter();
+  let currentKey: string | undefined;
+  const keyPath: Array<string | number> = [];
+  let indexPath: string | undefined;
+  let paths: { [k: string]: string } = {};
+  let hasValidManifestKey = false;
+  let hasValidManifestVersion = false;
+  let pathCount = 0;
+
+  const pipeline = new Chain([stream, parser()]);
+  emit(pipeline);
+
+  pipeline.on('error', (err) => {
+    emitter.emit('error', err);
+  });
+
+  pipeline.on('end', () => {
+    emitter.emit('end', {
+      pathCount,
+      indexPath,
+      isValid: hasValidManifestKey && hasValidManifestVersion && pathCount > 0,
+    });
+  });
+
+  pipeline.on('keyValue', (data) => {
+    currentKey = data;
+  });
+
+  pipeline.on('startObject', () => {
+    if (currentKey !== undefined) {
+      keyPath.push(currentKey);
+    }
+  });
+
+  pipeline.on('endObject', () => {
+    if (keyPath.length > 0) {
+      keyPath.pop();
+    }
+  });
+
+  pipeline.on('stringValue', (data) => {
+    // Manifest key
+    if (
+      keyPath.length === 0 &&
+      currentKey === 'manifest' &&
+      data === 'arweave/paths'
+    ) {
+      hasValidManifestKey = true;
+    }
+
+    // Manifest version
+    if (
+      keyPath.length === 0 &&
+      currentKey === 'version' &&
+      data === '0.1.0'
+    ) {
+      hasValidManifestVersion = true;
+    }
+
+    // Index
+    if (
+      keyPath.length === 1 &&
+      keyPath[0] === 'index' &&
+      currentKey === 'path'
+    ) {
+      indexPath = data;
+      // Resolve if the path id is already known
+      if (indexPath !== undefined && paths[indexPath] !== undefined) {
+        emitter.emit('index', { path: indexPath, id: paths[indexPath] });
+        paths = {};
+      }
+    }
+
+    // Paths
+    if (
+      keyPath.length === 2 &&
+      keyPath[0] === 'paths' &&
+      typeof keyPath[1] === 'string' &&
+      currentKey === 'id'
+    ) {
+      pathCount++;
+      const p = keyPath[1];
+      emitter.emit('path', { path: p, id: data });
+      if (indexPath === undefined) {
+        paths[p] = data; // Maintain map of paths for use later
+      } else if (p === indexPath) {
+        emitter.emit('index', { path: p, id: data });
+        paths = {};
+      }
+    }
+  });
+
+  return emitter;
+}
+
 export function resolveManifestStreamPath(
   stream: Readable,
   path?: string,
 ): Promise<String | undefined> {
   return new Promise((resolve, reject) => {
-    let currentKey: string | undefined;
-    const keyPath: Array<string | number> = [];
-    let indexPath: string | undefined;
-    let paths: { [k: string]: string } = {};
+    const emitter = parseManifestStream(stream);
 
-    const pipeline = new Chain([stream, parser()]);
-    emit(pipeline);
-
-    pipeline.on('error', (err) => {
+    emitter.on('error', (err) => {
       reject(err);
     });
 
-    pipeline.on('end', () => {
+    emitter.on('end', () => {
       resolve(undefined);
     });
 
-    pipeline.on('keyValue', (data) => {
-      currentKey = data;
-    });
-
-    pipeline.on('startObject', () => {
-      if (currentKey !== undefined) {
-        keyPath.push(currentKey);
+    emitter.on('index', (data) => {
+      if (path === undefined) {
+        resolve(data.id);
       }
     });
 
-    pipeline.on('endObject', () => {
-      if (keyPath.length > 0) {
-        keyPath.pop();
-      }
-    });
-
-    pipeline.on('stringValue', (data) => {
-      // Index
-      if (
-        keyPath.length === 1 &&
-        keyPath[0] === 'index' &&
-        currentKey === 'path'
-      ) {
-        indexPath = data;
-        // Resolve if the path id is already known
-        if (indexPath !== undefined && paths[indexPath] !== undefined) {
-          resolve(paths[indexPath]);
-          paths = {};
-        }
-      }
-
-      // Paths
-      if (
-        keyPath.length === 2 &&
-        keyPath[0] === 'paths' &&
-        typeof keyPath[1] === 'string' &&
-        currentKey === 'id'
-      ) {
-        const p = keyPath[1];
-        if (path === undefined) {
-          if (indexPath === undefined) {
-            paths[p] = data; // Maintain map of paths for use later
-          } else if (p === indexPath) {
-            resolve(data);
-            paths = {};
-          }
-        } else if (p === path) {
-          resolve(data);
-        }
+    emitter.on('path', (data) => {
+      if (path !== undefined && data.path === path) {
+        resolve(data.id);
       }
     });
   });
