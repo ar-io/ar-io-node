@@ -316,6 +316,7 @@ export interface ChunkDataByAnySource {
 export interface ContiguousDataResponse {
   stream: Readable;
   size: number;
+  verified: boolean;
 }
 
 export interface ContiguousDataSource {

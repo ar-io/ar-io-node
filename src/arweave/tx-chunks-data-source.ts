@@ -87,6 +87,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       return {
         stream,
         size,
+        verified: true,
       };
     } catch (error: any) {
       this.log.error('Failed to retrieve transaction data:', {
