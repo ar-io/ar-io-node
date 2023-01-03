@@ -47,16 +47,16 @@ describe('TxChunksDataSource', () => {
       it('should return chunk data of the correct size for a known chunk', (done) => {
         txChunkRetriever
           .getContiguousData(TX_ID)
-          .then((res: { data: Readable; size: number }) => {
-            const { data, size } = res;
+          .then((res: { stream: Readable; size: number }) => {
+            const { stream, size } = res;
             let bytes = 0;
-            data.on('error', (error: any) => {
+            stream.on('error', (error: any) => {
               done(error);
             });
-            data.on('data', (c) => {
+            stream.on('data', (c) => {
               bytes += c.length;
             });
-            data.on('end', () => {
+            stream.on('end', () => {
               expect(bytes).to.equal(size);
               done();
             });
@@ -70,14 +70,14 @@ describe('TxChunksDataSource', () => {
         sinon.stub(chunkSource, 'getChunkDataByAny').rejects(error);
         txChunkRetriever
           .getContiguousData(TX_ID)
-          .then((res: { data: Readable; size: number }) => {
-            const { data } = res;
-            data.on('error', (e: any) => {
+          .then((res: { stream: Readable; size: number }) => {
+            const { stream } = res;
+            stream.on('error', (e: any) => {
               expect(e).to.deep.equal(error);
               done();
             });
             // do nothing
-            data.on('data', () => {
+            stream.on('data', () => {
               return;
             });
           });
@@ -89,14 +89,14 @@ describe('TxChunksDataSource', () => {
           sinon.stub(chunkSource, 'getChunkByAny').rejects(error);
           txChunkRetriever
             .getContiguousData(TX_ID)
-            .then((res: { data: Readable; size: number }) => {
-              const { data } = res;
-              data.on('error', (error: any) => {
+            .then((res: { stream: Readable; size: number }) => {
+              const { stream } = res;
+              stream.on('error', (error: any) => {
                 expect(error).to.deep.equal(error);
                 done();
               });
               // do nothing
-              data.on('data', () => {
+              stream.on('data', () => {
                 return;
               });
             });

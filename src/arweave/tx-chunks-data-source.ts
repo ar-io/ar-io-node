@@ -57,7 +57,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         txDataRoot,
         bytes,
       );
-      const data = new Readable({
+      const stream = new Readable({
         autoDestroy: true,
         read: async function () {
           try {
@@ -85,7 +85,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         },
       });
       return {
-        data,
+        stream,
         size,
       };
     } catch (error: any) {
