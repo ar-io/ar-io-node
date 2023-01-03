@@ -313,6 +313,11 @@ export interface ChunkDataByAnySource {
   ): Promise<ChunkData>;
 }
 
+export interface ContigousDataResponse {
+  data: Readable;
+  size: number;
+}
+
 export interface ContiguousDataSource {
-  getTxData(id: string): Promise<{ data: Readable; size: number }>;
+  getTxData(id: string): Promise<ContigousDataResponse>;
 }
