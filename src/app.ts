@@ -202,7 +202,7 @@ const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 
 app.get(rawDataPathRegex, async (req, res) => {
   try {
-    (await txDataSource.getTxData(req.params[0])).data.pipe(res);
+    (await txDataSource.getContiguousData(req.params[0])).data.pipe(res);
   } catch (e) {
     // TODO handle 500s separately
     res.status(404).send('Not found');

@@ -40,6 +40,7 @@ import {
   ChunkByAnySource,
   ChunkData,
   ChunkDataByAnySource,
+  ContiguousDataResponse,
   ContiguousDataSource,
   JsonTransactionOffset,
   PartialJsonBlock,
@@ -586,17 +587,17 @@ export class ArweaveCompositeClient
     };
   }
 
-  async getTxData(txId: string): Promise<{ data: Readable; size: number }> {
+  async getContiguousData(id: string): Promise<ContiguousDataResponse> {
     this.failureSimulator.maybeFail();
 
     const [dataResponse, dataSizeResponse] = await Promise.all([
       this.trustedNodeRequestQueue.push({
         method: 'GET',
-        url: `/tx/${txId}/data`,
+        url: `/tx/${id}/data`,
       }),
       this.trustedNodeRequestQueue.push({
         method: 'GET',
-        url: `/tx/${txId}/data_size`,
+        url: `/tx/${id}/data_size`,
       }),
     ]);
 
