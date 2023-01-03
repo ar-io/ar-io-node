@@ -317,6 +317,7 @@ export interface ContiguousDataResponse {
   stream: Readable;
   size: number;
   verified: boolean;
+  contentType?: string;
 }
 
 export interface ContiguousDataSource {
