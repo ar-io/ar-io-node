@@ -57,12 +57,12 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
 
-type Peer = {
+interface Peer {
   url: string;
   blocks: number;
   height: number;
   lastSeen: number;
-};
+}
 
 export class ArweaveCompositeClient
   implements

@@ -17,10 +17,10 @@
  */
 import { Readable } from 'stream';
 
-export type B64uTag = {
+export interface B64uTag {
   name: string;
   value: string;
-};
+}
 
 export interface PartialJsonBlock {
   indep_hash: string;
@@ -64,10 +64,10 @@ export interface JsonTransactionOffset {
   size: number;
 }
 
-export type BinaryTag = {
+export interface BinaryTag {
   name: Buffer;
   value: Buffer;
-};
+}
 
 export interface PartialMsgpackBlock {
   indep_hash: Buffer;
@@ -188,11 +188,11 @@ export interface BundleDatabase {
   saveDataItems(dataItems: DataItem[]): Promise<void>;
 }
 
-type GqlPageInfo = {
+interface GqlPageInfo {
   hasNextPage: boolean;
-};
+}
 
-type GqlTransaction = {
+interface GqlTransaction {
   id: string;
   anchor: string;
   signature: string;
@@ -207,34 +207,34 @@ type GqlTransaction = {
   blockTimestamp: number | undefined;
   height: number | undefined;
   blockPreviousBlock: string | undefined;
-};
+}
 
-type GqlTransactionEdge = {
+interface GqlTransactionEdge {
   cursor: string;
   node: GqlTransaction;
-};
+}
 
-type GqlTransactionsResult = {
+interface GqlTransactionsResult {
   pageInfo: GqlPageInfo;
   edges: GqlTransactionEdge[];
-};
+}
 
-type GqlBlock = {
+interface GqlBlock {
   id: string;
   timestamp: number;
   height: number;
   previous: string;
-};
+}
 
-type GqlBlockEdge = {
+interface GqlBlockEdge {
   cursor: string;
   node: GqlBlock;
-};
+}
 
-type GqlBlocksResult = {
+interface GqlBlocksResult {
   pageInfo: GqlPageInfo;
   edges: GqlBlockEdge[];
-};
+}
 
 export interface GqlQueryable {
   getGqlTransaction(args: { id: string }): Promise<GqlTransaction>;
