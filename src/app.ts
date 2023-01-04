@@ -25,8 +25,8 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
-import { TxChunksDataSource } from './arweave/tx-chunks-data-source.js';
 import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
+import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
