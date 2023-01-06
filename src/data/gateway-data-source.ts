@@ -14,14 +14,17 @@ export class GatewayDataSource implements ContiguousDataSource {
     log: winston.Logger;
     trustedGatewayUrl: string;
   }) {
-    this.log = log.child({ class: 'TxDataChunksRetriever' });
+    this.log = log.child({ class: 'GatewayDataSource' });
     this.trustedGatewayAxios = axios.create({
       baseURL: trustedGatewayUrl,
     });
   }
 
   async getContiguousData(id: string): Promise<ContiguousDataResponse> {
-    this.log.info('Fetching contiguous data for tx', { txId: id });
+    this.log.debug('Fetching contiguous data from gateway', {
+      id,
+      trustedGatewayUrl: this.trustedGatewayAxios.defaults.baseURL,
+    });
 
     const response = await this.trustedGatewayAxios.request({
       method: 'GET',
@@ -31,7 +34,7 @@ export class GatewayDataSource implements ContiguousDataSource {
 
     return {
       stream: response.data,
-      size: response.data.length,
+      size: parseInt(response.headers['content-length']),
       verified: false,
       contentType: response.headers['content-type'],
     };

@@ -25,14 +25,16 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
-import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
-import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
+//import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
+import { GatewayDataSource } from './data/gateway-data-source.js';
+//import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
+import { resolveManifestStreamPath } from './lib/encoding.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
-import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
+//import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -43,6 +45,8 @@ import { TransactionRepairWorker } from './workers/transaction-repair-worker.js'
 const startHeight = +(process.env.START_HEIGHT ?? 0);
 const stopHeight = +(process.env.STOP_HEIGHT ?? Infinity);
 const trustedNodeUrl = process.env.TRUSTED_NODE_URL ?? 'https://arweave.net';
+const trustedGatewayUrl =
+  process.env.TRUSTED_GATEWAY_URL ?? 'https://arweave.net';
 const skipCache = (process.env.SKIP_CACHE ?? 'false') === 'true';
 const port = +(process.env.PORT ?? 4000);
 const simulatedRequestFailureRate = +(
@@ -127,17 +131,22 @@ const txRepairWorker = new TransactionRepairWorker({
   txFetcher,
 });
 
-// Configure transaction data source
-const txChunkDataSource = new ReadThroughChunkDataCache({
-  log,
-  chunkSource: arweaveClient,
-  chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
-});
+// Configure contigous data source
+//const chunkDataSource = new ReadThroughChunkDataCache({
+//  log,
+//  chunkSource: arweaveClient,
+//  chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
+//});
+//
+//const contiguousDataSource = new TxChunksDataSource({
+//  log,
+//  chainSource: arweaveClient,
+//  chunkSource: chunkDataSource,
+//});
 
-const txDataSource = new TxChunksDataSource({
+const contiguousDataSource = new GatewayDataSource({
   log,
-  chainSource: arweaveClient,
-  chunkSource: txChunkDataSource,
+  trustedGatewayUrl,
 });
 
 arweaveClient.refreshPeers();
@@ -198,13 +207,59 @@ apolloServerInstanceGql.start().then(() => {
   });
 });
 
+// Data routes
 const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
-
 app.get(rawDataPathRegex, async (req, res) => {
   try {
-    (await txDataSource.getContiguousData(req.params[0])).stream.pipe(res);
+    // TODO retrieve content type from DB if possible
+    const dataId = req.params[0];
+    const contiguousData = await contiguousDataSource.getContiguousData(dataId);
+
+    const contentType =
+      contiguousData.contentType ?? 'application/octet-stream';
+    res.contentType(contentType);
+    res.header('Content-Length', contiguousData.size.toString());
+    contiguousData.stream.pipe(res);
   } catch (e) {
-    // TODO handle 500s separately
+    // TODO distinguish between errors and missing data
+    res.status(404).send('Not found');
+  }
+});
+
+// TODO add CORS header
+const dataPathRegex =
+  /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
+app.get(dataPathRegex, async (req, res) => {
+  try {
+    const dataId = req.params[0] ?? req.params[1];
+    let contiguousData = await contiguousDataSource.getContiguousData(dataId);
+
+    // TODO use content type from DB when possible
+
+    if (contiguousData.contentType === 'application/x.arweave-manifest+json') {
+      // TODO implement manifest path resolution interface (to support DB lookups)
+      const resolvedDataId = await resolveManifestStreamPath(
+        contiguousData.stream,
+        req.params[2],
+      );
+
+      if (resolvedDataId === undefined) {
+        res.status(404).send('Not found');
+        return;
+      }
+
+      contiguousData = await contiguousDataSource.getContiguousData(
+        resolvedDataId,
+      );
+    }
+
+    const contentType =
+      contiguousData.contentType ?? 'application/octet-stream';
+    res.contentType(contentType);
+    res.header('Content-Length', contiguousData.size.toString());
+    contiguousData.stream.pipe(res);
+  } catch (e) {
+    // TODO distinguish between errors and missing data
     res.status(404).send('Not found');
   }
 });

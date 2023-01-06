@@ -322,7 +322,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
 export function resolveManifestStreamPath(
   stream: Readable,
   path?: string,
-): Promise<String | undefined> {
+): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const emitter = parseManifestStream(stream);
 
