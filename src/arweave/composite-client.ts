@@ -56,6 +56,7 @@ const DEFAULT_MAX_REQUESTS_PER_SECOND = 15;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
+const CHUNK_CACHE_TTL_SECONDS = 5;
 
 interface Peer {
   url: string;
@@ -76,6 +77,10 @@ export class ArweaveCompositeClient
   private failureSimulator: FailureSimulator;
   private txStore: PartialJsonTransactionStore;
   private blockStore: PartialJsonBlockStore;
+  private chunkCache: WeakMap<
+    { absoluteOffset: number },
+    { cachedAt: number; chunk: Chunk }
+  >;
   private skipCache: boolean;
 
   // Trusted node
@@ -122,6 +127,7 @@ export class ArweaveCompositeClient
     arweave,
     trustedNodeUrl,
     blockStore,
+    chunkCache = new WeakMap(),
     txStore,
     failureSimulator,
     requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -137,6 +143,10 @@ export class ArweaveCompositeClient
     arweave: Arweave;
     trustedNodeUrl: string;
     blockStore: PartialJsonBlockStore;
+    chunkCache?: WeakMap<
+      { absoluteOffset: number },
+      { cachedAt: number; chunk: Chunk }
+    >;
     txStore: PartialJsonTransactionStore;
     failureSimulator: FailureSimulator;
     requestTimeout?: number;
@@ -154,6 +164,7 @@ export class ArweaveCompositeClient
     this.failureSimulator = failureSimulator;
     this.txStore = txStore;
     this.blockStore = blockStore;
+    this.chunkCache = chunkCache;
     this.skipCache = skipCache;
 
     // Initialize trusted node Axios with automatic retries
@@ -541,6 +552,14 @@ export class ArweaveCompositeClient
   ): Promise<Chunk> {
     this.failureSimulator.maybeFail();
 
+    const cacheEntry = this.chunkCache.get({ absoluteOffset });
+    if (
+      cacheEntry &&
+      cacheEntry.cachedAt > Date.now() - CHUNK_CACHE_TTL_SECONDS * 1000
+    ) {
+      return cacheEntry.chunk;
+    }
+
     const response = await this.trustedNodeRequestQueue.push({
       method: 'GET',
       url: `/chunk/${absoluteOffset}`,
@@ -565,6 +584,14 @@ export class ArweaveCompositeClient
     };
 
     await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
+
+    this.chunkCache.set(
+      { absoluteOffset },
+      {
+        cachedAt: Date.now(),
+        chunk,
+      },
+    );
 
     return chunk;
   }
