@@ -23,18 +23,18 @@ export class TxChunksDataSource implements ContiguousDataSource {
     chainSource: ChainSource;
     chunkSource: ChunkDataByAnySource;
   }) {
-    this.log = log.child({ class: 'TxDataChunksRetriever' });
+    this.log = log.child({ class: 'TxChunksDataSource' });
     this.chainSource = chainSource;
     this.chunkSource = chunkSource;
   }
 
-  async getContiguousData(id: string): Promise<ContiguousDataResponse> {
-    this.log.info('Fetching chunk data for tx', { txId: id });
+  async getContiguousData(txId: string): Promise<ContiguousDataResponse> {
+    this.log.debug('Fetching chunk data for TX', { txId });
 
     try {
       const [txDataRoot, txOffset] = await Promise.all([
-        this.chainSource.getTxField(id, 'data_root'),
-        this.chainSource.getTxOffset(id),
+        this.chainSource.getTxField(txId, 'data_root'),
+        this.chainSource.getTxOffset(txId),
       ]);
       const size = +txOffset.size;
       const offset = +txOffset.offset;
@@ -91,7 +91,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       };
     } catch (error: any) {
       this.log.error('Failed to retrieve transaction data:', {
-        txId: id,
+        txId,
         messag: error.message,
         stack: error.stack,
       });
