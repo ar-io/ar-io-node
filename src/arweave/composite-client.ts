@@ -614,7 +614,7 @@ export class ArweaveCompositeClient
     };
   }
 
-  async getContiguousData(id: string): Promise<ContiguousDataResponse> {
+  async getData(id: string): Promise<ContiguousDataResponse> {
     this.failureSimulator.maybeFail();
 
     const [dataResponse, dataSizeResponse] = await Promise.all([

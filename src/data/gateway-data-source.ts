@@ -20,7 +20,7 @@ export class GatewayDataSource implements ContiguousDataSource {
     });
   }
 
-  async getContiguousData(id: string): Promise<ContiguousDataResponse> {
+  async getData(id: string): Promise<ContiguousDataResponse> {
     this.log.debug('Fetching contiguous data from gateway', {
       id,
       trustedGatewayUrl: this.trustedGatewayAxios.defaults.baseURL,

@@ -321,7 +321,7 @@ export interface ContiguousDataResponse {
 }
 
 export interface ContiguousDataSource {
-  getContiguousData(id: string): Promise<ContiguousDataResponse>;
+  getData(id: string): Promise<ContiguousDataResponse>;
 }
 
 export interface ManifestDataPathResolver {

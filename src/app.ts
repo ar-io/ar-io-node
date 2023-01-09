@@ -220,7 +220,7 @@ app.get(rawDataPathRegex, async (req, res) => {
   try {
     // TODO retrieve content type from DB if possible
     const id = req.params[0];
-    const data = await contiguousDataSource.getContiguousData(id);
+    const data = await contiguousDataSource.getData(id);
 
     const contentType = data.contentType ?? DEFAULT_CONTENT_TYPE;
     res.contentType(contentType);
@@ -239,7 +239,7 @@ app.get(dataPathRegex, async (req, res) => {
   try {
     const id = req.params[0] ?? req.params[1];
     const manifestPath = req.params[2];
-    let data = await contiguousDataSource.getContiguousData(id);
+    let data = await contiguousDataSource.getData(id);
 
     // TODO use content type from DB when possible
 
@@ -259,7 +259,7 @@ app.get(dataPathRegex, async (req, res) => {
         return;
       }
 
-      data = await contiguousDataSource.getContiguousData(resolvedId);
+      data = await contiguousDataSource.getData(resolvedId);
     }
 
     const contentType = data.contentType ?? DEFAULT_CONTENT_TYPE;

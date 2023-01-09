@@ -37,16 +37,16 @@ describe('TxChunksDataSource', () => {
   describe('getContiguousData', () => {
     describe('an invalid transaction id', () => {
       it('should throw an error', async () => {
-        await expect(
-          txChunkRetriever.getContiguousData('bad-tx-id'),
-        ).to.be.rejectedWith(Error);
+        await expect(txChunkRetriever.getData('bad-tx-id')).to.be.rejectedWith(
+          Error,
+        );
       });
     });
 
     describe('a valid transaction id', () => {
       it('should return chunk data of the correct size for a known chunk', (done) => {
         txChunkRetriever
-          .getContiguousData(TX_ID)
+          .getData(TX_ID)
           .then((res: { stream: Readable; size: number }) => {
             const { stream, size } = res;
             let bytes = 0;
@@ -69,7 +69,7 @@ describe('TxChunksDataSource', () => {
         const error = new Error('missing chunk');
         sinon.stub(chunkSource, 'getChunkDataByAny').rejects(error);
         txChunkRetriever
-          .getContiguousData(TX_ID)
+          .getData(TX_ID)
           .then((res: { stream: Readable; size: number }) => {
             const { stream } = res;
             stream.on('error', (e: any) => {
@@ -88,7 +88,7 @@ describe('TxChunksDataSource', () => {
           const error = new Error('Invalid chunk');
           sinon.stub(chunkSource, 'getChunkByAny').rejects(error);
           txChunkRetriever
-            .getContiguousData(TX_ID)
+            .getData(TX_ID)
             .then((res: { stream: Readable; size: number }) => {
               const { stream } = res;
               stream.on('error', (error: any) => {

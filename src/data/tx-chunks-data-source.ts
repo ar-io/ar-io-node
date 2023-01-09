@@ -28,7 +28,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
     this.chunkSource = chunkSource;
   }
 
-  async getContiguousData(txId: string): Promise<ContiguousDataResponse> {
+  async getData(txId: string): Promise<ContiguousDataResponse> {
     this.log.debug('Fetching chunk data for TX', { txId });
 
     try {
