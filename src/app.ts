@@ -27,10 +27,10 @@ import YAML from 'yaml';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 //import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
 import { GatewayDataSource } from './data/gateway-data-source.js';
+import { StreamingManifestPathResolver } from './data/streaming-manifest-path-resolver.js';
 //import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
-import { resolveManifestStreamPath } from './lib/encoding.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
@@ -149,6 +149,10 @@ const contiguousDataSource = new GatewayDataSource({
   trustedGatewayUrl,
 });
 
+const manifestPathResolver = new StreamingManifestPathResolver({
+  log,
+});
+
 arweaveClient.refreshPeers();
 blockImporter.start();
 txRepairWorker.start();
@@ -237,12 +241,16 @@ app.get(dataPathRegex, async (req, res) => {
     // TODO use content type from DB when possible
 
     if (contiguousData.contentType === 'application/x.arweave-manifest+json') {
-      // TODO implement manifest path resolution interface (to support DB lookups)
-      const resolvedDataId = await resolveManifestStreamPath(
-        contiguousData.stream,
+      const resolvedDataId = await manifestPathResolver.resolveDataPath(
+        contiguousData,
+        dataId,
         req.params[2],
       );
 
+      // The original stream is no longer needed after path resolution
+      contiguousData.stream.destroy();
+
+      // Preserve the behavior of the existing gateway
       if (resolvedDataId === undefined) {
         res.status(404).send('Not found');
         return;

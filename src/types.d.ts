@@ -323,3 +323,11 @@ export interface ContiguousDataResponse {
 export interface ContiguousDataSource {
   getContiguousData(id: string): Promise<ContiguousDataResponse>;
 }
+
+export interface ManifestDataPathResolver {
+  resolveDataPath(
+    data: ContiguousDataResponse,
+    id: string,
+    path: string,
+  ): Promise<string | undefined>;
+}
