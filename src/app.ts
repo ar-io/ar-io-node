@@ -238,6 +238,7 @@ const dataPathRegex =
 app.get(dataPathRegex, async (req, res) => {
   try {
     const id = req.params[0] ?? req.params[1];
+    const manifestPath = req.params[2];
     let data = await contiguousDataSource.getContiguousData(id);
 
     // TODO use content type from DB when possible
@@ -246,13 +247,13 @@ app.get(dataPathRegex, async (req, res) => {
       const resolvedId = await manifestPathResolver.resolveDataPath(
         data,
         id,
-        req.params[2],
+        manifestPath,
       );
 
       // The original stream is no longer needed after path resolution
       data.stream.destroy();
 
-      // Preserve the behavior of the existing gateway
+      // Return 404 for not found index or path (existing gateway behavior)
       if (resolvedId === undefined) {
         res.status(404).send('Not found');
         return;
