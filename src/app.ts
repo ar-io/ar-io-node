@@ -216,14 +216,13 @@ const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 app.get(rawDataPathRegex, async (req, res) => {
   try {
     // TODO retrieve content type from DB if possible
-    const dataId = req.params[0];
-    const contiguousData = await contiguousDataSource.getContiguousData(dataId);
+    const id = req.params[0];
+    const data = await contiguousDataSource.getContiguousData(id);
 
-    const contentType =
-      contiguousData.contentType ?? 'application/octet-stream';
+    const contentType = data.contentType ?? 'application/octet-stream';
     res.contentType(contentType);
-    res.header('Content-Length', contiguousData.size.toString());
-    contiguousData.stream.pipe(res);
+    res.header('Content-Length', data.size.toString());
+    data.stream.pipe(res);
   } catch (e) {
     // TODO distinguish between errors and missing data
     res.status(404).send('Not found');
@@ -235,37 +234,34 @@ const dataPathRegex =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 app.get(dataPathRegex, async (req, res) => {
   try {
-    const dataId = req.params[0] ?? req.params[1];
-    let contiguousData = await contiguousDataSource.getContiguousData(dataId);
+    const id = req.params[0] ?? req.params[1];
+    let data = await contiguousDataSource.getContiguousData(id);
 
     // TODO use content type from DB when possible
 
-    if (contiguousData.contentType === 'application/x.arweave-manifest+json') {
-      const resolvedDataId = await manifestPathResolver.resolveDataPath(
-        contiguousData,
-        dataId,
+    if (data.contentType === 'application/x.arweave-manifest+json') {
+      const resolvedId = await manifestPathResolver.resolveDataPath(
+        data,
+        id,
         req.params[2],
       );
 
       // The original stream is no longer needed after path resolution
-      contiguousData.stream.destroy();
+      data.stream.destroy();
 
       // Preserve the behavior of the existing gateway
-      if (resolvedDataId === undefined) {
+      if (resolvedId === undefined) {
         res.status(404).send('Not found');
         return;
       }
 
-      contiguousData = await contiguousDataSource.getContiguousData(
-        resolvedDataId,
-      );
+      data = await contiguousDataSource.getContiguousData(resolvedId);
     }
 
-    const contentType =
-      contiguousData.contentType ?? 'application/octet-stream';
+    const contentType = data.contentType ?? 'application/octet-stream';
     res.contentType(contentType);
-    res.header('Content-Length', contiguousData.size.toString());
-    contiguousData.stream.pipe(res);
+    res.header('Content-Length', data.size.toString());
+    data.stream.pipe(res);
   } catch (e) {
     // TODO distinguish between errors and missing data
     res.status(404).send('Not found');
