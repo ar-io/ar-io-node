@@ -211,6 +211,9 @@ apolloServerInstanceGql.start().then(() => {
   });
 });
 
+const MANIFEST_CONTENT_TYPE = 'application/x.arweave-manifest+json';
+const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
+
 // Data routes
 const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 app.get(rawDataPathRegex, async (req, res) => {
@@ -219,7 +222,7 @@ app.get(rawDataPathRegex, async (req, res) => {
     const id = req.params[0];
     const data = await contiguousDataSource.getContiguousData(id);
 
-    const contentType = data.contentType ?? 'application/octet-stream';
+    const contentType = data.contentType ?? DEFAULT_CONTENT_TYPE;
     res.contentType(contentType);
     res.header('Content-Length', data.size.toString());
     data.stream.pipe(res);
@@ -239,7 +242,7 @@ app.get(dataPathRegex, async (req, res) => {
 
     // TODO use content type from DB when possible
 
-    if (data.contentType === 'application/x.arweave-manifest+json') {
+    if (data.contentType === MANIFEST_CONTENT_TYPE) {
       const resolvedId = await manifestPathResolver.resolveDataPath(
         data,
         id,
@@ -258,7 +261,7 @@ app.get(dataPathRegex, async (req, res) => {
       data = await contiguousDataSource.getContiguousData(resolvedId);
     }
 
-    const contentType = data.contentType ?? 'application/octet-stream';
+    const contentType = data.contentType ?? DEFAULT_CONTENT_TYPE;
     res.contentType(contentType);
     res.header('Content-Length', data.size.toString());
     data.stream.pipe(res);
