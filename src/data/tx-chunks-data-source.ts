@@ -5,7 +5,7 @@ import {
   ChainSource,
   ChunkData,
   ChunkDataByAnySource,
-  ContiguousDataResponse,
+  ContiguousData,
   ContiguousDataSource,
 } from '../types.js';
 
@@ -28,7 +28,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
     this.chunkSource = chunkSource;
   }
 
-  async getData(txId: string): Promise<ContiguousDataResponse> {
+  async getData(txId: string): Promise<ContiguousData> {
     this.log.debug('Fetching chunk data for TX', { txId });
 
     try {

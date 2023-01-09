@@ -313,7 +313,7 @@ export interface ChunkDataByAnySource {
   ): Promise<ChunkData>;
 }
 
-export interface ContiguousDataResponse {
+export interface ContiguousData {
   stream: Readable;
   size: number;
   verified: boolean;
@@ -321,12 +321,12 @@ export interface ContiguousDataResponse {
 }
 
 export interface ContiguousDataSource {
-  getData(id: string): Promise<ContiguousDataResponse>;
+  getData(id: string): Promise<ContiguousData>;
 }
 
 export interface ManifestDataPathResolver {
   resolveDataPath(
-    data: ContiguousDataResponse,
+    data: ContiguousData,
     id: string,
     path: string,
   ): Promise<string | undefined>;

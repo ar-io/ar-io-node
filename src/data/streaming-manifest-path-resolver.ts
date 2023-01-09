@@ -1,7 +1,7 @@
 import winston from 'winston';
 
 import { resolveManifestStreamPath } from '../lib/encoding.js';
-import { ContiguousDataResponse, ManifestDataPathResolver } from '../types.js';
+import { ContiguousData, ManifestDataPathResolver } from '../types.js';
 
 export class StreamingManifestPathResolver implements ManifestDataPathResolver {
   private log: winston.Logger;
@@ -11,7 +11,7 @@ export class StreamingManifestPathResolver implements ManifestDataPathResolver {
   }
 
   async resolveDataPath(
-    data: ContiguousDataResponse,
+    data: ContiguousData,
     id: string,
     path: string,
   ): Promise<string | undefined> {

@@ -1,7 +1,7 @@
 import { default as axios } from 'axios';
 import winston from 'winston';
 
-import { ContiguousDataResponse, ContiguousDataSource } from '../types.js';
+import { ContiguousData, ContiguousDataSource } from '../types.js';
 
 export class GatewayDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -20,7 +20,7 @@ export class GatewayDataSource implements ContiguousDataSource {
     });
   }
 
-  async getData(id: string): Promise<ContiguousDataResponse> {
+  async getData(id: string): Promise<ContiguousData> {
     this.log.debug('Fetching contiguous data from gateway', {
       id,
       trustedGatewayUrl: this.trustedGatewayAxios.defaults.baseURL,
