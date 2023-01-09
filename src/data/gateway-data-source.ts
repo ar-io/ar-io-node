@@ -36,7 +36,7 @@ export class GatewayDataSource implements ContiguousDataSource {
       stream: response.data,
       size: parseInt(response.headers['content-length']),
       verified: false,
-      contentType: response.headers['content-type'],
+      sourceContentType: response.headers['content-type'],
     };
   }
 }

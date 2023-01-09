@@ -222,7 +222,7 @@ app.get(rawDataPathRegex, async (req, res) => {
     const id = req.params[0];
     const data = await contiguousDataSource.getData(id);
 
-    const contentType = data.contentType ?? DEFAULT_CONTENT_TYPE;
+    const contentType = data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
     res.contentType(contentType);
     res.header('Content-Length', data.size.toString());
     data.stream.pipe(res);
@@ -243,7 +243,7 @@ app.get(dataPathRegex, async (req, res) => {
 
     // TODO use content type from DB when possible
 
-    if (data.contentType === MANIFEST_CONTENT_TYPE) {
+    if (data.sourceContentType === MANIFEST_CONTENT_TYPE) {
       const resolvedId = await manifestPathResolver.resolveDataPath(
         data,
         id,
@@ -262,7 +262,7 @@ app.get(dataPathRegex, async (req, res) => {
       data = await contiguousDataSource.getData(resolvedId);
     }
 
-    const contentType = data.contentType ?? DEFAULT_CONTENT_TYPE;
+    const contentType = data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
     res.contentType(contentType);
     res.header('Content-Length', data.size.toString());
     data.stream.pipe(res);
