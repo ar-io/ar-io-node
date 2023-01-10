@@ -324,10 +324,17 @@ export interface ContiguousDataSource {
   getData(id: string): Promise<ContiguousData>;
 }
 
-export interface ManifestDataPathResolver {
-  resolveDataPath(
+export interface ManifestResolution {
+  resolvedId: string | undefined;
+  complete: boolean;
+}
+
+export interface ManifestPathResolver {
+  resolveFromIndex(id: string, path: string): Promise<ManifestResolution>;
+
+  resolveFromData(
     data: ContiguousData,
     id: string,
     path: string,
-  ): Promise<string | undefined>;
+  ): Promise<ManifestResolution>;
 }

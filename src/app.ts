@@ -260,7 +260,7 @@ app.get(dataPathRegex, async (req, res) => {
     // TODO use content type from DB when possible
 
     if (data.sourceContentType === MANIFEST_CONTENT_TYPE) {
-      const resolvedId = await manifestPathResolver.resolveDataPath(
+      const { resolvedId } = await manifestPathResolver.resolveFromData(
         data,
         id,
         manifestPath,
@@ -269,7 +269,7 @@ app.get(dataPathRegex, async (req, res) => {
       // The original stream is no longer needed after path resolution
       data.stream.destroy();
 
-      // Return 404 for not found index or path (existing gateway behavior)
+      // Return 404 for not found index or path (arweave.net gateway behavior)
       if (resolvedId === undefined) {
         res.status(404).send('Not found');
         return;
