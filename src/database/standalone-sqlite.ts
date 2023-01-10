@@ -38,6 +38,7 @@ import {
 } from '../lib/encoding.js';
 import {
   ChainDatabase,
+  ContiguousDataAttributes,
   GqlQueryable,
   PartialJsonBlock,
   PartialJsonTransaction,
@@ -287,7 +288,9 @@ export class StandaloneSqliteDatabaseWorker {
         const previousBlock = fromB64Url(block.previous_block ?? '');
         const nonce = fromB64Url(block.nonce);
         const hash = fromB64Url(block.hash);
-        const rewardAddr = fromB64Url(block.reward_addr !== 'unclaimed' ? block.reward_addr : '');
+        const rewardAddr = fromB64Url(
+          block.reward_addr !== 'unclaimed' ? block.reward_addr : '',
+        );
         const hashListMerkle =
           block.hash_list_merkle && fromB64Url(block.hash_list_merkle);
         const walletList = fromB64Url(block.wallet_list);
@@ -472,6 +475,22 @@ export class StandaloneSqliteDatabaseWorker {
         maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
       );
     }
+  }
+
+  getDataAttributes(id: string) {
+    const rows = this.stmts.core.selectDataAttributes.all({
+      id,
+    });
+
+    if (rows.length === 0) {
+      return undefined;
+    }
+
+    return {
+      size: rows[0].data_size,
+      contentType: rows[0].content_type,
+      stable: rows[0].stable,
+    };
   }
 
   getDebugInfo() {
@@ -1341,6 +1360,10 @@ export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
     return this.queueWork('saveBlockAndTxs', [block, txs, missingTxIds]);
   }
 
+  getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined> {
+    return this.queueWork('getDataAttributes', [id]);
+  }
+
   getDebugInfo(): Promise<DebugInfo> {
     return this.queueWork('getDebugInfo', undefined);
   }
@@ -1449,6 +1472,10 @@ if (!isMainThread) {
         const [block, txs, missingTxIds] = args;
         worker.saveBlockAndTxs(block, txs, missingTxIds);
         parentPort?.postMessage(null);
+        break;
+      case 'getDataAttributes':
+        const dataAttributes = worker.getDataAttributes(args[0]);
+        parentPort?.postMessage(dataAttributes);
         break;
       case 'getDebugInfo':
         const debugInfo = worker.getDebugInfo();

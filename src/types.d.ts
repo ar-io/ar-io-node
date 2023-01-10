@@ -320,6 +320,16 @@ export interface ContiguousData {
   sourceContentType?: string;
 }
 
+export interface ContiguousDataAttributes {
+  size: number;
+  contentType: string | undefined;
+  stable: boolean;
+}
+
+export interface ContiguousDataIndex {
+  getDataAttributes(id: string): Promise<ContiguousDataAttributes>;
+}
+
 export interface ContiguousDataSource {
   getData(id: string): Promise<ContiguousData>;
 }
