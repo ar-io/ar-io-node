@@ -215,17 +215,15 @@ apolloServerInstanceGql.start().then(() => {
 const MANIFEST_CONTENT_TYPE = 'application/x.arweave-manifest+json';
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
-const setDataHeaders = (
-  {
-    res,
-    data,
-    contentType,
-  }: {
-    res: Response;
-    data: ContiguousData;
-    contentType: string;
-  },
-) => {
+const setDataHeaders = ({
+  res,
+  data,
+  contentType,
+}: {
+  res: Response;
+  data: ContiguousData;
+  contentType: string;
+}) => {
   // TODO add cache header(s)
   // TODO add etag
 
@@ -242,7 +240,7 @@ app.get(rawDataPathRegex, async (req, res) => {
     const data = await contiguousDataSource.getData(id);
 
     const contentType = data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-    setDataHeaders({res, data, contentType });
+    setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
   } catch (e) {
     // TODO distinguish between errors and missing data
