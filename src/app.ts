@@ -17,7 +17,7 @@
  */
 import { default as Arweave } from 'arweave';
 import { EventEmitter } from 'events';
-import express from 'express';
+import express, { Response } from 'express';
 import promMid from 'express-prometheus-middleware';
 import fs from 'fs';
 import * as promClient from 'prom-client';
@@ -36,6 +36,7 @@ import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
 //import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
+import { ContiguousData } from './types.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
@@ -214,6 +215,24 @@ apolloServerInstanceGql.start().then(() => {
 const MANIFEST_CONTENT_TYPE = 'application/x.arweave-manifest+json';
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
+const setDataHeaders = (
+  {
+    res,
+    data,
+    contentType,
+  }: {
+    res: Response;
+    data: ContiguousData;
+    contentType: string;
+  },
+) => {
+  // TODO add cache header(s)
+  // TODO add etag
+
+  res.contentType(contentType);
+  res.header('Content-Length', data.size.toString());
+};
+
 // Data routes
 const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 app.get(rawDataPathRegex, async (req, res) => {
@@ -223,8 +242,7 @@ app.get(rawDataPathRegex, async (req, res) => {
     const data = await contiguousDataSource.getData(id);
 
     const contentType = data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-    res.contentType(contentType);
-    res.header('Content-Length', data.size.toString());
+    setDataHeaders({res, data, contentType });
     data.stream.pipe(res);
   } catch (e) {
     // TODO distinguish between errors and missing data
@@ -263,8 +281,7 @@ app.get(dataPathRegex, async (req, res) => {
     }
 
     const contentType = data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-    res.contentType(contentType);
-    res.header('Content-Length', data.size.toString());
+    setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
   } catch (e) {
     // TODO distinguish between errors and missing data
