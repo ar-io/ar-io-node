@@ -265,22 +265,22 @@ const handleManifest = async ({
   complete: boolean;
 }): Promise<boolean> => {
   if (resolvedId !== undefined) {
-    // Retrieve authoritative data attributes if they're available
+    // Retrieve authoritative data attributes if available
     const dataAttributes = await chainDb.getDataAttributes(resolvedId);
     let contentType: string | undefined;
     if (dataAttributes) {
       contentType = dataAttributes.contentType;
     }
 
-    // Retrieve the data based on resolved ID
+    // Retrieve data based on ID resolved from manifest path or index
     const data = await contiguousDataSource.getData(resolvedId);
 
-    // Send the response
+    // Set headers and stream response
     contentType = contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
     setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
 
-    // Indicate the response was sent
+    // Indicate response was sent
     return true;
   }
 
@@ -288,11 +288,11 @@ const handleManifest = async ({
   if (complete) {
     res.status(404).send('Not found');
 
-    // Indicate the response was sent
+    // Indicate response was sent
     return true;
   }
 
-  // Indicate the response was NOT sent
+  // Indicate response was NOT sent
   return false;
 };
 
@@ -313,6 +313,7 @@ app.get(dataPathRegex, async (req, res) => {
       contentType = dataAttributes.contentType;
     }
 
+    // Attempt manifest path resolution from the index (without data parsing)
     if (contentType === MANIFEST_CONTENT_TYPE) {
       const manifestResolution = await manifestPathResolver.resolveFromIndex(
         id,
@@ -327,6 +328,7 @@ app.get(dataPathRegex, async (req, res) => {
     const data = await contiguousDataSource.getData(id);
     contentType = contentType ?? data.sourceContentType;
 
+    // Fall back to on-demand manifest parsing
     if (contentType === MANIFEST_CONTENT_TYPE) {
       const manifestResolution = await manifestPathResolver.resolveFromData(
         data,
