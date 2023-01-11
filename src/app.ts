@@ -17,7 +17,7 @@
  */
 import { default as Arweave } from 'arweave';
 import { EventEmitter } from 'events';
-import express, { Response } from 'express';
+import express from 'express';
 import promMid from 'express-prometheus-middleware';
 import fs from 'fs';
 import * as promClient from 'prom-client';
@@ -31,13 +31,17 @@ import { StreamingManifestPathResolver } from './data/streaming-manifest-path-re
 //import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
-import { MANIFEST_CONTENT_TYPE } from './lib/encoding.js';
 import log from './log.js';
+import {
+  DATA_PATH_REGEX,
+  RAW_DATA_PATH_REGEX,
+  dataHandler,
+  rawDataHandler,
+} from './routes/data.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
 //import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
-import { ContiguousData } from './types.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
@@ -213,193 +217,22 @@ apolloServerInstanceGql.start().then(() => {
   });
 });
 
-const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
-
-const setDataHeaders = ({
-  res,
-  data,
-  contentType,
-}: {
-  res: Response;
-  data: ContiguousData;
-  contentType: string;
-}) => {
-  // TODO add cache header(s)
-  // TODO add etag
-
-  res.contentType(contentType);
-  res.header('Content-Length', data.size.toString());
-};
-
 // Data routes
-const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
-app.get(rawDataPathRegex, async (req, res) => {
-  const id = req.params[0];
-  let data: ContiguousData | undefined;
-  try {
-    // Retrieve authoritative data attributes if they're available
-    const dataAttributes = await chainDb.getDataAttributes(id);
-    let contentType: string | undefined;
-    if (dataAttributes) {
-      contentType = dataAttributes.contentType;
-    }
+app.get(
+  RAW_DATA_PATH_REGEX,
+  rawDataHandler({
+    log,
+    dataIndex: chainDb,
+    dataSource: contiguousDataSource,
+  }),
+);
 
-    try {
-      data = await contiguousDataSource.getData(id);
-    } catch (error: any) {
-      log.warn('Unable to retrieve contiguous data:', {
-        dataId: id,
-        message: error.message,
-        stack: error.stack,
-      });
-      res.status(404).send('Not found');
-      return;
-    }
-
-    contentType = contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-    setDataHeaders({ res, data, contentType });
-    data.stream.pipe(res);
-  } catch (error: any) {
-    log.error('Error retrieving raw data:', {
-      dataId: id,
-      message: error.message,
-      stack: error.stack,
-    });
-    data?.stream.destroy();
-    res.status(404).send('Not found');
-  }
-});
-
-const handleManifest = async ({
-  res,
-  resolvedId,
-  complete,
-}: {
-  res: Response;
-  resolvedId: string | undefined;
-  complete: boolean;
-}): Promise<boolean> => {
-  let data: ContiguousData | undefined;
-  try {
-    if (resolvedId !== undefined) {
-      // Retrieve authoritative data attributes if available
-      const dataAttributes = await chainDb.getDataAttributes(resolvedId);
-      let contentType: string | undefined;
-      if (dataAttributes) {
-        contentType = dataAttributes.contentType;
-      }
-
-      // Retrieve data based on ID resolved from manifest path or index
-      try {
-        data = await contiguousDataSource.getData(resolvedId);
-      } catch (error: any) {
-        log.warn('Unable to retrieve contiguous data:', {
-          dataId: resolvedId,
-          message: error.message,
-          stack: error.stack,
-        });
-        // Indicate response was NOT sent
-        return false;
-      }
-
-      // Set headers and stream response
-      contentType =
-        contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-      setDataHeaders({ res, data, contentType });
-      data.stream.pipe(res);
-
-      // Indicate response was sent
-      return true;
-    }
-
-    // Return 404 for not found index or path (arweave.net gateway behavior)
-    if (complete) {
-      res.status(404).send('Not found');
-
-      // Indicate response was sent
-      return true;
-    }
-  } catch (error: any) {
-    log.error('Error retrieving manifest data:', {
-      dataId: resolvedId,
-      message: error.message,
-      stack: error.stack,
-    });
-    data?.stream.destroy();
-  }
-
-  // Indicate response was NOT sent
-  return false;
-};
-
-// TODO add CORS header
-const dataPathRegex =
-  /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
-app.get(dataPathRegex, async (req, res) => {
-  const id = req.params[0] ?? req.params[1];
-  const manifestPath = req.params[2];
-  let data: ContiguousData | undefined;
-  try {
-    let contentType: string | undefined;
-    const dataAttributes = await chainDb.getDataAttributes(id);
-    if (dataAttributes) {
-      contentType = dataAttributes.contentType;
-    }
-
-    // Attempt manifest path resolution from the index (without data parsing)
-    if (dataAttributes?.isManifest) {
-      const manifestResolution = await manifestPathResolver.resolveFromIndex(
-        id,
-        manifestPath,
-      );
-
-      if (await handleManifest({ res, ...manifestResolution })) {
-        return;
-      }
-    }
-
-    try {
-      data = await contiguousDataSource.getData(id);
-    } catch (error: any) {
-      log.warn('Unable to retrieve contiguous data:', {
-        dataId: id,
-        message: error.message,
-        stack: error.stack,
-      });
-      res.status(404).send('Not found');
-      return;
-    }
-    contentType = contentType ?? data.sourceContentType;
-
-    // Fall back to on-demand manifest parsing
-    if (contentType === MANIFEST_CONTENT_TYPE) {
-      const manifestResolution = await manifestPathResolver.resolveFromData(
-        data,
-        id,
-        manifestPath,
-      );
-
-      // The original stream is no longer needed after path resolution
-      data.stream.destroy();
-
-      if (!(await handleManifest({ res, ...manifestResolution }))) {
-        // for readability (should be unreachable)
-        res.status(404).send('Not found');
-      }
-      return;
-    }
-
-    contentType = contentType ?? DEFAULT_CONTENT_TYPE;
-    setDataHeaders({ res, data, contentType });
-    data.stream.pipe(res);
-  } catch (error: any) {
-    log.error('Error retrieving data:', {
-      dataId: id,
-      manifestPath,
-      message: error.message,
-      stack: error.stack,
-    });
-    res.status(404).send('Not found');
-    data?.stream.destroy();
-  }
-});
+app.get(
+  DATA_PATH_REGEX,
+  dataHandler({
+    log,
+    dataIndex: chainDb,
+    dataSource: contiguousDataSource,
+    manifestPathResolver,
+  }),
+);
