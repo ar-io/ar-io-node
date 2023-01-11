@@ -234,9 +234,8 @@ const setDataHeaders = ({
 // Data routes
 const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 app.get(rawDataPathRegex, async (req, res) => {
+  const id = req.params[0];
   try {
-    const id = req.params[0];
-
     // Retrieve authoritative data attributes if they're available
     const dataAttributes = await chainDb.getDataAttributes(id);
     let contentType: string | undefined;
@@ -249,8 +248,12 @@ app.get(rawDataPathRegex, async (req, res) => {
     contentType = contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
     setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
-  } catch (e) {
-    // TODO distinguish between errors and missing data
+  } catch (error: any) {
+    log.error('Error retrieving raw data', {
+      dataId: id,
+      message: error.message,
+      stack: error.stack,
+    });
     res.status(404).send('Not found');
   }
 });
@@ -300,10 +303,9 @@ const handleManifest = async ({
 const dataPathRegex =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 app.get(dataPathRegex, async (req, res) => {
+  const id = req.params[0] ?? req.params[1];
+  const manifestPath = req.params[2];
   try {
-    const id = req.params[0] ?? req.params[1];
-    const manifestPath = req.params[2];
-
     // TODO return isManifest flag in attributes (for cases where manifest is
     // indexed, but data ID is not)
 
@@ -349,8 +351,13 @@ app.get(dataPathRegex, async (req, res) => {
     contentType = contentType ?? DEFAULT_CONTENT_TYPE;
     setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
-  } catch (e) {
-    // TODO distinguish between errors and missing data
+  } catch (error: any) {
+    log.error('Error retrieving data', {
+      dataId: id,
+      manifestPath,
+      message: error.message,
+      stack: error.stack,
+    });
     res.status(404).send('Not found');
   }
 });
