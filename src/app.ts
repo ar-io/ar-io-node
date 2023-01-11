@@ -244,13 +244,23 @@ app.get(rawDataPathRegex, async (req, res) => {
       contentType = dataAttributes.contentType;
     }
 
-    data = await contiguousDataSource.getData(id);
+    try {
+      data = await contiguousDataSource.getData(id);
+    } catch (error: any) {
+      log.warn('Unable to retrieve contiguous data:', {
+        dataId: id,
+        message: error.message,
+        stack: error.stack,
+      });
+      res.status(404).send('Not found');
+      return;
+    }
 
     contentType = contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
     setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
   } catch (error: any) {
-    log.error('Error retrieving raw data', {
+    log.error('Error retrieving raw data:', {
       dataId: id,
       message: error.message,
       stack: error.stack,
@@ -280,7 +290,17 @@ const handleManifest = async ({
       }
 
       // Retrieve data based on ID resolved from manifest path or index
-      data = await contiguousDataSource.getData(resolvedId);
+      try {
+        data = await contiguousDataSource.getData(resolvedId);
+      } catch (error: any) {
+        log.warn('Unable to retrieve contiguous data:', {
+          dataId: resolvedId,
+          message: error.message,
+          stack: error.stack,
+        });
+        // Indicate response was NOT sent
+        return false;
+      }
 
       // Set headers and stream response
       contentType =
@@ -300,7 +320,7 @@ const handleManifest = async ({
       return true;
     }
   } catch (error: any) {
-    log.error('Error retrieving manifest data', {
+    log.error('Error retrieving manifest data:', {
       dataId: resolvedId,
       message: error.message,
       stack: error.stack,
@@ -341,7 +361,17 @@ app.get(dataPathRegex, async (req, res) => {
       }
     }
 
-    data = await contiguousDataSource.getData(id);
+    try {
+      data = await contiguousDataSource.getData(id);
+    } catch (error: any) {
+      log.warn('Unable to retrieve contiguous data:', {
+        dataId: id,
+        message: error.message,
+        stack: error.stack,
+      });
+      res.status(404).send('Not found');
+      return;
+    }
     contentType = contentType ?? data.sourceContentType;
 
     // Fall back to on-demand manifest parsing
@@ -366,7 +396,7 @@ app.get(dataPathRegex, async (req, res) => {
     setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
   } catch (error: any) {
-    log.error('Error retrieving data', {
+    log.error('Error retrieving data:', {
       dataId: id,
       manifestPath,
       message: error.message,
