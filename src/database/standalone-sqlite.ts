@@ -39,6 +39,7 @@ import {
 import {
   ChainDatabase,
   ContiguousDataAttributes,
+  ContiguousDataIndex,
   GqlQueryable,
   PartialJsonBlock,
   PartialJsonTransaction,
@@ -1232,7 +1233,9 @@ export class StandaloneSqliteDatabaseWorker {
   }
 }
 
-export class StandaloneSqliteDatabase implements ChainDatabase, GqlQueryable {
+export class StandaloneSqliteDatabase
+  implements ChainDatabase, ContiguousDataIndex, GqlQueryable
+{
   log: winston.Logger;
   private workers: any[] = [];
   private workQueue: any[] = [];

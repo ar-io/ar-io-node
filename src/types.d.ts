@@ -327,7 +327,7 @@ export interface ContiguousDataAttributes {
 }
 
 export interface ContiguousDataIndex {
-  getDataAttributes(id: string): Promise<ContiguousDataAttributes>;
+  getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
 }
 
 export interface ContiguousDataSource {
