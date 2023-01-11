@@ -235,6 +235,7 @@ const setDataHeaders = ({
 const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 app.get(rawDataPathRegex, async (req, res) => {
   const id = req.params[0];
+  let data: ContiguousData | undefined;
   try {
     // Retrieve authoritative data attributes if they're available
     const dataAttributes = await chainDb.getDataAttributes(id);
@@ -243,7 +244,7 @@ app.get(rawDataPathRegex, async (req, res) => {
       contentType = dataAttributes.contentType;
     }
 
-    const data = await contiguousDataSource.getData(id);
+    data = await contiguousDataSource.getData(id);
 
     contentType = contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
     setDataHeaders({ res, data, contentType });
@@ -254,6 +255,7 @@ app.get(rawDataPathRegex, async (req, res) => {
       message: error.message,
       stack: error.stack,
     });
+    data?.stream.destroy();
     res.status(404).send('Not found');
   }
 });
@@ -267,32 +269,43 @@ const handleManifest = async ({
   resolvedId: string | undefined;
   complete: boolean;
 }): Promise<boolean> => {
-  if (resolvedId !== undefined) {
-    // Retrieve authoritative data attributes if available
-    const dataAttributes = await chainDb.getDataAttributes(resolvedId);
-    let contentType: string | undefined;
-    if (dataAttributes) {
-      contentType = dataAttributes.contentType;
+  let data: ContiguousData | undefined;
+  try {
+    if (resolvedId !== undefined) {
+      // Retrieve authoritative data attributes if available
+      const dataAttributes = await chainDb.getDataAttributes(resolvedId);
+      let contentType: string | undefined;
+      if (dataAttributes) {
+        contentType = dataAttributes.contentType;
+      }
+
+      // Retrieve data based on ID resolved from manifest path or index
+      data = await contiguousDataSource.getData(resolvedId);
+
+      // Set headers and stream response
+      contentType =
+        contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
+      setDataHeaders({ res, data, contentType });
+      data.stream.pipe(res);
+
+      // Indicate response was sent
+      return true;
     }
 
-    // Retrieve data based on ID resolved from manifest path or index
-    const data = await contiguousDataSource.getData(resolvedId);
+    // Return 404 for not found index or path (arweave.net gateway behavior)
+    if (complete) {
+      res.status(404).send('Not found');
 
-    // Set headers and stream response
-    contentType = contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-    setDataHeaders({ res, data, contentType });
-    data.stream.pipe(res);
-
-    // Indicate response was sent
-    return true;
-  }
-
-  // Return 404 for not found index or path (arweave.net gateway behavior)
-  if (complete) {
-    res.status(404).send('Not found');
-
-    // Indicate response was sent
-    return true;
+      // Indicate response was sent
+      return true;
+    }
+  } catch (error: any) {
+    log.error('Error retrieving manifest data', {
+      dataId: resolvedId,
+      message: error.message,
+      stack: error.stack,
+    });
+    data?.stream.destroy();
   }
 
   // Indicate response was NOT sent
@@ -305,6 +318,7 @@ const dataPathRegex =
 app.get(dataPathRegex, async (req, res) => {
   const id = req.params[0] ?? req.params[1];
   const manifestPath = req.params[2];
+  let data: ContiguousData | undefined;
   try {
     // TODO return isManifest flag in attributes (for cases where manifest is
     // indexed, but data ID is not)
@@ -327,7 +341,7 @@ app.get(dataPathRegex, async (req, res) => {
       }
     }
 
-    const data = await contiguousDataSource.getData(id);
+    data = await contiguousDataSource.getData(id);
     contentType = contentType ?? data.sourceContentType;
 
     // Fall back to on-demand manifest parsing
@@ -359,5 +373,6 @@ app.get(dataPathRegex, async (req, res) => {
       stack: error.stack,
     });
     res.status(404).send('Not found');
+    data?.stream.destroy();
   }
 });
