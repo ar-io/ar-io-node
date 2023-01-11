@@ -32,6 +32,12 @@ export class GatewayDataSource implements ContiguousDataSource {
       responseType: 'stream',
     });
 
+    if (response.status !== 200) {
+      throw new Error(
+        `Unexpected status code from gateway: ${response.status}`,
+      );
+    }
+
     return {
       stream: response.data,
       size: parseInt(response.headers['content-length']),
