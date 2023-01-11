@@ -92,7 +92,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
     } catch (error: any) {
       this.log.error('Failed to retrieve transaction data:', {
         txId,
-        messag: error.message,
+        message: error.message,
         stack: error.stack,
       });
       throw error;
