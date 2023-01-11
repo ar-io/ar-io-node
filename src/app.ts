@@ -235,11 +235,18 @@ const setDataHeaders = ({
 const rawDataPathRegex = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 app.get(rawDataPathRegex, async (req, res) => {
   try {
-    // TODO retrieve content type from DB if possible
     const id = req.params[0];
+
+    // Retrieve authoritative data attributes if they're available
+    const dataAttributes = await chainDb.getDataAttributes(id);
+    let contentType: string | undefined;
+    if (dataAttributes) {
+      contentType = dataAttributes.contentType;
+    }
+
     const data = await contiguousDataSource.getData(id);
 
-    const contentType = data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
+    contentType = contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
     setDataHeaders({ res, data, contentType });
     data.stream.pipe(res);
   } catch (e) {
