@@ -36,6 +36,7 @@ import {
   toB64Url,
   utf8ToB64Url,
 } from '../lib/encoding.js';
+import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 import {
   ChainDatabase,
   ContiguousDataAttributes,
@@ -490,6 +491,7 @@ export class StandaloneSqliteDatabaseWorker {
     return {
       size: rows[0].data_size,
       contentType: rows[0].content_type,
+      isManifest: rows[0].content_type === MANIFEST_CONTENT_TYPE,
       stable: rows[0].stable,
     };
   }

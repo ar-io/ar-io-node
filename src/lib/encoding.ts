@@ -223,6 +223,8 @@ export function winstonToAr(amount: string) {
 
 // Manifests
 
+export const MANIFEST_CONTENT_TYPE = 'application/x.arweave-manifest+json';
+
 export function parseManifestStream(stream: Readable): EventEmitter {
   const emitter = new EventEmitter();
   let currentKey: string | undefined;

@@ -323,6 +323,7 @@ export interface ContiguousData {
 export interface ContiguousDataAttributes {
   size: number;
   contentType: string | undefined;
+  isManifest: boolean;
   stable: boolean;
 }
 

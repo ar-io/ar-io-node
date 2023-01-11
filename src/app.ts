@@ -31,6 +31,7 @@ import { StreamingManifestPathResolver } from './data/streaming-manifest-path-re
 //import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
+import { MANIFEST_CONTENT_TYPE } from './lib/encoding.js';
 import log from './log.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
@@ -212,7 +213,6 @@ apolloServerInstanceGql.start().then(() => {
   });
 });
 
-const MANIFEST_CONTENT_TYPE = 'application/x.arweave-manifest+json';
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const setDataHeaders = ({
@@ -340,9 +340,6 @@ app.get(dataPathRegex, async (req, res) => {
   const manifestPath = req.params[2];
   let data: ContiguousData | undefined;
   try {
-    // TODO return isManifest flag in attributes (for cases where manifest is
-    // indexed, but data ID is not)
-
     let contentType: string | undefined;
     const dataAttributes = await chainDb.getDataAttributes(id);
     if (dataAttributes) {
@@ -350,7 +347,7 @@ app.get(dataPathRegex, async (req, res) => {
     }
 
     // Attempt manifest path resolution from the index (without data parsing)
-    if (contentType === MANIFEST_CONTENT_TYPE) {
+    if (dataAttributes?.isManifest) {
       const manifestResolution = await manifestPathResolver.resolveFromIndex(
         id,
         manifestPath,
