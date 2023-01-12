@@ -27,6 +27,8 @@ import {
   ManifestPathResolver,
 } from '../types.js';
 
+const NOT_FOUND_MAX_AGE = 60; // 1 minute
+
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const setDataHeaders = ({
@@ -47,6 +49,14 @@ const setDataHeaders = ({
       DEFAULT_CONTENT_TYPE,
   );
   res.header('Content-Length', data.size.toString());
+};
+
+const sendNotFound = (res: Response) => {
+  res.header(
+    'Cache-Control',
+    `public, max-age=${NOT_FOUND_MAX_AGE}, immutable`,
+  );
+  res.status(404).send('Not found');
 };
 
 // Data routes
@@ -75,7 +85,7 @@ export const rawDataHandler = ({
           message: error.message,
           stack: error.stack,
         });
-        res.status(404).send('Not found');
+        sendNotFound(res);
         return;
       }
 
@@ -88,7 +98,7 @@ export const rawDataHandler = ({
         stack: error.stack,
       });
       data?.stream.destroy();
-      res.status(404).send('Not found');
+      sendNotFound(res);
     }
   };
 };
@@ -138,7 +148,7 @@ const handleManifest = async ({
 
     // Return 404 for not found index or path (arweave.net gateway behavior)
     if (complete) {
-      res.status(404).send('Not found');
+      sendNotFound(res);
 
       // Indicate response was sent
       return true;
@@ -205,7 +215,7 @@ export const dataHandler = ({
           message: error.message,
           stack: error.stack,
         });
-        res.status(404).send('Not found');
+        sendNotFound(res);
         return;
       }
 
@@ -233,7 +243,7 @@ export const dataHandler = ({
           }))
         ) {
           // for readability (should be unreachable)
-          res.status(404).send('Not found');
+          sendNotFound(res);
         }
         return;
       }
@@ -251,7 +261,7 @@ export const dataHandler = ({
         message: error.message,
         stack: error.stack,
       });
-      res.status(404).send('Not found');
+      sendNotFound(res);
       data?.stream.destroy();
     }
   };
