@@ -87,7 +87,7 @@ export const rawDataHandler = ({
       return;
     }
 
-    // Set headers and attempt to stream data
+    // Set headers and attempt to retrieve and stream data
     let data: ContiguousData | undefined;
     try {
       data = await dataSource.getData(id);
@@ -106,7 +106,7 @@ export const rawDataHandler = ({
   };
 };
 
-const handleManifest = async ({
+const sendManifestResponse = async ({
   log,
   res,
   dataSource,
@@ -136,7 +136,7 @@ const handleManifest = async ({
       return false;
     }
 
-    // Set headers and stream response
+    // Set headers and stream data
     try {
       setDataHeaders({
         res,
@@ -197,8 +197,10 @@ export const dataHandler = ({
           manifestPath,
         );
 
+        // Send response based on manifest resolution (data ID and
+        // completeness)
         if (
-          await handleManifest({
+          await sendManifestResponse({
             log,
             res,
             dataIndex,
@@ -206,10 +208,12 @@ export const dataHandler = ({
             ...manifestResolution,
           })
         ) {
+          // Manifest response successfully sent
           return;
         }
       }
 
+      // Attempt to retrieve data
       try {
         data = await dataSource.getData(id);
       } catch (error: any) {
@@ -236,8 +240,10 @@ export const dataHandler = ({
         // The original stream is no longer needed after path resolution
         data.stream.destroy();
 
+        // Send response based on manifest resolution (data ID and
+        // completeness)
         if (
-          !(await handleManifest({
+          !(await sendManifestResponse({
             log,
             res,
             dataIndex,
@@ -245,12 +251,14 @@ export const dataHandler = ({
             ...manifestResolution,
           }))
         ) {
-          // for readability (should be unreachable)
+          // This should be unreachable since resolution from data is always
+          // considered complete, but just in case...
           sendNotFound(res);
         }
         return;
       }
 
+      // Set headers and stream data
       setDataHeaders({
         res,
         dataAttributes,
