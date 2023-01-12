@@ -27,6 +27,8 @@ import {
   ManifestPathResolver,
 } from '../types.js';
 
+const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
 const NOT_FOUND_MAX_AGE = 60; // 1 minute
 
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
@@ -40,8 +42,16 @@ const setDataHeaders = ({
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
 }) => {
-  // TODO add cache header(s)
   // TODO add etag
+  // TODO add header indicating stability
+  // TODO add header indicating whether data is verified
+  // TODO cached header for zero length data (maybe...)
+
+  if (dataAttributes?.stable) {
+    res.header('Cache-Control', `public, max-age=${STABLE_MAX_AGE}, immutable`);
+  } else {
+    res.header('Cache-Control', `public, max-age=${UNSTABLE_MAX_AGE}`);
+  }
 
   res.contentType(
     dataAttributes?.contentType ??
