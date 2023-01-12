@@ -72,33 +72,36 @@ export const rawDataHandler = ({
 }) => {
   return async (req: Request, res: Response) => {
     const id = req.params[0];
-    let data: ContiguousData | undefined;
+
+    // Retrieve authoritative data attributes if they're available
+    let dataAttributes: ContiguousDataAttributes | undefined;
     try {
-      // Retrieve authoritative data attributes if they're available
-      const dataAttributes = await dataIndex.getDataAttributes(id);
-
-      try {
-        data = await dataSource.getData(id);
-      } catch (error: any) {
-        log.warn('Unable to retrieve contiguous data:', {
-          dataId: id,
-          message: error.message,
-          stack: error.stack,
-        });
-        sendNotFound(res);
-        return;
-      }
-
-      setDataHeaders({ res, dataAttributes, data });
-      data.stream.pipe(res);
+      dataAttributes = await dataIndex.getDataAttributes(id);
     } catch (error: any) {
-      log.error('Error retrieving raw data:', {
+      log.error('Error retrieving data attributes:', {
         dataId: id,
         message: error.message,
         stack: error.stack,
       });
-      data?.stream.destroy();
       sendNotFound(res);
+      return;
+    }
+
+    // Set headers and attempt to stream data
+    let data: ContiguousData | undefined;
+    try {
+      data = await dataSource.getData(id);
+      setDataHeaders({ res, dataAttributes, data });
+      data.stream.pipe(res);
+    } catch (error: any) {
+      log.warn('Unable to retrieve contiguous data:', {
+        dataId: id,
+        message: error.message,
+        stack: error.stack,
+      });
+      sendNotFound(res);
+      data?.stream.destroy();
+      return;
     }
   };
 };
@@ -119,47 +122,47 @@ const handleManifest = async ({
   complete: boolean;
 }): Promise<boolean> => {
   let data: ContiguousData | undefined;
-  try {
-    if (resolvedId !== undefined) {
-      // Retrieve data based on ID resolved from manifest path or index
-      try {
-        data = await dataSource.getData(resolvedId);
-      } catch (error: any) {
-        log.warn('Unable to retrieve contiguous data:', {
-          dataId: resolvedId,
-          message: error.message,
-          stack: error.stack,
-        });
-        // Indicate response was NOT sent
-        return false;
-      }
+  if (resolvedId !== undefined) {
+    // Retrieve data based on ID resolved from manifest path or index
+    try {
+      data = await dataSource.getData(resolvedId);
+    } catch (error: any) {
+      log.warn('Unable to retrieve contiguous data:', {
+        dataId: resolvedId,
+        message: error.message,
+        stack: error.stack,
+      });
+      // Indicate response was NOT sent
+      return false;
+    }
 
-      // Set headers and stream response
+    // Set headers and stream response
+    try {
       setDataHeaders({
         res,
         dataAttributes: await dataIndex.getDataAttributes(resolvedId),
         data,
       });
       data.stream.pipe(res);
-
-      // Indicate response was sent
-      return true;
+    } catch (error: any) {
+      log.error('Error retrieving data attributes:', {
+        dataId: resolvedId,
+        message: error.message,
+        stack: error.stack,
+      });
+      data?.stream.destroy();
     }
 
-    // Return 404 for not found index or path (arweave.net gateway behavior)
-    if (complete) {
-      sendNotFound(res);
+    // Indicate response was sent
+    return true;
+  }
 
-      // Indicate response was sent
-      return true;
-    }
-  } catch (error: any) {
-    log.error('Error retrieving manifest data:', {
-      dataId: resolvedId,
-      message: error.message,
-      stack: error.stack,
-    });
-    data?.stream.destroy();
+  // Return 404 for not found index or path (arweave.net gateway behavior)
+  if (complete) {
+    sendNotFound(res);
+
+    // Indicate response was sent
+    return true;
   }
 
   // Indicate response was NOT sent
