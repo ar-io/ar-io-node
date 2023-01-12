@@ -21,6 +21,7 @@ import { Logger } from 'winston';
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataIndex,
   ContiguousDataSource,
   ManifestPathResolver,
@@ -30,17 +31,21 @@ const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const setDataHeaders = ({
   res,
+  dataAttributes,
   data,
-  contentType,
 }: {
   res: Response;
+  dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
-  contentType: string;
 }) => {
   // TODO add cache header(s)
   // TODO add etag
 
-  res.contentType(contentType);
+  res.contentType(
+    dataAttributes?.contentType ??
+      data.sourceContentType ??
+      DEFAULT_CONTENT_TYPE,
+  );
   res.header('Content-Length', data.size.toString());
 };
 
@@ -61,10 +66,6 @@ export const rawDataHandler = ({
     try {
       // Retrieve authoritative data attributes if they're available
       const dataAttributes = await dataIndex.getDataAttributes(id);
-      let contentType: string | undefined;
-      if (dataAttributes) {
-        contentType = dataAttributes.contentType;
-      }
 
       try {
         data = await dataSource.getData(id);
@@ -78,9 +79,7 @@ export const rawDataHandler = ({
         return;
       }
 
-      contentType =
-        contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-      setDataHeaders({ res, data, contentType });
+      setDataHeaders({ res, dataAttributes, data });
       data.stream.pipe(res);
     } catch (error: any) {
       log.error('Error retrieving raw data:', {
@@ -112,13 +111,6 @@ const handleManifest = async ({
   let data: ContiguousData | undefined;
   try {
     if (resolvedId !== undefined) {
-      // Retrieve authoritative data attributes if available
-      const dataAttributes = await dataIndex.getDataAttributes(resolvedId);
-      let contentType: string | undefined;
-      if (dataAttributes) {
-        contentType = dataAttributes.contentType;
-      }
-
       // Retrieve data based on ID resolved from manifest path or index
       try {
         data = await dataSource.getData(resolvedId);
@@ -133,9 +125,11 @@ const handleManifest = async ({
       }
 
       // Set headers and stream response
-      contentType =
-        contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE;
-      setDataHeaders({ res, data, contentType });
+      setDataHeaders({
+        res,
+        dataAttributes: await dataIndex.getDataAttributes(resolvedId),
+        data,
+      });
       data.stream.pipe(res);
 
       // Indicate response was sent
@@ -180,11 +174,8 @@ export const dataHandler = ({
     const manifestPath = req.params[2];
     let data: ContiguousData | undefined;
     try {
-      let contentType: string | undefined;
+      // Retrieve authoritative data attributes if available
       const dataAttributes = await dataIndex.getDataAttributes(id);
-      if (dataAttributes) {
-        contentType = dataAttributes.contentType;
-      }
 
       // Attempt manifest path resolution from the index (without data parsing)
       if (dataAttributes?.isManifest) {
@@ -217,10 +208,12 @@ export const dataHandler = ({
         res.status(404).send('Not found');
         return;
       }
-      contentType = contentType ?? data.sourceContentType;
 
       // Fall back to on-demand manifest parsing
-      if (contentType === MANIFEST_CONTENT_TYPE) {
+      if (
+        (dataAttributes?.contentType ?? data.sourceContentType) ===
+        MANIFEST_CONTENT_TYPE
+      ) {
         const manifestResolution = await manifestPathResolver.resolveFromData(
           data,
           id,
@@ -245,8 +238,11 @@ export const dataHandler = ({
         return;
       }
 
-      contentType = contentType ?? DEFAULT_CONTENT_TYPE;
-      setDataHeaders({ res, data, contentType });
+      setDataHeaders({
+        res,
+        dataAttributes,
+        data,
+      });
       data.stream.pipe(res);
     } catch (error: any) {
       log.error('Error retrieving data:', {
