@@ -61,6 +61,17 @@ const setDataHeaders = ({
   res.header('Content-Length', data.size.toString());
 };
 
+const setRawDataHeaders = (res: Response) => {
+  // TODO restict this to non-ArNS, non-manifest domains (requires knowledge of
+  // primary domain)
+  res.header(
+    'Content-Security-Policy',
+    `default-src 'self'; frame-src 'none'; object-src 'none'`,
+  );
+  res.header('Cross-Origin-Opener-Policy', 'same-origin');
+  res.header('Cross-Origin-Embedder-Policy', 'require-corp');
+};
+
 const sendNotFound = (res: Response) => {
   res.header(
     'Cache-Control',
@@ -102,6 +113,7 @@ export const rawDataHandler = ({
     try {
       data = await dataSource.getData(id);
       setDataHeaders({ res, dataAttributes, data });
+      setRawDataHeaders(res);
       data.stream.pipe(res);
     } catch (error: any) {
       log.warn('Unable to retrieve contiguous data:', {
