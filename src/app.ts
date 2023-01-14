@@ -25,10 +25,11 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
-//import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
+import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
 import { GatewayDataSource } from './data/gateway-data-source.js';
+import { SequentialDataSource } from './data/sequential-data-source.js';
 import { StreamingManifestPathResolver } from './data/streaming-manifest-path-resolver.js';
-//import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
+import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
@@ -40,7 +41,7 @@ import {
 } from './routes/data.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
-//import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
+import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -138,21 +139,26 @@ const txRepairWorker = new TransactionRepairWorker({
 });
 
 // Configure contigous data source
-//const chunkDataSource = new ReadThroughChunkDataCache({
-//  log,
-//  chunkSource: arweaveClient,
-//  chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
-//});
-//
-//const contiguousDataSource = new TxChunksDataSource({
-//  log,
-//  chainSource: arweaveClient,
-//  chunkSource: chunkDataSource,
-//});
+const chunkDataSource = new ReadThroughChunkDataCache({
+  log,
+  chunkSource: arweaveClient,
+  chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
+});
 
-const contiguousDataSource = new GatewayDataSource({
+const txChunksDataSource = new TxChunksDataSource({
+  log,
+  chainSource: arweaveClient,
+  chunkSource: chunkDataSource,
+});
+
+const gatewayDataSource = new GatewayDataSource({
   log,
   trustedGatewayUrl,
+});
+
+const contiguousDataSource = new SequentialDataSource({
+  log,
+  dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
 });
 
 const manifestPathResolver = new StreamingManifestPathResolver({
