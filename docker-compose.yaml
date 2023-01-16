@@ -10,10 +10,12 @@ services:
       - '3000:3000'
       - '9901:9901'
     environment:
-      - AR_IO_HOST=core
-      - AR_IO_PORT=4000
-      - GATEWAY_URL=arweave.net
       - LOG_LEVEL=info
+      - TVAL_AR_IO_HOST=core
+      - TVAL_AR_IO_PORT=4000
+      - TVAL_GATEWAY_HOST=${TRUSTED_GATEWAY_HOST:-arweave.net}
+      - TVAL_GRAPHQL_HOST=${GRAPHQL_HOST:-core}
+      - TVAL_GRAPHQL_PORT=${GRAPHQL_PORT:-4000}
 
   core:
     image: ghcr.io/ar-io/ar-io-core:latest
@@ -24,4 +26,10 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      ENV: development
+      - ENV=${ENV:-development}
+      - TRUSTED_NODE_URL=${TRUSTED_NODE_URL:-https://arweave.net}
+      - TRUSTED_GATEWAY_URL=https://${TRUSTED_GATEWAY_HOST:-arweave.net}
+      - START_HEIGHT=${START_HEIGHT:-0}
+      - STOP_HEIGHT=${STOP_HEIGHT:-Infinity}
+      - SKIP_CACHE=${SKIP_CACHE:-false}
+      - SIMULATED_REQUEST_FAILURE_RATE=${SIMULATED_REQUEST_FAILURE_RATE:-0}

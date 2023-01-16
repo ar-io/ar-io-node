@@ -1,3 +1,4 @@
+#@ load("@ytt:data", "data")
 ---
 admin:
   address:
@@ -36,7 +37,10 @@ static_resources:
                               num_retries: 5
                         - match: { prefix: '/graphql' }
                           route:
-                            cluster: ario_gateways
+                            cluster: graphql_gateways
+                            #@ if data.values.GRAPHQL_HOST == "arweave.net":
+                            auto_host_rewrite: true
+                            #@ end
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               retriable_status_codes: 404
@@ -56,7 +60,7 @@ static_resources:
                         - match:
                             safe_regex:
                               google_re2: { max_program_size: 200 }
-                              regex: "^\/raw\/[a-zA-Z0-9_-]{43}$"
+                              regex: '^\/raw\/[a-zA-Z0-9_-]{43}$'
                           route:
                             timeout: 0s
                             cluster: ario_gateways
@@ -66,7 +70,7 @@ static_resources:
                         - match:
                             safe_regex:
                               google_re2: { max_program_size: 200 }
-                              regex: "^\/[a-zA-Z0-9_-]{43}\/?$|^\/[a-zA-Z0-9_-]{43}\/.*$"
+                              regex: '^\/[a-zA-Z0-9_-]{43}\/?$|^\/[a-zA-Z0-9_-]{43}\/.*$'
                           route:
                             timeout: 0s
                             cluster: ario_gateways
@@ -100,8 +104,32 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: ${AR_IO_HOST}
-                      port_value: ${AR_IO_PORT}
+                      address: #@ data.values.AR_IO_HOST
+                      port_value: #@ data.values.AR_IO_PORT
+    - name: graphql_gateways
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: legacy_gateways
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: #@ data.values.GRAPHQL_HOST
+                      port_value: #@ data.values.GRAPHQL_PORT
+      #@ if data.values.GRAPHQL_HOST == "arweave.net":
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: arweave.net
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: /etc/ssl/certs/ca-certificates.crt
+      #@ end
     - name: legacy_gateways
       connect_timeout: 1s
       type: STRICT_DNS
@@ -113,7 +141,7 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: ${GATEWAY_URL}
+                      address: #@ data.values.GATEWAY_HOST
                       port_value: 443
       transport_socket:
         name: envoy.transport_sockets.tls
