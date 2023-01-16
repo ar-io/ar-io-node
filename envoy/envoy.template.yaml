@@ -63,6 +63,16 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
+                        - match:
+                            safe_regex:
+                              google_re2: { max_program_size: 200 }
+                              regex: "^\/[a-zA-Z0-9_-]{43}\/?$|^\/[a-zA-Z0-9_-]{43}\/.*$"
+                          route:
+                            timeout: 0s
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
                         - match: { prefix: '/' }
                           route:
                             cluster: legacy_gateways
