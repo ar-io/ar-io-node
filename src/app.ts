@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { default as Arweave } from 'arweave';
+import { default as cors } from 'cors';
 import { EventEmitter } from 'events';
 import express from 'express';
 import promMid from 'express-prometheus-middleware';
@@ -171,6 +172,7 @@ txRepairWorker.start();
 
 // HTTP server
 const app = express();
+app.use(cors());
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
 
 // OpenAPI Spec

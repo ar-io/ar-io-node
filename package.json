@@ -20,6 +20,7 @@
     "arweave": "^1.11.4",
     "axios": "^0.27.2",
     "better-sqlite3": "^7.5.1",
+    "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "express": "^4.18.1",
     "express-prometheus-middleware": "^1.2.0",
