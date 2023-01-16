@@ -62,6 +62,11 @@ const setDataHeaders = ({
 };
 
 const setRawDataHeaders = (res: Response) => {
+  // Unset CORS headers
+  res.removeHeader('Access-Control-Allow-Origin');
+  res.removeHeader('Access-Control-Allow-Methods');
+  res.removeHeader('Access-Control-Allow-Headers');
+
   // TODO restict this to non-ArNS, non-manifest domains (requires knowledge of
   // primary domain)
   res.header(
