@@ -134,53 +134,61 @@ describe('Message pack encoding and decoding functions', () => {
 describe('Block message pack encoding and decoding functions', () => {
   describe('jsonBlockToMsgpackBlock and msgpackBlockToJsonBlock', () => {
     it('should round trip to and from a MsgpackBlock', async () => {
-      [1, 982575].forEach(async (height) => {
-        const chainSource = new ArweaveChainSourceStub();
-        const block = await chainSource.getBlockByHeight(height);
+      await Promise.all(
+        [1, 982575].map(async (height) => {
+          const chainSource = new ArweaveChainSourceStub();
+          const block = await chainSource.getBlockByHeight(height);
 
-        // Remove extranious header fields
-        delete (block as any).poa;
-        delete (block as any).tx_tree;
+          // Remove extranious header fields
+          delete (block as any).poa;
+          delete (block as any).tx_tree;
 
-        const msgpackBlock = jsonBlockToMsgpackBlock(block);
-        const jsonBlock = msgpackBlockToJsonBlock(msgpackBlock);
+          const msgpackBlock = jsonBlockToMsgpackBlock(block);
+          const jsonBlock = msgpackBlockToJsonBlock(msgpackBlock);
 
-        // Check keys individual since some may be present with undefined values
-        // on the jsonBlock but missing on the block
-        for (const key in jsonBlock) {
-          if ((block as any)[key] !== undefined) {
-            expect((jsonBlock as any)[key]).to.deep.equal((block as any)[key]);
-          } else {
-            expect((jsonBlock as any)[key]).to.be.undefined;
+          // Check keys individual since some may be present with undefined values
+          // on the jsonBlock but missing on the block
+          for (const key in jsonBlock) {
+            if ((block as any)[key] !== undefined) {
+              expect((jsonBlock as any)[key]).to.deep.equal(
+                (block as any)[key],
+              );
+            } else {
+              expect((jsonBlock as any)[key]).to.be.undefined;
+            }
           }
-        }
-      });
+        }),
+      );
     });
   });
 
   describe('jsonBlockToMsgpack and msgpackToJsonBlock', () => {
     it('should round trip to and from MessagePack binary data', async () => {
-      [1, 982575].forEach(async (height) => {
-        const chainSource = new ArweaveChainSourceStub();
-        const block = await chainSource.getBlockByHeight(height);
+      await Promise.all(
+        [1, 982575].map(async (height) => {
+          const chainSource = new ArweaveChainSourceStub();
+          const block = await chainSource.getBlockByHeight(height);
 
-        // Remove extranious header fields
-        delete (block as any).poa;
-        delete (block as any).tx_tree;
+          // Remove extranious header fields
+          delete (block as any).poa;
+          delete (block as any).tx_tree;
 
-        const buffer = jsonBlockToMsgpack(block);
-        const jsonBlock = msgpackToJsonBlock(buffer);
+          const buffer = jsonBlockToMsgpack(block);
+          const jsonBlock = msgpackToJsonBlock(buffer);
 
-        // Check keys individual since some may be present with undefined values
-        // on the jsonBlock but missing on the block
-        for (const key in jsonBlock) {
-          if ((block as any)[key] !== undefined) {
-            expect((jsonBlock as any)[key]).to.deep.equal((block as any)[key]);
-          } else {
-            expect((jsonBlock as any)[key]).to.be.undefined;
+          // Check keys individual since some may be present with undefined values
+          // on the jsonBlock but missing on the block
+          for (const key in jsonBlock) {
+            if ((block as any)[key] !== undefined) {
+              expect((jsonBlock as any)[key]).to.deep.equal(
+                (block as any)[key],
+              );
+            } else {
+              expect((jsonBlock as any)[key]).to.be.undefined;
+            }
           }
-        }
-      });
+        }),
+      );
     });
   });
 });
@@ -188,22 +196,24 @@ describe('Block message pack encoding and decoding functions', () => {
 describe('Transaction message pack encoding and decoding functions', () => {
   describe('jsonTxToMsgpackTx and msgpackTxToJsonTx', () => {
     it('should round trip to and from a MsgpackTransaction', async () => {
-      [
-        'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
-        '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
-      ].forEach(async (txId) => {
-        const chainSource = new ArweaveChainSourceStub();
-        const tx = await chainSource.getTx(txId);
+      await Promise.all(
+        [
+          'cK9WF2XMwFj5TF1uhaCSdrA2mVoaxAz20HkDyQhq0i0',
+          '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
+        ].map(async (txId) => {
+          const chainSource = new ArweaveChainSourceStub();
+          const tx = await chainSource.getTx(txId);
 
-        // Remove extranious header fields
-        delete (tx as any).data;
-        delete (tx as any).data_tree;
+          // Remove extranious header fields
+          delete (tx as any).data;
+          delete (tx as any).data_tree;
 
-        const msgpackTx = jsonTxToMsgpackTx(tx);
-        const jsonTx = msgpackTxToJsonTx(msgpackTx);
+          const msgpackTx = jsonTxToMsgpackTx(tx);
+          const jsonTx = msgpackTxToJsonTx(msgpackTx);
 
-        expect(jsonTx).to.deep.equal(tx);
-      });
+          expect(jsonTx).to.deep.equal(tx);
+        }),
+      );
     });
   });
 
