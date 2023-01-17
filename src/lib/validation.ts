@@ -19,9 +19,9 @@ export function sanityCheckBlock(block: PartialJsonBlock) {
 
   if (
     block.height !== 0 &&
-    (block.previous_block === undefined || block.previous_block === '')
+    (typeof block.previous_block !== 'string' || block.previous_block === '')
   ) {
-    throw new Error("Invalid block: missing 'previous_block'");
+    throw new Error("Invalid block: missing or invalid 'previous_block'");
   }
 }
 
