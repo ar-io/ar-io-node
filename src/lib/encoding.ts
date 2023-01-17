@@ -84,7 +84,7 @@ export function jsonBlockToMsgpackBlock(
     nonce: fromB64Url(jsonBlock.nonce),
     hash: fromB64Url(jsonBlock.hash),
     previous_block:
-      jsonBlock.previous_block === ''
+      jsonBlock.previous_block !== '' && jsonBlock.previous_block !== undefined
         ? fromB64Url(jsonBlock.previous_block)
         : undefined,
     timestamp: jsonBlock.timestamp,
@@ -92,7 +92,7 @@ export function jsonBlockToMsgpackBlock(
     cumulative_diff: jsonBlock.cumulative_diff,
     last_retarget: jsonBlock.last_retarget,
     reward_addr:
-      jsonBlock.reward_addr === 'unclaimed'
+      jsonBlock.reward_addr !== 'unclaimed'
         ? fromB64Url(jsonBlock.reward_addr)
         : undefined,
     reward_pool: jsonBlock.reward_pool,
@@ -101,6 +101,7 @@ export function jsonBlockToMsgpackBlock(
     usd_to_ar_rate: jsonBlock.usd_to_ar_rate,
     scheduled_usd_to_ar_rate: jsonBlock.scheduled_usd_to_ar_rate,
     hash_list_merkle:
+      jsonBlock.hash_list_merkle !== '' &&
       jsonBlock.hash_list_merkle !== undefined
         ? fromB64Url(jsonBlock.hash_list_merkle)
         : undefined,
@@ -277,11 +278,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
     }
 
     // Manifest version
-    if (
-      keyPath.length === 0 &&
-      currentKey === 'version' &&
-      data === '0.1.0'
-    ) {
+    if (keyPath.length === 0 && currentKey === 'version' && data === '0.1.0') {
       hasValidManifestVersion = true;
     }
 
