@@ -173,6 +173,10 @@ export class BlockImporter {
           `Gap found at height ${height}. Reseting index to height ${
             previousHeight - 1
           }...`,
+          {
+            previousHeight,
+            previousDbBlockHash,
+          },
         );
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
@@ -186,6 +190,12 @@ export class BlockImporter {
           `Fork detected at height ${height}. Reseting index to height ${
             previousHeight - 1
           }...`,
+          {
+            forkDepth,
+            previousHeight,
+            previousBlockHash: block.previous_block,
+            previousDbBlockHash,
+          },
         );
         this.chainDb.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
