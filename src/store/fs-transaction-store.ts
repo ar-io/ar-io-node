@@ -2,6 +2,7 @@ import fs from 'fs';
 import winston from 'winston';
 
 import { jsonTxToMsgpack, msgpackToJsonTx } from '../lib/encoding.js';
+import { sanityCheckTx } from '../lib/validation.js';
 import {
   PartialJsonTransaction,
   PartialJsonTransactionStore,
@@ -38,7 +39,9 @@ export class FsTransactionStore implements PartialJsonTransactionStore {
     try {
       if (await this.has(txId)) {
         const txData = await fs.promises.readFile(this.txPath(txId));
-        return msgpackToJsonTx(txData);
+        const tx = msgpackToJsonTx(txData);
+        sanityCheckTx(tx);
+        return tx;
       }
     } catch (error: any) {
       this.log.error('Failed to get transaction', {

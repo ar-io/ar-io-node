@@ -3,6 +3,7 @@ import path from 'path';
 import winston from 'winston';
 
 import { jsonBlockToMsgpack, msgpackToJsonBlock } from '../lib/encoding.js';
+import { sanityCheckBlock } from '../lib/validation.js';
 import { PartialJsonBlock, PartialJsonBlockStore } from '../types.js';
 
 export class FsBlockStore implements PartialJsonBlockStore {
@@ -71,7 +72,9 @@ export class FsBlockStore implements PartialJsonBlockStore {
         const blockData = await fs.promises.readFile(
           this.blockHeightPath(height),
         );
-        return msgpackToJsonBlock(blockData);
+        const block = msgpackToJsonBlock(blockData);
+        sanityCheckBlock(block);
+        return block;
       }
     } catch (error: any) {
       this.log.error('Failed to get block by height', {

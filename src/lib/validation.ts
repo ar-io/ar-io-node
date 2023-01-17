@@ -16,6 +16,13 @@ export function sanityCheckBlock(block: PartialJsonBlock) {
   if (!block.height === undefined) {
     throw new Error("Invalid block: missing 'height'");
   }
+
+  if (
+    block.height !== 0 &&
+    (block.previous_block === undefined || block.previous_block === '')
+  ) {
+    throw new Error("Invalid block: missing 'previous_block'");
+  }
 }
 
 export function sanityCheckTx(tx: PartialJsonTransaction) {
