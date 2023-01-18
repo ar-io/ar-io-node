@@ -78,7 +78,7 @@ const setRawDataHeaders = (res: Response) => {
   res.header('Cross-Origin-Embedder-Policy', 'require-corp');
 };
 
-const sendNotFound = (res: Response) => {
+export const sendNotFound = (res: Response) => {
   res.header(
     'Cache-Control',
     `public, max-age=${NOT_FOUND_MAX_AGE}, immutable`,
@@ -88,7 +88,7 @@ const sendNotFound = (res: Response) => {
 
 // Data routes
 export const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
-export const rawDataHandler = ({
+export const createRawDataHandler = ({
   log,
   dataIndex,
   dataSource,
@@ -211,9 +211,11 @@ const sendManifestResponse = async ({
   return false;
 };
 
+export type DataHandler = (req: Request, res: Response) => Promise<void>;
+
 export const DATA_PATH_REGEX =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
-export const dataHandler = ({
+export const createDataHandler = ({
   log,
   dataIndex,
   dataSource,
@@ -223,10 +225,19 @@ export const dataHandler = ({
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
   manifestPathResolver: ManifestPathResolver;
-}) => {
+}): DataHandler => {
   return async (req: Request, res: Response) => {
-    const id = req.params[0] ?? req.params[1];
-    const manifestPath = req.params[2];
+    const arnsResolvedId = res.getHeader('X-ArNS-Resolved-Id');
+    let id: string | undefined;
+    let manifestPath: string | undefined;
+    if (typeof arnsResolvedId === 'string') {
+      id = arnsResolvedId;
+      manifestPath = req.path.slice(1);
+    } else {
+      id = req.params[0] ?? req.params[1];
+      manifestPath = req.params[2];
+    }
+
     let data: ContiguousData | undefined;
     try {
       // Retrieve authoritative data attributes if available

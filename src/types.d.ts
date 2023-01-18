@@ -342,11 +342,32 @@ export interface ManifestResolution {
 }
 
 export interface ManifestPathResolver {
-  resolveFromIndex(id: string, path: string): Promise<ManifestResolution>;
+  resolveFromIndex(
+    id: string,
+    path: string | undefined,
+  ): Promise<ManifestResolution>;
 
   resolveFromData(
     data: ContiguousData,
     id: string,
-    path: string,
+    path: string | undefined,
   ): Promise<ManifestResolution>;
+}
+
+export interface ValidNameResolution {
+  name: string;
+  resolvedId: string;
+  ttl: number;
+}
+
+export interface MissingNameResolution {
+  name: string;
+  resolvedId: undefined;
+  ttl: undefined;
+}
+
+type NameResolution = ValidNameResolution | MissingNameResolution;
+
+export interface NameResolver {
+  resolve(name: string): Promise<NameResolution>;
 }
