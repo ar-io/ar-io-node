@@ -25,6 +25,7 @@ import * as promClient from 'prom-client';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
+import { TrustedGatewayArNSResolver } from './arns/trusted-gateway-arns-resolver.js';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { ReadThroughChunkDataCache } from './cache/read-through-chunk-data-cache.js';
 import { GatewayDataSource } from './data/gateway-data-source.js';
@@ -34,11 +35,12 @@ import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
+import { arnsMiddleware } from './middleware/arns.js';
 import {
   DATA_PATH_REGEX,
   RAW_DATA_PATH_REGEX,
-  dataHandler,
-  rawDataHandler,
+  createDataHandler,
+  createRawDataHandler,
 } from './routes/data.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
@@ -55,6 +57,8 @@ const stopHeight = +(process.env.STOP_HEIGHT ?? Infinity);
 const trustedNodeUrl = process.env.TRUSTED_NODE_URL ?? 'https://arweave.net';
 const trustedGatewayUrl =
   process.env.TRUSTED_GATEWAY_URL ?? 'https://arweave.net';
+const trustedArNSGatewayUrl =
+  process.env.TRUSTED_ARNS_GATEWAY_URL ?? 'https://__NAME__.arweave.dev';
 const skipCache = (process.env.SKIP_CACHE ?? 'false') === 'true';
 const port = +(process.env.PORT ?? 4000);
 const simulatedRequestFailureRate = +(
@@ -166,6 +170,11 @@ const manifestPathResolver = new StreamingManifestPathResolver({
   log,
 });
 
+const nameResolver = new TrustedGatewayArNSResolver({
+  log,
+  trustedGatewayUrl: trustedArNSGatewayUrl,
+});
+
 arweaveClient.refreshPeers();
 blockImporter.start();
 txRepairWorker.start();
@@ -174,6 +183,20 @@ txRepairWorker.start();
 const app = express();
 app.use(cors());
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
+
+const dataHandler = createDataHandler({
+  log,
+  dataIndex: chainDb,
+  dataSource: contiguousDataSource,
+  manifestPathResolver,
+});
+
+app.use(
+  arnsMiddleware({
+    dataHandler,
+    nameResolver,
+  }),
+);
 
 // OpenAPI Spec
 const openapiDocument = YAML.parse(
@@ -228,19 +251,11 @@ apolloServerInstanceGql.start().then(() => {
 // Data routes
 app.get(
   RAW_DATA_PATH_REGEX,
-  rawDataHandler({
+  createRawDataHandler({
     log,
     dataIndex: chainDb,
     dataSource: contiguousDataSource,
   }),
 );
 
-app.get(
-  DATA_PATH_REGEX,
-  dataHandler({
-    log,
-    dataIndex: chainDb,
-    dataSource: contiguousDataSource,
-    manifestPathResolver,
-  }),
-);
+app.get(DATA_PATH_REGEX, dataHandler);

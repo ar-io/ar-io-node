@@ -16,7 +16,7 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
 
   async resolveFromIndex(
     id: string,
-    path: string,
+    path: string | undefined,
   ): Promise<ManifestResolution> {
     this.log.debug('Resolving manifest path from index...', { id, path });
 
@@ -30,7 +30,7 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
   async resolveFromData(
     data: ContiguousData,
     id: string,
-    path: string,
+    path: string | undefined,
   ): Promise<ManifestResolution> {
     this.log.debug('Resolving manifest path from data...', { id, path });
 
