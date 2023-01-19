@@ -38,7 +38,7 @@ static_resources:
                         - match: { prefix: '/graphql' }
                           route:
                             cluster: graphql_gateways
-                            #@ if data.values.GRAPHQL_HOST == "arweave.net":
+                            #@ if data.values.GRAPHQL_PORT == "443":
                             auto_host_rewrite: true
                             #@ end
                             retry_policy:
@@ -109,6 +109,7 @@ static_resources:
     - name: graphql_gateways
       connect_timeout: 1s
       type: STRICT_DNS
+      dns_lookup_family: V4_PREFERRED
       lb_policy: LEAST_REQUEST
       load_assignment:
         cluster_name: legacy_gateways
@@ -119,12 +120,12 @@ static_resources:
                     socket_address:
                       address: #@ data.values.GRAPHQL_HOST
                       port_value: #@ data.values.GRAPHQL_PORT
-      #@ if data.values.GRAPHQL_HOST == "arweave.net":
+      #@ if data.values.GRAPHQL_PORT == "443":
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:
           '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-          sni: arweave.net
+          sni: #@ data.values.GRAPHQL_HOST
           common_tls_context:
             validation_context:
               trusted_ca:
@@ -147,7 +148,7 @@ static_resources:
         name: envoy.transport_sockets.tls
         typed_config:
           '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-          sni: arweave.net
+          sni: #@ data.values.GATEWAY_HOST
           common_tls_context:
             validation_context:
               trusted_ca:
