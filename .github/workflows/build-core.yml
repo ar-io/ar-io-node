@@ -14,6 +14,7 @@ jobs:
       id-token: write
       contents: read
       checks: write
+      package: write
 
     env:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
