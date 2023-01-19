@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -ex
+
+for test in $(ls ./test/end-to-end | grep -v run-all); do
+  echo "Running $test"
+  ./test/end-to-end/$test
+done
