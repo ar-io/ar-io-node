@@ -16,35 +16,75 @@ container=$(
 
 sleep 10
 
-tx="jdcXEvTOkkhSfGTVzHZ4gNZ1nzfK4MrbLKK5IWgOgzY"
+# manifest with invalid/missing index
+tx1="jdcXEvTOkkhSfGTVzHZ4gNZ1nzfK4MrbLKK5IWgOgzY"
 
-status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/raw/$tx)"
+# manifest with valid index
+tx2="yecPZWBFO8FnspfrC6y_xChBHYfInssITIip-3OF5kM"
+
+# non-manifest tx
+tx3="lbeIMUvoEqR2q-pKsT4Y5tz6mm9ppemReyLnQ8P7XpM"
+
+echo "Verifying that /raw/<id> returns 200..."
+status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/raw/$tx1)"
 if [[ "$status_code" != "200" ]]; then
-  echo "Unexpected raw data status code: '$content_length'"
+  echo "Unexpected status code: '$content_length'"
   exit 1
 fi
 
-content_length="$(curl -s -i http://localhost:4000/raw/$tx | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
+echo "Verifying that /raw/<id> returns expected Content-Length..."
+content_length="$(curl -s -i http://localhost:4000/raw/$tx1 | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
 if [[ "$content_length" != "7424" ]]; then
-  echo "Unexpected raw data content length: '$content_length'"
+  echo "Unexpected content length: '$content_length'"
   exit 1
 fi
 
-status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx)"
+echo "Verifying that /<id> for a manifest with a missing index returns 404..."
+status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx1)"
 if [[ "$status_code" != "404" ]]; then
-  echo "Unexpected missing manifest index status code: '$status_code'"
+  echo "Unexpected status code: '$status_code'"
   exit 1
 fi
 
-status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx/0)"
+echo "Verifying that /<id> for a manifest with a valid index returns 200..."
+status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx2)"
 if [[ "$status_code" != "200" ]]; then
-  echo "Unexpected manifest path status code: '$status_code'"
+  echo "Unexpected status code: '$status_code'"
   exit 1
 fi
 
-content_length="$(curl -s -i http://localhost:4000/$tx/0 | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
+echo "Verifying that /<id> for a manifest with a valid index returns expected Content-Length..."
+content_length="$(curl -s -i http://localhost:4000/$tx2 | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
+if [[ "$content_length" != "3922" ]]; then
+  echo "Unexpected content length: '$content_length'"
+  exit 1
+fi
+
+echo "Verifying that /<id>/<path> for a valid manifest path returns 200..."
+status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx1/0)"
+if [[ "$status_code" != "200" ]]; then
+  echo "Unexpected status code: '$status_code'"
+  exit 1
+fi
+
+echo "Verifying that /<id>/<path> for a valid manifest path returns expected Content-Length..."
+content_length="$(curl -s -i http://localhost:4000/$tx1/0 | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
 if [[ "$content_length" != "130" ]]; then
-  echo "Unexpected manifest path content length: '$content_length'"
+  echo "Unexpected content length: '$content_length'"
+  exit 1
+fi
+
+echo "Verifying that /<id> for a non-manifest returns 200..."
+status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx3)"
+if [[ "$status_code" != "200" ]]; then
+  echo "Unexpected status code: '$status_code'"
+  exit 1
+fi
+
+echo "Verifying that /<id> for a non-manifest returns expected Content-Length..."
+content_length="$(curl -s -i http://localhost:4000/$tx3 | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
+if [[ "$content_length" != "130" ]]; then
+  echo "Unexpected content length: '$content_length'"
   exit 1
 fi
 
