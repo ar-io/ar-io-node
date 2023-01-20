@@ -15,7 +15,7 @@ container=$(
 )
 
 function max_height() {
-  if [ ! -e data/sqlite/core.db ]; then
+  if [ -e data/sqlite/core.db ]; then
     sqlite3 data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
   fi
 }
@@ -33,7 +33,7 @@ while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
   sleep 5
 done
 
-if [ "$height" != "$STOP_HEIGHT" ]; then
+if [ "$gql_height" != "$STOP_HEIGHT" ]; then
   echo "Unexpected block height from GraphQL: '$gql_height'"
   exit 1
 fi
@@ -74,7 +74,7 @@ gql_height=$(
     http://localhost:4000/graphql | jq -r '.data.blocks.edges[0].node.height'
 )
 
-if [ "$height" != "$STOP_HEIGHT" ]; then
+if [ "$gql_height" != "$STOP_HEIGHT" ]; then
   echo "Unexpected block height from GraphQL: '$gql_height'"
   exit 1
 fi
