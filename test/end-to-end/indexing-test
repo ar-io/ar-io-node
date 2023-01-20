@@ -15,7 +15,9 @@ container=$(
 )
 
 function max_height() {
-  sqlite3 data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
+  if [ ! -e data/sqlite/core.db ]; then
+    sqlite3 data/sqlite/core.db "SELECT MAX(height) FROM new_blocks"
+  fi
 }
 
 while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
@@ -30,6 +32,11 @@ while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
   echo "Waiting for blocks to import..."
   sleep 5
 done
+
+if [ "$height" != "$STOP_HEIGHT" ]; then
+  echo "Unexpected block height from GraphQL: '$gql_height'"
+  exit 1
+fi
 
 echo "Blocks imported successfully."
 docker stop $container
@@ -58,6 +65,19 @@ while [ "0$(max_height)" -ne $STOP_HEIGHT ]; do
   echo "Waiting for blocks to import..."
   sleep 5
 done
+
+gql_height=$(
+  curl \
+    -g -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"query":"query{blocks(first: 1) {edges { node { height }}}}"}' \
+    http://localhost:4000/graphql | jq -r '.data.blocks.edges[0].node.height'
+)
+
+if [ "$height" != "$STOP_HEIGHT" ]; then
+  echo "Unexpected block height from GraphQL: '$gql_height'"
+  exit 1
+fi
 
 echo "Blocks imported successfully."
 docker stop $container
