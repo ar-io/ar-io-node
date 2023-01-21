@@ -59,6 +59,22 @@ docker-compose up --build
 
 Once running, requests can be directed to Envoy server at `localhost:3000`.
 
+## Configuration
+
+When running via docker-compose, it will read a `.env` file in the project root
+directory and use the envrionment variables set there.
+
+### GraphQL Pass-Through
+
+Add the following to your `.env` file to proxy GraphQL to another server while
+using the ar.io gateway to serve data (using arweave.net GraphQL as an example):
+
+```
+GRAPHQL_HOST=arweave.net
+GRAPHQL_PORT=443
+
+```
+
 ## Principles and Practices
 
 ### Architecture
