@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { Request, Response } from 'express';
+import url from 'url';
 import { Logger } from 'winston';
 
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
@@ -135,21 +136,35 @@ export const rawDataHandler = ({
 
 const sendManifestResponse = async ({
   log,
+  req,
   res,
   dataSource,
   dataIndex,
+  id,
   resolvedId,
   complete,
 }: {
   log: Logger;
+  req: Request;
   res: Response;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
+  id: string;
   resolvedId: string | undefined;
   complete: boolean;
 }): Promise<boolean> => {
   let data: ContiguousData | undefined;
   if (resolvedId !== undefined) {
+    // Add a trailing slash if needed
+    if (req.path === `/${id}`) {
+      // Extract query string using the url module
+      const queryString = url.parse(req.url).search ?? '';
+
+      // Add a trailing slash and replace any number of repeated slashes
+      res.redirect(301, `/${id}/${queryString}`);
+      return true;
+    }
+
     // Retrieve data based on ID resolved from manifest path or index
     try {
       data = await dataSource.getData(resolvedId);
@@ -229,6 +244,7 @@ export const dataHandler = ({
         if (
           await sendManifestResponse({
             log,
+            req,
             res,
             dataIndex,
             dataSource,
@@ -272,6 +288,7 @@ export const dataHandler = ({
         if (
           !(await sendManifestResponse({
             log,
+            req,
             res,
             dataIndex,
             dataSource,

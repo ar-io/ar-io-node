@@ -21,6 +21,7 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     this.log.debug('Resolving manifest path from index...', { id, path });
 
     return {
+      id,
       resolvedId: undefined,
       complete: false,
     };
@@ -36,6 +37,7 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     const resolvedId = await resolveManifestStreamPath(data.stream, path);
 
     return {
+      id,
       resolvedId,
       complete: true,
     };

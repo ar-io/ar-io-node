@@ -336,6 +336,7 @@ export interface ContiguousDataSource {
 }
 
 export interface ManifestResolution {
+  id: string;
   resolvedId: string | undefined;
   complete: boolean;
 }
