@@ -334,7 +334,7 @@ export function resolveManifestStreamPath(
     });
 
     emitter.on('index', (data) => {
-      if (path === undefined) {
+      if (path === undefined || path === '') {
         resolve(data.id);
       }
     });
