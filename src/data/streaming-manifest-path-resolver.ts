@@ -18,8 +18,10 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     id: string,
     path: string | undefined,
   ): Promise<ManifestResolution> {
-    this.log.debug('Resolving manifest path from index...', { id, path });
-
+    this.log.info('Resolving manifest path from index...', { id, path });
+    this.log.warn(
+      'Unable to resolve manifest path from index: not implemented',
+    );
     return {
       id,
       resolvedId: undefined,
@@ -32,10 +34,9 @@ export class StreamingManifestPathResolver implements ManifestPathResolver {
     id: string,
     path: string | undefined,
   ): Promise<ManifestResolution> {
-    this.log.debug('Resolving manifest path from data...', { id, path });
-
+    this.log.info('Resolving manifest path from data...', { id, path });
     const resolvedId = await resolveManifestStreamPath(data.stream, path);
-
+    this.log.info('Resolved manifest path from data', { id, path, resolvedId });
     return {
       id,
       resolvedId,

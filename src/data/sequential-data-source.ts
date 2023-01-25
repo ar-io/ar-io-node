@@ -18,14 +18,17 @@ export class SequentialDataSource implements ContiguousDataSource {
   }
 
   async getData(txId: string): Promise<ContiguousData> {
-    this.log.debug('Fetching contiguous data from data sources', { txId });
+    this.log.info('Sequentialy fetching from data sources', {
+      txId,
+    });
 
     for (const dataSource of this.dataSources) {
       try {
         const data = await dataSource.getData(txId);
         return data;
       } catch (error: any) {
-        this.log.debug('Error fetching contiguous data from data source', {
+        // Some errors are expected, so log them as warnings
+        this.log.warn('Unable to fetch data from data source', {
           txId,
           message: error.message,
           stack: error.stack,
@@ -33,6 +36,6 @@ export class SequentialDataSource implements ContiguousDataSource {
       }
     }
 
-    throw new Error('Unable to fetch contiguous data from any data source');
+    throw new Error('Unable to fetch data from any data source');
   }
 }
