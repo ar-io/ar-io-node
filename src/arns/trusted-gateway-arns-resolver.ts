@@ -1,6 +1,7 @@
 import { default as axios } from 'axios';
 import winston from 'winston';
 
+import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
 
 const DEFAULT_TTL = 60 * 15; // 15 minutes
@@ -32,12 +33,21 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       });
       const resolvedId = response.headers['x-arns-resolved-id'];
       const ttl = parseInt(response.headers['x-arns-ttl']) || DEFAULT_TTL;
-      this.log.info('Resolved name', { name, nameUrl, resolvedId });
-      return {
-        name,
-        resolvedId,
-        ttl,
-      };
+      if (isValidDataId(resolvedId)) {
+        this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
+        return {
+          name,
+          resolvedId,
+          ttl,
+        };
+      } else {
+        this.log.warn('Invalid resolved data ID', {
+          name,
+          nameUrl,
+          resolvedId,
+          ttl,
+        });
+      }
     } catch (error: any) {
       this.log.warn('Unable to resolve name:', {
         name,

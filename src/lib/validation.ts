@@ -8,6 +8,12 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
+export const isValidTx = (id: string): boolean => {
+  return !!id.match(/^[a-zA-Z0-9_-]{43}$/);
+};
+
+export const isValidDataId = isValidTx;
+
 export function sanityCheckBlock(block: PartialJsonBlock) {
   if (!block.indep_hash) {
     throw new Error("Invalid block: missing 'indep_hash'");
@@ -30,7 +36,7 @@ export function sanityCheckTx(tx: PartialJsonTransaction) {
     throw new Error("Invalid transaction: missing 'id'");
   }
 
-  if (!tx.id.match(/^[a-zA-Z0-9_-]{43}/)) {
+  if (!isValidTx(tx.id)) {
     throw new Error("Invalid transaction: invalid 'id' format");
   }
 }
