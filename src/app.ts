@@ -35,7 +35,7 @@ import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
-import { arnsMiddleware } from './middleware/arns.js';
+import { createArnsMiddleware } from './middleware/arns.js';
 import {
   DATA_PATH_REGEX,
   RAW_DATA_PATH_REGEX,
@@ -192,7 +192,7 @@ const dataHandler = createDataHandler({
 });
 
 app.use(
-  arnsMiddleware({
+  createArnsMiddleware({
     dataHandler,
     nameResolver,
   }),
