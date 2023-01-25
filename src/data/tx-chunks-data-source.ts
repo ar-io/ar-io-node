@@ -29,7 +29,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
   }
 
   async getData(txId: string): Promise<ContiguousData> {
-    this.log.debug('Fetching chunk data for TX', { txId });
+    this.log.info('Fetching chunk data for TX', { txId });
 
     const [txDataRoot, txOffset] = await Promise.all([
       this.chainSource.getTxField(txId, 'data_root'),

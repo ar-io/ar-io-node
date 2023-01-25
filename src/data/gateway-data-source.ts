@@ -21,14 +21,16 @@ export class GatewayDataSource implements ContiguousDataSource {
   }
 
   async getData(id: string): Promise<ContiguousData> {
-    this.log.debug('Fetching contiguous data from gateway', {
+    const path = `/raw/${id}`;
+    this.log.info('Fetching contiguous data from gateway', {
       id,
       trustedGatewayUrl: this.trustedGatewayAxios.defaults.baseURL,
+      path,
     });
 
     const response = await this.trustedGatewayAxios.request({
       method: 'GET',
-      url: `/raw/${id}`,
+      url: path,
       responseType: 'stream',
     });
 
