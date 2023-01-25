@@ -24,7 +24,7 @@ import { NameResolver } from '../types.js';
 // TODO consider moving this under arns/
 const EXCLUDED_SUBDOMAINS = ['www'];
 
-export const arnsMiddleware = ({
+export const createArnsMiddleware = ({
   dataHandler,
   nameResolver,
 }: {
