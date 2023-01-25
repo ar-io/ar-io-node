@@ -33,7 +33,7 @@ export const createArnsMiddleware = ({
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
     if (
-      req.subdomains !== undefined &&
+      Array.isArray(req.subdomains) &&
       req.subdomains.length === 1 &&
       !EXCLUDED_SUBDOMAINS.includes(req.subdomains[0]) &&
       req.subdomains[0].length < 43 // TODO why 43? (copied this from arweave.net)
