@@ -41,3 +41,6 @@ if ! curl -s -i http://ardrive.ar-io.localhost:4000/ | grep 'X-ArNS-TTL'; then
   echo "Missing X-ArNS-TTL header"
   exit 1
 fi
+
+echo "ArNS test passed!"
+docker stop $container
