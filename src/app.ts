@@ -19,6 +19,7 @@ import { default as Arweave } from 'arweave';
 import { default as cors } from 'cors';
 import { EventEmitter } from 'events';
 import express from 'express';
+//import * as OpenApiValidator from 'express-openapi-validator';
 import promMid from 'express-prometheus-middleware';
 import fs from 'fs';
 import * as promClient from 'prom-client';
@@ -181,6 +182,16 @@ txRepairWorker.start();
 
 // HTTP server
 const app = express();
+
+// TODO get path relative to source file instead of cwd
+//app.use(
+//  OpenApiValidator.middleware({
+//    apiSpec: './docs/openapi.yaml',
+//    validateRequests: true, // (default)
+//    validateResponses: true, // false by default
+//  }),
+//);
+
 app.use(cors());
 app.use(promMid({ metricsPath: '/gateway_metrics' }));
 
