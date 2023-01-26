@@ -16,6 +16,7 @@ services:
       - TVAL_GATEWAY_HOST=${TRUSTED_GATEWAY_HOST:-arweave.net}
       - TVAL_GRAPHQL_HOST=${GRAPHQL_HOST:-core}
       - TVAL_GRAPHQL_PORT=${GRAPHQL_PORT:-4000}
+      - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
 
   core:
     image: ghcr.io/ar-io/ar-io-core:latest

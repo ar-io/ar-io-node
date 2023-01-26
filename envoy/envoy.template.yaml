@@ -18,8 +18,25 @@ static_resources:
                 route_config:
                   name: local_route
                   virtual_hosts:
-                    - name: local_service
+                    #@ if data.values.ARNS_ROOT_HOST != "":
+                    - name: arns_resolution_service
+                      domains:
+                        - #@ "*." + data.values.ARNS_ROOT_HOST
+                      routes:
+                        - match: { prefix: '/' }
+                          route:
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                    #@ end
+                    - name: root_service
+                      #@ if data.values.ARNS_ROOT_HOST != "":
+                      domains:
+                        - #@ data.values.ARNS_ROOT_HOST
+                      #@ else:
                       domains: ['*']
+                      #@ end
                       routes:
                         - match: { prefix: '/gateway_metrics' }
                           route:
