@@ -18,7 +18,7 @@
 import { Handler } from 'express';
 import { asyncMiddleware } from 'middleware-async';
 
-import { DataHandler, sendNotFound } from '../routes/data.js';
+import { sendNotFound } from '../routes/data.js';
 import { NameResolver } from '../types.js';
 
 const EXCLUDED_SUBDOMAINS = new Set('www');
@@ -27,7 +27,7 @@ export const createArnsMiddleware = ({
   dataHandler,
   nameResolver,
 }: {
-  dataHandler: DataHandler;
+  dataHandler: Handler;
   nameResolver: NameResolver;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
@@ -42,7 +42,7 @@ export const createArnsMiddleware = ({
         res.header('X-ArNS-Resolved-Id', resolvedId);
         res.header('X-ArNS-TTL', ttl.toString());
         res.header('Cache-Control', `public, max-age=${ttl}`);
-        await dataHandler(req, res);
+        dataHandler(req, res, next);
         return;
       } else {
         sendNotFound(res);

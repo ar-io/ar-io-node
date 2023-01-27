@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { Request, Response } from 'express';
+import { default as asyncHandler } from 'express-async-handler';
 import url from 'url';
 import { Logger } from 'winston';
 
@@ -97,7 +98,7 @@ export const createRawDataHandler = ({
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
 }) => {
-  return async (req: Request, res: Response) => {
+  return asyncHandler(async (req: Request, res: Response) => {
     const id = req.params[0];
 
     // Retrieve authoritative data attributes if they're available
@@ -131,7 +132,7 @@ export const createRawDataHandler = ({
       data?.stream.destroy();
       return;
     }
-  };
+  });
 };
 
 const sendManifestResponse = async ({
@@ -211,8 +212,6 @@ const sendManifestResponse = async ({
   return false;
 };
 
-export type DataHandler = (req: Request, res: Response) => Promise<void>;
-
 export const DATA_PATH_REGEX =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 export const createDataHandler = ({
@@ -225,8 +224,8 @@ export const createDataHandler = ({
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
   manifestPathResolver: ManifestPathResolver;
-}): DataHandler => {
-  return async (req: Request, res: Response) => {
+}) => {
+  return asyncHandler(async (req: Request, res: Response) => {
     const arnsResolvedId = res.getHeader('X-ArNS-Resolved-Id');
     let id: string | undefined;
     let manifestPath: string | undefined;
@@ -330,5 +329,5 @@ export const createDataHandler = ({
       sendNotFound(res);
       data?.stream.destroy();
     }
-  };
+  });
 };
