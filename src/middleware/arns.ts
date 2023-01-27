@@ -21,8 +21,7 @@ import { asyncMiddleware } from 'middleware-async';
 import { DataHandler, sendNotFound } from '../routes/data.js';
 import { NameResolver } from '../types.js';
 
-// TODO consider moving this under arns/
-const EXCLUDED_SUBDOMAINS = ['www'];
+const EXCLUDED_SUBDOMAINS = new Set('www');
 
 export const createArnsMiddleware = ({
   dataHandler,
@@ -35,7 +34,7 @@ export const createArnsMiddleware = ({
     if (
       Array.isArray(req.subdomains) &&
       req.subdomains.length === 1 &&
-      !EXCLUDED_SUBDOMAINS.includes(req.subdomains[0]) &&
+      !EXCLUDED_SUBDOMAINS.has(req.subdomains[0]) &&
       req.subdomains[0].length <= 30 // Sanity check; contract already limits to 20
     ) {
       const { resolvedId, ttl } = await nameResolver.resolve(req.subdomains[0]);
