@@ -36,7 +36,7 @@ export const createArnsMiddleware = ({
       Array.isArray(req.subdomains) &&
       req.subdomains.length === 1 &&
       !EXCLUDED_SUBDOMAINS.includes(req.subdomains[0]) &&
-      req.subdomains[0].length < 43 // TODO why 43? (copied this from arweave.net)
+      req.subdomains[0].length <= 30 // Sanity check; contract already limits to 20
     ) {
       const { resolvedId, ttl } = await nameResolver.resolve(req.subdomains[0]);
       if (resolvedId !== undefined) {
