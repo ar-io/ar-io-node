@@ -82,7 +82,7 @@ Add the following to your `.env` file to enable ArNS resolution:
 ARNS_ROOT_HOST=<gateway-hostname>
 ```
 
-For example if your gateway's hostname was my-gateway.net your `.env` would
+For example if your gateway's hostname was `my-gateway.net` your `.env` would
 contain the following:
 
 ```
