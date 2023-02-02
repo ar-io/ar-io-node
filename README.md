@@ -75,6 +75,29 @@ GRAPHQL_PORT=443
 
 ```
 
+### ArNS
+
+Add the following to your `.env` file to enable ArNS resolution:
+
+```
+ARNS_ROOT_HOST=<gateway-hostname>
+```
+
+For example if your gateway's hostname was my-gateway.net your `.env` would
+contain the following:
+
+```
+ARNS_ROOT_HOST=my-gateway.net
+```
+
+This would allow you to resolve names like `my-arns-name.my-gateway.net` provided
+you correctly configured a wildcard DNS entry for your gateway.
+
+Note: ArNS data ID resolution is currently delegated to `arweave.dev`. Routing is
+handled locally, but ArNS state is not yet computed locally. Local ArNS state
+computation will be added in a future release. Also, be aware, ArNS is still using
+a test contract. Resolved names should be considered temporary.
+
 ## Principles and Practices
 
 ### Architecture
