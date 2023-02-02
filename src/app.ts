@@ -29,6 +29,7 @@ import YAML from 'yaml';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import { GatewayDataSource } from './data/gateway-data-source.js';
 import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.js';
+import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -46,6 +47,7 @@ import {
 import { apolloServer } from './routes/graphql/index.js';
 import { FsBlockStore } from './store/fs-block-store.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
+import { FsDataStore } from './store/fs-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -162,9 +164,13 @@ const gatewayDataSource = new GatewayDataSource({
   trustedGatewayUrl,
 });
 
-const contiguousDataSource = new SequentialDataSource({
+const contiguousDataSource = new ReadThroughDataCache({
   log,
-  dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
+  dataSource: new SequentialDataSource({
+    log,
+    dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
+  }),
+  dataStore: new FsDataStore({ log, baseDir: 'data/data' }),
 });
 
 const manifestPathResolver = new StreamingManifestPathResolver({

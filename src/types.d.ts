@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
 
 export interface B64uTag {
   name: string;
@@ -152,6 +152,13 @@ export interface ChunkMetadataStore {
     relativeOffset: number,
   ): Promise<ChunkMetadata | undefined>;
   set(chunkMetadata: ChunkMetadata): Promise<void>;
+}
+
+export interface ContiguousDataStore {
+  has(hash: Buffer): Promise<boolean>;
+  get(hash: Buffer): Promise<Readable | undefined>;
+  createWriteStream(): Promise<Writable>;
+  finalize(stream: Writable, hash: Buffer): Promise<void>;
 }
 
 export interface ChainSource {
