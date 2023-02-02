@@ -72,7 +72,6 @@ using the ar.io gateway to serve data (using arweave.net GraphQL as an example):
 ```
 GRAPHQL_HOST=arweave.net
 GRAPHQL_PORT=443
-
 ```
 
 ### ArNS
