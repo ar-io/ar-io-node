@@ -35,8 +35,8 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { createArnsMiddleware } from './middleware/arns.js';
-import { StreamingManifestPathResolver } from './resolvers/streaming-manifest-path-resolver.js';
-import { TrustedGatewayArNSResolver } from './resolvers/trusted-gateway-arns-resolver.js';
+import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
+import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-resolver.js';
 import {
   DATA_PATH_REGEX,
   RAW_DATA_PATH_REGEX,
