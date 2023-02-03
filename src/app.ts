@@ -102,6 +102,7 @@ const arweaveClient = new ArweaveCompositeClient({
 const chainDb = new StandaloneSqliteDatabase({
   log,
   coreDbPath: 'data/sqlite/core.db',
+  dataDbPath: 'data/sqlite/data.db',
 });
 
 // Workers
@@ -171,6 +172,7 @@ const contiguousDataSource = new ReadThroughDataCache({
     dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/data' }),
+  contiguousDataIndex: chainDb,
 });
 
 const manifestPathResolver = new StreamingManifestPathResolver({

@@ -203,10 +203,10 @@ type DebugInfo = {
 
 export class StandaloneSqliteDatabaseWorker {
   private dbs: {
-    core: Sqlite.Database;
+    [dbName: string]: Sqlite.Database;
   };
   private stmts: {
-    core: { [key: string]: Sqlite.Statement };
+    [dbName: string]: { [stmtName: string]: Sqlite.Statement };
   };
 
   // Transactions
@@ -216,22 +216,36 @@ export class StandaloneSqliteDatabaseWorker {
   saveStableDataFn: Sqlite.Transaction;
   deleteStaleNewDataFn: Sqlite.Transaction;
 
-  constructor({ coreDbPath }: { coreDbPath: string }) {
+  constructor({
+    coreDbPath,
+    dataDbPath,
+  }: {
+    coreDbPath: string;
+    dataDbPath: string;
+  }) {
     this.dbs = {
       core: new Sqlite(coreDbPath, {
         timeout: 30000,
       }),
+      data: new Sqlite(dataDbPath, {
+        timeout: 30000,
+      }),
     };
-    this.dbs.core.pragma('journal_mode = WAL');
-    this.dbs.core.pragma('page_size = 4096'); // may depend on OS and FS
+    for (const db of Object.values(this.dbs)) {
+      db.pragma('journal_mode = WAL');
+      db.pragma('page_size = 4096'); // may depend on OS and FS
+    }
 
-    this.stmts = { core: {} };
-    const sqlUrl = new URL('./sql/core', import.meta.url);
-    const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
-    for (const [k, sql] of Object.entries(coreSql)) {
-      // TODO explain if
-      if (!k.endsWith('.sql')) {
-        this.stmts.core[k] = this.dbs.core.prepare(sql);
+    this.stmts = { core: {}, data: {} };
+
+    for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
+      const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
+      const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
+      for (const [k, sql] of Object.entries(coreSql)) {
+        // TODO explain why if is needed
+        if (!k.endsWith('.sql')) {
+          stmts[k] = this.dbs[stmtsKey].prepare(sql);
+        }
       }
     }
 
@@ -533,6 +547,20 @@ export class StandaloneSqliteDatabaseWorker {
         maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
       },
     };
+  }
+
+  getDataHash(id: string) {
+    const row = this.stmts.data.selectDataIdHash.get({
+      id: fromB64Url(id),
+    });
+    return row?.contiguous_data_hash;
+  }
+
+  setDataHash(id: string, hash: Buffer) {
+    this.stmts.data.insertDataId.run({
+      id: fromB64Url(id),
+      contiguous_data_hash: hash,
+    });
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
@@ -1245,9 +1273,11 @@ export class StandaloneSqliteDatabase
   constructor({
     log,
     coreDbPath,
+    dataDbPath
   }: {
     log: winston.Logger;
     coreDbPath: string;
+    dataDbPath: string;
   }) {
     this.log = log.child({ class: 'StandaloneSqliteDatabaseWorker' });
 
@@ -1259,6 +1289,7 @@ export class StandaloneSqliteDatabase
       const worker = new Worker(workerUrl, {
         workerData: {
           coreDbPath,
+          dataDbPath,
         },
       });
 
@@ -1373,6 +1404,15 @@ export class StandaloneSqliteDatabase
     return this.queueWork('getDebugInfo', undefined);
   }
 
+  getDataHash(id: string): Promise<Buffer | undefined> {
+    return this.queueWork('getDataHash', [id]);
+  }
+
+  // TODO string hash
+  setDataHash(id: string, hash: Buffer) {
+    return this.queueWork('setDataHash', [id, hash]);
+  }
+
   getGqlTransactions({
     pageSize,
     cursor,
@@ -1448,6 +1488,7 @@ export class StandaloneSqliteDatabase
 if (!isMainThread) {
   const worker = new StandaloneSqliteDatabaseWorker({
     coreDbPath: workerData.coreDbPath,
+    dataDbPath: workerData.dataDbPath,
   });
 
   // TODO add types for messages
@@ -1485,6 +1526,15 @@ if (!isMainThread) {
       case 'getDebugInfo':
         const debugInfo = worker.getDebugInfo();
         parentPort?.postMessage(debugInfo);
+        break;
+      case 'getDataHash':
+        const dataHash = worker.getDataHash(args[0]);
+        parentPort?.postMessage(dataHash);
+        break;
+      case 'setDataHash':
+        const [id, hash] = args;
+        worker.setDataHash(id, hash);
+        parentPort?.postMessage(null);
         break;
       case 'getGqlTransactions':
         const gqlTransactions = worker.getGqlTransactions(args[0]);
