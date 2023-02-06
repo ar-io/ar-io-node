@@ -40,7 +40,7 @@ export const createArnsMiddleware = ({
       const { resolvedId, ttl } = await nameResolver.resolve(req.subdomains[0]);
       if (resolvedId !== undefined) {
         res.header('X-ArNS-Resolved-Id', resolvedId);
-        res.header('X-ArNS-TTL', ttl.toString());
+        res.header('X-ArNS-TTL-Seconds', ttl.toString());
         res.header('Cache-Control', `public, max-age=${ttl}`);
         dataHandler(req, res, next);
         return;

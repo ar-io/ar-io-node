@@ -32,7 +32,8 @@ export class TrustedGatewayArNSResolver implements NameResolver {
         validateStatus: (status) => status === 200,
       });
       const resolvedId = response.headers['x-arns-resolved-id'];
-      const ttl = parseInt(response.headers['x-arns-ttl']) || DEFAULT_TTL;
+      const ttl =
+        parseInt(response.headers['x-arns-ttl-seconds']) || DEFAULT_TTL;
       if (isValidDataId(resolvedId)) {
         this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
         return {
