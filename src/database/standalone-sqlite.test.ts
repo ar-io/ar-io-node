@@ -30,7 +30,7 @@ import {
   toSqliteParams,
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
-import { coreDb, coreDbPath } from '../../test/sqlite-helpers.js';
+import { coreDb, coreDbPath, dataDbPath } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
 import log from '../log.js';
 
@@ -121,10 +121,12 @@ describe('StandaloneSqliteDatabase', () => {
   before(() => {
     chainDb = new StandaloneSqliteDatabase({
       log,
-      coreDbPath: coreDbPath,
+      coreDbPath,
+      dataDbPath,
     });
     chainDbWorker = new StandaloneSqliteDatabaseWorker({
-      coreDbPath: coreDbPath,
+      coreDbPath,
+      dataDbPath,
     });
     chainSource = new ArweaveChainSourceStub();
   });

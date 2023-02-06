@@ -4,7 +4,9 @@ import fs from 'fs';
 import log from '../src/log.js';
 
 export const coreDbPath = `test/tmp/core.db`;
+export const dataDbPath = `test/tmp/data.db`;
 export let coreDb: Sqlite.Database;
+export let dataDb: Sqlite.Database;
 
 /* eslint-disable */
 before(async () => {
@@ -14,16 +16,24 @@ before(async () => {
       fs.unlinkSync(`test/tmp/${file}`);
     }
   });
+
+  // Core DB
   coreDb = new Sqlite(coreDbPath);
-  const schema = fs.readFileSync('test/schema.sql', 'utf8');
-  coreDb.exec(schema);
+  const coreSchema = fs.readFileSync('test/core-schema.sql', 'utf8');
+  coreDb.exec(coreSchema);
+
+  // Data DB
+  dataDb = new Sqlite(dataDbPath);
+  const dataSchema = fs.readFileSync('test/data-schema.sql', 'utf8');
+  dataDb.exec(dataSchema);
 });
 
 afterEach(async () => {
-  coreDb
-    .prepare("SELECT name FROM sqlite_schema WHERE type='table'")
-    .all()
-    .forEach((row) => {
-      coreDb.prepare(`DELETE FROM ${row.name}`).run();
-    });
+  [coreDb, dataDb].forEach((db) => {
+    db.prepare("SELECT name FROM sqlite_schema WHERE type='table'")
+      .all()
+      .forEach((row) => {
+        db.prepare(`DELETE FROM ${row.name}`).run();
+      });
+  });
 });
