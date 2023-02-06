@@ -37,10 +37,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.log.info(`Attempting to fetch cached data...`, {
       id,
     });
-    const hash = await this.contiguousDataIndex.getDataHash(id);
+    const dataAttributes = await this.contiguousDataIndex.getDataHash(id);
     // TODO get size and content type
-    if (hash !== undefined) {
+    if (dataAttributes?.hash !== undefined) {
       try {
+        const hash = dataAttributes.hash;
         const hashBuffer = Buffer.from(hash);
         const b64uHash = toB64Url(hashBuffer);
         this.log.info('Found data hash in index:', {
@@ -56,7 +57,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         } else {
           return {
             stream: cacheStream,
-            size: 648974, // TODO replace with real size
+            size: dataAttributes.size,
             verified: false,
           };
         }
@@ -101,7 +102,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             hash: b64uDigest,
           });
           // TODO write size and content type
-          await this.contiguousDataIndex.setDataHash(id, digest);
+          await this.contiguousDataIndex.setDataHash({
+            id,
+            hash: digest,
+            dataSize: data.size,
+          });
           await this.dataStore.finalize(cacheStream, digest);
           // TODO get data root if it's available and associate it with the hash
         } else {

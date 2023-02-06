@@ -328,6 +328,7 @@ export interface ContiguousData {
 }
 
 export interface ContiguousDataAttributes {
+  hash?: Buffer;
   size: number;
   contentType: string | undefined;
   isManifest: boolean;
@@ -336,8 +337,18 @@ export interface ContiguousDataAttributes {
 
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
-  getDataHash(id: string): Promise<Buffer | undefined>;
-  setDataHash(id: string, hash: Buffer): Promise<void>;
+  getDataHash(id: string): Promise<ContiguousDataAttributes | undefined>;
+  setDataHash({
+    id,
+    hash,
+    dataSize,
+    contentType,
+  }: {
+    id: string;
+    hash: Buffer;
+    dataSize: number;
+    contentType?: string;
+  }): Promise<void>;
 }
 
 export interface ContiguousDataSource {

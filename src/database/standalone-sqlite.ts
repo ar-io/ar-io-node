@@ -553,13 +553,36 @@ export class StandaloneSqliteDatabaseWorker {
     const row = this.stmts.data.selectDataIdHash.get({
       id: fromB64Url(id),
     });
-    return row?.contiguous_data_hash;
+    if (row !== undefined) {
+      return {
+        hash: row.contiguous_data_hash,
+        size: row.data_size,
+      };
+    }
+    return undefined;
   }
 
-  setDataHash(id: string, hash: Buffer) {
+  setDataHash({
+    id,
+    hash,
+    dataSize,
+    contentType,
+  }: {
+    id: string;
+    hash: Buffer;
+    dataSize: number;
+    contentType?: string;
+  }) {
+    this.stmts.data.insertDataHash.run({
+      hash,
+      data_size: dataSize,
+      original_source_content_type: contentType,
+      created_at: +(Date.now() / 1000).toFixed(0),
+    });
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hash,
+      created_at: +(Date.now() / 1000).toFixed(0),
     });
   }
 
@@ -1273,7 +1296,7 @@ export class StandaloneSqliteDatabase
   constructor({
     log,
     coreDbPath,
-    dataDbPath
+    dataDbPath,
   }: {
     log: winston.Logger;
     coreDbPath: string;
@@ -1404,13 +1427,28 @@ export class StandaloneSqliteDatabase
     return this.queueWork('getDebugInfo', undefined);
   }
 
-  getDataHash(id: string): Promise<Buffer | undefined> {
+  getDataHash(id: string): Promise<ContiguousDataAttributes | undefined> {
     return this.queueWork('getDataHash', [id]);
   }
 
   // TODO string hash
-  setDataHash(id: string, hash: Buffer) {
-    return this.queueWork('setDataHash', [id, hash]);
+  setDataHash({
+    id,
+    hash,
+    dataSize,
+    contentType,
+  }: {
+    id: string;
+    hash: Buffer;
+    dataSize: number;
+    contentType?: string;
+  }) {
+    return this.queueWork('setDataHash', [{
+      id,
+      hash,
+      dataSize,
+      contentType,
+    }]);
   }
 
   getGqlTransactions({
@@ -1532,8 +1570,7 @@ if (!isMainThread) {
         parentPort?.postMessage(dataHash);
         break;
       case 'setDataHash':
-        const [id, hash] = args;
-        worker.setDataHash(id, hash);
+        worker.setDataHash(args[0]);
         parentPort?.postMessage(null);
         break;
       case 'getGqlTransactions':
