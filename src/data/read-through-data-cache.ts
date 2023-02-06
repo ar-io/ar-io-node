@@ -58,6 +58,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           return {
             stream: cacheStream,
             size: dataAttributes.size,
+            sourceContentType: dataAttributes.contentType,
             verified: false,
           };
         }
@@ -106,6 +107,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             id,
             hash: digest,
             dataSize: data.size,
+            contentType: data.sourceContentType,
           });
           await this.dataStore.finalize(cacheStream, digest);
           // TODO get data root if it's available and associate it with the hash

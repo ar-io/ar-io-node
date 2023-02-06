@@ -557,6 +557,7 @@ export class StandaloneSqliteDatabaseWorker {
       return {
         hash: row.contiguous_data_hash,
         size: row.data_size,
+        contentType: row.original_source_content_type,
       };
     }
     return undefined;
