@@ -155,10 +155,10 @@ export interface ChunkMetadataStore {
 }
 
 export interface ContiguousDataStore {
-  has(hash: Buffer): Promise<boolean>;
-  get(hash: Buffer): Promise<Readable | undefined>;
+  has(hash: string): Promise<boolean>;
+  get(hash: string): Promise<Readable | undefined>;
   createWriteStream(): Promise<Writable>;
-  finalize(stream: Writable, hash: Buffer): Promise<void>;
+  finalize(stream: Writable, hash: string): Promise<void>;
 }
 
 export interface ChainSource {
@@ -328,7 +328,7 @@ export interface ContiguousData {
 }
 
 export interface ContiguousDataAttributes {
-  hash?: Buffer;
+  hash?: string;
   size: number;
   contentType: string | undefined;
   isManifest: boolean;
@@ -346,7 +346,7 @@ export interface ContiguousDataIndex {
     contentType,
   }: {
     id: string;
-    hash: Buffer;
+    hash: string;
     dataSize: number;
     contentType?: string;
   }): Promise<void>;

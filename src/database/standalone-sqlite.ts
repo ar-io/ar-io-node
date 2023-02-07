@@ -508,9 +508,10 @@ export class StandaloneSqliteDatabaseWorker {
 
     const contentType =
       coreRow?.content_type ?? dataRow?.original_source_content_type;
+    const hash = dataRow?.contiguous_data_hash;
 
     return {
-      hash: dataRow?.contiguous_data_hash,
+      hash: hash ? toB64Url(hash) : undefined,
       size: coreRow?.data_size ?? dataRow?.data_size,
       contentType,
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
@@ -579,19 +580,20 @@ export class StandaloneSqliteDatabaseWorker {
     contentType,
   }: {
     id: string;
-    hash: Buffer;
+    hash: string;
     dataSize: number;
     contentType?: string;
   }) {
+    const hashBuffer = fromB64Url(hash);
     this.stmts.data.insertDataHash.run({
-      hash,
+      hash: hashBuffer,
       data_size: dataSize,
       original_source_content_type: contentType,
       created_at: +(Date.now() / 1000).toFixed(0),
     });
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
-      contiguous_data_hash: hash,
+      contiguous_data_hash: hashBuffer,
       created_at: +(Date.now() / 1000).toFixed(0),
     });
   }
@@ -1449,7 +1451,7 @@ export class StandaloneSqliteDatabase
     contentType,
   }: {
     id: string;
-    hash: Buffer;
+    hash: string;
     dataSize: number;
     contentType?: string;
   }) {

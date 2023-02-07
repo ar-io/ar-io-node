@@ -3,7 +3,6 @@ import fs from 'fs';
 import { Readable } from 'stream';
 import winston from 'winston';
 
-import { toB64Url } from '../lib/encoding.js';
 import { ContiguousDataStore } from '../types.js';
 
 export class FsDataStore implements ContiguousDataStore {
@@ -23,20 +22,16 @@ export class FsDataStore implements ContiguousDataStore {
     return `${this.tempDir()}/${crypto.randomBytes(16).toString('hex')}`;
   }
 
-  private dataDir(b64uHashString: string) {
-    const hashPrefix = `${b64uHashString.substring(
-      0,
-      2,
-    )}/${b64uHashString.substring(2, 4)}`;
+  private dataDir(hash: string) {
+    const hashPrefix = `${hash.substring(0, 2)}/${hash.substring(2, 4)}`;
     return `${this.baseDir}/data/${hashPrefix}`;
   }
 
-  private dataPath(hash: Buffer) {
-    const hashString = toB64Url(hash);
-    return `${this.dataDir(hashString)}/${hashString}`;
+  private dataPath(hash: string) {
+    return `${this.dataDir(hash)}/${hash}`;
   }
 
-  async has(hash: Buffer) {
+  async has(hash: string) {
     try {
       await fs.promises.access(this.dataPath(hash), fs.constants.F_OK);
       return true;
@@ -45,7 +40,7 @@ export class FsDataStore implements ContiguousDataStore {
     }
   }
 
-  async get(hash: Buffer): Promise<Readable | undefined> {
+  async get(hash: string): Promise<Readable | undefined> {
     try {
       if (await this.has(hash)) {
         return fs.createReadStream(this.dataPath(hash));
@@ -53,6 +48,7 @@ export class FsDataStore implements ContiguousDataStore {
     } catch (error: any) {
       // TODO log hash
       this.log.error('Failed to get contigous data stream', {
+        hash,
         message: error.message,
         stack: error.stack,
       });
@@ -67,10 +63,10 @@ export class FsDataStore implements ContiguousDataStore {
     return file;
   }
 
-  async finalize(stream: fs.WriteStream, hash: Buffer) {
+  async finalize(stream: fs.WriteStream, hash: string) {
     try {
       stream.end();
-      const dataDir = this.dataDir(toB64Url(hash));
+      const dataDir = this.dataDir(hash);
       await fs.promises.mkdir(dataDir, { recursive: true });
       await fs.promises.rename(stream.path, this.dataPath(hash));
     } catch (error: any) {

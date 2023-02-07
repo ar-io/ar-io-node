@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import winston from 'winston';
 
-import { toB64Url } from '../lib/encoding.js';
 import {
   ContiguousData,
   ContiguousDataIndex,
@@ -41,17 +40,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     if (dataAttributes?.hash !== undefined) {
       try {
         const hash = dataAttributes.hash;
-        const hashBuffer = Buffer.from(hash);
-        const b64uHash = toB64Url(hashBuffer);
         this.log.info('Found data hash in index:', {
           id,
-          hash: b64uHash,
+          hash,
         });
-        const cacheStream = await this.dataStore.get(hashBuffer);
+        const cacheStream = await this.dataStore.get(hash);
         if (cacheStream === undefined) {
           this.log.info('Data missing in cache:', {
             id,
-            hash: b64uHash,
+            hash,
           });
         } else {
           return {
@@ -73,14 +70,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     const data = await this.dataSource.getData(id);
     try {
       const cacheStream = await this.dataStore.createWriteStream();
-      const hash = crypto.createHash('sha256');
+      const hasher = crypto.createHash('sha256');
 
       // TODO handle stream errors
       // TODO when does streaming start?
       data.stream.pipe(cacheStream);
 
       data.stream.on('data', (chunk) => {
-        hash.update(chunk);
+        hasher.update(chunk);
       });
 
       data.stream.on('error', (error) => {
@@ -94,21 +91,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
       data.stream.on('end', async () => {
         if (cacheStream !== undefined) {
-          const digest = hash.digest();
-          const b64uDigest = toB64Url(digest);
+          const hash = hasher.digest('base64url');
 
           this.log.info('Successfully cached data:', {
             id,
-            hash: b64uDigest,
+            hash,
           });
-          // TODO write size and content type
           await this.contiguousDataIndex.setDataHash({
             id,
-            hash: digest,
+            hash,
             dataSize: data.size,
             contentType: data.sourceContentType,
           });
-          await this.dataStore.finalize(cacheStream, digest);
+          await this.dataStore.finalize(cacheStream, hash);
           // TODO get data root if it's available and associate it with the hash
         } else {
           this.log.error('Error caching data:', {
