@@ -1455,12 +1455,14 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
   }) {
-    return this.queueWork('setDataHash', [{
-      id,
-      hash,
-      dataSize,
-      contentType,
-    }]);
+    return this.queueWork('setDataHash', [
+      {
+        id,
+        hash,
+        dataSize,
+        contentType,
+      },
+    ]);
   }
 
   getGqlTransactions({
