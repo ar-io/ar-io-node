@@ -321,6 +321,7 @@ export interface ChunkDataByAnySource {
 }
 
 export interface ContiguousData {
+  hash?: string;
   stream: Readable;
   size: number;
   verified: boolean;

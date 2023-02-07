@@ -46,6 +46,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         } else {
           this.log.info('Found data in cache', { id, hash });
           return {
+            hash,
             stream: cacheStream,
             size: dataAttributes.size,
             sourceContentType: dataAttributes.contentType,
