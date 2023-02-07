@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { pipeline } from 'stream';
 import winston from 'winston';
 
 import {
@@ -63,28 +64,17 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     }
 
     const data = await this.dataSource.getData(id);
-    try {
-      const cacheStream = await this.dataStore.createWriteStream();
-      const hasher = crypto.createHash('sha256');
-
-      // TODO handle stream errors
-      // TODO when does streaming start?
-      data.stream.pipe(cacheStream);
-
-      data.stream.on('data', (chunk) => {
-        hasher.update(chunk);
-      });
-
-      data.stream.on('error', (error) => {
-        // TODO moar better error handling
-        this.log.error('Error reading data:', {
+    const hasher = crypto.createHash('sha256');
+    const cacheStream = await this.dataStore.createWriteStream();
+    pipeline(data.stream, cacheStream, async (error: any) => {
+      if (error !== undefined) {
+        this.log.error('Error streaming or caching data:', {
           id,
           message: error.message,
           stack: error.stack,
         });
-      });
-
-      data.stream.on('end', async () => {
+        // TODO unlink temp file?
+      } else {
         if (cacheStream !== undefined) {
           const hash = hasher.digest('base64url');
 
@@ -95,19 +85,24 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             dataSize: data.size,
             contentType: data.sourceContentType,
           });
-          await this.dataStore.finalize(cacheStream, hash);
-          // TODO get data root if it's available and associate it with the hash
-        }
-      });
 
-      return data;
-    } catch (error: any) {
-      this.log.error('Error caching data:', {
-        id,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
+          try {
+            await this.dataStore.finalize(cacheStream, hash);
+          } catch (error: any) {
+            this.log.error('Error finalizing data in cache:', {
+              id,
+              message: error.message,
+              stack: error.stack,
+            });
+          }
+          // TODO associate hash with data root
+        }
+      }
+    });
+    data.stream.on('data', (chunk) => {
+      hasher.update(chunk);
+    });
+
+    return data;
   }
 }
