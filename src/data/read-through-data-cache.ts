@@ -37,7 +37,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.log.info(`Attempting to fetch cached data...`, {
       id,
     });
-    const dataAttributes = await this.contiguousDataIndex.getDataHash(id);
+    const dataAttributes = await this.contiguousDataIndex.getDataAttributes(id);
     // TODO get size and content type
     if (dataAttributes?.hash !== undefined) {
       try {

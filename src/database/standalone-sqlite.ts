@@ -494,19 +494,28 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getDataAttributes(id: string) {
-    const rows = this.stmts.core.selectDataAttributes.all({
-      id,
+    const coreRow = this.stmts.core.selectDataAttributes.get({
+      id: fromB64Url(id),
     });
 
-    if (rows.length === 0) {
+    const dataRow = this.stmts.data.selectDataIdHash.get({
+      id: fromB64Url(id),
+    });
+
+    if (coreRow === undefined && dataRow === undefined) {
       return undefined;
     }
 
+    const contentType =
+      coreRow?.content_type ?? dataRow?.original_source_content_type;
+
     return {
-      size: rows[0].data_size,
-      contentType: rows[0].content_type,
-      isManifest: rows[0].content_type === MANIFEST_CONTENT_TYPE,
-      stable: rows[0].stable,
+      hash: dataRow?.contiguous_data_hash,
+      size: coreRow?.data_size ?? dataRow?.data_size,
+      contentType,
+      isManifest: contentType === MANIFEST_CONTENT_TYPE,
+      stable: coreRow?.stable === true,
+      verified: dataRow?.verified === true,
     };
   }
 
