@@ -333,6 +333,7 @@ export interface ContiguousDataAttributes {
   contentType: string | undefined;
   isManifest: boolean;
   stable: boolean;
+  verified: boolean;
 }
 
 export interface ContiguousDataIndex {

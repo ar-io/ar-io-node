@@ -38,7 +38,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       id,
     });
     const dataAttributes = await this.contiguousDataIndex.getDataAttributes(id);
-    // TODO get size and content type
     if (dataAttributes?.hash !== undefined) {
       try {
         const hash = dataAttributes.hash;
@@ -59,7 +58,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             stream: cacheStream,
             size: dataAttributes.size,
             sourceContentType: dataAttributes.contentType,
-            verified: false,
+            verified: dataAttributes.verified,
           };
         }
       } catch (error: any) {
