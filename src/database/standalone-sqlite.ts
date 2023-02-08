@@ -559,7 +559,7 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
-  setDataHash({
+  setDataContentAttributes({
     id,
     hash,
     dataSize,
@@ -1425,7 +1425,7 @@ export class StandaloneSqliteDatabase
     return this.queueWork('getDebugInfo', undefined);
   }
 
-  setDataHash({
+  setDataContentAttributes({
     id,
     hash,
     dataSize,
@@ -1436,7 +1436,7 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
   }) {
-    return this.queueWork('setDataHash', [
+    return this.queueWork('setDataContentAttributes', [
       {
         id,
         hash,
@@ -1560,8 +1560,8 @@ if (!isMainThread) {
         const debugInfo = worker.getDebugInfo();
         parentPort?.postMessage(debugInfo);
         break;
-      case 'setDataHash':
-        worker.setDataHash(args[0]);
+      case 'setDataContentAttributes':
+        worker.setDataContentAttributes(args[0]);
         parentPort?.postMessage(null);
         break;
       case 'getGqlTransactions':
