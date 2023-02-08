@@ -559,20 +559,6 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
-  getDataHash(id: string) {
-    const row = this.stmts.data.selectDataIdHash.get({
-      id: fromB64Url(id),
-    });
-    if (row !== undefined) {
-      return {
-        hash: row.contiguous_data_hash,
-        size: row.data_size,
-        contentType: row.original_source_content_type,
-      };
-    }
-    return undefined;
-  }
-
   setDataHash({
     id,
     hash,
@@ -1439,11 +1425,6 @@ export class StandaloneSqliteDatabase
     return this.queueWork('getDebugInfo', undefined);
   }
 
-  getDataHash(id: string): Promise<ContiguousDataAttributes | undefined> {
-    return this.queueWork('getDataHash', [id]);
-  }
-
-  // TODO string hash
   setDataHash({
     id,
     hash,
@@ -1578,10 +1559,6 @@ if (!isMainThread) {
       case 'getDebugInfo':
         const debugInfo = worker.getDebugInfo();
         parentPort?.postMessage(debugInfo);
-        break;
-      case 'getDataHash':
-        const dataHash = worker.getDataHash(args[0]);
-        parentPort?.postMessage(dataHash);
         break;
       case 'setDataHash':
         worker.setDataHash(args[0]);

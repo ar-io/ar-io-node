@@ -339,7 +339,6 @@ export interface ContiguousDataAttributes {
 
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
-  getDataHash(id: string): Promise<ContiguousDataAttributes | undefined>;
   setDataHash({
     id,
     hash,
