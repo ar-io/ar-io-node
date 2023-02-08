@@ -242,7 +242,7 @@ export class StandaloneSqliteDatabaseWorker {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
       const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
       for (const [k, sql] of Object.entries(coreSql)) {
-        // TODO explain why if is needed
+        // Skip the key containing the complete file
         if (!k.endsWith('.sql')) {
           stmts[k] = this.dbs[stmtsKey].prepare(sql);
         }
