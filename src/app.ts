@@ -171,7 +171,7 @@ const contiguousDataSource = new ReadThroughDataCache({
     log,
     dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
   }),
-  dataStore: new FsDataStore({ log, baseDir: 'data/data' }),
+  dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
   contiguousDataIndex: chainDb,
 });
 
