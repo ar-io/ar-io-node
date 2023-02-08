@@ -81,6 +81,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           this.log.info('Successfully cached data', { id, hash });
           await this.contiguousDataIndex.setDataContentAttributes({
             id,
+            dataRoot: dataAttributes?.dataRoot,
             hash,
             dataSize: data.size,
             contentType: data.sourceContentType,

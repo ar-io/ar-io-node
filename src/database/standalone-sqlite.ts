@@ -509,9 +509,11 @@ export class StandaloneSqliteDatabaseWorker {
     const contentType =
       coreRow?.content_type ?? dataRow?.original_source_content_type;
     const hash = dataRow?.contiguous_data_hash;
+    const dataRoot = coreRow?.data_root;
 
     return {
       hash: hash ? toB64Url(hash) : undefined,
+      dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: coreRow?.data_size ?? dataRow?.data_size,
       contentType,
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
@@ -561,11 +563,13 @@ export class StandaloneSqliteDatabaseWorker {
 
   setDataContentAttributes({
     id,
+    dataRoot,
     hash,
     dataSize,
     contentType,
   }: {
     id: string;
+    dataRoot?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
@@ -582,6 +586,13 @@ export class StandaloneSqliteDatabaseWorker {
       contiguous_data_hash: hashBuffer,
       indexed_at: +(Date.now() / 1000).toFixed(0),
     });
+    if (dataRoot !== undefined) {
+      this.stmts.data.insertDataRoot.run({
+        data_root: fromB64Url(dataRoot),
+        contiguous_data_hash: hashBuffer,
+        indexed_at: +(Date.now() / 1000).toFixed(0),
+      });
+    }
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
@@ -1427,11 +1438,13 @@ export class StandaloneSqliteDatabase
 
   setDataContentAttributes({
     id,
+    dataRoot,
     hash,
     dataSize,
     contentType,
   }: {
     id: string;
+    dataRoot?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
@@ -1439,6 +1452,7 @@ export class StandaloneSqliteDatabase
     return this.queueWork('setDataContentAttributes', [
       {
         id,
+        dataRoot,
         hash,
         dataSize,
         contentType,

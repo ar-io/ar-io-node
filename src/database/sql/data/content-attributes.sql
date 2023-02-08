@@ -22,6 +22,17 @@ INSERT OR REPLACE INTO contiguous_data_ids (
   :indexed_at
 )
 
+-- insertDataRoot
+INSERT OR REPLACE INTO data_roots (
+  data_root,
+  contiguous_data_hash,
+  indexed_at
+) VALUES (
+  :data_root,
+  :contiguous_data_hash,
+  :indexed_at
+)
+
 -- selectDataIdHash
 SELECT
   contiguous_data_hash,

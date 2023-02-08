@@ -330,6 +330,7 @@ export interface ContiguousData {
 
 export interface ContiguousDataAttributes {
   hash?: string;
+  dataRoot?: string;
   size: number;
   contentType: string | undefined;
   isManifest: boolean;
@@ -341,11 +342,13 @@ export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
   setDataContentAttributes({
     id,
+    dataRoot,
     hash,
     dataSize,
     contentType,
   }: {
     id: string;
+    dataRoot?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
