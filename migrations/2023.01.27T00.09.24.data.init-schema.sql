@@ -2,14 +2,14 @@ CREATE TABLE IF NOT EXISTS contiguous_data  (
   hash BLOB PRIMARY KEY,
   data_size INTEGER NOT NULL,
   original_source_content_type TEXT,
-  created_at INTEGER NOT NULL
+  indexed_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS contiguous_data_ids (
   id BLOB PRIMARY KEY,
   contiguous_data_hash BLOB,
   verified BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at INTEGER NOT NULL,
+  indexed_at INTEGER NOT NULL,
   verified_at INTEGER
 );
 
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS data_roots (
   data_root BLOB PRIMARY KEY,
   contiguous_data_hash BLOB,
   verified BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at INTEGER NOT NULL,
+  indexed_at INTEGER NOT NULL,
   verified_at INTEGER
 );
 

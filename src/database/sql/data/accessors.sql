@@ -3,23 +3,23 @@ INSERT INTO contiguous_data (
   hash,
   data_size,
   original_source_content_type,
-  created_at
+  indexed_at
 ) VALUES (
   :hash,
   :data_size,
   :original_source_content_type,
-  :created_at
+  :indexed_at
 ) ON CONFLICT DO NOTHING
 
 -- insertDataId
 INSERT OR REPLACE INTO contiguous_data_ids (
   id,
   contiguous_data_hash,
-  created_at
+  indexed_at
 ) VALUES (
   :id,
   :contiguous_data_hash,
-  :created_at
+  :indexed_at
 )
 
 -- selectDataIdHash

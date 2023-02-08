@@ -575,12 +575,12 @@ export class StandaloneSqliteDatabaseWorker {
       hash: hashBuffer,
       data_size: dataSize,
       original_source_content_type: contentType,
-      created_at: +(Date.now() / 1000).toFixed(0),
+      indexed_at: +(Date.now() / 1000).toFixed(0),
     });
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
-      created_at: +(Date.now() / 1000).toFixed(0),
+      indexed_at: +(Date.now() / 1000).toFixed(0),
     });
   }
 
