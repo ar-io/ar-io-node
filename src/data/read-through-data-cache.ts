@@ -4,6 +4,7 @@ import winston from 'winston';
 
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
@@ -32,14 +33,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.contiguousDataIndex = contiguousDataIndex;
   }
 
-  async getData(id: string): Promise<ContiguousData> {
+  async getData(
+    id: string,
+    dataAttributes?: ContiguousDataAttributes,
+  ): Promise<ContiguousData> {
     this.log.info('Checking for cached data...', {
       id,
     });
-    const dataAttributes = await this.contiguousDataIndex.getDataAttributes(id);
-    if (dataAttributes?.hash !== undefined) {
+    const attributes =
+      dataAttributes ?? (await this.contiguousDataIndex.getDataAttributes(id));
+    if (attributes?.hash !== undefined) {
       try {
-        const hash = dataAttributes.hash;
+        const hash = attributes.hash;
         this.log.info('Found data hash in index', { id, hash });
         const cacheStream = await this.dataStore.get(hash);
         if (cacheStream === undefined) {
@@ -49,9 +54,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           return {
             hash,
             stream: cacheStream,
-            size: dataAttributes.size,
-            sourceContentType: dataAttributes.contentType,
-            verified: dataAttributes.verified,
+            size: attributes.size,
+            sourceContentType: attributes.contentType,
+            verified: attributes.verified,
           };
         }
       } catch (error: any) {
@@ -63,7 +68,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       }
     }
 
-    const data = await this.dataSource.getData(id);
+    const data = await this.dataSource.getData(id, dataAttributes);
     const hasher = crypto.createHash('sha256');
     const cacheStream = await this.dataStore.createWriteStream();
     pipeline(data.stream, cacheStream, async (error: any) => {
@@ -81,7 +86,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           this.log.info('Successfully cached data', { id, hash });
           await this.contiguousDataIndex.setDataContentAttributes({
             id,
-            dataRoot: dataAttributes?.dataRoot,
+            dataRoot: attributes?.dataRoot,
             hash,
             dataSize: data.size,
             contentType: data.sourceContentType,

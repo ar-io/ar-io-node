@@ -1,6 +1,10 @@
 import winston from 'winston';
 
-import { ContiguousData, ContiguousDataSource } from '../types.js';
+import {
+  ContiguousData,
+  ContiguousDataAttributes,
+  ContiguousDataSource,
+} from '../types.js';
 
 export class SequentialDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -17,14 +21,17 @@ export class SequentialDataSource implements ContiguousDataSource {
     this.dataSources = dataSources;
   }
 
-  async getData(txId: string): Promise<ContiguousData> {
+  async getData(
+    txId: string,
+    dataAttributes?: ContiguousDataAttributes,
+  ): Promise<ContiguousData> {
     this.log.info('Sequentialy fetching from data sources', {
       txId,
     });
 
     for (const dataSource of this.dataSources) {
       try {
-        const data = await dataSource.getData(txId);
+        const data = await dataSource.getData(txId, dataAttributes);
         return data;
       } catch (error: any) {
         // Some errors are expected, so log them as warnings

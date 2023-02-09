@@ -118,7 +118,7 @@ export const createRawDataHandler = ({
     // Set headers and attempt to retrieve and stream data
     let data: ContiguousData | undefined;
     try {
-      data = await dataSource.getData(id);
+      data = await dataSource.getData(id, dataAttributes);
       setDataHeaders({ res, dataAttributes, data });
       setRawDataHeaders(res);
       data.stream.pipe(res);
@@ -166,9 +166,22 @@ const sendManifestResponse = async ({
       return true;
     }
 
+    let dataAttributes: ContiguousDataAttributes | undefined;
+    try {
+      dataAttributes = await dataIndex.getDataAttributes(resolvedId);
+    } catch (error: any) {
+      log.error('Error retrieving data attributes:', {
+        dataId: resolvedId,
+        message: error.message,
+        stack: error.stack,
+      });
+      // Indicate response was NOT sent
+      return false;
+    }
+
     // Retrieve data based on ID resolved from manifest path or index
     try {
-      data = await dataSource.getData(resolvedId);
+      data = await dataSource.getData(resolvedId, dataAttributes);
     } catch (error: any) {
       log.warn('Unable to retrieve contiguous data:', {
         dataId: resolvedId,
@@ -183,7 +196,7 @@ const sendManifestResponse = async ({
     try {
       setDataHeaders({
         res,
-        dataAttributes: await dataIndex.getDataAttributes(resolvedId),
+        dataAttributes,
         data,
       });
       data.stream.pipe(res);
@@ -194,6 +207,8 @@ const sendManifestResponse = async ({
         stack: error.stack,
       });
       data?.stream.destroy();
+      // Indicate response was NOT sent
+      return false;
     }
 
     // Indicate response was sent
@@ -238,9 +253,10 @@ export const createDataHandler = ({
     }
 
     let data: ContiguousData | undefined;
+    let dataAttributes: ContiguousDataAttributes | undefined;
     try {
       // Retrieve authoritative data attributes if available
-      const dataAttributes = await dataIndex.getDataAttributes(id);
+      dataAttributes = await dataIndex.getDataAttributes(id);
 
       // Attempt manifest path resolution from the index (without data parsing)
       if (dataAttributes?.isManifest) {
@@ -268,7 +284,7 @@ export const createDataHandler = ({
 
       // Attempt to retrieve data
       try {
-        data = await dataSource.getData(id);
+        data = await dataSource.getData(id, dataAttributes);
       } catch (error: any) {
         log.warn('Unable to retrieve contiguous data:', {
           dataId: id,

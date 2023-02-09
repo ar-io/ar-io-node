@@ -356,7 +356,10 @@ export interface ContiguousDataIndex {
 }
 
 export interface ContiguousDataSource {
-  getData(id: string): Promise<ContiguousData>;
+  getData(
+    id: string,
+    dataAttributes?: ContiguousDataAttributes,
+  ): Promise<ContiguousData>;
 }
 
 export interface ManifestResolution {
