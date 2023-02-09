@@ -46,7 +46,6 @@ export class FsDataStore implements ContiguousDataStore {
         return fs.createReadStream(this.dataPath(hash));
       }
     } catch (error: any) {
-      // TODO log hash
       this.log.error('Failed to get contigous data stream', {
         hash,
         message: error.message,
