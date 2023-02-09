@@ -410,7 +410,6 @@ export class StandaloneSqliteDatabaseWorker {
 
     this.deleteStaleNewDataFn = this.dbs.core.transaction(
       (heightThreshold: number, createdAtThreshold: number) => {
-        // TODO add height and created_at to new_transaction_tags to speed up cleanup
         // Deletes missing_transactions that have been inserted asyncronously
         this.stmts.core.deleteStaleMissingTransactions.run({
           height_threshold: heightThreshold,
