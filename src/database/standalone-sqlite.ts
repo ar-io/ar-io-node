@@ -497,8 +497,9 @@ export class StandaloneSqliteDatabaseWorker {
       id: fromB64Url(id),
     });
 
-    const dataRow = this.stmts.data.selectDataIdHash.get({
+    const dataRow = this.stmts.data.selectDataAttributes.get({
       id: fromB64Url(id),
+      data_root: coreRow?.data_root,
     });
 
     if (coreRow === undefined && dataRow === undefined) {
@@ -507,7 +508,7 @@ export class StandaloneSqliteDatabaseWorker {
 
     const contentType =
       coreRow?.content_type ?? dataRow?.original_source_content_type;
-    const hash = dataRow?.contiguous_data_hash;
+    const hash = dataRow?.hash;
     const dataRoot = coreRow?.data_root;
 
     return {

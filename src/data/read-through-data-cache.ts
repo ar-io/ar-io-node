@@ -96,7 +96,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               stack: error.stack,
             });
           }
-          // TODO associate hash with data root
         }
       }
     });
