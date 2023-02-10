@@ -4,7 +4,6 @@ start_time=$(date +%s)
 
 export START_HEIGHT=0
 export STOP_HEIGHT=0
-
 container=$(
   docker run -d \
     -p 4000:4000 \
@@ -30,7 +29,7 @@ for i in {1..2}; do
   echo "Verifying that /raw/<id> returns 200..."
   status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/raw/$tx1)"
   if [[ "$status_code" != "200" ]]; then
-    echo "Unexpected status code: '$content_length'"
+    echo "Unexpected status code: '$status_code'"
     exit 1
   fi
 
@@ -38,6 +37,13 @@ for i in {1..2}; do
   content_length="$(curl -s -i http://localhost:4000/raw/$tx1 | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
   if [[ "$content_length" != "7424" ]]; then
     echo "Unexpected content length: '$content_length'"
+    exit 1
+  fi
+
+  echo "Verifying that /raw/<id> returns expected content..."
+  content_hash="$(curl -s http://localhost:4000/raw/$tx1 | sha256sum | awk '{print $1}')"
+  if [[ "$content_hash" != "b5affa2ffcfc4ce9ad862b6d5261a96237006ef3b33d1561730dfa9bea18b10f" ]]; then
+    echo "Unexpected content hash: '$content_hash'"
     exit 1
   fi
 
@@ -55,10 +61,10 @@ for i in {1..2}; do
     exit 1
   fi
 
-  echo "Verifying that /<id>/ for a manifest with a valid index returns 200..."
-  status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx2/)"
-  if [[ "$status_code" != "200" ]]; then
-    echo "Unexpected status code: '$status_code'"
+  echo "Verifying that /<id>/ for a manifest with a valid index returns expected content..."
+  content_hash="$(curl -s http://localhost:4000/$tx2/ | sha256sum | awk '{print $1}')"
+  if [[ "$content_hash" != "479c49a8820aaeac6e509cb98a0d3fcea281a03cf23919f1009d00caf7b7220d" ]]; then
+    echo "Unexpected content hash: '$content_hash'"
     exit 1
   fi
 
@@ -83,10 +89,24 @@ for i in {1..2}; do
     exit 1
   fi
 
+  echo "Verifying that /<id>/<path> for a valid manifest path returns expected content..."
+  content_hash="$(curl -s http://localhost:4000/$tx1/0 | sha256sum | awk '{print $1}')"
+  if [[ "$content_hash" != "824387f0905374aaffc03f52ae2c18c0233aa7bb1a40024553ad0044444440b0" ]]; then
+    echo "Unexpected content hash: '$content_hash'"
+    exit 1
+  fi
+
   echo "Verifying that /<id> for a non-manifest returns 200..."
   status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx3)"
   if [[ "$status_code" != "200" ]]; then
     echo "Unexpected status code: '$status_code'"
+    exit 1
+  fi
+
+  echo "Verifying that /<id> for a non-manifest returns expcted content..."
+  content_hash="$(curl -s http://localhost:4000/$tx3 | sha256sum | awk '{print $1}')"
+  if [[ "$content_hash" != "824387f0905374aaffc03f52ae2c18c0233aa7bb1a40024553ad0044444440b0" ]]; then
+    echo "Unexpected content hash: '$content_hash'"
     exit 1
   fi
 
@@ -98,5 +118,5 @@ for i in {1..2}; do
   fi
 done
 
-#echo "Data retrieved successfully."
-#docker stop $container
+echo "Data retrieved successfully."
+docker stop $container
