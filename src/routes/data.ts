@@ -17,7 +17,7 @@
  */
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
-import url from 'url';
+import url from 'node:url';
 import { Logger } from 'winston';
 
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';

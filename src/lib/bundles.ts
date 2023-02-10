@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import arbundles from 'arbundles/stream/index.js';
-import stream from 'stream';
+import stream from 'node:stream';
 import * as winston from 'winston';
 
 import { BundleDatabase, DataItem } from '../types.js';

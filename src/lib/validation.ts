@@ -1,5 +1,5 @@
 import { validatePath } from 'arweave/node/lib/merkle.js';
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 
 import {
   Chunk,

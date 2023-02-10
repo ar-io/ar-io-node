@@ -4,7 +4,7 @@
   "parserOptions": {
     "project": "tsconfig.json"
   },
-  "plugins": ["@typescript-eslint", "prettier", "mocha", "jest-formatting"],
+  "plugins": ["@typescript-eslint", "prettier", "mocha", "jest-formatting", "unicorn"],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/eslint-recommended",
@@ -33,6 +33,7 @@
     "no-return-await": 2,
     "no-unneeded-ternary": 2,
     "no-unused-vars": "off",
-    "prettier/prettier": 2
+    "prettier/prettier": 2,
+    "unicorn/prefer-node-protocol": 2
   }
 }

@@ -15,9 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import * as EventEmitter from 'events';
 import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
+import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
 import { ChainDatabase, PartialJsonTransaction } from '../types.js';

@@ -20,9 +20,9 @@ import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
 import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
 import { default as NodeCache } from 'node-cache';
+import { Readable } from 'node:stream';
 import * as promClient from 'prom-client';
 import * as rax from 'retry-axios';
-import { Readable } from 'stream';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 

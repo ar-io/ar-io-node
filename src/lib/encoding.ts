@@ -16,10 +16,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import ArModule from 'arweave/node/ar.js';
-import { createHash } from 'crypto';
-import { EventEmitter } from 'events';
 import { Packr } from 'msgpackr';
-import { Readable } from 'stream';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { default as Chain } from 'stream-chain';
 import parser from 'stream-json';
 import emit from 'stream-json/utils/emit.js';

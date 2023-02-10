@@ -17,8 +17,8 @@
  */
 import { ValidationError } from 'apollo-server-express';
 import { expect } from 'chai';
-import crypto from 'crypto';
-import fs from 'fs';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 
 import {
   StandaloneSqliteDatabase,

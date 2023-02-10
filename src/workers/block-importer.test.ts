@@ -17,7 +17,7 @@
  */
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import * as promClient from 'prom-client';
 import * as sinon from 'sinon';
 import sinonChai from 'sinon-chai';

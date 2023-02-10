@@ -17,12 +17,17 @@
  */
 import { ValidationError } from 'apollo-server-express';
 import Sqlite from 'better-sqlite3';
-import crypto from 'crypto';
-import os from 'os';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import {
+  Worker,
+  isMainThread,
+  parentPort,
+  workerData,
+} from 'node:worker_threads';
 import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 
 /* eslint-disable */
 // @ts-ignore

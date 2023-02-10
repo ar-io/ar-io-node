@@ -1,5 +1,5 @@
 import chai, { expect } from 'chai';
-import fs from 'fs';
+import fs from 'node:fs';
 import sinon, { SinonSandbox } from 'sinon';
 import sinonChai from 'sinon-chai';
 import * as winston from 'winston';

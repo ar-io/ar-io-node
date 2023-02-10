@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import Sqlite from 'better-sqlite3';
-import fs from 'fs';
+import fs from 'node:fs';
 import { Umzug, UmzugStorage } from 'umzug';
 
 function extractDbName(path: string) {

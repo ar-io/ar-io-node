@@ -1,5 +1,5 @@
-import crypto from 'crypto';
-import { pipeline } from 'stream';
+import crypto from 'node:crypto';
+import { pipeline } from 'node:stream';
 import winston from 'winston';
 
 import {

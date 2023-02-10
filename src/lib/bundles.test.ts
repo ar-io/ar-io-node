@@ -16,8 +16,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { expect } from 'chai';
+import stream from 'node:stream';
 import * as sinon from 'sinon';
-import stream from 'stream';
 import * as winston from 'winston';
 
 import { importAns104Bundle } from '../../src/lib/bundles.js';

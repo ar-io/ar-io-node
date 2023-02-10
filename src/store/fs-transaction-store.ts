@@ -1,4 +1,4 @@
-import fs from 'fs';
+import fs from 'node:fs';
 import winston from 'winston';
 
 import { jsonTxToMsgpack, msgpackToJsonTx } from '../lib/encoding.js';

@@ -1,6 +1,6 @@
-import crypto from 'crypto';
-import fs from 'fs';
-import { Readable } from 'stream';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import winston from 'winston';
 
 import { ContiguousDataStore } from '../types.js';

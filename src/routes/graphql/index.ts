@@ -24,7 +24,7 @@ import {
   ApolloServerExpressConfig,
   gql,
 } from 'apollo-server-express';
-import { readFileSync } from 'fs';
+import { readFileSync } from 'node:fs';
 
 import { GqlQueryable } from '../../types.js';
 import { resolvers } from './resolvers.js';

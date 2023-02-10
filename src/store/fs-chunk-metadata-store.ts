@@ -1,4 +1,4 @@
-import fs from 'fs';
+import fs from 'node:fs';
 import winston from 'winston';
 
 import { fromMsgpack, toB64Url, toMsgpack } from '../lib/encoding.js';

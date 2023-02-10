@@ -17,11 +17,11 @@
  */
 import { default as Arweave } from 'arweave';
 import { default as cors } from 'cors';
-import { EventEmitter } from 'events';
 import express from 'express';
 //import * as OpenApiValidator from 'express-openapi-validator';
 import promMid from 'express-prometheus-middleware';
-import fs from 'fs';
+import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import * as promClient from 'prom-client';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';

@@ -1,7 +1,7 @@
 import chai, { expect } from 'chai';
+import { Readable } from 'node:stream';
 import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
-import { Readable } from 'stream';
 import * as winston from 'winston';
 
 import {
