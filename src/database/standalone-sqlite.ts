@@ -561,7 +561,7 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
-  setDataContentAttributes({
+  saveDataContentAttributes({
     id,
     dataRoot,
     hash,
@@ -1436,7 +1436,7 @@ export class StandaloneSqliteDatabase
     return this.queueWork('getDebugInfo', undefined);
   }
 
-  setDataContentAttributes({
+  saveDataContentAttributes({
     id,
     dataRoot,
     hash,
@@ -1575,7 +1575,7 @@ if (!isMainThread) {
         parentPort?.postMessage(debugInfo);
         break;
       case 'setDataContentAttributes':
-        worker.setDataContentAttributes(args[0]);
+        worker.saveDataContentAttributes(args[0]);
         parentPort?.postMessage(null);
         break;
       case 'getGqlTransactions':

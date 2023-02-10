@@ -340,7 +340,7 @@ export interface ContiguousDataAttributes {
 
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
-  setDataContentAttributes({
+  saveDataContentAttributes({
     id,
     dataRoot,
     hash,

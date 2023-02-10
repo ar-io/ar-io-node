@@ -84,7 +84,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           const hash = hasher.digest('base64url');
 
           this.log.info('Successfully cached data', { id, hash });
-          await this.contiguousDataIndex.setDataContentAttributes({
+          await this.contiguousDataIndex.saveDataContentAttributes({
             id,
             dataRoot: attributes?.dataRoot,
             hash,
