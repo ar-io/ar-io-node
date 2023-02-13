@@ -572,12 +572,14 @@ export class StandaloneSqliteDatabaseWorker {
     hash,
     dataSize,
     contentType,
+    cachedAt,
   }: {
     id: string;
     dataRoot?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
+    cachedAt?: number;
   }) {
     const hashBuffer = fromB64Url(hash);
     this.stmts.data.insertDataHash.run({
@@ -585,6 +587,7 @@ export class StandaloneSqliteDatabaseWorker {
       data_size: dataSize,
       original_source_content_type: contentType,
       indexed_at: +(Date.now() / 1000).toFixed(0),
+      cached_at: cachedAt,
     });
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
@@ -1454,7 +1457,7 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
   }) {
-    return this.queueWork('setDataContentAttributes', [
+    return this.queueWork('saveDataContentAttributes', [
       {
         id,
         dataRoot,
@@ -1579,7 +1582,7 @@ if (!isMainThread) {
         const debugInfo = worker.getDebugInfo();
         parentPort?.postMessage(debugInfo);
         break;
-      case 'setDataContentAttributes':
+      case 'saveDataContentAttributes':
         worker.saveDataContentAttributes(args[0]);
         parentPort?.postMessage(null);
         break;

@@ -3,12 +3,14 @@ INSERT INTO contiguous_data (
   hash,
   data_size,
   original_source_content_type,
-  indexed_at
+  indexed_at,
+  cached_at
 ) VALUES (
   :hash,
   :data_size,
   :original_source_content_type,
-  :indexed_at
+  :indexed_at,
+  :cached_at
 ) ON CONFLICT DO NOTHING
 
 -- insertDataId

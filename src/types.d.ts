@@ -346,12 +346,14 @@ export interface ContiguousDataIndex {
     hash,
     dataSize,
     contentType,
+    cachedAt,
   }: {
     id: string;
     dataRoot?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
+    cachedAt?: number;
   }): Promise<void>;
 }
 

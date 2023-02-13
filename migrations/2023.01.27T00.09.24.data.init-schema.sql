@@ -2,7 +2,8 @@ CREATE TABLE IF NOT EXISTS contiguous_data  (
   hash BLOB PRIMARY KEY,
   data_size INTEGER NOT NULL,
   original_source_content_type TEXT,
-  indexed_at INTEGER NOT NULL
+  indexed_at INTEGER NOT NULL,
+  cached_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS contiguous_data_ids (

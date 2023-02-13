@@ -90,6 +90,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             hash,
             dataSize: data.size,
             contentType: data.sourceContentType,
+            cachedAt: +(Date.now() / 1000).toFixed(0),
           });
 
           try {
