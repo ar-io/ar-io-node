@@ -1,5 +1,5 @@
 import Sqlite from 'better-sqlite3';
-import fs from 'fs';
+import fs from 'node:fs';
 
 import log from '../src/log.js';
 

@@ -15,8 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import fs from 'fs';
-import { Readable } from 'stream';
+import fs from 'node:fs';
+import { Readable } from 'node:stream';
 
 import { fromB64Url } from '../src/lib/encoding.js';
 import { validateChunk } from '../src/lib/validation.js';
