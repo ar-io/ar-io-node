@@ -1,0 +1,26 @@
+version: 0.0
+os: linux
+files:
+  - source: /
+    destination: /opt/ar-io-node
+hooks:
+  ApplicationStop:
+    - location: scripts/codedeploy/app-stop
+      timeout: 300
+      runas: root
+  BeforeInstall:
+    - location: scripts/codedeploy/before-install
+      timeout: 300
+      runas: root
+  AfterInstall:
+    - location: scripts/codedeploy/after-install
+      timeout: 300
+      runas: root
+  ApplicationStart:
+    - location: scripts/codedeploy/app-start
+      timeout: 300
+      runas: root
+  ValidateService:
+    - location: scripts/codedeploy/validate-service
+      timeout: 60
+      runas: root

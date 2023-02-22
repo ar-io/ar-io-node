@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+cd /opt/ar-io-node
+
+# TODO use a pre-built image
+docker-compose build
+
+# TODO start the service and run sanity checks against it
+# TODO stop the service and run sanity checks against the DB

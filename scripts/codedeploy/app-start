@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+cd /opt/ar-io-node
+
+# TODO use a pre-built image
+docker-compose up -d

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+service_urls=(
+  "http://localhost:3000"
+)
+
+for url in "${service_urls[@]}"
+do
+  response=$(curl --write-out '%{http_code}' --silent --output /dev/null $url)
+  if [[ "$response" != "200" ]]; then
+    echo "Error: $url returned $response"
+    exit 1
+  fi
+done

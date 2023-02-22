@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+cd /opt/ar-io-node
+
+shopt -s extglob
+rm -rf !(.env)
+
+# TODO backup DBs
