@@ -31,12 +31,7 @@ static_resources:
                               num_retries: 5
                     #@ end
                     - name: root_service
-                      #@ if data.values.ARNS_ROOT_HOST != "":
-                      domains:
-                        - #@ data.values.ARNS_ROOT_HOST
-                      #@ else:
                       domains: ['*']
-                      #@ end
                       routes:
                         - match: { prefix: '/gateway_metrics' }
                           route:
