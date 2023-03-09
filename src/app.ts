@@ -201,7 +201,6 @@ const app = express();
 //);
 
 app.use(cors());
-app.use(promMid({ metricsPath: '/gateway_metrics' }));
 
 const dataHandler = createDataHandler({
   log,
@@ -216,6 +215,8 @@ app.use(
     nameResolver,
   }),
 );
+
+app.use(promMid({ metricsPath: '/gateway_metrics' }));
 
 // OpenAPI Spec
 const openapiDocument = YAML.parse(
