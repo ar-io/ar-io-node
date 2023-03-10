@@ -3,6 +3,7 @@
 cd /opt/ar-io-node
 
 shopt -s extglob
-rm -rf !(.env)
+rm -rf .!(env)
+rm -rf !(data)
 
 # TODO backup DBs
