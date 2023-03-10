@@ -2,8 +2,10 @@
 
 cd /opt/ar-io-node
 
+# cleanup existing files that might conflict on first deploy
 shopt -s extglob
 rm -rf .!(env)
 rm -rf !(data)
+find . -name ".gitkeep" -type f -delete
 
 # TODO backup DBs
