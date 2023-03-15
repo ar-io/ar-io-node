@@ -29,7 +29,7 @@ services:
       - ${CONTIGUOUS_DATA_PATH:-./data/contiguous}:/app/data/contiguous
       - ${HEADERS_DATA_PATH:-./data/headers}:/app/data/headers
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
-      - ${TMP_DATA_PATH:-./data/tmp}:/app/data/tmp
+      - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
     environment:
       - ENV=${ENV:-development}
       - TRUSTED_NODE_URL=${TRUSTED_NODE_URL:-https://arweave.net}
