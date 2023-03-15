@@ -1,3 +1,4 @@
+import fse from 'fs-extra';
 import fs from 'node:fs';
 import winston from 'winston';
 
@@ -11,10 +12,21 @@ import {
 export class FsTransactionStore implements PartialJsonTransactionStore {
   private log: winston.Logger;
   private baseDir: string;
+  private tmpDir: string;
 
-  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
+  constructor({
+    log,
+    baseDir,
+    tmpDir,
+  }: {
+    log: winston.Logger;
+    baseDir: string;
+    tmpDir: string;
+  }) {
     this.log = log.child({ class: this.constructor.name });
     this.baseDir = baseDir;
+    this.tmpDir = tmpDir;
+    fs.mkdirSync(tmpDir, { recursive: true });
   }
 
   private txDir(txId: string) {
@@ -55,9 +67,18 @@ export class FsTransactionStore implements PartialJsonTransactionStore {
 
   async set(tx: PartialJsonTransaction) {
     try {
-      await fs.promises.mkdir(this.txDir(tx.id), { recursive: true });
-      const txData = jsonTxToMsgpack(tx);
-      await fs.promises.writeFile(this.txPath(tx.id), txData);
+      if (!(await this.has(tx.id))) {
+        // Encode the transaction data
+        const txData = jsonTxToMsgpack(tx);
+
+        // Write the block data to the temporary file
+        const tmpPath = `${this.tmpDir}/${tx.id}.msgpack`;
+        await fs.promises.writeFile(tmpPath, txData);
+
+        // Move the temporary file to the final location
+        await fs.promises.mkdir(this.txDir(tx.id), { recursive: true });
+        await fse.move(tmpPath, this.txPath(tx.id));
+      }
     } catch (error: any) {
       this.log.error('Failed to set transaction', {
         txId: tx.id,

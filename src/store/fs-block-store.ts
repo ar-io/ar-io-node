@@ -1,3 +1,4 @@
+import fse from 'fs-extra';
 import fs from 'node:fs';
 import path from 'node:path';
 import winston from 'winston';
@@ -9,10 +10,21 @@ import { PartialJsonBlock, PartialJsonBlockStore } from '../types.js';
 export class FsBlockStore implements PartialJsonBlockStore {
   private log: winston.Logger;
   private baseDir: string;
+  private tmpDir: string;
 
-  constructor({ log, baseDir }: { log: winston.Logger; baseDir: string }) {
+  constructor({
+    log,
+    baseDir,
+    tmpDir,
+  }: {
+    log: winston.Logger;
+    baseDir: string;
+    tmpDir: string;
+  }) {
     this.log = log.child({ class: this.constructor.name });
     this.baseDir = baseDir;
+    this.tmpDir = tmpDir;
+    fs.mkdirSync(tmpDir, { recursive: true });
   }
 
   private blockHashDir(hash: string) {
@@ -87,17 +99,32 @@ export class FsBlockStore implements PartialJsonBlockStore {
   }
 
   async set(block: PartialJsonBlock, height?: number) {
+    const hash = block.indep_hash;
     try {
-      if (!(await this.hasHash(block.indep_hash))) {
-        await fs.promises.mkdir(this.blockHashDir(block.indep_hash), {
+      if (!(await this.hasHash(hash))) {
+        await fs.promises.mkdir(this.blockHashDir(hash), {
           recursive: true,
         });
 
-        const blockData = jsonBlockToMsgpack(block);
-        await fs.promises.writeFile(
-          this.blockHashPath(block.indep_hash),
-          blockData,
-        );
+        const tmpPath = `${this.tmpDir}/${hash}.msgpack`;
+        try {
+          // Write the block data to the temporary file
+          const blockData = jsonBlockToMsgpack(block);
+          await fs.promises.writeFile(tmpPath, blockData);
+
+          // Move to the final location
+          await fse.move(tmpPath, this.blockHashPath(hash));
+        } catch (error: any) {
+          fs.unlink(tmpPath, (err) => {
+            if (err) {
+              this.log.error('Failed to delete temporary block file', {
+                hash,
+                tmpPath,
+              });
+            }
+          });
+          throw error;
+        }
       }
 
       if (height !== undefined && !(await this.hasHeight(height))) {
@@ -107,13 +134,13 @@ export class FsBlockStore implements PartialJsonBlockStore {
 
         const targetPath = path.relative(
           `${process.cwd()}/${this.blockHeightDir(height)}`,
-          `${process.cwd()}/${this.blockHashPath(block.indep_hash)}`,
+          `${process.cwd()}/${this.blockHashPath(hash)}`,
         );
         await fs.promises.symlink(targetPath, this.blockHeightPath(height));
       }
     } catch (error: any) {
       this.log.error('Failed to set block', {
-        hash: block.indep_hash,
+        hash,
         height,
         message: error.message,
         stack: error.stack,

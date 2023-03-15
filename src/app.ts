@@ -92,8 +92,16 @@ const arweaveClient = new ArweaveCompositeClient({
   arweave,
   trustedNodeUrl,
   skipCache,
-  blockStore: new FsBlockStore({ log, baseDir: 'data/headers/partial-blocks' }),
-  txStore: new FsTransactionStore({ log, baseDir: 'data/headers/partial-txs' }),
+  blockStore: new FsBlockStore({
+    log,
+    baseDir: 'data/headers/partial-blocks',
+    tmpDir: 'data/tmp/partial-blocks',
+  }),
+  txStore: new FsTransactionStore({
+    log,
+    baseDir: 'data/headers/partial-txs',
+    tmpDir: 'data/tmp/partial-txs',
+  }),
   failureSimulator: new UniformFailureSimulator({
     failureRate: simulatedRequestFailureRate,
   }),
