@@ -32,6 +32,7 @@ services:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
     environment:
       - ENV=${ENV:-development}
+      - LOG_FORMAT=${LOG_FORMAT:-simple}
       - TRUSTED_NODE_URL=${TRUSTED_NODE_URL:-https://arweave.net}
       - TRUSTED_GATEWAY_URL=https://${TRUSTED_GATEWAY_HOST:-arweave.net}
       - START_HEIGHT=${START_HEIGHT:-0}
