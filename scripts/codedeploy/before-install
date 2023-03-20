@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# exit if a command errors
+set -e
+
 cd /opt/ar-io-node
 
 # cleanup existing files that might conflict on first deploy
@@ -7,7 +10,14 @@ shopt -s extglob
 rm -rf .!(env)
 rm -rf * # okay since data is stored in /data and /efs
 
-# backup DBs
 instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+
+# create backup dirs
+mkdir -p /efs/backups/$instance_id/previous-before-install
 mkdir -p /efs/backups/$instance_id/before-install
+
+# keep an archive of the previous backup in case the copy fails
+mv /efs/backups/$instance_id/before-install/* /efs/backups/$instance_id/previous-before-install/
+
+# copy the live DBs to the backup directory
 cp /data/sqlite/*.db /efs/backups/$instance_id/before-install/
