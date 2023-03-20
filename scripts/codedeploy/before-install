@@ -5,6 +5,9 @@ cd /opt/ar-io-node
 # cleanup existing files that might conflict on first deploy
 shopt -s extglob
 rm -rf .!(env)
-rm -rf * # okay since data is stored elsewhere
+rm -rf * # okay since data is stored in /data and /efs
 
-# TODO backup DBs
+# backup DBs
+instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+mkdir -p /efs/backups/$instance_id/before-install
+cp /data/sqlite/*.db /efs/backups/$instance_id/before-install/
