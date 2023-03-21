@@ -2,4 +2,6 @@
 
 cd /opt/ar-io-node
 
-docker-compose down
+if [ "$(docker ps -q)" ]; then
+  docker-compose down
+fi
