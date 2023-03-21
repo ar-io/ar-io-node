@@ -17,7 +17,9 @@ mkdir -p /efs/backups/$instance_id/sqlite/previous-before-install
 mkdir -p /efs/backups/$instance_id/sqlite/before-install
 
 # keep an archive of the previous backup in case the copy fails
-mv /efs/backups/$instance_id/sqlite/before-install/* /efs/backups/$instance_id/sql/previous-before-install/
+if [ "$(ls /efs/backups/$instance_id/before-install/*.db)" ]; then
+  mv /efs/backups/$instance_id/before-install/* /efs/backups/$instance_id/previous-before-install/
+fi
 
 # copy the live DBs to the backup directory
 cp /data/sqlite/*.db /efs/backups/$instance_id/sqlite/before-install/
