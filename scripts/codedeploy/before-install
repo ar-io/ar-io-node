@@ -13,8 +13,8 @@ rm -rf * || true # okay since data is stored in /data and /efs
 instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
 
 # create backup dirs
-mkdir -p /efs/backups/$instance_id/previous-before-install
-mkdir -p /efs/backups/$instance_id/before-install
+mkdir -p /efs/backups/$instance_id/sqlite/previous-before-install
+mkdir -p /efs/backups/$instance_id/sqlite/before-install
 
 # keep an archive of the previous backup in case the copy fails
 mv /efs/backups/$instance_id/before-install/* /efs/backups/$instance_id/previous-before-install/
