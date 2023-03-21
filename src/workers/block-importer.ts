@@ -58,6 +58,7 @@ export class BlockImporter {
   private transactionsImportedCounter: promClient.Counter<string>;
   private missingTransactionsCounter: promClient.Counter<string>;
   private blockImportErrorsCounter: promClient.Counter<string>;
+  private lastHeightImported: promClient.Gauge<string>;
 
   constructor({
     log,
@@ -137,6 +138,12 @@ export class BlockImporter {
       help: 'Count of block import errors',
     });
     metricsRegistry.registerMetric(this.blockImportErrorsCounter);
+
+    this.lastHeightImported = new promClient.Gauge({
+      name: 'last_height_imported',
+      help: 'Height of the last block imported',
+    });
+    metricsRegistry.registerMetric(this.lastHeightImported);
   }
 
   public async getBlockOrForkedBlock(
@@ -234,11 +241,12 @@ export class BlockImporter {
       this.eventEmitter.emit('block-tx-saved', tx);
     });
 
-    // Record import count metrics
+    // Record import metrics
     this.blocksImportedCounter.inc();
     this.transactionsImportedCounter.inc(txs.length);
     this.transactionsImported += txs.length;
     this.missingTransactionsCounter.inc(missingTxIds.length);
+    this.lastHeightImported.set(block.height);
 
     this.log.info(`Block imported`, {
       height: block.height,
