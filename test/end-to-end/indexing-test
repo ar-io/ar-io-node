@@ -2,8 +2,8 @@
 
 start_time=$(date +%s)
 
-export START_HEIGHT=0
-export STOP_HEIGHT=10
+export START_HEIGHT=1
+export STOP_HEIGHT=11
 
 container=$(
   docker run -d \
