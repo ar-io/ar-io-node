@@ -386,12 +386,14 @@ export interface ManifestPathResolver {
 export interface ValidNameResolution {
   name: string;
   resolvedId: string;
+  resolvedAt: number;
   ttl: number;
 }
 
 export interface MissingNameResolution {
   name: string;
   resolvedId: undefined;
+  resolvedAt: undefined;
   ttl: undefined;
 }
 

@@ -36,6 +36,7 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { createArnsMiddleware } from './middleware/arns.js';
+import { MemoryCacheArNSResolver } from './resolution/memory-cache-arns-resolver.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
 import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-resolver.js';
 import {
@@ -187,9 +188,12 @@ const manifestPathResolver = new StreamingManifestPathResolver({
   log,
 });
 
-const nameResolver = new TrustedGatewayArNSResolver({
+const nameResolver = new MemoryCacheArNSResolver({
   log,
-  trustedGatewayUrl: trustedArNSGatewayUrl,
+  resolver: new TrustedGatewayArNSResolver({
+    log,
+    trustedGatewayUrl: trustedArNSGatewayUrl,
+  }),
 });
 
 arweaveClient.refreshPeers();

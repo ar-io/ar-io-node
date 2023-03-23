@@ -39,6 +39,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
         return {
           name,
           resolvedId,
+          resolvedAt: Date.now(),
           ttl,
         };
       } else {
@@ -60,6 +61,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
     return {
       name,
       resolvedId: undefined,
+      resolvedAt: undefined,
       ttl: undefined,
     };
   }
