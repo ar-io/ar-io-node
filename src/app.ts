@@ -249,7 +249,7 @@ app.use(
 );
 
 // Healthcheck
-app.get('/healthcheck', (_req, res) => {
+app.get('/ar-io/healthcheck', (_req, res) => {
   const data = {
     uptime: process.uptime(),
     message: 'Welcome to the Permaweb.',
@@ -259,8 +259,8 @@ app.get('/healthcheck', (_req, res) => {
   res.status(200).send(data);
 });
 
-// TODO move under '/admin'
-app.get('/debug', async (_req, res) => {
+// Debug info (for internal use)
+app.get('/ar-io/debug', async (_req, res) => {
   res.json({
     db: await chainDb.getDebugInfo(),
   });
