@@ -20,6 +20,7 @@ import { default as cors } from 'cors';
 import express from 'express';
 //import * as OpenApiValidator from 'express-openapi-validator';
 import promMid from 'express-prometheus-middleware';
+import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import * as promClient from 'prom-client';
@@ -68,6 +69,13 @@ const port = +(process.env.PORT ?? 4000);
 const simulatedRequestFailureRate = +(
   process.env.SIMULATED_REQUEST_FAILURE_RATE ?? 0
 );
+const adminKey =
+  process.env.ADMIN_KEY !== undefined && process.env.ADMIN_KEY !== ''
+    ? process.env.ADMIN_KEY
+    : crypto.randomBytes(32).toString('base64url');
+if (process.env.ADMIN_KEY === undefined || process.env.ADMIN_KEY === '') {
+  log.info('Using a random admin key since none was set', { adminKey });
+}
 
 // Global errors counter
 const errorsCounter = new promClient.Counter({
@@ -259,8 +267,17 @@ app.get('/ar-io/healthcheck', (_req, res) => {
   res.status(200).send(data);
 });
 
+// Only allow access to admin routes if the bearer token matches the admin key
+app.use('/ar-io/admin', (req, res, next) => {
+  if (req.headers.authorization === `Bearer ${adminKey}`) {
+    next();
+  } else {
+    res.status(401).send('Unauthorized');
+  }
+});
+
 // Debug info (for internal use)
-app.get('/ar-io/debug', async (_req, res) => {
+app.get('/ar-io/admin/debug', async (_req, res) => {
   res.json({
     db: await chainDb.getDebugInfo(),
   });

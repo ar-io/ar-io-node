@@ -69,6 +69,12 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
+                        - match: { prefix: '/admin' }
+                          route:
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
                         - match:
                             safe_regex:
                               google_re2: { max_program_size: 200 }
