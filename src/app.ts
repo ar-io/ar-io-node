@@ -69,6 +69,7 @@ const port = +(process.env.PORT ?? 4000);
 const simulatedRequestFailureRate = +(
   process.env.SIMULATED_REQUEST_FAILURE_RATE ?? 0
 );
+const arioWallet = process.env.AR_IO_WALLET;
 const adminKey =
   process.env.ADMIN_KEY !== undefined && process.env.ADMIN_KEY !== ''
     ? process.env.ADMIN_KEY
@@ -265,6 +266,13 @@ app.get('/ar-io/healthcheck', (_req, res) => {
   };
 
   res.status(200).send(data);
+});
+
+// ar.io network info
+app.get('/ar-io/info', (_req, res) => {
+  res.status(200).send({
+    wallet: arioWallet,
+  });
 });
 
 // Only allow access to admin routes if the bearer token matches the admin key
