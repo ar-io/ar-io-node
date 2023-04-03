@@ -69,7 +69,7 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
-                        - match: { prefix: '/admin' }
+                        - match: { prefix: '/ar-io' }
                           route:
                             cluster: ario_gateways
                             retry_policy:
