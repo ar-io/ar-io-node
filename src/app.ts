@@ -226,6 +226,18 @@ const app = express();
 
 app.use(cors());
 
+app.use(
+  promMid({
+    metricsPath: '/ar-io/__gateway_metrics',
+    extraMasks: [
+      // Mask all paths except for the ones below
+      /^(?!api-docs)(?!ar-io)(?!graphql)(?!openapi\.json)(?!raw).+$/,
+      // Mask Arweave TX IDs
+      /[a-zA-Z0-9_-]{43}/,
+    ],
+  }),
+);
+
 const dataHandler = createDataHandler({
   log,
   dataIndex: chainDb,
@@ -239,8 +251,6 @@ app.use(
     nameResolver,
   }),
 );
-
-app.use(promMid({ metricsPath: '/gateway_metrics' }));
 
 // OpenAPI Spec
 const openapiDocument = YAML.parse(
