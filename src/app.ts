@@ -70,12 +70,15 @@ const simulatedRequestFailureRate = +(
   process.env.SIMULATED_REQUEST_FAILURE_RATE ?? 0
 );
 const arioWallet = process.env.AR_IO_WALLET;
-const adminKey =
-  process.env.ADMIN_KEY !== undefined && process.env.ADMIN_KEY !== ''
-    ? process.env.ADMIN_KEY
+const adminApiKey =
+  process.env.ADMIN_API_KEY !== undefined && process.env.ADMIN_API_KEY !== ''
+    ? process.env.ADMIN_API_KEY
     : crypto.randomBytes(32).toString('base64url');
-if (process.env.ADMIN_KEY === undefined || process.env.ADMIN_KEY === '') {
-  log.info('Using a random admin key since none was set', { adminKey });
+if (
+  process.env.ADMIN_API_KEY === undefined ||
+  process.env.ADMIN_API_KEY === ''
+) {
+  log.info('Using a random admin key since none was set', { adminApiKey });
 }
 
 // Global errors counter
@@ -275,9 +278,9 @@ app.get('/ar-io/info', (_req, res) => {
   });
 });
 
-// Only allow access to admin routes if the bearer token matches the admin key
+// Only allow access to admin routes if the bearer token matches the admin api key
 app.use('/ar-io/admin', (req, res, next) => {
-  if (req.headers.authorization === `Bearer ${adminKey}`) {
+  if (req.headers.authorization === `Bearer ${adminApiKey}`) {
     next();
   } else {
     res.status(401).send('Unauthorized');

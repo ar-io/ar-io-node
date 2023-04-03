@@ -97,6 +97,13 @@ handled locally, but ArNS state is not yet computed locally. Local ArNS state
 computation will be added in a future release. Also, be aware, ArNS is still using
 a test contract. Resolved names should be considered temporary.
 
+### Admin API key
+
+HTTP endpoints under '/ar-io/admin' are protected by an admin API key. On startup,
+the admin key is read from the `ADMIN_API_KEY` environment variable. If no key is
+set, a random key is generated and logged. To make a request to an admin endpoint
+add an `Authorization: Bearer <ADMIN_API_KEY>` header to your request.
+
 ## Principles and Practices
 
 ### Architecture
