@@ -97,6 +97,12 @@ handled locally, but ArNS state is not yet computed locally. Local ArNS state
 computation will be added in a future release. Also, be aware, ArNS is still using
 a test contract. Resolved names should be considered temporary.
 
+### Wallet assocation
+
+In order to participate in the ar.io network, gateways need to advertise their wallet
+association. This can be configured by setting the AR_IO_WALLET environment variable.
+Once set, the associated wallet address is visible via the `/ar-io/info` endpoint.
+
 ### Admin API key
 
 HTTP endpoints under '/ar-io/admin' are protected by an admin API key. On startup,

@@ -69,7 +69,10 @@ const port = +(process.env.PORT ?? 4000);
 const simulatedRequestFailureRate = +(
   process.env.SIMULATED_REQUEST_FAILURE_RATE ?? 0
 );
-const arioWallet = process.env.AR_IO_WALLET;
+const arioWallet =
+  process.env.AR_IO_WALLET !== undefined && process.env.AR_IO_WALLET !== ''
+    ? process.env.AR_IO_WALLET
+    : undefined;
 const adminApiKey =
   process.env.ADMIN_API_KEY !== undefined && process.env.ADMIN_API_KEY !== ''
     ? process.env.ADMIN_API_KEY
