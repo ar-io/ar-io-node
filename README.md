@@ -99,9 +99,10 @@ a test contract. Resolved names should be considered temporary.
 
 ### Wallet assocation
 
-In order to participate in the ar.io network, gateways need to advertise their wallet
-association. This can be configured by setting the AR_IO_WALLET environment variable.
-Once set, the associated wallet address is visible via the `/ar-io/info` endpoint.
+In order to participate in the [ar.io network](https://ar.io/), gateways need to
+association themselves with a wallet. This can be configured by setting the AR_IO_WALLET
+environment variable. Once set, the associated wallet address is visible via the
+`/ar-io/info` endpoint.
 
 ### Admin API key
 
