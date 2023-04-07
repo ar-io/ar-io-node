@@ -206,6 +206,9 @@ type DebugInfo = {
   };
 };
 
+type WorkerRole = 'read' | 'write';
+const WORKER_ROLES: Array<WorkerRole> = ['read', 'write'];
+
 export class StandaloneSqliteDatabaseWorker {
   private dbs: {
     [dbName: string]: Sqlite.Database;
@@ -1307,9 +1310,14 @@ export class StandaloneSqliteDatabase
   implements ChainDatabase, ContiguousDataIndex, GqlQueryable
 {
   log: winston.Logger;
-  private workers: any[] = [];
-  private workQueue: any[] = [];
-
+  private workers: {
+    read: any[];
+    write: any[];
+  } = { read: [], write: [] };
+  private workQueues: {
+    read: any[];
+    write: any[];
+  } = { read: [], write: [] };
   constructor({
     log,
     coreDbPath,
@@ -1319,12 +1327,11 @@ export class StandaloneSqliteDatabase
     coreDbPath: string;
     dataDbPath: string;
   }) {
-    this.log = log.child({ class: 'StandaloneSqliteDatabaseWorker' });
+    this.log = log.child({ class: 'StandaloneSqliteDatabase' });
 
     const self = this;
 
-    // Spawn workers that try to drain the queue.
-    os.cpus().forEach(function spawn() {
+    function spawn(role: WorkerRole) {
       const workerUrl = new URL('./standalone-sqlite.js', import.meta.url);
       const worker = new Worker(workerUrl, {
         workerData: {
@@ -1337,16 +1344,16 @@ export class StandaloneSqliteDatabase
       let error: any = null; // Error that caused the worker to crash
 
       function takeWork() {
-        if (!job && self.workQueue.length) {
+        if (!job && self.workQueues[role].length) {
           // If there's a job in the queue, send it to the worker
-          job = self.workQueue.shift();
+          job = self.workQueues[role].shift();
           worker.postMessage(job.message);
         }
       }
 
       worker
         .on('online', () => {
-          self.workers.push({ takeWork });
+          self.workers[role].push({ takeWork });
           takeWork();
         })
         .on('message', (result) => {
@@ -1359,7 +1366,9 @@ export class StandaloneSqliteDatabase
           error = err;
         })
         .on('exit', (code) => {
-          self.workers = self.workers.filter((w) => w.takeWork !== takeWork);
+          self.workers[role] = self.workers[role].filter(
+            (w) => w.takeWork !== takeWork,
+          );
           if (job) {
             job.reject(error || new Error('worker died'));
           }
@@ -1367,36 +1376,46 @@ export class StandaloneSqliteDatabase
             self.log.error('Worker stopped with exit code ' + code, {
               exitCode: code,
             });
-            spawn(); // Worker died, so spawn a new one
+            spawn(role); // Worker died, so spawn a new one
           }
         });
-    });
+    }
+
+    // Spawn 1 reader per CPU core
+    os.cpus().forEach(() => spawn('read'));
+
+    // To avoid contention, spawn only 1 writer
+    spawn('write');
   }
 
   stop() {
-    this.workers.forEach(() => {
-      return new Promise((resolve, reject) => {
-        this.workQueue.push({
-          resolve,
-          reject,
-          message: {
-            method: 'terminate',
-          },
+    WORKER_ROLES.forEach((role) => {
+      this.workers[role].forEach(() => {
+        return new Promise((resolve, reject) => {
+          this.workQueues[role].push({
+            resolve,
+            reject,
+            message: {
+              method: 'terminate',
+            },
+          });
+          this.drainQueue();
         });
-        this.drainQueue();
       });
     });
   }
 
   drainQueue() {
-    for (const worker of this.workers) {
-      worker.takeWork();
-    }
+    WORKER_ROLES.forEach((role) => {
+      for (const worker of this.workers[role]) {
+        worker.takeWork();
+      }
+    });
   }
 
-  queueWork(method: string, args: any): Promise<any> {
+  queueWork(role: WorkerRole, method: string, args: any): Promise<any> {
     return new Promise((resolve, reject) => {
-      this.workQueue.push({
+      this.workQueues[role].push({
         resolve,
         reject,
         message: {
@@ -1409,23 +1428,23 @@ export class StandaloneSqliteDatabase
   }
 
   getMaxHeight(): Promise<number> {
-    return this.queueWork('getMaxHeight', undefined);
+    return this.queueWork('read', 'getMaxHeight', undefined);
   }
 
   getBlockHashByHeight(height: number): Promise<string | undefined> {
-    return this.queueWork('getBlockHashByHeight', [height]);
+    return this.queueWork('read', 'getBlockHashByHeight', [height]);
   }
 
   getMissingTxIds(limit = 20): Promise<string[]> {
-    return this.queueWork('getMissingTxIds', [limit]);
+    return this.queueWork('read', 'getMissingTxIds', [limit]);
   }
 
   resetToHeight(height: number): Promise<void> {
-    return this.queueWork('resetToHeight', [height]);
+    return this.queueWork('write', 'resetToHeight', [height]);
   }
 
   saveTx(tx: PartialJsonTransaction): Promise<void> {
-    return this.queueWork('saveTx', [tx]);
+    return this.queueWork('write', 'saveTx', [tx]);
   }
 
   saveBlockAndTxs(
@@ -1433,15 +1452,15 @@ export class StandaloneSqliteDatabase
     txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void> {
-    return this.queueWork('saveBlockAndTxs', [block, txs, missingTxIds]);
+    return this.queueWork('write', 'saveBlockAndTxs', [block, txs, missingTxIds]);
   }
 
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined> {
-    return this.queueWork('getDataAttributes', [id]);
+    return this.queueWork('read', 'getDataAttributes', [id]);
   }
 
   getDebugInfo(): Promise<DebugInfo> {
-    return this.queueWork('getDebugInfo', undefined);
+    return this.queueWork('read', 'getDebugInfo', undefined);
   }
 
   saveDataContentAttributes({
@@ -1457,7 +1476,7 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
   }) {
-    return this.queueWork('saveDataContentAttributes', [
+    return this.queueWork('write', 'saveDataContentAttributes', [
       {
         id,
         dataRoot,
@@ -1489,7 +1508,7 @@ export class StandaloneSqliteDatabase
     maxHeight?: number;
     tags?: { name: string; values: string[] }[];
   }) {
-    return this.queueWork('getGqlTransactions', [
+    return this.queueWork('read', 'getGqlTransactions', [
       {
         pageSize,
         cursor,
@@ -1505,7 +1524,7 @@ export class StandaloneSqliteDatabase
   }
 
   async getGqlTransaction({ id }: { id: string }) {
-    return this.queueWork('getGqlTransaction', [{ id }]);
+    return this.queueWork('read', 'getGqlTransaction', [{ id }]);
   }
 
   getGqlBlocks({
@@ -1523,7 +1542,7 @@ export class StandaloneSqliteDatabase
     minHeight?: number;
     maxHeight?: number;
   }) {
-    return this.queueWork('getGqlBlocks', [
+    return this.queueWork('read', 'getGqlBlocks', [
       {
         pageSize,
         cursor,
@@ -1536,7 +1555,7 @@ export class StandaloneSqliteDatabase
   }
 
   getGqlBlock({ id }: { id: string }) {
-    return this.queueWork('getGqlBlock', [{ id }]);
+    return this.queueWork('read', 'getGqlBlock', [{ id }]);
   }
 }
 
