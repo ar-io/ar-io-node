@@ -51,6 +51,8 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
+const CPU_COUNT = os.cpus().length;
+
 const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const JOIN_LAST_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
@@ -206,9 +208,6 @@ type DebugInfo = {
   };
 };
 
-type WorkerRole = 'read' | 'write';
-const WORKER_ROLES: Array<WorkerRole> = ['read', 'write'];
-
 export class StandaloneSqliteDatabaseWorker {
   private dbs: {
     [dbName: string]: Sqlite.Database;
@@ -301,7 +300,6 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
-    // TODO add height to missing txs
     this.insertBlockAndTxsFn = this.dbs.core.transaction(
       (
         block: PartialJsonBlock,
@@ -1306,18 +1304,53 @@ export class StandaloneSqliteDatabaseWorker {
   }
 }
 
+type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug';
+const WORKER_POOL_NAMES: Array<WorkerPoolName> = [
+  'core',
+  'data',
+  'gql',
+  'debug',
+];
+
+type WorkerRoleName = 'read' | 'write';
+const WORKER_ROLE_NAMES: Array<WorkerRoleName> = ['read', 'write'];
+
+type WorkerPoolSizes = {
+  [key in WorkerPoolName]: { [key in WorkerRoleName]: number };
+};
+const WORKER_POOL_SIZES: WorkerPoolSizes = {
+  core: { read: 1, write: 1 },
+  data: { read: 1, write: 1 },
+  gql: { read: CPU_COUNT, write: 0 },
+  debug: { read: 1, write: 0 },
+};
+
 export class StandaloneSqliteDatabase
   implements ChainDatabase, ContiguousDataIndex, GqlQueryable
 {
   log: winston.Logger;
   private workers: {
-    read: any[];
-    write: any[];
-  } = { read: [], write: [] };
+    core: { read: any[]; write: any[] };
+    data: { read: any[]; write: any[] };
+    gql: { read: any[]; write: any[] };
+    debug: { read: any[]; write: any[] };
+  } = {
+    core: { read: [], write: [] },
+    data: { read: [], write: [] },
+    gql: { read: [], write: [] },
+    debug: { read: [], write: [] },
+  };
   private workQueues: {
-    read: any[];
-    write: any[];
-  } = { read: [], write: [] };
+    core: { read: any[]; write: any[] };
+    data: { read: any[]; write: any[] };
+    gql: { read: any[]; write: any[] };
+    debug: { read: any[]; write: any[] };
+  } = {
+    core: { read: [], write: [] },
+    data: { read: [], write: [] },
+    gql: { read: [], write: [] },
+    debug: { read: [], write: [] },
+  };
   constructor({
     log,
     coreDbPath,
@@ -1331,7 +1364,7 @@ export class StandaloneSqliteDatabase
 
     const self = this;
 
-    function spawn(role: WorkerRole) {
+    function spawn(pool: WorkerPoolName, role: WorkerRoleName) {
       const workerUrl = new URL('./standalone-sqlite.js', import.meta.url);
       const worker = new Worker(workerUrl, {
         workerData: {
@@ -1344,16 +1377,16 @@ export class StandaloneSqliteDatabase
       let error: any = null; // Error that caused the worker to crash
 
       function takeWork() {
-        if (!job && self.workQueues[role].length) {
+        if (!job && self.workQueues[pool][role].length) {
           // If there's a job in the queue, send it to the worker
-          job = self.workQueues[role].shift();
+          job = self.workQueues[pool][role].shift();
           worker.postMessage(job.message);
         }
       }
 
       worker
         .on('online', () => {
-          self.workers[role].push({ takeWork });
+          self.workers[pool][role].push({ takeWork });
           takeWork();
         })
         .on('message', (result) => {
@@ -1366,7 +1399,7 @@ export class StandaloneSqliteDatabase
           error = err;
         })
         .on('exit', (code) => {
-          self.workers[role] = self.workers[role].filter(
+          self.workers[pool][role] = self.workers[pool][role].filter(
             (w) => w.takeWork !== takeWork,
           );
           if (job) {
@@ -1376,46 +1409,61 @@ export class StandaloneSqliteDatabase
             self.log.error('Worker stopped with exit code ' + code, {
               exitCode: code,
             });
-            spawn(role); // Worker died, so spawn a new one
+            spawn(pool, role); // Worker died, so spawn a new one
           }
         });
     }
 
-    // Spawn 1 reader per CPU core
-    os.cpus().forEach(() => spawn('read'));
+    WORKER_POOL_NAMES.forEach((pool) => {
+      // Spawn readers
+      for (let i = 0; i < WORKER_POOL_SIZES[pool].read; i++) {
+        spawn(pool, 'read');
+      }
 
-    // To avoid contention, spawn only 1 writer
-    spawn('write');
+      // Spawn writers
+      for (let i = 0; i < WORKER_POOL_SIZES[pool].write; i++) {
+        spawn(pool, 'write');
+      }
+    });
   }
 
   stop() {
-    WORKER_ROLES.forEach((role) => {
-      this.workers[role].forEach(() => {
-        return new Promise((resolve, reject) => {
-          this.workQueues[role].push({
-            resolve,
-            reject,
-            message: {
-              method: 'terminate',
-            },
+    WORKER_POOL_NAMES.forEach((pool) => {
+      WORKER_ROLE_NAMES.forEach((role) => {
+        this.workers[pool][role].forEach(() => {
+          return new Promise((resolve, reject) => {
+            this.workQueues[pool][role].push({
+              resolve,
+              reject,
+              message: {
+                method: 'terminate',
+              },
+            });
+            this.drainQueue();
           });
-          this.drainQueue();
         });
       });
     });
   }
 
   drainQueue() {
-    WORKER_ROLES.forEach((role) => {
-      for (const worker of this.workers[role]) {
-        worker.takeWork();
-      }
+    WORKER_POOL_NAMES.forEach((pool) => {
+      WORKER_ROLE_NAMES.forEach((role) => {
+        for (const worker of this.workers[pool][role]) {
+          worker.takeWork();
+        }
+      });
     });
   }
 
-  queueWork(role: WorkerRole, method: string, args: any): Promise<any> {
+  queueWork(
+    workerName: WorkerPoolName,
+    role: WorkerRoleName,
+    method: string,
+    args: any,
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
-      this.workQueues[role].push({
+      this.workQueues[workerName][role].push({
         resolve,
         reject,
         message: {
@@ -1427,24 +1475,32 @@ export class StandaloneSqliteDatabase
     });
   }
 
+  queueRead(pool: WorkerPoolName, method: string, args: any): Promise<any> {
+    return this.queueWork(pool, 'read', method, args);
+  }
+
+  queueWrite(pool: WorkerPoolName, method: string, args: any): Promise<any> {
+    return this.queueWork(pool, 'write', method, args);
+  }
+
   getMaxHeight(): Promise<number> {
-    return this.queueWork('read', 'getMaxHeight', undefined);
+    return this.queueRead('core', 'getMaxHeight', undefined);
   }
 
   getBlockHashByHeight(height: number): Promise<string | undefined> {
-    return this.queueWork('read', 'getBlockHashByHeight', [height]);
+    return this.queueRead('core', 'getBlockHashByHeight', [height]);
   }
 
   getMissingTxIds(limit = 20): Promise<string[]> {
-    return this.queueWork('read', 'getMissingTxIds', [limit]);
+    return this.queueRead('core', 'getMissingTxIds', [limit]);
   }
 
   resetToHeight(height: number): Promise<void> {
-    return this.queueWork('write', 'resetToHeight', [height]);
+    return this.queueWrite('core', 'resetToHeight', [height]);
   }
 
   saveTx(tx: PartialJsonTransaction): Promise<void> {
-    return this.queueWork('write', 'saveTx', [tx]);
+    return this.queueWrite('core', 'saveTx', [tx]);
   }
 
   saveBlockAndTxs(
@@ -1452,15 +1508,19 @@ export class StandaloneSqliteDatabase
     txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void> {
-    return this.queueWork('write', 'saveBlockAndTxs', [block, txs, missingTxIds]);
+    return this.queueWrite('core', 'saveBlockAndTxs', [
+      block,
+      txs,
+      missingTxIds,
+    ]);
   }
 
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined> {
-    return this.queueWork('read', 'getDataAttributes', [id]);
+    return this.queueRead('data', 'getDataAttributes', [id]);
   }
 
   getDebugInfo(): Promise<DebugInfo> {
-    return this.queueWork('read', 'getDebugInfo', undefined);
+    return this.queueRead('debug', 'getDebugInfo', undefined);
   }
 
   saveDataContentAttributes({
@@ -1476,7 +1536,7 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
   }) {
-    return this.queueWork('write', 'saveDataContentAttributes', [
+    return this.queueWrite('data', 'saveDataContentAttributes', [
       {
         id,
         dataRoot,
@@ -1508,7 +1568,7 @@ export class StandaloneSqliteDatabase
     maxHeight?: number;
     tags?: { name: string; values: string[] }[];
   }) {
-    return this.queueWork('read', 'getGqlTransactions', [
+    return this.queueRead('gql', 'getGqlTransactions', [
       {
         pageSize,
         cursor,
@@ -1524,7 +1584,7 @@ export class StandaloneSqliteDatabase
   }
 
   async getGqlTransaction({ id }: { id: string }) {
-    return this.queueWork('read', 'getGqlTransaction', [{ id }]);
+    return this.queueRead('gql', 'getGqlTransaction', [{ id }]);
   }
 
   getGqlBlocks({
@@ -1542,7 +1602,7 @@ export class StandaloneSqliteDatabase
     minHeight?: number;
     maxHeight?: number;
   }) {
-    return this.queueWork('read', 'getGqlBlocks', [
+    return this.queueRead('gql', 'getGqlBlocks', [
       {
         pageSize,
         cursor,
@@ -1555,9 +1615,14 @@ export class StandaloneSqliteDatabase
   }
 
   getGqlBlock({ id }: { id: string }) {
-    return this.queueWork('read', 'getGqlBlock', [{ id }]);
+    return this.queueRead('gql', 'getGqlBlock', [{ id }]);
   }
 }
+
+type WorkerMessage = {
+  method: keyof StandaloneSqliteDatabaseWorker | 'terminate';
+  args: any[];
+};
 
 if (!isMainThread) {
   const worker = new StandaloneSqliteDatabaseWorker({
@@ -1565,8 +1630,7 @@ if (!isMainThread) {
     dataDbPath: workerData.dataDbPath,
   });
 
-  // TODO add types for messages
-  parentPort?.on('message', ({ method, args }) => {
+  parentPort?.on('message', ({ method, args }: WorkerMessage) => {
     switch (method) {
       case 'getMaxHeight':
         const maxHeight = worker.getMaxHeight();
