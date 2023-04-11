@@ -232,8 +232,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   const keyPath: Array<string | number> = [];
   let indexPath: string | undefined;
   let paths: { [k: string]: string } = {};
-  let hasValidManifestKey = false;
-  let hasValidManifestVersion = false;
+  let hasValidManifestKey = false; // { "manifest": "arweave/paths" }
+  let hasValidManifestVersion = false; // { "version": "0.1.0" }
   let pathCount = 0;
 
   const pipeline = new Chain([stream, parser()]);
@@ -268,7 +268,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   });
 
   pipeline.on('stringValue', (data) => {
-    // Manifest key
+    // Manifest key - { "manifest": "arweave/paths" }
     if (
       keyPath.length === 0 &&
       currentKey === 'manifest' &&
@@ -277,12 +277,12 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       hasValidManifestKey = true;
     }
 
-    // Manifest version
+    // Manifest version - { "version": "0.1.0" }
     if (keyPath.length === 0 && currentKey === 'version' && data === '0.1.0') {
       hasValidManifestVersion = true;
     }
 
-    // Index
+    // Index - { "index": { "path": "index.html" } }
     if (
       keyPath.length === 1 &&
       keyPath[0] === 'index' &&
@@ -296,7 +296,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       }
     }
 
-    // Paths
+    // Paths - { "paths": { "some/path/file.html": { "id": "<data-id>" } }
     if (
       keyPath.length === 2 &&
       keyPath[0] === 'paths' &&
@@ -325,6 +325,9 @@ export function resolveManifestStreamPath(
   return new Promise((resolve, reject) => {
     const emitter = parseManifestStream(stream);
 
+    // Remove trailing slashes from path - treat /path and /path/ the same
+    const sanitizedPath = path !== undefined ? path.replace(/\/+$/g, '') : '';
+
     emitter.on('error', (err) => {
       reject(err);
     });
@@ -334,13 +337,14 @@ export function resolveManifestStreamPath(
     });
 
     emitter.on('index', (data) => {
-      if (path === undefined || path === '') {
+      if (sanitizedPath === '') {
         resolve(data.id);
       }
     });
 
     emitter.on('path', (data) => {
-      if (path !== undefined && data.path === path) {
+      const trimmedDataPath = data.path.replace(/\/+$/g, '');
+      if (sanitizedPath !== '' && trimmedDataPath === sanitizedPath) {
         resolve(data.id);
       }
     });

@@ -260,6 +260,13 @@ describe('Manifest parsing', () => {
         'assets/img/icon.png',
       );
       expect(id2).to.equal('0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
+
+      // somewhat contrived, but this tests a trailing slashes is ignored
+      const id3 = await resolveManifestStreamPath(
+        exampleManifestStream(),
+        'assets/img/icon.png/',
+      );
+      expect(id3).to.equal('0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
     });
 
     it('should return undefined if the path is not found', async () => {
