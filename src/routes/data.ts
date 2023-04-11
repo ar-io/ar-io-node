@@ -22,6 +22,7 @@ import { Logger } from 'winston';
 
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 import {
+  BlockListValidator,
   ContiguousData,
   ContiguousDataAttributes,
   ContiguousDataIndex,
@@ -93,13 +94,29 @@ export const createRawDataHandler = ({
   log,
   dataIndex,
   dataSource,
+  blockListValidator,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
+  blockListValidator: BlockListValidator;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const id = req.params[0];
+
+    // Return 404 if the data is blocked by ID
+    try {
+      if (await blockListValidator.isIdBlocked(id)) {
+        sendNotFound(res);
+        return;
+      }
+    } catch (error: any) {
+      log.error('Error checking blocklist:', {
+        dataId: id,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
 
     // Retrieve authoritative data attributes if they're available
     let dataAttributes: ContiguousDataAttributes | undefined;
@@ -113,6 +130,20 @@ export const createRawDataHandler = ({
       });
       sendNotFound(res);
       return;
+    }
+
+    // Return 404 if the data is blocked by hash
+    try {
+      if (await blockListValidator.isHashBlocked(dataAttributes?.hash)) {
+        sendNotFound(res);
+        return;
+      }
+    } catch (error: any) {
+      log.error('Error checking blocklist:', {
+        dataId: id,
+        message: error.message,
+        stack: error.stack,
+      });
     }
 
     // Set headers and attempt to retrieve and stream data
@@ -233,11 +264,13 @@ export const createDataHandler = ({
   log,
   dataIndex,
   dataSource,
+  blockListValidator,
   manifestPathResolver,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
+  blockListValidator: BlockListValidator;
   manifestPathResolver: ManifestPathResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
@@ -252,11 +285,39 @@ export const createDataHandler = ({
       manifestPath = req.params[2];
     }
 
+    // Return 404 if the data is blocked by ID
+    try {
+      if (await blockListValidator.isIdBlocked(id)) {
+        sendNotFound(res);
+        return;
+      }
+    } catch (error: any) {
+      log.error('Error checking blocklist:', {
+        dataId: id,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+
     let data: ContiguousData | undefined;
     let dataAttributes: ContiguousDataAttributes | undefined;
     try {
       // Retrieve authoritative data attributes if available
       dataAttributes = await dataIndex.getDataAttributes(id);
+
+      // Return 404 if the data is blocked by hash
+      try {
+        if (await blockListValidator.isHashBlocked(dataAttributes?.hash)) {
+          sendNotFound(res);
+          return;
+        }
+      } catch (error: any) {
+        log.error('Error checking blocklist:', {
+          dataId: id,
+          message: error.message,
+          stack: error.stack,
+        });
+      }
 
       // Attempt manifest path resolution from the index (without data parsing)
       if (dataAttributes?.isManifest) {

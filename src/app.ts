@@ -245,6 +245,7 @@ const dataHandler = createDataHandler({
   log,
   dataIndex: chainDb,
   dataSource: contiguousDataSource,
+  blockListValidator: chainDb,
   manifestPathResolver,
 });
 
@@ -328,6 +329,7 @@ app.get(
     log,
     dataIndex: chainDb,
     dataSource: contiguousDataSource,
+    blockListValidator: chainDb,
   }),
 );
 

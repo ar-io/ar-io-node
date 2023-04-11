@@ -270,6 +270,11 @@ export interface GqlQueryable {
   }): Promise<GqlBlocksResult>;
 }
 
+export interface BlockListValidator {
+  isIdBlocked(id: string | undefined): Promise<boolean>;
+  isHashBlocked(hash: string | undefined): Promise<boolean>;
+}
+
 export interface JsonChunk {
   tx_path: string;
   data_path: string;

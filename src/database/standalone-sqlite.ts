@@ -43,6 +43,7 @@ import {
 } from '../lib/encoding.js';
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 import {
+  BlockListValidator,
   ChainDatabase,
   ContiguousDataAttributes,
   ContiguousDataIndex,
@@ -1326,7 +1327,11 @@ const WORKER_POOL_SIZES: WorkerPoolSizes = {
 };
 
 export class StandaloneSqliteDatabase
-  implements ChainDatabase, ContiguousDataIndex, GqlQueryable
+  implements
+    BlockListValidator,
+    ChainDatabase,
+    ContiguousDataIndex,
+    GqlQueryable
 {
   log: winston.Logger;
   private workers: {
@@ -1616,6 +1621,16 @@ export class StandaloneSqliteDatabase
 
   getGqlBlock({ id }: { id: string }) {
     return this.queueRead('gql', 'getGqlBlock', [{ id }]);
+  }
+
+  async isIdBlocked(_: string): Promise<boolean> {
+    // TODO implement this
+    return false;
+  }
+
+  async isHashBlocked(_: string): Promise<boolean> {
+    // TODO implement this
+    return false;
   }
 }
 
