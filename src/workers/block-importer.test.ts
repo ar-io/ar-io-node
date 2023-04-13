@@ -26,7 +26,11 @@ import { default as wait } from 'wait';
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
-import { coreDbPath, dataDbPath } from '../../test/sqlite-helpers.js';
+import {
+  coreDbPath,
+  dataDbPath,
+  moderationDbPath,
+} from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
 
 chai.use(chaiAsPromised);
@@ -65,7 +69,12 @@ describe('BlockImporter', () => {
   before(async () => {
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
-    chainDb = new StandaloneSqliteDatabase({ log, coreDbPath, dataDbPath });
+    chainDb = new StandaloneSqliteDatabase({
+      log,
+      coreDbPath,
+      dataDbPath,
+      moderationDbPath,
+    });
   });
 
   after(async () => {
