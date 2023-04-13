@@ -116,6 +116,7 @@ export const createRawDataHandler = ({
         message: error.message,
         stack: error.stack,
       });
+      // TODO return 500
     }
 
     // Retrieve authoritative data attributes if they're available

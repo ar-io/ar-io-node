@@ -309,6 +309,23 @@ app.get('/ar-io/admin/debug', async (_req, res) => {
   });
 });
 
+// Block access to contiguous data by ID or hash
+app.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
+  // TODO improve validation
+  try {
+    const { id, hash, source, notes } = req.body;
+    if (id === undefined && hash === undefined) {
+      res.status(400).send("Must provide 'id' or 'hash'");
+      return;
+    }
+    chainDb.blockData({ id, hash, source, notes });
+    // TODO check return value
+    res.json({ message: 'Content blocked' });
+  } catch (error: any) {
+    res.status(500).send(error?.message);
+  }
+});
+
 // GraphQL
 const apolloServerInstanceGql = apolloServer(chainDb, {
   introspection: true,

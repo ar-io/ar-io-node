@@ -1330,6 +1330,44 @@ export class StandaloneSqliteDatabaseWorker {
     });
     return row?.is_blocked === 1;
   }
+
+  blockData({
+    id,
+    hash,
+    source,
+    notes,
+  }: {
+    id?: string;
+    hash?: string;
+    source?: string;
+    notes?: string;
+  }) {
+    let sourceId = undefined;
+    if (source !== undefined) {
+      this.stmts.moderation.insertSource.run({
+        name: source,
+        created_at: +(Date.now() / 1000).toFixed(0),
+      });
+      sourceId = this.stmts.moderation.getSourceByName.get({
+        name: source,
+      })?.id;
+    }
+    if (id !== undefined) {
+      this.stmts.moderation.insertBlockedId.run({
+        id: fromB64Url(id),
+        block_source_id: sourceId,
+        notes,
+        blocked_at: +(Date.now() / 1000).toFixed(0),
+      });
+    } else if (hash !== undefined) {
+      this.stmts.moderation.insertBlockedHash.run({
+        hash: fromB64Url(hash),
+        block_source_id: sourceId,
+        notes,
+        blocked_at: +(Date.now() / 1000).toFixed(0),
+      });
+    }
+  }
 }
 
 type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug' | 'moderation';
@@ -1666,6 +1704,27 @@ export class StandaloneSqliteDatabase
   async isHashBlocked(hash: string): Promise<boolean> {
     return this.queueRead('moderation', 'isHashBlocked', [hash]);
   }
+
+  async blockData({
+    id,
+    hash,
+    source,
+    notes,
+  }: {
+    id?: string;
+    hash?: string;
+    source?: string;
+    notes?: string;
+  }): Promise<void> {
+    return this.queueWrite('moderation', 'blockData', [
+      {
+        id,
+        hash,
+        source,
+        notes,
+      },
+    ]);
+  }
 }
 
 type WorkerMessage = {
@@ -1742,6 +1801,10 @@ if (!isMainThread) {
       case 'isHashBlocked':
         const isHashBlocked = worker.isHashBlocked(args[0]);
         parentPort?.postMessage(isHashBlocked);
+        break;
+      case 'blockData':
+        worker.blockData(args[0]);
+        parentPort?.postMessage(null);
         break;
       case 'terminate':
         process.exit(0);
