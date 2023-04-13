@@ -127,6 +127,7 @@ const chainDb = new StandaloneSqliteDatabase({
   log,
   coreDbPath: 'data/sqlite/core.db',
   dataDbPath: 'data/sqlite/data.db',
+  moderationDbPath: 'data/sqlite/moderation.db',
 });
 
 // Workers

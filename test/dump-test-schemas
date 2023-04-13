@@ -2,3 +2,4 @@
 
 sqlite3 data/sqlite/core.db < test/dump-core-schema.sql
 sqlite3 data/sqlite/data.db < test/dump-data-schema.sql
+sqlite3 data/sqlite/moderation.db < test/dump-moderation-schema.sql

@@ -5,8 +5,10 @@ import log from '../src/log.js';
 
 export const coreDbPath = `test/tmp/core.db`;
 export const dataDbPath = `test/tmp/data.db`;
+export const moderationDbPath = `test/tmp/moderation.db`;
 export let coreDb: Sqlite.Database;
 export let dataDb: Sqlite.Database;
+export let moderationDb: Sqlite.Database;
 
 /* eslint-disable */
 before(async () => {
@@ -26,10 +28,15 @@ before(async () => {
   dataDb = new Sqlite(dataDbPath);
   const dataSchema = fs.readFileSync('test/data-schema.sql', 'utf8');
   dataDb.exec(dataSchema);
+
+  // Moderation DB
+  moderationDb = new Sqlite(moderationDbPath);
+  const moderationSchema = fs.readFileSync('test/moderation-schema.sql', 'utf8');
+  moderationDb.exec(moderationSchema);
 });
 
 afterEach(async () => {
-  [coreDb, dataDb].forEach((db) => {
+  [coreDb, dataDb, moderationDb].forEach((db) => {
     db.prepare("SELECT name FROM sqlite_schema WHERE type='table'")
       .all()
       .forEach((row) => {

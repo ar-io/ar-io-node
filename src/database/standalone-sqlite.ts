@@ -211,10 +211,14 @@ type DebugInfo = {
 
 export class StandaloneSqliteDatabaseWorker {
   private dbs: {
-    [dbName: string]: Sqlite.Database;
+    core: Sqlite.Database;
+    data: Sqlite.Database;
+    moderation: Sqlite.Database;
   };
   private stmts: {
-    [dbName: string]: { [stmtName: string]: Sqlite.Statement };
+    core: { [stmtName: string]: Sqlite.Statement };
+    data: { [stmtName: string]: Sqlite.Statement };
+    moderation: { [stmtName: string]: Sqlite.Statement };
   };
 
   // Transactions
@@ -227,24 +231,24 @@ export class StandaloneSqliteDatabaseWorker {
   constructor({
     coreDbPath,
     dataDbPath,
+    moderationDbPath,
   }: {
     coreDbPath: string;
     dataDbPath: string;
+    moderationDbPath: string;
   }) {
+    const timeout = 30000;
     this.dbs = {
-      core: new Sqlite(coreDbPath, {
-        timeout: 30000,
-      }),
-      data: new Sqlite(dataDbPath, {
-        timeout: 30000,
-      }),
+      core: new Sqlite(coreDbPath, { timeout }),
+      data: new Sqlite(dataDbPath, { timeout }),
+      moderation: new Sqlite(moderationDbPath, { timeout }),
     };
     for (const db of Object.values(this.dbs)) {
       db.pragma('journal_mode = WAL');
       db.pragma('page_size = 4096'); // may depend on OS and FS
     }
 
-    this.stmts = { core: {}, data: {} };
+    this.stmts = { core: {}, data: {}, moderation: {} };
 
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
@@ -252,7 +256,16 @@ export class StandaloneSqliteDatabaseWorker {
       for (const [k, sql] of Object.entries(coreSql)) {
         // Skip the key containing the complete file
         if (!k.endsWith('.sql')) {
-          stmts[k] = this.dbs[stmtsKey].prepare(sql);
+          // Guard against unexpected statement keys
+          if (
+            stmtsKey === 'core' ||
+            stmtsKey === 'data' ||
+            stmtsKey === 'moderation'
+          ) {
+            stmts[k] = this.dbs[stmtsKey].prepare(sql);
+          } else {
+            throw new Error(`Unexpected statement key: ${stmtsKey}`);
+          }
         }
       }
     }
@@ -1303,14 +1316,29 @@ export class StandaloneSqliteDatabaseWorker {
 
     return block;
   }
+
+  isIdBlocked(id: string): boolean {
+    const row = this.stmts.moderation.isIdBlocked.get({
+      id: fromB64Url(id),
+    });
+    return row?.is_blocked === 1;
+  }
+
+  isHashBlocked(hash: string): boolean {
+    const row = this.stmts.moderation.isHashBlocked.get({
+      hash: fromB64Url(hash),
+    });
+    return row?.is_blocked === 1;
+  }
 }
 
-type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug';
+type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug' | 'moderation';
 const WORKER_POOL_NAMES: Array<WorkerPoolName> = [
   'core',
   'data',
   'gql',
   'debug',
+  'moderation',
 ];
 
 type WorkerRoleName = 'read' | 'write';
@@ -1324,6 +1352,7 @@ const WORKER_POOL_SIZES: WorkerPoolSizes = {
   data: { read: 1, write: 1 },
   gql: { read: CPU_COUNT, write: 0 },
   debug: { read: 1, write: 0 },
+  moderation: { read: 1, write: 1 },
 };
 
 export class StandaloneSqliteDatabase
@@ -1339,31 +1368,37 @@ export class StandaloneSqliteDatabase
     data: { read: any[]; write: any[] };
     gql: { read: any[]; write: any[] };
     debug: { read: any[]; write: any[] };
+    moderation: { read: any[]; write: any[] };
   } = {
     core: { read: [], write: [] },
     data: { read: [], write: [] },
     gql: { read: [], write: [] },
     debug: { read: [], write: [] },
+    moderation: { read: [], write: [] },
   };
   private workQueues: {
     core: { read: any[]; write: any[] };
     data: { read: any[]; write: any[] };
     gql: { read: any[]; write: any[] };
     debug: { read: any[]; write: any[] };
+    moderation: { read: any[]; write: any[] };
   } = {
     core: { read: [], write: [] },
     data: { read: [], write: [] },
     gql: { read: [], write: [] },
     debug: { read: [], write: [] },
+    moderation: { read: [], write: [] },
   };
   constructor({
     log,
     coreDbPath,
     dataDbPath,
+    moderationDbPath,
   }: {
     log: winston.Logger;
     coreDbPath: string;
     dataDbPath: string;
+    moderationDbPath: string;
   }) {
     this.log = log.child({ class: 'StandaloneSqliteDatabase' });
 
@@ -1375,6 +1410,7 @@ export class StandaloneSqliteDatabase
         workerData: {
           coreDbPath,
           dataDbPath,
+          moderationDbPath,
         },
       });
 
@@ -1623,14 +1659,12 @@ export class StandaloneSqliteDatabase
     return this.queueRead('gql', 'getGqlBlock', [{ id }]);
   }
 
-  async isIdBlocked(_: string): Promise<boolean> {
-    // TODO implement this
-    return false;
+  async isIdBlocked(id: string): Promise<boolean> {
+    return this.queueRead('moderation', 'isIdBlocked', [id]);
   }
 
-  async isHashBlocked(_: string): Promise<boolean> {
-    // TODO implement this
-    return false;
+  async isHashBlocked(hash: string): Promise<boolean> {
+    return this.queueRead('moderation', 'isHashBlocked', [hash]);
   }
 }
 
@@ -1643,6 +1677,7 @@ if (!isMainThread) {
   const worker = new StandaloneSqliteDatabaseWorker({
     coreDbPath: workerData.coreDbPath,
     dataDbPath: workerData.dataDbPath,
+    moderationDbPath: workerData.moderationDbPath,
   });
 
   parentPort?.on('message', ({ method, args }: WorkerMessage) => {
@@ -1699,6 +1734,14 @@ if (!isMainThread) {
       case 'getGqlBlock':
         const gqlBlock = worker.getGqlBlock(args[0]);
         parentPort?.postMessage(gqlBlock);
+        break;
+      case 'isIdBlocked':
+        const isIdBlocked = worker.isIdBlocked(args[0]);
+        parentPort?.postMessage(isIdBlocked);
+        break;
+      case 'isHashBlocked':
+        const isHashBlocked = worker.isHashBlocked(args[0]);
+        parentPort?.postMessage(isHashBlocked);
         break;
       case 'terminate':
         process.exit(0);
