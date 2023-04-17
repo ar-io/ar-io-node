@@ -24,6 +24,9 @@ tx2="yecPZWBFO8FnspfrC6y_xChBHYfInssITIip-3OF5kM"
 # non-manifest tx
 tx3="lbeIMUvoEqR2q-pKsT4Y5tz6mm9ppemReyLnQ8P7XpM"
 
+# manifest with paths without trailing slash
+tx4="sYaO7sklQ8FyObQNLy7kDbEvwUNKKes7mUnv-_Ri9bE"
+
 # Run tests twice to test caching
 for i in {1..2}; do
   echo "Verifying that /raw/<id> returns 200..."
@@ -114,6 +117,20 @@ for i in {1..2}; do
   content_length="$(curl -s -i http://localhost:4000/$tx3 | grep Content-Length | awk '{print $2}' | tr -d '[:space:]')"
   if [[ "$content_length" != "130" ]]; then
     echo "Unexpected content length: '$content_length'"
+    exit 1
+  fi
+
+  echo "Verifying that /<id>/<path> for a manifest path without a trailing slash returns 200..."
+  status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx4/blog/a-fresh-start/)"
+  if [[ "$status_code" != "200" ]]; then
+    echo "Unexpected status code: '$status_code'"
+    exit 1
+  fi
+
+  echo "Verifying that /<id>/<path>/ for a manifest path without a trailing slash returns 200..."
+  status_code="$(curl -s -w "%{http_code}" -o /dev/null http://localhost:4000/$tx4/blog/a-fresh-start/)"
+  if [[ "$status_code" != "200" ]]; then
+    echo "Unexpected status code: '$status_code'"
     exit 1
   fi
 done
