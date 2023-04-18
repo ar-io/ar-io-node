@@ -19,8 +19,8 @@ import arbundles from 'arbundles/stream/index.js';
 import stream from 'node:stream';
 import * as winston from 'winston';
 
-import { BundleDatabase, DataItem } from '../types.js';
-import { fromB64Url, sha256B64Url } from './encoding.js';
+import { BundleDatabase, DataItem, PartialJsonTransaction } from '../types.js';
+import { b64UrlToUtf8, fromB64Url, sha256B64Url } from './encoding.js';
 
 /* eslint-disable */
 // @ts-ignore
@@ -43,6 +43,35 @@ export async function importAns102Bundle({
   parentTxId: string;
   batchSize?: number;
 }): Promise<void> {}
+
+export function isAns104Bundle(tx: PartialJsonTransaction): boolean {
+  if (!Array.isArray(tx.tags)) {
+    return false;
+  }
+
+  let isBinary = false;
+  let isVersion2 = false;
+
+  for (const tag of tx.tags) {
+    if (typeof tag.name !== 'string' || typeof tag.value !== 'string') {
+      continue;
+    }
+    const tagName = b64UrlToUtf8(tag.name);
+    const tagValue = b64UrlToUtf8(tag.value);
+    if (tagName === 'Bundle-Format' && tagValue === 'binary') {
+      isBinary = true;
+    }
+    if (tagName === 'Bundle-Version' && tagValue.startsWith('2.')) {
+      isVersion2 = true;
+    }
+  }
+
+  if (isBinary && isVersion2) {
+    return true;
+  }
+
+  return false;
+}
 
 export async function importAns104Bundle({
   log,

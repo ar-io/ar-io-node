@@ -34,6 +34,7 @@ import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+import { isAns104Bundle } from './lib/bundles.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { createArnsMiddleware } from './middleware/arns.js';
@@ -142,6 +143,16 @@ const blockImporter = new BlockImporter({
   eventEmitter,
   startHeight: startHeight,
   stopHeight: stopHeight,
+});
+
+eventEmitter.addListener('block-tx-saved', (tx) => {
+  eventEmitter.emit('tx-saved', tx);
+});
+
+eventEmitter.addListener('tx-saved', (tx) => {
+  if (isAns104Bundle(tx)) {
+    eventEmitter.emit('ans104-tx-saved', tx);
+  }
 });
 
 const txFetcher = new TransactionFetcher({
