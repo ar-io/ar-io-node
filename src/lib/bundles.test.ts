@@ -16,27 +16,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { expect } from 'chai';
+import { EventEmitter } from 'node:events';
 import stream from 'node:stream';
 import * as sinon from 'sinon';
-import * as winston from 'winston';
 
-import { importAns104Bundle } from '../../src/lib/bundles.js';
-import logger from '../../src/log.js';
-import { BundleDatabase, DataItem } from '../../src/types.js';
+import { emitAns104UnbundleEvents } from '../../src/lib/bundles.js';
+import log from '../../src/log.js';
 import { stubAns104Bundle, stubTxID } from '../../test/stubs.js';
-
-export class BundleDatabaseStub implements BundleDatabase {
-  private log: winston.Logger;
-
-  constructor() {
-    this.log = logger;
-  }
-
-  async saveDataItems(dataItems: DataItem[]): Promise<void> {
-    this.log.info(`Saving ${dataItems.length} data items to bundle database`);
-    return new Promise((resolve) => resolve());
-  }
-}
 
 describe('importAns102Bundle', () => {
   it('should do something (placedholder test)', () => {
@@ -45,15 +31,11 @@ describe('importAns102Bundle', () => {
 });
 
 describe('importAns104Bundle', () => {
-  let log: winston.Logger;
-  let bundleDb: BundleDatabase;
-  let saveDbSpy: sinon.SinonSpy;
   let ans104Bundle: stream.Readable;
+  let eventEmitter: EventEmitter;
 
   beforeEach(async () => {
-    log = sinon.stub(winston.createLogger());
-    bundleDb = new BundleDatabaseStub();
-    saveDbSpy = sinon.stub(bundleDb, 'saveDataItems');
+    eventEmitter = new EventEmitter();
     ans104Bundle = await stubAns104Bundle();
   });
 
@@ -62,25 +44,17 @@ describe('importAns104Bundle', () => {
   });
 
   it('should proccess bundles and save data items to the database using default batch size', async () => {
-    const result = await importAns104Bundle({
-      log: log,
-      db: bundleDb,
+    let emitCount = 0;
+    eventEmitter.on('data-item-unbundled', () => {
+      emitCount++;
+      console.log('emitCount', emitCount);
+    });
+    await emitAns104UnbundleEvents({
+      log,
+      eventEmitter,
       bundleStream: ans104Bundle,
       parentTxId: stubTxID,
     });
-    expect(result).not.to.throw;
-    expect(saveDbSpy.calledOnce).to.be.ok;
-  });
-
-  it('should proccess bundles and save data items to the database with specifed batch size', async () => {
-    const result = await importAns104Bundle({
-      log: log,
-      db: bundleDb,
-      bundleStream: ans104Bundle,
-      parentTxId: stubTxID,
-      batchSize: 1,
-    });
-    expect(result).not.to.throw;
-    expect(saveDbSpy.calledTwice).to.be.ok;
+    expect(emitCount).to.equal(2);
   });
 });

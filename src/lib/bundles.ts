@@ -16,32 +16,34 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import arbundles from 'arbundles/stream/index.js';
+import * as EventEmitter from 'node:events';
 import stream from 'node:stream';
 import * as winston from 'winston';
 
-import { BundleDatabase, DataItem, PartialJsonTransaction } from '../types.js';
-import { b64UrlToUtf8, fromB64Url, sha256B64Url } from './encoding.js';
+import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
+import {
+  b64UrlToUtf8,
+  fromB64Url,
+  sha256B64Url,
+  utf8ToB64Url,
+} from './encoding.js';
 
 /* eslint-disable */
 // @ts-ignore
 const { default: processStream } = arbundles;
 
-const DEFAULT_BATCH_SIZE = 10;
-
 /* eslint-disable */
 // @ts-ignore
-export async function importAns102Bundle({
+export async function emitAns102UnbundleEvents({
   log,
-  db,
+  eventEmitter,
   bundleStream,
   parentTxId,
-  batchSize = DEFAULT_BATCH_SIZE,
 }: {
   log: winston.Logger;
-  db: BundleDatabase;
+  eventEmitter: EventEmitter;
   bundleStream: stream.Readable;
   parentTxId: string;
-  batchSize?: number;
 }): Promise<void> {}
 
 export function isAns104Bundle(tx: PartialJsonTransaction): boolean {
@@ -53,9 +55,6 @@ export function isAns104Bundle(tx: PartialJsonTransaction): boolean {
   let isVersion2 = false;
 
   for (const tag of tx.tags) {
-    if (typeof tag.name !== 'string' || typeof tag.value !== 'string') {
-      continue;
-    }
     const tagName = b64UrlToUtf8(tag.name);
     const tagValue = b64UrlToUtf8(tag.value);
     if (tagName === 'Bundle-Format' && tagValue === 'binary') {
@@ -73,79 +72,78 @@ export function isAns104Bundle(tx: PartialJsonTransaction): boolean {
   return false;
 }
 
-export async function importAns104Bundle({
+export function normalizeAns104DataItem(
+  parentTxId: string,
+  ans104DataItem: Record<string, any>,
+): NormalizedDataItem {
+  // TODO stricter type checking (maybe zod)
+
+  const tags = (ans104DataItem.tags || []).map(
+    (tag: { name: string; value: string }) => ({
+      name: utf8ToB64Url(tag.name),
+      value: utf8ToB64Url(tag.value),
+    }),
+  );
+
+  return {
+    parentTxId,
+    id: ans104DataItem.id,
+    signature: ans104DataItem.signature,
+    owner: ans104DataItem.owner,
+    owner_address: sha256B64Url(fromB64Url(ans104DataItem.owner)),
+    target: ans104DataItem.target,
+    anchor: ans104DataItem.anchor,
+    tags,
+    dataOffset: ans104DataItem.dataOffset,
+    dataSize: ans104DataItem.dataSize,
+  } as NormalizedDataItem;
+}
+
+export async function emitAns104UnbundleEvents({
   log,
-  db,
+  eventEmitter,
   bundleStream,
   parentTxId,
-  batchSize = DEFAULT_BATCH_SIZE,
 }: {
   log: winston.Logger;
-  db: BundleDatabase;
+  eventEmitter: EventEmitter;
   bundleStream: stream.Readable;
   parentTxId: string;
-  batchSize?: number;
 }): Promise<void> {
   const iterable = await processStream(bundleStream);
   const bundleLength = iterable.length;
 
-  // TODO: create child logger
-  log.info(`processing ${parentTxId} bundle tx of size ${bundleLength}`);
+  const fnLog = log.child({ parentTxId, bundleLength });
+  fnLog.info('Unbundling ANS-104 bundle stream data items...');
 
-  const currentBatch: DataItem[] = [];
-  const processedDataItems = new Set<string>();
-  let nextBatchPromise: Promise<void> | undefined;
+  const processedDataItemIds = new Set<string>();
   for await (const [index, dataItem] of iterable.entries()) {
-    log.info(`unpacking ${index + 1} of ${bundleLength} data items`);
+    const diLog = fnLog.child({
+      dataItemId: dataItem.id,
+      dataItemIndex: index,
+    });
+    diLog.info('Processing data item...');
 
     if (!dataItem.id) {
       // TODO counter metric data items with missing ids
-      log.info(`data-item is missing id, skipping...`);
+      diLog.warn('Skipping data item with missing ID.');
       continue;
     }
 
-    if (processedDataItems.has(dataItem.id)) {
+    if (processedDataItemIds.has(dataItem.id)) {
       // TODO counter metric for skipped data items
-      log.info(`duplicate data-item id '${dataItem.id}', skipping...`);
+      diLog.warn('Skipping duplicate data item ID.');
       continue;
     }
 
-    // data-items don't have tags b64 encoded
-    const tags = (dataItem.tags || []).map(
-      (tag: { name: string; value: string }) => ({
-        name: fromB64Url(tag.name),
-        value: fromB64Url(tag.value),
-      }),
+    if (!dataItem.dataOffset) {
+      // TODO counter metric for skipped data items
+      diLog.warn('Skipping data item with missing data offset.');
+    }
+
+    eventEmitter.emit(
+      'data-item-unbundled',
+      normalizeAns104DataItem(parentTxId, dataItem),
     );
-
-    const newDataItem: DataItem = {
-      parentTxId: fromB64Url(parentTxId),
-      id: fromB64Url(dataItem.id),
-      signature: fromB64Url(dataItem.signature),
-      owner: fromB64Url(dataItem.owner),
-      owner_address: fromB64Url(sha256B64Url(fromB64Url(dataItem.owner))),
-      target: fromB64Url(dataItem.target || ''),
-      anchor: fromB64Url(dataItem.anchor),
-      tags,
-      data_size: dataItem.dataSize ?? fromB64Url(dataItem.data).byteLength,
-    };
-
-    log.info(`succesfully unpacked data item ${dataItem.id}, adding to batch`);
-    currentBatch.push(newDataItem);
-    processedDataItems.add(dataItem.id);
-
-    // wait for previous batch save to complete
-    if (nextBatchPromise) {
-      await nextBatchPromise;
-      nextBatchPromise = undefined;
-    }
-
-    // create promise for batch when it's ready, or we're at the end
-    if (currentBatch.length >= batchSize || index + 1 === bundleLength) {
-      nextBatchPromise = db.saveDataItems(currentBatch);
-      currentBatch.length = 0;
-    }
   }
-
-  await nextBatchPromise;
 }

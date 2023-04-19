@@ -106,16 +106,17 @@ export interface PartialMsgpackTransaction {
   tags: BinaryTag[];
 }
 
-export interface DataItem {
-  parentTxId: Buffer;
-  id: Buffer;
-  signature: Buffer;
-  owner: Buffer;
-  owner_address: Buffer;
-  target: Buffer;
-  anchor: Buffer;
-  tags: BinaryTag[];
-  data_size: bigint;
+export interface NormalizedDataItem {
+  parentTxId: string;
+  id: string;
+  signature: string;
+  owner: string;
+  owner_address: string;
+  target: string;
+  anchor: string;
+  tags: B64uTag[];
+  data_size?: number;
+  data_offset?: number;
 }
 
 export interface PartialJsonBlockStore {
