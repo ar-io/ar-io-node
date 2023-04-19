@@ -192,9 +192,9 @@ export interface ChainDatabase {
   ): Promise<void>;
 }
 
-export interface BundleDatabase {
-  saveDataItems(dataItems: DataItem[]): Promise<void>;
-}
+//export interface BundleDatabase {
+//  saveDataItems(dataItems: DataItem[]): Promise<void>;
+//}
 
 interface GqlPageInfo {
   hasNextPage: boolean;
