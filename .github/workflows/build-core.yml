@@ -32,7 +32,7 @@ jobs:
       # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
       - run: yarn build
-      - run: yarn -s test --reporter json > test-results.json
+      - run: yarn -s test
 
       # Test results report
       - name: Report test results
