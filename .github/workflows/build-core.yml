@@ -43,11 +43,17 @@ jobs:
           path: test-results.json
           reporter: mocha-json
 
-      # Coverage report
+      - name: Setup LCOV
+        uses: hrishikesh-kadam/setup-lcov@v1
+
       - name: Report code coverage
-        uses: romeovs/lcov-reporter-action@v0.2.11
+        uses: zgosalvez/github-actions-report-lcov@v3
         with:
-          lcov-file: ./coverage/lcov.info
+          coverage-files: coverage/lcov.info
+          minimum-coverage: 60
+          artifact-name: code-coverage-report
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          update-comment: true
 
       # Build and push container image to GCR (only on main branch)
       - name: Log in to the GitHub Container Registry
