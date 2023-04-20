@@ -47,7 +47,6 @@ describe('importAns104Bundle', () => {
     let emitCount = 0;
     eventEmitter.on('data-item-unbundled', () => {
       emitCount++;
-      console.log('emitCount', emitCount);
     });
     await emitAns104UnbundleEvents({
       log,

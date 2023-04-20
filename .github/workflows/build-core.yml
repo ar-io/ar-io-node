@@ -1,6 +1,6 @@
 name: Test and build AR.IO core
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
   build:
@@ -11,10 +11,12 @@ jobs:
         node-version: [16.x]
 
     permissions:
+      actions: write
       id-token: write
       contents: read
       checks: write
       packages: write
+      pull-requests: write
 
     env:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -32,7 +34,7 @@ jobs:
       # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
       - run: yarn build
-      - run: yarn -s test --reporter json > test-results.json
+      - run: yarn test:ci
 
       # Test results report
       - name: Report test results
@@ -42,6 +44,19 @@ jobs:
           name: Mocha tests
           path: test-results.json
           reporter: mocha-json
+
+      - name: Report code coverage
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: romeovs/lcov-reporter-action@v0.2.16
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          lcov-file: ./coverage/lcov.info
+
+      - name: Check code coverage threshold
+        uses: VeryGoodOpenSource/very_good_coverage@v2
+        with:
+          path: ./coverage/lcov.info
+          min_coverage: 60
 
       # Build and push container image to GCR (only on main branch)
       - name: Log in to the GitHub Container Registry
@@ -69,9 +84,11 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to ECR
+        if: ${{ github.ref == 'refs/heads/develop' }}
         uses: aws-actions/amazon-ecr-login@v1
 
       - name: Push image ECR
+        if: ${{ github.ref == 'refs/heads/develop' }}
         uses: docker/build-push-action@v3
         with:
           labels: |
@@ -82,7 +99,9 @@ jobs:
             ${{ env.ECR_REGISTRY }}/ar-io-core:${{ github.sha }}
 
       # Start CodePipeline to test image
-      - run: |
+      - name: Start CodePipeline
+        if: ${{ github.ref == 'refs/heads/develop' }}
+        run: |
           aws codepipeline start-pipeline-execution \
             --name ${{ secrets.AWS_CODEPIPELINE_NAME }}
 
