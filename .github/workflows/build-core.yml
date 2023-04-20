@@ -45,7 +45,7 @@ jobs:
 
       # Coverage report
       - name: Report code coverage
-        uses: romeovs/lcov-reporter-action@v0.2.16
+        uses: romeovs/lcov-reporter-action@v0.2.11
         with:
           lcov-file: ./coverage/lcov.info
 
