@@ -16,6 +16,7 @@ jobs:
       contents: read
       checks: write
       packages: write
+      pull-requests: write
 
     env:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
