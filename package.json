@@ -72,6 +72,7 @@
     "eslint-plugin-prettier": "^4.0.0",
     "eslint-plugin-unicorn": "^45.0.2",
     "mocha": "^10.0.0",
+    "mocha-multi": "^1.1.7",
     "msgpack-lite": "^0.1.26",
     "nodemon": "^2.0.18",
     "prettier": "^2.6.2",
@@ -93,6 +94,7 @@
     "db:migrate": "ts-node-esm ./src/migrate.ts",
     "db:dump-test-schemas": "./test/dump-test-schemas",
     "test": "mocha --no-warnings",
+    "test:ci": "mocha --no-warnings -R mocha-multi --reporter-options spec=-,json=test-results.json",
     "test:coverage": "npx c8 -r text -r html mocha --no-warnings",
     "lint:check": "prettier --check .",
     "lint:fix": "prettier --write ."
