@@ -46,6 +46,8 @@ jobs:
       # Coverage report
       - name: Report code coverage
         uses: romeovs/lcov-reporter-action@v0.2.16
+        with:
+          lcov-file: ./coverage/lcov.info
 
       # Build and push container image to GCR (only on main branch)
       - name: Log in to the GitHub Container Registry
