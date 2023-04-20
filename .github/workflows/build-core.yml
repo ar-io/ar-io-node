@@ -43,6 +43,10 @@ jobs:
           path: test-results.json
           reporter: mocha-json
 
+      # Coverage report
+      - name: Report code coverage
+        uses: romeovs/lcov-reporter-action@v0.2.16
+
       # Build and push container image to GCR (only on main branch)
       - name: Log in to the GitHub Container Registry
         if: ${{ github.ref == 'refs/heads/main' }}

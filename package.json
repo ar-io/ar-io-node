@@ -94,7 +94,7 @@
     "db:migrate": "ts-node-esm ./src/migrate.ts",
     "db:dump-test-schemas": "./test/dump-test-schemas",
     "test": "mocha --no-warnings",
-    "test:ci": "mocha --no-warnings -R mocha-multi --reporter-options spec=-,json=test-results.json",
+    "test:ci": "npx c8 -r lcov mocha --no-warnings -R mocha-multi --reporter-options spec=-,json=test-results.json",
     "test:coverage": "npx c8 -r text -r html mocha --no-warnings",
     "lint:check": "prettier --check .",
     "lint:fix": "prettier --write ."
