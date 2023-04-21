@@ -34,7 +34,7 @@ import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
-import { isAns104Bundle } from './lib/bundles.js';
+import * as filters from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { createArnsMiddleware } from './middleware/arns.js';
@@ -52,6 +52,7 @@ import { FsBlockStore } from './store/fs-block-store.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
+import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
@@ -149,8 +150,13 @@ eventEmitter.addListener('block-tx-saved', (tx) => {
   eventEmitter.emit('tx-saved', tx);
 });
 
-eventEmitter.addListener('tx-saved', (tx) => {
-  if (isAns104Bundle(tx)) {
+const ans104TxMatcher = new filters.MatchTags([
+  { name: 'Bundle-Format', value: 'binary' },
+  { name: 'Bundle-Version', valueStartsWith: '2.' },
+]);
+
+eventEmitter.addListener('tx-saved', async (tx) => {
+  if (await ans104TxMatcher.match(tx)) {
     eventEmitter.emit('ans104-tx-saved', tx);
   }
 });
@@ -209,6 +215,19 @@ const contiguousDataSource = new ReadThroughDataCache({
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
   contiguousDataIndex: chainDb,
+});
+
+const ans104UnbundleTxFilter = new filters.NeverMatch();
+
+new Ans104Unbundler({
+  log,
+  eventEmitter,
+  filter: ans104UnbundleTxFilter,
+  contiguousDataSource,
+});
+
+eventEmitter.addListener('data-item-unbundled', (dataItem) => {
+  console.log('data-item-unbundled', dataItem);
 });
 
 const manifestPathResolver = new StreamingManifestPathResolver({

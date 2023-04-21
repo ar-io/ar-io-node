@@ -119,6 +119,18 @@ export interface NormalizedDataItem {
   data_offset?: number;
 }
 
+export interface TransactionLike {
+  id: string;
+  signature: string;
+  owner: string;
+  owner_address?: string;
+  target?: string;
+  quantity?: string;
+  data_size: string;
+  data_offset?: number;
+  tags: B64uTag[];
+}
+
 export interface PartialJsonBlockStore {
   hasHash(hash: string): Promise<boolean>;
   hasHeight(height: number): Promise<boolean>;
@@ -407,4 +419,8 @@ type NameResolution = ValidNameResolution | MissingNameResolution;
 
 export interface NameResolver {
   resolve(name: string): Promise<NameResolution>;
+}
+
+export interface TransactionFilter {
+  match(tx: TransactionLike): Promise<boolean>;
 }
