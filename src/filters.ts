@@ -1,14 +1,14 @@
 import { b64UrlToUtf8 } from './lib/encoding.js';
-import { TransactionFilter, TransactionLike } from './types.js';
+import { ItemFilter, MatchableItem } from './types.js';
 
-export class AlwaysMatch implements TransactionFilter {
-  async match(_: TransactionLike): Promise<boolean> {
+export class AlwaysMatch implements ItemFilter {
+  async match(_: MatchableItem): Promise<boolean> {
     return true;
   }
 }
 
-export class NeverMatch implements TransactionFilter {
-  async match(_: TransactionLike): Promise<boolean> {
+export class NeverMatch implements ItemFilter {
+  async match(_: MatchableItem): Promise<boolean> {
     return false;
   }
 }
@@ -25,14 +25,14 @@ type TagValueStartsWithMatch = {
 
 type TagMatch = TagValueMatch | TagValueStartsWithMatch;
 
-export class MatchTags implements TransactionFilter {
+export class MatchTags implements ItemFilter {
   private readonly tags: TagMatch[];
 
   constructor(tags: TagMatch[]) {
     this.tags = tags;
   }
 
-  async match(item: TransactionLike): Promise<boolean> {
+  async match(item: MatchableItem): Promise<boolean> {
     const matches: Set<number> = new Set();
 
     if (Array.isArray(item.tags)) {

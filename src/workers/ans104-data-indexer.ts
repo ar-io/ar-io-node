@@ -18,51 +18,54 @@
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
-import { emitAns104UnbundleEvents } from '../lib/bundles.js';
-import {
-  ContiguousDataSource,
-  ItemFilter,
-  PartialJsonTransaction,
-} from '../types.js';
+import { ItemFilter, NestedDataIndexer, NormalizedDataItem } from '../types.js';
 
-export class Ans104Unbundler {
+export class Ans104DataIndexer {
   // Dependencies
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
   private filter: ItemFilter;
-  private contigousDataSource: ContiguousDataSource;
+  private indexWriter: NestedDataIndexer;
 
   constructor({
     log,
     eventEmitter,
     filter,
-    contiguousDataSource,
+    indexWriter,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     filter: ItemFilter;
-    contiguousDataSource: ContiguousDataSource;
+    indexWriter: NestedDataIndexer;
   }) {
-    this.log = log.child({ class: 'Ans104Unbundler' });
+    this.log = log.child({ class: 'Ans104DataIndexer' });
     this.eventEmitter = eventEmitter;
     this.filter = filter;
-    this.contigousDataSource = contiguousDataSource;
+    this.indexWriter = indexWriter;
 
-    this.eventEmitter.on('ans104-tx-saved', this.unbundle.bind(this));
+    // TODO use a queue
+    this.eventEmitter.on('data-item-unbundled', this.index.bind(this));
   }
 
-  async unbundle(tx: PartialJsonTransaction): Promise<void> {
-    if (await this.filter.match(tx)) {
-      this.log.info('Unbundling ANS-104 bundle.', {
-        txId: tx.id,
-      });
-      const dataStream = await this.contigousDataSource.getData(tx.id);
-      emitAns104UnbundleEvents({
-        log: this.log,
-        eventEmitter: this.eventEmitter,
-        bundleStream: dataStream.stream,
-        parentTxId: tx.id,
-      });
+  async index(item: NormalizedDataItem): Promise<void> {
+    if (await this.filter.match(item)) {
+      if (
+        typeof item.dataOffset === 'number' &&
+        typeof item.dataSize === 'number'
+      ) {
+        this.log.debug('Indexing ANS-104 data item data by ID.', {
+          id: item.id,
+          parentId: item.parentId,
+          dataOffset: item.dataOffset,
+          dataSize: item.dataSize,
+        });
+        this.indexWriter.saveNestedDataId({
+          id: item.id,
+          parentId: item.parentId,
+          dataOffset: item.dataOffset,
+          dataSize: item.dataSize,
+        });
+      }
     }
   }
 }
