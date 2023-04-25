@@ -48,6 +48,7 @@ import {
   ContiguousDataAttributes,
   ContiguousDataIndex,
   GqlQueryable,
+  NestedDataIndexer,
   PartialJsonBlock,
   PartialJsonTransaction,
 } from '../types.js';
@@ -1368,6 +1369,25 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
   }
+
+  async saveNestedDataId({
+    id,
+    parentId,
+    dataOffset,
+    dataSize,
+  }: {
+    id: string;
+    parentId: string;
+    dataOffset: number;
+    dataSize: number;
+  }) {
+    this.stmts.data.insertNestedDataId.run({
+      id: fromB64Url(id),
+      parent_id: fromB64Url(parentId),
+      data_offset: dataOffset,
+      data_size: dataSize,
+    });
+  }
 }
 
 type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug' | 'moderation';
@@ -1398,7 +1418,8 @@ export class StandaloneSqliteDatabase
     BlockListValidator,
     ChainDatabase,
     ContiguousDataIndex,
-    GqlQueryable
+    GqlQueryable,
+    NestedDataIndexer
 {
   log: winston.Logger;
   private workers: {
@@ -1725,6 +1746,27 @@ export class StandaloneSqliteDatabase
       },
     ]);
   }
+
+  async saveNestedDataId({
+    id,
+    parentId,
+    dataOffset,
+    dataSize,
+  }: {
+    id: string;
+    parentId: string;
+    dataOffset: number;
+    dataSize: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveNestedDataId', [
+      {
+        id,
+        parentId,
+        dataOffset,
+        dataSize,
+      },
+    ]);
+  }
 }
 
 type WorkerMessage = {
@@ -1804,6 +1846,10 @@ if (!isMainThread) {
         break;
       case 'blockData':
         worker.blockData(args[0]);
+        parentPort?.postMessage(null);
+        break;
+      case 'saveNestedDataId':
+        worker.saveNestedDataId(args[0]);
         parentPort?.postMessage(null);
         break;
       case 'terminate':

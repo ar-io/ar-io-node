@@ -107,28 +107,16 @@ export interface PartialMsgpackTransaction {
 }
 
 export interface NormalizedDataItem {
-  parentTxId: string;
+  parentId: string;
   id: string;
   signature: string;
   owner: string;
-  owner_address: string;
+  ownerAddress: string;
   target: string;
   anchor: string;
   tags: B64uTag[];
-  data_size?: number;
-  data_offset?: number;
-}
-
-export interface TransactionLike {
-  id: string;
-  signature: string;
-  owner: string;
-  owner_address?: string;
-  target?: string;
-  quantity?: string;
-  data_size: string;
-  data_offset?: number;
-  tags: B64uTag[];
+  dataOffset?: number;
+  dataSize?: number;
 }
 
 export interface PartialJsonBlockStore {
@@ -202,6 +190,20 @@ export interface ChainDatabase {
     txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void>;
+}
+
+export interface NestedDataIndexer {
+  saveNestedDataId({
+    id,
+    parentId,
+    dataOffset,
+    dataSize,
+  }: {
+    id: string;
+    parentId: string;
+    dataOffset: number;
+    dataSize: number;
+  }): Promise<void>;
 }
 
 //export interface BundleDatabase {
@@ -421,6 +423,16 @@ export interface NameResolver {
   resolve(name: string): Promise<NameResolution>;
 }
 
-export interface TransactionFilter {
-  match(tx: TransactionLike): Promise<boolean>;
+export interface MatchableItem {
+  id: string;
+  signature: string;
+  owner: string;
+  owner_address?: string;
+  target?: string;
+  quantity?: string;
+  tags: B64uTag[];
+}
+
+export interface ItemFilter {
+  match(tx: MatchableItem): Promise<boolean>;
 }

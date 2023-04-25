@@ -52,6 +52,7 @@ import { FsBlockStore } from './store/fs-block-store.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
+import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -226,8 +227,13 @@ new Ans104Unbundler({
   contiguousDataSource,
 });
 
-eventEmitter.addListener('data-item-unbundled', (dataItem) => {
-  console.log('data-item-unbundled', dataItem);
+const ans104DataIndexFilter = new filters.NeverMatch();
+
+new Ans104DataIndexer({
+  log,
+  eventEmitter,
+  filter: ans104DataIndexFilter,
+  indexWriter: chainDb,
 });
 
 const manifestPathResolver = new StreamingManifestPathResolver({

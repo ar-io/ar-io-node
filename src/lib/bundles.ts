@@ -55,11 +55,11 @@ export function normalizeAns104DataItem(
   );
 
   return {
-    parentTxId,
+    parentId: parentTxId,
     id: ans104DataItem.id,
     signature: ans104DataItem.signature,
     owner: ans104DataItem.owner,
-    owner_address: sha256B64Url(fromB64Url(ans104DataItem.owner)),
+    ownerAddress: sha256B64Url(fromB64Url(ans104DataItem.owner)),
     target: ans104DataItem.target,
     anchor: ans104DataItem.anchor,
     tags,

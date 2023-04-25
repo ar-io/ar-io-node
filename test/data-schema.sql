@@ -21,3 +21,16 @@ CREATE TABLE data_roots (
   verified_at INTEGER
 );
 CREATE INDEX data_roots_contiguous_data_hash_idx ON data_roots (contiguous_data_hash);
+CREATE TABLE contiguous_data_parents (
+  hash BLOB NOT NULL,
+  parent_hash BLOB NOT NULL,
+  data_offset INTEGER NOT NULL,
+  PRIMARY KEY (hash, parent_hash)
+);
+CREATE TABLE contiguous_data_id_parents (
+  id BLOB NOT NULL,
+  parent_id BLOB NOT NULL,
+  data_offset INTEGER NOT NULL,
+  data_size INTEGER NOT NULL,
+  PRIMARY KEY (id, parent_id)
+);
