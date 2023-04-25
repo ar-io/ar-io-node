@@ -1,6 +1,12 @@
 import { b64UrlToUtf8 } from './lib/encoding.js';
 import { TransactionFilter, TransactionLike } from './types.js';
 
+export class AlwaysMatch implements TransactionFilter {
+  async match(_: TransactionLike): Promise<boolean> {
+    return true;
+  }
+}
+
 export class NeverMatch implements TransactionFilter {
   async match(_: TransactionLike): Promise<boolean> {
     return false;
