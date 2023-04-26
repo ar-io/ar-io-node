@@ -543,6 +543,25 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
+  getDataParent(id: string) {
+    const dataRow = this.stmts.data.selectDataParent.get({
+      id: fromB64Url(id),
+    });
+
+    if (dataRow === undefined) {
+      return undefined;
+    }
+
+    return {
+      parentId: dataRow?.parent_id ? toB64Url(dataRow?.parent_id) : undefined,
+      parentHash: dataRow?.parent_hash
+        ? toB64Url(dataRow?.parent_hash)
+        : undefined,
+      offset: dataRow?.data_offset,
+      size: dataRow?.data_size,
+    };
+  }
+
   getDebugInfo() {
     const minStableHeight =
       this.stmts.core.selectMinStableHeight.get().min_height;
@@ -1619,6 +1638,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('data', 'getDataAttributes', [id]);
   }
 
+  getDataParent(id: string) {
+    return this.queueRead('data', 'getDataParent', [id]);
+  }
+
   getDebugInfo(): Promise<DebugInfo> {
     return this.queueRead('debug', 'getDebugInfo', undefined);
   }
@@ -1811,6 +1834,10 @@ if (!isMainThread) {
       case 'getDataAttributes':
         const dataAttributes = worker.getDataAttributes(args[0]);
         parentPort?.postMessage(dataAttributes);
+        break;
+      case 'getDataParent':
+        const dataParent = worker.getDataParent(args[0]);
+        parentPort?.postMessage(dataParent);
         break;
       case 'getDebugInfo':
         const debugInfo = worker.getDebugInfo();

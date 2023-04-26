@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { pipeline } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
 
 import {
@@ -33,30 +33,42 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.contiguousDataIndex = contiguousDataIndex;
   }
 
-  async getData(
+  async getCacheData(
     id: string,
-    dataAttributes?: ContiguousDataAttributes,
-  ): Promise<ContiguousData> {
-    this.log.info('Checking for cached data...', {
-      id,
-    });
-    const attributes =
-      dataAttributes ?? (await this.contiguousDataIndex.getDataAttributes(id));
-    if (attributes?.hash !== undefined) {
+    hash?: string,
+    dataSize?: number,
+    region?: {
+      offset: number;
+      size: number;
+    },
+  ): Promise<
+    | {
+        stream: Readable;
+        size: number;
+      }
+    | undefined
+  > {
+    if (hash !== undefined) {
       try {
-        const hash = attributes.hash;
         this.log.info('Found data hash in index', { id, hash });
-        const cacheStream = await this.dataStore.get(hash);
+        const cacheStream = await this.dataStore.get(hash, region);
         if (cacheStream === undefined) {
-          this.log.info('Unable to find data in cache', { id, hash });
-        } else {
-          this.log.info('Found data in cache', { id, hash });
-          return {
+          this.log.info('Unable to find data in cache', {
+            id,
             hash,
+            ...region,
+          });
+        } else {
+          this.log.info('Found data in cache', { id, hash, ...region });
+          // Note: it's impossible for both sizes to be undefined, but TS
+          // doesn't know that
+          const size = dataSize ?? region?.size;
+          if (size === undefined) {
+            throw new Error('Missing data size');
+          }
+          return {
             stream: cacheStream,
-            size: attributes.size,
-            sourceContentType: attributes.contentType,
-            verified: attributes.verified,
+            size,
           };
         }
       } catch (error: any) {
@@ -66,6 +78,44 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           stack: error.stack,
         });
       }
+    }
+
+    this.log.info('Checking for parent data ID...', { id });
+    const parentData = await this.contiguousDataIndex.getDataParent(id);
+    this.log.info('Found parent data ID', { id, ...parentData });
+    if (parentData?.parentHash !== undefined) {
+      return this.getCacheData(id, parentData.parentHash, dataSize, {
+        offset: (region?.offset ?? 0) + parentData.offset,
+        size: parentData.size,
+      });
+    }
+
+    return undefined;
+  }
+
+  async getData(
+    id: string,
+    dataAttributes?: ContiguousDataAttributes,
+  ): Promise<ContiguousData> {
+    this.log.info('Checking for cached data...', {
+      id,
+    });
+    const attributes =
+      dataAttributes ?? (await this.contiguousDataIndex.getDataAttributes(id));
+
+    const cacheData = await this.getCacheData(
+      id,
+      attributes?.hash,
+      attributes?.size,
+    );
+    if (cacheData !== undefined) {
+      return {
+        hash: attributes?.hash,
+        stream: cacheData.stream,
+        size: cacheData.size,
+        sourceContentType: dataAttributes?.contentType,
+        verified: dataAttributes?.verified ?? false,
+      };
     }
 
     const data = await this.dataSource.getData(id, dataAttributes);
