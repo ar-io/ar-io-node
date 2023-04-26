@@ -157,7 +157,13 @@ export interface ChunkMetadataStore {
 
 export interface ContiguousDataStore {
   has(hash: string): Promise<boolean>;
-  get(hash: string): Promise<Readable | undefined>;
+  get(
+    hash: string,
+    region?: {
+      offset: number;
+      size: number;
+    },
+  ): Promise<Readable | undefined>;
   createWriteStream(): Promise<Writable>;
   finalize(stream: Writable, hash: string): Promise<void>;
 }

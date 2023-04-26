@@ -40,14 +40,27 @@ export class FsDataStore implements ContiguousDataStore {
     }
   }
 
-  async get(hash: string): Promise<Readable | undefined> {
+  async get(
+    hash: string,
+    region?: {
+      offset: number;
+      size: number;
+    },
+  ): Promise<Readable | undefined> {
     try {
       if (await this.has(hash)) {
-        return fs.createReadStream(this.dataPath(hash));
+        const opts = region
+          ? {
+              start: region.offset,
+              end: region.offset + region.size - 1, // end is inclusive
+            }
+          : undefined;
+        return fs.createReadStream(this.dataPath(hash), opts);
       }
     } catch (error: any) {
       this.log.error('Failed to get contigous data stream', {
         hash,
+        ...region,
         message: error.message,
         stack: error.stack,
       });
