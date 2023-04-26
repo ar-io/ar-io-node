@@ -46,3 +46,15 @@ LEFT JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
 LEFT JOIN data_roots dr ON dr.contiguous_data_hash = cd.hash
 WHERE cdi.id = :id OR dr.data_root = :data_root
 LIMIT 1
+
+-- selectDataParent
+SELECT
+  cdip.parent_id,
+  cd.hash AS parent_hash,
+  cdip.data_offset,
+  cdip.data_size
+FROM contiguous_data_id_parents cdip
+JOIN contiguous_data_ids cdi ON cdip.parent_id = cdi.id
+JOIN contiguous_data cd ON cd.hash = cdi.contiguous_data_hash
+WHERE cdip.id = :id
+LIMIT 1
