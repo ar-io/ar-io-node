@@ -106,19 +106,6 @@ export interface PartialMsgpackTransaction {
   tags: BinaryTag[];
 }
 
-export interface NormalizedDataItem {
-  parentId: string;
-  id: string;
-  signature: string;
-  owner: string;
-  ownerAddress: string;
-  target: string;
-  anchor: string;
-  tags: B64uTag[];
-  dataOffset?: number;
-  dataSize?: number;
-}
-
 export interface PartialJsonBlockStore {
   hasHash(hash: string): Promise<boolean>;
   hasHeight(height: number): Promise<boolean>;
@@ -212,9 +199,18 @@ export interface NestedDataIndexer {
   }): Promise<void>;
 }
 
-//export interface BundleDatabase {
-//  saveDataItems(dataItems: DataItem[]): Promise<void>;
-//}
+export interface NormalizedDataItem {
+  parent_id: string;
+  id: string;
+  signature: string;
+  owner: string;
+  owner_address: string;
+  target: string;
+  anchor: string;
+  tags: B64uTag[];
+  data_offset?: number;
+  data_size?: number;
+}
 
 interface GqlPageInfo {
   hasNextPage: boolean;

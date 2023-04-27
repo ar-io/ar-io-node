@@ -55,16 +55,16 @@ export function normalizeAns104DataItem(
   );
 
   return {
-    parentId: parentTxId,
+    parent_id: parentTxId,
     id: ans104DataItem.id,
     signature: ans104DataItem.signature,
     owner: ans104DataItem.owner,
-    ownerAddress: sha256B64Url(fromB64Url(ans104DataItem.owner)),
+    owner_address: sha256B64Url(fromB64Url(ans104DataItem.owner)),
     target: ans104DataItem.target,
     anchor: ans104DataItem.anchor,
     tags,
-    dataOffset: ans104DataItem.dataOffset,
-    dataSize: ans104DataItem.dataSize,
+    data_offset: ans104DataItem.dataOffset,
+    data_size: ans104DataItem.dataSize,
   } as NormalizedDataItem;
 }
 
