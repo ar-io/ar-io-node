@@ -50,20 +50,20 @@ export class Ans104DataIndexer {
   async index(item: NormalizedDataItem): Promise<void> {
     if (await this.filter.match(item)) {
       if (
-        typeof item.dataOffset === 'number' &&
-        typeof item.dataSize === 'number'
+        typeof item.data_offset === 'number' &&
+        typeof item.data_size === 'number'
       ) {
         this.log.debug('Indexing ANS-104 data item data by ID.', {
           id: item.id,
-          parentId: item.parentId,
-          dataOffset: item.dataOffset,
-          dataSize: item.dataSize,
+          parentId: item.parent_id,
+          dataOffset: item.data_offset,
+          dataSize: item.data_size,
         });
         this.indexWriter.saveNestedDataId({
           id: item.id,
-          parentId: item.parentId,
-          dataOffset: item.dataOffset,
-          dataSize: item.dataSize,
+          parentId: item.parent_id,
+          dataOffset: item.data_offset,
+          dataSize: item.data_size,
         });
       }
     }
