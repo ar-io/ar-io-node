@@ -553,7 +553,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     return {
-      parentId: dataRow?.parent_id ? toB64Url(dataRow?.parent_id) : undefined,
+      parentId: toB64Url(dataRow.parent_id),
       parentHash: dataRow?.parent_hash
         ? toB64Url(dataRow?.parent_hash)
         : undefined,
