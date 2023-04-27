@@ -18,14 +18,14 @@
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
-import { ItemFilter, NestedDataIndexer, NormalizedDataItem } from '../types.js';
+import { ItemFilter, NestedDataIndexWriter, NormalizedDataItem } from '../types.js';
 
 export class Ans104DataIndexer {
   // Dependencies
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
   private filter: ItemFilter;
-  private indexWriter: NestedDataIndexer;
+  private indexWriter: NestedDataIndexWriter;
 
   constructor({
     log,
@@ -36,7 +36,7 @@ export class Ans104DataIndexer {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     filter: ItemFilter;
-    indexWriter: NestedDataIndexer;
+    indexWriter: NestedDataIndexWriter;
   }) {
     this.log = log.child({ class: 'Ans104DataIndexer' });
     this.eventEmitter = eventEmitter;

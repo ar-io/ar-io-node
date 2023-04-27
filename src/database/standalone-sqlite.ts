@@ -44,11 +44,11 @@ import {
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 import {
   BlockListValidator,
-  ChainDatabase,
+  ChainIndex,
   ContiguousDataAttributes,
   ContiguousDataIndex,
   GqlQueryable,
-  NestedDataIndexer,
+  NestedDataIndexWriter,
   PartialJsonBlock,
   PartialJsonTransaction,
 } from '../types.js';
@@ -1435,10 +1435,10 @@ const WORKER_POOL_SIZES: WorkerPoolSizes = {
 export class StandaloneSqliteDatabase
   implements
     BlockListValidator,
-    ChainDatabase,
+    ChainIndex,
     ContiguousDataIndex,
     GqlQueryable,
-    NestedDataIndexer
+    NestedDataIndexWriter
 {
   log: winston.Logger;
   private workers: {

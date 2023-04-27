@@ -20,14 +20,14 @@ import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
-import { ChainDatabase, PartialJsonTransaction } from '../types.js';
+import { ChainIndex, PartialJsonTransaction } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
 
 export class TransactionImporter {
   // Dependencies
   private log: winston.Logger;
-  private chainDb: ChainDatabase;
+  private chainIndex: ChainIndex;
   private eventEmitter: EventEmitter;
 
   // TX fetch queue
@@ -35,18 +35,18 @@ export class TransactionImporter {
 
   constructor({
     log,
-    chainDb,
+    chainIndex,
     eventEmitter,
     workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
-    chainDb: ChainDatabase;
+    chainIndex: ChainIndex;
     eventEmitter: EventEmitter;
     workerCount?: number;
   }) {
     this.log = log.child({ class: 'TransactionImporter' });
     this.eventEmitter = eventEmitter;
-    this.chainDb = chainDb;
+    this.chainIndex = chainIndex;
 
     // Initialize TX import queue
     this.txImportQueue = fastq.promise(this.importTx.bind(this), workerCount);
@@ -61,7 +61,7 @@ export class TransactionImporter {
     const log = this.log.child({ txId: tx.id });
     try {
       log.info('Importing transaction');
-      await this.chainDb.saveTx(tx);
+      await this.chainIndex.saveTx(tx);
       this.eventEmitter.emit('tx-saved', tx);
     } catch (error: any) {
       log.error('Failed to import transaction:', error);

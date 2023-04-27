@@ -120,17 +120,17 @@ describe('SQLite GraphQL cursor functions', () => {
 
 describe('StandaloneSqliteDatabase', () => {
   let chainSource: ArweaveChainSourceStub;
-  let chainDb: StandaloneSqliteDatabase;
-  let chainDbWorker: StandaloneSqliteDatabaseWorker;
+  let db: StandaloneSqliteDatabase;
+  let dbWorker: StandaloneSqliteDatabaseWorker;
 
   before(() => {
-    chainDb = new StandaloneSqliteDatabase({
+    db = new StandaloneSqliteDatabase({
       log,
       coreDbPath,
       dataDbPath,
       moderationDbPath,
     });
-    chainDbWorker = new StandaloneSqliteDatabaseWorker({
+    dbWorker = new StandaloneSqliteDatabaseWorker({
       coreDbPath,
       dataDbPath,
       moderationDbPath,
@@ -139,7 +139,7 @@ describe('StandaloneSqliteDatabase', () => {
   });
 
   after(async () => {
-    chainDb.stop();
+    db.stop();
   });
 
   describe('saveBlockAndTxs', () => {
@@ -149,9 +149,9 @@ describe('StandaloneSqliteDatabase', () => {
       const { block, txs, missingTxIds } =
         await chainSource.getBlockAndTxsByHeight(height);
 
-      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
 
-      const stats = await chainDb.getDebugInfo();
+      const stats = await db.getDebugInfo();
       expect(stats.counts.newBlocks).to.equal(1);
 
       const dbBlock = coreDb
@@ -226,9 +226,9 @@ describe('StandaloneSqliteDatabase', () => {
       const { block, txs, missingTxIds } =
         await chainSource.getBlockAndTxsByHeight(height);
 
-      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
 
-      const stats = await chainDb.getDebugInfo();
+      const stats = await db.getDebugInfo();
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       const sql = `
@@ -335,7 +335,7 @@ describe('StandaloneSqliteDatabase', () => {
         const { block, txs, missingTxIds } =
           await chainSource.getBlockAndTxsByHeight(height);
 
-        await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+        await db.saveBlockAndTxs(block, txs, missingTxIds);
       }
 
       const sql = `
@@ -456,11 +456,11 @@ describe('StandaloneSqliteDatabase', () => {
         const { block, txs, missingTxIds } =
           await chainSource.getBlockAndTxsByHeight(height);
 
-        await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+        await db.saveBlockAndTxs(block, txs, missingTxIds);
       }
 
       // TODO replace with queries to make more focused
-      const stats = await chainDb.getDebugInfo();
+      const stats = await db.getDebugInfo();
       expect(stats.counts.stableBlocks).to.equal(149);
     });
 
@@ -469,7 +469,7 @@ describe('StandaloneSqliteDatabase', () => {
         const { block, txs, missingTxIds } =
           await chainSource.getBlockAndTxsByHeight(height);
 
-        await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+        await db.saveBlockAndTxs(block, txs, missingTxIds);
       }
 
       const sql = `
@@ -577,10 +577,10 @@ describe('StandaloneSqliteDatabase', () => {
       const { block, txs, missingTxIds } =
         await chainSource.getBlockAndTxsByHeight(height);
 
-      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDbWorker.saveStableDataFn(height + 1);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
+      dbWorker.saveStableDataFn(height + 1);
 
-      const stats = await chainDb.getDebugInfo();
+      const stats = await db.getDebugInfo();
       expect(stats.counts.stableBlocks).to.equal(1);
 
       const dbBlock = coreDb
@@ -655,13 +655,13 @@ describe('StandaloneSqliteDatabase', () => {
       const { block, txs, missingTxIds } =
         await chainSource.getBlockAndTxsByHeight(height);
 
-      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
 
-      const stats = await chainDb.getDebugInfo();
+      const stats = await db.getDebugInfo();
       expect(stats.counts.newTxs).to.equal(txs.length);
 
-      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDbWorker.saveStableDataFn(height + 1);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
+      dbWorker.saveStableDataFn(height + 1);
 
       const sql = `
         SELECT sb.*, wo.public_modulus AS owner
@@ -762,13 +762,13 @@ describe('StandaloneSqliteDatabase', () => {
       const { block, txs, missingTxIds } =
         await chainSource.getBlockAndTxsByHeight(height);
 
-      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
 
-      const stats = await chainDb.getDebugInfo();
+      const stats = await db.getDebugInfo();
       expect(stats.counts.newTxs).to.equal(txs.length);
 
-      await chainDb.saveBlockAndTxs(block, txs, missingTxIds);
-      chainDbWorker.saveStableDataFn(height + 1);
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
+      dbWorker.saveStableDataFn(height + 1);
 
       const sql = `
         SELECT sb.*, wo.public_modulus AS owner
@@ -868,7 +868,7 @@ describe('StandaloneSqliteDatabase', () => {
         fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
       );
 
-      await chainDb.saveTx(tx);
+      await db.saveTx(tx);
     });
 
     it('should insert into new_transactions', async () => {
