@@ -364,16 +364,16 @@ export interface ContiguousDataAttributes {
   verified: boolean;
 }
 
+export interface ContiguousDataParent {
+  parentId: string;
+  parentHash?: string;
+  offset: number;
+  size: number;
+}
+
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
-  getDataParent(id: string): Promise<
-    | {
-        parentHash: string;
-        offset: number;
-        size: number;
-      }
-    | undefined
-  >;
+  getDataParent(id: string): Promise<ContiguousDataParent | undefined>;
   saveDataContentAttributes({
     id,
     dataRoot,
