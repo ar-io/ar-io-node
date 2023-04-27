@@ -41,7 +41,7 @@ describe('BlockImporter', () => {
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
-  let chainDb: StandaloneSqliteDatabase;
+  let db: StandaloneSqliteDatabase;
   let sandbox: sinon.SinonSandbox;
 
   const createBlockImporter = ({
@@ -59,7 +59,7 @@ describe('BlockImporter', () => {
         help: 'Total error count',
       }),
       chainSource,
-      chainDb,
+      chainIndex: db,
       eventEmitter,
       startHeight,
       heightPollingIntervalMs,
@@ -69,7 +69,7 @@ describe('BlockImporter', () => {
   before(async () => {
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
-    chainDb = new StandaloneSqliteDatabase({
+    db = new StandaloneSqliteDatabase({
       log,
       coreDbPath,
       dataDbPath,
@@ -78,7 +78,7 @@ describe('BlockImporter', () => {
   });
 
   after(async () => {
-    chainDb.stop();
+    db.stop();
     sandbox.restore();
   });
 
@@ -101,17 +101,17 @@ describe('BlockImporter', () => {
       });
 
       it('should increase the max height', async () => {
-        const maxHeight = await chainDb.getMaxHeight();
+        const maxHeight = await db.getMaxHeight();
         expect(maxHeight).to.equal(982575);
       });
 
       it('should add the block to the DB', async () => {
-        const stats = await chainDb.getDebugInfo();
+        const stats = await db.getDebugInfo();
         expect(stats.counts.newBlocks).to.equal(1);
       });
 
       it("should add the block's transactions to the DB", async () => {
-        const stats = await chainDb.getDebugInfo();
+        const stats = await db.getDebugInfo();
         expect(stats.counts.newTxs).to.equal(3);
       });
     });
@@ -126,22 +126,22 @@ describe('BlockImporter', () => {
       });
 
       it('should increase the max height', async () => {
-        const maxHeight = await chainDb.getMaxHeight();
+        const maxHeight = await db.getMaxHeight();
         expect(maxHeight).to.equal(982575);
       });
 
       it('should add the block to the DB', async () => {
-        const stats = await chainDb.getDebugInfo();
+        const stats = await db.getDebugInfo();
         expect(stats.counts.newBlocks).to.equal(1);
       });
 
       it("should add the block's transactions to the DB", async () => {
-        const stats = await chainDb.getDebugInfo();
+        const stats = await db.getDebugInfo();
         expect(stats.counts.newTxs).to.equal(2);
       });
 
       it('should add the IDs of the missing transactions to DB', async () => {
-        const stats = await chainDb.getDebugInfo();
+        const stats = await db.getDebugInfo();
         expect(stats.counts.missingTxs).to.equal(1);
       });
     });
@@ -154,12 +154,12 @@ describe('BlockImporter', () => {
       });
 
       it('should import the first block at the start of the gap', async () => {
-        const stats = await chainDb.getDebugInfo();
+        const stats = await db.getDebugInfo();
         expect(stats.counts.newBlocks).to.equal(2);
       });
 
       it('should import only 1 block', async () => {
-        const maxHeight = await chainDb.getMaxHeight();
+        const maxHeight = await db.getMaxHeight();
         expect(maxHeight).to.equal(2);
       });
     });
@@ -176,15 +176,15 @@ describe('BlockImporter', () => {
 
       it('should reset the height to where the fork occured', async () => {
         await blockImporter.importBlock(2);
-        const maxHeight = await chainDb.getMaxHeight();
+        const maxHeight = await db.getMaxHeight();
         expect(maxHeight).to.equal(1);
       });
 
       it('should reimport the block where the fork occured', async () => {
-        sandbox.spy(chainDb, 'saveBlockAndTxs');
+        sandbox.spy(db, 'saveBlockAndTxs');
         await blockImporter.importBlock(2);
-        expect(chainDb.saveBlockAndTxs).to.have.been.calledOnce;
-        expect(chainDb.saveBlockAndTxs).to.have.been.calledWithMatch({
+        expect(db.saveBlockAndTxs).to.have.been.calledOnce;
+        expect(db.saveBlockAndTxs).to.have.been.calledWithMatch({
           height: 1,
         });
       });

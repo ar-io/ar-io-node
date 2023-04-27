@@ -126,7 +126,7 @@ const arweaveClient = new ArweaveCompositeClient({
   }),
 });
 
-const chainDb = new StandaloneSqliteDatabase({
+const db = new StandaloneSqliteDatabase({
   log,
   coreDbPath: 'data/sqlite/core.db',
   dataDbPath: 'data/sqlite/data.db',
@@ -141,7 +141,7 @@ const blockImporter = new BlockImporter({
   metricsRegistry: promClient.register,
   errorsCounter,
   chainSource: arweaveClient,
-  chainDb,
+  chainIndex: db,
   eventEmitter,
   startHeight: startHeight,
   stopHeight: stopHeight,
@@ -175,7 +175,7 @@ eventEmitter.addListener('block-tx-fetch-failed', ({ id: txId }) => {
 
 const txImporter = new TransactionImporter({
   log,
-  chainDb,
+  chainIndex: db,
   eventEmitter,
 });
 
@@ -186,7 +186,7 @@ eventEmitter.addListener('tx-fetched', (tx) => {
 
 const txRepairWorker = new TransactionRepairWorker({
   log,
-  chainDb,
+  chainIndex: db,
   txFetcher,
 });
 
@@ -215,7 +215,7 @@ const contiguousDataSource = new ReadThroughDataCache({
     dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
-  contiguousDataIndex: chainDb,
+  contiguousDataIndex: db,
 });
 
 const ans104UnbundleTxFilter = new filters.NeverMatch();
@@ -227,13 +227,13 @@ new Ans104Unbundler({
   contiguousDataSource,
 });
 
-const ans104DataIndexFilter = new filters.NeverMatch();
+const ans104DataIndexFilter = new filters.AlwaysMatch();
 
 new Ans104DataIndexer({
   log,
   eventEmitter,
   filter: ans104DataIndexFilter,
-  indexWriter: chainDb,
+  indexWriter: db,
 });
 
 const manifestPathResolver = new StreamingManifestPathResolver({
@@ -280,9 +280,9 @@ app.use(
 
 const dataHandler = createDataHandler({
   log,
-  dataIndex: chainDb,
+  dataIndex: db,
   dataSource: contiguousDataSource,
-  blockListValidator: chainDb,
+  blockListValidator: db,
   manifestPathResolver,
 });
 
@@ -341,7 +341,7 @@ app.use('/ar-io/admin', (req, res, next) => {
 // Debug info (for internal use)
 app.get('/ar-io/admin/debug', async (_req, res) => {
   res.json({
-    db: await chainDb.getDebugInfo(),
+    db: await db.getDebugInfo(),
   });
 });
 
@@ -354,7 +354,7 @@ app.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
       res.status(400).send("Must provide 'id' or 'hash'");
       return;
     }
-    chainDb.blockData({ id, hash, source, notes });
+    db.blockData({ id, hash, source, notes });
     // TODO check return value
     res.json({ message: 'Content blocked' });
   } catch (error: any) {
@@ -363,7 +363,7 @@ app.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
 });
 
 // GraphQL
-const apolloServerInstanceGql = apolloServer(chainDb, {
+const apolloServerInstanceGql = apolloServer(db, {
   introspection: true,
 });
 apolloServerInstanceGql.start().then(() => {
@@ -381,9 +381,9 @@ app.get(
   RAW_DATA_PATH_REGEX,
   createRawDataHandler({
     log,
-    dataIndex: chainDb,
+    dataIndex: db,
     dataSource: contiguousDataSource,
-    blockListValidator: chainDb,
+    blockListValidator: db,
   }),
 );
 

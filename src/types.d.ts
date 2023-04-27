@@ -171,8 +171,7 @@ export interface ChainSource {
   getHeight(): Promise<number>;
 }
 
-// TODO consider renaming to ChainIndexer
-export interface ChainDatabase {
+export interface ChainIndex {
   getMaxHeight(): Promise<number>;
   getBlockHashByHeight(height: number): Promise<string | undefined>;
   getMissingTxIds(limit?: number): Promise<string[]>;
@@ -185,7 +184,7 @@ export interface ChainDatabase {
   ): Promise<void>;
 }
 
-export interface NestedDataIndexer {
+export interface NestedDataIndexWriter {
   saveNestedDataId({
     id,
     parentId,

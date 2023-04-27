@@ -22,7 +22,7 @@ import * as winston from 'winston';
 
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import {
-  ChainDatabase,
+  ChainIndex,
   ChainSource,
   PartialJsonBlock,
   PartialJsonTransaction,
@@ -37,7 +37,7 @@ export class BlockImporter {
   // Dependencies
   private log: winston.Logger;
   private chainSource: ChainSource;
-  private chainDb: ChainDatabase;
+  private chainIndex: ChainIndex;
   private eventEmitter: EventEmitter;
 
   // State
@@ -65,7 +65,7 @@ export class BlockImporter {
     metricsRegistry,
     errorsCounter,
     chainSource,
-    chainDb,
+    chainIndex,
     eventEmitter,
     startHeight = DEFAULT_START_HEIGHT,
     stopHeight = DEFAULT_STOP_HEIGHT,
@@ -75,7 +75,7 @@ export class BlockImporter {
     metricsRegistry: promClient.Registry;
     errorsCounter: promClient.Counter<string>;
     chainSource: ChainSource;
-    chainDb: ChainDatabase;
+    chainIndex: ChainIndex;
     eventEmitter: EventEmitter;
     startHeight?: number;
     stopHeight?: number;
@@ -84,7 +84,7 @@ export class BlockImporter {
     // Dependencies
     this.log = log.child({ class: 'BlockImporter' });
     this.chainSource = chainSource;
-    this.chainDb = chainDb;
+    this.chainIndex = chainIndex;
     this.eventEmitter = eventEmitter;
 
     // State
@@ -170,7 +170,7 @@ export class BlockImporter {
     if (height > this.startHeight) {
       // Retrieve expected previous block hash from the DB
       const previousHeight = height - 1;
-      const previousDbBlockHash = await this.chainDb.getBlockHashByHeight(
+      const previousDbBlockHash = await this.chainIndex.getBlockHashByHeight(
         previousHeight,
       );
 
@@ -185,7 +185,7 @@ export class BlockImporter {
             previousDbBlockHash,
           },
         );
-        this.chainDb.resetToHeight(previousHeight - 1);
+        this.chainIndex.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       } else if (block.previous_block !== previousDbBlockHash) {
         // Only increment the fork counter once per fork
@@ -204,7 +204,7 @@ export class BlockImporter {
             previousDbBlockHash,
           },
         );
-        this.chainDb.resetToHeight(previousHeight - 1);
+        this.chainIndex.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       }
     }
@@ -228,7 +228,7 @@ export class BlockImporter {
       this.eventEmitter.emit('block-tx-fetched', tx);
     });
 
-    await this.chainDb.saveBlockAndTxs(block, txs, missingTxIds);
+    await this.chainIndex.saveBlockAndTxs(block, txs, missingTxIds);
 
     // Emit failed TX fetch events after DB is populated
     missingTxIds.forEach((txId) => {
@@ -263,7 +263,7 @@ export class BlockImporter {
       this.maxChainHeight = await this.chainSource.getHeight();
     }
 
-    const dbHeight = await this.chainDb.getMaxHeight();
+    const dbHeight = await this.chainIndex.getMaxHeight();
 
     // Wait for the next block if the DB is in sync with the chain
     while (dbHeight >= this.maxChainHeight) {

@@ -17,7 +17,7 @@
  */
 import * as winston from 'winston';
 
-import { ChainDatabase } from '../types.js';
+import { ChainIndex } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
@@ -25,20 +25,20 @@ const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 export class TransactionRepairWorker {
   // Dependencies
   private log: winston.Logger;
-  private chainDb: ChainDatabase;
+  private chainIndex: ChainIndex;
   private txFetcher: TransactionFetcher;
 
   constructor({
     log,
-    chainDb,
+    chainIndex,
     txFetcher,
   }: {
     log: winston.Logger;
-    chainDb: ChainDatabase;
+    chainIndex: ChainIndex;
     txFetcher: TransactionFetcher;
   }) {
     this.log = log.child({ class: 'TransactionRepairWorker' });
-    this.chainDb = chainDb;
+    this.chainIndex = chainIndex;
     this.txFetcher = txFetcher;
   }
 
@@ -48,7 +48,7 @@ export class TransactionRepairWorker {
 
   async retryMissingTransactions() {
     try {
-      const missingTxIds = await this.chainDb.getMissingTxIds();
+      const missingTxIds = await this.chainIndex.getMissingTxIds();
       for (const txId of missingTxIds) {
         this.log.info('Retrying missing transaction', { txId });
         await this.txFetcher.queueTxId(txId);
