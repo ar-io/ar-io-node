@@ -55,6 +55,6 @@ SELECT
   cdip.data_size
 FROM contiguous_data_id_parents cdip
 JOIN contiguous_data_ids cdi ON cdip.parent_id = cdi.id
-JOIN contiguous_data cd ON cd.hash = cdi.contiguous_data_hash
+LEFT JOIN contiguous_data cd ON cd.hash = cdi.contiguous_data_hash
 WHERE cdip.id = :id
 LIMIT 1
