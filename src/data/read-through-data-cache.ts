@@ -82,8 +82,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
     this.log.info('Checking for parent data ID...', { id });
     const parentData = await this.contiguousDataIndex.getDataParent(id);
-    this.log.info('Found parent data ID', { id, ...parentData });
     if (parentData?.parentHash !== undefined) {
+      this.log.info('Found parent data ID', { id, ...parentData });
       return this.getCacheData(id, parentData.parentHash, dataSize, {
         offset: (region?.offset ?? 0) + parentData.offset,
         size: parentData.size,
