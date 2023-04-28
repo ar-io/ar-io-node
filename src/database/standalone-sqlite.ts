@@ -1405,6 +1405,7 @@ export class StandaloneSqliteDatabaseWorker {
       parent_id: fromB64Url(parentId),
       data_offset: dataOffset,
       data_size: dataSize,
+      created_at: +(Date.now() / 1000).toFixed(0),
     });
   }
 }
