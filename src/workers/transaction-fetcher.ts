@@ -38,7 +38,7 @@ export class TransactionFetcher {
   private retryWaitMs: number;
 
   // TX fetch queue
-  private txFetchQueue: queueAsPromised<string, void>;
+  private queue: queueAsPromised<string, void>;
 
   constructor({
     log,
@@ -63,12 +63,14 @@ export class TransactionFetcher {
     this.retryWaitMs = retryWaitMs;
 
     // Initialize TX ID fetch queue
-    this.txFetchQueue = fastq.promise(this.fetchTx.bind(this), workerCount);
+    this.queue = fastq.promise(this.fetchTx.bind(this), workerCount);
   }
 
   async queueTxId(txId: string): Promise<void> {
-    this.log.info(`Queuing TX to fetch`, { txId });
-    this.txFetchQueue.push(txId);
+    const log = this.log.child({ method: 'queueTxId', txId });
+    log.info('Queuing transaction...');
+    this.queue.push(txId);
+    log.info('Transaction queued.');
   }
 
   async fetchTx(txId: string): Promise<void> {
@@ -78,13 +80,12 @@ export class TransactionFetcher {
     let tx: PartialJsonTransaction | undefined;
     while (attempts < this.maxAttempts && !tx) {
       try {
-        log.info(`Fetching transaction`);
+        log.info('Fetching transaction...');
         tx = await this.chainSource.getTx(txId);
         this.eventEmitter.emit('tx-fetched', tx);
+        log.info('Transaction fetched.');
       } catch (error: any) {
-        log.warn(`Failed to fetch transaction:`, {
-          message: error.message,
-        });
+        log.warn('Failed to fetch transaction:', error);
         await wait(this.retryWaitMs);
         attempts++;
       }
