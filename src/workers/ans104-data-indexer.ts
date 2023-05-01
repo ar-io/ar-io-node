@@ -15,57 +15,83 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { default as fastq } from 'fastq';
+import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
-import { ItemFilter, NestedDataIndexWriter, NormalizedDataItem } from '../types.js';
+import { NestedDataIndexWriter, NormalizedDataItem } from '../types.js';
+
+const DEFAULT_WORKER_COUNT = 1;
 
 export class Ans104DataIndexer {
   // Dependencies
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
-  private filter: ItemFilter;
   private indexWriter: NestedDataIndexWriter;
+
+  // Data indexing queue
+  private queue: queueAsPromised<NormalizedDataItem, void>;
 
   constructor({
     log,
     eventEmitter,
-    filter,
     indexWriter,
+    workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
-    filter: ItemFilter;
     indexWriter: NestedDataIndexWriter;
+    workerCount?: number;
   }) {
     this.log = log.child({ class: 'Ans104DataIndexer' });
-    this.eventEmitter = eventEmitter;
-    this.filter = filter;
     this.indexWriter = indexWriter;
+    this.eventEmitter = eventEmitter;
 
-    // TODO use a queue
-    this.eventEmitter.on('data-item-unbundled', this.index.bind(this));
+    this.queue = fastq.promise(this.indexDataItem.bind(this), workerCount);
   }
 
-  async index(item: NormalizedDataItem): Promise<void> {
-    if (await this.filter.match(item)) {
+  async queueDataItem(item: NormalizedDataItem): Promise<void> {
+    const log = this.log.child({
+      method: 'queueDataItem',
+      id: item.id,
+      parentId: item.parent_id,
+      dataOffset: item?.data_offset,
+      dataSize: item?.data_size,
+    });
+    log.debug('Queueing ANS-104 data item for indexing...');
+    this.queue.push(item);
+    log.debug('ANS-104 data item queued for indexing.');
+  }
+
+  async indexDataItem(item: NormalizedDataItem): Promise<void> {
+    const log = this.log.child({
+      method: 'indexDataItem',
+      id: item.id,
+      parentId: item.parent_id,
+      dataOffset: item?.data_offset,
+      dataSize: item?.data_size,
+    });
+
+    try {
       if (
         typeof item.data_offset === 'number' &&
         typeof item.data_size === 'number'
       ) {
-        this.log.debug('Indexing ANS-104 data item data by ID.', {
-          id: item.id,
-          parentId: item.parent_id,
-          dataOffset: item.data_offset,
-          dataSize: item.data_size,
-        });
+        log.debug('Indexing ANS-104 data item data...');
         this.indexWriter.saveNestedDataId({
           id: item.id,
           parentId: item.parent_id,
           dataOffset: item.data_offset,
           dataSize: item.data_size,
         });
+        this.eventEmitter.emit('ans104-data-indexed', item);
+        log.debug('ANS-104 data item data indexed.');
+      } else {
+        this.log.warn('ANS-104 data item data is missing data offset or size.');
       }
+    } catch (error) {
+      log.error('Failed to index ANS-104 data item data.', error);
     }
   }
 }

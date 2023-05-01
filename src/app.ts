@@ -229,11 +229,16 @@ new Ans104Unbundler({
 
 const ans104DataIndexFilter = new filters.AlwaysMatch();
 
-new Ans104DataIndexer({
+const ans104DataIndexer = new Ans104DataIndexer({
   log,
   eventEmitter,
-  filter: ans104DataIndexFilter,
   indexWriter: db,
+});
+
+eventEmitter.addListener('data-item-unbundled', async (dataItem) => {
+  if (await ans104DataIndexFilter.match(dataItem)) {
+    ans104DataIndexer.queueDataItem(dataItem);
+  }
 });
 
 const manifestPathResolver = new StreamingManifestPathResolver({
