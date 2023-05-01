@@ -30,8 +30,8 @@ export class TransactionImporter {
   private chainIndex: ChainIndex;
   private eventEmitter: EventEmitter;
 
-  // TX fetch queue
-  private txImportQueue: queueAsPromised<PartialJsonTransaction, void>;
+  // TX import queue
+  private queue: queueAsPromised<PartialJsonTransaction, void>;
 
   constructor({
     log,
@@ -49,19 +49,22 @@ export class TransactionImporter {
     this.chainIndex = chainIndex;
 
     // Initialize TX import queue
-    this.txImportQueue = fastq.promise(this.importTx.bind(this), workerCount);
+    this.queue = fastq.promise(this.importTx.bind(this), workerCount);
   }
 
   async queueTx(tx: PartialJsonTransaction): Promise<void> {
-    this.log.info('Queuing transaction to import', { txId: tx.id });
-    this.txImportQueue.push(tx);
+    const log = this.log.child({ method: 'queueTx', txId: tx.id });
+    log.info('Queuing transaction...');
+    this.queue.push(tx);
+    log.info('Transaction queued.');
   }
 
   async importTx(tx: PartialJsonTransaction): Promise<void> {
     const log = this.log.child({ txId: tx.id });
     try {
-      log.info('Importing transaction');
+      log.info('Importing transaction...');
       await this.chainIndex.saveTx(tx);
+      log.info('Transaction imported.');
       this.eventEmitter.emit('tx-saved', tx);
     } catch (error: any) {
       log.error('Failed to import transaction:', error);

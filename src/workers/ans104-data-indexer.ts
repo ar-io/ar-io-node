@@ -59,9 +59,9 @@ export class Ans104DataIndexer {
       dataOffset: item?.data_offset,
       dataSize: item?.data_size,
     });
-    log.debug('Queueing ANS-104 data item for indexing...');
+    log.debug('Queueing data item for indexing...');
     this.queue.push(item);
-    log.debug('ANS-104 data item queued for indexing.');
+    log.debug('Data item queued for indexing.');
   }
 
   async indexDataItem(item: NormalizedDataItem): Promise<void> {
@@ -78,7 +78,7 @@ export class Ans104DataIndexer {
         typeof item.data_offset === 'number' &&
         typeof item.data_size === 'number'
       ) {
-        log.debug('Indexing ANS-104 data item data...');
+        log.debug('Indexing data item data...');
         this.indexWriter.saveNestedDataId({
           id: item.id,
           parentId: item.parent_id,
@@ -86,12 +86,12 @@ export class Ans104DataIndexer {
           dataSize: item.data_size,
         });
         this.eventEmitter.emit('ans104-data-indexed', item);
-        log.debug('ANS-104 data item data indexed.');
+        log.debug('Data item data indexed.');
       } else {
-        this.log.warn('ANS-104 data item data is missing data offset or size.');
+        this.log.warn('Data item data is missing data offset or size.');
       }
     } catch (error) {
-      log.error('Failed to index ANS-104 data item data.', error);
+      log.error('Failed to index data item data:', error);
     }
   }
 }
