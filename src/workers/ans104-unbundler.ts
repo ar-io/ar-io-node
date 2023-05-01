@@ -15,6 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { default as fastq } from 'fastq';
+import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
@@ -25,6 +27,8 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
+const DEFAULT_WORKER_COUNT = 1;
+
 export class Ans104Unbundler {
   // Dependencies
   private log: winston.Logger;
@@ -32,37 +36,53 @@ export class Ans104Unbundler {
   private filter: ItemFilter;
   private contigousDataSource: ContiguousDataSource;
 
+  // Unbundling queue
+  private queue: queueAsPromised<PartialJsonTransaction, void>;
+
   constructor({
     log,
     eventEmitter,
     filter,
     contiguousDataSource,
+    workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     filter: ItemFilter;
     contiguousDataSource: ContiguousDataSource;
+    workerCount?: number;
   }) {
     this.log = log.child({ class: 'Ans104Unbundler' });
     this.eventEmitter = eventEmitter;
     this.filter = filter;
     this.contigousDataSource = contiguousDataSource;
 
-    this.eventEmitter.on('ans104-tx-saved', this.unbundle.bind(this));
+    this.queue = fastq.promise(this.unbundle.bind(this), workerCount);
+  }
+
+  async queueTx(tx: PartialJsonTransaction): Promise<void> {
+    const log = this.log.child({ method: 'queueTx', txId: tx.id });
+    log.debug('Queueing bundle...');
+    this.queue.push(tx);
+    log.debug('Bundle queued.');
   }
 
   async unbundle(tx: PartialJsonTransaction): Promise<void> {
-    if (await this.filter.match(tx)) {
-      this.log.info('Unbundling ANS-104 bundle.', {
-        txId: tx.id,
-      });
-      const dataStream = await this.contigousDataSource.getData(tx.id);
-      emitAns104UnbundleEvents({
-        log: this.log,
-        eventEmitter: this.eventEmitter,
-        bundleStream: dataStream.stream,
-        parentTxId: tx.id,
-      });
+    const log = this.log.child({ method: 'unbundle', txId: tx.id });
+    try {
+      if (await this.filter.match(tx)) {
+        log.info('Unbundling bundle...');
+        const dataStream = await this.contigousDataSource.getData(tx.id);
+        await emitAns104UnbundleEvents({
+          log: this.log,
+          eventEmitter: this.eventEmitter,
+          bundleStream: dataStream.stream,
+          parentTxId: tx.id,
+        });
+        log.info('Bundle unbundled.');
+      }
+    } catch (error) {
+      log.error('Unbundling failed:', error);
     }
   }
 }
