@@ -220,11 +220,17 @@ const contiguousDataSource = new ReadThroughDataCache({
 
 const ans104UnbundleTxFilter = new filters.NeverMatch();
 
-new Ans104Unbundler({
+const ans104Unbundler = new Ans104Unbundler({
   log,
   eventEmitter,
   filter: ans104UnbundleTxFilter,
   contiguousDataSource,
+});
+
+eventEmitter.addListener('ans104-tx-saved', async (tx) => {
+  if (await ans104UnbundleTxFilter.match(tx)) {
+    ans104Unbundler.queueTx(tx);
+  }
 });
 
 const ans104DataIndexFilter = new filters.AlwaysMatch();
