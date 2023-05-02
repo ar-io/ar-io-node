@@ -20,6 +20,7 @@ import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
+import * as events from '../events.js';
 import { NestedDataIndexWriter, NormalizedDataItem } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
@@ -85,7 +86,7 @@ export class Ans104DataIndexer {
           dataOffset: item.data_offset,
           dataSize: item.data_size,
         });
-        this.eventEmitter.emit('ans104-data-indexed', item);
+        this.eventEmitter.emit(events.ANS104_TX_INDEXED, item);
         log.debug('Data item data indexed.');
       } else {
         this.log.warn('Data item data is missing data offset or size.');

@@ -21,6 +21,7 @@ import { default as wait } from 'wait';
 import * as winston from 'winston';
 
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
+import * as events from '../events.js';
 import {
   ChainIndex,
   ChainSource,
@@ -223,22 +224,22 @@ export class BlockImporter {
     );
 
     // Emit sucessful fetch events
-    this.eventEmitter.emit('block-fetched', block);
+    this.eventEmitter.emit(events.BLOCK_FETCHED, block);
     txs.forEach((tx) => {
-      this.eventEmitter.emit('block-tx-fetched', tx);
+      this.eventEmitter.emit(events.BLOCK_TX_FETCHED, tx);
     });
 
     await this.chainIndex.saveBlockAndTxs(block, txs, missingTxIds);
 
     // Emit failed TX fetch events after DB is populated
     missingTxIds.forEach((txId) => {
-      this.eventEmitter.emit('block-tx-fetch-failed', { id: txId });
+      this.eventEmitter.emit(events.BLOCK_TX_FETCH_FAILED, { id: txId });
     });
 
     // Emit save events
-    this.eventEmitter.emit('block-saved', block);
+    this.eventEmitter.emit(events.BLOCK_INDEXED, block);
     txs.forEach((tx) => {
-      this.eventEmitter.emit('block-tx-saved', tx);
+      this.eventEmitter.emit(events.BLOCK_TX_INDEXED, tx);
     });
 
     // Record import metrics

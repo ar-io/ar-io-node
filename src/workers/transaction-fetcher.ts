@@ -21,6 +21,7 @@ import * as EventEmitter from 'node:events';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
+import * as events from '../events.js';
 import { ChainSource, PartialJsonTransaction } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
@@ -82,7 +83,7 @@ export class TransactionFetcher {
       try {
         log.info('Fetching transaction...');
         tx = await this.chainSource.getTx(txId);
-        this.eventEmitter.emit('tx-fetched', tx);
+        this.eventEmitter.emit(events.TX_FETCHED, tx);
         log.info('Transaction fetched.');
       } catch (error: any) {
         log.warn('Failed to fetch transaction:', error);
