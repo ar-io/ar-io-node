@@ -34,6 +34,7 @@ import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+import * as events from './events.js';
 import * as filters from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
@@ -147,8 +148,8 @@ const blockImporter = new BlockImporter({
   stopHeight: stopHeight,
 });
 
-eventEmitter.addListener('block-tx-saved', (tx) => {
-  eventEmitter.emit('tx-saved', tx);
+eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
+  eventEmitter.emit(events.TX_INDEXED, tx);
 });
 
 const ans104TxMatcher = new filters.MatchTags([
@@ -156,9 +157,9 @@ const ans104TxMatcher = new filters.MatchTags([
   { name: 'Bundle-Version', valueStartsWith: '2.' },
 ]);
 
-eventEmitter.addListener('tx-saved', async (tx) => {
+eventEmitter.on(events.TX_INDEXED, async (tx) => {
   if (await ans104TxMatcher.match(tx)) {
-    eventEmitter.emit('ans104-tx-saved', tx);
+    eventEmitter.emit(events.ANS104_TX_INDEXED, tx);
   }
 });
 
@@ -169,7 +170,7 @@ const txFetcher = new TransactionFetcher({
 });
 
 // Async fetch block TXs that failed sync fetch
-eventEmitter.addListener('block-tx-fetch-failed', ({ id: txId }) => {
+eventEmitter.on(events.BLOCK_TX_FETCH_FAILED, ({ id: txId }) => {
   txFetcher.queueTxId(txId);
 });
 
@@ -227,7 +228,7 @@ const ans104Unbundler = new Ans104Unbundler({
   contiguousDataSource,
 });
 
-eventEmitter.addListener('ans104-tx-saved', async (tx) => {
+eventEmitter.on(events.ANS104_TX_INDEXED, async (tx) => {
   if (await ans104UnbundleTxFilter.match(tx)) {
     ans104Unbundler.queueTx(tx);
   }
@@ -241,7 +242,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
   indexWriter: db,
 });
 
-eventEmitter.addListener('data-item-unbundled', async (dataItem) => {
+eventEmitter.on(events.DATA_ITEM_UNBUNDLED, async (dataItem) => {
   if (await ans104DataIndexFilter.match(dataItem)) {
     ans104DataIndexer.queueDataItem(dataItem);
   }

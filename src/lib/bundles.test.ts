@@ -20,6 +20,7 @@ import { EventEmitter } from 'node:events';
 import stream from 'node:stream';
 import * as sinon from 'sinon';
 
+import * as events from '../../src/events.js';
 import { emitAns104UnbundleEvents } from '../../src/lib/bundles.js';
 import log from '../../src/log.js';
 import { stubAns104Bundle, stubTxID } from '../../test/stubs.js';
@@ -45,7 +46,7 @@ describe('importAns104Bundle', () => {
 
   it('should proccess bundles and save data items to the database using default batch size', async () => {
     let emitCount = 0;
-    eventEmitter.on('data-item-unbundled', () => {
+    eventEmitter.on(events.DATA_ITEM_UNBUNDLED, () => {
       emitCount++;
     });
     await emitAns104UnbundleEvents({

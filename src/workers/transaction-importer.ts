@@ -20,6 +20,7 @@ import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
+import * as events from '../events.js';
 import { ChainIndex, PartialJsonTransaction } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
@@ -65,7 +66,7 @@ export class TransactionImporter {
       log.info('Importing transaction...');
       await this.chainIndex.saveTx(tx);
       log.info('Transaction imported.');
-      this.eventEmitter.emit('tx-saved', tx);
+      this.eventEmitter.emit(events.TX_INDEXED, tx);
     } catch (error: any) {
       log.error('Failed to import transaction:', error);
     }
