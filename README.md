@@ -74,6 +74,33 @@ GRAPHQL_HOST=arweave.net
 GRAPHQL_PORT=443
 ```
 
+### Unbundling
+
+The ar.io gateway supports unbundling and indexing [ANS-104] bundle data. To
+enable this add the following environment variables to your `.env` file:
+
+```
+ANS104_UNBUNDLE_FILTER="<filter string>"
+AND104_DATA_INDEX_FILTER="<filter string>"
+```
+
+The following types of filters are supported:
+
+```
+{ never: true } # the default
+{ always: true }
+{ attributes: { owner: <owner key>, ... }}
+{ tags: [{ name: <utf8 tag name>, value: <utf8 tag value> }, ...]}
+{ and: [ <nested filter>, ... ]}
+{ or: [ <nested filter>, ... ]}
+
+```
+
+Note: currently only data is indexed (IDs, hashes, offsets, and sizes). This
+enables retrieval of data items from L1 transaction data without delegating to
+another gateway, but it does not yet enable GraphQL. GraphQL support will be
+added a in a future update.
+
 ### ArNS
 
 Add the following to your `.env` file to enable ArNS resolution:
@@ -136,6 +163,7 @@ add an `Authorization: Bearer <ADMIN_API_KEY>` header to your request.
 - Make liberal use of [Prometheus metrics] to aid in monitoring and debugging.
 - Follow the Prometheus [metrics naming recommendations].
 
+[ans-104]: https://github.com/ArweaveTeam/arweave-standards/blob/master/ans/ANS-104.md
 [docker compose]: https://docs.docker.com/compose/install/
 [envoy]: https://www.envoyproxy.io/
 [idempotent]: https://en.wikipedia.org/wiki/Idempotence

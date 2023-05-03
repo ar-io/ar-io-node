@@ -35,7 +35,7 @@ import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
-import * as filters from './filters.js';
+import { MatchTags, createFilter } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { createArnsMiddleware } from './middleware/arns.js';
@@ -87,6 +87,16 @@ if (
 ) {
   log.info('Using a random admin key since none was set', { adminApiKey });
 }
+const ans104UnbundleFilter =
+  process.env.ANS104_UNBUNDLE_FILTER !== undefined &&
+  process.env.ANS104_UNBUNDLE_FILTER !== ''
+    ? createFilter(JSON.parse(process.env.ANS104_UNBUNDLE_FILTER))
+    : createFilter({ never: true });
+const ans104DataIndexFilter =
+  process.env.ANS104_DATA_INDEX_FILTER !== undefined &&
+  process.env.ANS104_DATA_INDEX_FILTER !== ''
+    ? createFilter(JSON.parse(process.env.ANS104_DATA_INDEX_FILTER))
+    : createFilter({ never: true });
 
 // Global errors counter
 const errorsCounter = new promClient.Counter({
@@ -152,7 +162,7 @@ eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);
 });
 
-const ans104TxMatcher = new filters.MatchTags([
+const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Format', value: 'binary' },
   { name: 'Bundle-Version', valueStartsWith: '2.' },
 ]);
@@ -219,22 +229,18 @@ const contiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex: db,
 });
 
-const ans104UnbundleTxFilter = new filters.NeverMatch();
-
 const ans104Unbundler = new Ans104Unbundler({
   log,
   eventEmitter,
-  filter: ans104UnbundleTxFilter,
+  filter: ans104UnbundleFilter,
   contiguousDataSource,
 });
 
 eventEmitter.on(events.ANS104_TX_INDEXED, async (tx) => {
-  if (await ans104UnbundleTxFilter.match(tx)) {
+  if (await ans104UnbundleFilter.match(tx)) {
     ans104Unbundler.queueTx(tx);
   }
 });
-
-const ans104DataIndexFilter = new filters.AlwaysMatch();
 
 const ans104DataIndexer = new Ans104DataIndexer({
   log,
