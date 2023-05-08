@@ -17,11 +17,13 @@
  */
 import { createLogger, format, transports } from 'winston';
 
-const LOG_LEVEL = process.env.LOG_LEVEL ?? 'info';
-const LOG_ALL_STACKTRACES = process.env.LOG_ALL_STACKTRACES === 'true';
-const LOG_FORMAT = process.env.LOG_FORMAT ?? 'simple';
-const INSTANCE_ID =
-  process.env.INSTANCE_ID === '' ? undefined : process.env.INSTANCE_ID;
+import { envVarOrDefault, envVarOrUndefined } from './config.js';
+
+const LOG_LEVEL = envVarOrDefault('LOG_LEVEL', 'info');
+const LOG_ALL_STACKTRACES =
+  envVarOrDefault('LOG_ALL_STACKTRACES', 'false') === 'true';
+const LOG_FORMAT = envVarOrDefault('LOG_FORMAT', 'simple');
+const INSTANCE_ID = envVarOrUndefined('INSTANCE_ID');
 
 const logger = createLogger({
   level: LOG_LEVEL,

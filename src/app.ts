@@ -28,6 +28,7 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
+import { envVarOrDefault, envVarOrUndefined } from './config.js';
 import { GatewayDataSource } from './data/gateway-data-source.js';
 import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
@@ -61,42 +62,40 @@ import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 
 // Configuration
-const startHeight = +(process.env.START_HEIGHT ?? 0);
-const stopHeight = +(process.env.STOP_HEIGHT ?? Infinity);
-const trustedNodeUrl = process.env.TRUSTED_NODE_URL ?? 'https://arweave.net';
-const trustedGatewayUrl =
-  process.env.TRUSTED_GATEWAY_URL ?? 'https://arweave.net';
-const trustedArNSGatewayUrl =
-  process.env.TRUSTED_ARNS_GATEWAY_URL ?? 'https://__NAME__.arweave.dev';
-const skipCache = (process.env.SKIP_CACHE ?? 'false') === 'true';
-const port = +(process.env.PORT ?? 4000);
-const simulatedRequestFailureRate = +(
-  process.env.SIMULATED_REQUEST_FAILURE_RATE ?? 0
+const startHeight = +envVarOrDefault('START_HEIGHT', '0');
+const stopHeight = +envVarOrDefault('STOP_HEIGHT', 'Infinity');
+const trustedNodeUrl = envVarOrDefault(
+  'TRUSTED_NODE_URL',
+  'https://arweave.net',
 );
-const arioWallet =
-  process.env.AR_IO_WALLET !== undefined && process.env.AR_IO_WALLET !== ''
-    ? process.env.AR_IO_WALLET
-    : undefined;
-const adminApiKey =
-  process.env.ADMIN_API_KEY !== undefined && process.env.ADMIN_API_KEY !== ''
-    ? process.env.ADMIN_API_KEY
-    : crypto.randomBytes(32).toString('base64url');
-if (
-  process.env.ADMIN_API_KEY === undefined ||
-  process.env.ADMIN_API_KEY === ''
-) {
+const trustedGatewayUrl = envVarOrDefault(
+  'TRUSTED_GATEWAY_URL',
+  'https://arweave.net',
+);
+const trustedArNSGatewayUrl = envVarOrDefault(
+  'TRUSTED_ARNS_GATEWAY_URL',
+  'https://__NAME__.arweave.dev',
+);
+const skipCache = envVarOrDefault('SKIP_CACHE', 'false') === 'true';
+const port = +envVarOrDefault('PORT', '4000');
+const simulatedRequestFailureRate = +envVarOrDefault(
+  'SIMULATED_REQUEST_FAILURE_RATE',
+  '0',
+);
+const arioWallet = envVarOrUndefined('AR_IO_WALLET');
+const adminApiKey = envVarOrDefault(
+  'ADMIN_API_KEY',
+  crypto.randomBytes(32).toString('base64url'),
+);
+if (envVarOrUndefined('ADMIN_API_KEY') === undefined) {
   log.info('Using a random admin key since none was set', { adminApiKey });
 }
-const ans104UnbundleFilter =
-  process.env.ANS104_UNBUNDLE_FILTER !== undefined &&
-  process.env.ANS104_UNBUNDLE_FILTER !== ''
-    ? createFilter(JSON.parse(process.env.ANS104_UNBUNDLE_FILTER))
-    : createFilter({ never: true });
-const ans104DataIndexFilter =
-  process.env.ANS104_DATA_INDEX_FILTER !== undefined &&
-  process.env.ANS104_DATA_INDEX_FILTER !== ''
-    ? createFilter(JSON.parse(process.env.ANS104_DATA_INDEX_FILTER))
-    : createFilter({ never: true });
+const ans104UnbundleFilter = createFilter(
+  JSON.parse(envVarOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
+);
+const ans104DataIndexFilter = createFilter(
+  JSON.parse(envVarOrDefault('ANS104_DATA_INDEX_FILTER', '{"never": true}')),
+);
 
 // Global errors counter
 const errorsCounter = new promClient.Counter({
