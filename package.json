@@ -27,7 +27,6 @@
     "msgpackr": "^1.6.2",
     "node-cache": "^5.1.2",
     "prom-client": "^14.0.1",
-    "rambda": "^7.2.1",
     "ramda": "^0.28.0",
     "retry-axios": "^3.0.0",
     "sql-bricks": "^3.0.0",
