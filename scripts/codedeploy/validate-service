@@ -17,3 +17,5 @@ do
     exit 1
   fi
 done
+
+docker image prune -a -f
