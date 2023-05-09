@@ -788,9 +788,9 @@ export class StandaloneSqliteDatabaseWorker {
         const tagAlias = `"${index}_${index}"`;
         let joinCond: { [key: string]: string };
         if (source === 'stable') {
-          heightSortTableAlias = tagAlias;
-          blockTransactionIndexSortTableAlias = tagAlias;
           if (index === 0 || !HIGH_CARDINALITY_TAG_NAMES.has(tag.name)) {
+            heightSortTableAlias = tagAlias;
+            blockTransactionIndexSortTableAlias = tagAlias;
             joinCond = {
               [`${blockTransactionIndexTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
               [`${heightTableAlias}.height`]: `${tagAlias}.height`,
