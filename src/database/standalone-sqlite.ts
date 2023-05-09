@@ -822,11 +822,11 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
 
-    if (minHeight > 0) {
+    if (minHeight != null && minHeight > 0) {
       query.where(sql.gte(`${heightTableAlias}.height`, minHeight));
     }
 
-    if (maxHeight >= 0 && maxHeight < maxDbHeight) {
+    if (maxHeight != null && maxHeight >= 0 && maxHeight < maxDbHeight) {
       query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
     }
 
@@ -1139,11 +1139,11 @@ export class StandaloneSqliteDatabaseWorker {
       );
     }
 
-    if (minHeight >= 0) {
+    if (minHeight != null && minHeight >= 0) {
       query.where(sql.gte('b.height', minHeight));
     }
 
-    if (maxHeight >= 0) {
+    if (maxHeight != null && maxHeight >= 0) {
       query.where(sql.lte('b.height', maxHeight));
     }
 
