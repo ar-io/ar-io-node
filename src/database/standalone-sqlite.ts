@@ -57,10 +57,10 @@ const CPU_COUNT = os.cpus().length;
 
 const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
-const JOIN_LAST_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
+const HIGH_CARDINALITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
 
 function tagJoinSortPriority(tag: { name: string; values: string[] }) {
-  return JOIN_LAST_TAG_NAMES.has(tag.name) ? 1 : 0;
+  return HIGH_CARDINALITY_TAG_NAMES.has(tag.name) ? 1 : 0;
 }
 
 export function encodeTransactionGqlCursor({
@@ -790,10 +790,23 @@ export class StandaloneSqliteDatabaseWorker {
         if (source === 'stable') {
           heightSortTableAlias = tagAlias;
           blockTransactionIndexSortTableAlias = tagAlias;
-          joinCond = {
-            [`${blockTransactionIndexTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
-            [`${heightTableAlias}.height`]: `${tagAlias}.height`,
-          };
+          if (index === 0 || !HIGH_CARDINALITY_TAG_NAMES.has(tag.name)) {
+            joinCond = {
+              [`${blockTransactionIndexTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
+              [`${heightTableAlias}.height`]: `${tagAlias}.height`,
+            };
+          } else {
+            const previousTagAlias = `"${index - 1}_${index - 1}"`;
+            joinCond = {
+              [`${previousTagAlias}.transaction_id`]: `${tagAlias}.transaction_id`,
+            };
+            query.where(
+              sql.notEq(
+                `${previousTagAlias}.transaction_tag_index`,
+                sql(`${tagAlias}.transaction_tag_index`),
+              ),
+            );
+          }
         } else {
           joinCond = {
             [`${txTableAlias}.id`]: `${tagAlias}.transaction_id`,
