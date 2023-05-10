@@ -20,7 +20,6 @@ import { default as cors } from 'cors';
 import express from 'express';
 //import * as OpenApiValidator from 'express-openapi-validator';
 import promMid from 'express-prometheus-middleware';
-import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import * as promClient from 'prom-client';
@@ -28,7 +27,7 @@ import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
-import { envVarOrDefault, envVarOrUndefined } from './config.js';
+import * as config from './config.js';
 import { GatewayDataSource } from './data/gateway-data-source.js';
 import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
@@ -36,7 +35,7 @@ import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
-import { MatchTags, createFilter } from './filters.js';
+import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import log from './log.js';
 import { createArnsMiddleware } from './middleware/arns.js';
@@ -61,42 +60,6 @@ import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 
-// Configuration
-const startHeight = +envVarOrDefault('START_HEIGHT', '0');
-const stopHeight = +envVarOrDefault('STOP_HEIGHT', 'Infinity');
-const trustedNodeUrl = envVarOrDefault(
-  'TRUSTED_NODE_URL',
-  'https://arweave.net',
-);
-const trustedGatewayUrl = envVarOrDefault(
-  'TRUSTED_GATEWAY_URL',
-  'https://arweave.net',
-);
-const trustedArNSGatewayUrl = envVarOrDefault(
-  'TRUSTED_ARNS_GATEWAY_URL',
-  'https://__NAME__.arweave.dev',
-);
-const skipCache = envVarOrDefault('SKIP_CACHE', 'false') === 'true';
-const port = +envVarOrDefault('PORT', '4000');
-const simulatedRequestFailureRate = +envVarOrDefault(
-  'SIMULATED_REQUEST_FAILURE_RATE',
-  '0',
-);
-const arioWallet = envVarOrUndefined('AR_IO_WALLET');
-const adminApiKey = envVarOrDefault(
-  'ADMIN_API_KEY',
-  crypto.randomBytes(32).toString('base64url'),
-);
-if (envVarOrUndefined('ADMIN_API_KEY') === undefined) {
-  log.info('Using a random admin key since none was set', { adminApiKey });
-}
-const ans104UnbundleFilter = createFilter(
-  JSON.parse(envVarOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
-);
-const ans104DataIndexFilter = createFilter(
-  JSON.parse(envVarOrDefault('ANS104_DATA_INDEX_FILTER', '{"never": true}')),
-);
-
 // Global errors counter
 const errorsCounter = new promClient.Counter({
   name: 'errors_total',
@@ -119,8 +82,8 @@ const arweaveClient = new ArweaveCompositeClient({
   log,
   metricsRegistry: promClient.register,
   arweave,
-  trustedNodeUrl,
-  skipCache,
+  trustedNodeUrl: config.TRUSTED_NODE_URL,
+  skipCache: config.SKIP_CACHE,
   blockStore: new FsBlockStore({
     log,
     baseDir: 'data/headers/partial-blocks',
@@ -132,7 +95,7 @@ const arweaveClient = new ArweaveCompositeClient({
     tmpDir: 'data/tmp/partial-txs',
   }),
   failureSimulator: new UniformFailureSimulator({
-    failureRate: simulatedRequestFailureRate,
+    failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
 });
 
@@ -153,8 +116,8 @@ const blockImporter = new BlockImporter({
   chainSource: arweaveClient,
   chainIndex: db,
   eventEmitter,
-  startHeight: startHeight,
-  stopHeight: stopHeight,
+  startHeight: config.START_HEIGHT,
+  stopHeight: config.STOP_HEIGHT,
 });
 
 eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
@@ -215,7 +178,7 @@ const txChunksDataSource = new TxChunksDataSource({
 
 const gatewayDataSource = new GatewayDataSource({
   log,
-  trustedGatewayUrl,
+  trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
 });
 
 const contiguousDataSource = new ReadThroughDataCache({
@@ -231,12 +194,12 @@ const contiguousDataSource = new ReadThroughDataCache({
 const ans104Unbundler = new Ans104Unbundler({
   log,
   eventEmitter,
-  filter: ans104UnbundleFilter,
+  filter: config.ANS104_UNBUNDLE_FILTER,
   contiguousDataSource,
 });
 
 eventEmitter.on(events.ANS104_TX_INDEXED, async (tx) => {
-  if (await ans104UnbundleFilter.match(tx)) {
+  if (await config.ANS104_UNBUNDLE_FILTER.match(tx)) {
     ans104Unbundler.queueTx(tx);
   }
 });
@@ -248,7 +211,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
 });
 
 eventEmitter.on(events.DATA_ITEM_UNBUNDLED, async (dataItem) => {
-  if (await ans104DataIndexFilter.match(dataItem)) {
+  if (await config.ANS104_DATA_INDEX_FILTER.match(dataItem)) {
     ans104DataIndexer.queueDataItem(dataItem);
   }
 });
@@ -261,7 +224,7 @@ const nameResolver = new MemoryCacheArNSResolver({
   log,
   resolver: new TrustedGatewayArNSResolver({
     log,
-    trustedGatewayUrl: trustedArNSGatewayUrl,
+    trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   }),
 });
 
@@ -342,13 +305,13 @@ app.get('/ar-io/healthcheck', (_req, res) => {
 // ar.io network info
 app.get('/ar-io/info', (_req, res) => {
   res.status(200).send({
-    wallet: arioWallet,
+    wallet: config.AR_IO_WALLET,
   });
 });
 
 // Only allow access to admin routes if the bearer token matches the admin api key
 app.use('/ar-io/admin', (req, res, next) => {
-  if (req.headers.authorization === `Bearer ${adminApiKey}`) {
+  if (req.headers.authorization === `Bearer ${config.ADMIN_API_KEY}`) {
     next();
   } else {
     res.status(401).send('Unauthorized');
@@ -388,8 +351,8 @@ apolloServerInstanceGql.start().then(() => {
     app,
     path: '/graphql',
   });
-  app.listen(port, () => {
-    log.info(`Listening on port ${port}`);
+  app.listen(config.PORT, () => {
+    log.info(`Listening on port ${config.PORT}`);
   });
 });
 
