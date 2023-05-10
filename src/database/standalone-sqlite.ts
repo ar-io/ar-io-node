@@ -57,10 +57,10 @@ const CPU_COUNT = os.cpus().length;
 
 const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
-const HIGH_CARDINALITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
+const LOW_SELECTIVITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
 
 function tagJoinSortPriority(tag: { name: string; values: string[] }) {
-  return HIGH_CARDINALITY_TAG_NAMES.has(tag.name) ? 1 : 0;
+  return LOW_SELECTIVITY_TAG_NAMES.has(tag.name) ? 1 : 0;
 }
 
 export function encodeTransactionGqlCursor({
