@@ -31,7 +31,7 @@ services:
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
     environment:
-      - ENV=${ENV:-development}
+      - NODE_ENV=${NODE_ENV:-production}
       - LOG_FORMAT=${LOG_FORMAT:-simple}
       - TRUSTED_NODE_URL=${TRUSTED_NODE_URL:-}
       - TRUSTED_GATEWAY_URL=https://${TRUSTED_GATEWAY_HOST:-}
