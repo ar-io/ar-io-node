@@ -783,12 +783,13 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     if (tags) {
+      // To improve performance, force tags with large result to be last
       const sortByTagJoinPriority = R.sortBy(tagJoinSortPriority);
       sortByTagJoinPriority(tags).forEach((tag, index) => {
         const tagAlias = `"${index}_${index}"`;
         let joinCond: { [key: string]: string };
         if (source === 'stable') {
-          if (index === 0 || !HIGH_CARDINALITY_TAG_NAMES.has(tag.name)) {
+          if (index === 0) {
             heightSortTableAlias = tagAlias;
             blockTransactionIndexSortTableAlias = tagAlias;
             joinCond = {
@@ -800,6 +801,10 @@ export class StandaloneSqliteDatabaseWorker {
             joinCond = {
               [`${previousTagAlias}.transaction_id`]: `${tagAlias}.transaction_id`,
             };
+            // This condition forces the use of the transaction_id index rather
+            // than the name and value index. The transaction_id index is
+            // always the optimal choice given the most selective condition is
+            // first in the GraphQL query.
             query.where(
               sql.notEq(
                 `${previousTagAlias}.transaction_tag_index`,
