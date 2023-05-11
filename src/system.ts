@@ -62,7 +62,7 @@ process.on('uncaughtException', (error) => {
   log.error('Uncaught exception:', error);
 });
 
-export const arweave = Arweave.init({});
+const arweave = Arweave.init({});
 
 export const arweaveClient = new ArweaveCompositeClient({
   log,
@@ -93,7 +93,7 @@ export const db = new StandaloneSqliteDatabase({
 });
 
 // Workers
-export const eventEmitter = new EventEmitter();
+const eventEmitter = new EventEmitter();
 
 export const blockImporter = new BlockImporter({
   log,
@@ -110,7 +110,7 @@ eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);
 });
 
-export const ans104TxMatcher = new MatchTags([
+const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Format', value: 'binary' },
   { name: 'Bundle-Version', valueStartsWith: '2.' },
 ]);
@@ -121,7 +121,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
   }
 });
 
-export const txFetcher = new TransactionFetcher({
+const txFetcher = new TransactionFetcher({
   log,
   chainSource: arweaveClient,
   eventEmitter,
@@ -132,7 +132,7 @@ eventEmitter.on(events.BLOCK_TX_FETCH_FAILED, ({ id: txId }) => {
   txFetcher.queueTxId(txId);
 });
 
-export const txImporter = new TransactionImporter({
+const txImporter = new TransactionImporter({
   log,
   chainIndex: db,
   eventEmitter,
@@ -150,19 +150,19 @@ export const txRepairWorker = new TransactionRepairWorker({
 });
 
 // Configure contigous data source
-export const chunkDataSource = new ReadThroughChunkDataCache({
+const chunkDataSource = new ReadThroughChunkDataCache({
   log,
   chunkSource: arweaveClient,
   chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
 });
 
-export const txChunksDataSource = new TxChunksDataSource({
+const txChunksDataSource = new TxChunksDataSource({
   log,
   chainSource: arweaveClient,
   chunkSource: chunkDataSource,
 });
 
-export const gatewayDataSource = new GatewayDataSource({
+const gatewayDataSource = new GatewayDataSource({
   log,
   trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
 });
@@ -177,7 +177,7 @@ export const contiguousDataSource = new ReadThroughDataCache({
   contiguousDataIndex: db,
 });
 
-export const ans104Unbundler = new Ans104Unbundler({
+const ans104Unbundler = new Ans104Unbundler({
   log,
   eventEmitter,
   filter: config.ANS104_UNBUNDLE_FILTER,
@@ -193,7 +193,7 @@ eventEmitter.on(
   },
 );
 
-export const ans104DataIndexer = new Ans104DataIndexer({
+const ans104DataIndexer = new Ans104DataIndexer({
   log,
   eventEmitter,
   indexWriter: db,
