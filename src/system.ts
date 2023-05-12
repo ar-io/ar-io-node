@@ -38,7 +38,14 @@ import { FsBlockStore } from './store/fs-block-store.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
-import { MatchableItem, PartialJsonTransaction } from './types.js';
+import {
+  BlockListValidator,
+  ChainIndex,
+  ContiguousDataIndex,
+  MatchableItem,
+  NestedDataIndexWriter,
+  PartialJsonTransaction,
+} from './types.js';
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
@@ -92,6 +99,11 @@ export const db = new StandaloneSqliteDatabase({
   moderationDbPath: 'data/sqlite/moderation.db',
 });
 
+export const chainIndex: ChainIndex = db;
+export const contiguousDataIndex: ContiguousDataIndex = db;
+export const blockListValidator: BlockListValidator = db;
+export const nestedDataIndexWriter: NestedDataIndexWriter = db;
+
 // Workers
 const eventEmitter = new EventEmitter();
 
@@ -100,7 +112,7 @@ export const blockImporter = new BlockImporter({
   metricsRegistry: promClient.register,
   errorsCounter,
   chainSource: arweaveClient,
-  chainIndex: db,
+  chainIndex,
   eventEmitter,
   startHeight: config.START_HEIGHT,
   stopHeight: config.STOP_HEIGHT,
@@ -134,7 +146,7 @@ eventEmitter.on(events.BLOCK_TX_FETCH_FAILED, ({ id: txId }) => {
 
 const txImporter = new TransactionImporter({
   log,
-  chainIndex: db,
+  chainIndex,
   eventEmitter,
 });
 
@@ -145,7 +157,7 @@ eventEmitter.addListener('tx-fetched', (tx: PartialJsonTransaction) => {
 
 export const txRepairWorker = new TransactionRepairWorker({
   log,
-  chainIndex: db,
+  chainIndex,
   txFetcher,
 });
 
@@ -174,7 +186,7 @@ export const contiguousDataSource = new ReadThroughDataCache({
     dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
-  contiguousDataIndex: db,
+  contiguousDataIndex,
 });
 
 const ans104Unbundler = new Ans104Unbundler({
@@ -196,7 +208,7 @@ eventEmitter.on(
 const ans104DataIndexer = new Ans104DataIndexer({
   log,
   eventEmitter,
-  indexWriter: db,
+  indexWriter: nestedDataIndexWriter,
 });
 
 eventEmitter.on(events.DATA_ITEM_UNBUNDLED, async (dataItem: any) => {

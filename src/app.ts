@@ -67,9 +67,9 @@ app.use(
 
 const dataHandler = createDataHandler({
   log,
-  dataIndex: system.db,
+  dataIndex: system.contiguousDataIndex,
   dataSource: system.contiguousDataSource,
-  blockListValidator: system.db,
+  blockListValidator: system.blockListValidator,
   manifestPathResolver: system.manifestPathResolver,
 });
 
@@ -168,9 +168,9 @@ app.get(
   RAW_DATA_PATH_REGEX,
   createRawDataHandler({
     log,
-    dataIndex: system.db,
+    dataIndex: system.contiguousDataIndex,
     dataSource: system.contiguousDataSource,
-    blockListValidator: system.db,
+    blockListValidator: system.blockListValidator,
   }),
 );
 
