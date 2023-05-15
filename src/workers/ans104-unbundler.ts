@@ -20,7 +20,7 @@ import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
-import { emitAns104UnbundleEvents } from '../lib/bundles.js';
+import { Ans104Parser } from '../lib/ans-104.js';
 import {
   ContiguousDataSource,
   ItemFilter,
@@ -32,9 +32,8 @@ const DEFAULT_WORKER_COUNT = 1;
 export class Ans104Unbundler {
   // Dependencies
   private log: winston.Logger;
-  private eventEmitter: EventEmitter;
   private filter: ItemFilter;
-  private contigousDataSource: ContiguousDataSource;
+  private ans104Parser: Ans104Parser;
 
   // Unbundling queue
   private queue: queueAsPromised<PartialJsonTransaction, void>;
@@ -53,9 +52,12 @@ export class Ans104Unbundler {
     workerCount?: number;
   }) {
     this.log = log.child({ class: 'Ans104Unbundler' });
-    this.eventEmitter = eventEmitter;
     this.filter = filter;
-    this.contigousDataSource = contiguousDataSource;
+    this.ans104Parser = new Ans104Parser({
+      log,
+      eventEmitter,
+      contiguousDataSource,
+    });
 
     this.queue = fastq.promise(this.unbundle.bind(this), workerCount);
   }
@@ -72,13 +74,7 @@ export class Ans104Unbundler {
     try {
       if (await this.filter.match(tx)) {
         log.info('Unbundling bundle...');
-        const dataStream = await this.contigousDataSource.getData(tx.id);
-        await emitAns104UnbundleEvents({
-          log: this.log,
-          eventEmitter: this.eventEmitter,
-          bundleStream: dataStream.stream,
-          parentTxId: tx.id,
-        });
+        await this.ans104Parser.parseBundle({ parentTxId: tx.id });
         log.info('Bundle unbundled.');
       }
     } catch (error) {
