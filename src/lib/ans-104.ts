@@ -16,6 +16,7 @@ import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
 const { default: processStream } = arbundles;
 
 export function normalizeAns104DataItem(
+  rootTxId: string,
   parentTxId: string,
   ans104DataItem: Record<string, any>,
 ): NormalizedDataItem {
@@ -29,8 +30,9 @@ export function normalizeAns104DataItem(
   );
 
   return {
-    parent_id: parentTxId,
     id: ans104DataItem.id,
+    parent_id: parentTxId,
+    root_tx_id: rootTxId,
     signature: ans104DataItem.signature,
     owner: ans104DataItem.owner,
     owner_address: sha256B64Url(fromB64Url(ans104DataItem.owner)),
@@ -87,36 +89,44 @@ export class Ans104Parser {
     });
   }
 
-  async parseBundle({ parentTxId }: { parentTxId: string }): Promise<void> {
-    const unbundlePromise: Promise<void> = new Promise(async (resolve, reject) => {
-      const log = this.log.child({ parentTxId });
-      log.debug('Waiting for previous bundle to finish...');
-      while (this.unbundlePromise) {
-        await wait(100);
-      }
-      log.debug('Previous bundle finished.');
-      await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
-        recursive: true,
-      });
-      const data = await this.contiguousDataSource.getData(parentTxId);
-      const bundlePath = path.join(
-        process.cwd(),
-        'data/tmp/ans-104',
-        `${parentTxId}`,
-      );
-      const writeStream = fs.createWriteStream(bundlePath);
-      // TODO consider using pipeline
-      data.stream.pipe(writeStream);
-      writeStream.on('error', (error) => {
-        log.error('Error writing ANS-104 bundle stream', error);
-        reject(error);
-      });
-      writeStream.on('finish', async () => {
-        log.info('Parsing ANS-104 bundle stream...');
-        this.worker.postMessage({ parentTxId, bundlePath });
-        resolve();
-      });
-    });
+  async parseBundle({
+    rootTxId,
+    parentId,
+  }: {
+    rootTxId: string;
+    parentId: string;
+  }): Promise<void> {
+    const unbundlePromise: Promise<void> = new Promise(
+      async (resolve, reject) => {
+        const log = this.log.child({ parentId });
+        log.debug('Waiting for previous bundle to finish...');
+        while (this.unbundlePromise) {
+          await wait(100);
+        }
+        log.debug('Previous bundle finished.');
+        await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
+          recursive: true,
+        });
+        const data = await this.contiguousDataSource.getData(parentId);
+        const bundlePath = path.join(
+          process.cwd(),
+          'data/tmp/ans-104',
+          `${parentId}`,
+        );
+        const writeStream = fs.createWriteStream(bundlePath);
+        // TODO consider using pipeline
+        data.stream.pipe(writeStream);
+        writeStream.on('error', (error) => {
+          log.error('Error writing ANS-104 bundle stream', error);
+          reject(error);
+        });
+        writeStream.on('finish', async () => {
+          log.info('Parsing ANS-104 bundle stream...');
+          this.worker.postMessage({ rootTxId, parentId, bundlePath });
+          resolve();
+        });
+      },
+    );
     this.unbundlePromise = unbundlePromise;
     return unbundlePromise;
   }
@@ -124,13 +134,13 @@ export class Ans104Parser {
 
 if (!isMainThread) {
   parentPort?.on('message', async (message: any) => {
-    const { parentTxId, bundlePath } = message;
+    const { rootTxId, parentId, bundlePath } = message;
     try {
       const stream = fs.createReadStream(bundlePath);
       const iterable = await processStream(stream);
       const bundleLength = iterable.length;
 
-      const fnLog = log.child({ parentTxId, bundleLength });
+      const fnLog = log.child({ rootTxId, parentId, bundleLength });
       fnLog.info('Unbundling ANS-104 bundle stream data items...');
 
       const processedDataItemIds = new Set<string>();
@@ -160,7 +170,7 @@ if (!isMainThread) {
 
         parentPort?.postMessage({
           eventName: 'data-item-unbundled',
-          dataItem: normalizeAns104DataItem(parentTxId, dataItem),
+          dataItem: normalizeAns104DataItem(rootTxId, parentId, dataItem),
         });
       }
       parentPort?.postMessage({ eventName: 'unbundle-complete' });

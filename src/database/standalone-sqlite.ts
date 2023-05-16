@@ -50,6 +50,7 @@ import {
   ContiguousDataIndex,
   GqlQueryable,
   NestedDataIndexWriter,
+  NormalizedDataItem,
   PartialJsonBlock,
   PartialJsonTransaction,
 } from '../types.js';
@@ -203,6 +204,85 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
   };
 }
 
+export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
+  const tagNames = [] as { name: Buffer; hash: Buffer }[];
+  const tagValues = [] as { value: Buffer; hash: Buffer }[];
+  const newDataItemTags = [] as {
+    tag_name_hash: Buffer;
+    tag_value_hash: Buffer;
+    root_transaction_id: Buffer;
+    data_item_id: Buffer;
+    data_item_tag_index: number;
+    indexed_at: number;
+  }[];
+  const wallets = [] as { address: Buffer; public_modulus: Buffer }[];
+
+  let contentType: string | undefined;
+  const id = fromB64Url(item.id);
+
+  let dataItemTagIndex = 0;
+  for (const tag of item.tags) {
+    const tagName = fromB64Url(tag.name);
+    const tagNameHash = hashTagPart(tagName);
+    tagNames.push({ name: tagName, hash: tagNameHash });
+
+    const tagValue = fromB64Url(tag.value);
+    const tagValueHash = hashTagPart(tagValue);
+    tagValues.push({ value: tagValue, hash: tagValueHash });
+
+    if (isContentTypeTag(tagName)) {
+      contentType = tagValue.toString('utf8');
+    }
+
+    newDataItemTags.push({
+      tag_name_hash: tagNameHash,
+      tag_value_hash: tagValueHash,
+      root_transaction_id: fromB64Url(item.root_tx_id),
+      data_item_id: id,
+      data_item_tag_index: dataItemTagIndex,
+      indexed_at: currentTimestamp(),
+    });
+
+    dataItemTagIndex++;
+  }
+
+  const ownerBuffer = fromB64Url(item.owner);
+  const ownerAddressBuffer = ownerToAddress(ownerBuffer);
+
+  wallets.push({ address: ownerAddressBuffer, public_modulus: ownerBuffer });
+
+  const parentId = fromB64Url(item.parent_id);
+  const rootTxId = fromB64Url(item.root_tx_id);
+
+  return {
+    tagNames,
+    tagValues,
+    newDataItemTags,
+    wallets,
+    newBundleDataItem: {
+      id,
+      parent_id: parentId,
+      root_transaction_id: rootTxId,
+      indexed_at: currentTimestamp(),
+    },
+    newDataItem: {
+      id,
+      parent_id: parentId,
+      root_transaction_id: rootTxId,
+      height: height,
+      signature: fromB64Url(item.signature),
+      anchor: fromB64Url(item.anchor),
+      owner_address: ownerAddressBuffer,
+      target: fromB64Url(item.target),
+      data_offset: item.data_offset,
+      data_size: item.data_size,
+      content_type: contentType,
+      tag_count: item.tags.length,
+      indexed_at: currentTimestamp(),
+    },
+  };
+}
+
 type DebugInfo = {
   counts: {
     wallets: number;
@@ -242,6 +322,7 @@ export class StandaloneSqliteDatabaseWorker {
   // Transactions
   resetToHeightFn: Sqlite.Transaction;
   insertTxFn: Sqlite.Transaction;
+  insertDataItemFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
   saveStableDataFn: Sqlite.Transaction;
   deleteStaleNewDataFn: Sqlite.Transaction;
@@ -332,6 +413,37 @@ export class StandaloneSqliteDatabaseWorker {
 
         this.stmts.core.insertAsyncNewBlockTransaction.run({
           transaction_id: rows.newTx.id,
+        });
+      },
+    );
+
+    this.insertDataItemFn = this.dbs.core.transaction(
+      (item: NormalizedDataItem, height?: number) => {
+        // Insert the data item
+        const rows = dataItemToDbRows(item);
+
+        for (const row of rows.tagNames) {
+          this.stmts.bundles.insertOrIgnoreTagName.run(row);
+        }
+
+        for (const row of rows.tagValues) {
+          this.stmts.bundles.insertOrIgnoreTagValue.run(row);
+        }
+
+        for (const row of rows.newDataItemTags) {
+          this.stmts.bundles.upsertNewDataItemTag.run({
+            ...row,
+            height,
+          });
+        }
+
+        for (const row of rows.wallets) {
+          this.stmts.bundles.insertOrIgnoreWallet.run(row);
+        }
+
+        this.stmts.bundles.upsertNewDataItem.run({
+          ...rows.newDataItem,
+          height,
         });
       },
     );
@@ -511,6 +623,14 @@ export class StandaloneSqliteDatabaseWorker {
     })?.height;
     this.insertTxFn(tx, maybeTxHeight);
     this.stmts.core.deleteNewMissingTransaction.run({ transaction_id: txId });
+  }
+
+  saveDataItem(item: NormalizedDataItem) {
+    const rootTxId = fromB64Url(item.root_tx_id);
+    const maybeTxHeight = this.stmts.core.selectTransactionHeight.get({
+      transaction_id: rootTxId,
+    })?.height;
+    this.insertDataItemFn(item, maybeTxHeight);
   }
 
   saveBlockAndTxs(
@@ -1701,6 +1821,10 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('core', 'saveTx', [tx]);
   }
 
+  saveDataItem(item: NormalizedDataItem): Promise<void> {
+    return this.queueWrite('bundles', 'saveDataItem', [item]);
+  }
+
   saveBlockAndTxs(
     block: PartialJsonBlock,
     txs: PartialJsonTransaction[],
@@ -1904,6 +2028,10 @@ if (!isMainThread) {
         break;
       case 'saveTx':
         worker.saveTx(args[0]);
+        parentPort?.postMessage(null);
+        break;
+      case 'saveDataItem':
+        worker.saveDataItem(args[0]);
         parentPort?.postMessage(null);
         break;
       case 'saveBlockAndTxs':
