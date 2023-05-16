@@ -91,12 +91,12 @@ data items within a bundle have their data indexed.
 The following types of filters are supported:
 
 ```
-{ never: true } # the default
-{ always: true }
-{ attributes: { owner: <owner key>, ... }}
-{ tags: [{ name: <utf8 tag name>, value: <utf8 tag value> }, ...]}
-{ and: [ <nested filter>, ... ]}
-{ or: [ <nested filter>, ... ]}
+{ "never": true } # the default
+{ "always": true }
+{ "attributes": { "owner": <owner key>, ... }}
+{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, ...]}
+{ "and": [ <nested filter>, ... ]}
+{ "or": [ <nested filter>, ... ]}
 
 ```
 
