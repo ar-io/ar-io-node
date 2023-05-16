@@ -98,6 +98,7 @@ export const db = new StandaloneSqliteDatabase({
   coreDbPath: 'data/sqlite/core.db',
   dataDbPath: 'data/sqlite/data.db',
   moderationDbPath: 'data/sqlite/moderation.db',
+  bundlesDbPath: 'data/sqlite/bundles.db',
 });
 
 export const chainIndex: ChainIndex = db;

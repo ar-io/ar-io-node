@@ -32,6 +32,7 @@ import {
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import {
+  bundlesDbPath,
   coreDb,
   coreDbPath,
   dataDbPath,
@@ -134,11 +135,13 @@ describe('StandaloneSqliteDatabase', () => {
       coreDbPath,
       dataDbPath,
       moderationDbPath,
+      bundlesDbPath,
     });
     dbWorker = new StandaloneSqliteDatabaseWorker({
       coreDbPath,
       dataDbPath,
       moderationDbPath,
+      bundlesDbPath,
     });
     chainSource = new ArweaveChainSourceStub();
   });

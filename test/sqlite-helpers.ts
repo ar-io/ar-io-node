@@ -6,9 +6,11 @@ import log from '../src/log.js';
 export const coreDbPath = `test/tmp/core.db`;
 export const dataDbPath = `test/tmp/data.db`;
 export const moderationDbPath = `test/tmp/moderation.db`;
+export const bundlesDbPath = `test/tmp/bundles.db`;
 export let coreDb: Sqlite.Database;
 export let dataDb: Sqlite.Database;
 export let moderationDb: Sqlite.Database;
+export let bundlesDb: Sqlite.Database;
 
 /* eslint-disable */
 before(async () => {
@@ -33,10 +35,15 @@ before(async () => {
   moderationDb = new Sqlite(moderationDbPath);
   const moderationSchema = fs.readFileSync('test/moderation-schema.sql', 'utf8');
   moderationDb.exec(moderationSchema);
+
+  // Bundles DB
+  bundlesDb = new Sqlite(bundlesDbPath);
+  const bundlesSchema = fs.readFileSync('test/bundles-schema.sql', 'utf8');
+  bundlesDb.exec(bundlesSchema);
 });
 
 afterEach(async () => {
-  [coreDb, dataDb, moderationDb].forEach((db) => {
+  [coreDb, dataDb, moderationDb, bundlesDb].forEach((db) => {
     db.prepare("SELECT name FROM sqlite_schema WHERE type='table'")
       .all()
       .forEach((row) => {
