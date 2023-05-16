@@ -216,11 +216,13 @@ export class StandaloneSqliteDatabaseWorker {
     core: Sqlite.Database;
     data: Sqlite.Database;
     moderation: Sqlite.Database;
+    bundles: Sqlite.Database;
   };
   private stmts: {
     core: { [stmtName: string]: Sqlite.Statement };
     data: { [stmtName: string]: Sqlite.Statement };
     moderation: { [stmtName: string]: Sqlite.Statement };
+    bundles: { [stmtName: string]: Sqlite.Statement };
   };
 
   // Transactions
@@ -234,23 +236,26 @@ export class StandaloneSqliteDatabaseWorker {
     coreDbPath,
     dataDbPath,
     moderationDbPath,
+    bundlesDbPath,
   }: {
     coreDbPath: string;
     dataDbPath: string;
     moderationDbPath: string;
+    bundlesDbPath: string;
   }) {
     const timeout = 30000;
     this.dbs = {
       core: new Sqlite(coreDbPath, { timeout }),
       data: new Sqlite(dataDbPath, { timeout }),
       moderation: new Sqlite(moderationDbPath, { timeout }),
+      bundles: new Sqlite(bundlesDbPath, { timeout }),
     };
     for (const db of Object.values(this.dbs)) {
       db.pragma('journal_mode = WAL');
       db.pragma('page_size = 4096'); // may depend on OS and FS
     }
 
-    this.stmts = { core: {}, data: {}, moderation: {} };
+    this.stmts = { core: {}, data: {}, moderation: {}, bundles: {} };
 
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
@@ -262,7 +267,8 @@ export class StandaloneSqliteDatabaseWorker {
           if (
             stmtsKey === 'core' ||
             stmtsKey === 'data' ||
-            stmtsKey === 'moderation'
+            stmtsKey === 'moderation' ||
+            stmtsKey === 'bundles'
           ) {
             stmts[k] = this.dbs[stmtsKey].prepare(sql);
           } else {
@@ -1435,13 +1441,14 @@ export class StandaloneSqliteDatabaseWorker {
   }
 }
 
-type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug' | 'moderation';
+type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug' | 'moderation' | 'bundles';
 const WORKER_POOL_NAMES: Array<WorkerPoolName> = [
   'core',
   'data',
   'gql',
   'debug',
   'moderation',
+  'bundles',
 ];
 
 type WorkerRoleName = 'read' | 'write';
@@ -1456,6 +1463,7 @@ const WORKER_POOL_SIZES: WorkerPoolSizes = {
   gql: { read: CPU_COUNT, write: 0 },
   debug: { read: 1, write: 0 },
   moderation: { read: 1, write: 1 },
+  bundles: { read: 1, write: 1 },
 };
 
 export class StandaloneSqliteDatabase
@@ -1474,12 +1482,14 @@ export class StandaloneSqliteDatabase
     gql: { read: any[]; write: any[] };
     debug: { read: any[]; write: any[] };
     moderation: { read: any[]; write: any[] };
+    bundles: { read: any[]; write: any[] };
   } = {
     core: { read: [], write: [] },
     data: { read: [], write: [] },
     gql: { read: [], write: [] },
     debug: { read: [], write: [] },
     moderation: { read: [], write: [] },
+    bundles: { read: [], write: [] },
   };
   private workQueues: {
     core: { read: any[]; write: any[] };
@@ -1487,12 +1497,14 @@ export class StandaloneSqliteDatabase
     gql: { read: any[]; write: any[] };
     debug: { read: any[]; write: any[] };
     moderation: { read: any[]; write: any[] };
+    bundles: { read: any[]; write: any[] };
   } = {
     core: { read: [], write: [] },
     data: { read: [], write: [] },
     gql: { read: [], write: [] },
     debug: { read: [], write: [] },
     moderation: { read: [], write: [] },
+    bundles: { read: [], write: [] },
   };
   constructor({
     log,
@@ -1500,12 +1512,14 @@ export class StandaloneSqliteDatabase
     coreDbPath,
     dataDbPath,
     moderationDbPath,
+    bundlesDbPath,
   }: {
     log: winston.Logger;
     metricsRegistry: promClient.Registry;
     coreDbPath: string;
     dataDbPath: string;
     moderationDbPath: string;
+    bundlesDbPath: string;
   }) {
     this.log = log.child({ class: 'StandaloneSqliteDatabase' });
 
@@ -1526,6 +1540,7 @@ export class StandaloneSqliteDatabase
           coreDbPath,
           dataDbPath,
           moderationDbPath,
+          bundlesDbPath,
         },
       });
 
@@ -1846,6 +1861,7 @@ if (!isMainThread) {
     coreDbPath: workerData.coreDbPath,
     dataDbPath: workerData.dataDbPath,
     moderationDbPath: workerData.moderationDbPath,
+    bundlesDbPath: workerData.bundlesDbPath,
   });
 
   parentPort?.on('message', ({ method, args }: WorkerMessage) => {
