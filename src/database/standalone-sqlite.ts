@@ -117,6 +117,23 @@ export function toSqliteParams(sqlBricksParams: { values: any[] }) {
     }, {} as { [key: string]: any });
 }
 
+function hashTagPart(value: Buffer) {
+  return crypto.createHash('sha1').update(value).digest();
+}
+
+function isContentTypeTag(tagName: Buffer) {
+  return tagName.toString('utf8').toLowerCase() === 'content-type';
+}
+
+// TODO switch to milliseconds
+function currentTimestamp() {
+  return +(Date.now() / 1000).toFixed(0);
+}
+
+function ownerToAddress(owner: Buffer) {
+  return crypto.createHash('sha256').update(owner).digest();
+}
+
 export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
   const tagNames = [] as { name: Buffer; hash: Buffer }[];
   const tagValues = [] as { value: Buffer; hash: Buffer }[];
@@ -135,14 +152,14 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
   let transactionTagIndex = 0;
   for (const tag of tx.tags) {
     const tagName = fromB64Url(tag.name);
-    const tagNameHash = crypto.createHash('sha1').update(tagName).digest();
+    const tagNameHash = hashTagPart(tagName);
     tagNames.push({ name: tagName, hash: tagNameHash });
 
     const tagValue = fromB64Url(tag.value);
-    const tagValueHash = crypto.createHash('sha1').update(tagValue).digest();
+    const tagValueHash = hashTagPart(tagValue);
     tagValues.push({ value: tagValue, hash: tagValueHash });
 
-    if (tagName.toString('utf8').toLowerCase() === 'content-type') {
+    if (isContentTypeTag(tagName)) {
       contentType = tagValue.toString('utf8');
     }
 
@@ -151,17 +168,14 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       tag_value_hash: tagValueHash,
       transaction_id: txId,
       transaction_tag_index: transactionTagIndex,
-      created_at: +(Date.now() / 1000).toFixed(0),
+      created_at: currentTimestamp(),
     });
 
     transactionTagIndex++;
   }
 
   const ownerBuffer = fromB64Url(tx.owner);
-  const ownerAddressBuffer = crypto
-    .createHash('sha256')
-    .update(ownerBuffer)
-    .digest();
+  const ownerAddressBuffer = ownerToAddress(ownerBuffer);
 
   wallets.push({ address: ownerAddressBuffer, public_modulus: ownerBuffer });
 
@@ -183,7 +197,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       data_root: fromB64Url(tx.data_root),
       content_type: contentType,
       tag_count: tx.tags.length,
-      created_at: +(Date.now() / 1000).toFixed(0),
+      created_at: currentTimestamp(),
       height: height,
     },
   };
@@ -628,19 +642,19 @@ export class StandaloneSqliteDatabaseWorker {
       hash: hashBuffer,
       data_size: dataSize,
       original_source_content_type: contentType,
-      indexed_at: +(Date.now() / 1000).toFixed(0),
+      indexed_at: currentTimestamp(),
       cached_at: cachedAt,
     });
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
-      indexed_at: +(Date.now() / 1000).toFixed(0),
+      indexed_at: currentTimestamp(),
     });
     if (dataRoot !== undefined) {
       this.stmts.data.insertDataRoot.run({
         data_root: fromB64Url(dataRoot),
         contiguous_data_hash: hashBuffer,
-        indexed_at: +(Date.now() / 1000).toFixed(0),
+        indexed_at: currentTimestamp(),
       });
     }
   }
@@ -1397,7 +1411,7 @@ export class StandaloneSqliteDatabaseWorker {
     if (source !== undefined) {
       this.stmts.moderation.insertSource.run({
         name: source,
-        created_at: +(Date.now() / 1000).toFixed(0),
+        created_at: currentTimestamp(),
       });
       sourceId = this.stmts.moderation.getSourceByName.get({
         name: source,
@@ -1408,14 +1422,14 @@ export class StandaloneSqliteDatabaseWorker {
         id: fromB64Url(id),
         block_source_id: sourceId,
         notes,
-        blocked_at: +(Date.now() / 1000).toFixed(0),
+        blocked_at: currentTimestamp(),
       });
     } else if (hash !== undefined) {
       this.stmts.moderation.insertBlockedHash.run({
         hash: fromB64Url(hash),
         block_source_id: sourceId,
         notes,
-        blocked_at: +(Date.now() / 1000).toFixed(0),
+        blocked_at: currentTimestamp(),
       });
     }
   }
@@ -1436,12 +1450,18 @@ export class StandaloneSqliteDatabaseWorker {
       parent_id: fromB64Url(parentId),
       data_offset: dataOffset,
       data_size: dataSize,
-      created_at: +(Date.now() / 1000).toFixed(0),
+      created_at: currentTimestamp(),
     });
   }
 }
 
-type WorkerPoolName = 'core' | 'data' | 'gql' | 'debug' | 'moderation' | 'bundles';
+type WorkerPoolName =
+  | 'core'
+  | 'data'
+  | 'gql'
+  | 'debug'
+  | 'moderation'
+  | 'bundles';
 const WORKER_POOL_NAMES: Array<WorkerPoolName> = [
   'core',
   'data',
