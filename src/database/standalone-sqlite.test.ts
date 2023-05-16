@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { ValidationError } from 'apollo-server-express';
+import arbundles from 'arbundles/stream/index.js';
 import { expect } from 'chai';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -24,6 +25,7 @@ import * as promClient from 'prom-client';
 import {
   StandaloneSqliteDatabase,
   StandaloneSqliteDatabaseWorker,
+  dataItemToDbRows,
   decodeBlockGqlCursor,
   decodeTransactionGqlCursor,
   encodeBlockGqlCursor,
@@ -38,8 +40,15 @@ import {
   dataDbPath,
   moderationDbPath,
 } from '../../test/sqlite-helpers.js';
-import { ArweaveChainSourceStub } from '../../test/stubs.js';
+import { ArweaveChainSourceStub, stubAns104Bundle } from '../../test/stubs.js';
+import { normalizeAns104DataItem } from '../lib/ans-104.js';
 import log from '../log.js';
+
+//import { NormalizedDataItem } from '../types.js';
+
+/* eslint-disable */
+// @ts-ignore
+const { default: processStream } = arbundles;
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -116,6 +125,28 @@ describe('SQLite GraphQL cursor functions', () => {
       expect(() => {
         decodeBlockGqlCursor('123');
       }).to.throw(ValidationError, 'Invalid block cursor');
+    });
+  });
+});
+
+describe('SQLite data conversion functions', () => {
+  describe('dataItemToDbRows', () => {
+    it('should return DB rows to insert', async () => {
+      const bundleStream = await stubAns104Bundle();
+      const iterable = await processStream(bundleStream);
+      for await (const [_index, dataItem] of iterable.entries()) {
+        const normalizedDataItem = normalizeAns104DataItem(
+          '0000000000000000000000000000000000000000000',
+          '0000000000000000000000000000000000000000000',
+          dataItem,
+        );
+        const rows = dataItemToDbRows(normalizedDataItem);
+        expect(rows.tagNames.length).to.be.above(0);
+        expect(rows.tagValues.length).to.be.above(0);
+        expect(rows.newDataItemTags.length).to.be.above(0);
+        expect(rows.wallets.length).to.be.above(0);
+        expect(rows.newDataItem).to.be.an('object');
+      }
     });
   });
 });

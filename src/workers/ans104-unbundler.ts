@@ -24,10 +24,13 @@ import { Ans104Parser } from '../lib/ans-104.js';
 import {
   ContiguousDataSource,
   ItemFilter,
+  NormalizedDataItem,
   PartialJsonTransaction,
 } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
+
+type UnbundleableItem = NormalizedDataItem | PartialJsonTransaction;
 
 export class Ans104Unbundler {
   // Dependencies
@@ -36,7 +39,7 @@ export class Ans104Unbundler {
   private ans104Parser: Ans104Parser;
 
   // Unbundling queue
-  private queue: queueAsPromised<PartialJsonTransaction, void>;
+  private queue: queueAsPromised<UnbundleableItem, void>;
 
   constructor({
     log,
@@ -62,19 +65,33 @@ export class Ans104Unbundler {
     this.queue = fastq.promise(this.unbundle.bind(this), workerCount);
   }
 
-  async queueTx(tx: PartialJsonTransaction): Promise<void> {
-    const log = this.log.child({ method: 'queueTx', txId: tx.id });
+  async queueItem(item: UnbundleableItem): Promise<void> {
+    const log = this.log.child({ method: 'queueItem', id: item.id });
     log.debug('Queueing bundle...');
-    this.queue.push(tx);
+    this.queue.push(item);
     log.debug('Bundle queued.');
   }
 
-  async unbundle(tx: PartialJsonTransaction): Promise<void> {
-    const log = this.log.child({ method: 'unbundle', txId: tx.id });
+  async unbundle(item: UnbundleableItem): Promise<void> {
+    const log = this.log.child({ method: 'unbundle', id: item.id });
     try {
-      if (await this.filter.match(tx)) {
+      let rootTxId: string | undefined;
+      if ('root_tx_id' in item) {
+        // Data item with root_tx_id
+        rootTxId = item.root_tx_id;
+      } else if ('last_tx' in item) {
+        // Layer 1 transaction
+        rootTxId = item.id;
+      } else {
+        // Data item without root_tx_id (should be impossible)
+        throw new Error('Missing root_tx_id on data item.');
+      }
+      if (await this.filter.match(item)) {
         log.info('Unbundling bundle...');
-        await this.ans104Parser.parseBundle({ parentTxId: tx.id });
+        await this.ans104Parser.parseBundle({
+          rootTxId,
+          parentId: item.id,
+        });
         log.info('Bundle unbundled.');
       }
     } catch (error) {
