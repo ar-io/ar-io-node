@@ -35,10 +35,11 @@ export const createArnsMiddleware = ({
       Array.isArray(req.subdomains) &&
       req.subdomains.length === 1 &&
       !EXCLUDED_SUBDOMAINS.has(req.subdomains[0]) &&
-      // Avoid collision with sandbox URLs - contract limits length to 20
-      // chars, but 30 is still below sandbox domain length; undernames are a
-      // safe exception since '_' is not in base32
-      (req.subdomains[0].length <= 30 || req.subdomains[0].match(/_/))
+      // Avoid collisions with sandbox URLs by ensuring the subdomain length
+      // is below the mininimum length of a sandbox subdomain. Undernames are
+      // are an exception because they can be longer and '_' cannot appear in
+      // base32.
+      (req.subdomains[0].length <= 48 || req.subdomains[0].match(/_/))
     ) {
       const { resolvedId, ttl } = await nameResolver.resolve(req.subdomains[0]);
       if (resolvedId !== undefined) {
