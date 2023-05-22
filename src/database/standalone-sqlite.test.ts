@@ -617,7 +617,7 @@ describe('StandaloneSqliteDatabase', () => {
         await chainSource.getBlockAndTxsByHeight(height);
 
       await db.saveBlockAndTxs(block, txs, missingTxIds);
-      dbWorker.saveStableDataFn(height + 1);
+      dbWorker.saveCoreStableDataFn(height + 1);
 
       const stats = await db.getDebugInfo();
       expect(stats.counts.stableBlocks).to.equal(1);
@@ -700,7 +700,7 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       await db.saveBlockAndTxs(block, txs, missingTxIds);
-      dbWorker.saveStableDataFn(height + 1);
+      dbWorker.saveCoreStableDataFn(height + 1);
 
       const sql = `
         SELECT sb.*, wo.public_modulus AS owner
@@ -807,7 +807,7 @@ describe('StandaloneSqliteDatabase', () => {
       expect(stats.counts.newTxs).to.equal(txs.length);
 
       await db.saveBlockAndTxs(block, txs, missingTxIds);
-      dbWorker.saveStableDataFn(height + 1);
+      dbWorker.saveCoreStableDataFn(height + 1);
 
       const sql = `
         SELECT sb.*, wo.public_modulus AS owner
