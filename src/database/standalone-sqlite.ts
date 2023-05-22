@@ -324,8 +324,10 @@ export class StandaloneSqliteDatabaseWorker {
   insertTxFn: Sqlite.Transaction;
   insertDataItemFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
-  saveStableDataFn: Sqlite.Transaction;
-  deleteStaleNewDataFn: Sqlite.Transaction;
+  saveCoreStableDataFn: Sqlite.Transaction;
+  saveBundlesStableDataFn: Sqlite.Transaction;
+  deleteCoreStaleNewDataFn: Sqlite.Transaction;
+  deleteBundlesStaleNewDataFn: Sqlite.Transaction;
 
   constructor({
     coreDbPath,
@@ -349,6 +351,8 @@ export class StandaloneSqliteDatabaseWorker {
       db.pragma('journal_mode = WAL');
       db.pragma('page_size = 4096'); // may depend on OS and FS
     }
+
+    this.dbs.bundles.exec(`ATTACH DATABASE '${coreDbPath}' AS core`);
 
     this.stmts = { core: {}, data: {}, moderation: {}, bundles: {} };
 
@@ -417,7 +421,7 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
-    this.insertDataItemFn = this.dbs.core.transaction(
+    this.insertDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
         // Insert the data item
         const rows = dataItemToDbRows(item);
@@ -544,7 +548,7 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
-    this.saveStableDataFn = this.dbs.core.transaction((endHeight: number) => {
+    this.saveCoreStableDataFn = this.dbs.core.transaction((endHeight: number) => {
       this.stmts.core.insertOrIgnoreStableBlocks.run({
         end_height: endHeight,
       });
@@ -562,7 +566,19 @@ export class StandaloneSqliteDatabaseWorker {
       });
     });
 
-    this.deleteStaleNewDataFn = this.dbs.core.transaction(
+    this.saveBundlesStableDataFn = this.dbs.bundles.transaction(
+      (endHeight: number) => {
+        this.stmts.bundles.insertOrIgnoreStableDataItems.run({
+          end_height: endHeight,
+        });
+
+        this.stmts.bundles.insertOrIgnoreStableDataItemTags.run({
+          end_height: endHeight,
+        });
+      },
+    );
+
+    this.deleteCoreStaleNewDataFn = this.dbs.core.transaction(
       (heightThreshold: number, createdAtThreshold: number) => {
         // Deletes missing_transactions that have been inserted asyncronously
         this.stmts.core.deleteStaleMissingTransactions.run({
@@ -584,6 +600,18 @@ export class StandaloneSqliteDatabaseWorker {
         });
 
         this.stmts.core.deleteStaleNewBlocks.run({
+          height_threshold: heightThreshold,
+        });
+      },
+    );
+
+    this.deleteBundlesStaleNewDataFn = this.dbs.bundles.transaction(
+      (heightThreshold: number) => {
+        this.stmts.bundles.deleteStaleNewDataItems.run({
+          height_threshold: heightThreshold,
+        });
+
+        this.stmts.bundles.deleteStaleNewDataItemTags.run({
           height_threshold: heightThreshold,
         });
       },
@@ -645,12 +673,14 @@ export class StandaloneSqliteDatabaseWorker {
         this.stmts.core.selectMaxStableBlockTimestamp.get();
       const endHeight = block.height - MAX_FORK_DEPTH;
 
-      this.saveStableDataFn(endHeight);
+      this.saveCoreStableDataFn(endHeight);
+      this.saveBundlesStableDataFn(endHeight);
 
-      this.deleteStaleNewDataFn(
+      this.deleteCoreStaleNewDataFn(
         endHeight,
         maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
       );
+      this.deleteBundlesStaleNewDataFn(endHeight);
     }
   }
 
