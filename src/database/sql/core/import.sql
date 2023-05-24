@@ -1,3 +1,13 @@
+-- updateNewDataItemHeights
+UPDATE bundles.new_data_items
+SET height = @height
+WHERE root_transaction_id = @transaction_id
+
+-- updateNewDataItemTagHeights
+UPDATE bundles.new_data_item_tags
+SET height = @height
+WHERE root_transaction_id = @transaction_id
+
 -- insertOrIgnoreWallet
 INSERT INTO wallets (address, public_modulus)
 VALUES (@address, @public_modulus)

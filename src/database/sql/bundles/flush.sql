@@ -23,6 +23,7 @@ LEFT JOIN core.missing_transactions mt
   AND mt.height < @end_height
 LEFT JOIN core.stable_block_transactions sbt
   ON mt.transaction_id = sbt.transaction_id
+WHERE ndi.height < @end_height
 ON CONFLICT DO NOTHING
 
 -- insertOrIgnoreStableDataItemTags
@@ -48,4 +49,5 @@ LEFT JOIN core.missing_transactions mt
   AND mt.height < @end_height
 LEFT JOIN core.stable_block_transactions sbt
   ON mt.transaction_id = sbt.transaction_id
+WHERE ndit.height < @end_height
 ON CONFLICT DO NOTHING
