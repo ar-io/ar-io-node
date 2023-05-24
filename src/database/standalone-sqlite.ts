@@ -320,7 +320,8 @@ export class StandaloneSqliteDatabaseWorker {
   };
 
   // Transactions
-  resetToHeightFn: Sqlite.Transaction;
+  resetBundlesToHeightFn: Sqlite.Transaction;
+  resetCoreToHeightFn: Sqlite.Transaction;
   insertTxFn: Sqlite.Transaction;
   insertDataItemFn: Sqlite.Transaction;
   insertBlockAndTxsFn: Sqlite.Transaction;
@@ -352,6 +353,7 @@ export class StandaloneSqliteDatabaseWorker {
       db.pragma('page_size = 4096'); // may depend on OS and FS
     }
 
+    this.dbs.core.exec(`ATTACH DATABASE '${bundlesDbPath}' AS bundles`);
     this.dbs.bundles.exec(`ATTACH DATABASE '${coreDbPath}' AS core`);
 
     this.stmts = { core: {}, data: {}, moderation: {}, bundles: {} };
@@ -378,7 +380,12 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     // Transactions
-    this.resetToHeightFn = this.dbs.core.transaction((height: number) => {
+    this.resetBundlesToHeightFn = this.dbs.bundles.transaction((height: number) => {
+      this.stmts.bundles.clearHeightsOnNewDataItems.run({ height });
+      this.stmts.bundles.clearHeightsOnNewDataItemTags.run({ height });
+    });
+
+    this.resetCoreToHeightFn = this.dbs.core.transaction((height: number) => {
       this.stmts.core.clearHeightsOnNewTransactions.run({ height });
       this.stmts.core.clearHeightsOnNewTransactionTags.run({ height });
       this.stmts.core.truncateNewBlocksAt.run({ height });
@@ -388,8 +395,19 @@ export class StandaloneSqliteDatabaseWorker {
 
     this.insertTxFn = this.dbs.core.transaction(
       (tx: PartialJsonTransaction, height?: number) => {
-        // Insert the transaction
-        const rows = txToDbRows(tx);
+        const rows = txToDbRows(tx, height);
+
+        if (height !== undefined) {
+          this.stmts.core.updateNewDataItemHeights.run({
+            height,
+            transaction_id: rows.newTx.id,
+          });
+
+          this.stmts.core.updateNewDataItemTagHeights.run({
+            height,
+            transaction_id: rows.newTx.id,
+          });
+        }
 
         for (const row of rows.tagNames) {
           this.stmts.core.insertOrIgnoreTagName.run(row);
@@ -423,8 +441,7 @@ export class StandaloneSqliteDatabaseWorker {
 
     this.insertDataItemFn = this.dbs.bundles.transaction(
       (item: NormalizedDataItem, height?: number) => {
-        // Insert the data item
-        const rows = dataItemToDbRows(item);
+        const rows = dataItemToDbRows(item, height);
 
         for (const row of rows.tagNames) {
           this.stmts.bundles.insertOrIgnoreTagName.run(row);
@@ -514,6 +531,16 @@ export class StandaloneSqliteDatabaseWorker {
         for (const tx of txs) {
           const rows = txToDbRows(tx, block.height);
 
+          this.stmts.core.updateNewDataItemHeights.run({
+            height: block.height,
+            transaction_id: rows.newTx.id,
+          });
+
+          this.stmts.core.updateNewDataItemTagHeights.run({
+            height: block.height,
+            transaction_id: rows.newTx.id,
+          });
+
           for (const row of rows.tagNames) {
             this.stmts.core.insertOrIgnoreTagName.run(row);
           }
@@ -548,23 +575,25 @@ export class StandaloneSqliteDatabaseWorker {
       },
     );
 
-    this.saveCoreStableDataFn = this.dbs.core.transaction((endHeight: number) => {
-      this.stmts.core.insertOrIgnoreStableBlocks.run({
-        end_height: endHeight,
-      });
+    this.saveCoreStableDataFn = this.dbs.core.transaction(
+      (endHeight: number) => {
+        this.stmts.core.insertOrIgnoreStableBlocks.run({
+          end_height: endHeight,
+        });
 
-      this.stmts.core.insertOrIgnoreStableBlockTransactions.run({
-        end_height: endHeight,
-      });
+        this.stmts.core.insertOrIgnoreStableBlockTransactions.run({
+          end_height: endHeight,
+        });
 
-      this.stmts.core.insertOrIgnoreStableTransactions.run({
-        end_height: endHeight,
-      });
+        this.stmts.core.insertOrIgnoreStableTransactions.run({
+          end_height: endHeight,
+        });
 
-      this.stmts.core.insertOrIgnoreStableTransactionTags.run({
-        end_height: endHeight,
-      });
-    });
+        this.stmts.core.insertOrIgnoreStableTransactionTags.run({
+          end_height: endHeight,
+        });
+      },
+    );
 
     this.saveBundlesStableDataFn = this.dbs.bundles.transaction(
       (endHeight: number) => {
@@ -641,7 +670,8 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   resetToHeight(height: number) {
-    this.resetToHeightFn(height);
+    this.resetBundlesToHeightFn(height);
+    this.resetCoreToHeightFn(height);
   }
 
   saveTx(tx: PartialJsonTransaction) {
@@ -655,7 +685,7 @@ export class StandaloneSqliteDatabaseWorker {
 
   saveDataItem(item: NormalizedDataItem) {
     const rootTxId = fromB64Url(item.root_tx_id);
-    const maybeTxHeight = this.stmts.core.selectTransactionHeight.get({
+    const maybeTxHeight = this.stmts.bundles.selectTransactionHeight.get({
       transaction_id: rootTxId,
     })?.height;
     this.insertDataItemFn(item, maybeTxHeight);
