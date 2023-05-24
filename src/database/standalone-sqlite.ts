@@ -59,6 +59,7 @@ const CPU_COUNT = os.cpus().length;
 
 const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
+const NEW_DATA_ITEM_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const LOW_SELECTIVITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
 
 function tagJoinSortPriority(tag: { name: string; values: string[] }) {
@@ -645,13 +646,15 @@ export class StandaloneSqliteDatabaseWorker {
     );
 
     this.deleteBundlesStaleNewDataFn = this.dbs.bundles.transaction(
-      (heightThreshold: number) => {
+      (heightThreshold: number, indexedAtThreshold: number) => {
         this.stmts.bundles.deleteStaleNewDataItems.run({
           height_threshold: heightThreshold,
+          indexed_at_threshold: indexedAtThreshold,
         });
 
         this.stmts.bundles.deleteStaleNewDataItemTags.run({
           height_threshold: heightThreshold,
+          indexed_at_threshold: indexedAtThreshold,
         });
       },
     );
@@ -720,7 +723,10 @@ export class StandaloneSqliteDatabaseWorker {
         endHeight,
         maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
       );
-      this.deleteBundlesStaleNewDataFn(endHeight);
+      this.deleteBundlesStaleNewDataFn(
+        endHeight,
+        maxStableBlockTimestamp - NEW_DATA_ITEM_CLEANUP_WAIT_SECS,
+      );
     }
   }
 
