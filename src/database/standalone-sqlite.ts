@@ -566,6 +566,16 @@ export class StandaloneSqliteDatabaseWorker {
         for (const txIdStr of missingTxIds) {
           const txId = fromB64Url(txIdStr);
 
+          this.stmts.core.updateNewDataItemHeights.run({
+            height: block.height,
+            transaction_id: txId,
+          });
+
+          this.stmts.core.updateNewDataItemTagHeights.run({
+            height: block.height,
+            transaction_id: txId,
+          });
+
           this.stmts.core.insertOrIgnoreMissingTransaction.run({
             block_indep_hash: indepHash,
             transaction_id: txId,
