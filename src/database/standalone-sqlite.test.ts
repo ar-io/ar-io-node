@@ -19,6 +19,7 @@ import { ValidationError } from 'apollo-server-express';
 import { expect } from 'chai';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import * as promClient from 'prom-client';
 
 import {
   StandaloneSqliteDatabase,
@@ -119,13 +120,17 @@ describe('SQLite GraphQL cursor functions', () => {
 });
 
 describe('StandaloneSqliteDatabase', () => {
+  let metricsRegistry: promClient.Registry;
   let chainSource: ArweaveChainSourceStub;
   let db: StandaloneSqliteDatabase;
   let dbWorker: StandaloneSqliteDatabaseWorker;
 
   before(() => {
+    metricsRegistry = promClient.register;
+    metricsRegistry.clear();
     db = new StandaloneSqliteDatabase({
       log,
+      metricsRegistry,
       coreDbPath,
       dataDbPath,
       moderationDbPath,

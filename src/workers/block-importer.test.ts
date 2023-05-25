@@ -67,10 +67,13 @@ describe('BlockImporter', () => {
   };
 
   before(async () => {
+    metricsRegistry = promClient.register;
+    metricsRegistry.clear();
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
     db = new StandaloneSqliteDatabase({
       log,
+      metricsRegistry,
       coreDbPath,
       dataDbPath,
       moderationDbPath,
@@ -79,14 +82,12 @@ describe('BlockImporter', () => {
 
   after(async () => {
     db.stop();
-    sandbox.restore();
   });
 
   beforeEach(async () => {
     sandbox = sinon.createSandbox();
     metricsRegistry = promClient.register;
     metricsRegistry.clear();
-    promClient.collectDefaultMetrics({ register: metricsRegistry });
   });
 
   afterEach(async () => {
