@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS stable_block_transactions_transaction_id_idx;
