@@ -22,5 +22,5 @@ hooks:
       runas: root
   ValidateService:
     - location: scripts/codedeploy/validate-service
-      timeout: 60
+      timeout: 300
       runas: root
