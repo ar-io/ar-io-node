@@ -22,7 +22,7 @@ import log from '../../log.js';
 import { GqlTransaction } from '../../types.js';
 
 export const DEFAULT_PAGE_SIZE = 10;
-export const MAX_PAGE_SIZE = 100;
+export const MAX_PAGE_SIZE = 1000;
 
 export function getPageSize({ first }: { first?: number }) {
   return Math.min(first ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
