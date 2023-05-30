@@ -64,17 +64,15 @@ export function resolveTxOwner(tx: GqlTransaction) {
   };
 }
 
-// TODO implement when L2 data is added
-export function resolveTxParent() {
+export function resolveTxParent(tx: GqlTransaction) {
   return {
-    id: '',
+    id: tx.parentId,
   };
 }
 
-// TODO implement when L2 data is added
-export function resolveTxBundledIn() {
+export function resolveTxBundledIn(tx: GqlTransaction) {
   return {
-    id: '',
+    id: tx.parentId,
   };
 }
 

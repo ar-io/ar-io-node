@@ -381,10 +381,12 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     // Transactions
-    this.resetBundlesToHeightFn = this.dbs.bundles.transaction((height: number) => {
-      this.stmts.bundles.clearHeightsOnNewDataItems.run({ height });
-      this.stmts.bundles.clearHeightsOnNewDataItemTags.run({ height });
-    });
+    this.resetBundlesToHeightFn = this.dbs.bundles.transaction(
+      (height: number) => {
+        this.stmts.bundles.clearHeightsOnNewDataItems.run({ height });
+        this.stmts.bundles.clearHeightsOnNewDataItemTags.run({ height });
+      },
+    );
 
     this.resetCoreToHeightFn = this.dbs.core.transaction((height: number) => {
       this.stmts.core.clearHeightsOnNewTransactions.run({ height });
@@ -883,7 +885,7 @@ export class StandaloneSqliteDatabaseWorker {
         'nt.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         'id',
-        'last_tx',
+        'last_tx AS anchor',
         'signature',
         'target',
         'CAST(reward AS TEXT) AS reward',
@@ -914,7 +916,7 @@ export class StandaloneSqliteDatabaseWorker {
         'st.height AS height',
         'st.block_transaction_index AS block_transaction_index',
         'id',
-        'last_tx',
+        'last_tx AS anchor',
         'signature',
         'target',
         'CAST(reward AS TEXT) AS reward',
@@ -926,6 +928,7 @@ export class StandaloneSqliteDatabaseWorker {
         'sb.indep_hash AS block_indep_hash',
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
+        "'' AS parent_id",
       )
       .from('stable_transactions st')
       .join('stable_blocks sb', {
@@ -933,6 +936,35 @@ export class StandaloneSqliteDatabaseWorker {
       })
       .join('wallets w', {
         'st.owner_address': 'w.address',
+      });
+  }
+
+  getGqlStableDataItemsBaseSql() {
+    return sql
+      .select(
+        'sdi.height AS height',
+        'sdi.block_transaction_index AS block_transaction_index',
+        'id',
+        'anchor',
+        'signature',
+        'target',
+        "'' AS reward",
+        "'' AS quantity",
+        'CAST(data_size AS TEXT) AS data_size',
+        'content_type',
+        'owner_address',
+        'public_modulus',
+        'sb.indep_hash AS block_indep_hash',
+        'sb.block_timestamp AS block_timestamp',
+        'sb.previous_block AS block_previous_block',
+        'sdi.parent_id',
+      )
+      .from('bundles.stable_data_items sdi')
+      .join('stable_blocks sb', {
+        'sdi.height': 'sb.height',
+      })
+      .join('bundles.wallets w', {
+        'sdi.owner_address': 'w.address',
       });
   }
 
@@ -949,7 +981,7 @@ export class StandaloneSqliteDatabaseWorker {
     tags = [],
   }: {
     query: sql.SelectStatement;
-    source: 'stable' | 'new';
+    source: 'stable_txs' | 'stable_items' | 'new_txs' | 'new_items';
     cursor?: string;
     sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
     ids?: string[];
@@ -963,17 +995,32 @@ export class StandaloneSqliteDatabaseWorker {
     let heightTableAlias: string;
     let blockTransactionIndexTableAlias: string;
     let tagsTable: string;
+    let tagIdColumn: string;
+    let tagIndexColumn: string;
     let heightSortTableAlias: string;
     let blockTransactionIndexSortTableAlias: string;
     let maxDbHeight = Infinity;
 
-    if (source === 'stable') {
+    if (source === 'stable_txs') {
       txTableAlias = 'st';
       heightTableAlias = 'st';
       blockTransactionIndexTableAlias = 'st';
       tagsTable = 'stable_transaction_tags';
+      tagIdColumn = 'transaction_id';
+      tagIndexColumn = 'transaction_tag_index';
       heightSortTableAlias = 'st';
       blockTransactionIndexSortTableAlias = 'st';
+      maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
+        .height as number;
+    } else if (source === 'stable_items') {
+      txTableAlias = 'sdi';
+      heightTableAlias = 'sdi';
+      blockTransactionIndexTableAlias = 'sdi';
+      tagsTable = 'stable_data_item_tags';
+      tagIdColumn = 'data_item_id';
+      tagIndexColumn = 'data_item_tag_index';
+      heightSortTableAlias = 'sdi';
+      blockTransactionIndexSortTableAlias = 'sdi';
       maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
         .height as number;
     } else {
@@ -1000,12 +1047,12 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     if (tags) {
-      // To improve performance, force tags with large result to be last
+      // To improve performance, force tags with large result sets to be last
       const sortByTagJoinPriority = R.sortBy(tagJoinSortPriority);
       sortByTagJoinPriority(tags).forEach((tag, index) => {
         const tagAlias = `"${index}_${index}"`;
         let joinCond: { [key: string]: string };
-        if (source === 'stable') {
+        if (source === 'stable_txs' || source === 'stable_items') {
           if (index === 0) {
             heightSortTableAlias = tagAlias;
             blockTransactionIndexSortTableAlias = tagAlias;
@@ -1016,7 +1063,7 @@ export class StandaloneSqliteDatabaseWorker {
           } else {
             const previousTagAlias = `"${index - 1}_${index - 1}"`;
             joinCond = {
-              [`${previousTagAlias}.transaction_id`]: `${tagAlias}.transaction_id`,
+              [`${previousTagAlias}.${tagIdColumn}`]: `${tagAlias}.${tagIdColumn}`,
             };
             // This condition forces the use of the transaction_id index rather
             // than the name and value index. The transaction_id index is
@@ -1024,8 +1071,8 @@ export class StandaloneSqliteDatabaseWorker {
             // first in the GraphQL query.
             query.where(
               sql.notEq(
-                `${previousTagAlias}.transaction_tag_index`,
-                sql(`${tagAlias}.transaction_tag_index`),
+                `${previousTagAlias}.${tagIndexColumn}`,
+                sql(`${tagAlias}.${tagIndexColumn}`),
               ),
             );
           }
@@ -1122,7 +1169,7 @@ export class StandaloneSqliteDatabaseWorker {
 
     this.addGqlTransactionFilters({
       query,
-      source: 'new',
+      source: 'new_txs',
       cursor,
       sortOrder,
       ids,
@@ -1144,7 +1191,7 @@ export class StandaloneSqliteDatabaseWorker {
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
         id: toB64Url(tx.id),
-        anchor: toB64Url(tx.last_tx),
+        anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
         recipient: tx.target ? toB64Url(tx.target) : undefined,
         ownerAddress: toB64Url(tx.owner_address),
@@ -1157,6 +1204,7 @@ export class StandaloneSqliteDatabaseWorker {
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
         blockPreviousBlock: toB64Url(tx.block_previous_block),
+        parentId: '', // TODO implement this
       }));
   }
 
@@ -1181,11 +1229,11 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     tags?: { name: string; values: string[] }[];
   }) {
-    const query = this.getGqlStableTransactionsBaseSql();
+    const txsQuery = this.getGqlStableTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
-      query,
-      source: 'stable',
+      query: txsQuery,
+      source: 'stable_txs',
       cursor,
       sortOrder,
       ids,
@@ -1196,18 +1244,47 @@ export class StandaloneSqliteDatabaseWorker {
       tags,
     });
 
-    const queryParams = query.toParams();
-    const sql = queryParams.text;
-    const sqliteParams = toSqliteParams(queryParams);
+    const txsQueryParams = txsQuery.toParams();
+    const txsSql = txsQueryParams.text;
+    const txsFinalSql = `${txsSql} LIMIT ${pageSize + 1}`;
+
+    const itemsQuery = this.getGqlStableDataItemsBaseSql();
+
+    this.addGqlTransactionFilters({
+      query: itemsQuery,
+      source: 'stable_items',
+      cursor,
+      sortOrder,
+      ids,
+      recipients,
+      owners,
+      minHeight,
+      maxHeight,
+      tags,
+    });
+
+    const itemsQueryParams = itemsQuery.toParams();
+    const itemsSql = itemsQueryParams.text;
+    const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
+
+    const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    const sql: string = `
+      SELECT * FROM (${txsFinalSql})
+      UNION
+      SELECT * FROM (${itemsFinalSql})
+      ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}
+      LIMIT ${pageSize + 1}
+    `;
+    const sqliteParams = toSqliteParams(txsQueryParams);
 
     return this.dbs.core
-      .prepare(`${sql} LIMIT ${pageSize + 1}`)
+      .prepare(sql)
       .all(sqliteParams)
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
         id: toB64Url(tx.id),
-        anchor: toB64Url(tx.last_tx),
+        anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
         recipient: tx.target ? toB64Url(tx.target) : undefined,
         ownerAddress: toB64Url(tx.owner_address),
@@ -1220,6 +1297,7 @@ export class StandaloneSqliteDatabaseWorker {
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
         blockPreviousBlock: toB64Url(tx.block_previous_block),
+        parentId: tx.parent_id ? toB64Url(tx.parent_id) : '',
       }));
   }
 
