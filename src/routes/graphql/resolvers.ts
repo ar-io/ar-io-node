@@ -65,12 +65,18 @@ export function resolveTxOwner(tx: GqlTransaction) {
 }
 
 export function resolveTxParent(tx: GqlTransaction) {
+  if (tx.parentId === null) {
+    return null;
+  }
   return {
     id: tx.parentId,
   };
 }
 
 export function resolveTxBundledIn(tx: GqlTransaction) {
+  if (tx.parentId === null) {
+    return null;
+  }
   return {
     id: tx.parentId,
   };
@@ -99,9 +105,13 @@ export const resolvers: IResolvers = {
         ids: queryParams.ids,
         recipients: queryParams.recipients,
         owners: queryParams.owners,
-        tags: queryParams.tags || [],
         minHeight: queryParams.block?.min,
         maxHeight: queryParams.block?.max,
+        bundledIn:
+          queryParams.bundledIn !== undefined
+            ? queryParams.bundledIn
+            : queryParams.parent,
+        tags: queryParams.tags || [],
       });
     },
     block: async (_, queryParams, { db }) => {

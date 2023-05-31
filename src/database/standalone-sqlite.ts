@@ -49,6 +49,7 @@ import {
   ContiguousDataAttributes,
   ContiguousDataIndex,
   GqlQueryable,
+  GqlTransaction,
   NestedDataIndexWriter,
   NormalizedDataItem,
   PartialJsonBlock,
@@ -71,9 +72,9 @@ export function encodeTransactionGqlCursor({
   blockTransactionIndex,
   dataItemId,
 }: {
-  height: number;
-  blockTransactionIndex: number;
-  dataItemId: string | undefined;
+  height?: number;
+  blockTransactionIndex?: number;
+  dataItemId?: string;
 }) {
   return utf8ToB64Url(
     JSON.stringify([height, blockTransactionIndex, dataItemId]),
@@ -989,6 +990,7 @@ export class StandaloneSqliteDatabaseWorker {
     owners = [],
     minHeight = -1,
     maxHeight = -1,
+    bundledIn,
     tags = [],
   }: {
     query: sql.SelectStatement;
@@ -1000,6 +1002,7 @@ export class StandaloneSqliteDatabaseWorker {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
   }) {
     let txTableAlias: string;
@@ -1123,6 +1126,12 @@ export class StandaloneSqliteDatabaseWorker {
       query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
     }
 
+    if (Array.isArray(bundledIn) && source === 'stable_items') {
+      query.where(
+        sql.in(`${txTableAlias}.parent_id`, bundledIn.map(fromB64Url)),
+      );
+    }
+
     const {
       height: cursorHeight,
       blockTransactionIndex: cursorBlockTransactionIndex,
@@ -1219,6 +1228,7 @@ export class StandaloneSqliteDatabaseWorker {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }) {
     const query = this.getGqlNewTransactionsBaseSql();
@@ -1261,7 +1271,7 @@ export class StandaloneSqliteDatabaseWorker {
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
         blockPreviousBlock: toB64Url(tx.block_previous_block),
-        parentId: '', // TODO implement this
+        parentId: null, // TODO implement this
       }));
   }
 
@@ -1274,6 +1284,7 @@ export class StandaloneSqliteDatabaseWorker {
     owners = [],
     minHeight = -1,
     maxHeight = -1,
+    bundledIn,
     tags = [],
   }: {
     pageSize: number;
@@ -1284,6 +1295,7 @@ export class StandaloneSqliteDatabaseWorker {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }) {
     const txsQuery = this.getGqlStableTransactionsBaseSql();
@@ -1298,6 +1310,7 @@ export class StandaloneSqliteDatabaseWorker {
       owners,
       minHeight,
       maxHeight,
+      bundledIn,
       tags,
     });
 
@@ -1317,6 +1330,7 @@ export class StandaloneSqliteDatabaseWorker {
       owners,
       minHeight,
       maxHeight,
+      bundledIn,
       tags,
     });
 
@@ -1325,14 +1339,22 @@ export class StandaloneSqliteDatabaseWorker {
     const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
 
     const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
-    const sql: string = `
-      SELECT * FROM (${txsFinalSql})
-      UNION
-      SELECT * FROM (${itemsFinalSql})
-      ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}
-      LIMIT ${pageSize + 1}
-    `;
-    const sqliteParams = toSqliteParams(txsQueryParams);
+    const sqlParts = [];
+    if (bundledIn === undefined || bundledIn === null) {
+      sqlParts.push(`SELECT * FROM (${txsFinalSql})`);
+    }
+    if (bundledIn === undefined) {
+      sqlParts.push('UNION');
+    }
+    if (bundledIn === undefined || Array.isArray(bundledIn)) {
+      sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
+    }
+    sqlParts.push(
+      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}`,
+    );
+    sqlParts.push(`LIMIT ${pageSize + 1}`);
+    const sql = sqlParts.join(' ');
+    const sqliteParams = toSqliteParams(itemsQueryParams);
 
     return this.dbs.core
       .prepare(sql)
@@ -1355,7 +1377,7 @@ export class StandaloneSqliteDatabaseWorker {
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
         blockPreviousBlock: toB64Url(tx.block_previous_block),
-        parentId: tx.parent_id ? toB64Url(tx.parent_id) : '',
+        parentId: tx.parent_id ? toB64Url(tx.parent_id) : null,
       }));
   }
 
@@ -1368,6 +1390,7 @@ export class StandaloneSqliteDatabaseWorker {
     owners = [],
     minHeight = -1,
     maxHeight = -1,
+    bundledIn,
     tags = [],
   }: {
     pageSize: number;
@@ -1378,9 +1401,10 @@ export class StandaloneSqliteDatabaseWorker {
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }) {
-    let txs;
+    let txs: GqlTransaction[] = [];
 
     if (sortOrder === 'HEIGHT_DESC') {
       txs = this.getGqlNewTransactions({
@@ -1392,10 +1416,12 @@ export class StandaloneSqliteDatabaseWorker {
         owners,
         minHeight,
         maxHeight,
+        bundledIn,
         tags,
       });
 
       if (txs.length < pageSize) {
+        const lastTxHeight = txs[txs.length - 1].height;
         txs = txs.concat(
           this.getGqlStableTransactions({
             pageSize,
@@ -1406,7 +1432,8 @@ export class StandaloneSqliteDatabaseWorker {
             owners,
             minHeight,
             maxHeight:
-              txs.length > 0 ? txs[txs.length - 1].height - 1 : maxHeight,
+              txs.length > 0 && lastTxHeight ? lastTxHeight - 1 : maxHeight,
+            bundledIn,
             tags,
           }),
         );
@@ -1421,10 +1448,12 @@ export class StandaloneSqliteDatabaseWorker {
         owners,
         minHeight,
         maxHeight,
+        bundledIn,
         tags,
       });
 
       if (txs.length < pageSize) {
+        const lastTxHeight = txs[txs.length - 1].height;
         txs = txs.concat(
           this.getGqlNewTransactions({
             pageSize,
@@ -1434,8 +1463,9 @@ export class StandaloneSqliteDatabaseWorker {
             recipients,
             owners,
             minHeight:
-              txs.length > 0 ? txs[txs.length - 1].height + 1 : minHeight,
+              txs.length > 0 && lastTxHeight ? lastTxHeight : minHeight,
             maxHeight,
+            bundledIn,
             tags,
           }),
         );
@@ -2094,6 +2124,7 @@ export class StandaloneSqliteDatabase
     owners = [],
     minHeight = -1,
     maxHeight = -1,
+    bundledIn,
     tags = [],
   }: {
     pageSize: number;
@@ -2104,6 +2135,7 @@ export class StandaloneSqliteDatabase
     owners?: string[];
     minHeight?: number;
     maxHeight?: number;
+    bundledIn?: string[];
     tags?: { name: string; values: string[] }[];
   }) {
     return this.queueRead('gql', 'getGqlTransactions', [
@@ -2116,6 +2148,7 @@ export class StandaloneSqliteDatabase
         owners,
         minHeight,
         maxHeight,
+        bundledIn,
         tags,
       },
     ]);
