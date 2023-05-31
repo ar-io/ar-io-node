@@ -231,7 +231,7 @@ interface GqlTransaction {
   blockTimestamp: number | undefined;
   height: number | undefined;
   blockPreviousBlock: string | undefined;
-  parentId: string | undefined;
+  parentId: string | null;
 }
 
 interface GqlTransactionEdge {
