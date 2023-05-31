@@ -52,6 +52,8 @@ const { default: processStream } = arbundles;
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
+const DATA_ITEM_ID = 'zoljIRyzG5hp-R4EZV2q8kFI49OAoy23_B9YJ_yEEws';
+const CURSOR = 'WzExMzgsNDIsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiXQ';
 
 describe('SQLite helper functions', () => {
   describe('toSqliteParams', () => {
@@ -71,23 +73,26 @@ describe('SQLite GraphQL cursor functions', () => {
         encodeTransactionGqlCursor({
           height: HEIGHT,
           blockTransactionIndex: BLOCK_TX_INDEX,
+          dataItemId: DATA_ITEM_ID,
         }),
-      ).to.equal('WzExMzgsNDJd');
+      ).to.equal(CURSOR);
     });
   });
 
   describe('decodeTransactionGqlCursor', () => {
     it('should decode a height and blockTransactionIndex given an encoded cursor', () => {
-      expect(decodeTransactionGqlCursor('WzExMzgsNDJd')).to.deep.equal({
+      expect(decodeTransactionGqlCursor(CURSOR)).to.deep.equal({
         height: HEIGHT,
         blockTransactionIndex: BLOCK_TX_INDEX,
+        dataItemId: DATA_ITEM_ID,
       });
     });
 
-    it('should return an undefined height and blockTransactionIndex given an undefined cursor', () => {
+    it('should return an undefined height, blockTransactionIndex, and dataItemId given an undefined cursor', () => {
       expect(decodeTransactionGqlCursor(undefined)).to.deep.equal({
         height: undefined,
         blockTransactionIndex: undefined,
+        dataItemId: undefined,
       });
     });
 
