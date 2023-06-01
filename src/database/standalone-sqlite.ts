@@ -907,6 +907,7 @@ export class StandaloneSqliteDatabaseWorker {
         'nb.indep_hash AS block_indep_hash',
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
+        "'' AS parent_id"
       )
       .from('new_transactions nt')
       .join('new_block_transactions nbt', {
@@ -917,6 +918,39 @@ export class StandaloneSqliteDatabaseWorker {
       })
       .join('wallets w', {
         'nt.owner_address': 'w.address',
+      });
+  }
+
+  getGqlNewDataItemsBaseSql() {
+    return sql
+      .select(
+        'ndi.height AS height',
+        'nbt.block_transaction_index AS block_transaction_index',
+        'id AS data_item_id',
+        'id',
+        'anchor',
+        'signature',
+        'target',
+        "'' AS reward",
+        "'' AS quantity",
+        'CAST(data_size AS TEXT) AS data_size',
+        'content_type',
+        'owner_address',
+        'public_modulus',
+        'nb.indep_hash AS block_indep_hash',
+        'nb.block_timestamp AS block_timestamp',
+        'nb.previous_block AS block_previous_block',
+        'ndi.parent_id',
+      )
+      .from('new_data_items ndi')
+      .join('new_block_transactions nbt', {
+        'nbt.transaction_id': 'ndi.root_transaction_id',
+      })
+      .join('new_blocks nb', {
+        'nb.indep_hash': 'nbt.block_indep_hash',
+      })
+      .join('bundles.wallets w', {
+        'ndi.owner_address': 'w.address',
       });
   }
 
@@ -939,7 +973,7 @@ export class StandaloneSqliteDatabaseWorker {
         'sb.indep_hash AS block_indep_hash',
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
-        "'' AS parent_id",
+        "'' AS parent_id"
       )
       .from('stable_transactions st')
       .join('stable_blocks sb', {
@@ -1037,12 +1071,19 @@ export class StandaloneSqliteDatabaseWorker {
       blockTransactionIndexSortTableAlias = 'sdi';
       maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
         .height as number;
-    } else {
+    } else if (source === 'new_txs') {
       txTableAlias = 'nt';
       heightTableAlias = 'nt';
       blockTransactionIndexTableAlias = 'nbt';
       tagsTable = 'new_transaction_tags';
       heightSortTableAlias = 'nt';
+      blockTransactionIndexSortTableAlias = 'nbt';
+    } else {
+      txTableAlias = 'ndi';
+      heightTableAlias = 'ndi';
+      blockTransactionIndexTableAlias = 'nbt';
+      tagsTable = 'new_data_item_tags';
+      heightSortTableAlias = 'ndi';
       blockTransactionIndexSortTableAlias = 'nbt';
     }
 
@@ -1126,7 +1167,10 @@ export class StandaloneSqliteDatabaseWorker {
       query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
     }
 
-    if (Array.isArray(bundledIn) && source === 'stable_items') {
+    if (
+      Array.isArray(bundledIn) &&
+      (source === 'stable_items' || source === 'new_items')
+    ) {
       query.where(
         sql.in(`${txTableAlias}.parent_id`, bundledIn.map(fromB64Url)),
       );
@@ -1218,6 +1262,7 @@ export class StandaloneSqliteDatabaseWorker {
     owners = [],
     minHeight = -1,
     maxHeight = -1,
+    bundledIn,
     tags = [],
   }: {
     pageSize: number;
@@ -1231,10 +1276,10 @@ export class StandaloneSqliteDatabaseWorker {
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }) {
-    const query = this.getGqlNewTransactionsBaseSql();
+    const txsQuery = this.getGqlNewTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
-      query,
+      query: txsQuery,
       source: 'new_txs',
       cursor,
       sortOrder,
@@ -1246,12 +1291,50 @@ export class StandaloneSqliteDatabaseWorker {
       tags,
     });
 
-    const queryParams = query.toParams();
-    const sql = queryParams.text;
-    const sqliteParams = toSqliteParams(queryParams);
+    const txsQueryParams = txsQuery.toParams();
+    const txsSql = txsQueryParams.text;
+    const txsFinalSql = `${txsSql} LIMIT ${pageSize + 1}`;
+
+    const itemsQuery = this.getGqlNewDataItemsBaseSql();
+
+    this.addGqlTransactionFilters({
+      query: itemsQuery,
+      source: 'new_items',
+      cursor,
+      sortOrder,
+      ids,
+      recipients,
+      owners,
+      minHeight,
+      maxHeight,
+      bundledIn,
+      tags,
+    });
+
+    const itemsQueryParams = itemsQuery.toParams();
+    const itemsSql = itemsQueryParams.text;
+    const itemsFinalSql = `${itemsSql} LIMIT ${pageSize + 1}`;
+
+    const sqlSortOrder = sortOrder === 'HEIGHT_DESC' ? 'DESC' : 'ASC';
+    const sqlParts = [];
+    if (bundledIn === undefined || bundledIn === null) {
+      sqlParts.push(`SELECT * FROM (${txsFinalSql})`);
+    }
+    if (bundledIn === undefined) {
+      sqlParts.push('UNION');
+    }
+    if (bundledIn === undefined || Array.isArray(bundledIn)) {
+      sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
+    }
+    sqlParts.push(
+      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}`,
+    );
+    sqlParts.push(`LIMIT ${pageSize + 1}`);
+    const sql = sqlParts.join(' ');
+    const sqliteParams = toSqliteParams(itemsQueryParams);
 
     return this.dbs.core
-      .prepare(`${sql} LIMIT ${pageSize + 1}`)
+      .prepare(sql)
       .all(sqliteParams)
       .map((tx) => ({
         height: tx.height,
@@ -1271,7 +1354,7 @@ export class StandaloneSqliteDatabaseWorker {
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
         blockPreviousBlock: toB64Url(tx.block_previous_block),
-        parentId: null, // TODO implement this
+        parentId: tx.parent_id ? toB64Url(tx.parent_id) : null,
       }));
   }
 
@@ -1421,7 +1504,7 @@ export class StandaloneSqliteDatabaseWorker {
       });
 
       if (txs.length < pageSize) {
-        const lastTxHeight = txs[txs.length - 1].height;
+        const lastTxHeight = txs[txs.length - 1]?.height;
         txs = txs.concat(
           this.getGqlStableTransactions({
             pageSize,
@@ -1453,7 +1536,7 @@ export class StandaloneSqliteDatabaseWorker {
       });
 
       if (txs.length < pageSize) {
-        const lastTxHeight = txs[txs.length - 1].height;
+        const lastTxHeight = txs[txs.length - 1]?.height;
         txs = txs.concat(
           this.getGqlNewTransactions({
             pageSize,
