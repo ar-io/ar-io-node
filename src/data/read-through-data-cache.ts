@@ -158,6 +158,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     data.stream.on('data', (chunk) => {
       hasher.update(chunk);
     });
+    data.stream.pause();
 
     return data;
   }
