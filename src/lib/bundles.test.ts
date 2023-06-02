@@ -46,7 +46,7 @@ describe('importAns104Bundle', () => {
 
   it('should proccess bundles and save data items to the database using default batch size', async () => {
     let emitCount = 0;
-    eventEmitter.on(events.DATA_ITEM_UNBUNDLED, () => {
+    eventEmitter.on(events.ANS104_DATA_ITEM_UNBUNDLED, () => {
       emitCount++;
     });
     await emitAns104UnbundleEvents({

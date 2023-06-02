@@ -55,8 +55,8 @@ if (env.varOrUndefined('ADMIN_API_KEY') === undefined) {
 export const ANS104_UNBUNDLE_FILTER = createFilter(
   JSON.parse(env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
 );
-export const ANS104_DATA_INDEX_FILTER = createFilter(
-  JSON.parse(env.varOrDefault('ANS104_DATA_INDEX_FILTER', '{"never": true}')),
+export const ANS104_INDEX_FILTER = createFilter(
+  JSON.parse(env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}')),
 );
 export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
 export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');

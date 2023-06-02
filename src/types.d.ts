@@ -184,6 +184,10 @@ export interface ChainIndex {
   ): Promise<void>;
 }
 
+export interface DataItemIndexWriter {
+  saveDataItem(item: NormalizedDataItem): Promise<void>;
+}
+
 export interface NestedDataIndexWriter {
   saveNestedDataId({
     id,

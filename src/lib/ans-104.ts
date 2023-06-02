@@ -7,6 +7,7 @@ import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
+import * as events from '../events.js';
 import log from '../log.js';
 import { ContiguousDataSource, NormalizedDataItem } from '../types.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
@@ -68,10 +69,9 @@ export class Ans104Parser {
     this.worker.on(
       'message',
       ((message: any) => {
-        this.log.info('message', { message });
         switch (message.eventName) {
           case 'data-item-unbundled':
-            eventEmitter.emit(message.eventName, message.dataItem);
+            eventEmitter.emit(events.ANS104_DATA_ITEM_UNBUNDLED, message.dataItem);
             break;
           case 'unbundle-complete':
             this.unbundlePromise = undefined;
