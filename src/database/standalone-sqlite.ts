@@ -877,9 +877,31 @@ export class StandaloneSqliteDatabaseWorker {
     }));
   }
 
+  getGqlNewDataItemTags(id: Buffer) {
+    const tags = this.stmts.bundles.selectNewDataItemTags.all({
+      id: id,
+    });
+
+    return tags.map((tag) => ({
+      name: tag.name.toString('utf8'),
+      value: tag.value.toString('utf8'),
+    }));
+  }
+
   getGqlStableTransactionTags(txId: Buffer) {
     const tags = this.stmts.core.selectStableTransactionTags.all({
       transaction_id: txId,
+    });
+
+    return tags.map((tag) => ({
+      name: tag.name.toString('utf8'),
+      value: tag.value.toString('utf8'),
+    }));
+  }
+
+  getGqlStableDataItemTags(id: Buffer) {
+    const tags = this.stmts.bundles.selectStableDataItemTags.all({
+      id: id,
     });
 
     return tags.map((tag) => ({
@@ -907,7 +929,7 @@ export class StandaloneSqliteDatabaseWorker {
         'nb.indep_hash AS block_indep_hash',
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
-        "'' AS parent_id"
+        "'' AS parent_id",
       )
       .from('new_transactions nt')
       .join('new_block_transactions nbt', {
@@ -973,7 +995,7 @@ export class StandaloneSqliteDatabaseWorker {
         'sb.indep_hash AS block_indep_hash',
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
-        "'' AS parent_id"
+        "'' AS parent_id",
       )
       .from('stable_transactions st')
       .join('stable_blocks sb', {
@@ -1349,7 +1371,9 @@ export class StandaloneSqliteDatabaseWorker {
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
-        tags: this.getGqlNewTransactionTags(tx.id),
+        tags: tx.data_item_id.length > 1
+          ? this.getGqlNewDataItemTags(tx.id)
+          : this.getGqlNewTransactionTags(tx.id),
         contentType: tx.content_type,
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
@@ -1455,7 +1479,9 @@ export class StandaloneSqliteDatabaseWorker {
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
-        tags: this.getGqlStableTransactionTags(tx.id),
+        tags: tx.data_item_id.length > 1
+          ? this.getGqlStableDataItemTags(tx.id)
+          : this.getGqlStableTransactionTags(tx.id),
         contentType: tx.content_type,
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
