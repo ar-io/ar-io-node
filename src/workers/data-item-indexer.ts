@@ -1,6 +1,6 @@
 /**
  * AR.IO Gateway
- * Copyright (C) 2022 Permanent Data Solutions, Inc
+ * Copyright (C) 2023 Permanent Data Solutions, Inc
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -21,15 +21,15 @@ import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
 import * as events from '../events.js';
-import { NestedDataIndexWriter, NormalizedDataItem } from '../types.js';
+import { DataItemIndexWriter, NormalizedDataItem } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
 
-export class Ans104DataIndexer {
+export class DataItemIndexer {
   // Dependencies
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
-  private indexWriter: NestedDataIndexWriter;
+  private indexWriter: DataItemIndexWriter;
 
   // Data indexing queue
   private queue: queueAsPromised<NormalizedDataItem, void>;
@@ -42,10 +42,10 @@ export class Ans104DataIndexer {
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
-    indexWriter: NestedDataIndexWriter;
+    indexWriter: DataItemIndexWriter;
     workerCount?: number;
   }) {
-    this.log = log.child({ class: 'Ans104DataIndexer' });
+    this.log = log.child({ class: 'DataItemIndexer' });
     this.indexWriter = indexWriter;
     this.eventEmitter = eventEmitter;
 
@@ -58,8 +58,6 @@ export class Ans104DataIndexer {
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
-      dataOffset: item?.data_offset,
-      dataSize: item?.data_size,
     });
     log.debug('Queueing data item for indexing...');
     this.queue.push(item);
@@ -72,27 +70,13 @@ export class Ans104DataIndexer {
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
-      dataOffset: item?.data_offset,
-      dataSize: item?.data_size,
     });
 
     try {
-      if (
-        typeof item.data_offset === 'number' &&
-        typeof item.data_size === 'number'
-      ) {
-        log.debug('Indexing data item data...');
-        this.indexWriter.saveNestedDataId({
-          id: item.id,
-          parentId: item.parent_id,
-          dataOffset: item.data_offset,
-          dataSize: item.data_size,
-        });
-        this.eventEmitter.emit(events.ANS104_DATA_ITEM_DATA_INDEXED, item);
-        log.debug('Data item data indexed.');
-      } else {
-        this.log.warn('Data item data is missing data offset or size.');
-      }
+      log.debug('Indexing data item...');
+      this.indexWriter.saveDataItem(item);
+      this.eventEmitter.emit(events.ANS104_DATA_ITEM_INDEXED, item);
+      log.debug('Data item indexed.');
     } catch (error) {
       log.error('Failed to index data item data:', error);
     }

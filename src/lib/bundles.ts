@@ -20,6 +20,7 @@ import * as EventEmitter from 'node:events';
 import stream from 'node:stream';
 import * as winston from 'winston';
 
+import * as events from '../../src/events.js';
 import { NormalizedDataItem } from '../types.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
 
@@ -111,7 +112,7 @@ export async function emitAns104UnbundleEvents({
     }
 
     eventEmitter.emit(
-      'data-item-unbundled',
+      events.ANS104_DATA_ITEM_UNBUNDLED,
       normalizeAns104DataItem(parentTxId, dataItem),
     );
   }

@@ -15,12 +15,14 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+export const ANS104_DATA_ITEM_DATA_INDEXED = 'ans104-data-item-data-indexed';
+export const ANS104_DATA_ITEM_INDEXED = 'ans104-data-indexed';
+export const ANS104_DATA_ITEM_UNBUNDLED = 'asn104-data-item-unbundled';
 export const ANS104_TX_INDEXED = 'ans104-tx-indexed';
-export const BLOCK_INDEXED = 'block-indexed';
 export const BLOCK_FETCHED = 'block-fetched';
+export const BLOCK_INDEXED = 'block-indexed';
 export const BLOCK_TX_FETCHED = 'block-tx-fetched';
 export const BLOCK_TX_FETCH_FAILED = 'block-tx-fetch-failed';
 export const BLOCK_TX_INDEXED = 'block-tx-indexed';
-export const DATA_ITEM_UNBUNDLED = 'data-item-unbundled';
 export const TX_FETCHED = 'tx-fetched';
 export const TX_INDEXED = 'tx-indexed';

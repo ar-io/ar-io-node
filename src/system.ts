@@ -42,6 +42,7 @@ import {
   BlockListValidator,
   ChainIndex,
   ContiguousDataIndex,
+  DataItemIndexWriter,
   MatchableItem,
   NestedDataIndexWriter,
   PartialJsonTransaction,
@@ -49,6 +50,7 @@ import {
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
+import { DataItemIndexer } from './workers/data-item-indexer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
@@ -105,6 +107,7 @@ export const chainIndex: ChainIndex = db;
 export const contiguousDataIndex: ContiguousDataIndex = db;
 export const blockListValidator: BlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
+export const dataItemIndexWriter: DataItemIndexWriter = db;
 
 // Workers
 const eventEmitter = new EventEmitter();
@@ -207,14 +210,21 @@ eventEmitter.on(
   },
 );
 
+const dataItemIndexer = new DataItemIndexer({
+  log,
+  eventEmitter,
+  indexWriter: dataItemIndexWriter,
+});
+
 const ans104DataIndexer = new Ans104DataIndexer({
   log,
   eventEmitter,
   indexWriter: nestedDataIndexWriter,
 });
 
-eventEmitter.on(events.DATA_ITEM_UNBUNDLED, async (dataItem: any) => {
-  if (await config.ANS104_DATA_INDEX_FILTER.match(dataItem)) {
+eventEmitter.on(events.ANS104_DATA_ITEM_UNBUNDLED, async (dataItem: any) => {
+  if (await config.ANS104_INDEX_FILTER.match(dataItem)) {
+    dataItemIndexer.queueDataItem(dataItem);
     ans104DataIndexer.queueDataItem(dataItem);
   }
 });
