@@ -269,7 +269,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
     tagValues,
     newDataItemTags,
     wallets,
-    newBundleDataItem: {
+    bundleDataItem: {
       id,
       parent_id: parentId,
       root_transaction_id: rootTxId,
@@ -473,6 +473,8 @@ export class StandaloneSqliteDatabaseWorker {
         for (const row of rows.wallets) {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
         }
+
+        this.stmts.bundles.insertBundleDataItem.run(rows.bundleDataItem);
 
         this.stmts.bundles.upsertNewDataItem.run({
           ...rows.newDataItem,
@@ -1371,9 +1373,10 @@ export class StandaloneSqliteDatabaseWorker {
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
-        tags: tx.data_item_id.length > 1
-          ? this.getGqlNewDataItemTags(tx.id)
-          : this.getGqlNewTransactionTags(tx.id),
+        tags:
+          tx.data_item_id.length > 1
+            ? this.getGqlNewDataItemTags(tx.id)
+            : this.getGqlNewTransactionTags(tx.id),
         contentType: tx.content_type,
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,
@@ -1479,9 +1482,10 @@ export class StandaloneSqliteDatabaseWorker {
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
-        tags: tx.data_item_id.length > 1
-          ? this.getGqlStableDataItemTags(tx.id)
-          : this.getGqlStableTransactionTags(tx.id),
+        tags:
+          tx.data_item_id.length > 1
+            ? this.getGqlStableDataItemTags(tx.id)
+            : this.getGqlStableTransactionTags(tx.id),
         contentType: tx.content_type,
         blockIndepHash: toB64Url(tx.block_indep_hash),
         blockTimestamp: tx.block_timestamp,

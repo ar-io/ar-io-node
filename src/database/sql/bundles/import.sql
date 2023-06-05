@@ -1,3 +1,10 @@
+-- insertBundleDataItem
+INSERT INTO bundle_data_items (
+  id, parent_id, root_transaction_id, indexed_at
+) VALUES (
+  @id, @parent_id, @root_transaction_id, @indexed_at
+)
+
 -- insertOrIgnoreWallet
 INSERT INTO wallets (address, public_modulus)
 VALUES (@address, @public_modulus)
