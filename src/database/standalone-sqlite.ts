@@ -1356,18 +1356,24 @@ export class StandaloneSqliteDatabaseWorker {
     return block;
   }
 
-  isIdBlocked(id: string): boolean {
-    const row = this.stmts.moderation.isIdBlocked.get({
-      id: fromB64Url(id),
-    });
-    return row?.is_blocked === 1;
+  isIdBlocked(id: string | undefined): boolean {
+    if (typeof id === 'string' && id.length > 0) {
+      const row = this.stmts.moderation.isIdBlocked.get({
+        id: fromB64Url(id),
+      });
+      return row?.is_blocked === 1;
+    }
+    return false
   }
 
-  isHashBlocked(hash: string): boolean {
-    const row = this.stmts.moderation.isHashBlocked.get({
-      hash: fromB64Url(hash),
-    });
-    return row?.is_blocked === 1;
+  isHashBlocked(hash: string | undefined): boolean {
+    if (typeof hash === 'string' && hash.length > 0) {
+      const row = this.stmts.moderation.isHashBlocked.get({
+        hash: fromB64Url(hash),
+      });
+      return row?.is_blocked === 1;
+    }
+    return false;
   }
 
   blockData({
@@ -1779,11 +1785,11 @@ export class StandaloneSqliteDatabase
     return this.queueRead('gql', 'getGqlBlock', [{ id }]);
   }
 
-  async isIdBlocked(id: string): Promise<boolean> {
+  async isIdBlocked(id: string | undefined): Promise<boolean> {
     return this.queueRead('moderation', 'isIdBlocked', [id]);
   }
 
-  async isHashBlocked(hash: string): Promise<boolean> {
+  async isHashBlocked(hash: string | undefined): Promise<boolean> {
     return this.queueRead('moderation', 'isHashBlocked', [hash]);
   }
 
