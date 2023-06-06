@@ -43,6 +43,7 @@ import {
   utf8ToB64Url,
 } from '../lib/encoding.js';
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
+import log from '../log.js';
 import {
   BlockListValidator,
   ChainIndex,
@@ -57,6 +58,8 @@ import {
 } from '../types.js';
 
 const CPU_COUNT = os.cpus().length;
+
+const MAX_WORKER_ERRORS = 100;
 
 const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
@@ -1863,7 +1866,7 @@ export class StandaloneSqliteDatabaseWorker {
       });
       return row?.is_blocked === 1;
     }
-    return false
+    return false;
   }
 
   isHashBlocked(hash: string | undefined): boolean {
@@ -2061,7 +2064,11 @@ export class StandaloneSqliteDatabase
           takeWork();
         })
         .on('message', (result) => {
-          job.resolve(result);
+          if (result === '__ERROR__') {
+            job.reject(new Error('Worker error'));
+          } else {
+            job.resolve(result);
+          }
           job = null;
           takeWork(); // Check if there's more work to do
         })
@@ -2371,87 +2378,99 @@ if (!isMainThread) {
     bundlesDbPath: workerData.bundlesDbPath,
   });
 
+  let errorCount = 0;
+
   parentPort?.on('message', ({ method, args }: WorkerMessage) => {
-    switch (method) {
-      case 'getMaxHeight':
-        const maxHeight = worker.getMaxHeight();
-        parentPort?.postMessage(maxHeight);
-        break;
-      case 'getBlockHashByHeight':
-        const newBlockHash = worker.getBlockHashByHeight(args[0]);
-        parentPort?.postMessage(newBlockHash);
-        break;
-      case 'getMissingTxIds':
-        const missingTxIdsRes = worker.getMissingTxIds(args[0]);
-        parentPort?.postMessage(missingTxIdsRes);
-        break;
-      case 'resetToHeight':
-        worker.resetToHeight(args[0]);
-        parentPort?.postMessage(undefined);
-        break;
-      case 'saveTx':
-        worker.saveTx(args[0]);
-        parentPort?.postMessage(null);
-        break;
-      case 'saveDataItem':
-        worker.saveDataItem(args[0]);
-        parentPort?.postMessage(null);
-        break;
-      case 'saveBlockAndTxs':
-        const [block, txs, missingTxIds] = args;
-        worker.saveBlockAndTxs(block, txs, missingTxIds);
-        parentPort?.postMessage(null);
-        break;
-      case 'getDataAttributes':
-        const dataAttributes = worker.getDataAttributes(args[0]);
-        parentPort?.postMessage(dataAttributes);
-        break;
-      case 'getDataParent':
-        const dataParent = worker.getDataParent(args[0]);
-        parentPort?.postMessage(dataParent);
-        break;
-      case 'getDebugInfo':
-        const debugInfo = worker.getDebugInfo();
-        parentPort?.postMessage(debugInfo);
-        break;
-      case 'saveDataContentAttributes':
-        worker.saveDataContentAttributes(args[0]);
-        parentPort?.postMessage(null);
-        break;
-      case 'getGqlTransactions':
-        const gqlTransactions = worker.getGqlTransactions(args[0]);
-        parentPort?.postMessage(gqlTransactions);
-        break;
-      case 'getGqlTransaction':
-        const gqlTransaction = worker.getGqlTransaction(args[0]);
-        parentPort?.postMessage(gqlTransaction);
-        break;
-      case 'getGqlBlocks':
-        const gqlBlocks = worker.getGqlBlocks(args[0]);
-        parentPort?.postMessage(gqlBlocks);
-        break;
-      case 'getGqlBlock':
-        const gqlBlock = worker.getGqlBlock(args[0]);
-        parentPort?.postMessage(gqlBlock);
-        break;
-      case 'isIdBlocked':
-        const isIdBlocked = worker.isIdBlocked(args[0]);
-        parentPort?.postMessage(isIdBlocked);
-        break;
-      case 'isHashBlocked':
-        const isHashBlocked = worker.isHashBlocked(args[0]);
-        parentPort?.postMessage(isHashBlocked);
-        break;
-      case 'blockData':
-        worker.blockData(args[0]);
-        parentPort?.postMessage(null);
-        break;
-      case 'saveNestedDataId':
-        worker.saveNestedDataId(args[0]);
-        parentPort?.postMessage(null);
-        break;
-      case 'terminate':
-        process.exit(0);
+    try {
+      switch (method) {
+        case 'getMaxHeight':
+          const maxHeight = worker.getMaxHeight();
+          parentPort?.postMessage(maxHeight);
+          break;
+        case 'getBlockHashByHeight':
+          const newBlockHash = worker.getBlockHashByHeight(args[0]);
+          parentPort?.postMessage(newBlockHash);
+          break;
+        case 'getMissingTxIds':
+          const missingTxIdsRes = worker.getMissingTxIds(args[0]);
+          parentPort?.postMessage(missingTxIdsRes);
+          break;
+        case 'resetToHeight':
+          worker.resetToHeight(args[0]);
+          parentPort?.postMessage(undefined);
+          break;
+        case 'saveTx':
+          worker.saveTx(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveDataItem':
+          worker.saveDataItem(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveBlockAndTxs':
+          const [block, txs, missingTxIds] = args;
+          worker.saveBlockAndTxs(block, txs, missingTxIds);
+          parentPort?.postMessage(null);
+          break;
+        case 'getDataAttributes':
+          const dataAttributes = worker.getDataAttributes(args[0]);
+          parentPort?.postMessage(dataAttributes);
+          break;
+        case 'getDataParent':
+          const dataParent = worker.getDataParent(args[0]);
+          parentPort?.postMessage(dataParent);
+          break;
+        case 'getDebugInfo':
+          const debugInfo = worker.getDebugInfo();
+          parentPort?.postMessage(debugInfo);
+          break;
+        case 'saveDataContentAttributes':
+          worker.saveDataContentAttributes(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'getGqlTransactions':
+          const gqlTransactions = worker.getGqlTransactions(args[0]);
+          parentPort?.postMessage(gqlTransactions);
+          break;
+        case 'getGqlTransaction':
+          const gqlTransaction = worker.getGqlTransaction(args[0]);
+          parentPort?.postMessage(gqlTransaction);
+          break;
+        case 'getGqlBlocks':
+          const gqlBlocks = worker.getGqlBlocks(args[0]);
+          parentPort?.postMessage(gqlBlocks);
+          break;
+        case 'getGqlBlock':
+          const gqlBlock = worker.getGqlBlock(args[0]);
+          parentPort?.postMessage(gqlBlock);
+          break;
+        case 'isIdBlocked':
+          const isIdBlocked = worker.isIdBlocked(args[0]);
+          parentPort?.postMessage(isIdBlocked);
+          break;
+        case 'isHashBlocked':
+          const isHashBlocked = worker.isHashBlocked(args[0]);
+          parentPort?.postMessage(isHashBlocked);
+          break;
+        case 'blockData':
+          worker.blockData(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveNestedDataId':
+          worker.saveNestedDataId(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'terminate':
+          process.exit(0);
+      }
+    } catch (error) {
+      if (errorCount > MAX_WORKER_ERRORS) {
+        log.error('Too many errors in StandaloneSqlite worker, exiting.');
+        process.exit(1);
+      }
+      log.error('Error in StandaloneSqlite worker:', error );
+      errorCount++;
+      parentPort?.postMessage('__ERROR__');
     }
   });
 }
