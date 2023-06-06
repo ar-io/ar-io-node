@@ -1100,6 +1100,7 @@ export class StandaloneSqliteDatabaseWorker {
       heightTableAlias = 'nt';
       blockTransactionIndexTableAlias = 'nbt';
       tagsTable = 'new_transaction_tags';
+      tagIdColumn = 'transaction_id';
       heightSortTableAlias = 'nt';
       blockTransactionIndexSortTableAlias = 'nbt';
     } else {
@@ -1107,6 +1108,7 @@ export class StandaloneSqliteDatabaseWorker {
       heightTableAlias = 'ndi';
       blockTransactionIndexTableAlias = 'nbt';
       tagsTable = 'new_data_item_tags';
+      tagIdColumn = 'data_item_id';
       heightSortTableAlias = 'ndi';
       blockTransactionIndexSortTableAlias = 'nbt';
     }
@@ -1139,6 +1141,9 @@ export class StandaloneSqliteDatabaseWorker {
               [`${blockTransactionIndexTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
               [`${heightTableAlias}.height`]: `${tagAlias}.height`,
             };
+            if (source === 'stable_items') {
+              joinCond[`${txTableAlias}.id`] = `${tagAlias}.${tagIdColumn}`;
+            }
           } else {
             const previousTagAlias = `"${index - 1}_${index - 1}"`;
             joinCond = {
@@ -1157,7 +1162,7 @@ export class StandaloneSqliteDatabaseWorker {
           }
         } else {
           joinCond = {
-            [`${txTableAlias}.id`]: `${tagAlias}.transaction_id`,
+            [`${txTableAlias}.id`]: `${tagAlias}.${tagIdColumn}`,
           };
         }
 
