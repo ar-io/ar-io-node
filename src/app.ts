@@ -26,6 +26,7 @@ import YAML from 'yaml';
 import * as config from './config.js';
 import log from './log.js';
 import { createArnsMiddleware } from './middleware/arns.js';
+import { createSandboxMiddleware } from './middleware/sandbox.js';
 import {
   DATA_PATH_REGEX,
   RAW_DATA_PATH_REGEX,
@@ -77,6 +78,13 @@ app.use(
   createArnsMiddleware({
     dataHandler,
     nameResolver: system.nameResolver,
+  }),
+);
+
+app.use(
+  createSandboxMiddleware({
+    rootHost: config.ARNS_ROOT_HOST,
+    sandboxProtocol: config.SANDBOX_PROTOCOL,
   }),
 );
 
