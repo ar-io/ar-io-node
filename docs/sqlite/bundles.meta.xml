@@ -1,0 +1,109 @@
+<schemaMeta xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://schemaspy.org/xsd/6/schemameta.xsd" >
+  <tables>
+    <table name="stable_data_items">
+      <column name="parent_id" type="BLOB">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="root_transaction_id" type="BLOB">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="owner_address" type="BLOB">
+        <foreignKey table="wallets" column="address" />
+      </column>
+    </table>
+
+    <table name="stable_data_item_tags">
+      <column name="data_item_id" type="BLOB">
+        <foreignKey table="stable_data_items" column="id" />
+      </column>
+
+      <column name="block_transaction_index" type="BLOB">
+        <foreignKey table="stable_data_items" column="block_transaction_index" />
+      </column>
+
+      <column name="parent_id" type="INTEGER">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="root_transaction_id" type="INTEGER">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="tag_name_hash" type="BLOB">
+        <foreignKey table="tag_names" column="hash" />
+      </column>
+
+      <column name="tag_value_hash" type="BLOB">
+        <foreignKey table="tag_values" column="hash" />
+      </column>
+    </table>
+
+    <table name="new_data_items">
+      <column name="owner_address" type="BLOB">
+        <foreignKey table="wallets" column="address" />
+      </column>
+    </table>
+
+    <table name="new_data_items">
+      <column name="parent_id" type="BLOB">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="root_transaction_id" type="BLOB">
+        <foreignKey table="bundles" column="id" />
+      </column>
+    </table>
+
+    <table name="new_data_item_tags">
+      <column name="parent_id" type="BLOB">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="root_transaction_id" type="BLOB">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="data_item_id" type="BLOB">
+        <foreignKey table="new_data_items" column="id" />
+      </column>
+
+      <column name="tag_name_hash" type="BLOB">
+        <foreignKey table="tag_names" column="hash" />
+      </column>
+
+      <column name="tag_value_hash" type="BLOB">
+        <foreignKey table="tag_values" column="hash" />
+      </column>
+    </table>
+
+    <table name="bundles">
+      <column name="unbundle_filter_id" type="INTEGER">
+        <foreignKey table="filters" column="id" />
+      </column>
+
+      <column name="index_filter_id" type="INTEGER">
+        <foreignKey table="filters" column="id" />
+      </column>
+
+      <column name="format_id" type="INTEGER">
+        <foreignKey table="bundle_formats" column="id" />
+      </column>
+    </table>
+
+    <table name="bundle_data_items">
+      <column name="id" type="INTEGER">
+        <foreignKey table="stable_data_items" column="id" />
+      </column>
+
+      <column name="parent_id" type="INTEGER">
+        <foreignKey table="bundles" column="id" />
+      </column>
+
+      <column name="root_transaction_id" type="INTEGER">
+        <foreignKey table="bundles" column="id" />
+      </column>
+    </table>
+  </tables>
+</schemaMeta>
