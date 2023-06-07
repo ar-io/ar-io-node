@@ -8,6 +8,10 @@
 /data
 /dist
 /node_modules
+/vendor
+
+# Generated docs
+/docs/sqlite/bundles
 
 # VS Code
 /.vscode

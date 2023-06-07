@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+schemaspy_version="6.2.2"
+schemaspy_jar="schemaspy-${schemaspy_version}.jar"
+sqlite_jdbc_version="3.42.0.0"
+sqlite_jdbc_jar="sqlite-jdbc-${sqlite_jdbc_version}.jar"
+
+mkdir -p vendor
+
+if [ ! -f vendor/${schemaspy_jar} ]; then
+  curl -L https://github.com/schemaspy/schemaspy/releases/download/v${schemaspy_version}/${schemaspy_jar} -o vendor/${schemaspy_jar}
+fi
+
+if [ ! -f vendor/${sqlite_jdbc_jar} ]; then
+  curl -L https://github.com/xerial/sqlite-jdbc/releases/download/${sqlite_jdbc_version}/${sqlite_jdbc_jar} -o vendor/${sqlite_jdbc_jar}
+fi
+
+java -jar vendor/schemaspy-*.jar \
+  -debug \
+  -t docs/sqlite/bundles.properties \
+  -sso \
+  -s bundles \
+  -cat catalog \
+  -meta docs/sqlite/bundles.meta.xml \
+  -o docs/sqlite/bundles
