@@ -1,6 +1,6 @@
 name: Test and build AR.IO core
 
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
   build:
