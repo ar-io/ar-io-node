@@ -275,7 +275,9 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
     bundleDataItem: {
       id,
       parent_id: parentId,
+      parent_index: item.parent_index,
       root_transaction_id: rootTxId,
+      filter_id: -1, // TODO remove once filters are in the DB
       indexed_at: currentTimestamp(),
     },
     newDataItem: {
@@ -477,7 +479,7 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
         }
 
-        this.stmts.bundles.insertBundleDataItem.run(rows.bundleDataItem);
+        this.stmts.bundles.upsertBundleDataItem.run(rows.bundleDataItem);
 
         this.stmts.bundles.upsertNewDataItem.run({
           ...rows.newDataItem,
@@ -2468,7 +2470,7 @@ if (!isMainThread) {
         log.error('Too many errors in StandaloneSqlite worker, exiting.');
         process.exit(1);
       }
-      log.error('Error in StandaloneSqlite worker:', error );
+      log.error('Error in StandaloneSqlite worker:', error);
       errorCount++;
       parentPort?.postMessage('__ERROR__');
     }

@@ -16,11 +16,19 @@ import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
 // @ts-ignore
 const { default: processStream } = arbundles;
 
-export function normalizeAns104DataItem(
-  rootTxId: string,
-  parentTxId: string,
-  ans104DataItem: Record<string, any>,
-): NormalizedDataItem {
+export function normalizeAns104DataItem({
+  rootTxId,
+  parentId,
+  parentIndex,
+  index,
+  ans104DataItem,
+}: {
+  rootTxId: string;
+  parentId: string;
+  parentIndex: number;
+  index: number;
+  ans104DataItem: Record<string, any>;
+}): NormalizedDataItem {
   // TODO stricter type checking (maybe zod)
 
   const tags = (ans104DataItem.tags || []).map(
@@ -32,7 +40,9 @@ export function normalizeAns104DataItem(
 
   return {
     id: ans104DataItem.id,
-    parent_id: parentTxId,
+    index: index,
+    parent_id: parentId,
+    parent_index: parentIndex,
     root_tx_id: rootTxId,
     signature: ans104DataItem.signature,
     owner: ans104DataItem.owner,
@@ -71,7 +81,10 @@ export class Ans104Parser {
       ((message: any) => {
         switch (message.eventName) {
           case 'data-item-unbundled':
-            eventEmitter.emit(events.ANS104_DATA_ITEM_UNBUNDLED, message.dataItem);
+            eventEmitter.emit(
+              events.ANS104_DATA_ITEM_UNBUNDLED,
+              message.dataItem,
+            );
             break;
           case 'unbundle-complete':
             this.unbundlePromise = undefined;
@@ -92,9 +105,11 @@ export class Ans104Parser {
   async parseBundle({
     rootTxId,
     parentId,
+    parentIndex,
   }: {
     rootTxId: string;
     parentId: string;
+    parentIndex: number;
   }): Promise<void> {
     const unbundlePromise: Promise<void> = new Promise(
       async (resolve, reject) => {
@@ -122,7 +137,7 @@ export class Ans104Parser {
         });
         writeStream.on('finish', async () => {
           log.info('Parsing ANS-104 bundle stream...');
-          this.worker.postMessage({ rootTxId, parentId, bundlePath });
+          this.worker.postMessage({ rootTxId, parentId, parentIndex, bundlePath });
           resolve();
         });
       },
@@ -134,7 +149,7 @@ export class Ans104Parser {
 
 if (!isMainThread) {
   parentPort?.on('message', async (message: any) => {
-    const { rootTxId, parentId, bundlePath } = message;
+    const { rootTxId, parentId, parentIndex, bundlePath } = message;
     try {
       const stream = fs.createReadStream(bundlePath);
       const iterable = await processStream(stream);
@@ -170,7 +185,13 @@ if (!isMainThread) {
 
         parentPort?.postMessage({
           eventName: 'data-item-unbundled',
-          dataItem: normalizeAns104DataItem(rootTxId, parentId, dataItem),
+          dataItem: normalizeAns104DataItem({
+            rootTxId: rootTxId as string,
+            parentId: parentId as string,
+            parentIndex: parentIndex as number,
+            index: index as number,
+            ans104DataItem: dataItem as Record<string, any>,
+          }),
         });
       }
       parentPort?.postMessage({ eventName: 'unbundle-complete' });

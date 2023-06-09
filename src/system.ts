@@ -205,7 +205,10 @@ eventEmitter.on(
   events.ANS104_TX_INDEXED,
   async (tx: PartialJsonTransaction) => {
     if (await config.ANS104_UNBUNDLE_FILTER.match(tx)) {
-      ans104Unbundler.queueItem(tx);
+      ans104Unbundler.queueItem({
+        index: -1, // parent indexes are not needed for L1
+        ...tx,
+      });
     }
   },
 );

@@ -140,11 +140,13 @@ describe('SQLite data conversion functions', () => {
       const bundleStream = await stubAns104Bundle();
       const iterable = await processStream(bundleStream);
       for await (const [_index, dataItem] of iterable.entries()) {
-        const normalizedDataItem = normalizeAns104DataItem(
-          '0000000000000000000000000000000000000000000',
-          '0000000000000000000000000000000000000000000',
-          dataItem,
-        );
+        const normalizedDataItem = normalizeAns104DataItem({
+          rootTxId: '0000000000000000000000000000000000000000000',
+          parentId: '0000000000000000000000000000000000000000000',
+          parentIndex: -1,
+          index: 0,
+          ans104DataItem: dataItem,
+        });
         const rows = dataItemToDbRows(normalizedDataItem);
         expect(rows.tagNames.length).to.be.above(0);
         expect(rows.tagValues.length).to.be.above(0);

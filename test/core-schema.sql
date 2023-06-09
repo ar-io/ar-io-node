@@ -194,3 +194,4 @@ CREATE INDEX missing_transactions_height_transaction_id_idx ON missing_transacti
 CREATE INDEX new_transaction_tags_height_created_at_idx ON new_transaction_tags (height, created_at);
 CREATE INDEX sable_block_transactions_transaction_id_idx
   ON stable_block_transactions (transaction_id);
+CREATE INDEX new_transaction_tags_transaction_id_idx ON new_transaction_tags (transaction_id);

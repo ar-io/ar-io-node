@@ -1,10 +1,3 @@
--- insertBundleDataItem
-INSERT INTO bundle_data_items (
-  id, parent_id, root_transaction_id, indexed_at
-) VALUES (
-  @id, @parent_id, @root_transaction_id, @indexed_at
-)
-
 -- insertOrIgnoreWallet
 INSERT INTO wallets (address, public_modulus)
 VALUES (@address, @public_modulus)
@@ -31,13 +24,27 @@ INSERT INTO new_data_item_tags (
   @height, @indexed_at
 ) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
 
--- insertOrIgnoreBundleDataItem
+-- upsertBundleDataItem
 INSERT INTO bundle_data_items (
-  id, parent_id, root_transaction_id, indexed_at
+  id,
+  parent_id,
+  parent_index,
+  filter_id,
+  root_transaction_id,
+  first_indexed_at,
+  last_indexed_at
 ) VALUES (
-  @id, @parent_id, @root_transaction_id, @indexed_at
-)
-ON CONFLICT DO NOTHING
+  @id,
+  @parent_id,
+  @parent_index,
+  @filter_id,
+  @root_transaction_id,
+  @indexed_at,
+  @indexed_at
+) ON CONFLICT DO
+UPDATE SET
+  filter_id = IFNULL(@filter_id, filter_id),
+  last_indexed_at = @indexed_at
 
 -- upsertNewDataItem
 INSERT INTO new_data_items (
