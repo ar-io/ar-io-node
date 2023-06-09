@@ -9,13 +9,6 @@ CREATE TABLE bundles (
   first_processed_at INTEGER NOT NULL,
   last_processed_at INTEGER NOT NULL
 );
-CREATE TABLE bundle_data_items (
-  id BLOB,
-  parent_id BLOB NOT NULL,
-  root_transaction_id BLOB NOT NULL,
-  indexed_at INTEGER NOT NULL,
-  PRIMARY KEY (id, parent_id)
-);
 CREATE TABLE wallets (
   address BLOB PRIMARY KEY,
   public_modulus BLOB
@@ -67,7 +60,6 @@ CREATE TABLE stable_data_item_tags (
   root_transaction_id BLOB NOT NULL,
   PRIMARY KEY (tag_name_hash, tag_value_hash, height, block_transaction_index, data_item_id, data_item_tag_index)
 );
-CREATE INDEX stable_data_item_tags_transaction_id_idx ON stable_data_item_tags (data_item_id);
 CREATE TABLE new_data_items (
   -- Identity
   id BLOB NOT NULL,
@@ -107,3 +99,17 @@ CREATE TABLE new_data_item_tags (
   PRIMARY KEY (tag_name_hash, tag_value_hash, root_transaction_id, data_item_id, data_item_tag_index)
 );
 CREATE INDEX new_data_item_tags_height_indexed_at_idx ON new_data_item_tags (height, indexed_at);
+CREATE INDEX stable_data_item_tags_data_item_id_idx ON stable_data_item_tags (data_item_id);
+CREATE INDEX new_data_item_tags_data_item_id_idx ON new_data_item_tags (data_item_id);
+CREATE TABLE bundle_data_items (
+  id BLOB NOT NULL,
+  parent_id BLOB NOT NULL,
+  parent_index INTEGER NOT NULL,
+  filter_id INTEGER NOT NULL,
+  root_transaction_id BLOB NOT NULL,
+  first_indexed_at INTEGER NOT NULL,
+  last_indexed_at INTEGER NOT NULL,
+  PRIMARY KEY (id, parent_id, parent_index, filter_id)
+);
+CREATE INDEX bundle_data_items_filter_id_idx
+  ON bundle_data_items (filter_id);

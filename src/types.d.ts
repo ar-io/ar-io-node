@@ -204,7 +204,9 @@ export interface NestedDataIndexWriter {
 
 export interface NormalizedDataItem {
   id: string;
+  index: number;
   parent_id: string;
+  parent_index: number;
   root_tx_id: string;
   signature: string;
   owner: string;

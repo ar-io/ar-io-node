@@ -30,7 +30,12 @@ import {
 
 const DEFAULT_WORKER_COUNT = 1;
 
-type UnbundleableItem = NormalizedDataItem | PartialJsonTransaction;
+interface IndexProperty {
+  index: number;
+}
+
+type UnbundleableItem = (NormalizedDataItem | PartialJsonTransaction) &
+  IndexProperty;
 
 export class Ans104Unbundler {
   // Dependencies
@@ -91,6 +96,7 @@ export class Ans104Unbundler {
         await this.ans104Parser.parseBundle({
           rootTxId,
           parentId: item.id,
+          parentIndex: item.index,
         });
         log.info('Bundle unbundled.');
       }
