@@ -3,11 +3,17 @@ import * as EventEmitter from 'node:events';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
-import { Worker, isMainThread, parentPort } from 'node:worker_threads';
+import {
+  Worker,
+  isMainThread,
+  parentPort,
+  workerData,
+} from 'node:worker_threads';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
 
 import * as events from '../events.js';
+import { createFilter } from '../filters.js';
 import log from '../log.js';
 import { ContiguousDataSource, NormalizedDataItem } from '../types.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
@@ -60,29 +66,37 @@ export class Ans104Parser {
   private worker: Worker;
   private contiguousDataSource: ContiguousDataSource;
   private unbundlePromise: Promise<void> | undefined;
+  private dataItemIndexFilterString: string;
 
   constructor({
     log,
     eventEmitter,
     contiguousDataSource,
+    dataItemIndexFilterString,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     contiguousDataSource: ContiguousDataSource;
+    dataItemIndexFilterString: string;
   }) {
     this.log = log.child({ class: 'Ans104Parser' });
     this.contiguousDataSource = contiguousDataSource;
+    this.dataItemIndexFilterString = dataItemIndexFilterString;
 
     const workerUrl = new URL('./ans-104.js', import.meta.url);
-    this.worker = new Worker(workerUrl);
+    this.worker = new Worker(workerUrl, {
+      workerData: {
+        dataItemIndexFilterString: this.dataItemIndexFilterString,
+      },
+    });
 
     this.worker.on(
       'message',
       ((message: any) => {
         switch (message.eventName) {
-          case 'data-item-unbundled':
+          case 'data-item-matched':
             eventEmitter.emit(
-              events.ANS104_DATA_ITEM_UNBUNDLED,
+              events.ANS104_DATA_ITEM_MATCHED,
               message.dataItem,
             );
             break;
@@ -137,7 +151,12 @@ export class Ans104Parser {
         });
         writeStream.on('finish', async () => {
           log.info('Parsing ANS-104 bundle stream...');
-          this.worker.postMessage({ rootTxId, parentId, parentIndex, bundlePath });
+          this.worker.postMessage({
+            rootTxId,
+            parentId,
+            parentIndex,
+            bundlePath,
+          });
           resolve();
         });
       },
@@ -148,6 +167,7 @@ export class Ans104Parser {
 }
 
 if (!isMainThread) {
+  const filter = createFilter(JSON.parse(workerData.dataItemIndexFilterString));
   parentPort?.on('message', async (message: any) => {
     const { rootTxId, parentId, parentIndex, bundlePath } = message;
     try {
@@ -183,16 +203,20 @@ if (!isMainThread) {
           diLog.warn('Skipping data item with missing data offset.');
         }
 
-        parentPort?.postMessage({
-          eventName: 'data-item-unbundled',
-          dataItem: normalizeAns104DataItem({
-            rootTxId: rootTxId as string,
-            parentId: parentId as string,
-            parentIndex: parentIndex as number,
-            index: index as number,
-            ans104DataItem: dataItem as Record<string, any>,
-          }),
+        const normalizedDataItem = normalizeAns104DataItem({
+          rootTxId: rootTxId as string,
+          parentId: parentId as string,
+          parentIndex: parentIndex as number,
+          index: index as number,
+          ans104DataItem: dataItem as Record<string, any>,
         });
+
+        if (await filter.match(normalizedDataItem)) {
+          parentPort?.postMessage({
+            eventName: 'data-item-matched',
+            dataItem: normalizedDataItem,
+          });
+        }
       }
       parentPort?.postMessage({ eventName: 'unbundle-complete' });
     } catch (error) {

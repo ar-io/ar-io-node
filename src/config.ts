@@ -52,11 +52,19 @@ export const ADMIN_API_KEY = env.varOrDefault(
 if (env.varOrUndefined('ADMIN_API_KEY') === undefined) {
   log.info('Using a random admin key since none was set', { ADMIN_API_KEY });
 }
+export const ANS104_UNBUNDLE_FILTER_STRING = env.varOrDefault(
+  'ANS104_UNBUNDLE_FILTER',
+  '{"never": true}',
+);
 export const ANS104_UNBUNDLE_FILTER = createFilter(
-  JSON.parse(env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
+  JSON.parse(ANS104_UNBUNDLE_FILTER_STRING),
+);
+export const ANS104_INDEX_FILTER_STRING = env.varOrDefault(
+  'ANS104_INDEX_FILTER',
+  '{"never": true}',
 );
 export const ANS104_INDEX_FILTER = createFilter(
-  JSON.parse(env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}')),
+  JSON.parse(ANS104_INDEX_FILTER_STRING),
 );
 export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
 export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
