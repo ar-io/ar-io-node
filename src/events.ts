@@ -19,6 +19,7 @@ export const ANS104_DATA_ITEM_DATA_INDEXED = 'ans104-data-item-data-indexed';
 export const ANS104_DATA_ITEM_INDEXED = 'ans104-data-indexed';
 export const ANS104_DATA_ITEM_MATCHED = 'asn104-data-item-matched';
 export const ANS104_TX_INDEXED = 'ans104-tx-indexed';
+export const ANS104_UNBUNDLE_COMPLETE = 'ans104-unbundle-complete';
 export const BLOCK_FETCHED = 'block-fetched';
 export const BLOCK_INDEXED = 'block-indexed';
 export const BLOCK_TX_FETCHED = 'block-tx-fetched';

@@ -22,6 +22,23 @@ import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
 // @ts-ignore
 const { default: processStream } = arbundles;
 
+type ParseEventName =
+  | 'data-item-matched'
+  | 'unbundle-complete'
+  | 'unbundle-error';
+
+const DATA_ITEM_MATCHED: ParseEventName = 'data-item-matched';
+const UNBUNDLE_COMPLETE: ParseEventName = 'unbundle-complete';
+const UNBUNDLE_ERROR: ParseEventName = 'unbundle-error';
+
+interface ParserMessage {
+  eventName: ParseEventName;
+  dataItem?: NormalizedDataItem;
+  dataItemIndexFilterString?: string;
+  itemCount?: number;
+  matchedItemCount?: number;
+}
+
 export function normalizeAns104DataItem({
   rootTxId,
   parentId,
@@ -66,7 +83,6 @@ export class Ans104Parser {
   private worker: Worker;
   private contiguousDataSource: ContiguousDataSource;
   private unbundlePromise: Promise<void> | undefined;
-  private dataItemIndexFilterString: string;
 
   constructor({
     log,
@@ -81,29 +97,33 @@ export class Ans104Parser {
   }) {
     this.log = log.child({ class: 'Ans104Parser' });
     this.contiguousDataSource = contiguousDataSource;
-    this.dataItemIndexFilterString = dataItemIndexFilterString;
 
     const workerUrl = new URL('./ans-104.js', import.meta.url);
     this.worker = new Worker(workerUrl, {
       workerData: {
-        dataItemIndexFilterString: this.dataItemIndexFilterString,
+        dataItemIndexFilterString,
       },
     });
 
     this.worker.on(
       'message',
-      ((message: any) => {
+      ((message: ParserMessage) => {
         switch (message.eventName) {
-          case 'data-item-matched':
+          case DATA_ITEM_MATCHED:
             eventEmitter.emit(
               events.ANS104_DATA_ITEM_MATCHED,
               message.dataItem,
             );
             break;
-          case 'unbundle-complete':
+          case UNBUNDLE_COMPLETE:
+            const { eventName, ...eventBody } = message;
+            eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
+              dataItemIndexFilterString,
+              ...eventBody,
+            });
             this.unbundlePromise = undefined;
             break;
-          case 'unbundle-error':
+          case UNBUNDLE_ERROR:
             this.unbundlePromise = undefined;
             break;
         }
@@ -174,6 +194,7 @@ if (!isMainThread) {
       const stream = fs.createReadStream(bundlePath);
       const iterable = await processStream(stream);
       const bundleLength = iterable.length;
+      let matchedItemCount = 0;
 
       const fnLog = log.child({ rootTxId, parentId, bundleLength });
       fnLog.info('Unbundling ANS-104 bundle stream data items...');
@@ -212,13 +233,18 @@ if (!isMainThread) {
         });
 
         if (await filter.match(normalizedDataItem)) {
+          matchedItemCount++;
           parentPort?.postMessage({
-            eventName: 'data-item-matched',
+            eventName: DATA_ITEM_MATCHED,
             dataItem: normalizedDataItem,
           });
         }
       }
-      parentPort?.postMessage({ eventName: 'unbundle-complete' });
+      parentPort?.postMessage({
+        eventName: UNBUNDLE_COMPLETE,
+        itemCount: bundleLength,
+        matchedItemCount,
+      });
     } catch (error) {
       log.error('Error unbundling ANS-104 bundle stream', error);
       parentPort?.postMessage({ eventName: 'unbundle-error' });
