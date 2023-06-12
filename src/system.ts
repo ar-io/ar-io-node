@@ -199,6 +199,7 @@ const ans104Unbundler = new Ans104Unbundler({
   eventEmitter,
   filter: config.ANS104_UNBUNDLE_FILTER,
   contiguousDataSource,
+  dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
 });
 
 eventEmitter.on(
@@ -225,11 +226,9 @@ const ans104DataIndexer = new Ans104DataIndexer({
   indexWriter: nestedDataIndexWriter,
 });
 
-eventEmitter.on(events.ANS104_DATA_ITEM_UNBUNDLED, async (dataItem: any) => {
-  if (await config.ANS104_INDEX_FILTER.match(dataItem)) {
-    dataItemIndexer.queueDataItem(dataItem);
-    ans104DataIndexer.queueDataItem(dataItem);
-  }
+eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
+  dataItemIndexer.queueDataItem(dataItem);
+  ans104DataIndexer.queueDataItem(dataItem);
 });
 
 export const manifestPathResolver = new StreamingManifestPathResolver({

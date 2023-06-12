@@ -41,22 +41,26 @@ export class Ans104Unbundler {
   // Dependencies
   private log: winston.Logger;
   private filter: ItemFilter;
-  private ans104Parser: Ans104Parser;
 
   // Unbundling queue
   private queue: queueAsPromised<UnbundleableItem, void>;
+
+  // Parser
+  private ans104Parser: Ans104Parser;
 
   constructor({
     log,
     eventEmitter,
     filter,
     contiguousDataSource,
+    dataItemIndexFilterString,
     workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     filter: ItemFilter;
     contiguousDataSource: ContiguousDataSource;
+    dataItemIndexFilterString: string;
     workerCount?: number;
   }) {
     this.log = log.child({ class: 'Ans104Unbundler' });
@@ -65,6 +69,7 @@ export class Ans104Unbundler {
       log,
       eventEmitter,
       contiguousDataSource,
+      dataItemIndexFilterString,
     });
 
     this.queue = fastq.promise(this.unbundle.bind(this), workerCount);
