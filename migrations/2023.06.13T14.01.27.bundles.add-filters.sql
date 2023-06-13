@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS filters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  filter TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS filters_filter_idx ON filters (filter);

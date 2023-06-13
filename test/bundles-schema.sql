@@ -113,3 +113,8 @@ CREATE TABLE bundle_data_items (
 );
 CREATE INDEX bundle_data_items_filter_id_idx
   ON bundle_data_items (filter_id);
+CREATE TABLE filters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  filter TEXT NOT NULL UNIQUE
+);
+CREATE INDEX filters_filter_idx ON filters (filter);

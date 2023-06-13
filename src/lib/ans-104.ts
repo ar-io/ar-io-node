@@ -44,12 +44,14 @@ export function normalizeAns104DataItem({
   parentId,
   parentIndex,
   index,
+  filter,
   ans104DataItem,
 }: {
   rootTxId: string;
   parentId: string;
   parentIndex: number;
   index: number;
+  filter: string;
   ans104DataItem: Record<string, any>;
 }): NormalizedDataItem {
   // TODO stricter type checking (maybe zod)
@@ -75,6 +77,7 @@ export function normalizeAns104DataItem({
     tags,
     data_offset: ans104DataItem.dataOffset,
     data_size: ans104DataItem.dataSize,
+    filter,
   } as NormalizedDataItem;
 }
 
@@ -229,6 +232,7 @@ if (!isMainThread) {
           parentId: parentId as string,
           parentIndex: parentIndex as number,
           index: index as number,
+          filter: workerData.dataItemIndexFilterString,
           ans104DataItem: dataItem as Record<string, any>,
         });
 
