@@ -24,6 +24,7 @@
     "fastq": "^1.13.0",
     "fs-extra": "^11.1.0",
     "graphql": "^16.5.0",
+    "json-canonicalize": "^1.0.6",
     "middleware-async": "^1.3.5",
     "msgpackr": "^1.6.2",
     "node-cache": "^5.1.2",
