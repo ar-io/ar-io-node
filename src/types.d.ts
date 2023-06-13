@@ -216,6 +216,7 @@ export interface NormalizedDataItem {
   tags: B64uTag[];
   data_offset?: number;
   data_size?: number;
+  filter?: string;
 }
 
 interface GqlPageInfo {

@@ -277,8 +277,8 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
       parent_id: parentId,
       parent_index: item.parent_index,
       root_transaction_id: rootTxId,
-      filter_id: -1, // TODO remove once filters are in the DB
       indexed_at: currentTimestamp(),
+      filter: item.filter,
     },
     newDataItem: {
       id,
@@ -479,7 +479,20 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
         }
 
-        this.stmts.bundles.upsertBundleDataItem.run(rows.bundleDataItem);
+        let filterId: number = -1;
+        if (rows.bundleDataItem.filter != undefined) {
+          this.stmts.bundles.insertOrIgnoreFilter.run({
+            filter: rows.bundleDataItem.filter,
+          });
+          filterId = this.stmts.bundles.selectFilterId.get({
+            filter: rows.bundleDataItem.filter,
+          })?.id;
+        }
+
+        this.stmts.bundles.upsertBundleDataItem.run({
+          ...rows.bundleDataItem,
+          filter_id: filterId,
+        });
 
         this.stmts.bundles.upsertNewDataItem.run({
           ...rows.newDataItem,
