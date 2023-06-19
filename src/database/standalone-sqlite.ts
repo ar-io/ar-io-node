@@ -43,6 +43,7 @@ import {
   utf8ToB64Url,
 } from '../lib/encoding.js';
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
+import { currentUnixTimestamp } from '../lib/time.js';
 import log from '../log.js';
 import {
   BlockListValidator,
@@ -139,11 +140,6 @@ function isContentTypeTag(tagName: Buffer) {
   return tagName.toString('utf8').toLowerCase() === 'content-type';
 }
 
-// TODO switch to milliseconds
-function currentTimestamp() {
-  return +(Date.now() / 1000).toFixed(0);
-}
-
 function ownerToAddress(owner: Buffer) {
   return crypto.createHash('sha256').update(owner).digest();
 }
@@ -182,7 +178,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       tag_value_hash: tagValueHash,
       transaction_id: txId,
       transaction_tag_index: transactionTagIndex,
-      created_at: currentTimestamp(),
+      created_at: currentUnixTimestamp(),
     });
 
     transactionTagIndex++;
@@ -211,7 +207,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       data_root: fromB64Url(tx.data_root),
       content_type: contentType,
       tag_count: tx.tags.length,
-      created_at: currentTimestamp(),
+      created_at: currentUnixTimestamp(),
       height: height,
     },
   };
@@ -253,7 +249,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
       root_transaction_id: fromB64Url(item.root_tx_id),
       data_item_id: id,
       data_item_tag_index: dataItemTagIndex,
-      indexed_at: currentTimestamp(),
+      indexed_at: currentUnixTimestamp(),
     });
 
     dataItemTagIndex++;
@@ -277,7 +273,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
       parent_id: parentId,
       parent_index: item.parent_index,
       root_transaction_id: rootTxId,
-      indexed_at: currentTimestamp(),
+      indexed_at: currentUnixTimestamp(),
       filter: item.filter,
     },
     newDataItem: {
@@ -293,7 +289,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
       data_size: item.data_size,
       content_type: contentType,
       tag_count: item.tags.length,
-      indexed_at: currentTimestamp(),
+      indexed_at: currentUnixTimestamp(),
     },
   };
 }
@@ -333,6 +329,8 @@ export class StandaloneSqliteDatabaseWorker {
     moderation: { [stmtName: string]: Sqlite.Statement };
     bundles: { [stmtName: string]: Sqlite.Statement };
   };
+  private bundleFormatIds: { [filter: string]: number; } = {};
+  private filterIds: { [filter: string]: number; } = {};
 
   // Transactions
   resetBundlesToHeightFn: Sqlite.Transaction;
@@ -479,19 +477,9 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
         }
 
-        let filterId: number = -1;
-        if (rows.bundleDataItem.filter != undefined) {
-          this.stmts.bundles.insertOrIgnoreFilter.run({
-            filter: rows.bundleDataItem.filter,
-          });
-          filterId = this.stmts.bundles.selectFilterId.get({
-            filter: rows.bundleDataItem.filter,
-          })?.id;
-        }
-
         this.stmts.bundles.upsertBundleDataItem.run({
           ...rows.bundleDataItem,
-          filter_id: filterId,
+          filter_id: this.getFilterId(rows.bundleDataItem.filter),
         });
 
         this.stmts.bundles.upsertNewDataItem.run({
@@ -727,12 +715,79 @@ export class StandaloneSqliteDatabaseWorker {
     this.stmts.core.deleteNewMissingTransaction.run({ transaction_id: txId });
   }
 
+  getBundleFormatId(format: string | undefined) {
+    let id: number | undefined;
+    if (format != undefined) {
+      id = this.bundleFormatIds[format];
+      if (id == undefined) {
+        id= this.stmts.bundles.selectFormatId.get({ format })?.id;
+        if (id != undefined) {
+          this.bundleFormatIds[format] = id;
+        }
+      }
+    }
+    return id;
+  }
+
+  getFilterId(filter: string | undefined) {
+    let id: number | undefined;
+    if (filter != undefined) {
+      id = this.filterIds[filter];
+      if (id == undefined) {
+        this.stmts.bundles.insertOrIgnoreFilter.run({ filter });
+        id= this.stmts.bundles.selectFilterId.get({ filter })?.id;
+        if (id != undefined) {
+          this.filterIds[filter] = id;
+        }
+      }
+    }
+    return id;
+  }
+
   saveDataItem(item: NormalizedDataItem) {
     const rootTxId = fromB64Url(item.root_tx_id);
     const maybeTxHeight = this.stmts.bundles.selectTransactionHeight.get({
       transaction_id: rootTxId,
     })?.height;
     this.insertDataItemFn(item, maybeTxHeight);
+  }
+
+  saveBundle({
+    id,
+    format,
+    unbundleFilter,
+    indexFilter,
+    dataItemCount,
+    matchedDataItemCount,
+    queuedAt,
+    skippedAt,
+    unbundledAt,
+    fullyIndexedAt,
+  }: {
+    id: string;
+    format: 'ans-102' | 'ans-104';
+    unbundleFilter?: string;
+    indexFilter?: string;
+    dataItemCount?: number;
+    matchedDataItemCount?: number;
+    queuedAt?: number;
+    skippedAt?: number;
+    unbundledAt?: number;
+    fullyIndexedAt?: number;
+  }) {
+    const idBuffer = fromB64Url(id);
+    this.stmts.bundles.upsertBundle.run({
+      id: idBuffer,
+      format_id: this.getBundleFormatId(format),
+      unbundle_filter_id: this.getFilterId(unbundleFilter),
+      index_filter_id: this.getFilterId(indexFilter),
+      data_item_count: dataItemCount,
+      matched_data_item_count: matchedDataItemCount,
+      queued_at: queuedAt,
+      skipped_at: skippedAt,
+      unbundled_at: unbundledAt,
+      fully_indexed_at: fullyIndexedAt,
+    });
   }
 
   saveBlockAndTxs(
@@ -869,19 +924,19 @@ export class StandaloneSqliteDatabaseWorker {
       hash: hashBuffer,
       data_size: dataSize,
       original_source_content_type: contentType,
-      indexed_at: currentTimestamp(),
+      indexed_at: currentUnixTimestamp(),
       cached_at: cachedAt,
     });
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
-      indexed_at: currentTimestamp(),
+      indexed_at: currentUnixTimestamp(),
     });
     if (dataRoot !== undefined) {
       this.stmts.data.insertDataRoot.run({
         data_root: fromB64Url(dataRoot),
         contiguous_data_hash: hashBuffer,
-        indexed_at: currentTimestamp(),
+        indexed_at: currentUnixTimestamp(),
       });
     }
   }
@@ -1909,7 +1964,7 @@ export class StandaloneSqliteDatabaseWorker {
     if (source !== undefined) {
       this.stmts.moderation.insertSource.run({
         name: source,
-        created_at: currentTimestamp(),
+        created_at: currentUnixTimestamp(),
       });
       sourceId = this.stmts.moderation.getSourceByName.get({
         name: source,
@@ -1920,14 +1975,14 @@ export class StandaloneSqliteDatabaseWorker {
         id: fromB64Url(id),
         block_source_id: sourceId,
         notes,
-        blocked_at: currentTimestamp(),
+        blocked_at: currentUnixTimestamp(),
       });
     } else if (hash !== undefined) {
       this.stmts.moderation.insertBlockedHash.run({
         hash: fromB64Url(hash),
         block_source_id: sourceId,
         notes,
-        blocked_at: currentTimestamp(),
+        blocked_at: currentUnixTimestamp(),
       });
     }
   }
@@ -1948,7 +2003,7 @@ export class StandaloneSqliteDatabaseWorker {
       parent_id: fromB64Url(parentId),
       data_offset: dataOffset,
       data_size: dataSize,
-      created_at: currentTimestamp(),
+      created_at: currentUnixTimestamp(),
     });
   }
 }
@@ -2207,6 +2262,20 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'saveDataItem', [item]);
   }
 
+  saveBundle(bundle: {
+    id: string;
+    format: 'ans-102' | 'ans-104';
+    unbundleFilter?: string;
+    indexFilter?: string;
+    dataItemCount?: number;
+    matchedDataItemCount?: number;
+    queuedAt?: number;
+    skippedAt?: number;
+    unbundledAt?: number;
+  }): Promise<void> {
+    return this.queueWrite('bundles', 'saveBundle', [bundle]);
+  }
+
   saveBlockAndTxs(
     block: PartialJsonBlock,
     txs: PartialJsonTransaction[],
@@ -2420,6 +2489,10 @@ if (!isMainThread) {
           break;
         case 'saveDataItem':
           worker.saveDataItem(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveBundle':
+          worker.saveBundle(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'saveBlockAndTxs':

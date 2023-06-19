@@ -30,6 +30,7 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
+import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import { MemoryCacheArNSResolver } from './resolution/memory-cache-arns-resolver.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
@@ -205,14 +206,42 @@ const ans104Unbundler = new Ans104Unbundler({
 eventEmitter.on(
   events.ANS104_TX_INDEXED,
   async (tx: PartialJsonTransaction) => {
+    await db.saveBundle({
+      id: tx.id,
+      format: 'ans-104',
+    });
     if (await config.ANS104_UNBUNDLE_FILTER.match(tx)) {
+      await db.saveBundle({
+        id: tx.id,
+        format: 'ans-104',
+        unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+        indexFilter: config.ANS104_INDEX_FILTER_STRING,
+        queuedAt: currentUnixTimestamp(),
+      });
       ans104Unbundler.queueItem({
         index: -1, // parent indexes are not needed for L1
         ...tx,
       });
+    } else {
+      await db.saveBundle({
+        id: tx.id,
+        format: 'ans-104',
+        unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+        skippedAt: currentUnixTimestamp(),
+      });
     }
   },
 );
+
+eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
+  db.saveBundle({
+    id: bundleEvent.parentId,
+    format: 'ans-104',
+    dataItemCount: bundleEvent.itemCount,
+    matchedDataItemCount: bundleEvent.matchedItemCount,
+    unbundledAt: currentUnixTimestamp(),
+  });
+});
 
 const dataItemIndexer = new DataItemIndexer({
   log,
