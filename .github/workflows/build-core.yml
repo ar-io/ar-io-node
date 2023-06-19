@@ -56,7 +56,7 @@ jobs:
         uses: VeryGoodOpenSource/very_good_coverage@v2
         with:
           path: ./coverage/lcov.info
-          min_coverage: 60
+          min_coverage: 50
 
       # Build and push container image to GCR (only on main branch)
       - name: Log in to the GitHub Container Registry

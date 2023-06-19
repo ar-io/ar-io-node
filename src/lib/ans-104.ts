@@ -246,6 +246,7 @@ if (!isMainThread) {
       }
       parentPort?.postMessage({
         eventName: UNBUNDLE_COMPLETE,
+        parentId: parentId as string,
         itemCount: bundleLength,
         matchedItemCount,
       });
