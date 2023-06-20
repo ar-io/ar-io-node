@@ -1,0 +1,2 @@
+/docker-entrypoint.sh text eol=lf
+/envoy/docker-entrypoint.sh text eol=lf
