@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
 
+import { currentUnixTimestamp } from '../lib/time.js';
 import {
   ContiguousData,
   ContiguousDataAttributes,
@@ -84,10 +85,16 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     const parentData = await this.contiguousDataIndex.getDataParent(id);
     if (parentData?.parentHash !== undefined) {
       this.log.info('Found parent data ID', { id, ...parentData });
-      return this.getCacheData(id, parentData.parentHash, dataSize, {
-        offset: (region?.offset ?? 0) + parentData.offset,
-        size: parentData.size,
-      });
+      const size = dataSize ?? parentData.size;
+      return this.getCacheData(
+        parentData.parentId,
+        parentData.parentHash,
+        size,
+        {
+          offset: (region?.offset ?? 0) + parentData.offset,
+          size,
+        },
+      );
     }
 
     return undefined;
@@ -140,7 +147,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             hash,
             dataSize: data.size,
             contentType: data.sourceContentType,
-            cachedAt: +(Date.now() / 1000).toFixed(0),
+            cachedAt: currentUnixTimestamp(),
           });
 
           try {
