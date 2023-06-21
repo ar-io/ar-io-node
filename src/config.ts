@@ -15,11 +15,14 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import dotenv from 'dotenv';
 import crypto from 'node:crypto';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
 import log from './log.js';
+
+dotenv.config();
 
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
