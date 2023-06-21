@@ -61,15 +61,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           });
         } else {
           this.log.info('Found data in cache', { id, hash, ...region });
-          // Note: it's impossible for both sizes to be undefined, but TS
-          // doesn't know that
-          const size = dataSize ?? region?.size;
-          if (size === undefined) {
+          // It should be impossible for dataSize to be undefined if hash is
+          // set, but TypeScript doesn't know that.
+          if (dataSize === undefined) {
             throw new Error('Missing data size');
           }
           return {
             stream: cacheStream,
-            size,
+            size: dataSize,
           };
         }
       } catch (error: any) {
@@ -85,6 +84,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     const parentData = await this.contiguousDataIndex.getDataParent(id);
     if (parentData?.parentHash !== undefined) {
       this.log.info('Found parent data ID', { id, ...parentData });
+      // We might have a parent but no data size when retreiving by ID
       const size = dataSize ?? parentData.size;
       return this.getCacheData(
         parentData.parentId,
