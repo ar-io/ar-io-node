@@ -62,24 +62,33 @@ Before starting the installation process, ensure you have the following:
         ```
     - Save the file with the name `.env` and make sure to select "All Files" as the file type.
 
-    **Note**: The `.env` file should be saved in the same directory where you cloned the repository (e.g., `ar-io-node`).
+    **Note**: The `.env` file should be saved inside the same directory where you cloned the repository (e.g., `ar-io-node`).
 
 ## Start the Docker Container
 
 1. Start the Docker container:
-    - Open the command prompt:
-        - Press `Windows Key + R`.
-        - Type `cmd` and press `Enter`.
-    - Navigate to the directory where you cloned the repository (e.g., `ar-io-node`):
-        - Use the `cd` command to change directories. For example, if the repository is in the `Documents` directory:
-            ```
-            cd Documents\ar-io-node
-            ```
-    - Run the following command:
-        ```
-        docker compose up -d --build
-        ```
-    - Allow access when prompted by the firewall.
+   - Open the command prompt:
+     - Press `Windows Key + R`.
+     - Type `cmd` and press `Enter`.
+   - Navigate to the directory where you cloned the repository (e.g., `ar-io-node`):
+     - Use the `cd` command to change directories. For example, if the repository is located in the `Documents` directory, you would enter:
+       ```
+       cd Documents\ar-io-node
+       ```
+     - If the directory path contains spaces, enclose it in double quotation marks. For example:
+       ```
+       cd "C:\My Documents\ar-io-node"
+       ```
+     - Use the `dir` command to list the contents of the current directory and verify that you're in the correct location:
+       ```
+       dir
+       ```
+   - Once you are in the correct directory, run the following command to start the Docker container:
+     ```
+     docker compose up -d --build
+     ```
+   - If prompted by the firewall, allow access for Docker when requested.
+
 
 ## Test Localhost
 
