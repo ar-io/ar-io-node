@@ -21,6 +21,7 @@ import { ChainIndex } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_TXS_TO_RETRY = 20;
 
 export class TransactionRepairWorker {
   // Dependencies
@@ -48,7 +49,9 @@ export class TransactionRepairWorker {
 
   async retryMissingTransactions() {
     try {
-      const missingTxIds = await this.chainIndex.getMissingTxIds();
+      const missingTxIds = await this.chainIndex.getMissingTxIds(
+        DEFAULT_TXS_TO_RETRY,
+      );
       for (const txId of missingTxIds) {
         this.log.info('Retrying missing transaction', { txId });
         await this.txFetcher.queueTxId(txId);

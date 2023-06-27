@@ -53,7 +53,8 @@ const { default: processStream } = arbundles;
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
 const DATA_ITEM_ID = 'zoljIRyzG5hp-R4EZV2q8kFI49OAoy23_B9YJ_yEEws';
-const CURSOR = 'WzExMzgsNDIsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiXQ';
+const CURSOR =
+  'WzExMzgsNDIsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiXQ';
 
 describe('SQLite helper functions', () => {
   describe('toSqliteParams', () => {

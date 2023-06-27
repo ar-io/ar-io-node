@@ -23,5 +23,9 @@ LIMIT 1
 
 -- selectMissingTransactionIds
 SELECT transaction_id
-FROM missing_transactions
-LIMIT @limit
+FROM (
+  SELECT transaction_id
+  FROM missing_transactions
+  LIMIT @limit
+)
+ORDER BY RANDOM()

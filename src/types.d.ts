@@ -174,7 +174,7 @@ export interface ChainSource {
 export interface ChainIndex {
   getMaxHeight(): Promise<number>;
   getBlockHashByHeight(height: number): Promise<string | undefined>;
-  getMissingTxIds(limit?: number): Promise<string[]>;
+  getMissingTxIds(limit: number): Promise<string[]>;
   resetToHeight(height: number): Promise<void>;
   saveTx(txs: PartialJsonTransaction): Promise<void>;
   saveBlockAndTxs(
@@ -182,6 +182,27 @@ export interface ChainIndex {
     txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void>;
+}
+
+export interface BundleRecord {
+  id: string;
+  rootTransactionId?: string;
+  format: 'ans-102' | 'ans-104';
+  unbundleFilter?: string;
+  indexFilter?: string;
+  dataItemCount?: number;
+  matchedDataItemCount?: number;
+  queuedAt?: number;
+  skippedAt?: number;
+  unbundledAt?: number;
+  fullyIndexedAt?: number;
+}
+
+export interface BundleIndex {
+  saveBundle(bundle: BundleRecord): Promise<void>;
+  getFailedBundleIds(limit: number): Promise<string[]>;
+  updateBundlesFullyIndexedAt(): Promise<void>;
+  backfillBundles(): Promise<void>;
 }
 
 export interface DataItemIndexWriter {

@@ -41,6 +41,7 @@ import { FsDataStore } from './store/fs-data-store.js';
 import { FsTransactionStore } from './store/fs-transaction-store.js';
 import {
   BlockListValidator,
+  BundleIndex,
   ChainIndex,
   ContiguousDataIndex,
   DataItemIndexWriter,
@@ -51,6 +52,7 @@ import {
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
+import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
@@ -105,6 +107,7 @@ export const db = new StandaloneSqliteDatabase({
 });
 
 export const chainIndex: ChainIndex = db;
+export const bundleIndex: BundleIndex = db;
 export const contiguousDataIndex: ContiguousDataIndex = db;
 export const blockListValidator: BlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
@@ -167,6 +170,13 @@ export const txRepairWorker = new TransactionRepairWorker({
   txFetcher,
 });
 
+export const bundleRepairWorker = new BundleRepairWorker({
+  log,
+  bundleIndex,
+  txFetcher,
+  shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
+});
+
 // Configure contigous data source
 const chunkDataSource = new ReadThroughChunkDataCache({
   log,
@@ -208,6 +218,7 @@ eventEmitter.on(
   async (tx: PartialJsonTransaction) => {
     await db.saveBundle({
       id: tx.id,
+      rootTransactionId: tx.id,
       format: 'ans-104',
     });
     if (await config.ANS104_UNBUNDLE_FILTER.match(tx)) {
