@@ -1,6 +1,6 @@
 -- upsertBundle
 INSERT INTO bundles (
-  id, format_id,
+  id, root_transaction_id, format_id,
   unbundle_filter_id, index_filter_id,
   data_item_count, matched_data_item_count,
   first_queued_at, last_queued_at,
@@ -8,7 +8,7 @@ INSERT INTO bundles (
   first_unbundled_at, last_unbundled_at,
   first_fully_indexed_at, last_fully_indexed_at
 ) VALUES (
-  @id, @format_id,
+  @id, @root_transaction_id, @format_id,
   @unbundle_filter_id, @index_filter_id,
   @data_item_count, @matched_data_item_count,
   @queued_at, @queued_at,

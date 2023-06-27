@@ -47,6 +47,8 @@ import { currentUnixTimestamp } from '../lib/time.js';
 import log from '../log.js';
 import {
   BlockListValidator,
+  BundleIndex,
+  BundleRecord,
   ChainIndex,
   ContiguousDataAttributes,
   ContiguousDataIndex,
@@ -65,6 +67,7 @@ const MAX_WORKER_ERRORS = 100;
 const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const NEW_DATA_ITEM_CLEANUP_WAIT_SECS = 60 * 60 * 2;
+const BUNDLE_REPROCESS_WAIT_SECS = 60 * 60 * 4;
 const LOW_SELECTIVITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
 
 function tagJoinSortPriority(tag: { name: string; values: string[] }) {
@@ -329,8 +332,8 @@ export class StandaloneSqliteDatabaseWorker {
     moderation: { [stmtName: string]: Sqlite.Statement };
     bundles: { [stmtName: string]: Sqlite.Statement };
   };
-  private bundleFormatIds: { [filter: string]: number; } = {};
-  private filterIds: { [filter: string]: number; } = {};
+  private bundleFormatIds: { [filter: string]: number } = {};
+  private filterIds: { [filter: string]: number } = {};
 
   // Transactions
   resetBundlesToHeightFn: Sqlite.Transaction;
@@ -694,11 +697,30 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getMissingTxIds(limit: number) {
-    const missingTxIds = this.stmts.core.selectMissingTransactionIds.all({
+    const rows = this.stmts.core.selectMissingTransactionIds.all({
       limit,
     });
 
-    return missingTxIds.map((row): string => toB64Url(row.transaction_id));
+    return rows.map((row): string => toB64Url(row.transaction_id));
+  }
+
+  getFailedBundleIds(limit: number) {
+    const rows = this.stmts.bundles.selectFailedBundleIds.all({
+      limit,
+      reprocess_cutoff: currentUnixTimestamp() - BUNDLE_REPROCESS_WAIT_SECS,
+    });
+
+    return rows.map((row): string => toB64Url(row.id));
+  }
+
+  backfillBundles() {
+    this.stmts.bundles.insertMissingBundles.run();
+  }
+
+  updateBundlesFullyIndexedAt() {
+    this.stmts.bundles.updateFullyIndexedAt.run({
+      fully_indexed_at: currentUnixTimestamp(),
+    });
   }
 
   resetToHeight(height: number) {
@@ -720,7 +742,7 @@ export class StandaloneSqliteDatabaseWorker {
     if (format != undefined) {
       id = this.bundleFormatIds[format];
       if (id == undefined) {
-        id= this.stmts.bundles.selectFormatId.get({ format })?.id;
+        id = this.stmts.bundles.selectFormatId.get({ format })?.id;
         if (id != undefined) {
           this.bundleFormatIds[format] = id;
         }
@@ -735,7 +757,7 @@ export class StandaloneSqliteDatabaseWorker {
       id = this.filterIds[filter];
       if (id == undefined) {
         this.stmts.bundles.insertOrIgnoreFilter.run({ filter });
-        id= this.stmts.bundles.selectFilterId.get({ filter })?.id;
+        id = this.stmts.bundles.selectFilterId.get({ filter })?.id;
         if (id != undefined) {
           this.filterIds[filter] = id;
         }
@@ -754,6 +776,7 @@ export class StandaloneSqliteDatabaseWorker {
 
   saveBundle({
     id,
+    rootTransactionId,
     format,
     unbundleFilter,
     indexFilter,
@@ -763,21 +786,15 @@ export class StandaloneSqliteDatabaseWorker {
     skippedAt,
     unbundledAt,
     fullyIndexedAt,
-  }: {
-    id: string;
-    format: 'ans-102' | 'ans-104';
-    unbundleFilter?: string;
-    indexFilter?: string;
-    dataItemCount?: number;
-    matchedDataItemCount?: number;
-    queuedAt?: number;
-    skippedAt?: number;
-    unbundledAt?: number;
-    fullyIndexedAt?: number;
-  }) {
+  }: BundleRecord) {
     const idBuffer = fromB64Url(id);
+    let rootTxId: Buffer | undefined;
+    if (rootTransactionId != undefined) {
+      rootTxId = fromB64Url(rootTransactionId);
+    }
     this.stmts.bundles.upsertBundle.run({
       id: idBuffer,
+      root_transaction_id: rootTxId,
       format_id: this.getBundleFormatId(format),
       unbundle_filter_id: this.getFilterId(unbundleFilter),
       index_filter_id: this.getFilterId(indexFilter),
@@ -2041,6 +2058,7 @@ const WORKER_POOL_SIZES: WorkerPoolSizes = {
 
 export class StandaloneSqliteDatabase
   implements
+    BundleIndex,
     BlockListValidator,
     ChainIndex,
     ContiguousDataIndex,
@@ -2246,8 +2264,20 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getBlockHashByHeight', [height]);
   }
 
-  getMissingTxIds(limit = 20): Promise<string[]> {
+  getMissingTxIds(limit: number): Promise<string[]> {
     return this.queueRead('core', 'getMissingTxIds', [limit]);
+  }
+
+  getFailedBundleIds(limit: number): Promise<string[]> {
+    return this.queueRead('bundles', 'getFailedBundleIds', [limit]);
+  }
+
+  backfillBundles() {
+    return this.queueRead('bundles', 'backfillBundles', undefined);
+  }
+
+  updateBundlesFullyIndexedAt(): Promise<void> {
+    return this.queueRead('bundles', 'updateBundlesFullyIndexedAt', undefined);
   }
 
   resetToHeight(height: number): Promise<void> {
@@ -2262,17 +2292,7 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'saveDataItem', [item]);
   }
 
-  saveBundle(bundle: {
-    id: string;
-    format: 'ans-102' | 'ans-104';
-    unbundleFilter?: string;
-    indexFilter?: string;
-    dataItemCount?: number;
-    matchedDataItemCount?: number;
-    queuedAt?: number;
-    skippedAt?: number;
-    unbundledAt?: number;
-  }): Promise<void> {
+  saveBundle(bundle: BundleRecord): Promise<void> {
     return this.queueWrite('bundles', 'saveBundle', [bundle]);
   }
 
@@ -2476,8 +2496,19 @@ if (!isMainThread) {
           parentPort?.postMessage(newBlockHash);
           break;
         case 'getMissingTxIds':
-          const missingTxIdsRes = worker.getMissingTxIds(args[0]);
-          parentPort?.postMessage(missingTxIdsRes);
+          parentPort?.postMessage(worker.getMissingTxIds(args[0]));
+          break;
+        case 'getFailedBundleIds':
+          const failedBundleIds = worker.getFailedBundleIds(args[0]);
+          parentPort?.postMessage(failedBundleIds);
+          break;
+        case 'backfillBundles':
+          worker.backfillBundles();
+          parentPort?.postMessage(null);
+          break;
+        case 'updateBundlesFullyIndexedAt':
+          worker.updateBundlesFullyIndexedAt();
+          parentPort?.postMessage(null);
           break;
         case 'resetToHeight':
           worker.resetToHeight(args[0]);

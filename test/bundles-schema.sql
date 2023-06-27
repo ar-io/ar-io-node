@@ -126,5 +126,15 @@ CREATE TABLE bundles (
   last_unbundled_at INTEGER,
   first_fully_indexed_at INTEGER,
   last_fully_indexed_at INTEGER
-);
+, root_transaction_id BLOB);
 CREATE INDEX bundles_format_id_idx ON bundles (format_id);
+CREATE INDEX bundles_last_queued_at_idx
+  ON bundles (last_queued_at);
+CREATE INDEX bundles_last_skipped_at_idx
+  ON bundles (last_skipped_at);
+CREATE INDEX bundles_last_fully_indexed_at_idx
+  ON bundles (last_fully_indexed_at);
+CREATE INDEX bundles_matched_data_item_count_idx
+  ON bundles (matched_data_item_count);
+CREATE INDEX bundle_data_items_parent_id_filter_id_idx
+  ON bundle_data_items (parent_id, filter_id);

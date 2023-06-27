@@ -53,6 +53,8 @@ export const ADMIN_API_KEY = env.varOrDefault(
 if (env.varOrUndefined('ADMIN_API_KEY') === undefined) {
   log.info('Using a random admin key since none was set', { ADMIN_API_KEY });
 }
+export const BACKFILL_BUNDLE_RECORDS =
+  env.varOrDefault('BACKFILL_BUNDLE_RECORDS', 'false') === 'true';
 export const ANS104_UNBUNDLE_FILTER_STRING = canonicalize(
   JSON.parse(env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
 );
