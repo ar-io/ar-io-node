@@ -1,7 +1,7 @@
 # Linux Installation Instructions
 
 ## Overview
-The following instructions will guide you through the process of installing the Ar-io node on a Linux machine, specifically Ubuntu 20.04.5 desktop on a home computer. This guide will cover how to set up your node, point a domain name to your home network, and create an nginx server for routing traffic to your node. No prior coding experience is required.
+The following instructions will guide you through the process of installing the Ar-io node on a Linux machine, specifically Ubuntu 20.04.5 desktop on a home computer. Actual steps may differ slightly on different versions or distributions. This guide will cover how to set up your node, point a domain name to your home network, and create an nginx server for routing traffic to your node. No prior coding experience is required.
 
 ## Install Required Packages
 
@@ -19,7 +19,10 @@ The following instructions will guide you through the process of installing the 
 
 3. Open necessary ports in your firewall:
     ```
+    # Optional: If using SSH, allow port 22 
     sudo ufw allow 22
+
+    # Allow ports 80 and 443 for HTTP and HTTPS
     sudo ufw allow 80
     sudo ufw allow 443
     ```
@@ -72,7 +75,7 @@ The following instructions will guide you through the process of installing the 
 ## Install the Node
 
 - Navigate to the desired installation location:
-    - NOTE: Your database of Arweave Transaction Headers will be created in the project directory, not Docker. So, if you are using an external hard drive to turn an old machine into a node, install the node directly to that external drive.
+    - **NOTE**: Your database of Arweave Transaction Headers will be created in the project directory, not Docker. So, if you are using an external hard drive to turn an old machine into a node, install the node directly to that external drive.
 
 - Clone the ar-io-node repository and navigate into it:
     ```
@@ -88,8 +91,10 @@ The following instructions will guide you through the process of installing the 
     ```
     GRAPHQL_HOST=arweave.net
     GRAPHQL_PORT=443
+    START_HEIGHT=1000000
     ```
-    - These values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries.
+    - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries.
+    - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading transactions headers. If your node receives a request for a transaction not included in what is downloaded to your node, it will be redirected to arweave.net to get the data.
 
 - Build the Docker container:
     ```
@@ -119,12 +124,12 @@ To ensure your node is running correctly, follow the next two steps.
 The following guide assumes you are running your node on a local home computer.
 
 - Register a Domain Name:
-    Choose a domain registrar (e.g., [namecheap](https://www.namecheap.com/?gclid=CjwKCAjwyqWkBhBMEiwAp2yUFvVmCyyLIFIMgHupgaO-c3IhUk_B4IbdSYzAAxUwaYxqMvytNz5e_xoCJYMQAvD_BwE)) to register a domain name. Domains are usually purchased for a specific duration and need to be periodically renewed.
+    Choose a domain registrar (e.g., [Namecheap](https://www.namecheap.com)) to register a domain name.
 
-    - **NOTE:** The domain you use must be a base level domain. Due to the way Arns names work, using a subdomain to point to your node will not work correctly.
+    - **Note**: The domain should be a base domain ("ardrive.io"), do not use a subdomain ("docs.ardrive.io").
 
 - Point the Domain at Your Home Internet:
-    - Obtain your public IP address by visiting https://whatismyipaddress.com/ or running:
+    - Obtain your public IP address by visiting https://www.whatsmyip.org/ or running:
         ```
         curl ifconfig.me
         ```
@@ -136,7 +141,10 @@ The following guide assumes you are running your node on a local home computer.
         ip addr show | grep -w inet | awk '{print $2}' | awk -F'/' '{print $1}'
         ```
         - If there are multiple lines of output, choose the one starting with 192 (usually).
-    - Access your home router settings by entering `192.168.0.1` in your browser while connected to that network. (If this method does not work, consult the documentation for your model of router.)
+    - Enter your router's IP address in the address bar of a browser (e.g., `192.168.0.1`).
+        - If you're unsure of your router's IP address, consult your router's documentation or contact your Internet Service Provider (ISP).
+    - Navigate to the port forwarding settings in your router configuration.
+        - The exact steps may vary depending on your router model. Consult your router's documentation or support for detailed steps.
     - Set up port forwarding rules to forward incoming traffic on ports 80 (HTTP) and 443 (HTTPS) to the same ports on the machine running your node. You may also forward port 22 if you want to enable SSH access to your node from outside your home network.
 
 - Create SSL (HTTPS) Certificates for Your Domain:
@@ -193,3 +201,5 @@ The following guide assumes you are running your node on a local home computer.
         ```
 
 Your node should now be running and connected to the internet. Test it by entering https://<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
+
+**Note**: If you encounter any issues during the installation process, please seek assistance from the Ar-io community.
