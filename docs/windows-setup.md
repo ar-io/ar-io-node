@@ -1,13 +1,13 @@
 # Windows Installation Instructions
 
 ## Overview
-This guide provides step-by-step instructions for setting up the Ar-io node on a Windows machine. It covers installing necessary software, cloning the repository, creating an environment file, starting the Docker container, setting up networking, and installing and configuring NGINX Docker. No prior coding experience is required.
+This guide provides step-by-step instructions for setting up the Ar-io node on a Windows computer. It covers installing necessary software, cloning the repository, creating an environment file, starting the Docker container, setting up networking, and installing and configuring NGINX Docker. No prior coding experience is required.
 
 ## Prerequisites
 Before starting the installation process, ensure you have the following:
 
-- A Windows machine
-- Administrative privileges on the machine
+- A Windows computer
+- Administrative privileges on the computer
 
 ## Install Required Packages
 
@@ -21,7 +21,11 @@ Before starting the installation process, ensure you have the following:
     - During installation, make sure to select the option to use WSL (Windows Subsystem for Linux) rather than Hyper-V.
     - Restart your PC.
     - Update Windows Subsystem for Linux (WSL):
-        - Open the command prompt as an administrator.
+        - Open the command prompt as an administrator:
+            - Press Windows Key + R.
+            - Type cmd and press Enter.
+            - Right-click on the "Command Prompt" application in the search results.
+            - Select "Run as administrator" from the context menu.
         - Run the following commands:
             ```
             wsl --update
@@ -44,6 +48,8 @@ Before starting the installation process, ensure you have the following:
             ```
             cd Documents
             ```
+            - More detailed instructions on navigating with the `cd` command can be found [here](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cd)
+            - **NOTE**: Your database of Arweave Transaction Headers will be created in the project directory, not Docker. So, if you are using an external hard drive to turn an old machine into a node, install the node directly to that external drive.
     - Run the following command:
         ```
         gh repo clone bobinstein/ar-io-node
@@ -51,7 +57,7 @@ Before starting the installation process, ensure you have the following:
 
 ## Create the Environment File
 
-1. Create an `.env` file:
+1. Create a ".env" file:
     - Open a text editor (e.g., Notepad):
         - Press `Windows Key` and search for "Notepad".
         - Click on "Notepad" to open the text editor.
@@ -59,12 +65,14 @@ Before starting the installation process, ensure you have the following:
         ```
         GRAPHQL_HOST=arweave.net
         GRAPHQL_PORT=443
+        START_HEIGHT=1000000
         ```
-    - Save the file with the name `.env` and make sure to select "All Files" as the file type.
+        - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading transactions headers. If your node receives a request for a transaction not included in what is downloaded to your node, it will be redirected to arweave.net to get the data.
+    - Save the file with the name ".env" and make sure to select "All Files" as the file type. This helps to ensure the file saves as ".env" and not ".env.txt"
 
     **Note**: The `.env` file should be saved inside the same directory where you cloned the repository (e.g., `ar-io-node`).
 
-## Start the Docker Container
+## Start the Docker Containers
 
 1. Start the Docker container:
    - Open the command prompt:
@@ -87,6 +95,10 @@ Before starting the installation process, ensure you have the following:
      ```
      docker compose up -d --build
      ```
+     - Explanation of tags:
+        - `up`: Start the Docker containers.
+        - `-d`: Run the containers as background processes (detached mode).
+        - `--build`: Build a new container for the project. Use this tag when you make changes to the code or environmental variables.
    - If prompted by the firewall, allow access for Docker when requested.
 
 
@@ -102,15 +114,13 @@ To expose your node to the internet and use a custom domain, follow these steps:
 
 1. Obtain a Domain Name:
     - Choose a domain registrar (e.g., [Namecheap](https://www.namecheap.com)) and purchase a domain name.
-    - Note: The domain should be a base domain, not a subdomain.
+    - **Note**: The domain should be a base domain ("ardrive.io"), do not use a subdomain ("docs.ardrive.io").
 
 2. Point the Domain at Your Home Network:
-    - Access your domain registrar's settings (e.g., Namecheap's cPanel):
-        - Open your web browser.
-        - Search for your domain registrar's name followed by "cPanel" (e.g., "Namecheap cPanel").
-        - Follow the instructions provided by your registrar to access the cPanel.
-    - Navigate to the DNS settings for your domain.
-    - Create an A record for your domain and configure it to point to your public IP address.
+    - In your browser, go to https://www.whatsmyip.org/ to display your public ip address. It can be found at the top of the screen. Note this number down.
+    - Access your domain registrar's settings (e.g., Namecheap's cPanel).
+    - Navigate to the DNS settings for your domain. In cPanel this is under the "Zone Editor" tab.
+    - Create an A record with your registrar for your domain and wildcard subdomains, using your public IP address. For example, if your domain is "ar.io," create a record for "ar.io" and "*.ar.io."
         - Instructions may vary depending on the domain registrar and cPanel. Consult your registrar's documentation or support for detailed steps.
 
 3. Obtain the Local IP Address of Your Machine:
@@ -142,7 +152,7 @@ To expose your node to the internet and use a custom domain, follow these steps:
     - Open the command prompt:
         - Press `Windows Key + R`.
         - Type `cmd` and press `Enter`.
-    - Navigate to the directory where you want to clone the repository:
+    - Navigate to the directory where you want to clone the repository (This should not be done inside the directory for the node):
         - Use the `cd` command to change directories. For example, to navigate to the `Documents` directory:
             ```
             cd Documents
@@ -152,8 +162,10 @@ To expose your node to the internet and use a custom domain, follow these steps:
         gh repo clone bobinstein/dockerized-nginx
         ```
 
+    **Note**: This NGINX container was designed to easily automate many of the more techincal aspects of setting up NGNIX and obtaining an ssl certificate so your node can be accessed with https. However, wildcard domain certifications cannot be universally automated due to significant security concerns. Be sure to follow the instructions in this project for obtaining wildcard domain certificates in order for your node to function properly. 
+
 2. Follow the instructions provided in the repository for setting up NGINX Docker.
 
-Congratulations! Your Ar-io node is now running and connected to the internet.
+Congratulations! Your Ar-io node is now running and connected to the internet. Test it by entering https://<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
 
 **Note**: If you encounter any issues during the installation process, please seek assistance from the Ar-io community.
