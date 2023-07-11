@@ -15,9 +15,13 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+export const ANS104_BUNDLE_INDEXED = 'ans104-bundle-indexed';
+export const ANS104_DATA_ITEM_BUNDLE_MATCHED =
+  'ans104-data-item-bundle-matched';
 export const ANS104_DATA_ITEM_DATA_INDEXED = 'ans104-data-item-data-indexed';
-export const ANS104_DATA_ITEM_INDEXED = 'ans104-data-indexed';
-export const ANS104_DATA_ITEM_MATCHED = 'asn104-data-item-matched';
+export const ANS104_DATA_ITEM_INDEXED = 'ans104-data-item-indexed';
+export const ANS104_DATA_ITEM_MATCHED = 'ans104-data-item-matched';
+export const ANS104_NESTED_BUNDLE_INDEXED = 'ans104-nested-bundle-indexed';
 export const ANS104_TX_INDEXED = 'ans104-tx-indexed';
 export const ANS104_UNBUNDLE_COMPLETE = 'ans104-unbundle-complete';
 export const BLOCK_FETCHED = 'block-fetched';

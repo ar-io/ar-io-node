@@ -47,6 +47,7 @@ import {
   DataItemIndexWriter,
   MatchableItem,
   NestedDataIndexWriter,
+  NormalizedDataItem,
   PartialJsonTransaction,
 } from './types.js';
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
@@ -139,8 +140,19 @@ const ans104TxMatcher = new MatchTags([
 eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
   if (await ans104TxMatcher.match(tx)) {
     eventEmitter.emit(events.ANS104_TX_INDEXED, tx);
+    eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, tx);
   }
 });
+
+eventEmitter.on(
+  events.ANS104_DATA_ITEM_DATA_INDEXED,
+  async (item: MatchableItem) => {
+    if (await ans104TxMatcher.match(item)) {
+      eventEmitter.emit(events.ANS104_NESTED_BUNDLE_INDEXED, item);
+      eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, item);
+    }
+  },
+);
 
 const txFetcher = new TransactionFetcher({
   log,
@@ -214,28 +226,31 @@ const ans104Unbundler = new Ans104Unbundler({
 });
 
 eventEmitter.on(
-  events.ANS104_TX_INDEXED,
-  async (tx: PartialJsonTransaction) => {
+  events.ANS104_BUNDLE_INDEXED,
+  async (item: NormalizedDataItem | PartialJsonTransaction) => {
     await db.saveBundle({
-      id: tx.id,
-      rootTransactionId: tx.id,
+      id: item.id,
+      rootTransactionId: 'root_tx_id' in item ? item.root_tx_id : item.id,
       format: 'ans-104',
     });
-    if (await config.ANS104_UNBUNDLE_FILTER.match(tx)) {
+    if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
       await db.saveBundle({
-        id: tx.id,
+        id: item.id,
         format: 'ans-104',
         unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
         indexFilter: config.ANS104_INDEX_FILTER_STRING,
         queuedAt: currentUnixTimestamp(),
       });
       ans104Unbundler.queueItem({
-        index: -1, // parent indexes are not needed for L1
-        ...tx,
+        index:
+          'parent_index' in item && item.parent_index !== undefined
+            ? item.parent_index
+            : -1, // parent indexes are not needed for L1
+        ...item,
       });
     } else {
       await db.saveBundle({
-        id: tx.id,
+        id: item.id,
         format: 'ans-104',
         unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
         skippedAt: currentUnixTimestamp(),

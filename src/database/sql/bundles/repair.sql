@@ -72,5 +72,34 @@ WHERE nttf.tag_name_hash = x'BF796ECA81CCE3FF36CEA53FA1EBB0F274A0FF29'
   AND nttv.tag_name_hash = x'858B76CB055E360A2E4C3C38F4A3049F80175216'
   AND nttv.tag_value_hash = x'F7CA6A21D278EB5CE64611AADBDB77EF1511D3DD'
   AND b.id IS NULL
+UNION ALL
+SELECT
+  sdi.id,
+  sdi.root_transaction_id,
+  (SELECT id FROM bundle_formats WHERE format = 'ans-104')
+FROM stable_data_item_tags sdif
+JOIN stable_data_item_tags sdiv ON sdiv.data_item_id = sdif.data_item_id
+  AND sdiv.data_item_tag_index != sdif.data_item_tag_index
+JOIN stable_data_items sdi ON sdi.id = sdif.data_item_id
+LEFT JOIN bundles b ON b.id = sdif.data_item_id
+WHERE sdif.tag_name_hash = x'BF796ECA81CCE3FF36CEA53FA1EBB0F274A0FF29'
+  AND sdif.tag_value_hash = x'7E57CFE843145135AEE1F4D0D63CEB7842093712'
+  AND sdiv.tag_name_hash = x'858B76CB055E360A2E4C3C38F4A3049F80175216'
+  AND sdiv.tag_value_hash = x'F7CA6A21D278EB5CE64611AADBDB77EF1511D3DD'
+  AND b.id IS NULL
+UNION ALL
+SELECT
+  ndi.id,
+  ndi.root_transaction_id,
+  (SELECT id FROM bundle_formats WHERE format = 'ans-104')
+FROM new_data_item_tags ndif
+JOIN new_data_item_tags ndiv ON ndiv.data_item_id = ndif.data_item_id
+JOIN new_data_items ndi ON ndi.id = ndif.data_item_id
+LEFT JOIN bundles b ON b.id = ndif.data_item_id
+WHERE ndif.tag_name_hash = x'BF796ECA81CCE3FF36CEA53FA1EBB0F274A0FF29'
+  AND ndif.tag_value_hash = x'7E57CFE843145135AEE1F4D0D63CEB7842093712'
+  AND ndiv.tag_name_hash = x'858B76CB055E360A2E4C3C38F4A3049F80175216'
+  AND ndiv.tag_value_hash = x'F7CA6A21D278EB5CE64611AADBDB77EF1511D3DD'
+  AND b.id IS NULL
 LIMIT 10000
 ON CONFLICT DO NOTHING
