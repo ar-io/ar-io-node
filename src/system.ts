@@ -186,7 +186,10 @@ export const bundleRepairWorker = new BundleRepairWorker({
   log,
   bundleIndex,
   txFetcher,
+  unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+  indexFilter: config.ANS104_INDEX_FILTER_STRING,
   shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
+  filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
 
 // Configure contigous data source

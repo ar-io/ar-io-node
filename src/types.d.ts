@@ -202,6 +202,10 @@ export interface BundleIndex {
   saveBundle(bundle: BundleRecord): Promise<void>;
   getFailedBundleIds(limit: number): Promise<string[]>;
   updateBundlesFullyIndexedAt(): Promise<void>;
+  updateBundlesForFilterChange(
+    unbundleFilter: string,
+    indexFilter: string,
+  ): Promise<void>;
   backfillBundles(): Promise<void>;
 }
 
