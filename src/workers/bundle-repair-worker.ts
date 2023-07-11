@@ -23,6 +23,7 @@ import { TransactionFetcher } from './transaction-fetcher.js';
 const DEFAULT_RETRY_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const DEFAULT_FILTER_REPOCESS_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_BUNDLES_TO_RETRY = 20;
 
 export class BundleRepairWorker {
@@ -30,23 +31,35 @@ export class BundleRepairWorker {
   private log: winston.Logger;
   private bundleIndex: BundleIndex;
   private txFetcher: TransactionFetcher;
+  private unbundledFilter: string;
+  private indexFilter: string;
   private shouldBackfillBundles: boolean;
+  private filtersChanged: boolean;
 
   constructor({
     log,
     bundleIndex,
     txFetcher,
+    unbundleFilter,
+    indexFilter,
     shouldBackfillBundles,
+    filtersChanged,
   }: {
     log: winston.Logger;
     bundleIndex: BundleIndex;
     txFetcher: TransactionFetcher;
+    unbundleFilter: string;
+    indexFilter: string;
     shouldBackfillBundles: boolean;
+    filtersChanged: boolean;
   }) {
     this.log = log.child({ class: 'BundleRepairWorker' });
     this.bundleIndex = bundleIndex;
     this.txFetcher = txFetcher;
+    this.unbundledFilter = unbundleFilter;
+    this.indexFilter = indexFilter;
     this.shouldBackfillBundles = shouldBackfillBundles;
+    this.filtersChanged = filtersChanged;
   }
 
   async start(): Promise<void> {
@@ -59,6 +72,12 @@ export class BundleRepairWorker {
       setInterval(
         this.backfillBundles.bind(this),
         DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS,
+      );
+    }
+    if (this.filtersChanged) {
+      setInterval(
+        this.updateForFilterChange.bind(this),
+        DEFAULT_FILTER_REPOCESS_INTERVAL_MS,
       );
     }
   }
@@ -94,6 +113,19 @@ export class BundleRepairWorker {
       this.log.info('Bundle records backfilled.');
     } catch (error: any) {
       this.log.error('Error backfilling bundle records:', error);
+    }
+  }
+
+  async updateForFilterChange() {
+    try {
+      this.log.info('Update bundles for filter change...');
+      await this.bundleIndex.updateBundlesForFilterChange(
+        this.unbundledFilter,
+        this.indexFilter,
+      );
+      this.log.info('Bundles updated for filter change.');
+    } catch (error: any) {
+      this.log.error('Error updating bundles for filter change:', error);
     }
   }
 }

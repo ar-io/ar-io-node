@@ -723,6 +723,13 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  updateBundlesForFilterChange(unbundleFilter: string, indexFilter: string) {
+    this.stmts.bundles.updateForFilterChange.run({
+      unbundle_filter: unbundleFilter,
+      index_filter: indexFilter,
+    });
+  }
+
   resetToHeight(height: number) {
     this.resetBundlesToHeightFn(height);
     this.resetCoreToHeightFn(height);
@@ -2280,6 +2287,13 @@ export class StandaloneSqliteDatabase
     return this.queueRead('bundles', 'updateBundlesFullyIndexedAt', undefined);
   }
 
+  updateBundlesForFilterChange(unbundleFilter: string, indexFilter: string) {
+    return this.queueWrite('bundles', 'updateBundlesForFilterChange', [
+      unbundleFilter,
+      indexFilter,
+    ]);
+  }
+
   resetToHeight(height: number): Promise<void> {
     return this.queueWrite('core', 'resetToHeight', [height]);
   }
@@ -2508,6 +2522,11 @@ if (!isMainThread) {
           break;
         case 'updateBundlesFullyIndexedAt':
           worker.updateBundlesFullyIndexedAt();
+          parentPort?.postMessage(null);
+          break;
+        case 'updateBundlesForFilterChange':
+          const [unbundleFilter, indexFilter] = args;
+          worker.updateBundlesForFilterChange(unbundleFilter, indexFilter);
           parentPort?.postMessage(null);
           break;
         case 'resetToHeight':

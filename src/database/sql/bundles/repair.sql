@@ -40,6 +40,32 @@ WHERE matched_data_item_count IS NOT NULL
     HAVING COUNT(*) = bundles.matched_data_item_count
   ) AND last_fully_indexed_at IS NULL
 
+-- updateForFilterChange
+UPDATE bundles
+SET
+  last_queued_at = NULL,
+  last_skipped_at = NULL
+WHERE id IN (
+  SELECT b.id
+  FROM bundles b
+  WHERE (
+      last_skipped_at IS NOT NULL
+      AND unbundle_filter_id != (
+        SELECT id
+        FROM filters
+        WHERE filter = @unbundle_filter
+      )
+    ) OR (
+      last_queued_at IS NOT NULL
+      AND index_filter_id != (
+        SELECT id
+        FROM filters
+        WHERE filter = @index_filter
+      )
+    )
+  LIMIT 10000
+)
+
 --insertMissingBundles
 INSERT INTO bundles (
   id,
