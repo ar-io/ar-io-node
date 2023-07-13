@@ -259,7 +259,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
   }
 
   const ownerBuffer = fromB64Url(item.owner);
-  const ownerAddressBuffer = ownerToAddress(ownerBuffer);
+  const ownerAddressBuffer = fromB64Url(item.owner_address);
 
   wallets.push({ address: ownerAddressBuffer, public_modulus: ownerBuffer });
 
