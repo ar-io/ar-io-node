@@ -1,7 +1,9 @@
 FROM envoyproxy/envoy:v1.22-latest
 
 RUN apt-get update -y && apt-get install -y curl
-RUN curl -L https://github.com/vmware-tanzu/carvel-ytt/releases/download/v0.44.1/ytt-linux-amd64 > /usr/local/bin/ytt && chmod 755 /usr/local/bin/ytt
+
+COPY install-ytt.sh /install-ytt.sh
+RUN /install-ytt.sh && rm /install-ytt.sh
 
 # Copy files
 COPY docker-entrypoint.sh /docker-entrypoint.sh
