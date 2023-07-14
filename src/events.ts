@@ -1,6 +1,6 @@
 /**
  * AR.IO Gateway
- * Copyright (C) 2023 Permanent Data Solutions, Inc
+ * Copyright (C) 2022-2023 Permanent Data Solutions, Inc. All Rights Reserved.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
 export const ANS104_BUNDLE_INDEXED = 'ans104-bundle-indexed';
 export const ANS104_DATA_ITEM_BUNDLE_MATCHED =
   'ans104-data-item-bundle-matched';

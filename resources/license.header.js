@@ -15,23 +15,3 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-const DEFAULT_FAILURE_RATE = 0;
-
-export interface FailureSimulator {
-  maybeFail(): void;
-}
-
-export class UniformFailureSimulator {
-  private failureRate;
-
-  constructor({ failureRate = DEFAULT_FAILURE_RATE }) {
-    this.failureRate = failureRate;
-  }
-
-  public maybeFail() {
-    if (Math.random() < this.failureRate) {
-      throw new Error('Simulated failure');
-    }
-  }
-}
