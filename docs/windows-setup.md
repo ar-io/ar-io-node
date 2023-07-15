@@ -1,7 +1,7 @@
 # Windows Installation Instructions
 
 ## Overview
-This guide provides step-by-step instructions for setting up the Ar-io node on a Windows computer. It covers installing necessary software, cloning the repository, creating an environment file, starting the Docker container, setting up networking, and installing and configuring NGINX Docker. No prior coding experience is required.
+This guide provides step-by-step instructions for setting up the ar.io node on a Windows computer. It covers installing necessary software, cloning the repository, creating an environment file, starting the Docker container, setting up networking, and installing and configuring NGINX Docker. No prior coding experience is required.
 
 ## Prerequisites
 Before starting the installation process, ensure you have the following:
@@ -52,7 +52,7 @@ Before starting the installation process, ensure you have the following:
             - **NOTE**: Your database of Arweave Transaction Headers will be created in the project directory, not Docker. So, if you are using an external hard drive to turn an old machine into a node, install the node directly to that external drive.
     - Run the following command:
         ```
-        gh repo clone bobinstein/ar-io-node
+        gh repo clone ar-io/ar-io-node
         ```
 
 ## Create the Environment File
@@ -67,7 +67,8 @@ Before starting the installation process, ensure you have the following:
         GRAPHQL_PORT=443
         START_HEIGHT=1000000
         ```
-        - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading transactions headers. If your node receives a request for a transaction not included in what is downloaded to your node, it will be redirected to arweave.net to get the data.
+        - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. Your node can handle direct GQL queries, but only indexes L1 transactions by default and will fall back on your chosen proxy for any transactions not indexed.
+        - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading and indexing transactions headers. Omitting this line will begin indexing at block 0.
     - Save the file with the name ".env" and make sure to select "All Files" as the file type. This helps to ensure the file saves as ".env" and not ".env.txt"
 
     **Note**: The `.env` file should be saved inside the same directory where you cloned the repository (e.g., `ar-io-node`).
@@ -95,10 +96,10 @@ Before starting the installation process, ensure you have the following:
      ```
      docker compose up -d --build
      ```
-     - Explanation of tags:
+     - Explanation of flags:
         - `up`: Start the Docker containers.
         - `-d`: Run the containers as background processes (detached mode).
-        - `--build`: Build a new container for the project. Use this tag when you make changes to the code or environmental variables.
+        - `--build`: Build a new container for the project. Use this flag when you make changes to the code or environmental variables.
    - If prompted by the firewall, allow access for Docker when requested.
 
 
@@ -162,10 +163,10 @@ To expose your node to the internet and use a custom domain, follow these steps:
         gh repo clone bobinstein/dockerized-nginx
         ```
 
-    **Note**: This NGINX container was designed to easily automate many of the more techincal aspects of setting up NGNIX and obtaining an ssl certificate so your node can be accessed with https. However, wildcard domain certifications cannot be universally automated due to significant security concerns. Be sure to follow the instructions in this project for obtaining wildcard domain certificates in order for your node to function properly. 
+    **Note**: This NGINX container was designed to easily automate many of the more technical aspects of setting up NGNIX and obtaining an ssl certificate so your node can be accessed with https. However, wildcard domain certifications cannot be universally automated due to significant security concerns. Be sure to follow the instructions in this project for obtaining wildcard domain certificates in order for your node to function properly. 
 
 2. Follow the instructions provided in the repository for setting up NGINX Docker.
 
-Congratulations! Your Ar-io node is now running and connected to the internet. Test it by entering https://<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
+Congratulations! Your ar.io node is now running and connected to the internet. Test it by entering https://\<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
 
-**Note**: If you encounter any issues during the installation process, please seek assistance from the Ar-io community.
+**Note**: If you encounter any issues during the installation process, please seek assistance from the [ar.io community](https://discord.gg/7zUPfN4D6g).
