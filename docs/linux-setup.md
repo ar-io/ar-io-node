@@ -1,7 +1,7 @@
 # Linux Installation Instructions
 
 ## Overview
-The following instructions will guide you through the process of installing the Ar-io node on a Linux machine, specifically Ubuntu 20.04.5 desktop on a home computer. Actual steps may differ slightly on different versions or distributions. This guide will cover how to set up your node, point a domain name to your home network, and create an nginx server for routing traffic to your node. No prior coding experience is required.
+The following instructions will guide you through the process of installing the ar.io node on a Linux machine, specifically Ubuntu 20.04.5 desktop on a home computer. Actual steps may differ slightly on different versions or distributions. This guide will cover how to set up your node, point a domain name to your home network, and create an nginx server for routing traffic to your node. No prior coding experience is required.
 
 ## Install Required Packages
 
@@ -93,17 +93,17 @@ The following instructions will guide you through the process of installing the 
     GRAPHQL_PORT=443
     START_HEIGHT=1000000
     ```
-    - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries.
-    - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading transactions headers. If your node receives a request for a transaction not included in what is downloaded to your node, it will be redirected to arweave.net to get the data.
+    - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. Your node can handle direct GQL queries, but only indexes L1 transactions by default and will fall back on your chosen proxy for any transactions not indexed.
+    - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading and indexing transactions headers. Omitting this line will begin indexing at block 0.
 
 - Build the Docker container:
     ```
     sudo docker-compose up -d --build
     ```
-    - Explanation of tags:
+    - Explanation of flags:
         - `up`: Start the Docker containers.
         - `-d`: Run the containers as background processes (detached mode).
-        - `--build`: Build a new container for the project. Use this tag when you make changes to the code or environmental variables.
+        - `--build`: Build a new container for the project. Use this flag when you make changes to the code or environmental variables.
 
 To ensure your node is running correctly, follow the next two steps.
 
@@ -111,7 +111,7 @@ To ensure your node is running correctly, follow the next two steps.
     ```
     sudo docker-compose logs -f --tail=0
     ```
-    - Explanation of tags:
+    - Explanation of flags:
         - `-f`: Follow the logs in real time.
         - `--tail=0`: Ignore all logs from before running the command.
 
@@ -149,9 +149,11 @@ The following guide assumes you are running your node on a local home computer.
 
 - Create SSL (HTTPS) Certificates for Your Domain:
     ```
-    sudo certbot certonly --manual --preferred-challenges dns -d <your-domain>.com -d '*.<your-domain>.com'
+    sudo certbot certonly --manual --preferred-challenges dns --email <your-email-address> -d <your-domain>.com -d '*.<your-domain>.com'
     ```
     Follow the instructions to create the required TXT records for your domain in your chosen registrar. Use a [DNS checker](https://dnschecker.org/) to verify the propagation of each record.
+
+    **IMPORTANT**: Wild card subdomain (*.\<your-domain>.com) cannot auto renew without obtaining an API key from your domain registrar. Not all registrars offer this. Certbot certificates expire every 90 days. Be sure to consult with your chosen registrar to see if they offer an API for this purpose, or run the above command again to renew your certificates. You will receive an email warning at the address you provided to remind you when it is time to renew.
 
 - Configure nginx:
     nginx is a free and open-source web server and reverse proxy server. It will handle incoming traffic, provide SSL certificates, and redirect the traffic to your node.
@@ -200,6 +202,6 @@ The following guide assumes you are running your node on a local home computer.
         sudo service nginx restart
         ```
 
-Your node should now be running and connected to the internet. Test it by entering https://<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
+Your node should now be running and connected to the internet. Test it by entering https://\<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
 
-**Note**: If you encounter any issues during the installation process, please seek assistance from the Ar-io community.
+**Note**: If you encounter any issues during the installation process, please seek assistance from the [ar.io community](https://discord.gg/7zUPfN4D6g).
