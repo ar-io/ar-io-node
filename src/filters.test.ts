@@ -35,6 +35,7 @@ function getTx(id: string) {
 
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 const TX = getTx(TX_ID);
+const TX_OWNER_ADDRESS = 'Th825IP80n4i9F3Rc4cBFh767CGqiV4n7S-Oy5lGLjc';
 
 describe('AlwaysMatch', () => {
   const alwaysMatch = new AlwaysMatch();
@@ -178,11 +179,24 @@ describe('MatchAttributes', () => {
 
     const matchAttributes = new MatchAttributes(attributes);
 
-    delete TX.owner;
+    const tx = JSON.parse(JSON.stringify(TX));
+    delete tx.owner;
+
+    const result = await matchAttributes.match(tx);
+
+    expect(result).to.be.false;
+  });
+
+  it('should match owner given an owner address', async () => {
+    const attributes = {
+      owner_address: TX_OWNER_ADDRESS,
+    };
+
+    const matchAttributes = new MatchAttributes(attributes);
 
     const result = await matchAttributes.match(TX);
 
-    expect(result).to.be.false;
+    expect(result).to.be.true;
   });
 });
 

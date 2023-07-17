@@ -1,4 +1,4 @@
-import { b64UrlToUtf8 } from './lib/encoding.js';
+import { b64UrlToUtf8, fromB64Url, sha256B64Url } from './lib/encoding.js';
 import { ItemFilter, MatchableItem } from './types.js';
 
 export class AlwaysMatch implements ItemFilter {
@@ -108,6 +108,12 @@ export class MatchAttributes implements ItemFilter {
     for (const [name, value] of Object.entries(this.attributes)) {
       if (item?.[name as keyof MatchableItem] === value) {
         matches.add(name);
+      } else if (name === 'owner_address' && item['owner'] !== undefined) {
+        const ownerBuffer = fromB64Url(item['owner']);
+        const ownerAddress = sha256B64Url(ownerBuffer);
+        if (ownerAddress === value) {
+          matches.add(name);
+        }
       }
     }
 
