@@ -61,14 +61,16 @@ Before starting the installation process, ensure you have the following:
     - Open a text editor (e.g., Notepad):
         - Press `Windows Key` and search for "Notepad".
         - Click on "Notepad" to open the text editor.
-    - Paste the following content into the new file:
+    - Paste the following content into the new file, replacing \<your-domain> with the domain address you are using to access the node:
         ```
         GRAPHQL_HOST=arweave.net
         GRAPHQL_PORT=443
         START_HEIGHT=1000000
+        ARNS_ROOT_HOST=<your-domain>
         ```
-        - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. Your node can handle direct GQL queries, but only indexes L1 transactions by default and will fall back on your chosen proxy for any transactions not indexed.
+        - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. If omitted, your node can support GQL queries on locally indexed transactions, but only L1 transactions are indexed by default.
         - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading and indexing transactions headers. Omitting this line will begin indexing at block 0.
+        - `ARNS_ROOT_HOST` sets the starting point for resolving ARNS names, which are accessed as a subdomain of a gateway. It should be set to the url you are pointing to your node, excluding any protocol prefix. For example, use `node-ar.io` and not `https://node-ar.io`. If you are using a subdomain to access your node and do not set this value, the node will not understand incoming requests.
     - Save the file with the name ".env" and make sure to select "All Files" as the file type. This helps to ensure the file saves as ".env" and not ".env.txt"
 
     **Note**: The `.env` file should be saved inside the same directory where you cloned the repository (e.g., `ar-io-node`).
@@ -115,7 +117,6 @@ To expose your node to the internet and use a custom domain, follow these steps:
 
 1. Obtain a Domain Name:
     - Choose a domain registrar (e.g., [Namecheap](https://www.namecheap.com)) and purchase a domain name.
-    - **Note**: The domain should be a base domain ("ardrive.io"), do not use a subdomain ("docs.ardrive.io").
 
 2. Point the Domain at Your Home Network:
     - In your browser, go to https://www.whatsmyip.org/ to display your public ip address. It can be found at the top of the screen. Note this number down.

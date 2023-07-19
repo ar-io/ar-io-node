@@ -87,14 +87,16 @@ The following instructions will guide you through the process of installing the 
     ```
     nano .env
     ```
-    Paste the following content into the new file, save, and exit:
+    Paste the following content into the new file, replacing \<your-domain> with the domain address you are using to access the node, save, and exit:
     ```
     GRAPHQL_HOST=arweave.net
     GRAPHQL_PORT=443
     START_HEIGHT=1000000
+    ARNS_ROOT_HOST=<your-domain>
     ```
-    - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. Your node can handle direct GQL queries, but only indexes L1 transactions by default and will fall back on your chosen proxy for any transactions not indexed.
+    - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. If omitted, your node can support GQL queries on locally indexed transactions, but only L1 transactions are indexed by default.
     - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading and indexing transactions headers. Omitting this line will begin indexing at block 0.
+    - `ARNS_ROOT_HOST` sets the starting point for resolving ARNS names, which are accessed as a subdomain of a gateway. It should be set to the url you are pointing to your node, excluding any protocol prefix. For example, use `node-ar.io` and not `https://node-ar.io`. If you are using a subdomain to access your node and do not set this value, the node will not understand incoming requests.
 
 - Build the Docker container:
     ```
@@ -126,10 +128,9 @@ The following guide assumes you are running your node on a local home computer.
 - Register a Domain Name:
     Choose a domain registrar (e.g., [Namecheap](https://www.namecheap.com)) to register a domain name.
 
-    - **Note**: The domain should be a base domain ("ardrive.io"), do not use a subdomain ("docs.ardrive.io").
-
 - Point the Domain at Your Home Internet:
     - Obtain your public IP address by visiting https://www.whatsmyip.org/ or running:
+    
         ```
         curl ifconfig.me
         ```
