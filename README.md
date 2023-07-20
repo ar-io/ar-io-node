@@ -1,5 +1,10 @@
 # AR.IO Gateway Node
 
+## Getting Started
+
+- [Linux Installation Instructions](./docs/linux-setup.md)
+- [Windows Installation Instructions](./docs/windows-setup.md)
+
 ## Dev Workflow
 
 ### Install dependencies
