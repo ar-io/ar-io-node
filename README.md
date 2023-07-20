@@ -100,10 +100,9 @@ The following types of filters are supported:
 
 ```
 
-Note: currently only data item data (IDs, hashes, offsets, and sizes) is
-indexed. This enables retrieval of data items from L1 transaction data without
-delegating to another gateway, but it does not yet enable GraphQL. GraphQL
-support will be added a in a future update.
+Note: ANS-104 indexing support is currently experimental. It has been tested
+successfully with small sets of bundles (using filters), but you may still
+encounter problems with it when indexing larger sets of transactions.
 
 ### ArNS
 
