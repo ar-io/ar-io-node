@@ -136,12 +136,12 @@ export class Ans104Parser {
             );
             break;
           case UNBUNDLE_COMPLETE:
+            this.unbundlePromise = undefined;
             const { eventName, ...eventBody } = message;
             eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
               dataItemIndexFilterString,
               ...eventBody,
             });
-            this.unbundlePromise = undefined;
             break;
           case UNBUNDLE_ERROR:
             this.unbundlePromise = undefined;
