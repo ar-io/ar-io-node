@@ -20,6 +20,8 @@ import winston from 'winston';
 
 import { ContiguousData, ContiguousDataSource } from '../types.js';
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
+
 export class GatewayDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private trustedGatewayAxios;
@@ -27,13 +29,16 @@ export class GatewayDataSource implements ContiguousDataSource {
   constructor({
     log,
     trustedGatewayUrl,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     trustedGatewayUrl: string;
+    requestTimeoutMs?: number;
   }) {
     this.log = log.child({ class: 'GatewayDataSource' });
     this.trustedGatewayAxios = axios.create({
       baseURL: trustedGatewayUrl,
+      timeout: requestTimeoutMs,
     });
   }
 
