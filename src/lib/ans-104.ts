@@ -271,7 +271,11 @@ if (!isMainThread) {
       log.error('Error unbundling ANS-104 bundle stream', error);
       parentPort?.postMessage({ eventName: 'unbundle-error' });
     } finally {
-      await fsPromises.unlink(bundlePath);
+      try {
+        await fsPromises.unlink(bundlePath);
+      } catch (error) {
+        log.error('Error deleting ANS-104 temporary bundle file', error);
+      }
     }
   });
 }
