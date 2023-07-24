@@ -310,12 +310,20 @@ type DebugInfo = {
     missingTxs: number;
     newBlocks: number;
     newTxs: number;
+    bundleDataItems: number;
+    matchedDataItems: number;
+    dataItems: number;
   };
   heights: {
     minStable: number;
     maxStable: number;
     minNew: number;
     maxNew: number;
+  };
+  timestamps: {
+    now: number;
+    maxStableDataItemIndexedAt: number;
+    maxNewDataItemIndexedAt: number;
   };
 };
 
@@ -904,6 +912,9 @@ export class StandaloneSqliteDatabaseWorker {
       maxStableHeight - (minStableHeight - 1) - stableBlocksCount;
     const missingStableTxCount = stableBlockTxsCount - stableTxsCount;
 
+    const bundleStats = this.stmts.bundles.selectBundleStats.get();
+    const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
+
     return {
       counts: {
         wallets: this.stmts.core.selectWalletsCount.get().count,
@@ -911,6 +922,7 @@ export class StandaloneSqliteDatabaseWorker {
         tagValues: this.stmts.core.selectTagValuesCount.get().count,
         stableTxs: stableTxsCount,
         stableBlocks: stableBlocksCount,
+        // TODO fix nulls
         stableBlockTxs:
           this.stmts.core.selectStableBlockTransactionCount.get().count,
         missingStableBlocks: missingStableBlockCount,
@@ -918,12 +930,24 @@ export class StandaloneSqliteDatabaseWorker {
         missingTxs: this.stmts.core.selectMissingTransactionsCount.get().count,
         newBlocks: this.stmts.core.selectNewBlocksCount.get().count,
         newTxs: this.stmts.core.selectNewTransactionsCount.get().count,
+        bundleCount: bundleStats.count,
+        bundleDataItems: bundleStats.data_item_count,
+        matcheDataItems: bundleStats.matched_data_item_count,
+        dataItems: dataItemStats.data_item_count,
+        nestedDataItems: dataItemStats.nested_data_item_count,
       },
       heights: {
-        minStable: minStableHeight,
-        maxStable: maxStableHeight,
+        // TODO move -1 into query
+        minStable: minStableHeight ?? -1,
+        // TODO move -1 into query
+        maxStable: maxStableHeight ?? -1,
         minNew: this.stmts.core.selectMinNewHeight.get().min_height,
         maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
+      },
+      timestamps: {
+        now: currentUnixTimestamp(),
+        maxNewDataItemIndexedAt: dataItemStats.last_new_indexed_at,
+        maxStableDataItemIndexedAt: dataItemStats.last_stable_indexed_at,
       },
     };
   }
