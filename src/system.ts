@@ -137,15 +137,18 @@ const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Version', valueStartsWith: '2.' },
 ]);
 
-const ans104BundlesCounter = new promClient.Counter({
-  name: 'ans104_bundles_total',
-  help: 'Count of all ANS-104 bundles seen',
-  labelNames: ['parent_type'],
+const bundlesCounter = new promClient.Counter({
+  name: 'bundles_total',
+  help: 'Count of all bundles seen',
+  labelNames: ['bundle_format', 'parent_type'],
 });
 
 eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
   if (await ans104TxMatcher.match(tx)) {
-    ans104BundlesCounter.inc({ parent_type: 'transaction' });
+    bundlesCounter.inc({
+      bundle_format: 'ans-104',
+      parent_type: 'transaction',
+    });
     eventEmitter.emit(events.ANS104_TX_INDEXED, tx);
     eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, tx);
   }
@@ -155,7 +158,10 @@ eventEmitter.on(
   events.ANS104_DATA_ITEM_DATA_INDEXED,
   async (item: MatchableItem) => {
     if (await ans104TxMatcher.match(item)) {
-      ans104BundlesCounter.inc({ parent_type: 'data_item' });
+      bundlesCounter.inc({
+        bundle_format: 'ans-104',
+        parent_type: 'data_item',
+      });
       eventEmitter.emit(events.ANS104_NESTED_BUNDLE_INDEXED, item);
       eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, item);
     }
@@ -236,9 +242,10 @@ const ans104Unbundler = new Ans104Unbundler({
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
 });
 
-const ans104BundlesMatchedCounter = new promClient.Counter({
-  name: 'ans104_bundles_matched_total',
-  help: 'Count of ANS-104 bundles matched for unbundling',
+const bundlesMatchedCounter = new promClient.Counter({
+  name: 'bundles_matched_total',
+  help: 'Count of bundles matched for unbundling',
+  labelNames: ['bundle_format'],
 });
 
 eventEmitter.on(
@@ -250,7 +257,7 @@ eventEmitter.on(
       format: 'ans-104',
     });
     if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
-      ans104BundlesMatchedCounter.inc();
+      bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
       await db.saveBundle({
         id: item.id,
         format: 'ans-104',
@@ -276,13 +283,14 @@ eventEmitter.on(
   },
 );
 
-const ans104BundlesUnbundledCounter = new promClient.Counter({
-  name: 'ans104_bundles_unbundled_total',
-  help: 'Count of ANS-104 bundles unbundled',
+const bundlesUnbundledCounter = new promClient.Counter({
+  name: 'bundles_unbundled_total',
+  help: 'Count of bundles unbundled',
+  labelNames: ['bundle_format'],
 });
 
 eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
-  ans104BundlesUnbundledCounter.inc();
+  bundlesUnbundledCounter.inc({ bundle_format: 'ans-104' });
   db.saveBundle({
     id: bundleEvent.parentId,
     format: 'ans-104',
@@ -304,13 +312,14 @@ const ans104DataIndexer = new Ans104DataIndexer({
   indexWriter: nestedDataIndexWriter,
 });
 
-const ans104DataItemsQueuedCounter = new promClient.Counter({
-  name: 'ans104_data_items_queued_total',
-  help: 'Count of ANS-104 data items queued for indexing',
+const dataItemsQueuedCounter = new promClient.Counter({
+  name: 'data_items_queued_total',
+  help: 'Count of data items queued for indexing',
+  labelNames: ['bundle_format'],
 });
 
 eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
-  ans104DataItemsQueuedCounter.inc();
+  dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
   dataItemIndexer.queueDataItem(dataItem);
   ans104DataIndexer.queueDataItem(dataItem);
 });
