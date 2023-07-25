@@ -20,6 +20,7 @@ import * as EventEmitter from 'node:events';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
 import {
   Worker,
   isMainThread,
@@ -205,20 +206,25 @@ export class Ans104Parser {
             `${parentId}`,
           );
           const writeStream = fs.createWriteStream(bundlePath);
-          data.stream.pipe(writeStream);
-          writeStream.on('error', (error) => {
-            log.error('Error writing ANS-104 bundle stream', error);
-            reject(error);
-          });
-          writeStream.on('finish', async () => {
-            log.info('Parsing ANS-104 bundle stream...');
-            this.worker.postMessage({
-              rootTxId,
-              parentId,
-              parentIndex,
-              bundlePath,
-            });
-          });
+          pipeline(
+            data.stream,
+            writeStream,
+            (error) => {
+              if (error !== undefined) {
+                this.unbundlePromiseReject?.(error);
+                this.resetUnbundlePromise();
+                log.error('Error writing ANS-104 bundle stream', error);
+              } else {
+                log.info('Parsing ANS-104 bundle stream...');
+                this.worker.postMessage({
+                  rootTxId,
+                  parentId,
+                  parentIndex,
+                  bundlePath,
+                });
+              }
+            }
+          );
         } catch (error) {
           reject(error);
         }
