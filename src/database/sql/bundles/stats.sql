@@ -2,15 +2,19 @@
 SELECT
   COUNT(*) AS count,
   IFNULL(SUM(data_item_count), 0) AS data_item_count,
-  IFNULL(SUM(matched_data_item_count), 0) AS matched_data_item_count
+  IFNULL(SUM(matched_data_item_count), 0) AS matched_data_item_count,
+  IFNULL(MAX(last_queued_at), -1) AS max_queued_at,
+  IFNULL(MAX(last_skipped_at), -1) AS max_skipped_at,
+  IFNULL(MAX(last_unbundled_at), -1) AS max_unbundled_at,
+  IFNULL(MAX(last_fully_indexed_at), -1) AS max_fully_indexed_at
 FROM bundles
 
 -- selectDataItemStats
 SELECT
   SUM(data_item_count) AS data_item_count,
   SUM(nested_data_item_count) AS nested_data_item_count,
-  MAX(max_new_indexed_at) AS last_new_indexed_at,
-  MAX(max_stable_indexed_at) AS last_stable_indexed_at
+  MAX(max_new_indexed_at) AS max_new_indexed_at,
+  MAX(max_stable_indexed_at) AS max_stable_indexed_at
 FROM (
   SELECT
     COUNT(*) AS data_item_count,

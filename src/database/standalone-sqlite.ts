@@ -322,6 +322,10 @@ type DebugInfo = {
   };
   timestamps: {
     now: number;
+    maxBundleQueuedAt: number;
+    maxBundleSkippedAt: number;
+    maxBundleUnbundledAt: number;
+    maxBundleFullyIndexedAt: number;
     maxStableDataItemIndexedAt: number;
     maxNewDataItemIndexedAt: number;
   };
@@ -946,8 +950,12 @@ export class StandaloneSqliteDatabaseWorker {
       },
       timestamps: {
         now: currentUnixTimestamp(),
-        maxNewDataItemIndexedAt: dataItemStats.last_new_indexed_at,
-        maxStableDataItemIndexedAt: dataItemStats.last_stable_indexed_at,
+        maxBundleQueuedAt: bundleStats.max_queued_at,
+        maxBundleSkippedAt: bundleStats.max_skipped_at,
+        maxBundleUnbundledAt: bundleStats.max_unbundled_at,
+        maxBundleFullyIndexedAt: bundleStats.max_fully_indexed_at,
+        maxNewDataItemIndexedAt: dataItemStats.max_new_indexed_at,
+        maxStableDataItemIndexedAt: dataItemStats.max_stable_indexed_at,
       },
     };
   }
