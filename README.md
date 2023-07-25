@@ -146,6 +146,24 @@ the admin key is read from the `ADMIN_API_KEY` environment variable. If no key i
 set, a random key is generated and logged. To make a request to an admin endpoint
 add an `Authorization: Bearer <ADMIN_API_KEY>` header to your request.
 
+### Content Moderation
+
+Block a specific TX/data item ID on your gateway:
+
+```
+curl -X PUT -H "Authorization: Bearer <ADMIN_KEY>" \
+  -H "Content-Type: application/json" \
+  "http://<HOST>:<PORT>/ar-io/admin/block-data" \
+  -d '{ "id": "<ID>", "notes": "Example notes", "source": "Example source" }'
+
+```
+
+`notes` and `source` are for documentation only. `source` is intended to be an
+identifier of a particular source of IDs to block (e.g. the name of a
+blocklist). `notes` is a text field that can be used to further describe why a
+particular ID is blocked.
+
+
 ## Principles and Practices
 
 ### Architecture
