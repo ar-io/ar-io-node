@@ -103,6 +103,8 @@ export class Ans104Parser {
   private worker: Worker;
   private contiguousDataSource: ContiguousDataSource;
   private unbundlePromise: Promise<void> | undefined;
+  private unbundlePromiseResolve: (() => void) | undefined;
+  private unbundlePromiseReject: ((reason?: any) => void) | undefined;
 
   constructor({
     log,
@@ -125,35 +127,50 @@ export class Ans104Parser {
       },
     });
 
-    this.worker.on(
-      'message',
-      ((message: ParserMessage) => {
-        switch (message.eventName) {
-          case DATA_ITEM_MATCHED:
-            eventEmitter.emit(
-              events.ANS104_DATA_ITEM_MATCHED,
-              message.dataItem,
-            );
-            break;
-          case UNBUNDLE_COMPLETE:
-            this.unbundlePromise = undefined;
-            const { eventName, ...eventBody } = message;
-            eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
-              dataItemIndexFilterString,
-              ...eventBody,
-            });
-            break;
-          case UNBUNDLE_ERROR:
-            this.unbundlePromise = undefined;
-            break;
-        }
-      }).bind(this),
-    );
+    const self = this;
+    this.worker
+      .on(
+        'message',
+        ((message: ParserMessage) => {
+          switch (message.eventName) {
+            case DATA_ITEM_MATCHED:
+              eventEmitter.emit(
+                events.ANS104_DATA_ITEM_MATCHED,
+                message.dataItem,
+              );
+              break;
+            case UNBUNDLE_COMPLETE:
+              self.unbundlePromiseResolve?.();
+              self.resetUnbundlePromise();
+              const { eventName, ...eventBody } = message;
+              eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
+                dataItemIndexFilterString,
+                ...eventBody,
+              });
+              break;
+            case UNBUNDLE_ERROR:
+              self.unbundlePromiseReject?.();
+              self.resetUnbundlePromise();
+              break;
+          }
+        }).bind(this),
+      )
+      .on('error', (error: any) => {
+        self.unbundlePromiseReject?.();
+        self.resetUnbundlePromise();
+        self.log.error('Error in ANS-104 worker:', error);
+      })
+      .on('exit', (code: number) => {
+        self.unbundlePromiseReject?.();
+        self.resetUnbundlePromise();
+        self.log.error(`ANS-104 worker exited with code ${code}.`);
+      });
+  }
 
-    this.worker.on('error', (error: any) => {
-      this.unbundlePromise = undefined;
-      this.log.error('Error in ANS-104 worker', error);
-    });
+  resetUnbundlePromise() {
+    this.unbundlePromise = undefined;
+    this.unbundlePromiseResolve = undefined;
+    this.unbundlePromiseReject = undefined;
   }
 
   async parseBundle({
@@ -167,38 +184,44 @@ export class Ans104Parser {
   }): Promise<void> {
     const unbundlePromise: Promise<void> = new Promise(
       async (resolve, reject) => {
-        const log = this.log.child({ parentId });
-        log.debug('Waiting for previous bundle to finish...');
-        while (this.unbundlePromise) {
-          await wait(100);
-        }
-        log.debug('Previous bundle finished.');
-        await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
-          recursive: true,
-        });
-        const data = await this.contiguousDataSource.getData(parentId);
-        const bundlePath = path.join(
-          process.cwd(),
-          'data/tmp/ans-104',
-          `${parentId}`,
-        );
-        const writeStream = fs.createWriteStream(bundlePath);
-        // TODO consider using pipeline
-        data.stream.pipe(writeStream);
-        writeStream.on('error', (error) => {
-          log.error('Error writing ANS-104 bundle stream', error);
-          reject(error);
-        });
-        writeStream.on('finish', async () => {
-          log.info('Parsing ANS-104 bundle stream...');
-          this.worker.postMessage({
-            rootTxId,
-            parentId,
-            parentIndex,
-            bundlePath,
+        try {
+          this.unbundlePromiseResolve = resolve;
+          this.unbundlePromiseReject = reject;
+
+          const log = this.log.child({ parentId });
+          log.debug('Waiting for previous bundle to finish...');
+          while (this.unbundlePromise) {
+            await wait(100);
+          }
+          log.debug('Previous bundle finished.');
+
+          await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
+            recursive: true,
           });
-          resolve();
-        });
+          const data = await this.contiguousDataSource.getData(parentId);
+          const bundlePath = path.join(
+            process.cwd(),
+            'data/tmp/ans-104',
+            `${parentId}`,
+          );
+          const writeStream = fs.createWriteStream(bundlePath);
+          data.stream.pipe(writeStream);
+          writeStream.on('error', (error) => {
+            log.error('Error writing ANS-104 bundle stream', error);
+            reject(error);
+          });
+          writeStream.on('finish', async () => {
+            log.info('Parsing ANS-104 bundle stream...');
+            this.worker.postMessage({
+              rootTxId,
+              parentId,
+              parentIndex,
+              bundlePath,
+            });
+          });
+        } catch (error) {
+          reject(error);
+        }
       },
     );
     this.unbundlePromise = unbundlePromise;
@@ -228,19 +251,16 @@ if (!isMainThread) {
         diLog.info('Processing data item...');
 
         if (!dataItem.id) {
-          // TODO counter metric data items with missing ids
           diLog.warn('Skipping data item with missing ID.');
           continue;
         }
 
         if (processedDataItemIds.has(dataItem.id)) {
-          // TODO counter metric for skipped data items
           diLog.warn('Skipping duplicate data item ID.');
           continue;
         }
 
         if (!dataItem.dataOffset) {
-          // TODO counter metric for skipped data items
           diLog.warn('Skipping data item with missing data offset.');
         }
 
