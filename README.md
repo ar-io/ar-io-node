@@ -15,6 +15,10 @@
 
 `yarn db:migrate up`
 
+### Run lint
+
+`yarn lint:check`
+
 ### Run tests
 
 `yarn test`
