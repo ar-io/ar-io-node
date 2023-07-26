@@ -329,6 +329,8 @@ type DebugInfo = {
     maxStableDataItemIndexedAt: number;
     maxNewDataItemIndexedAt: number;
   };
+  errors: string[];
+  warnings: string[];
 };
 
 export class StandaloneSqliteDatabaseWorker {
@@ -919,6 +921,30 @@ export class StandaloneSqliteDatabaseWorker {
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
 
+    const warnings: string[] = [];
+    const errors: string[] = [];
+
+    const now = currentUnixTimestamp();
+
+    if (stableTxsCount !== stableBlockTxsCount) {
+      const error = `
+        Stable transaction count (${stableTxsCount}) does not match
+        stable block transaction count (${stableBlockTxsCount})
+      `
+        .replace(/\s+/g, ' ')
+        .trim();
+      errors.push(error);
+    }
+
+    if (now - bundleStats.last_fully_indexed_at > 60 * 60 * 24) {
+      const warning = `
+        Last bundle fully indexed more than 24 hours ago.
+      `
+        .replace(/\s+/g, ' ')
+        .trim();
+      warnings.push(warning);
+    }
+
     return {
       counts: {
         wallets: this.stmts.core.selectWalletsCount.get().count,
@@ -941,9 +967,7 @@ export class StandaloneSqliteDatabaseWorker {
         nestedDataItems: dataItemStats.nested_data_item_count,
       },
       heights: {
-        // TODO move -1 into query
         minStable: minStableHeight ?? -1,
-        // TODO move -1 into query
         maxStable: maxStableHeight ?? -1,
         minNew: this.stmts.core.selectMinNewHeight.get().min_height,
         maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
@@ -957,6 +981,8 @@ export class StandaloneSqliteDatabaseWorker {
         maxNewDataItemIndexedAt: dataItemStats.max_new_indexed_at,
         maxStableDataItemIndexedAt: dataItemStats.max_stable_indexed_at,
       },
+      errors,
+      warnings,
     };
   }
 

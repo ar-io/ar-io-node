@@ -19,7 +19,7 @@ SELECT COUNT(*) AS count
 FROM stable_blocks
 
 -- selectStableBlockTransactionCount
-SELECT SUM(tx_count) AS count
+SELECT IFNULL(SUM(tx_count), 0) AS count
 FROM stable_blocks
 
 -- selectMissingTransactionsCount
