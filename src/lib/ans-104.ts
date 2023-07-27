@@ -128,43 +128,39 @@ export class Ans104Parser {
       },
     });
 
-    const self = this;
     this.worker
-      .on(
-        'message',
-        ((message: ParserMessage) => {
-          switch (message.eventName) {
-            case DATA_ITEM_MATCHED:
-              eventEmitter.emit(
-                events.ANS104_DATA_ITEM_MATCHED,
-                message.dataItem,
-              );
-              break;
-            case UNBUNDLE_COMPLETE:
-              self.unbundlePromiseResolve?.();
-              self.resetUnbundlePromise();
-              const { eventName, ...eventBody } = message;
-              eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
-                dataItemIndexFilterString,
-                ...eventBody,
-              });
-              break;
-            case UNBUNDLE_ERROR:
-              self.unbundlePromiseReject?.();
-              self.resetUnbundlePromise();
-              break;
-          }
-        }).bind(this),
-      )
+      .on('message', (message: ParserMessage) => {
+        switch (message.eventName) {
+          case DATA_ITEM_MATCHED:
+            eventEmitter.emit(
+              events.ANS104_DATA_ITEM_MATCHED,
+              message.dataItem,
+            );
+            break;
+          case UNBUNDLE_COMPLETE:
+            this.unbundlePromiseResolve?.();
+            this.resetUnbundlePromise();
+            const { eventName, ...eventBody } = message;
+            eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
+              dataItemIndexFilterString,
+              ...eventBody,
+            });
+            break;
+          case UNBUNDLE_ERROR:
+            this.unbundlePromiseReject?.();
+            this.resetUnbundlePromise();
+            break;
+        }
+      })
       .on('error', (error: any) => {
-        self.unbundlePromiseReject?.();
-        self.resetUnbundlePromise();
-        self.log.error('Error in ANS-104 worker:', error);
+        this.unbundlePromiseReject?.();
+        this.resetUnbundlePromise();
+        this.log.error('Error in ANS-104 worker', error);
       })
       .on('exit', (code: number) => {
-        self.unbundlePromiseReject?.();
-        self.resetUnbundlePromise();
-        self.log.error(`ANS-104 worker exited with code ${code}.`);
+        this.unbundlePromiseReject?.();
+        this.resetUnbundlePromise();
+        this.log.error(`ANS-104 worker exited with code ${code}.`);
       });
   }
 
@@ -206,25 +202,21 @@ export class Ans104Parser {
             `${parentId}`,
           );
           const writeStream = fs.createWriteStream(bundlePath);
-          pipeline(
-            data.stream,
-            writeStream,
-            (error) => {
-              if (error !== undefined) {
-                this.unbundlePromiseReject?.(error);
-                this.resetUnbundlePromise();
-                log.error('Error writing ANS-104 bundle stream', error);
-              } else {
-                log.info('Parsing ANS-104 bundle stream...');
-                this.worker.postMessage({
-                  rootTxId,
-                  parentId,
-                  parentIndex,
-                  bundlePath,
-                });
-              }
+          pipeline(data.stream, writeStream, (error) => {
+            if (error !== undefined) {
+              this.unbundlePromiseReject?.(error);
+              this.resetUnbundlePromise();
+              log.error('Error writing ANS-104 bundle stream', error);
+            } else {
+              log.info('Parsing ANS-104 bundle stream...');
+              this.worker.postMessage({
+                rootTxId,
+                parentId,
+                parentIndex,
+                bundlePath,
+              });
             }
-          );
+          });
         } catch (error) {
           reject(error);
         }
