@@ -904,32 +904,41 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getDebugInfo() {
-    const minStableHeight =
-      this.stmts.core.selectMinStableHeight.get().min_height;
-    const maxStableHeight =
-      this.stmts.core.selectMaxStableHeight.get().max_height;
-    const stableTxsCount =
-      this.stmts.core.selectStableTransactionsCount.get().count;
-    const stableBlocksCount =
-      this.stmts.core.selectStableBlockCount.get().count;
-    const stableBlockTxsCount =
-      this.stmts.core.selectStableBlockTransactionCount.get().count;
-    const missingStableBlockCount =
-      maxStableHeight - (minStableHeight - 1) - stableBlocksCount;
-    const missingStableTxCount = stableBlockTxsCount - stableTxsCount;
-
+    const chainStats = this.stmts.core.selectChainStats.get();
     const bundleStats = this.stmts.bundles.selectBundleStats.get();
     const dataItemStats = this.stmts.bundles.selectDataItemStats.get();
+
+    const now = currentUnixTimestamp();
 
     const warnings: string[] = [];
     const errors: string[] = [];
 
-    const now = currentUnixTimestamp();
+    let missingStableBlockCount = 0;
+    if (chainStats.stable_blocks_max_height != undefined) {
+      missingStableBlockCount =
+        (chainStats.stable_blocks_max_height ?? 0) -
+        (chainStats.stable_blocks_min_height
+          ? chainStats.stable_blocks_min_height - 1
+          : 0) -
+        chainStats.stable_blocks_count;
+    }
 
-    if (stableTxsCount !== stableBlockTxsCount) {
+    if (missingStableBlockCount > 0) {
       const error = `
-        Stable transaction count (${stableTxsCount}) does not match
-        stable block transaction count (${stableBlockTxsCount})
+        Stable block count (${chainStats.stable_blocks_count}) does not match
+        stable block height range (${chainStats.stable_blocks_min_height} to
+        ${chainStats.stable_blocks_max_height}).
+      `.replace(/\s+/g, ' ');
+      errors.push(error);
+    }
+
+    const missingStableTxCount =
+      chainStats.stable_block_txs_count - chainStats.stable_txs_count;
+
+    if (missingStableTxCount > 0) {
+      const error = `
+        Stable transaction count (${chainStats.stable_txs_count}) does not match
+        stable block transaction count (${chainStats.stable_block_txs_count}).
       `
         .replace(/\s+/g, ' ')
         .trim();
@@ -947,19 +956,17 @@ export class StandaloneSqliteDatabaseWorker {
 
     return {
       counts: {
-        wallets: this.stmts.core.selectWalletsCount.get().count,
-        tagNames: this.stmts.core.selectTagNamesCount.get().count,
-        tagValues: this.stmts.core.selectTagValuesCount.get().count,
-        stableTxs: stableTxsCount,
-        stableBlocks: stableBlocksCount,
-        // TODO fix nulls
-        stableBlockTxs:
-          this.stmts.core.selectStableBlockTransactionCount.get().count,
+        wallets: chainStats.wallets_count,
+        tagNames: chainStats.tag_names_count,
+        tagValues: chainStats.tag_values_count,
+        stableTxs: chainStats.stable_txs_count,
+        stableBlocks: chainStats.stable_blocks_count,
+        stableBlockTxs: chainStats.stable_block_txs_count,
         missingStableBlocks: missingStableBlockCount,
         missingStableTxs: missingStableTxCount,
-        missingTxs: this.stmts.core.selectMissingTransactionsCount.get().count,
-        newBlocks: this.stmts.core.selectNewBlocksCount.get().count,
-        newTxs: this.stmts.core.selectNewTransactionsCount.get().count,
+        missingTxs: chainStats.missing_txs_count,
+        newBlocks: chainStats.new_blocks_count,
+        newTxs: chainStats.new_txs_count,
         bundleCount: bundleStats.count,
         bundleDataItems: bundleStats.data_item_count,
         matcheDataItems: bundleStats.matched_data_item_count,
@@ -967,10 +974,10 @@ export class StandaloneSqliteDatabaseWorker {
         nestedDataItems: dataItemStats.nested_data_item_count,
       },
       heights: {
-        minStable: minStableHeight ?? -1,
-        maxStable: maxStableHeight ?? -1,
-        minNew: this.stmts.core.selectMinNewHeight.get().min_height,
-        maxNew: this.stmts.core.selectMaxNewHeight.get().max_height,
+        minStable: chainStats.stable_blocks_min_height ?? -1,
+        maxStable: chainStats.stable_blocks_max_height ?? -1,
+        minNew: chainStats.new_blocks_min_height ?? -1,
+        maxNew: chainStats.new_blocks_max_height ?? -1,
       },
       timestamps: {
         now: currentUnixTimestamp(),
