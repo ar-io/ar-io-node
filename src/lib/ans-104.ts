@@ -27,7 +27,6 @@ import {
   parentPort,
   workerData,
 } from 'node:worker_threads';
-import { default as wait } from 'wait';
 import * as winston from 'winston';
 
 import * as events from '../events.js';
@@ -103,7 +102,6 @@ export class Ans104Parser {
   private log: winston.Logger;
   private worker: Worker;
   private contiguousDataSource: ContiguousDataSource;
-  private unbundlePromise: Promise<void> | undefined;
   private unbundlePromiseResolve: (() => void) | undefined;
   private unbundlePromiseReject: ((reason?: any) => void) | undefined;
 
@@ -165,7 +163,6 @@ export class Ans104Parser {
   }
 
   resetUnbundlePromise() {
-    this.unbundlePromise = undefined;
     this.unbundlePromiseResolve = undefined;
     this.unbundlePromiseReject = undefined;
   }
@@ -184,14 +181,7 @@ export class Ans104Parser {
         try {
           this.unbundlePromiseResolve = resolve;
           this.unbundlePromiseReject = reject;
-
           const log = this.log.child({ parentId });
-          log.debug('Waiting for previous bundle to finish...');
-          while (this.unbundlePromise) {
-            await wait(100);
-          }
-          log.debug('Previous bundle finished.');
-
           await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
             recursive: true,
           });
@@ -204,7 +194,7 @@ export class Ans104Parser {
           const writeStream = fs.createWriteStream(bundlePath);
           pipeline(data.stream, writeStream, (error) => {
             if (error !== undefined) {
-              this.unbundlePromiseReject?.(error);
+              reject(error);
               this.resetUnbundlePromise();
               log.error('Error writing ANS-104 bundle stream', error);
             } else {
@@ -219,10 +209,10 @@ export class Ans104Parser {
           });
         } catch (error) {
           reject(error);
+          this.resetUnbundlePromise();
         }
       },
     );
-    this.unbundlePromise = unbundlePromise;
     return unbundlePromise;
   }
 }
