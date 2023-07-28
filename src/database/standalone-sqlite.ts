@@ -1233,6 +1233,7 @@ export class StandaloneSqliteDatabaseWorker {
     let tagIndexColumn: string;
     let heightSortTableAlias: string;
     let blockTransactionIndexSortTableAlias: string;
+    let dataItemSortTableAlias: string | undefined = undefined;
     let maxDbHeight = Infinity;
 
     if (source === 'stable_txs') {
@@ -1299,6 +1300,7 @@ export class StandaloneSqliteDatabaseWorker {
           if (index === 0) {
             heightSortTableAlias = tagAlias;
             blockTransactionIndexSortTableAlias = tagAlias;
+            dataItemSortTableAlias = tagAlias;
             joinCond = {
               [`${blockTransactionIndexTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
               [`${heightTableAlias}.height`]: `${tagAlias}.height`,
@@ -1406,7 +1408,13 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       }
-      query.orderBy('1 DESC, 2 DESC, 3 DESC');
+      let orderBy = `${heightSortTableAlias}.height DESC, ${blockTransactionIndexSortTableAlias}.block_transaction_index DESC`;
+      if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
+        orderBy += `, ${dataItemSortTableAlias}.data_item_id DESC`;
+      } else {
+        orderBy += `, 3 DESC`;
+      }
+      query.orderBy(orderBy);
     } else {
       if (
         cursorHeight != undefined &&
@@ -1440,7 +1448,13 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       }
-      query.orderBy('1 ASC, 2 ASC, 3 ASC');
+      let orderBy = `${heightSortTableAlias}.height ASC, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC`;
+      if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
+        orderBy += `, ${dataItemSortTableAlias}.data_item_id ASC`;
+      } else {
+        orderBy += `, 3 ASC`;
+      }
+      query.orderBy(orderBy);
     }
   }
 
