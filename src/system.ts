@@ -168,7 +168,7 @@ eventEmitter.on(
   },
 );
 
-const txFetcher = new TransactionFetcher({
+export const txFetcher = new TransactionFetcher({
   log,
   chainSource: arweaveClient,
   eventEmitter,

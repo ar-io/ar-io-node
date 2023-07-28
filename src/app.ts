@@ -158,6 +158,21 @@ app.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
   }
 });
 
+// Queue a TX ID for processing
+app.post('/ar-io/admin/queue-tx', express.json(), async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (id === undefined) {
+      res.status(400).send("Must provide 'id'");
+      return;
+    }
+    system.txFetcher.queueTxId(id);
+    res.json({ message: 'TX queued' });
+  } catch (error: any) {
+    res.status(500).send(error?.message);
+  }
+});
+
 // GraphQL
 const apolloServerInstanceGql = apolloServer(system.db, {
   introspection: true,
