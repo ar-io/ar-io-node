@@ -78,11 +78,45 @@ query_end_time=$(date +%s%N)
 query_runtime=$((($query_end_time - $query_start_time) / 1000000))
 echo "query_runtime: $query_runtime ms"
 
-echo "1k ArDrive transactions (output sent to /dev/null)"
+echo "1k ArDrive transactions with min height ascending (output sent to /dev/null)"
 query_start_time=$(date +%s%N)
 curl -g -X POST \
   -H "Content-Type: application/json" \
   -d '{"query":"query { transactions(tags: [ { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] } ], sort: HEIGHT_ASC, block: { min: 1100000 }, first: 1000) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL > /dev/null
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "1k ArDrive transactions with max height ascending (output sent to /dev/null)"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] } ], sort: HEIGHT_ASC, block: { max: 1100000 }, first: 1000) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL > /dev/null
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+end_time=$(date +%s%N)
+runtime=$((($end_time - $start_time) / 1000000))
+echo "runtime: $runtime ms"
+
+echo "1k ArDrive transactions with min height descending (output sent to /dev/null)"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] } ], sort: HEIGHT_DESC, block: { min: 1100000 }, first: 1000) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL > /dev/null
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "1k ArDrive transactions with max height descending (output sent to /dev/null)"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] } ], sort: HEIGHT_DESC, block: { max: 1100000 }, first: 1000) { edges { node { block { height } } } } }"}' \
   $GRAPHQL_URL > /dev/null
 query_end_time=$(date +%s%N)
 query_runtime=$((($query_end_time - $query_start_time) / 1000000))
