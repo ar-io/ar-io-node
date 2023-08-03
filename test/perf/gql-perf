@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+GRAPHQL_URL=${GRAPHQL_URL:-http://localhost:3000/graphql}
+#GRAPHQL_URL=${GRAPHQL_URL:-http://localhost:4000/graphql}
+#GRAPHQL_URL=${GRAPHQL_URL:-https://arweave.net/graphql}
+#GRAPHQL_URL=${GRAPHQL_URL:-https://arweave-search.goldsky.com/graphql}
+#GRAPHQL_URL=${GRAPHQL_URL:-https://ar-io.dev/graphql}
+
+start_time=$(date +%s%N)
+
+echo "Retrieving first transaction"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(sort: HEIGHT_ASC, first: 1) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "Retrieving last transaction"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(sort: HEIGHT_DESC, first: 1) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "First ANS-104 bundle transaction"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"Bundle-Version\", values: [\"2.0.0\"] } ], sort: HEIGHT_ASC, first: 1) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "Last ANS-104 bundle transaction"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"Bundle-Version\", values: [\"2.0.0\"] } ], sort: HEIGHT_DESC, first: 1) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "ArDrive Drive-Id first transaction"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"Drive-Id\", values: [\"61e9553d-d6a7-476e-8b22-4793776f66a5\"] }, { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] }  ], sort: HEIGHT_ASC, first: 1) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "ArDrive Drive-Id last transaction"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"Drive-Id\", values: [\"61e9553d-d6a7-476e-8b22-4793776f66a5\"] }, { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] } ], sort: HEIGHT_DESC, first: 1) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "ArDrive Drive-Id with min height"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"Drive-Id\", values: [\"61e9553d-d6a7-476e-8b22-4793776f66a5\"] }, { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] } ], sort: HEIGHT_ASC, block: { min: 1100000 }, first: 1) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+echo "1k ArDrive transactions (output sent to /dev/null)"
+query_start_time=$(date +%s%N)
+curl -g -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { transactions(tags: [ { name: \"ArFS\", values: [\"0.10\", \"0.11\", \"0.12\"] } ], sort: HEIGHT_ASC, block: { min: 1100000 }, first: 1000) { edges { node { block { height } } } } }"}' \
+  $GRAPHQL_URL > /dev/null
+query_end_time=$(date +%s%N)
+query_runtime=$((($query_end_time - $query_start_time) / 1000000))
+echo "query_runtime: $query_runtime ms"
+
+end_time=$(date +%s%N)
+runtime=$((($end_time - $start_time) / 1000000))
+echo "runtime: $runtime ms"
+
+if [ $runtime -gt 15000 ]; then
+  echo "FAIL: runtime exceeded 15 seconds"
+  exit 1
+fi

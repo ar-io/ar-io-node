@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# exit if a command errors
+set -e
+
+cd /opt/ar-io-node
+
 while [[ "$(curl -s -o /dev/null -w ''%{http_code}'' http://localhost:3000/ar-io/healthcheck)" != "200" ]]; do
   echo "Waiting for ar-io service to start..."
   sleep 1
@@ -17,5 +22,7 @@ do
     exit 1
   fi
 done
+
+./test/perf/gql-perf
 
 docker image prune -a -f
