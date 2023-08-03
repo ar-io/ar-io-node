@@ -1353,11 +1353,11 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     if (minHeight != null && minHeight > 0) {
-      query.where(sql.gte(`${heightTableAlias}.height`, minHeight));
+      query.where(sql.gte(`${heightSortTableAlias}.height`, minHeight));
     }
 
     if (maxHeight != null && maxHeight >= 0 && maxHeight < maxDbHeight) {
-      query.where(sql.lte(`${heightTableAlias}.height`, maxHeight));
+      query.where(sql.lte(`${heightSortTableAlias}.height`, maxHeight));
     }
 
     if (
