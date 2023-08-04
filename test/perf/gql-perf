@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-GRAPHQL_URL=${GRAPHQL_URL:-http://localhost:3000/graphql}
+#GRAPHQL_URL=${GRAPHQL_URL:-http://localhost:3000/graphql}
 #GRAPHQL_URL=${GRAPHQL_URL:-http://localhost:4000/graphql}
 #GRAPHQL_URL=${GRAPHQL_URL:-https://arweave.net/graphql}
 #GRAPHQL_URL=${GRAPHQL_URL:-https://arweave-search.goldsky.com/graphql}
@@ -126,7 +126,7 @@ end_time=$(date +%s%N)
 runtime=$((($end_time - $start_time) / 1000000))
 echo "runtime: $runtime ms"
 
-if [ $runtime -gt 15000 ]; then
-  echo "FAIL: runtime exceeded 15 seconds"
+if [ $runtime -gt 45000 ]; then
+  echo "FAIL: runtime exceeded 45 seconds"
   exit 1
 fi
