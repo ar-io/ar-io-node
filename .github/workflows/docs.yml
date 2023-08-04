@@ -1,6 +1,9 @@
 name: Build docs and deploy as GitHub pages
 
-on: push
+on:
+  push:
+    branches:
+      - develop
 
 jobs:
   build:
