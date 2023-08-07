@@ -94,7 +94,7 @@ export class Ans104Unbundler {
       this.queue.push(item);
       log.debug('Bundle queued.');
     } else {
-      log.info('Skipping unbundle, queue is full.');
+      log.debug('Skipping unbundle, queue is full.');
     }
   }
 

@@ -265,6 +265,8 @@ eventEmitter.on(
         rootTransactionId: 'root_tx_id' in item ? item.root_tx_id : item.id,
         format: 'ans-104',
       });
+      const prioritized = prioritizedTxIds.has(item.id);
+      prioritizedTxIds.delete(item.id);
       if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
         bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
         await db.saveBundle({
@@ -274,8 +276,6 @@ eventEmitter.on(
           indexFilter: config.ANS104_INDEX_FILTER_STRING,
           queuedAt: currentUnixTimestamp(),
         });
-        const prioritized = prioritizedTxIds.has(item.id);
-        prioritizedTxIds.delete(item.id);
         ans104Unbundler.queueItem(
           {
             index:
