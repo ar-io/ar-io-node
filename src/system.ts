@@ -143,6 +143,8 @@ const bundlesCounter = new promClient.Counter({
   labelNames: ['bundle_format', 'parent_type'],
 });
 
+export const prioritizedTxIds = new Set<string>();
+
 eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
   if (await ans104TxMatcher.match(tx)) {
     bundlesCounter.inc({
@@ -272,13 +274,18 @@ eventEmitter.on(
           indexFilter: config.ANS104_INDEX_FILTER_STRING,
           queuedAt: currentUnixTimestamp(),
         });
-        ans104Unbundler.queueItem({
-          index:
-            'parent_index' in item && item.parent_index !== undefined
-              ? item.parent_index
-              : -1, // parent indexes are not needed for L1
-          ...item,
-        });
+        const prioritized = prioritizedTxIds.has(item.id);
+        prioritizedTxIds.delete(item.id);
+        ans104Unbundler.queueItem(
+          {
+            index:
+              'parent_index' in item && item.parent_index !== undefined
+                ? item.parent_index
+                : -1, // parent indexes are not needed for L1
+            ...item,
+          },
+          prioritized,
+        );
         bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
       } else {
         await db.saveBundle({

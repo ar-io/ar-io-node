@@ -29,6 +29,7 @@ import {
 } from '../types.js';
 
 const DEFAULT_WORKER_COUNT = 1;
+const DEFAULT_MAX_QUEUE_SIZE = 1000;
 
 interface IndexProperty {
   index: number;
@@ -43,6 +44,7 @@ export class Ans104Unbundler {
   private filter: ItemFilter;
 
   // Unbundling queue
+  private maxQueueSize: number;
   private queue: queueAsPromised<UnbundleableItem, void>;
 
   // Parser
@@ -54,6 +56,7 @@ export class Ans104Unbundler {
     filter,
     contiguousDataSource,
     dataItemIndexFilterString,
+    maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
     workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
@@ -61,6 +64,7 @@ export class Ans104Unbundler {
     filter: ItemFilter;
     contiguousDataSource: ContiguousDataSource;
     dataItemIndexFilterString: string;
+    maxQueueSize?: number;
     workerCount?: number;
   }) {
     this.log = log.child({ class: 'Ans104Unbundler' });
@@ -72,14 +76,26 @@ export class Ans104Unbundler {
       dataItemIndexFilterString,
     });
 
+    this.maxQueueSize = maxQueueSize;
     this.queue = fastq.promise(this.unbundle.bind(this), workerCount);
   }
 
-  async queueItem(item: UnbundleableItem): Promise<void> {
+  async queueItem(
+    item: UnbundleableItem,
+    prioritized: boolean | undefined,
+  ): Promise<void> {
     const log = this.log.child({ method: 'queueItem', id: item.id });
-    log.debug('Queueing bundle...');
-    this.queue.push(item);
-    log.debug('Bundle queued.');
+    if (prioritized === true) {
+      log.debug('Queueing prioritized bundle...');
+      this.queue.unshift(item);
+      log.debug('Prioritized bundle queued.');
+    } else if (this.queue.length() < this.maxQueueSize) {
+      log.debug('Queueing bundle...');
+      this.queue.push(item);
+      log.debug('Bundle queued.');
+    } else {
+      log.info('Skipping unbundle, queue is full.');
+    }
   }
 
   async unbundle(item: UnbundleableItem): Promise<void> {

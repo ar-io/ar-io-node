@@ -166,6 +166,7 @@ app.post('/ar-io/admin/queue-tx', express.json(), async (req, res) => {
       res.status(400).send("Must provide 'id'");
       return;
     }
+    system.prioritizedTxIds.add(id);
     system.txFetcher.queueTxId(id);
     res.json({ message: 'TX queued' });
   } catch (error: any) {
