@@ -34,6 +34,12 @@ migration):
 
 `START_HEIGHT=800000 yarn start`
 
+## Dev Docs
+
+### Schema (WIP)
+
+- [Bundle schema]
+
 ## Docker
 
 ### Standalone AR.IO Node
@@ -167,7 +173,6 @@ identifier of a particular source of IDs to block (e.g. the name of a
 blocklist). `notes` is a text field that can be used to further describe why a
 particular ID is blocked.
 
-
 ## Principles and Practices
 
 ### Architecture
@@ -196,6 +201,7 @@ particular ID is blocked.
 [ans-104]: https://github.com/ArweaveTeam/arweave-standards/blob/master/ans/ANS-104.md
 [docker compose]: https://docs.docker.com/compose/install/
 [envoy]: https://www.envoyproxy.io/
+[bundle schema]: https://ar-io.github.io/ar-io-node/schema/sqlite/bundles/index.html
 [idempotent]: https://en.wikipedia.org/wiki/Idempotence
 [compile test suite]: https://martinfowler.com/bliki/UnitTest.html
 [sociable over solitary tests]: https://martinfowler.com/bliki/UnitTest.html
