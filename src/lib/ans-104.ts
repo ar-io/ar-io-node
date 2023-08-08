@@ -71,8 +71,6 @@ export function normalizeAns104DataItem({
   filter: string;
   ans104DataItem: Record<string, any>;
 }): NormalizedDataItem {
-  // TODO stricter type checking (maybe zod)
-
   const tags = (ans104DataItem.tags || []).map(
     (tag: { name: string; value: string }) => ({
       name: utf8ToB64Url(tag.name),
@@ -189,7 +187,7 @@ export class Ans104Parser {
           const bundlePath = path.join(
             process.cwd(),
             'data/tmp/ans-104',
-            `${parentId}`,
+            `${parentId}-${Math.random().toString(36).substring(2, 15)}`,
           );
           const writeStream = fs.createWriteStream(bundlePath);
           pipeline(data.stream, writeStream, (error) => {
