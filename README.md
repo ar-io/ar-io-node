@@ -96,12 +96,12 @@ enable this add the following environment variables to your `.env` file:
 
 ```
 ANS104_UNBUNDLE_FILTER="<filter string>"
-ANS104_DATA_INDEX_FILTER="<filter string>"
+ANS104_INDEX_FILTER="<filter string>"
 ```
 
 `ANS104_UNBUNDLE_FILTER` determines which TXs and data items (in the case of
-nested bundles) are unbundled, and `ANS104_DATA_INDEX_FILTER` determines which
-data items within a bundle have their data indexed.
+nested bundles) are unbundled, and `ANS104_INDEX_FILTER` determines which data
+items within a bundle get indexed.
 
 The following types of filters are supported:
 
