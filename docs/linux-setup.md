@@ -160,7 +160,7 @@ The following guide assumes you are running your node on a local home computer.
     nginx is a free and open-source web server and reverse proxy server. It will handle incoming traffic, provide SSL certificates, and redirect the traffic to your node.
     - Open the default configuration file:
         ```
-        sudo nano /etc/sites-available/default
+        sudo nano /etc/nginx/sites-available/default
         ```
     - Replace the file's contents with the following configuration (replace "<your-domain>" when necessary):
         ```
