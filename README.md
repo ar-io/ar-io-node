@@ -115,6 +115,16 @@ The following types of filters are supported:
 
 ```
 
+Place an ANS-104 bundle at the start of the queue for unbundling and indexing on your gateway:
+
+```
+curl -X PUT -H "Authorization: Bearer <ADMIN_KEY>" \
+  -H "Content-Type: application/json" \
+  "http://<HOST>:<PORT>/ar-io/admin/queue-tx" \
+  -d '{ "id": "<ID>" }'
+
+```
+
 Note: ANS-104 indexing support is currently experimental. It has been tested
 successfully with small sets of bundles (using filters), but you may still
 encounter problems with it when indexing larger sets of transactions.
