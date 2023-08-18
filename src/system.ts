@@ -69,7 +69,6 @@ const arweave = Arweave.init({});
 
 export const arweaveClient = new ArweaveCompositeClient({
   log,
-  metricsRegistry: promClient.register,
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
   skipCache: config.SKIP_CACHE,
