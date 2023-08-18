@@ -21,7 +21,6 @@ import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
 import { default as NodeCache } from 'node-cache';
 import { Readable } from 'node:stream';
-import * as promClient from 'prom-client';
 import * as rax from 'retry-axios';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
@@ -34,6 +33,7 @@ import {
   sanityCheckTx,
   validateChunk,
 } from '../lib/validation.js';
+import * as metrics from '../metrics.js';
 import {
   ChainSource,
   Chunk,
@@ -117,13 +117,8 @@ export class ArweaveCompositeClient
   private blockTxPrefetchCount;
   private maxPrefetchHeight = -1;
 
-  // Metrics
-  private arweavePeerInfoErrorCounter: promClient.Counter<string>;
-  private arweavePeerRefreshErrorCounter: promClient.Counter<string>;
-
   constructor({
     log,
-    metricsRegistry,
     arweave,
     trustedNodeUrl,
     blockStore,
@@ -139,7 +134,6 @@ export class ArweaveCompositeClient
     skipCache = false,
   }: {
     log: winston.Logger;
-    metricsRegistry: promClient.Registry;
     arweave: Arweave;
     trustedNodeUrl: string;
     blockStore: PartialJsonBlockStore;
@@ -201,19 +195,6 @@ export class ArweaveCompositeClient
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
-
-    // Metrics
-    this.arweavePeerInfoErrorCounter = new promClient.Counter({
-      name: 'arweave_peer_info_errors_total',
-      help: 'Count of failed Arweave peer info requests',
-    });
-    metricsRegistry.registerMetric(this.arweavePeerInfoErrorCounter);
-
-    this.arweavePeerRefreshErrorCounter = new promClient.Counter({
-      name: 'arweave_peer_referesh_errors_total',
-      help: 'Count of errors refreshing the Arweave peers list',
-    });
-    metricsRegistry.registerMetric(this.arweavePeerRefreshErrorCounter);
   }
 
   async refreshPeers(): Promise<void> {
@@ -242,13 +223,13 @@ export class ArweaveCompositeClient
               this.preferredPeers.add(this.peers[peerHost]);
             }
           } catch (error) {
-            this.arweavePeerInfoErrorCounter.inc();
+            metrics.arweavePeerInfoErrorCounter.inc();
           }
           return;
         }),
       );
     } catch (error) {
-      this.arweavePeerRefreshErrorCounter.inc();
+      metrics.arweavePeerRefreshErrorCounter.inc();
     }
   }
 

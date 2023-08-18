@@ -30,3 +30,17 @@ export const uncaughtExceptionCounter = new promClient.Counter({
   name: 'uncaught_exceptions_total',
   help: 'Count of uncaught exceptions',
 });
+
+//
+// Arweave client metrics
+//
+
+export const arweavePeerInfoErrorCounter = new promClient.Counter({
+  name: 'arweave_peer_info_errors_total',
+  help: 'Count of failed Arweave peer info requests',
+});
+
+export const arweavePeerRefreshErrorCounter = new promClient.Counter({
+  name: 'arweave_peer_referesh_errors_total',
+  help: 'Count of errors refreshing the Arweave peers list',
+});
