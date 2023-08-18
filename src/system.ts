@@ -32,6 +32,7 @@ import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
+import * as metrics from './metrics.js';
 import { MemoryCacheArNSResolver } from './resolution/memory-cache-arns-resolver.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
 import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-resolver.js';
@@ -59,19 +60,8 @@ import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 
-// Global errors counter
-export const errorsCounter = new promClient.Counter({
-  name: 'errors_total',
-  help: 'Total error count',
-});
-
-// Uncaught exception handler
-export const uncaughtExceptionCounter = new promClient.Counter({
-  name: 'uncaught_exceptions_total',
-  help: 'Count of uncaught exceptions',
-});
 process.on('uncaughtException', (error) => {
-  uncaughtExceptionCounter.inc();
+  metrics.uncaughtExceptionCounter.inc();
   log.error('Uncaught exception:', error);
 });
 
@@ -120,7 +110,7 @@ const eventEmitter = new EventEmitter();
 export const blockImporter = new BlockImporter({
   log,
   metricsRegistry: promClient.register,
-  errorsCounter,
+  errorsCounter: metrics.errorsCounter,
   chainSource: arweaveClient,
   chainIndex,
   eventEmitter,
