@@ -115,7 +115,8 @@ The following types of filters are supported:
 
 ```
 
-Place an ANS-104 bundle at the start of the queue for unbundling and indexing on your gateway:
+Place an ANS-104 bundle at the start of the queue for unbundling and indexing
+on your gateway:
 
 ```
 curl -X PUT -H "Authorization: Bearer <ADMIN_KEY>" \
