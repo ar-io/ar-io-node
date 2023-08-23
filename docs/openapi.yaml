@@ -48,7 +48,16 @@ tags:
   - name: Index Querying
     description: |
       Get data from the AR.IO Gateway index using GQL
+  - name: Admin
+    description: |
+      Access several password protected features and functions specific to your AR.IO Gateway.\nInput your ADMIN_API_KEY using the green "Authorize" button at the top of this page, or by clicking on the "lock" icon next to any password protected endpoint.
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: userPassword
+      description: ADMIN_API_KEY set in your .env file.
   schemas:
     Block:
       type: object
@@ -642,3 +651,81 @@ paths:
 
   # Index
   # "/graphql"
+
+  # Admin
+  '/ar-io/admin/debug':
+    get:
+      tags: [Admin]
+      summary: Admin debugging information.
+      description: Get detailed information about the current operational state of your AR.IO Gateway, including information about any current warnings or errors.
+      operationId: adminDebug
+      responses:
+        '200':
+          description: Successful operation.
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
+  '/ar-io/admin/queue-tx':
+    post:
+      tags: [Admin]
+      summary: Prioritize a transaction in the queue.
+      description: Stage a specific TX ID as priority for your Gateway to locate and index.
+      operationId: adminQueueTx
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  pattern: '^[0-9a-zA-Z_-]{43}$'
+                  description: TX ID of the transaction you would like to prioritize.
+            examples:
+              example1:
+                value:
+                  id: '3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ'
+      responses:
+        '200':
+          description: Successful operation
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
+  '/ar-io/admin/block-data':
+    put:
+      tags: [Admin]
+      summary: Blocks transactions or data-items so your AR.IO Gateway will not serve them.
+      description: Submits a TX ID or data-item hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.\nWARNING - Testing a TX ID here WILL result in that data being blocked by your Gateway.
+      operationId: adminBlockData
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  description: TX ID for a transaction you want to block.
+                notes:
+                  type: string
+                  description: Any notes or comments related to the block data. Documentation purposes only.
+                source:
+                  type: string
+                  description: The source from which the block data was obtained. Documentation purposes only.
+            examples:
+              example1:
+                value:
+                  id: '3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ'
+                  notes: 'This content is offensive'
+                  source: 'Public Block list'
+      responses:
+        '200':
+          description: Successful operation.
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
