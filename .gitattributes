@@ -1,2 +1,4 @@
 /docker-entrypoint.sh text eol=lf
 /envoy/docker-entrypoint.sh text eol=lf
+/envoy/install-ytt.sh text eol=lf
+**/*.sh text eol=lf
