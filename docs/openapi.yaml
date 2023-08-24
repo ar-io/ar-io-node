@@ -50,7 +50,10 @@ tags:
       Get data from the AR.IO Gateway index using GQL
   - name: Admin
     description: |
-      Access several password protected features and functions specific to your AR.IO Gateway.\nInput your ADMIN_API_KEY using the green "Authorize" button at the top of this page, or by clicking on the "lock" icon next to any password protected endpoint.
+      Access several password protected features and functions specific to your AR.IO Gateway.  
+
+
+      Input your ADMIN_API_KEY using the green "Authorize" button at the top of this page, or by clicking on the "lock" icon next to any password protected endpoint.
 components:
   securitySchemes:
     bearerAuth:
@@ -351,10 +354,12 @@ paths:
   '/':
     get:
       tags: [Network]
+      summary: Network and Gateway Status.
+      description: Get information about the current status of the Network and your Gateway.
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -362,10 +367,12 @@ paths:
   '/info':
     get:
       tags: [Network]
+      summary: Network and Gateway Status, alternate endpoint.
+      description: An alternative option for accessing network and Gateway status.
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -373,10 +380,12 @@ paths:
   '/peers':
     get:
       tags: [Network]
+      summary: Get active peer list.
+      description: Gets a list of ip addresses for peers your Gateway is currently connected with.
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -384,6 +393,8 @@ paths:
   '/height':
     get:
       tags: [Network]
+      summary: Get current block height.
+      description: Gets the current block height of the Arweave network.
       responses:
         '200':
           description: |-
@@ -404,6 +415,8 @@ paths:
   '/price/{size}':
     get:
       tags: [Pricing]
+      summary: Get price to store an amount of data.
+      description: Get the price, in Winston, required to store a specified amount of data, in bytes, on the Arweave network.
       parameters:
         - name: size
           in: path
@@ -414,7 +427,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             # TODO text/plain ?
             text/html:
@@ -423,6 +436,9 @@ paths:
   '/price/{size}/target':
     get:
       tags: [Pricing]
+      summary: Get price to transfer AR into a wallet and store an amount of data
+      description: |
+        Get the price, in Winston, required to transfer AR into a wallet and store a specified amount of data, in bytes, on the Arweave network.
       parameters:
         - name: size
           in: path
@@ -433,7 +449,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             text/html:
               schema:
@@ -443,6 +459,8 @@ paths:
   '/wallet/{address}/balance':
     get:
       tags: [Wallets]
+      summary: Get the current balance of a wallet.
+      description: Get the current balance of AR, in Winston, of a specified wallet address.
       parameters:
         - name: address
           in: path
@@ -453,7 +471,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             # TODO text/plain ?
             text/html:
@@ -462,6 +480,8 @@ paths:
   '/wallet/{address}/last_tx':
     get:
       tags: [Wallets]
+      summary: Get the last transaction of a wallet.
+      description: Get the TX ID from the most recent transaction a specified wallet completed.
       parameters:
         - name: address
           in: path
@@ -472,7 +492,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             # TODO text/plain ?
             text/html:
@@ -484,10 +504,12 @@ paths:
   '/current_block':
     get:
       tags: [Blocks]
+      summary: Get information about the current block.
+      description: Get detailed information about the current block on the Arweave network.
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -495,6 +517,8 @@ paths:
   '/block/height/{height}':
     get:
       tags: [Blocks]
+      summary: Get current block height.
+      description: Gets the current block height of the Arweave network.
       parameters:
         - name: height
           in: path
@@ -505,7 +529,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -513,6 +537,8 @@ paths:
   '/block/hash/{hash}':
     get:
       tags: [Blocks]
+      summary: Get block by hash.
+      description: Get block information based on a block's hash.
       parameters:
         - name: hash
           in: path
@@ -523,7 +549,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -531,10 +557,12 @@ paths:
   '/block/current':
     get:
       tags: [Blocks]
+      summary: Alternative endpoint to get current block.
+      description: Alternative endpoint to `/current_block`, gets current block information.
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -545,10 +573,12 @@ paths:
   '/tx/pending':
     get:
       tags: [Transactions]
+      summary: Get pending transactions.
+      description: Get list of transactions that are currently pending.
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -556,6 +586,8 @@ paths:
   '/tx/{txId}':
     get:
       tags: [Transactions]
+      summary: Get information about a transaction.
+      description: Get detailed information about a specific transaction.
       parameters:
         - name: txId
           in: path
@@ -566,7 +598,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -574,6 +606,8 @@ paths:
   '/tx/{txId}/offset':
     get:
       tags: [Transactions]
+      summary: Get transaction offset information.
+      description: Get information about the size and offset of a specified transaction.
       parameters:
         - name: txId
           in: path
@@ -584,7 +618,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -592,6 +626,8 @@ paths:
   '/tx/{txId}/status':
     get:
       tags: [Transactions]
+      summary: Get transaction status.
+      description: Get the status of a specified transaction.
       parameters:
         - name: txId
           in: path
@@ -602,7 +638,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -614,6 +650,8 @@ paths:
   '/{txId}':
     get:
       tags: [Cache]
+      summary: Get transaction.
+      description: Get the content of a specified transaction.
       parameters:
         - name: txId
           in: path
@@ -624,7 +662,7 @@ paths:
       responses:
         '200':
           description: |-
-            200 response
+            Successful operation.
           content:
             application/json:
               schema:
@@ -634,6 +672,8 @@ paths:
   '/chunk/{offset}':
     get:
       tags: [Chunks]
+      summary: Get chunk offset information.
+      description:
       parameters:
         - name: offset
           in: path
@@ -698,7 +738,11 @@ paths:
     put:
       tags: [Admin]
       summary: Blocks transactions or data-items so your AR.IO Gateway will not serve them.
-      description: Submits a TX ID or data-item hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.\nWARNING - Testing a TX ID here WILL result in that data being blocked by your Gateway.
+      description: | 
+        Submits a TX ID or data-item hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.  
+
+
+        WARNING - Testing a TX ID here WILL result in that data being blocked by your Gateway.
       operationId: adminBlockData
       requestBody:
         required: true
