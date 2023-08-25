@@ -51,15 +51,12 @@ tags:
   - name: Admin
     description: |
       Access several password protected features and functions specific to your AR.IO Gateway.  
-
-
-      Input your ADMIN_API_KEY using the green "Authorize" button at the top of this page, or by clicking on the "lock" icon next to any password protected endpoint.
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: userPassword
+      bearerFormat: apiToken
       description: ADMIN_API_KEY set in your .env file.
   schemas:
     Block:
@@ -739,7 +736,7 @@ paths:
       tags: [Admin]
       summary: Blocks transactions or data-items so your AR.IO Gateway will not serve them.
       description: | 
-        Submits a TX ID or data-item hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.  
+        Submits a TX ID/data-item ID or sha-256 content hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.  
 
 
         WARNING - Testing a TX ID here WILL result in that data being blocked by your Gateway.
