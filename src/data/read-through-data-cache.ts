@@ -158,14 +158,22 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           const hash = hasher.digest('base64url');
 
           this.log.info('Successfully cached data', { id, hash });
-          await this.contiguousDataIndex.saveDataContentAttributes({
-            id,
-            dataRoot: attributes?.dataRoot,
-            hash,
-            dataSize: data.size,
-            contentType: data.sourceContentType,
-            cachedAt: currentUnixTimestamp(),
-          });
+          try {
+            await this.contiguousDataIndex.saveDataContentAttributes({
+              id,
+              dataRoot: attributes?.dataRoot,
+              hash,
+              dataSize: data.size,
+              contentType: data.sourceContentType,
+              cachedAt: currentUnixTimestamp(),
+            });
+          } catch (error: any) {
+            this.log.error('Error saving data content attributes:', {
+              id,
+              message: error.message,
+              stack: error.stack,
+            });
+          }
 
           try {
             await this.dataStore.finalize(cacheStream, hash);
