@@ -25,7 +25,6 @@ import {
   parentPort,
   workerData,
 } from 'node:worker_threads';
-import * as promClient from 'prom-client';
 import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
@@ -45,6 +44,7 @@ import {
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 import { currentUnixTimestamp } from '../lib/time.js';
 import log from '../log.js';
+import * as metrics from '../metrics.js';
 import {
   BlockListValidator,
   BundleIndex,
@@ -2152,7 +2152,6 @@ export class StandaloneSqliteDatabase
     NestedDataIndexWriter
 {
   log: winston.Logger;
-  methodDurationSummary: promClient.Summary<string>;
   private workers: {
     core: { read: any[]; write: any[] };
     data: { read: any[]; write: any[] };
@@ -2185,28 +2184,18 @@ export class StandaloneSqliteDatabase
   };
   constructor({
     log,
-    metricsRegistry,
     coreDbPath,
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
   }: {
     log: winston.Logger;
-    metricsRegistry: promClient.Registry;
     coreDbPath: string;
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
   }) {
     this.log = log.child({ class: 'StandaloneSqliteDatabase' });
-
-    // Metrics
-    this.methodDurationSummary = new promClient.Summary({
-      name: 'standalone_sqlite_method_duration_seconds',
-      help: 'Count of failed Arweave peer info requests',
-      labelNames: ['worker', 'role', 'method'],
-    });
-    metricsRegistry.registerMetric(this.methodDurationSummary);
 
     const self = this;
 
@@ -2314,7 +2303,7 @@ export class StandaloneSqliteDatabase
     method: string,
     args: any,
   ): Promise<any> {
-    const end = this.methodDurationSummary.startTimer({
+    const end = metrics.methodDurationSummary.startTimer({
       worker: workerName,
       role,
       method,

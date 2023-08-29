@@ -44,3 +44,12 @@ export const arweavePeerRefreshErrorCounter = new promClient.Counter({
   name: 'arweave_peer_referesh_errors_total',
   help: 'Count of errors refreshing the Arweave peers list',
 });
+
+//
+// SQLite metrics
+//
+export const methodDurationSummary = new promClient.Summary({
+  name: 'standalone_sqlite_method_duration_seconds',
+  help: 'Count of failed Arweave peer info requests',
+  labelNames: ['worker', 'role', 'method'],
+});
