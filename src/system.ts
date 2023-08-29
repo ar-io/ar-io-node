@@ -17,7 +17,6 @@
  */
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
-import * as promClient from 'prom-client';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
@@ -123,17 +122,11 @@ const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Version', valueStartsWith: '2.' },
 ]);
 
-const bundlesCounter = new promClient.Counter({
-  name: 'bundles_total',
-  help: 'Count of all bundles seen',
-  labelNames: ['bundle_format', 'parent_type'],
-});
-
 export const prioritizedTxIds = new Set<string>();
 
 eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
   if (await ans104TxMatcher.match(tx)) {
-    bundlesCounter.inc({
+    metrics.bundlesCounter.inc({
       bundle_format: 'ans-104',
       parent_type: 'transaction',
     });
@@ -146,7 +139,7 @@ eventEmitter.on(
   events.ANS104_DATA_ITEM_DATA_INDEXED,
   async (item: MatchableItem) => {
     if (await ans104TxMatcher.match(item)) {
-      bundlesCounter.inc({
+      metrics.bundlesCounter.inc({
         bundle_format: 'ans-104',
         parent_type: 'data_item',
       });
@@ -194,7 +187,7 @@ export const bundleRepairWorker = new BundleRepairWorker({
   filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
 
-// Configure contigous data source
+// Configure contiguous data source
 const chunkDataSource = new ReadThroughChunkDataCache({
   log,
   chunkSource: arweaveClient,
@@ -230,18 +223,6 @@ const ans104Unbundler = new Ans104Unbundler({
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
 });
 
-const bundlesMatchedCounter = new promClient.Counter({
-  name: 'bundles_matched_total',
-  help: 'Count of bundles matched for unbundling',
-  labelNames: ['bundle_format'],
-});
-
-const bundlesQueuedCounter = new promClient.Counter({
-  name: 'bundles_queued_total',
-  help: 'Count of bundles queued for unbundling',
-  labelNames: ['bundle_format'],
-});
-
 eventEmitter.on(
   events.ANS104_BUNDLE_INDEXED,
   async (item: NormalizedDataItem | PartialJsonTransaction) => {
@@ -254,7 +235,7 @@ eventEmitter.on(
       const prioritized = prioritizedTxIds.has(item.id);
       prioritizedTxIds.delete(item.id);
       if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
-        bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
+        metrics.bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
         await db.saveBundle({
           id: item.id,
           format: 'ans-104',
@@ -272,7 +253,7 @@ eventEmitter.on(
           },
           prioritized,
         );
-        bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
+        metrics.bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
       } else {
         await db.saveBundle({
           id: item.id,
@@ -287,15 +268,9 @@ eventEmitter.on(
   },
 );
 
-const bundlesUnbundledCounter = new promClient.Counter({
-  name: 'bundles_unbundled_total',
-  help: 'Count of bundles unbundled',
-  labelNames: ['bundle_format'],
-});
-
 eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   try {
-    bundlesUnbundledCounter.inc({ bundle_format: 'ans-104' });
+    metrics.bundlesUnbundledCounter.inc({ bundle_format: 'ans-104' });
     db.saveBundle({
       id: bundleEvent.parentId,
       format: 'ans-104',
@@ -320,14 +295,8 @@ const ans104DataIndexer = new Ans104DataIndexer({
   indexWriter: nestedDataIndexWriter,
 });
 
-const dataItemsQueuedCounter = new promClient.Counter({
-  name: 'data_items_queued_total',
-  help: 'Count of data items queued for indexing',
-  labelNames: ['bundle_format'],
-});
-
 eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
-  dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
+  metrics.dataItemsQueuedCounter.inc({ bundle_format: 'ans-104' });
   dataItemIndexer.queueDataItem(dataItem);
   ans104DataIndexer.queueDataItem(dataItem);
 });

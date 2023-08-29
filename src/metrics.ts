@@ -32,6 +32,40 @@ export const uncaughtExceptionCounter = new promClient.Counter({
 });
 
 //
+// Global bundle metrics
+//
+
+export const bundlesCounter = new promClient.Counter({
+  name: 'bundles_total',
+  help: 'Count of all bundles seen',
+  labelNames: ['bundle_format', 'parent_type'],
+});
+
+export const bundlesMatchedCounter = new promClient.Counter({
+  name: 'bundles_matched_total',
+  help: 'Count of bundles matched for unbundling',
+  labelNames: ['bundle_format'],
+});
+
+export const bundlesQueuedCounter = new promClient.Counter({
+  name: 'bundles_queued_total',
+  help: 'Count of bundles queued for unbundling',
+  labelNames: ['bundle_format'],
+});
+
+export const bundlesUnbundledCounter = new promClient.Counter({
+  name: 'bundles_unbundled_total',
+  help: 'Count of bundles unbundled',
+  labelNames: ['bundle_format'],
+});
+
+export const dataItemsQueuedCounter = new promClient.Counter({
+  name: 'data_items_queued_total',
+  help: 'Count of data items queued for indexing',
+  labelNames: ['bundle_format'],
+});
+
+//
 // Arweave client metrics
 //
 
@@ -48,6 +82,7 @@ export const arweavePeerRefreshErrorCounter = new promClient.Counter({
 //
 // SQLite metrics
 //
+
 export const methodDurationSummary = new promClient.Summary({
   name: 'standalone_sqlite_method_duration_seconds',
   help: 'Count of failed Arweave peer info requests',
@@ -57,6 +92,7 @@ export const methodDurationSummary = new promClient.Summary({
 //
 // Block importer metrics
 //
+
 export const blockImporterRunningGauge = new promClient.Gauge({
   name: 'block_importer_running',
   help: 'Depth of the last observed chain fork',
