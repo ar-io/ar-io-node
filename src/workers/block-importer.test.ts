@@ -18,7 +18,6 @@
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import { EventEmitter } from 'node:events';
-import * as promClient from 'prom-client';
 import * as sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 import { default as wait } from 'wait';
@@ -38,7 +37,6 @@ chai.use(chaiAsPromised);
 chai.use(sinonChai);
 
 describe('BlockImporter', () => {
-  let metricsRegistry: promClient.Registry;
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
@@ -54,11 +52,6 @@ describe('BlockImporter', () => {
   }) => {
     return new BlockImporter({
       log,
-      metricsRegistry,
-      errorsCounter: new promClient.Counter({
-        name: 'errors_total',
-        help: 'Total error count',
-      }),
       chainSource,
       chainIndex: db,
       eventEmitter,
@@ -68,13 +61,10 @@ describe('BlockImporter', () => {
   };
 
   before(async () => {
-    metricsRegistry = promClient.register;
-    metricsRegistry.clear();
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
     db = new StandaloneSqliteDatabase({
       log,
-      metricsRegistry,
       bundlesDbPath,
       coreDbPath,
       dataDbPath,
@@ -88,8 +78,6 @@ describe('BlockImporter', () => {
 
   beforeEach(async () => {
     sandbox = sinon.createSandbox();
-    metricsRegistry = promClient.register;
-    metricsRegistry.clear();
   });
 
   afterEach(async () => {
