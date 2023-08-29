@@ -107,8 +107,6 @@ const eventEmitter = new EventEmitter();
 
 export const blockImporter = new BlockImporter({
   log,
-  metricsRegistry: promClient.register,
-  errorsCounter: metrics.errorsCounter,
   chainSource: arweaveClient,
   chainIndex,
   eventEmitter,
