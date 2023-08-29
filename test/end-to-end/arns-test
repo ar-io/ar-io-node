@@ -2,12 +2,14 @@
 
 export START_HEIGHT=0
 export STOP_HEIGHT=0
+export ARNS_ROOT_HOST=ar-io.localhost
 
 container=$(
   docker run -d \
     -p 4000:4000 \
     -e START_HEIGHT \
     -e STOP_HEIGHT \
+    -e ARNS_ROOT_HOST \
     -v $PWD/data/:/app/data \
     $IMAGE_URI
 )
