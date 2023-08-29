@@ -4,6 +4,6 @@
   },
   "src/*.test.ts": {
     "alternate": "src/{}.ts",
-    "dispatch": "npx mocha --no-warnings --color=false"
+    "dispatch": "npx c8 -r lcov mocha --no-warnings --color=false"
   }
 }
