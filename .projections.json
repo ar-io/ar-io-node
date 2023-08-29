@@ -4,6 +4,6 @@
   },
   "src/*.test.ts": {
     "alternate": "src/{}.ts",
-    "dispatch": "yarn test -c"
+    "dispatch": "npx mocha --no-warnings --color=false"
   }
 }
