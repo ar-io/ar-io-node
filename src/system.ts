@@ -89,7 +89,6 @@ export const arweaveClient = new ArweaveCompositeClient({
 
 export const db = new StandaloneSqliteDatabase({
   log,
-  metricsRegistry: promClient.register,
   coreDbPath: 'data/sqlite/core.db',
   dataDbPath: 'data/sqlite/data.db',
   moderationDbPath: 'data/sqlite/moderation.db',
