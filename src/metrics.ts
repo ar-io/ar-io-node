@@ -53,3 +53,46 @@ export const methodDurationSummary = new promClient.Summary({
   help: 'Count of failed Arweave peer info requests',
   labelNames: ['worker', 'role', 'method'],
 });
+
+//
+// Block importer metrics
+//
+export const blockImporterRunningGauge = new promClient.Gauge({
+  name: 'block_importer_running',
+  help: 'Depth of the last observed chain fork',
+});
+
+export const forksCounter = new promClient.Counter({
+  name: 'forks_total',
+  help: 'Count of chain forks observed',
+});
+
+export const lastForkDepthGauge = new promClient.Gauge({
+  name: 'last_fork_depth',
+  help: 'Depth of the last observed chain fork',
+});
+
+export const blocksImportedCounter = new promClient.Counter({
+  name: 'blocks_imported_total',
+  help: 'Count of blocks imported',
+});
+
+export const transactionsImportedCounter = new promClient.Counter({
+  name: 'block_transactions_imported_total',
+  help: 'Count of transactions imported',
+});
+
+export const missingTransactionsCounter = new promClient.Counter({
+  name: 'missing_block_transactions_total',
+  help: 'Count of block transactions that could not be immediately fetched',
+});
+
+export const blockImportErrorsCounter = new promClient.Counter({
+  name: 'block_import_errors_total',
+  help: 'Count of block import errors',
+});
+
+export const lastHeightImported = new promClient.Gauge({
+  name: 'last_height_imported',
+  help: 'Height of the last block imported',
+});
