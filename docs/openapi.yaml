@@ -707,7 +707,7 @@ paths:
     post:
       tags: [Admin]
       summary: Prioritize a transaction or bundle in the queue.
-      description: Stage a specific TX ID as priority for your Gateway to locate and index. This can be any L1 transaction, or bundle if your Gateway is configured to unbundle and index.
+      description: Stage a specific TX ID as priority for your Gateway to locate and index. This will trigger and queue bundle processing if the transaction is a bundle, and your Gateway is configured to unbundle and index.
       operationId: adminQueueTx
       requestBody:
         required: true
@@ -719,7 +719,7 @@ paths:
                 id:
                   type: string
                   pattern: '^[0-9a-zA-Z_-]{43}$'
-                  description: TX ID of the transaction or bundle you would like to prioritize.
+                  description: TX ID of the transaction you would like to prioritize.
             examples:
               example1:
                 value:
