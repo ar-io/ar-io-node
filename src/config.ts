@@ -71,3 +71,5 @@ export const ANS104_INDEX_FILTER = createFilter(
 );
 export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
 export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
+export const START_WRITERS =
+  env.varOrDefault('START_WRITERS', 'true') === 'true';

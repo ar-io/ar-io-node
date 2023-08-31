@@ -77,7 +77,7 @@ Once running, requests can be directed to Envoy server at `localhost:3000`.
 ## Configuration
 
 When running via docker-compose, it will read a `.env` file in the project root
-directory and use the envrionment variables set there.
+directory and use the environment variables set there.
 
 ### GraphQL Pass-Through
 
@@ -115,6 +115,17 @@ The following types of filters are supported:
 
 ```
 
+Place an ANS-104 bundle at the start of the queue for unbundling and indexing
+on your gateway:
+
+```
+curl -X PUT -H "Authorization: Bearer <ADMIN_KEY>" \
+  -H "Content-Type: application/json" \
+  "http://<HOST>:<PORT>/ar-io/admin/queue-tx" \
+  -d '{ "id": "<ID>" }'
+
+```
+
 Note: ANS-104 indexing support is currently experimental. It has been tested
 successfully with small sets of bundles (using filters), but you may still
 encounter problems with it when indexing larger sets of transactions.
@@ -142,7 +153,7 @@ handled locally, but ArNS state is not yet computed locally. Local ArNS state
 computation will be added in a future release. Also, be aware, ArNS is still using
 a test contract. Resolved names should be considered temporary.
 
-### Wallet assocation
+### Wallet association
 
 In order to participate in the [ar.io network](https://ar.io/), gateways need to
 association themselves with a wallet. This can be configured by setting the AR_IO_WALLET

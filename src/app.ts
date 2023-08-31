@@ -37,9 +37,13 @@ import { apolloServer } from './routes/graphql/index.js';
 import * as system from './system.js';
 
 system.arweaveClient.refreshPeers();
-system.blockImporter.start();
-system.txRepairWorker.start();
-system.bundleRepairWorker.start();
+
+// Allow starting without writers to support SQLite replication
+if (config.START_WRITERS) {
+  system.blockImporter.start();
+  system.txRepairWorker.start();
+  system.bundleRepairWorker.start();
+}
 
 // HTTP server
 const app = express();
@@ -75,19 +79,21 @@ const dataHandler = createDataHandler({
   manifestPathResolver: system.manifestPathResolver,
 });
 
-app.use(
-  createArnsMiddleware({
-    dataHandler,
-    nameResolver: system.nameResolver,
-  }),
-);
+if (config.ARNS_ROOT_HOST !== undefined) {
+  app.use(
+    createArnsMiddleware({
+      dataHandler,
+      nameResolver: system.nameResolver,
+    }),
+  );
 
-app.use(
-  createSandboxMiddleware({
-    rootHost: config.ARNS_ROOT_HOST,
-    sandboxProtocol: config.SANDBOX_PROTOCOL,
-  }),
-);
+  app.use(
+    createSandboxMiddleware({
+      rootHost: config.ARNS_ROOT_HOST,
+      sandboxProtocol: config.SANDBOX_PROTOCOL,
+    }),
+  );
+}
 
 // OpenAPI Spec
 const openapiDocument = YAML.parse(

@@ -6,7 +6,7 @@
     "ts-node/register/transpile-only",
     "source-map-support/register.js"
   ],
-  "timeout": "5000",
+  "timeout": "15000",
   "parallel": false,
   "recursive": true
 }

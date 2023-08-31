@@ -9,6 +9,7 @@
 /dist
 /node_modules
 /vendor
+test-results.json
 
 # Generated docs
 /docs/sqlite/bundles
