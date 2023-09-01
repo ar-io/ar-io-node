@@ -71,6 +71,7 @@ static_resources:
                               num_retries: 5
                         - match: { prefix: '/ar-io' }
                           route:
+                            timeout: 0s
                             cluster: ario_gateways
                             retry_policy:
                               retry_on: '5xx,reset'
