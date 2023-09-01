@@ -51,6 +51,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           lcov-file: ./coverage/lcov.info
+          filter-changed-files: true
 
       - name: Check code coverage threshold
         uses: VeryGoodOpenSource/very_good_coverage@v2
