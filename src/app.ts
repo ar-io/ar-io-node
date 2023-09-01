@@ -183,6 +183,7 @@ app.post('/ar-io/admin/queue-tx', express.json(), async (req, res) => {
 // GraphQL
 const apolloServerInstanceGql = apolloServer(system.db, {
   introspection: true,
+  persistedQueries: false,
 });
 apolloServerInstanceGql.start().then(() => {
   apolloServerInstanceGql.applyMiddleware({
