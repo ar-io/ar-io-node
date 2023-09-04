@@ -1,21 +1,41 @@
 # Windows Installation Instructions
 
 ## Overview
-This guide provides step-by-step instructions for setting up the ar.io node on a Windows computer. It covers installing necessary software, cloning the repository, creating an environment file, starting the Docker container, setting up networking, and installing and configuring NGINX Docker. No prior coding experience is required.
+This guide provides step-by-step instructions for setting up the AR.IO node on a Windows computer. It covers installing necessary software, cloning the repository, creating an environment file, starting the Docker container, setting up networking, and installing and configuring NGINX Docker. No prior coding experience is required.
 
 ## Prerequisites
 Before starting the installation process, ensure you have the following:
 
-- A Windows computer
-- Administrative privileges on the computer
+- A Windows computer that meets the below system requirements.
+- Administrative privileges on the computer.
+
+
+## System Requirements
+
+Please note, The AR.IO Node software is still in development and testing, all system requirements are subject to change.
+
+
+### Minimum requirements
+
+The hardware specifications listed below represent the minimum system requirements at which the AR.IO Node has been tested. While your Node may still operate on systems with lesser specifications, please note that AR.IO cannot guarantee performance or functionality under those conditions. Use below-minimum hardware at your own risk.
+
+- 4 core CPU
+- 4 GB Ram
+- 500 GB storage (SSD recommended)
+- Stable 50 Mbps internet connection
+
+
+### Recommended
+
+- 12 core CPU
+- 32 GB Ram
+- 2 TB SSD storage 
+- Stable 1 Gbps internet connection
 
 ## Install Required Packages
 
-1. Install GitHub CLI (gh):
-    - Download the latest release of gh CLI from [here](https://github.com/cli/cli/releases/tag/v2.31.0).
-    - Run the `gh-cli-latest.windows-amd64.msi` installer and follow the prompts.
 
-2. Install Docker:
+1. Install Docker:
     - Download Docker Desktop for Windows from [here](https://www.docker.com/products/docker-desktop/).
     - Run the installer and follow the prompts.
     - During installation, make sure to select the option to use WSL (Windows Subsystem for Linux) rather than Hyper-V.
@@ -33,7 +53,7 @@ Before starting the installation process, ensure you have the following:
             ```
     - Restart Docker Desktop.
 
-3. Install Git:
+2. Install Git:
     - Download Git for Windows from [here](https://git-scm.com/download/win).
     - Run the installer and use the default settings.
 
@@ -49,10 +69,11 @@ Before starting the installation process, ensure you have the following:
             cd Documents
             ```
             - More detailed instructions on navigating with the `cd` command can be found [here](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cd)
-            - **NOTE**: Your database of Arweave Transaction Headers will be created in the project directory, not Docker. So, if you are using an external hard drive to turn an old machine into a node, install the node directly to that external drive.
+            - **NOTE**: Your indexing databases will be created in the project directory unless otherwise specified in your .env file, not your Docker environment. So, if you are using an external hard drive, you should install the node directly to that external drive.
+            
     - Run the following command:
         ```
-        gh repo clone ar-io/ar-io-node
+        git clone https://github.com/ar-io/ar-io-node
         ```
 
 ## Create the Environment File
@@ -73,6 +94,8 @@ Before starting the installation process, ensure you have the following:
         - `ARNS_ROOT_HOST` sets the starting point for resolving ARNS names, which are accessed as a subdomain of a gateway. It should be set to the url you are pointing to your node, excluding any protocol prefix. For example, use `node-ar.io` and not `https://node-ar.io`. If you are using a subdomain to access your node and do not set this value, the node will not understand incoming requests.
     - Save the file with the name ".env" and make sure to select "All Files" as the file type. This helps to ensure the file saves as ".env" and not ".env.txt"
 
+    Advanced configuration options can be found at [ar.io/docs](https://ar.io/docs/gateways/ar-io-node/advanced-config.html)
+
     **Note**: The `.env` file should be saved inside the same directory where you cloned the repository (e.g., `ar-io-node`).
 
 ## Start the Docker Containers
@@ -91,10 +114,12 @@ Before starting the installation process, ensure you have the following:
        cd "C:\My Documents\ar-io-node"
        ```
      - Use the `dir` command to list the contents of the current directory and verify that you're in the correct location:
+
        ```
        dir
        ```
    - Once you are in the correct directory, run the following command to start the Docker container:
+
      ```
      docker compose up -d --build
      ```
@@ -161,13 +186,13 @@ To expose your node to the internet and use a custom domain, follow these steps:
             ```
     - Run the following command:
         ```
-        gh repo clone bobinstein/dockerized-nginx
+        git clone https://github.com/bobinstein/dockerized-nginx
         ```
 
     **Note**: This NGINX container was designed to easily automate many of the more technical aspects of setting up NGNIX and obtaining an ssl certificate so your node can be accessed with https. However, wildcard domain certifications cannot be universally automated due to significant security concerns. Be sure to follow the instructions in this project for obtaining wildcard domain certificates in order for your node to function properly. 
 
 2. Follow the instructions provided in the repository for setting up NGINX Docker.
 
-Congratulations! Your ar.io node is now running and connected to the internet. Test it by entering https://\<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
+Congratulations! Your AR.IO node is now running and connected to the internet. Test it by entering https://\<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
 
-**Note**: If you encounter any issues during the installation process, please seek assistance from the [ar.io community](https://discord.gg/7zUPfN4D6g).
+**Note**: If you encounter any issues during the installation process, please seek assistance from the [AR.IO community](https://discord.gg/7zUPfN4D6g).

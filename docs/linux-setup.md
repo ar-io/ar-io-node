@@ -63,31 +63,19 @@ nvm install 16.15.1 && nvm use 16.15.1
     ```
 
 
-3. Install Yarn:
-    ```
-    curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
-
-    echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
-
-    sudo apt-get update -y
-
-    sudo apt-get install yarn -y
-    ```
-
-
-4. Install nginx:
+3. Install nginx:
     ```
     sudo apt install nginx -y
     ```
 
 
-5. Install git:
+4. Install git:
     ```
     sudo apt install git -y
     ```
 
 
-6. Install Docker:
+5. Install Docker:
     ```
     sudo apt install docker-compose -y
     ```
@@ -97,7 +85,7 @@ nvm install 16.15.1 && nvm use 16.15.1
         ```
 
 
-7. Install Certbot:
+6. Install Certbot:
     ```
     sudo apt install certbot -y
     ```
@@ -108,10 +96,22 @@ nvm install 16.15.1 && nvm use 16.15.1
 These packages are not required to run a node in its basic form. However, they will become necessary for more advanced usage or customization.
 
 
-8. Install ssh (optional, for remote access to your Linux machine):
+7. Install ssh (optional, for remote access to your Linux machine):
     ```
     sudo apt install openssh-server -y
     sudo systemctl enable ssh
+    ```
+
+
+8. Install Yarn:
+    ```
+    curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+
+    echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+
+    sudo apt-get update -y
+
+    sudo apt-get install yarn -y
     ```
 
 
@@ -177,7 +177,7 @@ These packages are not required to run a node in its basic form. However, they w
     START_HEIGHT=1000000
     ARNS_ROOT_HOST=<your-domain>
     ```
-    
+
     - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. If omitted, your node can support GQL queries on locally indexed transactions, but only L1 transactions are indexed by default.
     - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading and indexing transactions headers. Omitting this line will begin indexing at block 0.
     - `ARNS_ROOT_HOST` sets the starting point for resolving ARNS names, which are accessed as a subdomain of a gateway. It should be set to the url you are pointing to your node, excluding any protocol prefix. For example, use `node-ar.io` and not `https://node-ar.io`. If you are using a subdomain to access your node and do not set this value, the node will not understand incoming requests.
