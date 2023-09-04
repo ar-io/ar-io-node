@@ -1,9 +1,47 @@
 # Linux Installation Instructions
 
 ## Overview
-The following instructions will guide you through the process of installing the ar.io node on a Linux machine, specifically Ubuntu 20.04.5 desktop on a home computer. Actual steps may differ slightly on different versions or distributions. This guide will cover how to set up your node, point a domain name to your home network, and create an nginx server for routing traffic to your node. No prior coding experience is required.
+The following instructions will guide you through the process of installing the AR.IO node on a Linux machine, specifically Ubuntu 22.04.3 desktop on a home computer. Actual steps may differ slightly on different versions or distributions. This guide will cover how to set up your node, point a domain name to your home network, and create an nginx server for routing traffic to your node. No prior coding experience is required.
 
-## Install Required Packages
+## System Requirements
+
+Please note, The AR.IO Node software is still in development and testing, all system requirements are subject to change.
+
+External storage devices should be formatted as ext4.
+
+### Minimum requirements
+
+The hardware specifications listed below represent the minimum system requirements at which the AR.IO Node has been tested. While your Node may still operate on systems with lesser specifications, please note that AR.IO cannot guarantee performance or functionality under those conditions. Use below-minimum hardware at your own risk.
+
+- 4 core CPU
+- 4 GB Ram
+- 500 GB storage (SSD recommended)
+- Stable 50 Mbps internet connection
+
+
+### Recommended
+
+- 12 core CPU
+- 32 GB Ram
+- 2 TB SSD storage 
+- Stable 1 Gbps internet connection
+
+
+## Install Packages
+
+If you would like to quickly install all required and suggested packages, you can run the following 2 commands in your terminal, and skip to [installing the Node](#install-the-node).
+
+
+```
+sudo apt update -y && sudo apt upgrade -y && sudo apt install -y curl openssh-server docker-compose git certbot nginx sqlite3 && sudo systemctl enable ssh && curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list && sudo apt-get update -y && sudo apt-get install -y gcc g++ make yarn && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && source ~/.bashrc && sudo ufw allow 22 80 443 && sudo ufw enable
+```
+
+```
+nvm install 16.15.1 && nvm use 16.15.1
+```
+
+### Required packages
+
 
 1. Update your software:
     ```
@@ -11,14 +49,11 @@ The following instructions will guide you through the process of installing the 
     sudo apt upgrade
     ```
 
-2. Install ssh (optional, for remote access to your Linux machine):
-    ```
-    sudo apt install openssh-server
-    sudo systemctl enable ssh
-    ```
 
-3. Open necessary ports in your firewall:
+2. Enable your firewall and open necessary ports:
     ```
+    sudo ufw enable
+
     # Optional: If using SSH, allow port 22 
     sudo ufw allow 22
 
@@ -27,76 +62,127 @@ The following instructions will guide you through the process of installing the 
     sudo ufw allow 443
     ```
 
-4. Install Yarn:
+
+3. Install Yarn:
     ```
-    sudo snap install yarn --classic
+    curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+
+    echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+
+    sudo apt-get update -y
+
+    sudo apt-get install yarn -y
     ```
 
-5. Install NVM (Node Version Manager):
+
+4. Install nginx:
     ```
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-    source ~/.bashrc
+    sudo apt install nginx -y
     ```
 
-6. Install Node.js:
+
+5. Install git:
     ```
-    nvm install 16.15.1
+    sudo apt install git -y
     ```
 
-7. Install nginx:
-    ```
-    sudo apt install nginx
-    ```
 
-8. Install git:
+6. Install Docker:
     ```
-    sudo apt install git
-    ```
-
-9. Install GitHub CLI:
-    ```
-    sudo snap install gh
-    ```
-
-10. Install Docker:
-    ```
-    sudo apt install docker-compose
+    sudo apt install docker-compose -y
     ```
     - Test Docker installation:
         ```
         sudo docker run hello-world
         ```
 
-11. Install Certbot:
+
+7. Install Certbot:
     ```
-    sudo apt install certbot
+    sudo apt install certbot -y
     ```
+
+
+### Suggested packages
+
+These packages are not required to run a node in its basic form. However, they will become necessary for more advanced usage or customization.
+
+
+8. Install ssh (optional, for remote access to your Linux machine):
+    ```
+    sudo apt install openssh-server -y
+    sudo systemctl enable ssh
+    ```
+
+
+9. Install NVM (Node Version Manager):
+    ```
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    source ~/.bashrc
+    ```
+
+
+10. Install Node.js:
+    ```
+    nvm install 16.15.1
+    ```
+
+
+11. Install GCC:
+    ```
+    sudo apt-get install gcc -y 
+    ```
+
+
+12. Install G++:
+    ```
+    sudo apt-get install g++ -y
+    ```
+
+
+13. Install make:
+    ```
+    sudo apt-get install make -y
+    ```
+
+
+14. Install SQLite:
+    ```
+    sudo apt install sqlite3 -y
+    ```
+
 
 ## Install the Node
 
 - Navigate to the desired installation location:
-    - **NOTE**: Your database of Arweave Transaction Headers will be created in the project directory, not Docker. So, if you are using an external hard drive to turn an old machine into a node, install the node directly to that external drive.
+    - **NOTE**: Your indexing databases will be created in the project directory unless otherwise specified in your .env file, not your Docker environment. So, if you are using an external hard drive, you should install the node directly to that external drive.
 
 - Clone the ar-io-node repository and navigate into it:
     ```
-    gh repo clone ar-io/ar-io-node
+    git clone https://github.com/ar-io/ar-io-node
     cd ar-io-node
     ```
 
 - Create an environment file:
+
     ```
     nano .env
     ```
+
     Paste the following content into the new file, replacing \<your-domain> with the domain address you are using to access the node, save, and exit:
+
     ```
     GRAPHQL_HOST=arweave.net
     GRAPHQL_PORT=443
     START_HEIGHT=1000000
     ARNS_ROOT_HOST=<your-domain>
     ```
+    
     - The GRAPHQL values set the proxy for GQL queries to arweave.net, You may use any available gateway that supports GQL queries. If omitted, your node can support GQL queries on locally indexed transactions, but only L1 transactions are indexed by default.
     - `START_HEIGHT` is an optional line. It sets the block number where your node will start downloading and indexing transactions headers. Omitting this line will begin indexing at block 0.
     - `ARNS_ROOT_HOST` sets the starting point for resolving ARNS names, which are accessed as a subdomain of a gateway. It should be set to the url you are pointing to your node, excluding any protocol prefix. For example, use `node-ar.io` and not `https://node-ar.io`. If you are using a subdomain to access your node and do not set this value, the node will not understand incoming requests.
+
+    - More advanced configuration options can be found at [ar.io/docs](https://ar.io/docs/gateways/ar-io-node/advanced-config.html)
 
 - Build the Docker container:
     ```
@@ -205,4 +291,4 @@ The following guide assumes you are running your node on a local home computer.
 
 Your node should now be running and connected to the internet. Test it by entering https://\<your-domain>/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ in your browser.
 
-**Note**: If you encounter any issues during the installation process, please seek assistance from the [ar.io community](https://discord.gg/7zUPfN4D6g).
+**Note**: If you encounter any issues during the installation process, please seek assistance from the [AR.IO community](https://discord.gg/7zUPfN4D6g).
