@@ -33,7 +33,7 @@ If you would like to quickly install all required and suggested packages, you ca
 
 
 ```
-sudo apt update -y && sudo apt upgrade -y && sudo apt install -y curl openssh-server docker-compose git certbot nginx sqlite3 && sudo systemctl enable ssh && curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list && sudo apt-get update -y && sudo apt-get install -y gcc g++ make yarn && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && source ~/.bashrc && sudo ufw allow 22 80 443 && sudo ufw enable
+sudo apt update -y && sudo apt upgrade -y && sudo apt install -y curl openssh-server docker-compose git certbot nginx sqlite3 build-essential && sudo systemctl enable ssh && curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list && sudo apt-get update -y && sudo apt-get install -y yarn && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && source ~/.bashrc && sudo ufw allow 22 80 443 && sudo ufw enable
 ```
 
 ```
@@ -128,25 +128,12 @@ These packages are not required to run a node in its basic form. However, they w
     ```
 
 
-11. Install GCC:
+11. Install build tools
     ```
-    sudo apt-get install gcc -y 
-    ```
-
-
-12. Install G++:
-    ```
-    sudo apt-get install g++ -y
+    sudo apt install build-essential
     ```
 
-
-13. Install make:
-    ```
-    sudo apt-get install make -y
-    ```
-
-
-14. Install SQLite:
+12. Install SQLite:
     ```
     sudo apt install sqlite3 -y
     ```
