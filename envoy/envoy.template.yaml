@@ -97,6 +97,10 @@ static_resources:
                               retry_on: '5xx,reset'
                               num_retries: 5
                         - match: { prefix: '/' }
+                          response_headers_to_add:
+                            - header:
+                                key: 'Cache-Control'
+                                value: 'public, max-age=30'
                           route:
                             cluster: legacy_gateways
                             retry_policy:
