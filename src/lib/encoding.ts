@@ -351,8 +351,10 @@ export function resolveManifestStreamPath(
     });
 
     emitter.on('end', () => {
+      if(!resolved){
       resolved=true
       resolve(wildcard);
+      }
     });
 
     emitter.on('index', (data) => {
