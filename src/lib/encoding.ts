@@ -231,6 +231,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   let currentKey: string | undefined;
   const keyPath: Array<string | number> = [];
   let indexPath: string | undefined;
+  let wildcardpath: string| undefined;
   let paths: { [k: string]: string } = {};
   let hasValidManifestKey = false; // { "manifest": "arweave/paths" }
   let hasValidManifestVersion = false; // { "version": "0.1.0" }
@@ -295,6 +296,18 @@ export function parseManifestStream(stream: Readable): EventEmitter {
         paths = {};
       }
     }
+    if (
+      keyPath.length === 1 &&
+      keyPath[0] === '*' &&
+      currentKey === 'path'
+    ) {
+      wildcardPath = data;
+      // Resolve if the path id is already known
+      if (wildcardPath !== undefined && paths[wildcardPath] !== undefined) {
+        emitter.emit('wildcard', { path: wildcardPath, id: paths[wildcardPath] });
+        paths = {};
+      }
+    }
 
     // Paths - { "paths": { "some/path/file.html": { "id": "<data-id>" } }
     if (
@@ -311,6 +324,9 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       } else if (p === indexPath) {
         emitter.emit('index', { path: p, id: data });
         paths = {};
+      } else if (p === wildcardPath){
+        emitter.emit('wildcard', { path: p, id: data });
+        paths = {};
       }
     }
   });
@@ -324,20 +340,23 @@ export function resolveManifestStreamPath(
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const emitter = parseManifestStream(stream);
-
+    let resolved=false
     // Remove trailing slashes from path - treat /path and /path/ the same
     const sanitizedPath = path !== undefined ? path.replace(/\/+$/g, '') : '';
 
     emitter.on('error', (err) => {
+      resolved=true
       reject(err);
     });
 
     emitter.on('end', () => {
+      resolved=true
       resolve(undefined);
     });
 
     emitter.on('index', (data) => {
       if (sanitizedPath === '') {
+        resolved=true
         resolve(data.id);
       }
     });
@@ -345,8 +364,16 @@ export function resolveManifestStreamPath(
     emitter.on('path', (data) => {
       const trimmedDataPath = data.path.replace(/\/+$/g, '');
       if (sanitizedPath !== '' && trimmedDataPath === sanitizedPath) {
+        resolved=true
         resolve(data.id);
       }
     });
+
+    emitter.on('wildcard',(data) => {
+      if(!resolved){
+        resolved=true
+        resolve(data.id)
+      }
+    })
   });
 }
