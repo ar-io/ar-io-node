@@ -231,7 +231,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   let currentKey: string | undefined;
   const keyPath: Array<string | number> = [];
   let indexPath: string | undefined;
-  let wildcardpath: string| undefined;
+  let wildcardpath: string | undefined;
   let paths: { [k: string]: string } = {};
   let hasValidManifestKey = false; // { "manifest": "arweave/paths" }
   let hasValidManifestVersion = false; // { "version": "0.1.0" }
@@ -296,6 +296,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
         paths = {};
       }
     }
+    
+    // Wildcard - { "*": { "path": "404.html" } }
     if (
       keyPath.length === 1 &&
       keyPath[0] === '*' &&
@@ -375,5 +377,6 @@ export function resolveManifestStreamPath(
     emitter.on('wildcard',(data) => {
      wildcard=data
     })
+    
   });
 }
