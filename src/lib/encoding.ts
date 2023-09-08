@@ -342,6 +342,7 @@ export function resolveManifestStreamPath(
     const emitter = parseManifestStream(stream);
     let resolved=false
     // Remove trailing slashes from path - treat /path and /path/ the same
+    let wildcard;
     const sanitizedPath = path !== undefined ? path.replace(/\/+$/g, '') : '';
 
     emitter.on('error', (err) => {
@@ -351,7 +352,7 @@ export function resolveManifestStreamPath(
 
     emitter.on('end', () => {
       resolved=true
-      resolve(undefined);
+      resolve(wildcard);
     });
 
     emitter.on('index', (data) => {
@@ -370,10 +371,7 @@ export function resolveManifestStreamPath(
     });
 
     emitter.on('wildcard',(data) => {
-      if(!resolved){
-        resolved=true
-        resolve(data.id)
-      }
+     wildcard=data
     })
   });
 }
