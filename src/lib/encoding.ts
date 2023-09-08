@@ -278,8 +278,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       hasValidManifestKey = true;
     }
 
-    // Manifest version - { "version": "0.1.0" }
-    if (keyPath.length === 0 && currentKey === 'version' && data === '0.1.0') {
+    // Manifest version - { "version": "0.1.1" }
+    if (keyPath.length === 0 && currentKey === 'version' && ["0.1.0", "0.1.1"].includes(data)) {
       hasValidManifestVersion = true;
     }
 
@@ -309,6 +309,16 @@ export function parseManifestStream(stream: Readable): EventEmitter {
         emitter.emit('wildcard', { path: wildcardPath, id: paths[wildcardPath] });
         paths = {};
       }
+    }
+
+    // Wildcard - { "*": { "id": "wildcard-id" } }
+    if (
+      keyPath.length === 1 &&
+      keyPath[0] === '*' &&
+      currentKey === 'id'
+    ) {
+        emitter.emit('wildcard', { path: null, id: data });
+        paths = {};
     }
 
     // Paths - { "paths": { "some/path/file.html": { "id": "<data-id>" } }
