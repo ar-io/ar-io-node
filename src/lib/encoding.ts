@@ -231,7 +231,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   let currentKey: string | undefined;
   const keyPath: Array<string | number> = [];
   let indexPath: string | undefined;
-  let wildcardpath: string | undefined;
+  let wildcardPath: string | undefined;
   let paths: { [k: string]: string } = {};
   let hasValidManifestKey = false; // { "manifest": "arweave/paths" }
   let hasValidManifestVersion = false; // { "version": "0.1.0" }
