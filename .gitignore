@@ -18,5 +18,8 @@ test-results.json
 /.vscode
 .DS_Store
 
+# JetBrains
+/.idea
+
 # Exceptions
 !/data/.gitkeep
