@@ -1,8 +1,11 @@
 {
   "manifest": "arweave/paths",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "*":{
+    "id":"vNIcG7HdiMpFqJ8NZN4KopG4_iTQPoH_j7iP7EYgQJ-"
+  },
   "index": {
-    "path": "index.html"
+    "path": "index.html",
   },
   "paths": {
     "index.html": {
