@@ -247,6 +247,14 @@ describe('Manifest parsing', () => {
       expect(id).to.equal('cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
     });
 
+    it('should return wildcard file for files not present in manifest', async ()=>{
+      const id=await resolveManifestStreamPath(
+        exampleManifestStream(),
+        'path/that/does/not/exist.txt'
+      );
+      expect(id).to.equal('vNIcG7HdiMpFqJ8NZN4KopG4_iTQPoH_j7iP7EYgQJ-')
+    })
+    
     it('should return the ID for non-index paths', async () => {
       // TODO use an array here
       const id1 = await resolveManifestStreamPath(
