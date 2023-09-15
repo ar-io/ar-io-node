@@ -278,8 +278,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       hasValidManifestKey = true;
     }
 
-    // Manifest version - { "version": "0.1.1" }
-    if (keyPath.length === 0 && currentKey === 'version' && ["0.1.0", "0.1.1"].includes(data)) {
+    // Manifest version - { "version": "0.2.0" } or { "version": "0.1.0" }
+    if (keyPath.length === 0 && currentKey === 'version' && ["0.1.0", "0.2.0"].includes(data)) {
       hasValidManifestVersion = true;
     }
 
