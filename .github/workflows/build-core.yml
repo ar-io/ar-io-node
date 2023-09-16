@@ -47,6 +47,12 @@ jobs:
           path: test-results.json
           reporter: mocha-json
 
+      # Codecov report
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v3
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
       # Build and push container image to GCR (only on main branch)
       - name: Log in to the GitHub Container Registry
         if: github.ref == 'refs/heads/main'

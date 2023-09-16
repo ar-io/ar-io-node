@@ -1,5 +1,7 @@
 # AR.IO Gateway Node
 
+[![codecov](https://codecov.io/gh/ar-io/ar-io-node/graph/badge.svg?token=F3BJ7W74HY)](https://codecov.io/gh/ar-io/ar-io-node)
+
 ## Getting Started
 
 - [Linux Installation Instructions](./docs/linux-setup.md)
