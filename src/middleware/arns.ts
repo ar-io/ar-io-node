@@ -25,33 +25,42 @@ const EXCLUDED_SUBDOMAINS = new Set('www');
 
 export const createArnsMiddleware = ({
   dataHandler,
+  rootHost,
   nameResolver,
 }: {
   dataHandler: Handler;
+  rootHost: string;
   nameResolver: NameResolver;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
+    const rootHostSubdomainLength = rootHost.split('.').length - 2;
     if (
-      Array.isArray(req.subdomains) &&
-      req.subdomains.length === 1 &&
-      !EXCLUDED_SUBDOMAINS.has(req.subdomains[0]) &&
+      // Ignore subdomains that are part of the ArNS root hostname.
+      !Array.isArray(req.subdomains) ||
+      req.subdomains.length === rootHostSubdomainLength
+    ) {
+      next();
+      return;
+    }
+    const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
+    if (
+      EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
       // Avoid collisions with sandbox URLs by ensuring the subdomain length
       // is below the mininimum length of a sandbox subdomain. Undernames are
       // are an exception because they can be longer and '_' cannot appear in
       // base32.
-      (req.subdomains[0].length <= 48 || req.subdomains[0].match(/_/))
+      (arnsSubdomain.length > 48 && !arnsSubdomain.match(/_/))
     ) {
-      const { resolvedId, ttl } = await nameResolver.resolve(req.subdomains[0]);
-      if (resolvedId !== undefined) {
-        res.header('X-ArNS-Resolved-Id', resolvedId);
-        res.header('X-ArNS-TTL-Seconds', ttl.toString());
-        res.header('Cache-Control', `public, max-age=${ttl}`);
-        dataHandler(req, res, next);
-        return;
-      } else {
-        sendNotFound(res);
-        return;
-      }
+      next();
+      return;
     }
-    next();
+    const { resolvedId, ttl } = await nameResolver.resolve(arnsSubdomain);
+    if (resolvedId === undefined) {
+      sendNotFound(res);
+      return;
+    }
+    res.header('X-ArNS-Resolved-Id', resolvedId);
+    res.header('X-ArNS-TTL-Seconds', ttl.toString());
+    res.header('Cache-Control', `public, max-age=${ttl}`);
+    dataHandler(req, res, next);
   });

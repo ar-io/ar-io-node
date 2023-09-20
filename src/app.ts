@@ -83,6 +83,7 @@ if (config.ARNS_ROOT_HOST !== undefined) {
   app.use(
     createArnsMiddleware({
       dataHandler,
+      rootHost: config.ARNS_ROOT_HOST,
       nameResolver: system.nameResolver,
     }),
   );
