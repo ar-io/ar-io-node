@@ -21,9 +21,10 @@ import { base32 } from 'rfc4648';
 
 import { fromB64Url } from '../lib/encoding.js';
 
-function getRequestSandbox(req: Request): string | undefined {
-  if (req.subdomains.length === 1) {
-    return req.subdomains[0];
+function getRequestSandbox(req: Request, rootHost: string): string | undefined {
+  const rootHostSubdomainLength = rootHost.split('.').length - 2;
+  if (req.subdomains.length > rootHostSubdomainLength) {
+    return req.subdomains[req.subdomains.length - 1];
   }
   return undefined;
 }
@@ -55,7 +56,7 @@ export function createSandboxMiddleware({
       return;
     }
 
-    const reqSandbox = getRequestSandbox(req);
+    const reqSandbox = getRequestSandbox(req, rootHost);
     const idSandbox = sandboxFromId(id);
     if (reqSandbox !== idSandbox) {
       const queryString = url.parse(req.originalUrl).query ?? '';
