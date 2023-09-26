@@ -83,14 +83,12 @@ if (config.ARNS_ROOT_HOST !== undefined) {
   app.use(
     createArnsMiddleware({
       dataHandler,
-      rootHost: config.ARNS_ROOT_HOST,
       nameResolver: system.nameResolver,
     }),
   );
 
   app.use(
     createSandboxMiddleware({
-      rootHost: config.ARNS_ROOT_HOST,
       sandboxProtocol: config.SANDBOX_PROTOCOL,
     }),
   );

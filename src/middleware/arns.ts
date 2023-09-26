@@ -18,6 +18,7 @@
 import { Handler } from 'express';
 import { asyncMiddleware } from 'middleware-async';
 
+import * as config from '../config.js';
 import { sendNotFound } from '../routes/data.js';
 import { NameResolver } from '../types.js';
 
@@ -25,24 +26,21 @@ const EXCLUDED_SUBDOMAINS = new Set('www');
 
 export const createArnsMiddleware = ({
   dataHandler,
-  rootHost,
   nameResolver,
 }: {
   dataHandler: Handler;
-  rootHost: string;
   nameResolver: NameResolver;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
-    const rootHostSubdomainLength = rootHost.split('.').length - 2;
     if (
       // Ignore subdomains that are part of the ArNS root hostname.
       !Array.isArray(req.subdomains) ||
-      req.subdomains.length === rootHostSubdomainLength
+      req.subdomains.length === config.ROOT_HOST_SUBDOMAIN_LENGTH
     ) {
       next();
       return;
     }
-    const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
+    const arnsSubdomain = req.subdomains[config.ROOT_HOST_SUBDOMAIN_LENGTH - 1];
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
       // Avoid collisions with sandbox URLs by ensuring the subdomain length
