@@ -19,11 +19,11 @@ import { Handler, Request } from 'express';
 import url from 'node:url';
 import { base32 } from 'rfc4648';
 
+import * as config from '../config.js';
 import { fromB64Url } from '../lib/encoding.js';
 
-function getRequestSandbox(req: Request, rootHost: string): string | undefined {
-  const rootHostSubdomainLength = rootHost.split('.').length - 2;
-  if (req.subdomains.length > rootHostSubdomainLength) {
+function getRequestSandbox(req: Request): string | undefined {
+  if (req.subdomains.length > config.ROOT_HOST_SUBDOMAIN_LENGTH) {
     return req.subdomains[req.subdomains.length - 1];
   }
   return undefined;
@@ -38,14 +38,12 @@ function sandboxFromId(id: string): string {
 }
 
 export function createSandboxMiddleware({
-  rootHost,
   sandboxProtocol,
 }: {
-  rootHost?: string;
   sandboxProtocol?: string;
 }): Handler {
   return (req, res, next) => {
-    if (rootHost === undefined) {
+    if (config.ARNS_ROOT_HOST === undefined) {
       next();
       return;
     }
@@ -56,7 +54,7 @@ export function createSandboxMiddleware({
       return;
     }
 
-    const reqSandbox = getRequestSandbox(req, rootHost);
+    const reqSandbox = getRequestSandbox(req);
     const idSandbox = sandboxFromId(id);
     if (reqSandbox !== idSandbox) {
       const queryString = url.parse(req.originalUrl).query ?? '';
@@ -64,7 +62,7 @@ export function createSandboxMiddleware({
       const protocol = sandboxProtocol ?? (req.secure ? 'https' : 'http');
       return res.redirect(
         302,
-        `${protocol}://${idSandbox}.${rootHost}${path}?${queryString}`,
+        `${protocol}://${idSandbox}.${config.ARNS_ROOT_HOST}${path}?${queryString}`,
       );
     }
 
