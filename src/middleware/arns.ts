@@ -18,6 +18,7 @@
 import { Handler } from 'express';
 import { asyncMiddleware } from 'middleware-async';
 
+import * as config from '../config.js';
 import { sendNotFound } from '../routes/data.js';
 import { NameResolver } from '../types.js';
 
@@ -32,26 +33,32 @@ export const createArnsMiddleware = ({
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
     if (
-      Array.isArray(req.subdomains) &&
-      req.subdomains.length === 1 &&
-      !EXCLUDED_SUBDOMAINS.has(req.subdomains[0]) &&
+      // Ignore subdomains that are part of the ArNS root hostname.
+      !Array.isArray(req.subdomains) ||
+      req.subdomains.length === config.ROOT_HOST_SUBDOMAIN_LENGTH
+    ) {
+      next();
+      return;
+    }
+    const arnsSubdomain = req.subdomains[config.ROOT_HOST_SUBDOMAIN_LENGTH - 1];
+    if (
+      EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
       // Avoid collisions with sandbox URLs by ensuring the subdomain length
       // is below the mininimum length of a sandbox subdomain. Undernames are
       // are an exception because they can be longer and '_' cannot appear in
       // base32.
-      (req.subdomains[0].length <= 48 || req.subdomains[0].match(/_/))
+      (arnsSubdomain.length > 48 && !arnsSubdomain.match(/_/))
     ) {
-      const { resolvedId, ttl } = await nameResolver.resolve(req.subdomains[0]);
-      if (resolvedId !== undefined) {
-        res.header('X-ArNS-Resolved-Id', resolvedId);
-        res.header('X-ArNS-TTL-Seconds', ttl.toString());
-        res.header('Cache-Control', `public, max-age=${ttl}`);
-        dataHandler(req, res, next);
-        return;
-      } else {
-        sendNotFound(res);
-        return;
-      }
+      next();
+      return;
     }
-    next();
+    const { resolvedId, ttl } = await nameResolver.resolve(arnsSubdomain);
+    if (resolvedId === undefined) {
+      sendNotFound(res);
+      return;
+    }
+    res.header('X-ArNS-Resolved-Id', resolvedId);
+    res.header('X-ArNS-TTL-Seconds', ttl.toString());
+    res.header('Cache-Control', `public, max-age=${ttl}`);
+    dataHandler(req, res, next);
   });

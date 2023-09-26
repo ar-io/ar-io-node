@@ -70,6 +70,8 @@ export const ANS104_INDEX_FILTER = createFilter(
   JSON.parse(ANS104_INDEX_FILTER_STRING),
 );
 export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
+export const ROOT_HOST_SUBDOMAIN_LENGTH =
+  ARNS_ROOT_HOST !== undefined ? ARNS_ROOT_HOST.split('.').length - 2 : 0;
 export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 export const START_WRITERS =
   env.varOrDefault('START_WRITERS', 'true') === 'true';

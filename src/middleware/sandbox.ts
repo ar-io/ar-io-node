@@ -19,11 +19,12 @@ import { Handler, Request } from 'express';
 import url from 'node:url';
 import { base32 } from 'rfc4648';
 
+import * as config from '../config.js';
 import { fromB64Url } from '../lib/encoding.js';
 
 function getRequestSandbox(req: Request): string | undefined {
-  if (req.subdomains.length === 1) {
-    return req.subdomains[0];
+  if (req.subdomains.length > config.ROOT_HOST_SUBDOMAIN_LENGTH) {
+    return req.subdomains[req.subdomains.length - 1];
   }
   return undefined;
 }
@@ -37,14 +38,12 @@ function sandboxFromId(id: string): string {
 }
 
 export function createSandboxMiddleware({
-  rootHost,
   sandboxProtocol,
 }: {
-  rootHost?: string;
   sandboxProtocol?: string;
 }): Handler {
   return (req, res, next) => {
-    if (rootHost === undefined) {
+    if (config.ARNS_ROOT_HOST === undefined) {
       next();
       return;
     }
@@ -63,7 +62,7 @@ export function createSandboxMiddleware({
       const protocol = sandboxProtocol ?? (req.secure ? 'https' : 'http');
       return res.redirect(
         302,
-        `${protocol}://${idSandbox}.${rootHost}${path}?${queryString}`,
+        `${protocol}://${idSandbox}.${config.ARNS_ROOT_HOST}${path}?${queryString}`,
       );
     }
 
