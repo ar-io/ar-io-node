@@ -40,7 +40,7 @@ export const createArnsMiddleware = ({
       next();
       return;
     }
-    const arnsSubdomain = req.subdomains[config.ROOT_HOST_SUBDOMAIN_LENGTH - 1];
+    const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
       // Avoid collisions with sandbox URLs by ensuring the subdomain length
