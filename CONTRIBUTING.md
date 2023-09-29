@@ -20,7 +20,7 @@ NOTE: Contribution implies licensing under the terms of [LICENSE]
 - Keep the first line short but informative.
 - Provide explanation of why the change is being made in the commit message
   body.
-- Prefer copying relevant information into the commit body over linking to them.
+- Prefer copying relevant information into the commit body over linking to it.
 - Consider whether your commit message includes enough detail for someone to be
   able to understand it in the future.
 
