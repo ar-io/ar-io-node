@@ -10,6 +10,8 @@ NOTE: Contribution implies licensing under the terms of [LICENSE]
 - Ensure commit messages adequately explain the reasons for the changes.
 - Ensure changes are consistent with the [principles and practices]
   outlined in the README.
+- Ensure that tests were added or that the manual testing process followed is
+  described in the PR.
 - Run [lint].
 - Run the [unit tests].
 
