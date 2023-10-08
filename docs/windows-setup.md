@@ -73,7 +73,7 @@ The hardware specifications listed below represent the minimum system requiremen
             
     - Run the following command:
         ```
-        git clone https://github.com/ar-io/ar-io-node
+        git clone -b main https://github.com/ar-io/ar-io-node
         ```
 
 ## Create the Environment File
@@ -186,7 +186,7 @@ To expose your node to the internet and use a custom domain, follow these steps:
             ```
     - Run the following command:
         ```
-        git clone https://github.com/bobinstein/dockerized-nginx
+        git clone -b main https://github.com/bobinstein/dockerized-nginx
         ```
 
     **Note**: This NGINX container was designed to easily automate many of the more technical aspects of setting up NGNIX and obtaining an ssl certificate so your node can be accessed with https. However, wildcard domain certifications cannot be universally automated due to significant security concerns. Be sure to follow the instructions in this project for obtaining wildcard domain certificates in order for your node to function properly. 
