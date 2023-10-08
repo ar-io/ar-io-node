@@ -10,6 +10,8 @@ NOTE: Contribution implies licensing under the terms of [LICENSE]
 - Ensure commit messages adequately explain the reasons for the changes.
 - Ensure changes are consistent with the [principles and practices]
   outlined in the README.
+- Ensure that tests were added or that the manual testing process followed is
+  described in the PR.
 - Run [lint].
 - Run the [unit tests].
 
@@ -18,7 +20,7 @@ NOTE: Contribution implies licensing under the terms of [LICENSE]
 - Keep the first line short but informative.
 - Provide explanation of why the change is being made in the commit message
   body.
-- Prefer copying relevant information into the commit body over linking to them.
+- Prefer copying relevant information into the commit body over linking to it.
 - Consider whether your commit message includes enough detail for someone to be
   able to understand it in the future.
 
