@@ -20,7 +20,7 @@ import { default as asyncHandler } from 'express-async-handler';
 import url from 'node:url';
 import { Logger } from 'winston';
 
-import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
+import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import {
   BlockListValidator,
   ContiguousData,
@@ -28,7 +28,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ManifestPathResolver,
-} from '../types.js';
+} from '../../types.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
@@ -89,7 +89,6 @@ export const sendNotFound = (res: Response) => {
 };
 
 // Data routes
-export const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
 export const createRawDataHandler = ({
   log,
   dataIndex,
@@ -259,8 +258,6 @@ const sendManifestResponse = async ({
   return false;
 };
 
-export const DATA_PATH_REGEX =
-  /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 export const createDataHandler = ({
   log,
   dataIndex,
