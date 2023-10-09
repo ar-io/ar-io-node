@@ -19,7 +19,7 @@ import { Handler } from 'express';
 import { asyncMiddleware } from 'middleware-async';
 
 import * as config from '../config.js';
-import { sendNotFound } from '../routes/data.js';
+import { sendNotFound } from '../routes/data/handlers.js';
 import { NameResolver } from '../types.js';
 
 const EXCLUDED_SUBDOMAINS = new Set('www');
