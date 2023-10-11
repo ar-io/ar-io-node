@@ -39,7 +39,11 @@ if (config.START_WRITERS) {
 // HTTP server
 const app = express();
 
-app.use(cors());
+app.use(
+  cors({
+    exposedHeaders: ['X-ArNS-Resolved-Id', 'X-ArNS-TTL-Seconds'],
+  }),
+);
 
 app.use(arnsRouter);
 app.use(openApiRouter);
