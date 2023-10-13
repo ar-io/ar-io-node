@@ -59,7 +59,7 @@ export function createSandboxMiddleware({
     if (reqSandbox !== idSandbox) {
       const queryString = url.parse(req.originalUrl).query ?? '';
       const path = req.path.replace(/\/\//, '/');
-      const protocol = sandboxProtocol ?? (req.secure ? 'https' : 'http');
+      const protocol = sandboxProtocol ?? 'https';
       return res.redirect(
         302,
         `${protocol}://${idSandbox}.${config.ARNS_ROOT_HOST}${path}?${queryString}`,
