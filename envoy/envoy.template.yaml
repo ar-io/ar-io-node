@@ -62,6 +62,13 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
+                        - match: { prefix: '/ar-io/observer' }
+                          route:
+                            timeout: 0s
+                            cluster: observers
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
                         - match: { prefix: '/ar-io' }
                           route:
                             timeout: 0s
@@ -147,6 +154,19 @@ static_resources:
               trusted_ca:
                 filename: /etc/ssl/certs/ca-certificates.crt
       #@ end
+    - name: observers
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: observers
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: #@ data.values.OBSERVER_HOST
+                      port_value: #@ data.values.OBSERVER_PORT
     - name: legacy_gateways
       connect_timeout: 1s
       type: STRICT_DNS
