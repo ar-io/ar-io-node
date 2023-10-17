@@ -4,7 +4,7 @@
 mkdir -p data/sqlite
 
 # Migrate the DB to the latest version
-node dist/migrate.js up
+/nodejs/bin/node dist/migrate.js up
 
 # Run the gateway service
-exec node dist/app.js
+exec /nodejs/bin/node dist/app.js

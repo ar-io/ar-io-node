@@ -1,35 +1,40 @@
-FROM node:16-alpine as builder
+ARG NODE_VERSION=18.18.0
+ARG NODE_VERSION_SHORT=18
 
-# BUILD
+# Build
+FROM node:${NODE_VERSION}-bullseye-slim AS builder
+
 WORKDIR /app
-RUN apk --no-cache add g++ git python3 make
+RUN apt-get update \
+    && apt-get install -y build-essential curl git python3
 COPY . .
-RUN yarn install
-RUN yarn build
-RUN rm -rf node_modules # remove dev deps to reduce image size
-RUN yarn install --production
+RUN yarn install \
+    && yarn build \
+    && rm -rf node_modules \
+    && yarn install --production
 
-# EXTRACT DIST
-FROM node:16-alpine
+# Runtime
+FROM gcr.io/distroless/nodejs${NODE_VERSION_SHORT}-debian11
 WORKDIR /app
-RUN apk add --no-cache sqlite curl
+
+# Add sh and mkdir for scripts
+COPY --from=busybox:1.35.0-uclibc /bin/sh /bin/sh
+COPY --from=busybox:1.35.0-uclibc /bin/mkdir /bin/mkdir
 
 COPY --from=builder /app/node_modules ./node_modules/
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/dist/ ./dist/
 COPY ./migrations /app/migrations
 COPY ./docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY ./healthcheck.sh /app/healthcheck.sh
 COPY ./docs/openapi.yaml /app/docs/openapi.yaml
 
-# CREATE VOLUME
 VOLUME /app/data
 
-# EXPOSE PORT AND SETUP HEALTHCHECK
 EXPOSE 4000
-HEALTHCHECK CMD curl --fail http://localhost:4000/ar-io/healthcheck || exit 1
+HEALTHCHECK CMD /bin/sh healthcheck.sh
 
-# ADD LABELS
 LABEL org.opencontainers.image.title="ar.io Core Service"
 
-# START
+# Start
 ENTRYPOINT [ "/bin/sh", "docker-entrypoint.sh" ]
