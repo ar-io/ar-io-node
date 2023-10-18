@@ -1,0 +1,21 @@
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: write
+  pull-requests: write
+
+name: release-please
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/release-please-action@v3
+        with:
+          release-type: node
+          package-name: ar-io-node
+          bootstrap-sha: 38b27aa8eef2774cad119f69be56eb4593805f33
+          default-branch: develop
