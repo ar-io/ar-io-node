@@ -479,3 +479,10 @@ export interface MatchableItem {
 export interface ItemFilter {
   match(tx: MatchableItem): Promise<boolean>;
 }
+
+export type KVBufferStore = {
+  get(key: string): Promise<Buffer | undefined>;
+  set(key: string, buffer: Buffer): Promise<void>;
+  del(key: string): Promise<void>;
+  has(key: string): Promise<boolean>;
+};
