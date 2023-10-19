@@ -57,7 +57,7 @@ services:
     ports:
       - 5000:5000
     volumes:
-      - ${OBSERVER_DATA_PATH:-./data/reports}:/app/data/reports
+      - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
     environment:
       - PORT=5000
       - RUN_OBSERVER=${RUN_OBSERVER:-false}
