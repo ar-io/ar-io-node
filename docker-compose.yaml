@@ -53,11 +53,14 @@ services:
       - START_WRITERS=${START_WRITERS:-}
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-a2144db719ae3e41ddbcf2900db32ec12c719422}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-d1c6095a83c278d6c12c07c3167faf39b401ee3d}
     ports:
       - 5000:5000
     volumes:
+      - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
+      - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
       - PORT=5000
+      - OBSERVER_WALLET=${OBSERVER_WALLET:-<example>}
       - RUN_OBSERVER=${RUN_OBSERVER:-false}
