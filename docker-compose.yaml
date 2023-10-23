@@ -63,4 +63,4 @@ services:
     environment:
       - PORT=5000
       - OBSERVER_WALLET=${OBSERVER_WALLET:-<example>}
-      - RUN_OBSERVER=${RUN_OBSERVER:-false}
+      - RUN_OBSERVER=${RUN_OBSERVER:-true}
