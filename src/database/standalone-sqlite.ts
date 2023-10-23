@@ -969,7 +969,7 @@ export class StandaloneSqliteDatabaseWorker {
         newTxs: chainStats.new_txs_count,
         bundleCount: bundleStats.count,
         bundleDataItems: bundleStats.data_item_count,
-        matcheDataItems: bundleStats.matched_data_item_count,
+        matchedDataItems: bundleStats.matched_data_item_count,
         dataItems: dataItemStats.data_item_count,
         nestedDataItems: dataItemStats.nested_data_item_count,
       },
