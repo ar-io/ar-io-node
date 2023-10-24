@@ -53,7 +53,7 @@ services:
       - START_WRITERS=${START_WRITERS:-}
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-12e83cba9751e98ea9a970655dbd6fb23e8565bb}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-ae0005422005cf51b8222cecb6704d8cd172e8ca}
     ports:
       - 5000:5000
     volumes:
