@@ -60,10 +60,9 @@ export class KvTransactionStore implements PartialJsonTransactionStore {
   async get(txId: string) {
     try {
       if (await this.has(txId)) {
-        // kv buffer store currently catches errors and returns undefined, so throw if empty here
         const txData = await this.kvBufferStore.get(txId);
         if (txData === undefined) {
-          throw new Error('Missing transaction data in kv store');
+          throw new Error('Missing transaction data in key/value store');
         }
         const tx = msgpackToJsonTx(txData);
         sanityCheckTx(tx);
