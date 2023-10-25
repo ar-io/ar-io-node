@@ -25,10 +25,6 @@ import {
   PartialJsonTransactionStore,
 } from '../types.js';
 
-/**
- * TODO: currently our KvBufferStore is handling errors. We may want to refactor that to handle errors here instead.
- */
-
 export class KvTransactionStore implements PartialJsonTransactionStore {
   private log: winston.Logger;
   private kvBufferStore: KVBufferStore;
@@ -45,7 +41,20 @@ export class KvTransactionStore implements PartialJsonTransactionStore {
   }
 
   async has(txId: string) {
-    return this.kvBufferStore.has(txId);
+    try {
+      const exists = await this.kvBufferStore.has(txId);
+      return exists;
+    } catch (error: any) {
+      this.log.error(
+        'Failed to verify if transaction data exists in key/value store',
+        {
+          txId,
+          message: error.message,
+          stack: error.stack,
+        },
+      );
+    }
+    return false;
   }
 
   async get(txId: string) {
@@ -61,7 +70,7 @@ export class KvTransactionStore implements PartialJsonTransactionStore {
         return tx;
       }
     } catch (error: any) {
-      this.log.error('Failed to get transaction', {
+      this.log.error('Failed to get transaction data from key/value store', {
         txId,
         message: error.message,
         stack: error.stack,
@@ -71,18 +80,40 @@ export class KvTransactionStore implements PartialJsonTransactionStore {
   }
 
   async set(tx: PartialJsonTransaction) {
-    if (!(await this.has(tx.id))) {
-      // Encode the transaction data
-      const txData = jsonTxToMsgpack(tx);
+    try {
+      if (!(await this.has(tx.id))) {
+        // Encode the transaction data
+        const txData = jsonTxToMsgpack(tx);
 
-      // Write the block data to the kv store
-      return this.kvBufferStore.set(tx.id, txData);
+        // Write the block data to the kv store
+        return this.kvBufferStore.set(tx.id, txData);
+      }
+    } catch (error: any) {
+      this.log.error(
+        'Failed to set transaction buffer data in key/value store',
+        {
+          txId: tx.id,
+          message: error.message,
+          stack: error.stack,
+        },
+      );
     }
   }
 
   async del(txId: string) {
-    if (await this.has(txId)) {
-      return this.kvBufferStore.del(txId);
+    try {
+      if (await this.has(txId)) {
+        return this.kvBufferStore.del(txId);
+      }
+    } catch (error: any) {
+      this.log.error(
+        'Failed to delete transaction buffer data from key/value store',
+        {
+          txId,
+          message: error.message,
+          stack: error.stack,
+        },
+      );
     }
   }
 }

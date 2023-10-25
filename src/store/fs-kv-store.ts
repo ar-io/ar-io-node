@@ -36,22 +36,15 @@ export class FsKVStore implements KVBufferStore {
     tmpDir: string;
   }) {
     this.log = log.child({ class: this.constructor.name });
+    this.log.info('Using filesystem based key/value store');
     this.baseDir = baseDir;
     this.tmpDir = tmpDir;
     fs.mkdirSync(tmpDir, { recursive: true });
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    try {
-      if (await this.has(key)) {
-        return await fs.promises.readFile(this.bufferPath(key));
-      }
-    } catch (error: any) {
-      this.log.error('Failed to get buffer data from key/value store', {
-        key,
-        message: error.message,
-        stack: error.stack,
-      });
+    if (await this.has(key)) {
+      return fs.promises.readFile(this.bufferPath(key));
     }
     return undefined;
   }
@@ -70,35 +63,19 @@ export class FsKVStore implements KVBufferStore {
   }
 
   async del(key: string): Promise<void> {
-    try {
-      if (await this.has(key)) {
-        await fs.promises.unlink(this.bufferPath(key));
-      }
-    } catch (error: any) {
-      this.log.error('Failed to delete buffer data from key/value store', {
-        key,
-        message: error.message,
-        stack: error.stack,
-      });
+    if (await this.has(key)) {
+      return fs.promises.unlink(this.bufferPath(key));
     }
   }
 
   async set(key: string, buffer: Buffer): Promise<void> {
-    try {
-      if (!(await this.has(key))) {
-        // Write the block data to the temporary file in case it fails
-        const tmpPath = `${this.tmpDir}/${key}`;
-        await fs.promises.writeFile(tmpPath, buffer);
+    if (!(await this.has(key))) {
+      // Write the block data to the temporary file in case it fails
+      const tmpPath = `${this.tmpDir}/${key}`;
+      await fs.promises.writeFile(tmpPath, buffer);
 
-        // copy the temporary file to the final location
-        await fse.move(tmpPath, this.bufferPath(key));
-      }
-    } catch (error: any) {
-      this.log.error('Failed to set buffer data in key/value store', {
-        key,
-        message: error.message,
-        stack: error.stack,
-      });
+      // copy the temporary file to the final location
+      await fse.move(tmpPath, this.bufferPath(key));
     }
   }
 }

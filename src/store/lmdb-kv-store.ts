@@ -35,7 +35,7 @@ export class LmdbKVStore implements KVBufferStore {
     >;
   }) {
     this.log = log.child({ class: this.constructor.name });
-    this.log.info('Opening LMDB database', { lmdbOptions });
+    this.log.info('Using LMDB database', { lmdbOptions });
     this.db = open({
       ...lmdbOptions,
       encoding: 'binary',
