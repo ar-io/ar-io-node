@@ -79,3 +79,4 @@ export const CONTRACT_ID = env.varOrDefault(
   'CONTRACT_ID',
   'bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U',
 );
+export const CHAIN_CACHE_TYPE = env.varOrDefault('CHAIN_CACHE_TYPE', 'fs');

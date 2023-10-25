@@ -38,7 +38,9 @@ import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-re
 import { FsBlockStore } from './store/fs-block-store.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
-import { FsTransactionStore } from './store/fs-transaction-store.js';
+import { FsKVStore } from './store/fs-kv-store.js';
+import { KvTransactionStore } from './store/kv-transaction-store.js';
+import { LmdbKVStore } from './store/lmdb-kv-store.js';
 import {
   BlockListValidator,
   BundleIndex,
@@ -66,21 +68,49 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 
+// Stores
+
+const txStore = new KvTransactionStore({
+  log,
+  kvBufferStore: (() => {
+    switch (config.CHAIN_CACHE_TYPE) {
+      case 'lmdb': {
+        return new LmdbKVStore({
+          log,
+          lmdbOptions: {
+            path: 'data/lmdb/partial-txs',
+            // TODO: set sensible default options for LMDB client
+          },
+        });
+      }
+      case 'fs': {
+        return new FsKVStore({
+          log,
+          baseDir: 'data/headers/partial-txs',
+          tmpDir: 'data/tmp/partial-txs',
+        });
+      }
+      default: {
+        throw new Error(`Invalid chain cache type: ${config.CHAIN_CACHE_TYPE}`);
+      }
+    }
+  })(),
+});
+
+// TODO: replace with KvBlockStore
+const blockStore = new FsBlockStore({
+  log,
+  baseDir: 'data/headers/partial-blocks',
+  tmpDir: 'data/tmp/partial-blocks',
+});
+
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
   skipCache: config.SKIP_CACHE,
-  blockStore: new FsBlockStore({
-    log,
-    baseDir: 'data/headers/partial-blocks',
-    tmpDir: 'data/tmp/partial-blocks',
-  }),
-  txStore: new FsTransactionStore({
-    log,
-    baseDir: 'data/headers/partial-txs',
-    tmpDir: 'data/tmp/partial-txs',
-  }),
+  blockStore,
+  txStore,
   failureSimulator: new UniformFailureSimulator({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
