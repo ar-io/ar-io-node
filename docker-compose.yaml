@@ -51,9 +51,10 @@ services:
       - ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
       - SANDBOX_PROTOCOL=${SANDBOX_PROTOCOL:-}
       - START_WRITERS=${START_WRITERS:-}
+      - CONTRACT_ID=${CONTRACT_ID:-bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U}
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-6423f03c3ad6c3b2743f07a95d5d80ad48fffe9f}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-42c909257f9907f2aef9957b70474207f0cfc78d}
     ports:
       - 5000:5000
     volumes:
@@ -63,4 +64,5 @@ services:
     environment:
       - PORT=5000
       - OBSERVER_WALLET=${OBSERVER_WALLET:-<example>}
+      - CONTRACT_ID=${CONTRACT_ID:-bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}

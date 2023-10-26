@@ -50,6 +50,7 @@ arIoRouter.get('/ar-io/healthcheck', (_req, res) => {
 arIoRouter.get('/ar-io/info', (_req, res) => {
   res.status(200).send({
     wallet: config.AR_IO_WALLET,
+    contractId: config.CONTRACT_ID,
   });
 });
 
