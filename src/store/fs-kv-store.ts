@@ -42,15 +42,15 @@ export class FsKVStore implements KVBufferStore {
     fs.mkdirSync(tmpDir, { recursive: true });
   }
 
+  private bufferPath(key: string): string {
+    return `${this.baseDir}/${key}`;
+  }
+
   async get(key: string): Promise<Buffer | undefined> {
     if (await this.has(key)) {
       return fs.promises.readFile(this.bufferPath(key));
     }
     return undefined;
-  }
-
-  bufferPath(key: string): string {
-    return `${this.baseDir}/${key}`;
   }
 
   async has(key: string): Promise<boolean> {
