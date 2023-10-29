@@ -75,4 +75,7 @@ export const ROOT_HOST_SUBDOMAIN_LENGTH =
 export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 export const START_WRITERS =
   env.varOrDefault('START_WRITERS', 'true') === 'true';
-export const CONTRACT_ID = env.varOrUndefined('CONTRACT_ID');
+export const CONTRACT_ID = env.varOrDefault(
+  'CONTRACT_ID',
+  'bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U',
+);
