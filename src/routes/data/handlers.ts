@@ -19,6 +19,7 @@ import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
 import url from 'node:url';
 import { Logger } from 'winston';
+import { Transform } from 'stream';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import {
@@ -64,6 +65,70 @@ const setDataHeaders = ({
   res.header('Content-Length', data.size.toString());
 };
 
+const handlePartialDataResponse = (log: Logger, rangeHeader: string, res: Response, data: ContiguousData, dataAttributes: ContiguousDataAttributes | undefined ) => {
+  const totalSize = data.size;
+  const parts = rangeHeader.replace(/bytes=/, "").split("-");
+  const start = parseInt(parts[0], 10);
+  const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+  const chunkSize = end - start + 1;
+
+  // Check if the range is valid
+  if (start >= 0 && end < totalSize && start <= end) {
+    res.status(206); // Partial Content
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
+    res.setHeader("Accept-Ranges", "bytes");
+
+    if (dataAttributes?.stable) {
+      res.setHeader('Cache-Control', `public, max-age=${STABLE_MAX_AGE}, immutable`);
+    } else {
+      res.setHeader('Cache-Control', `public, max-age=${UNSTABLE_MAX_AGE}`);
+    }
+
+    res.contentType(
+      dataAttributes?.contentType ?? data.sourceContentType ?? DEFAULT_CONTENT_TYPE
+    );
+
+    // Create a custom Transform stream to filter the range
+    const rangeStream = new Transform({
+      transform(chunk, _, callback) {
+        // Calculate the byte range for this chunk relative to the global start position
+        const chunkStart = (this as any).position;
+        const chunkEnd = chunkStart + chunk.length - 1;
+
+        // Determine the intersection between the global range and the chunk's range
+        const intersectionStart = Math.max(start, chunkStart);
+        const intersectionEnd = Math.min(end, chunkEnd);
+
+        if (intersectionStart <= intersectionEnd) {
+          // There is an intersection, so slice and push the relevant part of the chunk
+          const slicedData = chunk.slice(intersectionStart - chunkStart, intersectionEnd - chunkStart + 1);
+          this.push(slicedData);
+        }
+
+        (this as any).position += chunk.length;
+        callback();
+      },
+    });
+    (rangeStream as any).position = 0;
+
+    rangeStream.on("close", () => {
+      // Handle any cleanup if needed
+    });
+
+    data.stream.pipe(rangeStream).pipe(res);
+  } else {
+    // If the range is invalid, send a 416 response (Requested Range Not Satisfiable)
+    log.warn('Attributes', dataAttributes);
+    log.warn("Couldn't run range query", {
+      start: start,
+      end: end,
+      chunkSize: chunkSize,
+      totalSize: totalSize,
+    });
+    res.status(416).end();
+  }
+};
+
 const setRawDataHeaders = (res: Response) => {
   // Unset CORS headers
   res.removeHeader('Access-Control-Allow-Origin');
@@ -78,6 +143,7 @@ const setRawDataHeaders = (res: Response) => {
   );
   res.header('Cross-Origin-Opener-Policy', 'same-origin');
   res.header('Cross-Origin-Embedder-Policy', 'require-corp');
+  res.header('Accept-Ranges', 'bytes');
 };
 
 export const sendNotFound = (res: Response) => {
@@ -150,9 +216,19 @@ export const createRawDataHandler = ({
     let data: ContiguousData | undefined;
     try {
       data = await dataSource.getData(id, dataAttributes);
-      setDataHeaders({ res, dataAttributes, data });
-      setRawDataHeaders(res);
-      data.stream.pipe(res);
+      // Check if the request includes a Range header
+      const rangeHeader = req.headers.range;
+      if (rangeHeader && data) {
+        handlePartialDataResponse(log, rangeHeader, res, data, dataAttributes);
+        setRawDataHeaders(res);
+      } else {
+        // Set headers and stream data
+        setDataHeaders({ res, dataAttributes, data });
+        setRawDataHeaders(res);
+        data.stream.pipe(res);
+      }      
+
+
     } catch (error: any) {
       log.warn('Unable to retrieve contiguous data:', {
         dataId: id,
@@ -225,12 +301,21 @@ const sendManifestResponse = async ({
 
     // Set headers and stream data
     try {
-      setDataHeaders({
-        res,
-        dataAttributes,
-        data,
-      });
-      data.stream.pipe(res);
+      // Check if the request includes a Range header
+      const rangeHeader = req.headers.range;
+      if (rangeHeader && data) {
+        handlePartialDataResponse(log, rangeHeader, res, data, dataAttributes);
+      } else {
+        // Set headers and stream data
+        setDataHeaders({
+          res,
+          dataAttributes,
+          data,
+        });
+
+        data.stream.pipe(res);
+      }
+
     } catch (error: any) {
       log.error('Error retrieving data attributes:', {
         dataId: resolvedId,
@@ -344,6 +429,7 @@ export const createDataHandler = ({
       // Attempt to retrieve data
       try {
         data = await dataSource.getData(id, dataAttributes);
+
       } catch (error: any) {
         log.warn('Unable to retrieve contiguous data:', {
           dataId: id,
@@ -387,13 +473,22 @@ export const createDataHandler = ({
         return;
       }
 
-      // Set headers and stream data
-      setDataHeaders({
-        res,
-        dataAttributes,
-        data,
-      });
-      data.stream.pipe(res);
+      // Check if the request includes a Range header
+      const rangeHeader = req.headers.range;
+      if (rangeHeader && data) {
+        handlePartialDataResponse(log, rangeHeader, res, data, dataAttributes);
+      } else {
+        // Set headers and stream data
+        setDataHeaders({
+          res,
+          dataAttributes,
+          data,
+        });
+
+        data.stream.pipe(res);
+      }
+
+
     } catch (error: any) {
       log.error('Error retrieving data:', {
         dataId: id,
