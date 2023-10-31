@@ -17,26 +17,14 @@
  */
 import fse from 'fs-extra';
 import fs from 'node:fs';
-import winston from 'winston';
 
 import { KVBufferStore } from '../types';
 
 export class FsKVStore implements KVBufferStore {
-  private log: winston.Logger;
   private baseDir: string;
   private tmpDir: string;
 
-  constructor({
-    log,
-    baseDir,
-    tmpDir,
-  }: {
-    log: winston.Logger;
-    baseDir: string;
-    tmpDir: string;
-  }) {
-    this.log = log.child({ class: this.constructor.name });
-    this.log.info('Using filesystem based key/value store');
+  constructor({ baseDir, tmpDir }: { baseDir: string; tmpDir: string }) {
     this.baseDir = baseDir;
     this.tmpDir = tmpDir;
     fs.mkdirSync(tmpDir, { recursive: true });

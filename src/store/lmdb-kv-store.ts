@@ -16,26 +16,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { RootDatabase, RootDatabaseOptionsWithPath, open } from 'lmdb';
-import winston from 'winston';
 
 import { KVBufferStore } from '../types';
 
 export class LmdbKVStore implements KVBufferStore {
-  private log: winston.Logger;
   private db: RootDatabase<Buffer, string>;
 
   constructor({
-    log,
     lmdbOptions,
   }: {
-    log: winston.Logger;
     lmdbOptions: Pick<
       RootDatabaseOptionsWithPath,
-      'compression' | 'mapSize' | 'noSync' | 'path'
+      'compression' | 'mapSize' | 'noSync' | 'path' | 'commitDelay'
     >;
   }) {
-    this.log = log.child({ class: this.constructor.name });
-    this.log.info('Using LMDB database', { lmdbOptions });
     this.db = open({
       ...lmdbOptions,
       encoding: 'binary',
@@ -43,10 +37,7 @@ export class LmdbKVStore implements KVBufferStore {
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    if (await this.has(key)) {
-      return this.db.getBinary(key);
-    }
-    return undefined;
+    return this.db.getBinary(key);
   }
 
   async has(key: string): Promise<boolean> {
@@ -60,8 +51,6 @@ export class LmdbKVStore implements KVBufferStore {
   }
 
   async set(key: string, buffer: Buffer): Promise<void> {
-    if (!(await this.has(key))) {
-      await this.db.put(key, buffer);
-    }
+    await this.db.put(key, buffer);
   }
 }
