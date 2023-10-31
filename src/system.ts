@@ -73,10 +73,12 @@ const arweave = Arweave.init({});
 const txStore = new KvTransactionStore({
   log,
   kvBufferStore: (() => {
+    log.info('Creating chain cache key/value store', {
+      type: config.CHAIN_CACHE_TYPE,
+    });
     switch (config.CHAIN_CACHE_TYPE) {
       case 'lmdb': {
         return new LmdbKVStore({
-          log,
           lmdbOptions: {
             path: 'data/lmdb/partial-txs',
             // TODO: set sensible default options for LMDB client
@@ -85,7 +87,6 @@ const txStore = new KvTransactionStore({
       }
       case 'fs': {
         return new FsKVStore({
-          log,
           baseDir: 'data/headers/partial-txs',
           tmpDir: 'data/tmp/partial-txs',
         });
