@@ -81,7 +81,8 @@ const txStore = new KvTransactionStore({
         return new LmdbKVStore({
           lmdbOptions: {
             path: 'data/lmdb/partial-txs',
-            // TODO: set sensible default options for LMDB client
+            compression: true,
+            commitDelay: 100, // 100ms - reduces I/O usage but increases latency
           },
         });
       }
