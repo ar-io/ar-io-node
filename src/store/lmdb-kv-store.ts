@@ -15,24 +15,18 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { RootDatabase, RootDatabaseOptionsWithPath, open } from 'lmdb';
+import { RootDatabase, open } from 'lmdb';
 
 import { KVBufferStore } from '../types';
 
 export class LmdbKVStore implements KVBufferStore {
   private db: RootDatabase<Buffer, string>;
 
-  constructor({
-    lmdbOptions,
-  }: {
-    lmdbOptions: Pick<
-      RootDatabaseOptionsWithPath,
-      'compression' | 'mapSize' | 'noSync' | 'path' | 'commitDelay'
-    >;
-  }) {
+  constructor({ dbPath }: { dbPath: string }) {
     this.db = open({
-      ...lmdbOptions,
+      path: dbPath,
       encoding: 'binary',
+      commitDelay: 100, // 100ms delay - increases writes per transaction to reduce I/O
     });
   }
 

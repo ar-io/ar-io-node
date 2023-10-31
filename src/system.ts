@@ -79,11 +79,7 @@ const txStore = new KvTransactionStore({
     switch (config.CHAIN_CACHE_TYPE) {
       case 'lmdb': {
         return new LmdbKVStore({
-          lmdbOptions: {
-            path: 'data/lmdb/partial-txs',
-            compression: true,
-            commitDelay: 100, // 100ms - reduces I/O usage but increases latency
-          },
+          dbPath: 'data/lmdb/partial-txs',
         });
       }
       case 'fs': {
