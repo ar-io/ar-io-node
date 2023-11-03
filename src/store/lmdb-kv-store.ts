@@ -31,7 +31,7 @@ export class LmdbKVStore implements KVBufferStore {
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    return this.db.getBinary(key);
+    return this.db.get(key);
   }
 
   async has(key: string): Promise<boolean> {

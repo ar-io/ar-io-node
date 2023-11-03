@@ -110,9 +110,9 @@ export interface PartialJsonBlockStore {
   hasHash(hash: string): Promise<boolean>;
   hasHeight(height: number): Promise<boolean>;
   getByHash(hash: string): Promise<PartialJsonBlock | undefined>;
-  getByHeight(number: number): Promise<PartialJsonBlock | undefined>;
+  getByHeight(height: number): Promise<PartialJsonBlock | undefined>;
   delByHash(hash: string): Promise<void>;
-  delByHeight(number: number): Promise<void>;
+  delByHeight(height: number): Promise<void>;
   set(block: PartialJsonBlock, height?: number): Promise<void>;
 }
 
