@@ -35,10 +35,10 @@ import * as metrics from './metrics.js';
 import { MemoryCacheArNSResolver } from './resolution/memory-cache-arns-resolver.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
 import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-resolver.js';
-import { FsBlockStore } from './store/fs-block-store.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import { FsKVStore } from './store/fs-kv-store.js';
+import { KvBlockStore } from './store/kv-block-store.js';
 import { KvTransactionStore } from './store/kv-transaction-store.js';
 import { LmdbKVStore } from './store/lmdb-kv-store.js';
 import {
@@ -73,7 +73,9 @@ const arweave = Arweave.init({});
 const txStore = new KvTransactionStore({
   log,
   kvBufferStore: (() => {
-    log.info('Creating chain cache key/value store', {
+    // TODO: move this to a util function that accepts path and type as args
+
+    log.info('Creating transaction cache key/value store', {
       type: config.CHAIN_CACHE_TYPE,
     });
     switch (config.CHAIN_CACHE_TYPE) {
@@ -95,11 +97,30 @@ const txStore = new KvTransactionStore({
   })(),
 });
 
-// TODO: replace with KvBlockStore
-const blockStore = new FsBlockStore({
+const blockStore = new KvBlockStore({
   log,
-  baseDir: 'data/headers/partial-blocks',
-  tmpDir: 'data/tmp/partial-blocks',
+  kvBufferStore: (() => {
+    // TODO: move this to a util function that accepts path and type as args
+    log.info('Creating block cache key/value store', {
+      type: config.CHAIN_CACHE_TYPE,
+    });
+    switch (config.CHAIN_CACHE_TYPE) {
+      case 'lmdb': {
+        return new LmdbKVStore({
+          dbPath: 'data/lmdb/partial-blocks',
+        });
+      }
+      case 'fs': {
+        return new FsKVStore({
+          baseDir: 'data/headers/partial-blocks',
+          tmpDir: 'data/tmp/partial-blocks',
+        });
+      }
+      default: {
+        throw new Error(`Invalid chain cache type: ${config.CHAIN_CACHE_TYPE}`);
+      }
+    }
+  })(),
 });
 
 export const arweaveClient = new ArweaveCompositeClient({

@@ -17,11 +17,16 @@
  */
 import winston from 'winston';
 
-import { jsonBlockToMsgpack, msgpackToJsonBlock } from '../lib/encoding.js';
+import {
+  fromB64Url,
+  jsonBlockToMsgpack,
+  msgpackToJsonBlock,
+  toB64Url,
+} from '../lib/encoding.js';
 import { KVBufferStore, PartialJsonBlockStore } from '../types.js';
 import { PartialJsonBlock } from '../types.js';
 
-export class KvTransactionStore implements PartialJsonBlockStore {
+export class KvBlockStore implements PartialJsonBlockStore {
   private log: winston.Logger;
   private kvBufferStore: KVBufferStore;
 
@@ -37,11 +42,11 @@ export class KvTransactionStore implements PartialJsonBlockStore {
   }
 
   private blockHash(hash: string) {
-    return `${hash}-hash`;
+    return `#|${hash}`;
   }
 
   private blockHeight(height: number) {
-    return `${height}-height`;
+    return `H|${height}`;
   }
 
   async hasHash(hash: string): Promise<boolean> {
@@ -77,14 +82,18 @@ export class KvTransactionStore implements PartialJsonBlockStore {
     }
     return false;
   }
+
   async getByHash(hash: string): Promise<PartialJsonBlock | undefined> {
     try {
       if (await this.hasHash(hash)) {
-        const blockData = await this.kvBufferStore.get(this.blockHash(hash));
-        if (blockData === undefined) {
+        const blockDataBuffer = await this.kvBufferStore.get(
+          this.blockHash(hash),
+        );
+        if (blockDataBuffer === undefined) {
           throw new Error('Missing block data in key/value store');
         }
-        return msgpackToJsonBlock(blockData);
+        const blockData = msgpackToJsonBlock(blockDataBuffer);
+        return blockData;
       }
     } catch (error: any) {
       this.log.error('Failed to get block by hash', {
@@ -96,27 +105,21 @@ export class KvTransactionStore implements PartialJsonBlockStore {
     return undefined;
   }
 
-  async getByHeight(number: number): Promise<PartialJsonBlock | undefined> {
+  async getByHeight(height: number): Promise<PartialJsonBlock | undefined> {
     try {
-      if (await this.hasHeight(number)) {
+      if (await this.hasHeight(height)) {
         const blockHashBuffer = await this.kvBufferStore.get(
-          this.blockHeight(number),
+          this.blockHeight(height),
         );
         if (blockHashBuffer === undefined) {
           throw new Error('Missing block hash in key/value store for height.');
         }
-        const blockHash = blockHashBuffer.toString();
-        const blockData = await this.kvBufferStore.get(
-          this.blockHash(blockHash),
-        );
-        if (blockData === undefined) {
-          throw new Error('Missing block data in key/value store for hash.');
-        }
-        return msgpackToJsonBlock(blockData);
+        const blockHash = toB64Url(blockHashBuffer);
+        return this.getByHash(blockHash);
       }
     } catch (error: any) {
       this.log.error('Failed to get block by height', {
-        height: number,
+        height,
         message: error.message,
         stack: error.stack,
       });
@@ -149,27 +152,26 @@ export class KvTransactionStore implements PartialJsonBlockStore {
     }
   }
 
-  async delByHeight(number: number): Promise<void> {
+  async delByHeight(height: number): Promise<void> {
     try {
-      if (await this.hasHeight(number)) {
+      if (await this.hasHeight(height)) {
         const blockHashBuffer = await this.kvBufferStore.get(
-          this.blockHeight(number),
+          this.blockHeight(height),
         );
         // remove height to block hash reference
-        await this.kvBufferStore.del(this.blockHeight(number));
+        await this.kvBufferStore.del(this.blockHeight(height));
 
-        if (
-          blockHashBuffer !== undefined &&
-          (await this.hasHash(blockHashBuffer.toString()))
-        ) {
-          // remove the block hash
-          const blockHash = blockHashBuffer.toString();
-          await this.kvBufferStore.del(this.blockHash(blockHash));
+        // remove the block hash to block data reference
+        if (blockHashBuffer !== undefined) {
+          const blockHash = toB64Url(blockHashBuffer);
+          if (await this.hasHash(blockHash)) {
+            await this.kvBufferStore.del(this.blockHash(blockHash));
+          }
         }
       }
     } catch (error: any) {
       this.log.error('Failed to delete block by height', {
-        height: number,
+        height,
         message: error.message,
         stack: error.stack,
       });
@@ -183,13 +185,10 @@ export class KvTransactionStore implements PartialJsonBlockStore {
         const blockData = jsonBlockToMsgpack(block);
         await this.kvBufferStore.set(this.blockHash(hash), blockData);
 
-        // store the hash by height separately, instead of also storing the height against the block data
+        // store the height against the hash value to avoid duplication of block data in the KV store
         if (height !== undefined && !(await this.hasHeight(height))) {
-          const blockHashBuffer = Buffer.from(hash);
-          await this.kvBufferStore.set(
-            this.blockHeight(height),
-            blockHashBuffer,
-          );
+          const encodedHash = fromB64Url(hash);
+          await this.kvBufferStore.set(this.blockHeight(height), encodedHash);
         }
       }
     } catch (error: any) {
