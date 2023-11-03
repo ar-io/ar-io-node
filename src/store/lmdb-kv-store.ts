@@ -25,13 +25,20 @@ export class LmdbKVStore implements KVBufferStore {
   constructor({ dbPath }: { dbPath: string }) {
     this.db = open({
       path: dbPath,
-      encoding: 'binary',
       commitDelay: 100, // 100ms delay - increases writes per transaction to reduce I/O
     });
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    return this.db.get(key);
+    const value = this.db.get(key);
+    /**
+     * NOTE: there appears to be a bug in LMDB where Buffers are converted to Uint8Arrays when retrieving. This is a workaround to ensure Buffers are always returned so our encoding/decoding functions work as expected.
+     * Reference: https://github.com/kriszyp/lmdb-js/blob/4c3a3b9eb590a876a923e0f9818d698ee0fccb2f/read.js#L232
+     */
+    if (value) {
+      return Buffer.from(value.buffer);
+    }
+    return value;
   }
 
   async has(key: string): Promise<boolean> {
