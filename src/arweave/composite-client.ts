@@ -273,6 +273,8 @@ export class ArweaveCompositeClient
         })
         .then(async (block) => {
           try {
+            // Sanity check to guard against accidental bad data from both
+            // cache and trusted node
             sanityCheckBlock(block);
 
             await this.blockStore.set(
@@ -417,8 +419,12 @@ export class ArweaveCompositeClient
       })
       .then(async (tx) => {
         try {
+          // Sanity check to guard against accidental bad data from both
+          // cache and trusted node
           sanityCheckTx(tx);
+
           await this.txStore.set(tx);
+
           return tx;
         } catch (error) {
           this.txStore.del(txId);
@@ -547,6 +553,7 @@ export class ArweaveCompositeClient
     });
     const jsonChunk = response.data;
 
+    // Fast fail if chunk has the wrong structure
     sanityCheckChunk(jsonChunk);
 
     const txPath = fromB64Url(jsonChunk.tx_path);
