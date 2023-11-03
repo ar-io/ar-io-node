@@ -54,7 +54,7 @@ services:
       - CONTRACT_ID=${CONTRACT_ID:-}
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-42c909257f9907f2aef9957b70474207f0cfc78d}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-a5b9b3a0246ba2912c610ad28ffe849d8184d752}
     ports:
       - 5000:5000
     volumes:
