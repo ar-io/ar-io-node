@@ -23,6 +23,7 @@ import {
   msgpackToJsonBlock,
   toB64Url,
 } from '../lib/encoding.js';
+import { sanityCheckBlock } from '../lib/validation.js';
 import { KVBufferStore, PartialJsonBlockStore } from '../types.js';
 import { PartialJsonBlock } from '../types.js';
 
@@ -92,8 +93,9 @@ export class KvBlockStore implements PartialJsonBlockStore {
         if (blockDataBuffer === undefined) {
           throw new Error('Missing block data in key/value store');
         }
-        const blockData = msgpackToJsonBlock(blockDataBuffer);
-        return blockData;
+        const block = msgpackToJsonBlock(blockDataBuffer);
+        sanityCheckBlock(block);
+        return block;
       }
     } catch (error: any) {
       this.log.error('Failed to get block by hash', {
