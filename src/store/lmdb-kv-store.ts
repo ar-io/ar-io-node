@@ -25,6 +25,7 @@ export class LmdbKVStore implements KVBufferStore {
   constructor({ dbPath }: { dbPath: string }) {
     this.db = open({
       path: dbPath,
+      encoding: 'binary',
       commitDelay: 100, // 100ms delay - increases writes per transaction to reduce I/O
     });
   }
