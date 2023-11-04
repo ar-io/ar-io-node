@@ -40,7 +40,7 @@ describe('LmdbKvStore', () => {
     await lmdbKvStore.set(key, value);
     const result = await lmdbKvStore.get(key);
     expect(result).not.to.be.undefined;
-    expect(toB64Url(result!)).to.equal('test');
+    expect(toB64Url(result!)).to.equal('test'); // eslint-disable-line
   });
 
   it('should properly delete buffer', async () => {
