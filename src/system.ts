@@ -29,6 +29,7 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
+import { getKvBufferStore } from './lib/kvstore';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';
@@ -37,10 +38,8 @@ import { StreamingManifestPathResolver } from './resolution/streaming-manifest-p
 import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-resolver.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
-import { FsKVStore } from './store/fs-kv-store.js';
 import { KvBlockStore } from './store/kv-block-store.js';
 import { KvTransactionStore } from './store/kv-transaction-store.js';
-import { LmdbKVStore } from './store/lmdb-kv-store.js';
 import {
   BlockListValidator,
   BundleIndex,
@@ -68,68 +67,25 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 
-// Stores
-
-const txStore = new KvTransactionStore({
-  log,
-  kvBufferStore: (() => {
-    // TODO: move this to a util function that accepts path and type as args
-
-    log.info('Creating transaction cache key/value store', {
-      type: config.CHAIN_CACHE_TYPE,
-    });
-    switch (config.CHAIN_CACHE_TYPE) {
-      case 'lmdb': {
-        return new LmdbKVStore({
-          dbPath: 'data/lmdb/partial-txs',
-        });
-      }
-      case 'fs': {
-        return new FsKVStore({
-          baseDir: 'data/headers/partial-txs',
-          tmpDir: 'data/tmp/partial-txs',
-        });
-      }
-      default: {
-        throw new Error(`Invalid chain cache type: ${config.CHAIN_CACHE_TYPE}`);
-      }
-    }
-  })(),
-});
-
-const blockStore = new KvBlockStore({
-  log,
-  kvBufferStore: (() => {
-    // TODO: move this to a util function that accepts path and type as args
-    log.info('Creating block cache key/value store', {
-      type: config.CHAIN_CACHE_TYPE,
-    });
-    switch (config.CHAIN_CACHE_TYPE) {
-      case 'lmdb': {
-        return new LmdbKVStore({
-          dbPath: 'data/lmdb/partial-blocks',
-        });
-      }
-      case 'fs': {
-        return new FsKVStore({
-          baseDir: 'data/headers/partial-blocks',
-          tmpDir: 'data/tmp/partial-blocks',
-        });
-      }
-      default: {
-        throw new Error(`Invalid chain cache type: ${config.CHAIN_CACHE_TYPE}`);
-      }
-    }
-  })(),
-});
-
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
   skipCache: config.SKIP_CACHE,
-  blockStore,
-  txStore,
+  blockStore: new KvBlockStore({
+    log,
+    kvBufferStore: getKvBufferStore({
+      pathKey: 'partial-blocks',
+      type: config.CHAIN_CACHE_TYPE,
+    }),
+  }),
+  txStore: new KvTransactionStore({
+    log,
+    kvBufferStore: getKvBufferStore({
+      pathKey: 'partial-txs',
+      type: config.CHAIN_CACHE_TYPE,
+    }),
+  }),
   failureSimulator: new UniformFailureSimulator({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
