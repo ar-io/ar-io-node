@@ -29,7 +29,7 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
-import { getKvBufferStore } from './lib/kvstore';
+import { getKvBufferStore } from './lib/kvstore.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';

@@ -15,9 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { FsKVStore } from '../store/fs-kv-store';
-import { LmdbKVStore } from '../store/lmdb-kv-store';
-import { KVBufferStore } from '../types';
+import { FsKVStore } from '../store/fs-kv-store.js';
+import { LmdbKVStore } from '../store/lmdb-kv-store.js';
+import { KVBufferStore } from '../types.js';
 
 export const getKvBufferStore = ({
   pathKey,
