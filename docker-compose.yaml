@@ -32,6 +32,7 @@ services:
       - ${HEADERS_DATA_PATH:-./data/headers}:/app/data/headers
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
+      - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_FORMAT=${LOG_FORMAT:-simple}
