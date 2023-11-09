@@ -75,6 +75,7 @@ export const arweaveClient = new ArweaveCompositeClient({
   blockStore: new KvBlockStore({
     log,
     kvBufferStore: getKvBufferStore({
+      log,
       pathKey: 'partial-blocks',
       type: config.CHAIN_CACHE_TYPE,
     }),
@@ -82,6 +83,7 @@ export const arweaveClient = new ArweaveCompositeClient({
   txStore: new KvTransactionStore({
     log,
     kvBufferStore: getKvBufferStore({
+      log,
       pathKey: 'partial-txs',
       type: config.CHAIN_CACHE_TYPE,
     }),

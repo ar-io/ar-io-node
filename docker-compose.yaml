@@ -54,6 +54,16 @@ services:
       - START_WRITERS=${START_WRITERS:-}
       - CONTRACT_ID=${CONTRACT_ID:-}
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-}
+      - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - ${REDIS_DATA_PATH:-./data/redis}:/app/data/redis
 
   observer:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-14802babee090d674249960df890c54c9406076b}
