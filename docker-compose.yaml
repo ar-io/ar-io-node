@@ -56,7 +56,7 @@ services:
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-}
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-a5b9b3a0246ba2912c610ad28ffe849d8184d752}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-14802babee090d674249960df890c54c9406076b}
     ports:
       - 5000:5000
     volumes:
