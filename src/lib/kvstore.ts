@@ -15,21 +15,34 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import winston from 'winston';
+
+import * as config from '../config.js';
 import { FsKVStore } from '../store/fs-kv-store.js';
 import { LmdbKVStore } from '../store/lmdb-kv-store.js';
+import { RedisKvStore } from '../store/redis-kv-store.js';
 import { KVBufferStore } from '../types.js';
 
 export const getKvBufferStore = ({
   pathKey,
   type,
+  log,
 }: {
   pathKey: string;
   type: string;
+  log: winston.Logger;
 }): KVBufferStore => {
+  log.info(`Using ${type} for KVBufferStore for ${pathKey}`);
   switch (type) {
     case 'lmdb': {
       return new LmdbKVStore({
         dbPath: `data/lmdb/${pathKey}`,
+      });
+    }
+    case 'redis': {
+      return new RedisKvStore({
+        redisUrl: config.REDIS_CACHE_URL,
+        log,
       });
     }
     case 'fs': {
@@ -38,6 +51,7 @@ export const getKvBufferStore = ({
         tmpDir: `data/tmp/${pathKey}`,
       });
     }
+
     // TODO: implement redis
     default: {
       throw new Error(`Invalid chain cache type: ${type}`);
