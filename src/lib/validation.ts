@@ -25,24 +25,37 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
-export const isValidTx = (id: string): boolean => {
+export const isValidBlockIndepHash = (id: string): boolean => {
+  return !!id.match(/^[a-zA-Z0-9_-]{64}$/);
+};
+
+export const isValidTxId = (id: string): boolean => {
   return !!id.match(/^[a-zA-Z0-9_-]{43}$/);
 };
 
-export const isValidDataId = isValidTx;
+export const isValidDataId = isValidTxId;
 
 export function sanityCheckBlock(block: PartialJsonBlock) {
   if (!block.indep_hash) {
     throw new Error("Invalid block: missing 'indep_hash'");
   }
 
+  if (!isValidBlockIndepHash(block.indep_hash)) {
+    throw new Error("Invalid block: invalid 'indep_hash' format");
+  }
+
   if (!block.height === undefined) {
     throw new Error("Invalid block: missing 'height'");
   }
 
+  if (typeof block.height !== 'number') {
+    throw new Error("Invalid block: 'height' must be a number");
+  }
+
   if (
     block.height !== 0 &&
-    (typeof block.previous_block !== 'string' || block.previous_block === '')
+    (typeof block.previous_block !== 'string' ||
+      !isValidBlockIndepHash(block.previous_block))
   ) {
     throw new Error("Invalid block: missing or invalid 'previous_block'");
   }
@@ -53,7 +66,7 @@ export function sanityCheckTx(tx: PartialJsonTransaction) {
     throw new Error("Invalid transaction: missing 'id'");
   }
 
-  if (!isValidTx(tx.id)) {
+  if (!isValidTxId(tx.id)) {
     throw new Error("Invalid transaction: invalid 'id' format");
   }
 }
