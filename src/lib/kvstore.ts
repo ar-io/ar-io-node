@@ -42,6 +42,7 @@ export const getKvBufferStore = ({
     case 'redis': {
       return new RedisKvStore({
         redisUrl: config.REDIS_CACHE_URL,
+        ttlSeconds: config.REDIS_CACHE_TTL_SECONDS,
         log,
       });
     }

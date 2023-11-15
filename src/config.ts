@@ -84,3 +84,7 @@ export const REDIS_CACHE_URL = env.varOrDefault(
   'REDIS_CACHE_URL',
   'redis://localhost:6379',
 );
+export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
+  'REDIS_CACHE_TTL_SECONDS',
+  `${60 * 60 * 8}`, // 8 hours by default
+);

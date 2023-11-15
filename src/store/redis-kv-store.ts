@@ -23,9 +23,19 @@ import { KVBufferStore } from '../types.js';
 export class RedisKvStore implements KVBufferStore {
   private client: RedisClientType;
   private log: winston.Logger;
+  private ttlSeconds: number;
 
-  constructor({ log, redisUrl }: { log: winston.Logger; redisUrl: string }) {
+  constructor({
+    log,
+    redisUrl,
+    ttlSeconds,
+  }: {
+    log: winston.Logger;
+    redisUrl: string;
+    ttlSeconds: number;
+  }) {
     this.log = log.child({ class: this.constructor.name });
+    this.ttlSeconds = ttlSeconds;
     this.client = createClient({
       url: redisUrl,
     });
@@ -58,6 +68,9 @@ export class RedisKvStore implements KVBufferStore {
   }
 
   async set(key: string, buffer: Buffer): Promise<void> {
-    await this.client.set(key, buffer);
+    // set the key with a TTL for every key
+    await this.client.set(key, buffer, {
+      EX: this.ttlSeconds,
+    });
   }
 }
