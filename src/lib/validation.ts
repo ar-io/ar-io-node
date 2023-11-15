@@ -25,8 +25,8 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
-export const isValidBlockIndepHash = (id: string): boolean => {
-  return !!id.match(/^[a-zA-Z0-9_-]{64}$/);
+export const isValidBlockIndepHash = (hash: string): boolean => {
+  return !!hash.match(/^[a-zA-Z0-9_-]{64}$/);
 };
 
 export const isValidTxId = (id: string): boolean => {
