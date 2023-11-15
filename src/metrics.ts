@@ -132,3 +132,10 @@ export const lastHeightImported = new promClient.Gauge({
   name: 'last_height_imported',
   help: 'Height of the last block imported',
 });
+
+// Redis Cache Metrics
+
+export const redisConnectionErrorsCounter = new promClient.Counter({
+  name: 'redis_connection_errors_total',
+  help: 'Number of errors connecting to redis',
+});

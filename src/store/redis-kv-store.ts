@@ -18,6 +18,7 @@
 import { RedisClientType, commandOptions, createClient } from 'redis';
 import winston from 'winston';
 
+import * as metrics from '../metrics.js';
 import { KVBufferStore } from '../types.js';
 
 export class RedisKvStore implements KVBufferStore {
@@ -44,6 +45,7 @@ export class RedisKvStore implements KVBufferStore {
     });
     this.client.connect().catch((err) => {
       this.log.error(`Redis connection error: ${err}`);
+      metrics.redisConnectionErrorsCounter.inc();
     });
   }
 
