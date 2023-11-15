@@ -19,6 +19,9 @@ services:
       - TVAL_GRAPHQL_HOST=${GRAPHQL_HOST:-core}
       - TVAL_GRAPHQL_PORT=${GRAPHQL_PORT:-4000}
       - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
+    depends_on:
+      - core
+      - observer
 
   core:
     image: ghcr.io/ar-io/ar-io-core:latest
@@ -55,6 +58,7 @@ services:
       - CONTRACT_ID=${CONTRACT_ID:-}
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-redis}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
+      - REDIS_CACHE_TTL_SECONDS=${REDIS_CACHE_TTL_SECONDS:-r}
     depends_on:
       - redis
 
