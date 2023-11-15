@@ -21,9 +21,10 @@ import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
 import * as events from '../events.js';
+import * as metrics from '../metrics.js';
 import { NestedDataIndexWriter, NormalizedDataItem } from '../types.js';
 
-const DEFAULT_WORKER_COUNT = 1;
+const DEFAULT_WORKER_COUNT = 2;
 
 export class Ans104DataIndexer {
   // Dependencies
@@ -82,12 +83,13 @@ export class Ans104DataIndexer {
         typeof item.data_size === 'number'
       ) {
         log.debug('Indexing data item data...');
-        this.indexWriter.saveNestedDataId({
+        await this.indexWriter.saveNestedDataId({
           id: item.id,
           parentId: item.parent_id,
           dataOffset: item.data_offset,
           dataSize: item.data_size,
         });
+        metrics.dataItemsIndexedCounter.inc();
         this.eventEmitter.emit(events.ANS104_DATA_ITEM_DATA_INDEXED, item);
         log.debug('Data item data indexed.');
       } else {

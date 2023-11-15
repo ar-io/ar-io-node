@@ -57,6 +57,10 @@ export const BACKFILL_BUNDLE_RECORDS =
   env.varOrDefault('BACKFILL_BUNDLE_RECORDS', 'false') === 'true';
 export const FILTER_CHANGE_REPROCESS =
   env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';
+export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
+  'ANS104_UNBUNDLE_WORKERS',
+  '2',
+);
 export const ANS104_UNBUNDLE_FILTER_STRING = canonicalize(
   JSON.parse(env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
 );

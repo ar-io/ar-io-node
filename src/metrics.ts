@@ -65,6 +65,11 @@ export const dataItemsQueuedCounter = new promClient.Counter({
   labelNames: ['bundle_format'],
 });
 
+export const dataItemsIndexedCounter = new promClient.Counter({
+  name: 'data_items_indexed_total',
+  help: 'Count of data items indexed',
+});
+
 //
 // Arweave client metrics
 //
