@@ -28,7 +28,6 @@ import {
   PartialJsonTransaction,
 } from '../types.js';
 
-const DEFAULT_WORKER_COUNT = 1;
 const DEFAULT_MAX_QUEUE_SIZE = 1000;
 
 interface IndexProperty {
@@ -56,16 +55,16 @@ export class Ans104Unbundler {
     filter,
     contiguousDataSource,
     dataItemIndexFilterString,
+    workerCount,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
-    workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     filter: ItemFilter;
     contiguousDataSource: ContiguousDataSource;
     dataItemIndexFilterString: string;
+    workerCount: number;
     maxQueueSize?: number;
-    workerCount?: number;
   }) {
     this.log = log.child({ class: 'Ans104Unbundler' });
     this.filter = filter;
@@ -73,6 +72,7 @@ export class Ans104Unbundler {
       log,
       eventEmitter,
       contiguousDataSource,
+      workerCount,
       dataItemIndexFilterString,
     });
 

@@ -100,75 +100,124 @@ export function normalizeAns104DataItem({
 
 export class Ans104Parser {
   private log: winston.Logger;
-  private worker: Worker;
   private contiguousDataSource: ContiguousDataSource;
   private streamTimeout: number;
-  private unbundlePromiseResolve: (() => void) | undefined;
-  private unbundlePromiseReject: ((reason?: any) => void) | undefined;
+  private workers: any[] = []; // TODO what's the type for this?
+  private workQueue: any[] = []; // TODO what's the type for this?
 
   constructor({
     log,
     eventEmitter,
     contiguousDataSource,
     dataItemIndexFilterString,
+    workerCount,
     streamTimeout = DEFAULT_STREAM_TIMEOUT,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     contiguousDataSource: ContiguousDataSource;
     dataItemIndexFilterString: string;
+    workerCount: number;
     streamTimeout?: number;
   }) {
     this.log = log.child({ class: 'Ans104Parser' });
     this.contiguousDataSource = contiguousDataSource;
     this.streamTimeout = streamTimeout;
 
-    const workerUrl = new URL('./ans-104.js', import.meta.url);
-    this.worker = new Worker(workerUrl, {
-      workerData: {
-        dataItemIndexFilterString,
-      },
-    });
+    const self = this;
 
-    this.worker
-      .on('message', (message: ParserMessage) => {
-        switch (message.eventName) {
-          case DATA_ITEM_MATCHED:
-            eventEmitter.emit(
-              events.ANS104_DATA_ITEM_MATCHED,
-              message.dataItem,
-            );
-            break;
-          case UNBUNDLE_COMPLETE:
-            this.unbundlePromiseResolve?.();
-            this.resetUnbundlePromise();
-            const { eventName, ...eventBody } = message;
-            eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
-              dataItemIndexFilterString,
-              ...eventBody,
-            });
-            break;
-          case UNBUNDLE_ERROR:
-            this.unbundlePromiseReject?.();
-            this.resetUnbundlePromise();
-            break;
-        }
-      })
-      .on('error', (error: any) => {
-        this.unbundlePromiseReject?.();
-        this.resetUnbundlePromise();
-        this.log.error('Error in ANS-104 worker', error);
-      })
-      .on('exit', (code: number) => {
-        this.unbundlePromiseReject?.();
-        this.resetUnbundlePromise();
-        this.log.error(`ANS-104 worker exited with code ${code}.`);
+    function spawn() {
+      const workerUrl = new URL('./ans-104.js', import.meta.url);
+      const worker = new Worker(workerUrl, {
+        workerData: {
+          dataItemIndexFilterString,
+        },
       });
+
+      let job: any = null; // Current item from the queue
+      let error: any = null; // Error that caused the worker to crash
+
+      function takeWork() {
+        if (!job && self.workQueue.length) {
+          // If there's a job in the queue, send it to the worker
+          job = self.workQueue.shift();
+          worker.postMessage(job.message);
+        }
+      }
+
+      worker
+        .on('online', () => {
+          self.workers.push({ takeWork });
+          takeWork();
+        })
+        .on('message', (message: ParserMessage) => {
+          switch (message.eventName) {
+            case DATA_ITEM_MATCHED:
+              eventEmitter.emit(
+                events.ANS104_DATA_ITEM_MATCHED,
+                message.dataItem,
+              );
+              break;
+            case UNBUNDLE_COMPLETE:
+              const { eventName, ...eventBody } = message;
+              eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
+                dataItemIndexFilterString,
+                ...eventBody,
+              });
+              job.resolve();
+              job = null;
+              break;
+            case UNBUNDLE_ERROR:
+              job.reject(new Error('Worker error'));
+              job = null;
+              break;
+            default:
+              job.reject(new Error('Unknown worker message'));
+              job = null;
+              break;
+          }
+          takeWork(); // Check if there's more work to do
+        })
+        .on('error', (err) => {
+          self.log.error('Worker error', err);
+          error = err;
+        })
+        .on('exit', (code) => {
+          self.workers = self.workers.filter(
+            (w: any) => w.takeWork !== takeWork,
+          );
+          if (job) {
+            job.reject(error || new Error('worker died'));
+          }
+          if (code !== 0) {
+            self.log.error('Worker stopped with exit code ' + code, {
+              exitCode: code,
+            });
+            spawn(); // Worker died, so spawn a new one
+          }
+        });
+    }
+
+    for (let i = 0; i < workerCount; i++) {
+      spawn();
+    }
   }
 
-  resetUnbundlePromise() {
-    this.unbundlePromiseResolve = undefined;
-    this.unbundlePromiseReject = undefined;
+  drainQueue() {
+    for (const worker of this.workers) {
+      worker.takeWork();
+    }
+  }
+
+  queueWork(message: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      this.workQueue.push({
+        resolve,
+        reject,
+        message,
+      });
+      this.drainQueue();
+    });
   }
 
   async parseBundle({
@@ -180,84 +229,84 @@ export class Ans104Parser {
     parentId: string;
     parentIndex: number;
   }): Promise<void> {
-    const unbundlePromise: Promise<void> = new Promise(
-      async (resolve, reject) => {
-        let bundlePath: string | undefined;
-        try {
-          this.unbundlePromiseResolve = resolve;
-          this.unbundlePromiseReject = reject;
-          const log = this.log.child({ parentId });
+    return new Promise(async (resolve, reject) => {
+      let bundlePath: string | undefined;
+      try {
+        const log = this.log.child({ parentId });
 
-          // Get data stream
-          const data = await this.contiguousDataSource.getData(parentId);
+        // Get data stream
+        const data = await this.contiguousDataSource.getData(parentId);
 
-          // Construct temp path for passing data to worker
-          await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
-            recursive: true,
-          });
-          bundlePath = path.join(
-            process.cwd(),
-            'data/tmp/ans-104',
-            `${parentId}-${Math.random().toString(36).substring(2, 15)}`,
-          );
+        // Construct temp path for passing data to worker
+        await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
+          recursive: true,
+        });
+        bundlePath = path.join(
+          process.cwd(),
+          'data/tmp/ans-104',
+          `${parentId}-${Math.random().toString(36).substring(2, 15)}`,
+        );
 
-          // Setup timeout for stalled data streams
-          let timeout: NodeJS.Timeout;
-          const resetTimeout = () => {
-            if (timeout !== undefined) {
-              clearTimeout(timeout);
-            }
-            timeout = setTimeout(() => {
-              data.stream.destroy(new Error('Timeout'));
-            }, this.streamTimeout);
-          };
-          data.stream.on('data', resetTimeout);
-          data.stream.pause();
+        // Setup timeout for stalled data streams
+        let timeout: NodeJS.Timeout;
+        const resetTimeout = () => {
+          if (timeout !== undefined) {
+            clearTimeout(timeout);
+          }
+          timeout = setTimeout(() => {
+            data.stream.destroy(new Error('Timeout'));
+          }, this.streamTimeout);
+        };
+        data.stream.on('data', resetTimeout);
+        data.stream.pause();
 
-          // Write data stream to temp file
-          const writeStream = fs.createWriteStream(bundlePath);
-          pipeline(data.stream, writeStream, async (error) => {
-            if (error !== undefined) {
-              reject(error);
-              this.resetUnbundlePromise();
-              log.error('Error writing ANS-104 bundle stream', error);
-              if (bundlePath !== undefined) {
-                try {
-                  await fsPromises.unlink(bundlePath);
-                } catch (error: any) {
-                  log.error('Error deleting ANS-104 temporary bundle file', {
+        // Write data stream to temp file
+        const writeStream = fs.createWriteStream(bundlePath);
+        pipeline(data.stream, writeStream, async (error) => {
+          if (error !== undefined) {
+            reject(error);
+            log.error('Error writing ANS-104 bundle stream', error);
+            if (bundlePath !== undefined) {
+              try {
+                await fsPromises.unlink(bundlePath);
+              } catch (error: any) {
+                log.error(
+                  'Error deleting ANS-104 temporary bundle file', {
                     message: error?.message,
                     stack: error?.stack,
-                  });
-                }
+                   }
+                );
               }
-            } else {
-              log.info('Parsing ANS-104 bundle stream...');
-              this.worker.postMessage({
+            }
+          } else {
+            log.info('Parsing ANS-104 bundle stream...');
+            this.workQueue.push({
+              resolve,
+              reject,
+              message: {
                 rootTxId,
                 parentId,
                 parentIndex,
                 bundlePath,
-              });
-            }
-          });
-        } catch (error) {
-          reject(error);
-          this.resetUnbundlePromise();
-          if (bundlePath !== undefined) {
-            try {
-              await fsPromises.unlink(bundlePath);
-            } catch (error: any) {
-              log.error('Error deleting ANS-104 temporary bundle file', {
-                message: error?.message,
-                stack: error?.stack,
-              });
-            }
+              },
+            });
+            this.drainQueue();
+          }
+        });
+      } catch (error) {
+        reject(error);
+        if (bundlePath !== undefined) {
+          try {
+            await fsPromises.unlink(bundlePath);
+          } catch (error: any) {
+            log.error('Error deleting ANS-104 temporary bundle file', {
+              message: error?.message,
+              stack: error?.stack,
+            });
           }
         }
-      },
-    );
-    return unbundlePromise;
+      }
+    });
   }
 }
 

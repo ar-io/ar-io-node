@@ -228,6 +228,7 @@ const ans104Unbundler = new Ans104Unbundler({
   filter: config.ANS104_UNBUNDLE_FILTER,
   contiguousDataSource,
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
+  workerCount: config.ANS104_UNBUNDLE_WORKERS,
 });
 
 eventEmitter.on(
