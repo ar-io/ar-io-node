@@ -42,6 +42,7 @@ export class RedisKvStore implements KVBufferStore {
     });
     this.client.on('error', (err) => {
       this.log.error(`Redis error: ${err}`);
+      metrics.redisErrorCounter.inc();
     });
     this.client.connect().catch((err) => {
       this.log.error(`Redis connection error: ${err}`);

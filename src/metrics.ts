@@ -139,3 +139,8 @@ export const redisConnectionErrorsCounter = new promClient.Counter({
   name: 'redis_connection_errors_total',
   help: 'Number of errors connecting to redis',
 });
+
+export const redisErrorCounter = new promClient.Counter({
+  name: 'redis_errors_total',
+  help: 'Number of errors redis cache has received',
+});
