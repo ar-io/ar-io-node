@@ -224,11 +224,11 @@ export class Ans104Parser {
               if (bundlePath !== undefined) {
                 try {
                   await fsPromises.unlink(bundlePath);
-                } catch (error) {
-                  log.error(
-                    'Error deleting ANS-104 temporary bundle file',
-                    error,
-                  );
+                } catch (error: any) {
+                  log.error('Error deleting ANS-104 temporary bundle file', {
+                    message: error?.message,
+                    stack: error?.stack,
+                  });
                 }
               }
             } else {
@@ -247,8 +247,11 @@ export class Ans104Parser {
           if (bundlePath !== undefined) {
             try {
               await fsPromises.unlink(bundlePath);
-            } catch (error) {
-              log.error('Error deleting ANS-104 temporary bundle file', error);
+            } catch (error: any) {
+              log.error('Error deleting ANS-104 temporary bundle file', {
+                message: error?.message,
+                stack: error?.stack,
+              });
             }
           }
         }
@@ -316,8 +319,11 @@ if (!isMainThread) {
         itemCount: bundleLength,
         matchedItemCount,
       });
-    } catch (error) {
-      log.error('Error unbundling ANS-104 bundle stream', error);
+    } catch (error: any) {
+      log.error('Error unbundling ANS-104 bundle stream', {
+        message: error?.message,
+        stack: error?.stack,
+      });
       parentPort?.postMessage({ eventName: 'unbundle-error' });
     } finally {
       try {

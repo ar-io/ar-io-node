@@ -121,8 +121,11 @@ export class Ans104Unbundler {
         });
         log.info('Bundle unbundled.');
       }
-    } catch (error) {
-      log.error('Unbundling failed:', error);
+    } catch (error: any) {
+      log.error('Unbundling failed:', {
+        message: error?.message,
+        stack: error?.stack,
+      });
     }
   }
 }
