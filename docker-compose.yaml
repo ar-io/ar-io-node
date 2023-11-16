@@ -64,8 +64,7 @@ services:
 
   redis:
     image: redis:latest
-    # TODO: append only is reccomended to prevent losing data
-    # command: redis-server --appendonly yes
+    command: redis-server --appendonly yes maxmemory ${REDIS_MAX_MEMORY:-2gb}
     ports:
       - "6379:6379"
     volumes:
