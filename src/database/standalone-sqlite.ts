@@ -61,6 +61,7 @@ import {
 } from '../types.js';
 
 const CPU_COUNT = os.cpus().length;
+const MAX_WORKER_COUNT = 12;
 
 const MAX_WORKER_ERRORS = 100;
 
@@ -2140,7 +2141,7 @@ type WorkerPoolSizes = {
 const WORKER_POOL_SIZES: WorkerPoolSizes = {
   core: { read: 1, write: 1 },
   data: { read: 1, write: 1 },
-  gql: { read: CPU_COUNT, write: 0 },
+  gql: { read: Math.min(CPU_COUNT, MAX_WORKER_COUNT), write: 0 },
   debug: { read: 1, write: 0 },
   moderation: { read: 1, write: 1 },
   bundles: { read: 1, write: 1 },
