@@ -20,6 +20,7 @@
                 gnumake
                 graphviz
                 nodejs
+                openjdk
                 sqlite-interactive
               ];
             };
