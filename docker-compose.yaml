@@ -66,7 +66,7 @@ services:
     image: redis:latest
     command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-2gb}
     ports:
-      - "6379:6379"
+      - 6379:6379
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
