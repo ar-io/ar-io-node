@@ -20,7 +20,6 @@ import { default as asyncHandler } from 'express-async-handler';
 import url from 'node:url';
 import { Logger } from 'winston';
 import { Transform } from 'stream';
-import { parseRange } from 'range-parser';
 
 import { MANIFEST_CONTENT_TYPE } from '../lib/encoding.js';
 import {
@@ -32,6 +31,7 @@ import {
   ManifestPathResolver,
 } from '../types.js';
 
+const parseRange = require('range-parser');
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
 const NOT_FOUND_MAX_AGE = 60; // 1 minute
@@ -68,12 +68,12 @@ const setCommonDataHeaders = ({
 const handleRangedataResponse = (log: Logger, rangeHeader: string, res: Response, data: ContiguousData ) => {
   const totalSize = data.size;
   const subranges = parseRange(totalSize, rangeHeader, { combine: true });
+  log.warn('subranges', {'subranges': subranges})
 
   if (subranges.type === 'bytes') {
     res.status(206); // Partial Content
     res.setHeader("Content-Range", `${rangeHeader}/${totalSize}`);
     res.setHeader("Accept-Ranges", "bytes");
-    let r = subranges.shift(); // same as pop(0)
 
     // Create a custom Transform stream to filter the range
     const rangeStream = new Transform({
@@ -82,7 +82,9 @@ const handleRangedataResponse = (log: Logger, rangeHeader: string, res: Response
         const chunkStart = (this as any).position;
         const chunkEnd = chunkStart + chunk.length - 1;
 
-        while (true) {
+        while ((this as any).subranges.length > 0) {
+          let r = (this as any).subranges.shift();
+
           // Determine the intersection between the global range and the chunk's range
           const intersectionStart = Math.max(r.start, chunkStart);
           const intersectionEnd = Math.min(r.end, chunkEnd);
@@ -93,9 +95,7 @@ const handleRangedataResponse = (log: Logger, rangeHeader: string, res: Response
             this.push(slicedData);
           }
 
-          if (subranges.length > 0 && chunkEnd > r.end) {
-            r = subranges.shift(); // same as pop(0)
-          } else {
+          if (chunkEnd <= r.end) {
             break;
           }
         }
@@ -105,9 +105,10 @@ const handleRangedataResponse = (log: Logger, rangeHeader: string, res: Response
       },
     });
     (rangeStream as any).position = 0;
+    (rangeStream as any).subranges = subranges;
 
     rangeStream.on("close", () => {
-      // Handle any cleanup if needed
+      log.info('Stream is closed', {});
     });
 
     data.stream.pipe(rangeStream).pipe(res);

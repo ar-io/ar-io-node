@@ -2459,6 +2459,11 @@ commander@^2.20.3:
   resolved "https://registry.npmjs.org/commander/-/commander-2.20.3.tgz"
   integrity sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==
 
+common-js@^0.3.8:
+  version "0.3.8"
+  resolved "https://registry.yarnpkg.com/common-js/-/common-js-0.3.8.tgz#f4328918b4ba376f981ad33a1b1fbb6614126ecb"
+  integrity sha512-83poCK3wlRnYqWdolJiYrMYvaBFzlDO1RwQVti2ZDBR2K5ifBGksu2cw3ZKFioEqB8FVLUmuu3OXxFUlSBk5UQ==
+
 component-emitter@^1.3.0:
   version "1.3.0"
   resolved "https://registry.npmjs.org/component-emitter/-/component-emitter-1.3.0.tgz"
@@ -5242,7 +5247,7 @@ randombytes@^2.1.0:
   dependencies:
     safe-buffer "^5.1.0"
 
-range-parser@~1.2.1:
+range-parser@^1.2.1, range-parser@~1.2.1:
   version "1.2.1"
   resolved "https://registry.npmjs.org/range-parser/-/range-parser-1.2.1.tgz"
   integrity sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==
