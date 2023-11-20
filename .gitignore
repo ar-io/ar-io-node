@@ -14,6 +14,7 @@ test-results.json
 
 # Generated docs
 /docs/sqlite/bundles
+/docs/diagrams/*.png
 
 # VS Code
 /.vscode
