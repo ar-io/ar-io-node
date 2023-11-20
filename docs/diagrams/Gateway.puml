@@ -1,0 +1,49 @@
+@startuml Gateway
+
+
+!include ./C4/C4_Context.puml
+!include ./C4/C4_Container.puml
+!include ./C4/C4_Component.puml
+
+' Set Layout
+LAYOUT_TOP_DOWN()
+
+
+' Define Elements
+
+Person(user, "End User")
+Component(arweave, "Arweave Blockweave")
+
+System_Boundary(ar-io, "AR.IO Gateway"){
+    Component(core, "AR.IO Core Service")
+    Component(envoy, "Envoy Service")
+    Component(observer, "Observer Service")
+
+    System(storage, "Local Storage"){
+        ContainerDb(chunks, "Chunk data")
+        ContainerDb(headers, "Header Data")
+        ContainerDb(contiguous, "Contiguous Data")
+        ContainerDb(indexes, "Index Data")
+        ContainerDb(reports, "Observer Reports")
+    }
+}
+
+' Relationships
+BiRel(user, envoy, "User requests data from Envoy", "HTTPS" )
+BiRel(envoy, arweave, "Chain API requests get data directly from the Blockweave", "HTTP")
+BiRel(envoy, arweave, "GraphQL API requests data from the Blockweave", "HTTP")
+BiRel(envoy, core, "Data API requests are forwarded to the core service")
+
+Rel(core, chunks, "Saves chunked data")
+Rel(core, headers, "saves header data")
+Rel(core, contiguous, "saves contiguous data")
+Rel(core, indexes, "indexes data and saves in db", "SQLite")
+
+
+Rel(observer, reports, "saves observer reports")
+Rel(observer, arweave, "Checks the ability of other gateways to resolve ArNS names", "HTTPS")
+
+' Legend
+SHOW_LEGEND()
+
+@enduml

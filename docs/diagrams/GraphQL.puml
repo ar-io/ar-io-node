@@ -1,0 +1,33 @@
+@startuml GraphQL_API
+
+
+!include ./C4/C4_Context.puml
+!include ./C4/C4_Container.puml
+!include ./C4/C4_Component.puml
+
+' Layout
+LAYOUT_TOP_DOWN()
+
+
+' Define Elements
+
+Person(user, "End User")
+Container(arweave, "Arweave Blockweave")
+System_Boundary(gateway, "AR.IO Gateway"){ 
+    Component(envoy, "Envoy Service")
+    ContainerDb(index, "Indexed data")
+    }
+
+
+' Define Relationships
+
+Rel(user, gateway, "User makes GraphQL query to AR.IO Gateway.", "HTTPS")
+Rel(gateway, envoy, "Gateway settings determine if query is processed locally or proxied to Arweave Blockweave.")
+BiRel(envoy, index, "Envoy process and responds to query using local index.", "", "(based on Gateway settings)")
+BiRel(envoy, arweave, "Envoy proxies query to pre-selected trusted Arweave node.","HTTP", "(based on Gateway settings)")
+Rel(envoy, user, "Envoy returns query results to user.")
+
+
+' Legend
+SHOW_LEGEND()
+@enduml

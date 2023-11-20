@@ -1,0 +1,32 @@
+@startuml Data_API
+
+
+!include ./C4/C4_Context.puml
+!include ./C4/C4_Container.puml
+!include ./C4/C4_Component.puml
+
+' Layout
+LAYOUT_TOP_DOWN()
+
+
+' Define Elements
+
+Person(user, "End User")
+Container(arweave, "Arweave Blockweave")
+System_Boundary(gateway, "AR.IO Gateway"){ 
+    Component(core, "Core Service")
+    ContainerDb(index, "Indexed data")
+    }
+
+
+' Define Relationships
+Rel(user, gateway, "User makes request for data to AR.IO Gateway.", "HTTPS")
+Rel(gateway, core, "Gateway routes the request to Core Service.")
+BiRel(core, index, "Core checks for requested data in gateway index.")
+BiRel(core, arweave, "Core requests any missing data from the Arweave Blockweave.", "HTTPS")
+Rel(core, user, "Core serves the requested data to User.")
+
+
+' Legend
+SHOW_LEGEND()
+@enduml
