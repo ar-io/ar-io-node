@@ -1,0 +1,26 @@
+@startuml Chain_API
+
+
+!include ./C4/C4_Context.puml
+!include ./C4/C4_Container.puml
+!include ./C4/C4_Component.puml
+
+
+' Layout
+LAYOUT_TOP_DOWN()
+
+
+' Define Elements
+
+Person(user, "End User")
+Container(arweave, "Arweave Blockweave")
+System(gateway, "AR.IO Gateway")
+
+
+' Define Relationships
+BiRel(user, gateway, "User requests chain data from AR.IO Gateway.", "HTTPS")
+BiRel(gateway, arweave, "Gateway retrieves the requested chain data from Arweave Blockweave.", "HTTP")
+
+' Legend
+SHOW_LEGEND()
+@enduml
