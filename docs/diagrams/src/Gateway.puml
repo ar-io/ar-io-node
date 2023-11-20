@@ -1,9 +1,9 @@
 @startuml Gateway
 
 
-!include ./C4/C4_Context.puml
-!include ./C4/C4_Container.puml
-!include ./C4/C4_Component.puml
+!include ./C4_Context.puml
+!include ./C4_Container.puml
+!include ./C4_Component.puml
 
 ' Set Layout
 LAYOUT_TOP_DOWN()
