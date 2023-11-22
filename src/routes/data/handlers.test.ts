@@ -15,13 +15,14 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { expect } from 'chai';
 import express from 'express';
+import { Readable } from 'node:stream';
 import sinon from 'sinon';
 import { default as request } from 'supertest';
 
 import log from '../../log.js';
 import {
-  BlockListValidator,
   ContiguousDataIndex,
   ContiguousDataSource,
   ManifestPathResolver,
@@ -33,7 +34,7 @@ describe('Data routes', () => {
     let app: express.Express;
     let dataIndex: ContiguousDataIndex;
     let dataSource: ContiguousDataSource;
-    let blockListValidator: BlockListValidator;
+    let blockListValidator: any;
     let manifestPathResolver: ManifestPathResolver;
 
     beforeEach(() => {
@@ -43,7 +44,12 @@ describe('Data routes', () => {
         getDataParent: sinon.stub(),
         saveDataContentAttributes: sinon.stub(),
       };
-      dataSource = { getData: sinon.stub() };
+      dataSource = {
+        getData: sinon.stub().returns({
+          stream: Readable.from(Buffer.from('testing...')),
+          size: 10,
+        }),
+      };
       blockListValidator = {
         isIdBlocked: sinon.stub(),
         isHashBlocked: sinon.stub(),
@@ -54,7 +60,28 @@ describe('Data routes', () => {
       };
     });
 
-    it('should handle blocked ID', async () => {
+    it('should return 200 status code and data for unblocked data request', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      blockListValidator.isIdBlocked.resolves(false);
+      blockListValidator.isHashBlocked.resolves(false);
+      return request(app)
+        .get('/not-a-real-id')
+        .expect(200)
+        .then((res: any) => {
+          expect(res.body.toString()).to.equal('testing...');
+        });
+    });
+
+    it('should return 206 status code and partial data for a range request', async () => {
       const blockListValidator = {
         isIdBlocked: sinon.stub(),
         isHashBlocked: sinon.stub(),
@@ -69,13 +96,49 @@ describe('Data routes', () => {
           manifestPathResolver,
         }),
       );
-      blockListValidator.isIdBlocked.resolves(true);
-      request(app)
-        .get('/id')
-        .expect(404)
-        .end((err: any, _res: any) => {
-          if (err) throw err;
+      return request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'bytes=2-3')
+        .expect(206)
+        .then((res: any) => {
+          expect(res.body.toString()).to.equal('st');
         });
+    });
+
+    // Multiple ranges are not yet supported
+    it('should return 200 status code and full data for a range request with multiple ranges', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      return request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'bytes=1-2,4-5')
+        .expect(200)
+        .then((res: any) => {
+          expect(res.text).to.equal('testing...');
+        });
+    });
+
+    it('should return 404 given a blocked ID', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      blockListValidator.isIdBlocked.resolves(true);
+      return request(app).get('/not-a-real-id-id').expect(404);
     });
   });
 });
