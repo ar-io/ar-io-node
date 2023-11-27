@@ -106,7 +106,7 @@ describe('Data routes', () => {
     });
 
     // Multiple ranges are not yet supported
-    it('should return 200 status code and full data for a range request with multiple ranges', async () => {
+    it('should return 416 status code for a range request with multiple ranges', async () => {
       app.get(
         '/:id',
         createDataHandler({
@@ -120,10 +120,7 @@ describe('Data routes', () => {
       return request(app)
         .get('/not-a-real-id')
         .set('Range', 'bytes=1-2,4-5')
-        .expect(200)
-        .then((res: any) => {
-          expect(res.text).to.equal('testing...');
-        });
+        .expect(416);
     });
 
     it('should return 404 given a blocked ID', async () => {
