@@ -83,14 +83,14 @@ const handleRangeRequest = (
 
   // Malformed range header
   if (ranges === -2) {
-    log.error(`Malformed 'range' header`);
+    log.warn(`Malformed 'range' header`);
     res.status(400).type('text').send(`Malformed 'range' header`);
     return;
   }
 
   // Unsatisfiable range
   if (ranges === -1 || ranges.type !== 'bytes') {
-    log.error('Range not satisfiable');
+    log.warn('Range not satisfiable');
     res
       .status(416)
       .set('Content-Range', `bytes */${data.size}`)
@@ -146,8 +146,8 @@ const handleRangeRequest = (
 
     data.stream.pipe(rangeStream).pipe(res);
   } else {
-    // Multiple ranges are not yet supported
-    data.stream.pipe(res);
+    log.warn('Multiple ranges are not yet supported');
+    res.status(416).type('text').send('Multiple ranges are not yet supported');
   }
 };
 
