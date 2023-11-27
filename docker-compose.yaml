@@ -61,6 +61,7 @@ services:
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-redis}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
       - REDIS_CACHE_TTL_SECONDS=${REDIS_CACHE_TTL_SECONDS:-}
+      - NODE_JS_MAX_OLD_SPACE_SIZE=${NODE_JS_MAX_OLD_SPACE_SIZE:-}
     depends_on:
       - redis
 
