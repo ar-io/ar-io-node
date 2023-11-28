@@ -6,6 +6,7 @@ services:
     image: ghcr.io/ar-io/ar-io-envoy:latest
     build:
       context: envoy/
+    restart: on-failure:5
     ports:
       - '3000:3000'
       - '9901:9901'
@@ -27,6 +28,7 @@ services:
     image: ghcr.io/ar-io/ar-io-core:latest
     build:
       context: .
+    restart: on-failure:5
     ports:
       - 4000:4000
     volumes:
@@ -65,6 +67,7 @@ services:
   redis:
     image: redis:latest
     command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-2gb}
+    restart: on-failure:5
     ports:
       - 6379:6379
     volumes:
@@ -72,6 +75,7 @@ services:
 
   observer:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-14802babee090d674249960df890c54c9406076b}
+    restart: on-failure:5
     ports:
       - 5000:5000
     volumes:
