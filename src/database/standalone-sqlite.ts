@@ -1076,7 +1076,8 @@ export class StandaloneSqliteDatabaseWorker {
 
   getGqlNewTransactionsBaseSql() {
     return sql
-      .select(
+      .select()
+      .distinct(
         'nt.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         "x'00' AS data_item_id",
@@ -1109,7 +1110,8 @@ export class StandaloneSqliteDatabaseWorker {
 
   getGqlNewDataItemsBaseSql() {
     return sql
-      .select(
+      .select()
+      .distinct(
         'ndi.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         'id AS data_item_id',
@@ -1142,7 +1144,8 @@ export class StandaloneSqliteDatabaseWorker {
 
   getGqlStableTransactionsBaseSql() {
     return sql
-      .select(
+      .select()
+      .distinct(
         'st.height AS height',
         'st.block_transaction_index AS block_transaction_index',
         "x'00' AS data_item_id",
@@ -1172,7 +1175,8 @@ export class StandaloneSqliteDatabaseWorker {
 
   getGqlStableDataItemsBaseSql() {
     return sql
-      .select(
+      .select()
+      .distinct(
         'sdi.height AS height',
         'sdi.block_transaction_index AS block_transaction_index',
         'sdi.id AS data_item_id',
