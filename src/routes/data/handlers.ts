@@ -55,11 +55,18 @@ const setDataHeaders = ({
   // Allow range requests
   res.header('Accept-Ranges', 'bytes');
 
-  // Aggressively cache data before max fork depth
-  if (dataAttributes?.stable) {
-    res.header('Cache-Control', `public, max-age=${STABLE_MAX_AGE}, immutable`);
-  } else {
-    res.header('Cache-Control', `public, max-age=${UNSTABLE_MAX_AGE}`);
+  // Only set Cache-Control header if it's not already set (e.g., for on ArNS
+  // TTLs)
+  if (!res.hasHeader('Cache-Control')) {
+    // Aggressively cache data before max fork depth
+    if (dataAttributes?.stable) {
+      res.header(
+        'Cache-Control',
+        `public, max-age=${STABLE_MAX_AGE}, immutable`,
+      );
+    } else {
+      res.header('Cache-Control', `public, max-age=${UNSTABLE_MAX_AGE}`);
+    }
   }
 
   // Use the content type from the L1 or data item index if available
