@@ -32,7 +32,11 @@ import * as winston from 'winston';
 import * as events from '../events.js';
 import { createFilter } from '../filters.js';
 import log from '../log.js';
-import { ContiguousDataSource, NormalizedDataItem } from '../types.js';
+import {
+  ContiguousData,
+  ContiguousDataSource,
+  NormalizedDataItem,
+} from '../types.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
 
 /* eslint-disable */
@@ -231,11 +235,12 @@ export class Ans104Parser {
   }): Promise<void> {
     return new Promise(async (resolve, reject) => {
       let bundlePath: string | undefined;
+      let data: ContiguousData | undefined;
       try {
         const log = this.log.child({ parentId });
 
         // Get data stream
-        const data = await this.contiguousDataSource.getData(parentId);
+        data = await this.contiguousDataSource.getData(parentId);
 
         // Construct temp path for passing data to worker
         await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
@@ -254,7 +259,7 @@ export class Ans104Parser {
             clearTimeout(timeout);
           }
           timeout = setTimeout(() => {
-            data.stream.destroy(new Error('Timeout'));
+            data?.stream.destroy(new Error('Timeout'));
           }, this.streamTimeout);
         };
         data.stream.on('data', resetTimeout);
@@ -270,12 +275,10 @@ export class Ans104Parser {
               try {
                 await fsPromises.unlink(bundlePath);
               } catch (error: any) {
-                log.error(
-                  'Error deleting ANS-104 temporary bundle file', {
-                    message: error?.message,
-                    stack: error?.stack,
-                   }
-                );
+                log.error('Error deleting ANS-104 bundle temporary file', {
+                  message: error?.message,
+                  stack: error?.stack,
+                });
               }
             }
           } else {
@@ -299,7 +302,17 @@ export class Ans104Parser {
           try {
             await fsPromises.unlink(bundlePath);
           } catch (error: any) {
-            log.error('Error deleting ANS-104 temporary bundle file', {
+            log.error('Error deleting ANS-104 bundle temporary file', {
+              message: error?.message,
+              stack: error?.stack,
+            });
+          }
+        }
+        if (data !== undefined) {
+          try {
+            data.stream.destroy();
+          } catch (error: any) {
+            log.error('Error destroying ANS-104 data stream', {
               message: error?.message,
               stack: error?.stack,
             });
@@ -314,8 +327,9 @@ if (!isMainThread) {
   const filter = createFilter(JSON.parse(workerData.dataItemIndexFilterString));
   parentPort?.on('message', async (message: any) => {
     const { rootTxId, parentId, parentIndex, bundlePath } = message;
+    let stream: fs.ReadStream | undefined = undefined;
     try {
-      const stream = fs.createReadStream(bundlePath);
+      stream = fs.createReadStream(bundlePath);
       const iterable = await processStream(stream);
       const bundleLength = iterable.length;
       let matchedItemCount = 0;
@@ -377,8 +391,21 @@ if (!isMainThread) {
     } finally {
       try {
         await fsPromises.unlink(bundlePath);
-      } catch (error) {
-        log.error('Error deleting ANS-104 temporary bundle file', error);
+      } catch (error: any) {
+        log.error('Error deleting ANS-104 bundle temporary file', {
+          message: error?.message,
+          stack: error?.stack,
+        });
+      }
+      if (stream !== undefined) {
+        try {
+          stream.destroy();
+        } catch (error: any) {
+          log.error('Error destroying ANS-104 bundle temporary file stream', {
+            message: error?.message,
+            stack: error?.stack,
+          });
+        }
       }
     }
   });
