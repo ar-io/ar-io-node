@@ -20,6 +20,7 @@ import createPrometheusMiddleware from 'express-prometheus-middleware';
 
 import * as config from '../config.js';
 import * as system from '../system.js';
+import { release } from '../version.js';
 
 export const arIoRouter = Router();
 
@@ -51,6 +52,7 @@ arIoRouter.get('/ar-io/info', (_req, res) => {
   res.status(200).send({
     wallet: config.AR_IO_WALLET,
     contractId: config.CONTRACT_ID,
+    release,
   });
 });
 

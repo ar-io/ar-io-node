@@ -1,7 +1,6 @@
 {
   "name": "ar-io-node",
-  "version": "0.0.1",
-  "description": "An AR.IO gateway node.",
+  "description": "The AR.IO gateway core service",
   "type": "module",
   "main": "./dist/app.js",
   "repository": {
