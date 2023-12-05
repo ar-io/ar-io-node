@@ -3,7 +3,7 @@
 *.db-wal
 *.log
 /.direnv
-/.env
+/.env.local
 /coverage
 /data
 /dist
