@@ -13,35 +13,27 @@ LAYOUT_TOP_DOWN()
 
 Person(user, "End User")
 Component(arweave, "Arweave Blockweave")
+Component(network, "AR.IO Network")
 
 System_Boundary(ar-io, "AR.IO Gateway"){
     Component(core, "AR.IO Core Service")
     Component(envoy, "Envoy Service")
     Component(observer, "Observer Service")
 
-    System(storage, "Local Storage"){
-        ContainerDb(chunks, "Chunk data")
-        ContainerDb(headers, "Header Data")
-        ContainerDb(contiguous, "Contiguous Data")
-        ContainerDb(indexes, "Index Data")
-        ContainerDb(reports, "Observer Reports")
-    }
+    ContainerDb(index, "Chain and Bundle Index", "Chunked, header, and contiguous data and Observer reports")
 }
 
 ' Relationships
-BiRel(user, envoy, "User requests data from Envoy", "HTTPS" )
+BiRel(user, envoy, "User sends data, chain, or GraphQL request to Envoy", "HTTPS" )
 BiRel(envoy, arweave, "Chain API requests get data directly from the Blockweave", "HTTP")
-BiRel(envoy, arweave, "GraphQL API requests data from the Blockweave", "HTTP")
-BiRel(envoy, core, "Data API requests are forwarded to the core service")
-
-Rel(core, chunks, "Saves chunked data")
-Rel(core, headers, "saves header data")
-Rel(core, contiguous, "saves contiguous data")
-Rel(core, indexes, "indexes data and saves in db", "SQLite")
+BiRel(envoy, core, "GraphQL API and Data API requests are forwarded to the core service")
 
 
-Rel(observer, reports, "saves observer reports")
-Rel(observer, arweave, "Checks the ability of other gateways to resolve ArNS names", "HTTPS")
+Rel(core, index, "Indexes and stores data locally")
+
+
+Rel(observer, index, "saves observer reports")
+Rel(observer, network, "Checks the ability of other gateways in the AR.IO Network to resolve ArNS names", "HTTPS")
 
 ' Legend
 SHOW_LEGEND()
