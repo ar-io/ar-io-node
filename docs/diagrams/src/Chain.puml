@@ -1,9 +1,9 @@
 @startuml Chain_API
 
 
-!include ./C4_Context.puml
-!include ./C4_Container.puml
-!include ./C4_Component.puml
+!include ./C4_definitions/C4_Context.puml
+!include ./C4_definitions/C4_Container.puml
+!include ./C4_definitions/C4_Component.puml
 
 
 ' Layout
