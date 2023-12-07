@@ -56,6 +56,7 @@ import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
+import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
@@ -123,6 +124,17 @@ export const blockImporter = new BlockImporter({
 eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
   eventEmitter.emit(events.TX_INDEXED, tx);
 });
+
+export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
+  ? new FsCleanupWorker({
+      log,
+      basePath: 'data/headers',
+      shouldDelete: async (path) => {
+        // Ignore .gitkeep
+        return !path.endsWith('.gitkeep');
+      },
+    })
+  : undefined;
 
 const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Format', value: 'binary' },
