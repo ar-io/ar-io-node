@@ -18,12 +18,13 @@
 import dotenv from 'dotenv';
 import { canonicalize } from 'json-canonicalize';
 import crypto from 'node:crypto';
+import path from 'node:path';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
 import log from './log.js';
 
-dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
@@ -92,3 +93,5 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
   'REDIS_CACHE_TTL_SECONDS',
   `${60 * 60 * 8}`, // 8 hours by default
 );
+export const ENABLE_HEADER_CLEANUP =
+  env.varOrDefault('ENABLE_HEADER_CLEANUP', 'false') === 'true';
