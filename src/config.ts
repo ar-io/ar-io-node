@@ -92,5 +92,5 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
   'REDIS_CACHE_TTL_SECONDS',
   `${60 * 60 * 8}`, // 8 hours by default
 );
-export const ENABLE_HEADER_CLEANUP =
-  env.varOrDefault('ENABLE_HEADER_CLEANUP', 'false') === 'true';
+export const ENABLE_FS_HEADER_CACHE_CLEANUP =
+  env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
