@@ -3,9 +3,7 @@ version: '3.0'
 
 services:
   envoy:
-    env_file:
-      - .env.local
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: on-failure:5
@@ -27,9 +25,7 @@ services:
       - observer
 
   core:
-    env_file:
-      - .env.local
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: on-failure:5
@@ -71,9 +67,7 @@ services:
       - redis
 
   redis:
-    env_file:
-      - .env.local
-    image: redis:${REDIS_IMAGE_TAG}
+    image: redis:${REDIS_IMAGE_TAG:-latest}
     command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-2gb}
     restart: on-failure:5
     ports:
@@ -82,9 +76,7 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    env_file:
-      - .env.local
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-14802babee090d674249960df890c54c9406076b}
     restart: on-failure:5
     ports:
       - 5000:5000
