@@ -121,12 +121,14 @@ The hardware specifications listed below represent the minimum system requiremen
    - Once you are in the correct directory, run the following command to start the Docker container:
 
      ```
-     docker compose up -d --build
+     docker compose up -d
      ```
      - Explanation of flags:
         - `up`: Start the Docker containers.
         - `-d`: Run the containers as background processes (detached mode).
-        - `--build`: Build a new container for the project. Use this flag when you make changes to the code or environmental variables.
+        
+      **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-commpose.yaml` file. 
+
    - If prompted by the firewall, allow access for Docker when requested.
 
 
