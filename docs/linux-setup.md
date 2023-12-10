@@ -173,12 +173,13 @@ These packages are not required to run a node in its basic form. However, they w
 
 - Build the Docker container:
     ```
-    sudo docker-compose up -d --build
+    sudo docker-compose up -d
     ```
     - Explanation of flags:
         - `up`: Start the Docker containers.
         - `-d`: Run the containers as background processes (detached mode).
-        - `--build`: Build a new container for the project. Use this flag when you make changes to the code or environmental variables.
+
+    **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-commpose.yaml` file. 
 
 To ensure your node is running correctly, follow the next two steps.
 
