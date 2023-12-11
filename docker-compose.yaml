@@ -3,7 +3,7 @@ version: '3.0'
 
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-v1.28-latest}
     build:
       context: envoy/
     restart: on-failure:5
@@ -67,7 +67,7 @@ services:
       - redis
 
   redis:
-    image: redis:${REDIS_IMAGE_TAG:-latest}
+    image: redis:${REDIS_IMAGE_TAG:-7}
     command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-2gb}
     restart: on-failure:5
     ports:
