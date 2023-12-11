@@ -1281,15 +1281,15 @@ export class StandaloneSqliteDatabaseWorker {
       blockTransactionIndexSortTableAlias = 'nbt';
     }
 
-    if (ids.length > 0) {
+    if (ids?.length > 0) {
       query.where(sql.in(`${txTableAlias}.id`, ids.map(fromB64Url)));
     }
 
-    if (recipients.length > 0) {
+    if (recipients?.length > 0) {
       query.where(sql.in(`${txTableAlias}.target`, recipients.map(fromB64Url)));
     }
 
-    if (owners.length > 0) {
+    if (owners?.length > 0) {
       query.where(
         sql.in(`${txTableAlias}.owner_address`, owners.map(fromB64Url)),
       );
