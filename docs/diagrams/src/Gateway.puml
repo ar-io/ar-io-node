@@ -20,7 +20,11 @@ System_Boundary(ar-io, "AR.IO Gateway"){
     Component(envoy, "Envoy Service")
     Component(observer, "Observer Service")
 
-    ContainerDb(index, "Chain and Bundle Index", "Chunked, header, and contiguous data and Observer reports")
+    ContainerDb(chunks, "Chunk data")
+    ContainerDb(headers, "Header Data")
+    ContainerDb(contiguous, "Contiguous Data")
+    ContainerDb(reports, "Observer Reports")
+    ContainerDb(index, "Chain and Bundle Index")
 }
 
 ' Relationships
@@ -29,10 +33,12 @@ BiRel(envoy, arweave, "Chain API requests get data directly from the Blockweave"
 BiRel(envoy, core, "GraphQL API and Data API requests are forwarded to the core service")
 
 
-Rel(core, index, "Indexes and stores data locally")
+Rel(core, index, "Indexes and stores chain and bundle data")
+Rel(core, chunks, "Saves chunked data")
+Rel(core, headers, "Saves header data")
+Rel(core, contiguous, "Saves contiguous data")
 
-
-Rel(observer, index, "saves observer reports")
+Rel(observer, reports, "saves observer reports")
 Rel(observer, network, "Checks the ability of other gateways in the AR.IO Network to resolve ArNS names", "HTTPS")
 
 ' Legend
