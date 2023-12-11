@@ -83,7 +83,7 @@ export const CONTRACT_ID = env.varOrDefault(
   'CONTRACT_ID',
   'bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U',
 );
-export const CHAIN_CACHE_TYPE = env.varOrDefault('CHAIN_CACHE_TYPE', 'fs');
+export const CHAIN_CACHE_TYPE = env.varOrDefault('CHAIN_CACHE_TYPE', 'lmdb');
 export const REDIS_CACHE_URL = env.varOrDefault(
   'REDIS_CACHE_URL',
   'redis://localhost:6379',
