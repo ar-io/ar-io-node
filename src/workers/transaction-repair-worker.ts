@@ -49,9 +49,8 @@ export class TransactionRepairWorker {
 
   async retryMissingTransactions() {
     try {
-      const missingTxIds = await this.chainIndex.getMissingTxIds(
-        DEFAULT_TXS_TO_RETRY,
-      );
+      const missingTxIds =
+        await this.chainIndex.getMissingTxIds(DEFAULT_TXS_TO_RETRY);
       for (const txId of missingTxIds) {
         this.log.info('Retrying missing transaction', { txId });
         await this.txFetcher.queueTxId(txId);
