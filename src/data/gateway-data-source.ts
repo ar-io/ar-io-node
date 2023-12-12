@@ -52,6 +52,9 @@ export class GatewayDataSource implements ContiguousDataSource {
 
     const response = await this.trustedGatewayAxios.request({
       method: 'GET',
+      headers: {
+        'Accept-Encoding': 'identity',
+      },
       url: path,
       responseType: 'stream',
     });
