@@ -22,8 +22,12 @@ import { FsKVStore } from '../store/fs-kv-store.js';
 import { LmdbKVStore } from '../store/lmdb-kv-store.js';
 import { RedisKvStore } from '../store/redis-kv-store.js';
 import { KVBufferStore } from '../types.js';
+import { KvBlockStore } from '../store/kv-block-store.js';
+import { KvTransactionStore } from '../store/kv-transaction-store.js';
+import { FsBlockStore } from '../store/fs-block-store.js';
+import { FsTransactionStore } from '../store/fs-transaction-store.js';
 
-export const getKvBufferStore = ({
+const createKvBufferStore = ({
   pathKey,
   type,
   log,
@@ -53,9 +57,62 @@ export const getKvBufferStore = ({
       });
     }
 
-    // TODO: implement redis
     default: {
       throw new Error(`Invalid chain cache type: ${type}`);
     }
+  }
+};
+
+export const makeBlockStore = ({
+  log,
+  type,
+}: {
+  log: winston.Logger;
+  type: string;
+}) => {
+  const pathKey = 'partial-blocks';
+  if (type === 'fs') {
+    log.info('Using FsBlockStore');
+    return new FsBlockStore({
+      log,
+      baseDir: `data/headers/${pathKey}`,
+      tmpDir: `data/tmp/${pathKey}`,
+    });
+  } else {
+    return new KvBlockStore({
+      log,
+      kvBufferStore: createKvBufferStore({
+        log,
+        pathKey,
+        type: config.CHAIN_CACHE_TYPE,
+      }),
+    });
+  }
+};
+
+export const makeTxStore = ({
+  log,
+  type,
+}: {
+  log: winston.Logger;
+  type: string;
+}) => {
+  const pathKey = 'partial-txs';
+  if (type === 'fs') {
+    log.info('Using FsTransactionStore');
+    return new FsTransactionStore({
+      log,
+      baseDir: `data/headers/${pathKey}`,
+      tmpDir: `data/tmp/${pathKey}`,
+    });
+  } else {
+    return new KvTransactionStore({
+      log,
+      kvBufferStore: createKvBufferStore({
+        log,
+        pathKey,
+        type: config.CHAIN_CACHE_TYPE,
+      }),
+    });
   }
 };

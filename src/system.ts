@@ -29,7 +29,7 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
-import { getKvBufferStore } from './lib/kvstore.js';
+import { makeBlockStore, makeTxStore } from './init/header-stores.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';
@@ -38,8 +38,6 @@ import { StreamingManifestPathResolver } from './resolution/streaming-manifest-p
 import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-resolver.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
-import { KvBlockStore } from './store/kv-block-store.js';
-import { KvTransactionStore } from './store/kv-transaction-store.js';
 import {
   BlockListValidator,
   BundleIndex,
@@ -73,21 +71,13 @@ export const arweaveClient = new ArweaveCompositeClient({
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
   skipCache: config.SKIP_CACHE,
-  blockStore: new KvBlockStore({
+  blockStore: makeBlockStore({
     log,
-    kvBufferStore: getKvBufferStore({
-      log,
-      pathKey: 'partial-blocks',
-      type: config.CHAIN_CACHE_TYPE,
-    }),
+    type: config.CHAIN_CACHE_TYPE,
   }),
-  txStore: new KvTransactionStore({
+  txStore: makeTxStore({
     log,
-    kvBufferStore: getKvBufferStore({
-      log,
-      pathKey: 'partial-txs',
-      type: config.CHAIN_CACHE_TYPE,
-    }),
+    type: config.CHAIN_CACHE_TYPE,
   }),
   failureSimulator: new UniformFailureSimulator({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
