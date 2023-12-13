@@ -14,7 +14,7 @@ hooks:
       runas: root
   AfterInstall:
     - location: scripts/codedeploy/after-install
-      timeout: 300
+      timeout: 600
       runas: root
   ApplicationStart:
     - location: scripts/codedeploy/app-start
