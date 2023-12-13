@@ -1,6 +1,7 @@
 name: Build docs and deploy as GitHub pages
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - develop
