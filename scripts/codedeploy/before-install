@@ -16,6 +16,11 @@ instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
 mkdir -p /efs/backups/$instance_id/sqlite/previous-before-install
 mkdir -p /efs/backups/$instance_id/sqlite/before-install
 
+# ensure containers are shut down
+if [ "$(docker ps -q)" ]; then
+  docker-compose down
+fi
+
 # keep an archive of the previous backup in case the copy fails
 if [ "$(ls /efs/backups/$instance_id/before-install/*.db)" ]; then
   mv /efs/backups/$instance_id/before-install/* /efs/backups/$instance_id/previous-before-install/

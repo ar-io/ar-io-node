@@ -2,5 +2,10 @@
 
 cd /opt/ar-io-node
 
+# ensure containers are shut down
+if [ "$(docker ps -q)" ]; then
+  docker-compose down
+fi
+
 # TODO use a pre-built image
 docker-compose up -d
