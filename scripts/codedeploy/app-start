@@ -2,5 +2,9 @@
 
 cd /opt/ar-io-node
 
+if [ "$(docker ps -q)" ]; then
+  docker-compose down
+fi
+
 # TODO use a pre-built image
 docker-compose up -d
