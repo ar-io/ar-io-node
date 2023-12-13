@@ -3,7 +3,7 @@ name: Build AR.IO Envoy container image
 on:
   push:
     branches:
-      - main
+      - develop
     paths:
       - 'envoy/**'
 
