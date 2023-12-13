@@ -218,7 +218,7 @@ export const contiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource: new SequentialDataSource({
     log,
-    dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
+    dataSources: [txChunksDataSource, gatewayDataSource, arweaveClient],
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
   contiguousDataIndex,
