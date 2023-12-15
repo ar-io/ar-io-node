@@ -78,7 +78,7 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-af96b81d221665b3150e16556ee98fb10c57e4b5}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-03a773534fbf959536375dd322c9c0b2837f238e}
     restart: on-failure:5
     ports:
       - 5000:5000
