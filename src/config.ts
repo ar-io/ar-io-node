@@ -94,3 +94,6 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
 );
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =
   env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
+export const ON_DEMAND_RETRIEVAL_ORDER = env
+  .varOrDefault('ON_DEMAND_RETRIEVAL_ORDER', 'trusted-gateway,chunks,tx-data')
+  .split(',');
