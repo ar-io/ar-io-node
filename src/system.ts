@@ -42,6 +42,7 @@ import {
   BlockListValidator,
   BundleIndex,
   ChainIndex,
+  ContiguousDataSource,
   ContiguousDataIndex,
   DataItemIndexWriter,
   MatchableItem,
@@ -214,11 +215,28 @@ const gatewayDataSource = new GatewayDataSource({
   trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
 });
 
+const dataSources: ContiguousDataSource[] = [];
+for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
+  switch (sourceName) {
+    case 'trusted-gateway':
+      dataSources.push(gatewayDataSource);
+      break;
+    case 'chunks':
+      dataSources.push(txChunksDataSource);
+      break;
+    case 'tx-data':
+      dataSources.push(arweaveClient);
+      break;
+    default:
+      throw new Error(`Unknown data source: ${sourceName}`);
+  }
+}
+
 export const contiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource: new SequentialDataSource({
     log,
-    dataSources: [txChunksDataSource, gatewayDataSource, arweaveClient],
+    dataSources,
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
   contiguousDataIndex,
