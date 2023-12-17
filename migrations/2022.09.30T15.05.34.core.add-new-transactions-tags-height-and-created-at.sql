@@ -1,4 +1,4 @@
 ALTER TABLE new_transaction_tags ADD COLUMN height INTEGER;
-ALTER TABLE new_transaction_tags ADD COLUMN created_at INTEGER;
+ALTER TABLE new_transaction_tags ADD COLUMN indexed_at INTEGER;
 
-CREATE INDEX new_transaction_tags_height_created_at_idx ON new_transaction_tags (height, created_at);
+CREATE INDEX new_transaction_tags_height_indexed_at_idx ON new_transaction_tags (height, indexed_at);

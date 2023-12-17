@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS block_sources (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  indexed_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS block_sources_name_idx ON block_sources (name);

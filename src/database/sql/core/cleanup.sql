@@ -11,14 +11,14 @@ WHERE height < @height_threshold AND
 DELETE FROM new_transaction_tags
 WHERE height < @height_threshold OR (
     height IS NULL AND
-    created_at < @created_at_threshold
+    indexed_at < @indexed_at_threshold
   )
 
 -- deleteStaleNewTransactions
 DELETE FROM new_transactions
 WHERE height < @height_threshold OR (
     height IS NULL
-    AND created_at < @created_at_threshold
+    AND indexed_at < @indexed_at_threshold
   )
 
 -- deleteStaleNewBlockTransactions

@@ -9,11 +9,11 @@ VALUES (@hash, @block_source_id, @notes, @blocked_at)
 ON CONFLICT DO NOTHING
 
 -- insertSource
-INSERT INTO block_sources (name, created_at)
-VALUES (@name, @created_at)
+INSERT INTO block_sources (name, indexed_at)
+VALUES (@name, @indexed_at)
 ON CONFLICT DO NOTHING
 
 -- getSourceByName
-SELECT id, name, created_at
+SELECT id, name, indexed_at
 FROM block_sources
 WHERE name = @name

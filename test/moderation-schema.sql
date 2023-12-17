@@ -1,7 +1,7 @@
 CREATE TABLE block_sources (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  indexed_at INTEGER NOT NULL
 );
 CREATE TABLE blocked_ids  (
   id BLOB PRIMARY KEY,

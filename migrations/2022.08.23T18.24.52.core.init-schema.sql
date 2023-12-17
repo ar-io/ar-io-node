@@ -188,12 +188,12 @@ CREATE TABLE IF NOT EXISTS new_transactions (
 
   -- Metadata
   tag_count INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  indexed_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS new_transactions_target_id_idx ON new_transactions (target, id);
 CREATE INDEX IF NOT EXISTS new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
-CREATE INDEX IF NOT EXISTS new_transactions_created_at_idx ON new_transactions (created_at);
+CREATE INDEX IF NOT EXISTS new_transactions_indexed_at_idx ON new_transactions (indexed_at);
 
 CREATE TABLE IF NOT EXISTS new_block_transactions (
   block_indep_hash BYTEA,
