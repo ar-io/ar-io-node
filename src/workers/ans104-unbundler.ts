@@ -81,7 +81,7 @@ export class Ans104Unbundler {
     this.maxQueueSize = maxQueueSize;
     this.queue = fastq.promise(
       this.unbundle.bind(this),
-      Math.min(workerCount, 1),
+      Math.max(workerCount, 1),
     );
   }
 
