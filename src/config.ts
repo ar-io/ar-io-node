@@ -94,3 +94,7 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
 );
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =
   env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
+
+export const WEBHOOK_TARGET_SERVER = env.varOrUndefined(
+  'WEBHOOK_TARGET_SERVER',
+);
