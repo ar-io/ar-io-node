@@ -829,35 +829,35 @@
   resolved "https://registry.yarnpkg.com/@jsdevtools/ono/-/ono-7.1.3.tgz#9df03bbd7c696a5c58885c34aa06da41c8543796"
   integrity sha512-4JQNk+3mVzK3xh2rqd6RB4J46qUR19azEHBneZyTZM+c456qOrbbM/5xcR8huNCCcbVt7+UmizG6GuUvPvKUYg==
 
-"@lmdb/lmdb-darwin-arm64@2.8.5":
-  version "2.8.5"
-  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-darwin-arm64/-/lmdb-darwin-arm64-2.8.5.tgz#895d8cb16a9d709ce5fedd8b60022903b875e08e"
-  integrity sha512-KPDeVScZgA1oq0CiPBcOa3kHIqU+pTOwRFDIhxvmf8CTNvqdZQYp5cCKW0bUk69VygB2PuTiINFWbY78aR2pQw==
+"@lmdb/lmdb-darwin-arm64@2.9.2":
+  version "2.9.2"
+  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-darwin-arm64/-/lmdb-darwin-arm64-2.9.2.tgz#da42cda48018eabfd678b9698e68a0102221b4ba"
+  integrity sha512-+GX51Fi8nZOrEXCFiQHnrCpKAzkfDA2sY5+M6Ry4wZEu711o2qlvg+7xXP+j7OT7+JsfB9ayGCdhra2AAaX02g==
 
-"@lmdb/lmdb-darwin-x64@2.8.5":
-  version "2.8.5"
-  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-darwin-x64/-/lmdb-darwin-x64-2.8.5.tgz#ca243534c8b37d5516c557e4624256d18dd63184"
-  integrity sha512-w/sLhN4T7MW1nB3R/U8WK5BgQLz904wh+/SmA2jD8NnF7BLLoUgflCNxOeSPOWp8geP6nP/+VjWzZVip7rZ1ug==
+"@lmdb/lmdb-darwin-x64@2.9.2":
+  version "2.9.2"
+  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-darwin-x64/-/lmdb-darwin-x64-2.9.2.tgz#fb24813693175a858727d61b3dc33c277a739987"
+  integrity sha512-ajkq2oZTd/RXXpgaZqVm6LHoJYf4A42q+S+U4gYKRYpeR4ERGvG+VGCK9bi9MXInQfeq0KM1yv6rsYpvCOoNhQ==
 
-"@lmdb/lmdb-linux-arm64@2.8.5":
-  version "2.8.5"
-  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-linux-arm64/-/lmdb-linux-arm64-2.8.5.tgz#b44a8023057e21512eefb9f6120096843b531c1e"
-  integrity sha512-vtbZRHH5UDlL01TT5jB576Zox3+hdyogvpcbvVJlmU5PdL3c5V7cj1EODdh1CHPksRl+cws/58ugEHi8bcj4Ww==
+"@lmdb/lmdb-linux-arm64@2.9.2":
+  version "2.9.2"
+  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-linux-arm64/-/lmdb-linux-arm64-2.9.2.tgz#1fc10dfd165b7199b47c41ce9de99b22f46a8da4"
+  integrity sha512-WqQqWwFyL8JPVpKJyKnyyg7tnsVlD08PHEyxSMxDQC2EkPpvZuUz2oMqasDoy5tmYB0jANOI13/Qz3Mbh9endQ==
 
-"@lmdb/lmdb-linux-arm@2.8.5":
-  version "2.8.5"
-  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-linux-arm/-/lmdb-linux-arm-2.8.5.tgz#17bd54740779c3e4324e78e8f747c21416a84b3d"
-  integrity sha512-c0TGMbm2M55pwTDIfkDLB6BpIsgxV4PjYck2HiOX+cy/JWiBXz32lYbarPqejKs9Flm7YVAKSILUducU9g2RVg==
+"@lmdb/lmdb-linux-arm@2.9.2":
+  version "2.9.2"
+  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-linux-arm/-/lmdb-linux-arm-2.9.2.tgz#2d4203c85e895cb75ffd6488791cc18de871a6b2"
+  integrity sha512-AAdmxDIh1tMYzXOUuDP+TNhvl9pLgvS63M6xhwgVArr79As4msraUSjIJ8J0jlhFKsN7nVoXzPB/jvpp8aK49w==
 
-"@lmdb/lmdb-linux-x64@2.8.5":
-  version "2.8.5"
-  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-linux-x64/-/lmdb-linux-x64-2.8.5.tgz#6c61835b6cc58efdf79dbd5e8c72a38300a90302"
-  integrity sha512-Xkc8IUx9aEhP0zvgeKy7IQ3ReX2N8N1L0WPcQwnZweWmOuKfwpS3GRIYqLtK5za/w3E60zhFfNdS+3pBZPytqQ==
+"@lmdb/lmdb-linux-x64@2.9.2":
+  version "2.9.2"
+  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-linux-x64/-/lmdb-linux-x64-2.9.2.tgz#dc0f71c092c005b2ad9ddd3502151ecce7692702"
+  integrity sha512-rB4tE80EOxXwTJr9rsATWZghOVP8+mV085P5u/dBdttJSq3TLxY0CMZ8NKB/WJpryNnsfCI4OvjOAibF/fg+GQ==
 
-"@lmdb/lmdb-win32-x64@2.8.5":
-  version "2.8.5"
-  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-win32-x64/-/lmdb-win32-x64-2.8.5.tgz#8233e8762440b0f4632c47a09b1b6f23de8b934c"
-  integrity sha512-4wvrf5BgnR8RpogHhtpCPJMKBmvyZPhhUtEwMJbXh0ni2BucpfF07jlmyM11zRqQ2XIq6PbC2j7W7UCCcm1rRQ==
+"@lmdb/lmdb-win32-x64@2.9.2":
+  version "2.9.2"
+  resolved "https://registry.yarnpkg.com/@lmdb/lmdb-win32-x64/-/lmdb-win32-x64-2.9.2.tgz#84f561d05329c671f6e4119b483ce54410772bb6"
+  integrity sha512-VRrM/Zq/k8YEZlGuDvFi3NU753cm+vOa1kUcq4iNyeAEVXzjrSg5K3sHI0d6Od5gLsKctjlQeaFn6+21inU4bw==
 
 "@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.2":
   version "3.0.2"
@@ -5178,23 +5178,23 @@ lines-and-columns@^1.1.6:
   resolved "https://registry.yarnpkg.com/lines-and-columns/-/lines-and-columns-1.2.4.tgz#eca284f75d2965079309dc0ad9255abb2ebc1632"
   integrity sha512-7ylylesZQ/PV29jhEDl3Ufjo6ZX7gCqJr5F7PKrqc93v7fzSymt1BpwEU8nAUXs8qzzvqhbjhK5QZg6Mt/HkBg==
 
-lmdb@^2.8.5:
-  version "2.8.5"
-  resolved "https://registry.yarnpkg.com/lmdb/-/lmdb-2.8.5.tgz#ce191110c755c0951caa062722e300c703973837"
-  integrity sha512-9bMdFfc80S+vSldBmG3HOuLVHnxRdNTlpzR6QDnzqCQtCzGUEAGTzBKYMeIM+I/sU4oZfgbcbS7X7F65/z/oxQ==
+lmdb@^2.9.2:
+  version "2.9.2"
+  resolved "https://registry.yarnpkg.com/lmdb/-/lmdb-2.9.2.tgz#a67ed24cad282ba7ad21daf2a8a13c08dcb33f56"
+  integrity sha512-Q5SQzu4u4sdz4U8QT1uCS04beS7hS/1YYb1suJwaijqVETGAkrPBKr0ERxTeza/u2F6ei5+8UTnzm4ae3PJG3w==
   dependencies:
-    msgpackr "^1.9.5"
+    msgpackr "^1.9.9"
     node-addon-api "^6.1.0"
     node-gyp-build-optional-packages "5.1.1"
     ordered-binary "^1.4.1"
     weak-lru-cache "^1.2.2"
   optionalDependencies:
-    "@lmdb/lmdb-darwin-arm64" "2.8.5"
-    "@lmdb/lmdb-darwin-x64" "2.8.5"
-    "@lmdb/lmdb-linux-arm" "2.8.5"
-    "@lmdb/lmdb-linux-arm64" "2.8.5"
-    "@lmdb/lmdb-linux-x64" "2.8.5"
-    "@lmdb/lmdb-win32-x64" "2.8.5"
+    "@lmdb/lmdb-darwin-arm64" "2.9.2"
+    "@lmdb/lmdb-darwin-x64" "2.9.2"
+    "@lmdb/lmdb-linux-arm" "2.9.2"
+    "@lmdb/lmdb-linux-arm64" "2.9.2"
+    "@lmdb/lmdb-linux-x64" "2.9.2"
+    "@lmdb/lmdb-win32-x64" "2.9.2"
 
 locate-path@^5.0.0:
   version "5.0.0"
@@ -5715,17 +5715,10 @@ msgpackr-extract@^3.0.2:
     "@msgpackr-extract/msgpackr-extract-linux-x64" "3.0.2"
     "@msgpackr-extract/msgpackr-extract-win32-x64" "3.0.2"
 
-msgpackr@^1.10.0:
+msgpackr@^1.10.0, msgpackr@^1.9.9:
   version "1.10.0"
   resolved "https://registry.yarnpkg.com/msgpackr/-/msgpackr-1.10.0.tgz#adbca9c951f06647a808f76bc00a519cf6f7fbe4"
   integrity sha512-rVQ5YAQDoZKZLX+h8tNq7FiHrPJoeGHViz3U4wIcykhAEpwF/nH2Vbk8dQxmpX5JavkI8C7pt4bnkJ02ZmRoUw==
-  optionalDependencies:
-    msgpackr-extract "^3.0.2"
-
-msgpackr@^1.9.5:
-  version "1.9.9"
-  resolved "https://registry.yarnpkg.com/msgpackr/-/msgpackr-1.9.9.tgz#ec71e37beb8729280847f683cb0a340eb35ce70f"
-  integrity sha512-sbn6mioS2w0lq1O6PpGtsv6Gy8roWM+o3o4Sqjd6DudrL/nOugY+KyJUimoWzHnf9OkO0T6broHFnYE/R05t9A==
   optionalDependencies:
     msgpackr-extract "^3.0.2"
 

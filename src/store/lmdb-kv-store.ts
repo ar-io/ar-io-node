@@ -32,13 +32,6 @@ export class LmdbKVStore implements KVBufferStore {
 
   async get(key: string): Promise<Buffer | undefined> {
     const value = this.db.get(key);
-    /**
-     * NOTE: there appears to be a bug in LMDB where Buffers are converted to Uint8Arrays when retrieving. This is a workaround to ensure Buffers are always returned so our encoding/decoding functions work as expected.
-     * Reference: https://github.com/kriszyp/lmdb-js/blob/4c3a3b9eb590a876a923e0f9818d698ee0fccb2f/read.js#L232
-     */
-    if (value) {
-      return Buffer.from(value.buffer);
-    }
     return value;
   }
 

@@ -24,7 +24,7 @@
     "fs-extra": "^11.2.0",
     "graphql": "^16.8.1",
     "json-canonicalize": "^1.0.6",
-    "lmdb": "^2.8.5",
+    "lmdb": "^2.9.2",
     "middleware-async": "^1.3.5",
     "msgpackr": "^1.10.0",
     "node-cache": "^5.1.2",
