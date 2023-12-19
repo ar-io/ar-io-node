@@ -58,6 +58,7 @@ import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
+import { WebhookEmitter } from './workers/webhook-emitter.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -322,3 +323,11 @@ export const nameResolver = new MemoryCacheArNSResolver({
     trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   }),
 });
+
+// webhooks
+
+new WebhookEmitter(eventEmitter, log);
+// eventEmitter.on(events.BLOCK_FETCHED, (blockData) => {
+//   // console.log(`\n\nEvent Triggered in System\n\n`)
+//   webhookEmitter.emitWebhook({ event: 'BLOCK_FETCHED', data: blockData })
+// });
