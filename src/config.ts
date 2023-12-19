@@ -104,7 +104,7 @@ export const ANS104_INDEX_FILTER = createFilter(
 // The number of ANS-104 worker threads to run
 export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
   'ANS104_UNBUNDLE_WORKERS',
-  '2',
+  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '1',
 );
 
 // Whether or not to attempt to rematch old bundles using the current filter
