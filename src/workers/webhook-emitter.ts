@@ -2,34 +2,45 @@ import axios from 'axios';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
-import { WEBHOOK_TARGET_SERVER } from '../config.js';
+import {
+  // ANS104_UNBUNDLE_FILTER,
+  ANS104_INDEX_FILTER,
+  WEBHOOK_TARGET_SERVER,
+} from '../config.js';
 import * as events from '../events.js';
+import { createFilter } from '../filters.js';
+import { ItemFilter } from '../types.js';
 
 // WebhookEmitter class
 export class WebhookEmitter {
   private eventEmitter: EventEmitter;
   private webhookTargetServer?: string;
   private log: winston.Logger;
+  // private unbundleFilter: ItemFilter;
+  private indexFilter: ItemFilter;
+  
 
   constructor(eventEmitter: EventEmitter, log: winston.Logger) {
     this.eventEmitter = eventEmitter;
     this.webhookTargetServer = WEBHOOK_TARGET_SERVER;
     this.log = log.child({ class: 'WebhookEmitter' });
+    // this.unbundleFilter = createFilter(ANS104_UNBUNDLE_FILTER);
+    this.indexFilter = createFilter(ANS104_INDEX_FILTER);
     this.registerEventListeners();
+    
+  }
+  public shutdown(): void {
+    // Remove all listeners to prevent memory leaks
+    this.eventEmitter.removeAllListeners();
+    this.log.info('WebhookEmitter shutdown completed.');
   }
 
   private registerEventListeners(): void {
-    // Listen to specific events from BlockImporter
-    this.eventEmitter.on(events.BLOCK_FETCHED, (blockData) => {
-      this.emitWebhook({ event: 'BLOCK_FETCHED', data: blockData });
-    });
-
-    this.eventEmitter.on(events.BLOCK_TX_FETCHED, (txData) => {
-      this.emitWebhook({ event: 'BLOCK_TX_FETCHED', data: txData });
-    });
-
-    this.eventEmitter.on(events.BLOCK_TX_FETCH_FAILED, (txData) => {
-      this.emitWebhook({ event: 'BLOCK_TX_FETCH_FAILED', data: txData });
+    this.eventEmitter.on(events.BLOCK_TX_INDEXED, async (tx) => {
+      console.log('indexed a block tx');
+      if (await this.indexFilter.match(tx)) {
+        this.emitWebhook({ event: 'BLOCK_TX_INDEXED', data: tx });
+      }
     });
 
     // Add more listeners as needed for other events

@@ -326,8 +326,15 @@ export const nameResolver = new MemoryCacheArNSResolver({
 
 // webhooks
 
-new WebhookEmitter(eventEmitter, log);
-// eventEmitter.on(events.BLOCK_FETCHED, (blockData) => {
-//   // console.log(`\n\nEvent Triggered in System\n\n`)
-//   webhookEmitter.emitWebhook({ event: 'BLOCK_FETCHED', data: blockData })
-// });
+const webhookEmitter = new WebhookEmitter(eventEmitter, log);
+
+// Handle shutdown signals
+process.on('SIGINT', () => {
+  webhookEmitter.shutdown();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  webhookEmitter.shutdown();
+  process.exit(0);
+});
