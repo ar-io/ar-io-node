@@ -35,16 +35,18 @@ export class WebhookEmitter {
 
   private registerEventListeners(): void {
     this.eventEmitter.on(events.TX_INDEXED, async (tx) => {
-      console.log('indexed a tx: ', tx);
+
       if (await this.indexFilter.match(tx)) {
         this.emitWebhook({ event: 'TX_INDEXED', data: tx });
+
       }
     });
 
     this.eventEmitter.on(events.ANS104_NESTED_BUNDLE_INDEXED, async (item) => {
-      console.log('indexed a bundle data item: ', item);
+
       if (await this.indexFilter.match(item)) {
         this.emitWebhook({ event: 'ANS104_DATA_ITEM_INDEXED', data: item });
+
       }
     });
 
@@ -57,8 +59,7 @@ export class WebhookEmitter {
   }): Promise<void> {
     if (this.webhookTargetServer) {
       this.log.info(
-        `Emitting webhook to ${this.webhookTargetServer}`,
-        eventWrapper,
+        `Emitting webhook to ${this.webhookTargetServer} for ${eventWrapper.event}`
       );
       try {
         // Send a POST request to the webhookTargetServer with the eventWrapper
