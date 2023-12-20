@@ -158,7 +158,7 @@ export class BlockImporter {
     // Emit sucessful fetch events
     this.eventEmitter.emit(events.BLOCK_FETCHED, block);
     txs.forEach((tx) => {
-      console.log("fetching tx")
+      // console.log("fetching tx")
       this.eventEmitter.emit(events.BLOCK_TX_FETCHED, tx);
     });
 
@@ -184,7 +184,7 @@ export class BlockImporter {
     // Update internal state
     this.transactionsImported += txs.length;
 
-    this.log.debug(`Block imported`, {
+    this.log.info(`Block imported`, {
       height: block.height,
       txCount: txs.length,
       missingTxCount: missingTxIds.length,
@@ -232,7 +232,7 @@ export class BlockImporter {
         if (nextHeight === 0 && this.startHeight !== 0) {
           nextHeight = this.startHeight;
         }
-        this.log.debug(`Importing block...`, {
+        this.log.info(`Importing block...`, {
           height: nextHeight,
         });
 

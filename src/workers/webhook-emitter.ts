@@ -18,7 +18,6 @@ export class WebhookEmitter {
   private log: winston.Logger;
   // private unbundleFilter: ItemFilter;
   private indexFilter: ItemFilter;
-  
 
   constructor(eventEmitter: EventEmitter, log: winston.Logger) {
     this.eventEmitter = eventEmitter;
@@ -27,7 +26,6 @@ export class WebhookEmitter {
     // this.unbundleFilter = createFilter(ANS104_UNBUNDLE_FILTER);
     this.indexFilter = createFilter(ANS104_INDEX_FILTER);
     this.registerEventListeners();
-    
   }
   public shutdown(): void {
     // Remove all listeners to prevent memory leaks
@@ -36,10 +34,17 @@ export class WebhookEmitter {
   }
 
   private registerEventListeners(): void {
-    this.eventEmitter.on(events.BLOCK_TX_INDEXED, async (tx) => {
-      console.log('indexed a block tx');
+    this.eventEmitter.on(events.TX_INDEXED, async (tx) => {
+      console.log('indexed a tx: ', tx);
       if (await this.indexFilter.match(tx)) {
-        this.emitWebhook({ event: 'BLOCK_TX_INDEXED', data: tx });
+        this.emitWebhook({ event: 'TX_INDEXED', data: tx });
+      }
+    });
+
+    this.eventEmitter.on(events.ANS104_NESTED_BUNDLE_INDEXED, async (item) => {
+      console.log('indexed a bundle data item: ', item);
+      if (await this.indexFilter.match(item)) {
+        this.emitWebhook({ event: 'ANS104_DATA_ITEM_INDEXED', data: item });
       }
     });
 
