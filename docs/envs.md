@@ -11,7 +11,7 @@ This document describes the environment variables that can be used to configure 
 | INSTANCE_ID                    | String               | ""                             | Adds an "INSTACE_ID" field to output logs                                                                                       |
 | LOG_FORMAT                     | String               | "simple"                       | Sets the format of output logs, accepts "simple" and "json"                                                                     |
 | SKIP_CACHE                     | Boolean              | false                          | If true, skips the local cache and always fetches headers from the node                                                         |
-| PORT                           | Number               | 4000                           | AR.IO node exposed port number                                                                                                  |
+| PORT                           | Number               | 4000                           | ar.io node exposed port number                                                                                                  |
 | SIMULATED_REQUEST_FAILURE_RATE | Number               | 0                              | Number from 0 to 1, representing the probability of a request failing                                                           |
 | AR_IO_WALLET                   | String               | ""                             | Arweave wallet address used for staking and rewards                                                                             |
 | ADMIN_API_KEY                  | String               | Generated                      | API key used for admin API requests (if not set, it's generated and logged into the console)                                    |
@@ -36,5 +36,5 @@ This document describes the environment variables that can be used to configure 
 | REDIS_CACHE_TTL_SECONDS        | Number               | 28800                          | TTL value for Redis cache, defaults to 8 hours (28800 seconds)                                                                  |
 | ENABLE_FS_HEADER_CACHE_CLEANUP | Boolean              | false                          | If true, periodically deletes cached header data                                                                                |
 | NODE_JS_MAX_OLD_SPACE_SIZE     | Number               | system default                 | Sets the memory limit, in Megabytes, for NodeJs. Default value depends on hardware                                              | 
-| SUBMIT_CONTRACT_INTERACTIONS   | Boolean              | true                           | If true, Observer will submit its generated reports to the AR.IO Network. If false, reports will be generated but not submitted |
+| SUBMIT_CONTRACT_INTERACTIONS   | Boolean              | true                           | If true, Observer will submit its generated reports to the ar.io Network. If false, reports will be generated but not submitted |
 
