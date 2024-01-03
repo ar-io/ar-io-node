@@ -158,13 +158,13 @@ a test contract. Resolved names should be considered temporary.
 ### Wallet association
 
 In order to participate in the [ar.io network](https://ar.io/), gateways need
-to association themselves with a wallet. This can be configured by setting the
+to associate themselves with a wallet. This can be configured by setting the
 `AR_IO_WALLET` environment variable. Once set, the associated wallet address is
 visible via the `/ar-io/info` endpoint.
 
 Similarly, network participants must make observations of other gateways and
 submit them. The wallet for this is configured using the `OBSERVER_WALLET`
-enviroment variable. An associated key file is also required to upload
+environment variable. An associated key file is also required to upload
 observation reports. The key file must be placed in
 `./wallets/<OBSERVER_WALLET>.json` (`<OBSERVER_WALLET>` should be replaced with
 the address of the wallet you are using).
