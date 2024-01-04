@@ -1235,7 +1235,7 @@ export class StandaloneSqliteDatabaseWorker {
     let blockTransactionIndexTableAlias: string;
     let tagsTable: string;
     let tagIdColumn: string;
-    let tagIndexColumn: string;
+    let tagJoinIndex: string;
     let heightSortTableAlias: string;
     let blockTransactionIndexSortTableAlias: string;
     let dataItemSortTableAlias: string | undefined = undefined;
@@ -1247,7 +1247,7 @@ export class StandaloneSqliteDatabaseWorker {
       blockTransactionIndexTableAlias = 'st';
       tagsTable = 'stable_transaction_tags';
       tagIdColumn = 'transaction_id';
-      tagIndexColumn = 'transaction_tag_index';
+      tagJoinIndex = 'stable_transaction_tags_transaction_id_idx';
       heightSortTableAlias = 'st';
       blockTransactionIndexSortTableAlias = 'st';
       maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
@@ -1258,7 +1258,7 @@ export class StandaloneSqliteDatabaseWorker {
       blockTransactionIndexTableAlias = 'sdi';
       tagsTable = 'stable_data_item_tags';
       tagIdColumn = 'data_item_id';
-      tagIndexColumn = 'data_item_tag_index';
+      tagJoinIndex = 'stable_data_item_tags_data_item_id_idx';
       heightSortTableAlias = 'sdi';
       blockTransactionIndexSortTableAlias = 'sdi';
       maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
@@ -1313,29 +1313,28 @@ export class StandaloneSqliteDatabaseWorker {
             if (source === 'stable_items') {
               joinCond[`${txTableAlias}.id`] = `${tagAlias}.${tagIdColumn}`;
             }
+
+            query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
           } else {
             const previousTagAlias = `"${index - 1}_${index - 1}"`;
-            joinCond = {
-              [`${previousTagAlias}.${tagIdColumn}`]: `${tagAlias}.${tagIdColumn}`,
-            };
-            // This condition forces the use of the transaction_id index rather
-            // than the name and value index. The transaction_id index is
-            // always the optimal choice given the most selective condition is
-            // first in the GraphQL query.
             query.where(
-              sql.notEq(
-                `${previousTagAlias}.${tagIndexColumn}`,
-                sql(`${tagAlias}.${tagIndexColumn}`),
-              ),
+              `${tagAlias}.${tagIdColumn}`,
+              sql(`${previousTagAlias}.${tagIdColumn}`),
             );
+
+            // We want the user to be able to control join order, so we use a
+            // CROSS JOIN to force it. We also force the use of the ID based
+            // index since we know it's always a reasonable choice and the
+            // optimizer will sometimes make very bad choices if we don't.
+            query.crossJoin(`${tagsTable} AS ${tagAlias} INDEXED BY ${tagJoinIndex}`);
           }
         } else {
           joinCond = {
             [`${txTableAlias}.id`]: `${tagAlias}.${tagIdColumn}`,
           };
-        }
 
-        query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
+          query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
+        }
 
         const nameHash = crypto
           .createHash('sha1')
