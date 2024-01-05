@@ -28,6 +28,7 @@ import {
 import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
+import CircuitBreaker from 'opossum';
 
 /* eslint-disable */
 // @ts-ignore
@@ -52,6 +53,7 @@ import {
   ChainIndex,
   ContiguousDataAttributes,
   ContiguousDataIndex,
+  ContiguousDataParent,
   GqlQueryable,
   GqlTransaction,
   NestedDataIndexWriter,
@@ -130,10 +132,13 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 export function toSqliteParams(sqlBricksParams: { values: any[] }) {
   return sqlBricksParams.values
     .map((v, i) => [i + 1, v])
-    .reduce((acc, [i, v]) => {
-      acc[i] = v;
-      return acc;
-    }, {} as { [key: string]: any });
+    .reduce(
+      (acc, [i, v]) => {
+        acc[i] = v;
+        return acc;
+      },
+      {} as { [key: string]: any },
+    );
 }
 
 function hashTagPart(value: Buffer) {
@@ -1326,7 +1331,9 @@ export class StandaloneSqliteDatabaseWorker {
             // CROSS JOIN to force it. We also force the use of the ID based
             // index since we know it's always a reasonable choice and the
             // optimizer will sometimes make very bad choices if we don't.
-            query.crossJoin(`${tagsTable} AS ${tagAlias} INDEXED BY ${tagJoinIndex}`);
+            query.crossJoin(
+              `${tagsTable} AS ${tagAlias} INDEXED BY ${tagJoinIndex}`,
+            );
           }
         } else {
           joinCond = {
@@ -2156,6 +2163,7 @@ export class StandaloneSqliteDatabase
     NestedDataIndexWriter
 {
   log: winston.Logger;
+
   private workers: {
     core: { read: any[]; write: any[] };
     data: { read: any[]; write: any[] };
@@ -2186,6 +2194,17 @@ export class StandaloneSqliteDatabase
     moderation: { read: [], write: [] },
     bundles: { read: [], write: [] },
   };
+
+  // Data index circuit breakers
+  private getDataParentCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getDataParent']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getDataParent']>>
+  >;
+  private getDataAttributesCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getDataAttributes']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getDataAttributes']>>
+  >;
+
   constructor({
     log,
     coreDbPath,
@@ -2199,7 +2218,47 @@ export class StandaloneSqliteDatabase
     moderationDbPath: string;
     bundlesDbPath: string;
   }) {
-    this.log = log.child({ class: 'StandaloneSqliteDatabase' });
+    this.log = log.child({ class: `${this.constructor.name}` });
+
+    //
+    // Initialize data index circuit breakers
+    //
+
+    const dataIndexCircuitBreakerOptions = {
+      timeout: 500,
+      errorThresholdPercentage: 50,
+      rollingCountTimeout: 5000,
+      resetTimeout: 10000,
+    };
+
+    this.getDataParentCircuitBreaker = new CircuitBreaker(
+      (id: string) => {
+        return this.queueRead('data', `${this.constructor.name}.getDataParent`, [id]);
+      },
+      {
+        name: 'getDataParent',
+        ...dataIndexCircuitBreakerOptions
+      },
+    );
+
+    this.getDataAttributesCircuitBreaker = new CircuitBreaker(
+      (id: string) => {
+        return this.queueRead('data', `${this.constructor.name}.getDataAttributes`, [id]);
+      },
+      {
+        name: 'getDataAttributes',
+        ...dataIndexCircuitBreakerOptions
+      },
+    );
+
+    metrics.circuitBreakerMetrics.add([
+      this.getDataParentCircuitBreaker,
+      this.getDataAttributesCircuitBreaker,
+    ]);
+
+    //
+    // Initialize workers
+    //
 
     const self = this;
 
@@ -2394,12 +2453,22 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
-  getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined> {
-    return this.queueRead('data', 'getDataAttributes', [id]);
+  async getDataAttributes(
+    id: string,
+  ): Promise<ContiguousDataAttributes | undefined> {
+    try {
+      return await this.getDataAttributesCircuitBreaker.fire(id);
+    } catch (_) {
+      return undefined;
+    }
   }
 
-  getDataParent(id: string) {
-    return this.queueRead('data', 'getDataParent', [id]);
+  async getDataParent(id: string): Promise<ContiguousDataParent | undefined> {
+    try {
+      return await this.getDataParentCircuitBreaker.fire(id);
+    } catch (_) {
+      return undefined;
+    }
   }
 
   getDebugInfo(): Promise<DebugInfo> {

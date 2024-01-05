@@ -16,6 +16,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import * as promClient from 'prom-client';
+/* eslint-disable */
+// @ts-ignore
+import PrometheusMetrics from 'opossum-prometheus';
+
+export const circuitBreakerMetrics = new PrometheusMetrics({
+  registry: promClient.register,
+});
 
 //
 // Global error metrics
