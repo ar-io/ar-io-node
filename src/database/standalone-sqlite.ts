@@ -2139,7 +2139,7 @@ type WorkerPoolSizes = {
 };
 const WORKER_POOL_SIZES: WorkerPoolSizes = {
   core: { read: 1, write: 1 },
-  data: { read: 1, write: 1 },
+  data: { read: 2, write: 1 },
   gql: { read: Math.min(CPU_COUNT, MAX_WORKER_COUNT), write: 0 },
   debug: { read: 1, write: 0 },
   moderation: { read: 1, write: 1 },
