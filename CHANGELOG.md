@@ -10,8 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Added circuit breakers around data index access to reduce impact of DB access
   contention under heavy requests loads.
-- Add support for configuring data source priority via the
+- Added support for configuring data source priority via the
   ON_DEMAND_RETRIEVAL_ORDER environment variable.
+- Updated observer to a version that retrieves epoch start and duration from
+  contract state.
 
 ### Changed
 
