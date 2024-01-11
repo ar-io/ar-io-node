@@ -36,5 +36,5 @@ This document describes the environment variables that can be used to configure 
 | REDIS_CACHE_TTL_SECONDS        | Number               | 28800                                              | TTL value for Redis cache, defaults to 8 hours (28800 seconds)                                                                  |
 | ENABLE_FS_HEADER_CACHE_CLEANUP | Boolean              | true if starting with docker, otherwise false      | If true, periodically deletes cached header data                                                                                |
 | NODE_JS_MAX_OLD_SPACE_SIZE     | Number               | 2048 or 8192, depending on number of workers       | Sets the memory limit, in Megabytes, for NodeJs. Default value is 2048 if using less than 2 unbundle workers, otherwise 8192    | 
-| SUBMIT_CONTRACT_INTERACTIONS   | Boolean              | true                                               | If true, Observer will submit its generated reports to the ar.io Network.                                                       |
-
+| SUBMIT_CONTRACT_INTERACTIONS   | Boolean              | true                                               | If true, Observer will submit its generated reports to the ar.io Network                                                        |
+| REDIS_MAX_MEMORY               | String               | 2gb                                                | Sets the max memory allocated to Redis                                                                                          |
