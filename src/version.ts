@@ -16,4 +16,4 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-export const release = '4-pre';
+export const release = '4';
