@@ -86,7 +86,10 @@ export class TransactionFetcher {
         this.eventEmitter.emit(events.TX_FETCHED, tx);
         log.info('Transaction fetched.');
       } catch (error: any) {
-        log.warn('Failed to fetch transaction:', error);
+        log.warn('Failed to fetch transaction:', {
+          message: error?.message,
+          stack: error?.stack,
+        });
         await wait(this.retryWaitMs);
         attempts++;
       }

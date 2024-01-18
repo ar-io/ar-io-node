@@ -42,6 +42,7 @@ import {
   BlockListValidator,
   BundleIndex,
   ChainIndex,
+  ChainOffsetIndex,
   ContiguousDataSource,
   ContiguousDataIndex,
   DataItemIndexWriter,
@@ -59,6 +60,8 @@ import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
+import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
+import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -94,6 +97,7 @@ export const db = new StandaloneSqliteDatabase({
 });
 
 export const chainIndex: ChainIndex = db;
+export const chainOffsetIndex: ChainOffsetIndex = db;
 export const bundleIndex: BundleIndex = db;
 export const contiguousDataIndex: ContiguousDataIndex = db;
 export const blockListValidator: BlockListValidator = db;
@@ -185,6 +189,18 @@ export const txRepairWorker = new TransactionRepairWorker({
   log,
   chainIndex,
   txFetcher,
+});
+
+const txOffsetImporter = new TransactionOffsetImporter({
+  log,
+  chainSource: arweaveClient,
+  chainOffsetIndex,
+});
+
+export const txOffsetRepairWorker = new TransactionOffsetRepairWorker({
+  log,
+  chainOffsetIndex,
+  txOffsetIndexer: txOffsetImporter,
 });
 
 export const bundleRepairWorker = new BundleRepairWorker({
