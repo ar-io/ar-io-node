@@ -22,3 +22,16 @@ WHERE transaction_id = @transaction_id
     SELECT MAX(height)+1
     FROM stable_blocks
   )
+
+-- selectStableTransactionIdsMissingOffsets
+SELECT id
+FROM stable_transactions
+WHERE format = 2
+  AND data_size > 0
+  AND offset IS NULL
+LIMIT @limit
+
+-- updateStableTransactionOffset
+UPDATE stable_transactions
+SET "offset" = @offset
+WHERE id = @id

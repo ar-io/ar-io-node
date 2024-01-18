@@ -51,6 +51,7 @@ import {
   BundleIndex,
   BundleRecord,
   ChainIndex,
+  ChainOffsetIndex,
   ContiguousDataAttributes,
   ContiguousDataIndex,
   ContiguousDataParent,
@@ -762,6 +763,21 @@ export class StandaloneSqliteDatabaseWorker {
     })?.height;
     this.insertTxFn(tx, maybeTxHeight);
     this.stmts.core.deleteNewMissingTransaction.run({ transaction_id: txId });
+  }
+
+  getTxIdsMissingOffsets(limit: number) {
+    const rows = this.stmts.core.selectStableTransactionIdsMissingOffsets.all({
+      limit,
+    });
+
+    return rows.map((row): string => toB64Url(row.id));
+  }
+
+  saveTxOffset(id: string, offset: number) {
+    this.stmts.core.updateStableTransactionOffset.run({
+      id: fromB64Url(id),
+      offset,
+    });
   }
 
   getBundleFormatId(format: string | undefined) {
@@ -2158,6 +2174,7 @@ export class StandaloneSqliteDatabase
     BundleIndex,
     BlockListValidator,
     ChainIndex,
+    ChainOffsetIndex,
     ContiguousDataIndex,
     GqlQueryable,
     NestedDataIndexWriter
@@ -2233,21 +2250,29 @@ export class StandaloneSqliteDatabase
 
     this.getDataParentCircuitBreaker = new CircuitBreaker(
       (id: string) => {
-        return this.queueRead('data', `${this.constructor.name}.getDataParent`, [id]);
+        return this.queueRead(
+          'data',
+          `${this.constructor.name}.getDataParent`,
+          [id],
+        );
       },
       {
         name: 'getDataParent',
-        ...dataIndexCircuitBreakerOptions
+        ...dataIndexCircuitBreakerOptions,
       },
     );
 
     this.getDataAttributesCircuitBreaker = new CircuitBreaker(
       (id: string) => {
-        return this.queueRead('data', `${this.constructor.name}.getDataAttributes`, [id]);
+        return this.queueRead(
+          'data',
+          `${this.constructor.name}.getDataAttributes`,
+          [id],
+        );
       },
       {
         name: 'getDataAttributes',
-        ...dataIndexCircuitBreakerOptions
+        ...dataIndexCircuitBreakerOptions,
       },
     );
 
@@ -2431,6 +2456,14 @@ export class StandaloneSqliteDatabase
 
   saveTx(tx: PartialJsonTransaction): Promise<void> {
     return this.queueWrite('core', 'saveTx', [tx]);
+  }
+
+  getTxIdsMissingOffsets(limit: number): Promise<string[]> {
+    return this.queueRead('core', 'getTxIdsMissingOffsets', [limit]);
+  }
+
+  saveTxOffset(id: string, offset: number) {
+    return this.queueWrite('core', 'saveTxOffset', [id, offset]);
   }
 
   saveDataItem(item: NormalizedDataItem): Promise<void> {
@@ -2676,6 +2709,14 @@ if (!isMainThread) {
           break;
         case 'saveTx':
           worker.saveTx(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'getTxIdsMissingOffsets':
+          const txIdsMissingOffsets = worker.getTxIdsMissingOffsets(args[0]);
+          parentPort?.postMessage(txIdsMissingOffsets);
+          break;
+        case 'saveTxOffset':
+          worker.saveTxOffset(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
         case 'saveDataItem':
