@@ -47,7 +47,7 @@ fi
 echo "Blocks imported successfully."
 docker stop $container
 
-sudo rm data/sqlite/*.db*
+rm data/sqlite/*.db*
 
 # Run a second time to test header caching behavior
 container=$(
