@@ -9,23 +9,28 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (
       system:
-        let pkgs = (import nixpkgs {
+      let
+        pkgs = (import nixpkgs {
           inherit system;
         });
-        in {
-          devShells = {
-            default = pkgs.mkShell {
-              name = "ar-io-node-shell";
-              buildInputs = with pkgs; [
-                gnumake
-                graphviz
-                nodejs
-                openjdk
-                sqlite-interactive
-              ];
-            };
+      in
+      {
+        devShells = {
+          default = pkgs.mkShell {
+            name = "ar-io-node-shell";
+            buildInputs = with pkgs; [
+              gnumake
+              graphviz
+              nodejs
+              yarn
+              nodePackages.typescript-language-server
+              yaml-language-server
+              openjdk
+              sqlite-interactive
+            ];
           };
-        }
+        };
+      }
     );
 
   nixConfig.bash-prompt = "\\e[32m\[ar-io-node-shell\]$\\e[0m ";
