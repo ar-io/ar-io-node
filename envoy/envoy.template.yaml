@@ -2,12 +2,12 @@
 ---
 admin:
   address:
-    socket_address: { address: 0.0.0.0, port_value: 9901 }
+    socket_address: { address: '::', port_value: 9901, ipv4_compat: true }
 static_resources:
   listeners:
     - name: arweave_listener
       address:
-        socket_address: { address: 0.0.0.0, port_value: 3000 }
+        socket_address: { address: '::', port_value: 3000, ipv4_compat: true }
       filter_chains:
         - filters:
             - name: envoy.filters.network.http_connection_manager
@@ -129,6 +129,7 @@ static_resources:
                     socket_address:
                       address: #@ data.values.AR_IO_HOST
                       port_value: #@ data.values.AR_IO_PORT
+                      ipv4_compat: true
     - name: graphql_gateways
       connect_timeout: 1s
       type: STRICT_DNS
@@ -143,6 +144,7 @@ static_resources:
                     socket_address:
                       address: #@ data.values.GRAPHQL_HOST
                       port_value: #@ data.values.GRAPHQL_PORT
+                      ipv4_compat: true
       #@ if data.values.GRAPHQL_PORT == "443":
       transport_socket:
         name: envoy.transport_sockets.tls
@@ -167,6 +169,7 @@ static_resources:
                     socket_address:
                       address: #@ data.values.OBSERVER_HOST
                       port_value: #@ data.values.OBSERVER_PORT
+                      ipv4_compat: true
     - name: legacy_gateways
       connect_timeout: 1s
       type: STRICT_DNS

@@ -42,6 +42,8 @@ import {
   BlockListValidator,
   BundleIndex,
   ChainIndex,
+  ChainOffsetIndex,
+  ContiguousDataSource,
   ContiguousDataIndex,
   DataItemIndexWriter,
   MatchableItem,
@@ -58,6 +60,8 @@ import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
 import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
+import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
+import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 
 process.on('uncaughtException', (error) => {
@@ -94,6 +98,7 @@ export const db = new StandaloneSqliteDatabase({
 });
 
 export const chainIndex: ChainIndex = db;
+export const chainOffsetIndex: ChainOffsetIndex = db;
 export const bundleIndex: BundleIndex = db;
 export const contiguousDataIndex: ContiguousDataIndex = db;
 export const blockListValidator: BlockListValidator = db;
@@ -187,6 +192,18 @@ export const txRepairWorker = new TransactionRepairWorker({
   txFetcher,
 });
 
+const txOffsetImporter = new TransactionOffsetImporter({
+  log,
+  chainSource: arweaveClient,
+  chainOffsetIndex,
+});
+
+export const txOffsetRepairWorker = new TransactionOffsetRepairWorker({
+  log,
+  chainOffsetIndex,
+  txOffsetIndexer: txOffsetImporter,
+});
+
 export const bundleRepairWorker = new BundleRepairWorker({
   log,
   bundleIndex,
@@ -215,11 +232,28 @@ const gatewayDataSource = new GatewayDataSource({
   trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
 });
 
+const dataSources: ContiguousDataSource[] = [];
+for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
+  switch (sourceName) {
+    case 'trusted-gateway':
+      dataSources.push(gatewayDataSource);
+      break;
+    case 'chunks':
+      dataSources.push(txChunksDataSource);
+      break;
+    case 'tx-data':
+      dataSources.push(arweaveClient);
+      break;
+    default:
+      throw new Error(`Unknown data source: ${sourceName}`);
+  }
+}
+
 export const contiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource: new SequentialDataSource({
     log,
-    dataSources: [gatewayDataSource, txChunksDataSource, arweaveClient],
+    dataSources,
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
   contiguousDataIndex,

@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+## [Release 4] - 2024-01-11
+
+### Added
+
+- Added circuit breakers around data index access to reduce impact of DB access
+  contention under heavy requests loads.
+- Added support for configuring data source priority via the
+  ON_DEMAND_RETRIEVAL_ORDER environment variable.
+- Updated observer to a version that retrieves epoch start and duration from
+  contract state.
+
+### Changed
+
+- Set the Redis max memory eviction policy to `allkeys-lru`.
+- Reduced default Redis max memory from 2GB to 256MB.
+- Improved predictability and performance of GraphQL queries.
+- Eliminated unbundling worker threads when filters are configured to skip
+  indexing ANS-104 bundles.
+- Reduced the default number of ANS-104 worker threads from 2 to 1 when
+  unbundling is enabled to conserve memory.
+- Increased nodejs max old space size to 8GB when ANS-104 workers > 1.
+
+### Fixed
+
+- Adjusted paths for chunks indexed by data root to include the full data root.
+
 ## [Release 3] - 2023-12-05
 
 ### Added

@@ -43,6 +43,7 @@ export class Ans104Unbundler {
   private filter: ItemFilter;
 
   // Unbundling queue
+  private workerCount: number;
   private maxQueueSize: number;
   private queue: queueAsPromised<UnbundleableItem, void>;
 
@@ -76,14 +77,21 @@ export class Ans104Unbundler {
       dataItemIndexFilterString,
     });
 
+    this.workerCount = workerCount;
     this.maxQueueSize = maxQueueSize;
-    this.queue = fastq.promise(this.unbundle.bind(this), workerCount);
+    this.queue = fastq.promise(
+      this.unbundle.bind(this),
+      Math.max(workerCount, 1),
+    );
   }
 
   async queueItem(
     item: UnbundleableItem,
     prioritized: boolean | undefined,
   ): Promise<void> {
+    if (this.workerCount === 0) {
+      return;
+    }
     const log = this.log.child({ method: 'queueItem', id: item.id });
     if (prioritized === true) {
       log.debug('Queueing prioritized bundle...');

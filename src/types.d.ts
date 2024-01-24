@@ -184,6 +184,11 @@ export interface ChainIndex {
   ): Promise<void>;
 }
 
+export interface ChainOffsetIndex {
+  getTxIdsMissingOffsets(limit: number): Promise<string[]>;
+  saveTxOffset(txId: string, offset: number): Promise<void>;
+}
+
 export interface BundleRecord {
   id: string;
   rootTransactionId?: string;

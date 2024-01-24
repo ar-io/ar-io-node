@@ -25,27 +25,14 @@ import log from './log.js';
 
 dotenv.config();
 
-export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
-export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
-export const TRUSTED_NODE_URL = env.varOrDefault(
-  'TRUSTED_NODE_URL',
-  'https://arweave.net',
-);
-export const TRUSTED_GATEWAY_URL = env.varOrDefault(
-  'TRUSTED_GATEWAY_URL',
-  'https://arweave.net',
-);
-export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
-  'TRUSTED_ARNS_GATEWAY_URL',
-  'https://__NAME__.arweave.dev',
-);
-export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
+//
+// HTTP server
+//
+
+// HTTP server port
 export const PORT = +env.varOrDefault('PORT', '4000');
-export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
-  'SIMULATED_REQUEST_FAILURE_RATE',
-  '0',
-);
-export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
+
+// API key for accessing admin HTTP entpoints
 export const ADMIN_API_KEY = env.varOrDefault(
   'ADMIN_API_KEY',
   crypto.randomBytes(32).toString('base64url'),
@@ -53,48 +40,140 @@ export const ADMIN_API_KEY = env.varOrDefault(
 if (env.varOrUndefined('ADMIN_API_KEY') === undefined) {
   log.info('Using a random admin key since none was set', { ADMIN_API_KEY });
 }
-export const BACKFILL_BUNDLE_RECORDS =
-  env.varOrDefault('BACKFILL_BUNDLE_RECORDS', 'false') === 'true';
-export const FILTER_CHANGE_REPROCESS =
-  env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';
-export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
-  'ANS104_UNBUNDLE_WORKERS',
-  '2',
+
+//
+// Nodes
+//
+
+// Trusted Arweave node URL (for syncing the chain and retrieving chunks)
+export const TRUSTED_NODE_URL = env.varOrDefault(
+  'TRUSTED_NODE_URL',
+  'https://arweave.net',
 );
+
+// Trusted gateway URL (for retrieving contiguous data)
+export const TRUSTED_GATEWAY_URL = env.varOrDefault(
+  'TRUSTED_GATEWAY_URL',
+  'https://arweave.net',
+);
+
+// Trusted ArNS gateway URL (for resolving ArNS names)
+export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
+  'TRUSTED_ARNS_GATEWAY_URL',
+  'https://__NAME__.arweave.dev',
+);
+
+//
+// Data
+//
+
+// Data retrieval priority order
+export const ON_DEMAND_RETRIEVAL_ORDER = env
+  .varOrDefault('ON_DEMAND_RETRIEVAL_ORDER', 'trusted-gateway,chunks,tx-data')
+  .split(',');
+
+//
+// Indexing
+//
+
+// Whether or not to run indexing processes (used on readers when running with
+// replication)
+export const START_WRITERS =
+  env.varOrDefault('START_WRITERS', 'true') === 'true';
+
+// Indexing range
+export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
+export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
+
+// Filter determining which ANS-104 bundles to unbundle
 export const ANS104_UNBUNDLE_FILTER_STRING = canonicalize(
   JSON.parse(env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
 );
 export const ANS104_UNBUNDLE_FILTER = createFilter(
   JSON.parse(ANS104_UNBUNDLE_FILTER_STRING),
 );
+
+// Filter determining which ANS-104 data items to index
 export const ANS104_INDEX_FILTER_STRING = canonicalize(
   JSON.parse(env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}')),
 );
 export const ANS104_INDEX_FILTER = createFilter(
   JSON.parse(ANS104_INDEX_FILTER_STRING),
 );
+
+// The number of ANS-104 worker threads to run
+export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
+  'ANS104_UNBUNDLE_WORKERS',
+  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '1',
+);
+
+// Whether or not to attempt to rematch old bundles using the current filter
+export const FILTER_CHANGE_REPROCESS =
+  env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';
+
+// Whether or not to backfill bundle records (only needed for DBs that existed
+// before unbundling was implemented)
+export const BACKFILL_BUNDLE_RECORDS =
+  env.varOrDefault('BACKFILL_BUNDLE_RECORDS', 'false') === 'true';
+
+//
+// ArNS and sandboxing
+//
+
+// The root host name to use for ArNS
 export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
 export const ROOT_HOST_SUBDOMAIN_LENGTH =
   ARNS_ROOT_HOST !== undefined ? ARNS_ROOT_HOST.split('.').length - 2 : 0;
+
+// The protocol to use for sandboxing redirects (defaults to https)
 export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
-export const START_WRITERS =
-  env.varOrDefault('START_WRITERS', 'true') === 'true';
+
+//
+// AR.IO network
+//
+
+// The wallet for this gateway
+export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
+
 export const CONTRACT_ID = env.varOrDefault(
   'CONTRACT_ID',
   'bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U',
 );
+
+//
+// Header caching
+//
+
+// Cache type (lmdb, fs, or redis)
 export const CHAIN_CACHE_TYPE = env.varOrDefault('CHAIN_CACHE_TYPE', 'lmdb');
+
+// Redis URL
 export const REDIS_CACHE_URL = env.varOrDefault(
   'REDIS_CACHE_URL',
   'redis://localhost:6379',
 );
+
+// Default Redis TTL
 export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
   'REDIS_CACHE_TTL_SECONDS',
   `${60 * 60 * 8}`, // 8 hours by default
 );
+
+// Whether or not to cleanup filesystem header cache files
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =
   env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
 
-export const WEBHOOK_TARGET_SERVER = env.varOrUndefined(
-  'WEBHOOK_TARGET_SERVER',
+export const WEBHOOK_TARGET_SERVER = env.varOrUndefined('WEBHOOK_TARGET_SERVER');
+
+//
+// Development and testing
+//
+
+// Whether or not to bypass the header cache
+export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
+
+// The rate (0 - 1) at which to simulate request failures
+export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
+  'SIMULATED_REQUEST_FAILURE_RATE',
+  '0',
 );

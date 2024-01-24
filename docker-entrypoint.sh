@@ -7,7 +7,12 @@ mkdir -p data/sqlite
 /nodejs/bin/node dist/migrate.js up
 
 if [ -z "$NODE_MAX_OLD_SPACE_SIZE" ]; then
-  NODE_MAX_OLD_SPACE_SIZE=2048
+  # 8GB for > 1 workers, 2GB for <= 1 worker
+  if [ "$ANS104_UNBUNDLE_WORKERS" -gt "1" ]; then
+    NODE_MAX_OLD_SPACE_SIZE=8192
+  else
+    NODE_MAX_OLD_SPACE_SIZE=2048
+  fi
 fi
 
 # Run the gateway service

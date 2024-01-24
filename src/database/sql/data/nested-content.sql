@@ -4,11 +4,11 @@ INSERT OR REPLACE INTO contiguous_data_id_parents (
   parent_id,
   data_offset,
   data_size,
-  created_at
+  indexed_at
 ) VALUES (
   :id,
   :parent_id,
   :data_offset,
   :data_size,
-  :created_at
+  :indexed_at
 );

@@ -3,7 +3,7 @@ version: '3.0'
 
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-312a2efbe092934906ab66f5b840951e51b5bfd9}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: on-failure:5
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-bc24b0856578313918afa8f515ebdf7ff613a96f}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: on-failure:5
@@ -64,13 +64,14 @@ services:
       - REDIS_CACHE_TTL_SECONDS=${REDIS_CACHE_TTL_SECONDS:-}
       - NODE_JS_MAX_OLD_SPACE_SIZE=${NODE_JS_MAX_OLD_SPACE_SIZE:-}
       - ENABLE_FS_HEADER_CACHE_CLEANUP=${ENABLE_FS_HEADER_CACHE_CLEANUP:-true}
+      - ON_DEMAND_RETRIEVAL_ORDER=${ON_DEMAND_RETRIEVAL_ORDER:-}
       - WEBHOOK_TARGET_SERVER=${WEBHOOK_TARGET_SERVER:-}
     depends_on:
       - redis
 
   redis:
     image: redis:${REDIS_IMAGE_TAG:-7}
-    command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-2gb}
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru
     restart: on-failure:5
     ports:
       - 6379:6379
@@ -78,7 +79,7 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-af96b81d221665b3150e16556ee98fb10c57e4b5}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-a60bb8571c064d66a2c12534906d4fdc855dcc6c}
     restart: on-failure:5
     ports:
       - 5000:5000
@@ -92,4 +93,5 @@ services:
       - CONTRACT_ID=${CONTRACT_ID:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}
       - NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP=${NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP:-5}
+      - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}

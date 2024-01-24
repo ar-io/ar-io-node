@@ -236,7 +236,7 @@ The following guide assumes you are running your node on a local home computer.
         ```
         sudo nano /etc/nginx/sites-available/default
         ```
-    - Replace the file's contents with the following configuration (replace "<your-domain>" when necessary):
+    - Replace the file's contents with the following configuration (replace "\<your-domain>" when necessary):
         ```
         # Force redirects from HTTP to HTTPS
         server {

@@ -28,6 +28,7 @@ import {
 import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
+import CircuitBreaker from 'opossum';
 
 /* eslint-disable */
 // @ts-ignore
@@ -50,8 +51,10 @@ import {
   BundleIndex,
   BundleRecord,
   ChainIndex,
+  ChainOffsetIndex,
   ContiguousDataAttributes,
   ContiguousDataIndex,
+  ContiguousDataParent,
   GqlQueryable,
   GqlTransaction,
   NestedDataIndexWriter,
@@ -130,10 +133,13 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 export function toSqliteParams(sqlBricksParams: { values: any[] }) {
   return sqlBricksParams.values
     .map((v, i) => [i + 1, v])
-    .reduce((acc, [i, v]) => {
-      acc[i] = v;
-      return acc;
-    }, {} as { [key: string]: any });
+    .reduce(
+      (acc, [i, v]) => {
+        acc[i] = v;
+        return acc;
+      },
+      {} as { [key: string]: any },
+    );
 }
 
 function hashTagPart(value: Buffer) {
@@ -156,7 +162,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
     tag_value_hash: Buffer;
     transaction_id: Buffer;
     transaction_tag_index: number;
-    created_at: number;
+    indexed_at: number;
   }[];
   const wallets = [] as { address: Buffer; public_modulus: Buffer }[];
 
@@ -182,7 +188,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       tag_value_hash: tagValueHash,
       transaction_id: txId,
       transaction_tag_index: transactionTagIndex,
-      created_at: currentUnixTimestamp(),
+      indexed_at: currentUnixTimestamp(),
     });
 
     transactionTagIndex++;
@@ -211,7 +217,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       data_root: fromB64Url(tx.data_root),
       content_type: contentType,
       tag_count: tx.tags.length,
-      created_at: currentUnixTimestamp(),
+      indexed_at: currentUnixTimestamp(),
       height: height,
     },
   };
@@ -664,12 +670,12 @@ export class StandaloneSqliteDatabaseWorker {
 
         this.stmts.core.deleteStaleNewTransactionTags.run({
           height_threshold: heightThreshold,
-          created_at_threshold: createdAtThreshold,
+          indexed_at_threshold: createdAtThreshold,
         });
 
         this.stmts.core.deleteStaleNewTransactions.run({
           height_threshold: heightThreshold,
-          created_at_threshold: createdAtThreshold,
+          indexed_at_threshold: createdAtThreshold,
         });
 
         this.stmts.core.deleteStaleNewBlockTransactions.run({
@@ -757,6 +763,21 @@ export class StandaloneSqliteDatabaseWorker {
     })?.height;
     this.insertTxFn(tx, maybeTxHeight);
     this.stmts.core.deleteNewMissingTransaction.run({ transaction_id: txId });
+  }
+
+  getTxIdsMissingOffsets(limit: number) {
+    const rows = this.stmts.core.selectStableTransactionIdsMissingOffsets.all({
+      limit,
+    });
+
+    return rows.map((row): string => toB64Url(row.id));
+  }
+
+  saveTxOffset(id: string, offset: number) {
+    this.stmts.core.updateStableTransactionOffset.run({
+      id: fromB64Url(id),
+      offset,
+    });
   }
 
   getBundleFormatId(format: string | undefined) {
@@ -1235,7 +1256,7 @@ export class StandaloneSqliteDatabaseWorker {
     let blockTransactionIndexTableAlias: string;
     let tagsTable: string;
     let tagIdColumn: string;
-    let tagIndexColumn: string;
+    let tagJoinIndex: string;
     let heightSortTableAlias: string;
     let blockTransactionIndexSortTableAlias: string;
     let dataItemSortTableAlias: string | undefined = undefined;
@@ -1247,7 +1268,7 @@ export class StandaloneSqliteDatabaseWorker {
       blockTransactionIndexTableAlias = 'st';
       tagsTable = 'stable_transaction_tags';
       tagIdColumn = 'transaction_id';
-      tagIndexColumn = 'transaction_tag_index';
+      tagJoinIndex = 'stable_transaction_tags_transaction_id_idx';
       heightSortTableAlias = 'st';
       blockTransactionIndexSortTableAlias = 'st';
       maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
@@ -1258,7 +1279,7 @@ export class StandaloneSqliteDatabaseWorker {
       blockTransactionIndexTableAlias = 'sdi';
       tagsTable = 'stable_data_item_tags';
       tagIdColumn = 'data_item_id';
-      tagIndexColumn = 'data_item_tag_index';
+      tagJoinIndex = 'stable_data_item_tags_data_item_id_idx';
       heightSortTableAlias = 'sdi';
       blockTransactionIndexSortTableAlias = 'sdi';
       maxDbHeight = this.stmts.core.selectMaxStableBlockHeight.get()
@@ -1313,29 +1334,30 @@ export class StandaloneSqliteDatabaseWorker {
             if (source === 'stable_items') {
               joinCond[`${txTableAlias}.id`] = `${tagAlias}.${tagIdColumn}`;
             }
+
+            query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
           } else {
             const previousTagAlias = `"${index - 1}_${index - 1}"`;
-            joinCond = {
-              [`${previousTagAlias}.${tagIdColumn}`]: `${tagAlias}.${tagIdColumn}`,
-            };
-            // This condition forces the use of the transaction_id index rather
-            // than the name and value index. The transaction_id index is
-            // always the optimal choice given the most selective condition is
-            // first in the GraphQL query.
             query.where(
-              sql.notEq(
-                `${previousTagAlias}.${tagIndexColumn}`,
-                sql(`${tagAlias}.${tagIndexColumn}`),
-              ),
+              `${tagAlias}.${tagIdColumn}`,
+              sql(`${previousTagAlias}.${tagIdColumn}`),
+            );
+
+            // We want the user to be able to control join order, so we use a
+            // CROSS JOIN to force it. We also force the use of the ID based
+            // index since we know it's always a reasonable choice and the
+            // optimizer will sometimes make very bad choices if we don't.
+            query.crossJoin(
+              `${tagsTable} AS ${tagAlias} INDEXED BY ${tagJoinIndex}`,
             );
           }
         } else {
           joinCond = {
             [`${txTableAlias}.id`]: `${tagAlias}.${tagIdColumn}`,
           };
-        }
 
-        query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
+          query.join(`${tagsTable} AS ${tagAlias}`, joinCond);
+        }
 
         const nameHash = crypto
           .createHash('sha1')
@@ -2111,7 +2133,7 @@ export class StandaloneSqliteDatabaseWorker {
       parent_id: fromB64Url(parentId),
       data_offset: dataOffset,
       data_size: dataSize,
-      created_at: currentUnixTimestamp(),
+      indexed_at: currentUnixTimestamp(),
     });
   }
 }
@@ -2140,7 +2162,7 @@ type WorkerPoolSizes = {
 };
 const WORKER_POOL_SIZES: WorkerPoolSizes = {
   core: { read: 1, write: 1 },
-  data: { read: 1, write: 1 },
+  data: { read: 2, write: 1 },
   gql: { read: Math.min(CPU_COUNT, MAX_WORKER_COUNT), write: 0 },
   debug: { read: 1, write: 0 },
   moderation: { read: 1, write: 1 },
@@ -2152,11 +2174,13 @@ export class StandaloneSqliteDatabase
     BundleIndex,
     BlockListValidator,
     ChainIndex,
+    ChainOffsetIndex,
     ContiguousDataIndex,
     GqlQueryable,
     NestedDataIndexWriter
 {
   log: winston.Logger;
+
   private workers: {
     core: { read: any[]; write: any[] };
     data: { read: any[]; write: any[] };
@@ -2187,6 +2211,17 @@ export class StandaloneSqliteDatabase
     moderation: { read: [], write: [] },
     bundles: { read: [], write: [] },
   };
+
+  // Data index circuit breakers
+  private getDataParentCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getDataParent']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getDataParent']>>
+  >;
+  private getDataAttributesCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getDataAttributes']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getDataAttributes']>>
+  >;
+
   constructor({
     log,
     coreDbPath,
@@ -2200,7 +2235,55 @@ export class StandaloneSqliteDatabase
     moderationDbPath: string;
     bundlesDbPath: string;
   }) {
-    this.log = log.child({ class: 'StandaloneSqliteDatabase' });
+    this.log = log.child({ class: `${this.constructor.name}` });
+
+    //
+    // Initialize data index circuit breakers
+    //
+
+    const dataIndexCircuitBreakerOptions = {
+      timeout: 500,
+      errorThresholdPercentage: 50,
+      rollingCountTimeout: 5000,
+      resetTimeout: 10000,
+    };
+
+    this.getDataParentCircuitBreaker = new CircuitBreaker(
+      (id: string) => {
+        return this.queueRead(
+          'data',
+          `${this.constructor.name}.getDataParent`,
+          [id],
+        );
+      },
+      {
+        name: 'getDataParent',
+        ...dataIndexCircuitBreakerOptions,
+      },
+    );
+
+    this.getDataAttributesCircuitBreaker = new CircuitBreaker(
+      (id: string) => {
+        return this.queueRead(
+          'data',
+          `${this.constructor.name}.getDataAttributes`,
+          [id],
+        );
+      },
+      {
+        name: 'getDataAttributes',
+        ...dataIndexCircuitBreakerOptions,
+      },
+    );
+
+    metrics.circuitBreakerMetrics.add([
+      this.getDataParentCircuitBreaker,
+      this.getDataAttributesCircuitBreaker,
+    ]);
+
+    //
+    // Initialize workers
+    //
 
     const self = this;
 
@@ -2375,6 +2458,14 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('core', 'saveTx', [tx]);
   }
 
+  getTxIdsMissingOffsets(limit: number): Promise<string[]> {
+    return this.queueRead('core', 'getTxIdsMissingOffsets', [limit]);
+  }
+
+  saveTxOffset(id: string, offset: number) {
+    return this.queueWrite('core', 'saveTxOffset', [id, offset]);
+  }
+
   saveDataItem(item: NormalizedDataItem): Promise<void> {
     return this.queueWrite('bundles', 'saveDataItem', [item]);
   }
@@ -2395,12 +2486,22 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
-  getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined> {
-    return this.queueRead('data', 'getDataAttributes', [id]);
+  async getDataAttributes(
+    id: string,
+  ): Promise<ContiguousDataAttributes | undefined> {
+    try {
+      return await this.getDataAttributesCircuitBreaker.fire(id);
+    } catch (_) {
+      return undefined;
+    }
   }
 
-  getDataParent(id: string) {
-    return this.queueRead('data', 'getDataParent', [id]);
+  async getDataParent(id: string): Promise<ContiguousDataParent | undefined> {
+    try {
+      return await this.getDataParentCircuitBreaker.fire(id);
+    } catch (_) {
+      return undefined;
+    }
   }
 
   getDebugInfo(): Promise<DebugInfo> {
@@ -2608,6 +2709,14 @@ if (!isMainThread) {
           break;
         case 'saveTx':
           worker.saveTx(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'getTxIdsMissingOffsets':
+          const txIdsMissingOffsets = worker.getTxIdsMissingOffsets(args[0]);
+          parentPort?.postMessage(txIdsMissingOffsets);
+          break;
+        case 'saveTxOffset':
+          worker.saveTxOffset(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
         case 'saveDataItem':

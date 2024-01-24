@@ -61,22 +61,22 @@ INSERT INTO new_block_transactions (
 INSERT INTO new_transaction_tags (
   tag_name_hash, tag_value_hash,
   transaction_id, transaction_tag_index,
-  height, created_at
+  height, indexed_at
 ) VALUES (
   @tag_name_hash, @tag_value_hash,
   @transaction_id, @transaction_tag_index,
-  @height, @created_at
+  @height, @indexed_at
 ) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
 
 -- upsertNewTransaction
 INSERT INTO new_transactions (
   id, signature, format, last_tx, owner_address,
   target, quantity, reward, data_size, data_root,
-  tag_count, content_type, created_at, height
+  tag_count, content_type, indexed_at, height
 ) VALUES (
   @id, @signature, @format, @last_tx, @owner_address,
   @target, @quantity, @reward, @data_size, @data_root,
-  @tag_count, @content_type, @created_at, @height
+  @tag_count, @content_type, @indexed_at, @height
 ) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
 
 -- insertOrIgnoreMissingTransaction
