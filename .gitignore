@@ -6,6 +6,7 @@
 /.env
 /coverage
 /data
+/src/store/lmdb
 /dist
 /node_modules
 /vendor

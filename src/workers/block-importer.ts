@@ -111,8 +111,7 @@ export class BlockImporter {
       if (previousDbBlockHash === undefined) {
         // If a gap is found, rewind the index to the last known block
         this.log.error(
-          `Gap found at height ${height}. Reseting index to height ${
-            previousHeight - 1
+          `Gap found at height ${height}. Reseting index to height ${previousHeight - 1
           }...`,
           {
             previousHeight,
@@ -128,8 +127,7 @@ export class BlockImporter {
         }
         // If there is a fork, rewind the index to the fork point
         this.log.info(
-          `Fork detected at height ${height}. Reseting index to height ${
-            previousHeight - 1
+          `Fork detected at height ${height}. Reseting index to height ${previousHeight - 1
           }...`,
           {
             forkDepth,
@@ -158,7 +156,6 @@ export class BlockImporter {
     // Emit sucessful fetch events
     this.eventEmitter.emit(events.BLOCK_FETCHED, block);
     txs.forEach((tx) => {
-      // console.log("fetching tx")
       this.eventEmitter.emit(events.BLOCK_TX_FETCHED, tx);
     });
 

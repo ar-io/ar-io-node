@@ -2,10 +2,9 @@ import axios from 'axios';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
 
-import { ANS104_INDEX_FILTER, WEBHOOK_TARGET_SERVER } from '../config.js';
+import { WEBHOOK_TARGET_SERVER } from '../config.js';
 import * as events from '../events.js';
-import { createFilter } from '../filters.js';
-import { AlwaysMatch } from '../filters.js';
+import { NeverMatch } from '../filters.js';
 import { ItemFilter } from '../types.js';
 
 // WebhookEmitter class
@@ -14,20 +13,26 @@ export class WebhookEmitter {
   private webhookTargetServer?: string;
   private log: winston.Logger;
   private indexFilter: ItemFilter;
+  public indexEventsToListenFor: string[];
 
-  constructor(eventEmitter: EventEmitter, log: winston.Logger) {
+  constructor(eventEmitter: EventEmitter, indexFilter: ItemFilter, log: winston.Logger) {
     this.eventEmitter = eventEmitter;
+    this.indexFilter = indexFilter;
     this.webhookTargetServer = WEBHOOK_TARGET_SERVER;
+    this.indexEventsToListenFor = [events.TX_INDEXED, events.ANS104_DATA_ITEM_INDEXED];
     this.log = log.child({ class: 'WebhookEmitter' });
 
-    if (ANS104_INDEX_FILTER instanceof AlwaysMatch) {
-      this.indexFilter = ANS104_INDEX_FILTER;
-    } else {
-      this.indexFilter = createFilter(ANS104_INDEX_FILTER);
+    this.log.info('WebhookEmitter initialized.');
+
+    if (indexFilter.constructor.name == NeverMatch.name) {
+      this.log.info('WebhookEmitter will not listen for events.');
+      return;
     }
 
+    this.log.info('Registering WebhookEmitter listeners.');
     this.registerEventListeners();
   }
+
   public shutdown(): void {
     // Remove all listeners to prevent memory leaks
     this.eventEmitter.removeAllListeners();
@@ -35,19 +40,13 @@ export class WebhookEmitter {
   }
 
   private registerEventListeners(): void {
-    this.eventEmitter.on(events.TX_INDEXED, async (tx) => {
-      if (await this.indexFilter.match(tx)) {
-        this.emitWebhook({ event: 'TX_INDEXED', data: tx });
-      }
-    });
-
-    this.eventEmitter.on(events.ANS104_NESTED_BUNDLE_INDEXED, async (item) => {
-      if (await this.indexFilter.match(item)) {
-        this.emitWebhook({ event: 'ANS104_DATA_ITEM_INDEXED', data: item });
-      }
-    });
-
-    // Add more listeners as needed for other events
+    for (const event of this.indexEventsToListenFor) {
+      this.eventEmitter.on(event, async (data) => {
+        if (await this.indexFilter.match(data)) {
+          this.emitWebhook({ event: event, data: data });
+        }
+      });
+    }
   }
 
   public async emitWebhook(eventWrapper: {
@@ -58,6 +57,7 @@ export class WebhookEmitter {
       this.log.info(
         `Emitting webhook to ${this.webhookTargetServer} for ${eventWrapper.event}`,
       );
+
       try {
         // Send a POST request to the webhookTargetServer with the eventWrapper
         const response = await axios.post(

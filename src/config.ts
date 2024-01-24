@@ -163,7 +163,16 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =
   env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
 
+//
+// Webhooks
+//
+
+// The webhook target server
 export const WEBHOOK_TARGET_SERVER = env.varOrUndefined('WEBHOOK_TARGET_SERVER');
+
+// The index filter to use for webhooks
+export const WEBHOOK_INDEX_FILTER_STRING = canonicalize(JSON.parse(env.varOrDefault('WEBHOOK_INDEX_FILTER', '{"never": true}')));
+export const WEBHOOK_INDEX_FILTER = createFilter(JSON.parse(WEBHOOK_INDEX_FILTER_STRING));
 
 //
 // Development and testing
