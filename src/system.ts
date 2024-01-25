@@ -360,7 +360,12 @@ export const nameResolver = new MemoryCacheArNSResolver({
 
 // webhooks
 
-const webhookEmitter = new WebhookEmitter(eventEmitter, config.WEBHOOK_INDEX_FILTER, log,);
+const webhookEmitter = new WebhookEmitter(
+  eventEmitter,
+  config.WEBHOOK_TARGET_SERVERS,
+  config.WEBHOOK_INDEX_FILTER,
+  log,
+);
 
 // Handle shutdown signals
 process.on('SIGINT', () => {

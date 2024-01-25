@@ -26,22 +26,38 @@ import { ItemFilter } from '../types.js';
 // WebhookEmitter class
 export class WebhookEmitter {
   private eventEmitter: EventEmitter;
-  private webhookTargetServer?: string;
-  private log: winston.Logger;
   private indexFilter: ItemFilter;
+  private log: winston.Logger;
   public indexEventsToListenFor: string[];
+  public webhookTargetServers?: string[];
 
-  constructor(eventEmitter: EventEmitter, indexFilter: ItemFilter, log: winston.Logger) {
+  constructor(
+    eventEmitter: EventEmitter,
+    targetServers: string[] | undefined,
+    indexFilter: ItemFilter,
+    log: winston.Logger,
+  ) {
     this.eventEmitter = eventEmitter;
     this.indexFilter = indexFilter;
-    this.webhookTargetServer = WEBHOOK_TARGET_SERVER;
-    this.indexEventsToListenFor = [events.TX_INDEXED, events.ANS104_DATA_ITEM_INDEXED];
+    this.webhookTargetServers = targetServers;
+    this.indexEventsToListenFor = [
+      events.TX_INDEXED,
+      events.ANS104_DATA_ITEM_INDEXED,
+    ];
     this.log = log.child({ class: 'WebhookEmitter' });
 
     this.log.info('WebhookEmitter initialized.');
 
-    if (indexFilter.constructor.name == NeverMatch.name) {
+    if (
+      indexFilter.constructor.name === NeverMatch.name ||
+      !this.webhookTargetServers
+    ) {
       this.log.info('WebhookEmitter will not listen for events.');
+      return;
+    }
+
+    if (this.webhookTargetServers.every((s) => s === '')) {
+      this.log.error('WEBHOOK_TARGET_SERVERS is wrongly set.');
       return;
     }
 
@@ -69,33 +85,40 @@ export class WebhookEmitter {
     event: string;
     data: any;
   }): Promise<void> {
-    if (this.webhookTargetServer) {
-      this.log.info(
-        `Emitting webhook to ${this.webhookTargetServer} for ${eventWrapper.event}`,
-      );
-
-      try {
-        // Send a POST request to the webhookTargetServer with the eventWrapper
-        const response = await axios.post(
-          this.webhookTargetServer,
-          eventWrapper,
-        );
-
-        // Check the response and handle it as needed
-        if (response.status === 200) {
-          this.log.info(
-            `Webhook emitted successfully for: ${eventWrapper.data.id}`,
-          );
-        } else {
-          this.log.error(
-            `Failed to emit webhook. Status code: ${response.status}`,
-          );
-        }
-      } catch (error: any) {
-        this.log.error('Error while emitting webhook:', error.message);
+    if (this.webhookTargetServers !== undefined) {
+      for (const webhookTargetServer of this.webhookTargetServers) {
+        await this.emitWebhookToTargetServer(webhookTargetServer, eventWrapper);
       }
-    } else {
-      return;
+    }
+  }
+
+  public async emitWebhookToTargetServer(
+    targetServer: string,
+    eventWrapper: {
+      event: string;
+      data: any;
+    },
+  ): Promise<void> {
+    this.log.info(
+      `Emitting webhook to ${targetServer} for ${eventWrapper.event}`,
+    );
+
+    try {
+      // Send a POST request to the webhookTargetServer with the eventWrapper
+      const response = await axios.post(targetServer, eventWrapper);
+
+      // Check the response and handle it as needed
+      if (response.status === 200) {
+        this.log.info(
+          `Webhook emitted successfully for: ${eventWrapper.data.id}`,
+        );
+      } else {
+        this.log.error(
+          `Failed to emit webhook. Status code: ${response.status}`,
+        );
+      }
+    } catch (error: any) {
+      this.log.error('Error while emitting webhook:', error.message);
     }
   }
 }
