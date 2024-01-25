@@ -25,6 +25,8 @@
               yarn
               nodePackages.typescript-language-server
               yaml-language-server
+              nodePackages.prettier
+              nodePackages.eslint
               openjdk
               sqlite-interactive
             ];

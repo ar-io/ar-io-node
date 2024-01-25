@@ -123,13 +123,13 @@ eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
 
 export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
   ? new FsCleanupWorker({
-    log,
-    basePath: 'data/headers',
-    shouldDelete: async (path) => {
-      // Ignore .gitkeep
-      return !path.endsWith('.gitkeep');
-    },
-  })
+      log,
+      basePath: 'data/headers',
+      shouldDelete: async (path) => {
+        // Ignore .gitkeep
+        return !path.endsWith('.gitkeep');
+      },
+    })
   : undefined;
 
 const ans104TxMatcher = new MatchTags([
