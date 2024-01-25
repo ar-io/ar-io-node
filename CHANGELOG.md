@@ -4,7 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 5] - 2024-01-25
+
+### Added
+
+- Added transaction offset indexing to support future data retrieval
+  capabilities.
+- Enabled IPv6 support in Envoy config.
+- Added ability to configure observer report generation interval via the
+  REPORT_GENERATION_INTERVAL_MS environment variable (intended primarily for
+  development and testing).
+
+### Changed
+
+- Updated observer to properly handle FQDN conflicts.
+- Renamed most created_at columns to indexed_at for consistency and clarity.
+
+### Fixed
+
+- Updated LMDB version to remove Buffer workaround and fix occassional block
+  cache errors.
 
 ## [Release 4] - 2024-01-11
 
