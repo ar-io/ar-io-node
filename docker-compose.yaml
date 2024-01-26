@@ -78,13 +78,14 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-39783cb6ab7586a443b0b3907e18b5cca914e72d}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-5bad8c827fe19158f61c4aab090e37899b5e5328}
     restart: on-failure:5
     ports:
       - 5000:5000
     volumes:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
+      - ${WARP_CACHE_PATH:./cache/warp}:/app/cache/warp
       - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
       - PORT=5000
