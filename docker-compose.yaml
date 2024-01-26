@@ -85,7 +85,7 @@ services:
     volumes:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
-      - ${WARP_CACHE_PATH:./cache/warp}:/app/cache/warp
+      - ${WARP_CACHE_PATH:-./cache/warp}:/app/cache/warp
       - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
       - PORT=5000
