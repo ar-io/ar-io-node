@@ -107,6 +107,12 @@ export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
   ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '1',
 );
 
+// The number of ANS-104 bundle downloads to attempt in parallel
+export const ANS104_DOWNLOAD_WORKERS = +env.varOrDefault(
+  'ANS104_DOWNLOAD_WORKERS',
+  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '5',
+);
+
 // Whether or not to attempt to rematch old bundles using the current filter
 export const FILTER_CHANGE_REPROCESS =
   env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';

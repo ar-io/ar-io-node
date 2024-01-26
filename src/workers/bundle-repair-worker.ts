@@ -24,7 +24,7 @@ const DEFAULT_RETRY_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_FILTER_REPOCESS_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const DEFAULT_BUNDLES_TO_RETRY = 20;
+const DEFAULT_BUNDLES_TO_RETRY = 100;
 
 export class BundleRepairWorker {
   // Dependencies
