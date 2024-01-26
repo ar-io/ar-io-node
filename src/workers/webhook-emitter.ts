@@ -18,16 +18,30 @@
 import axios from 'axios';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
+import { default as fastq } from 'fastq';
+import type { queueAsPromised } from 'fastq';
 
 import * as events from '../events.js';
 import { NeverMatch } from '../filters.js';
 import { ItemFilter } from '../types.js';
+
+interface WebhookEventWrapper {
+  event: string;
+  data: any;
+}
+
+interface WebhookEmissionDetails {
+  targetServer: string;
+  eventWrapper: WebhookEventWrapper;
+}
 
 // WebhookEmitter class
 export class WebhookEmitter {
   private eventEmitter: EventEmitter;
   private indexFilter: ItemFilter;
   private log: winston.Logger;
+  public emissionQueue: queueAsPromised<WebhookEmissionDetails, void>;
+  public emissionQueueSize: number;
   public indexEventsToListenFor: string[];
   public webhookTargetServers?: string[];
 
@@ -44,6 +58,12 @@ export class WebhookEmitter {
       events.TX_INDEXED,
       events.ANS104_DATA_ITEM_INDEXED,
     ];
+    this.emissionQueue = fastq.promise(
+      this.emitWebhookToTargetServer.bind(this),
+      5,
+    );
+    this.emissionQueueSize = 100;
+
     this.log = log.child({ class: 'WebhookEmitter' });
 
     this.log.info('WebhookEmitter initialized.');
@@ -61,12 +81,11 @@ export class WebhookEmitter {
       return;
     }
 
-    this.log.info('Registering WebhookEmitter listeners.');
+    this.log.debug('Registering WebhookEmitter listeners.');
     this.registerEventListeners();
   }
 
   public shutdown(): void {
-    // Remove all listeners to prevent memory leaks
     this.eventEmitter.removeAllListeners();
     this.log.info('WebhookEmitter shutdown completed.');
   }
@@ -74,40 +93,38 @@ export class WebhookEmitter {
   private registerEventListeners(): void {
     for (const event of this.indexEventsToListenFor) {
       this.eventEmitter.on(event, async (data) => {
-        if (await this.indexFilter.match(data)) {
-          this.emitWebhook({ event: event, data: data });
+        if ((await this.indexFilter.match(data)) && this.webhookTargetServers) {
+          for (const targetServer of this.webhookTargetServers) {
+            if (this.emissionQueue.length() < this.emissionQueueSize) {
+              this.log.debug('adding webhook to queue', { event, data });
+
+              this.emissionQueue.push({
+                targetServer,
+                eventWrapper: { event: event, data: data },
+              });
+            } else {
+              this.log.debug('webhook queue is full. Skipping webhook:', {
+                event,
+                data,
+              });
+            }
+          }
         }
       });
     }
   }
 
-  public async emitWebhook(eventWrapper: {
-    event: string;
-    data: any;
-  }): Promise<void> {
-    if (this.webhookTargetServers !== undefined) {
-      for (const webhookTargetServer of this.webhookTargetServers) {
-        await this.emitWebhookToTargetServer(webhookTargetServer, eventWrapper);
-      }
-    }
-  }
-
   public async emitWebhookToTargetServer(
-    targetServer: string,
-    eventWrapper: {
-      event: string;
-      data: any;
-    },
+    details: WebhookEmissionDetails,
   ): Promise<void> {
+    const { targetServer, eventWrapper } = details;
     this.log.info(
       `Emitting webhook to ${targetServer} for ${eventWrapper.event}`,
     );
 
     try {
-      // Send a POST request to the webhookTargetServer with the eventWrapper
       const response = await axios.post(targetServer, eventWrapper);
 
-      // Check the response and handle it as needed
       if (response.status === 200) {
         this.log.info(
           `Webhook emitted successfully for: ${eventWrapper.data.id}`,

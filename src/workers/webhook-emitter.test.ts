@@ -20,7 +20,6 @@ import chaiAsPromised from 'chai-as-promised';
 import { EventEmitter } from 'node:events';
 import * as sinon from 'sinon';
 import sinonChai from 'sinon-chai';
-import { default as wait } from 'wait';
 import axios from 'axios';
 
 import log from '../../src/log.js';
@@ -35,6 +34,7 @@ describe('WebhookEmitter', () => {
   let webhookEmitter: WebhookEmitter;
   let sandbox: sinon.SinonSandbox;
   const targetServers = ['http://localhost:3000', 'http://localhost:3001'];
+  const eventData = { id: 'test' };
 
   before(async () => {
     eventEmitter = new EventEmitter();
@@ -57,8 +57,9 @@ describe('WebhookEmitter', () => {
         new NeverMatch(),
         log,
       );
+
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(0);
       }
     });
@@ -71,7 +72,7 @@ describe('WebhookEmitter', () => {
         log,
       );
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(0);
       }
     });
@@ -84,7 +85,7 @@ describe('WebhookEmitter', () => {
         log,
       );
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(0);
       }
     });
@@ -96,8 +97,9 @@ describe('WebhookEmitter', () => {
         new NeverMatch(),
         log,
       );
+
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(0);
       }
     });
@@ -109,14 +111,15 @@ describe('WebhookEmitter', () => {
         new AlwaysMatch(),
         log,
       );
+
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(1);
       }
     });
   });
 
-  describe('emitWebhook', () => {
+  describe('emitWebhookToTargetServer', () => {
     it('should not emit a webhook when the indexFilter does not match', async () => {
       webhookEmitter = new WebhookEmitter(
         eventEmitter,
@@ -124,37 +127,23 @@ describe('WebhookEmitter', () => {
         new NeverMatch(),
         log,
       );
-      const emitWebhookSpy = sandbox.spy(webhookEmitter, 'emitWebhook');
+      const emitWebhookSpy = sandbox.spy(
+        webhookEmitter,
+        'emitWebhookToTargetServer',
+      );
+
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
         expect(emitWebhookSpy).to.not.have.been.called;
       }
     });
 
-    it('should emit a webhook when the indexFilter matches', async () => {
-      webhookEmitter = new WebhookEmitter(
-        eventEmitter,
-        targetServers,
-        new AlwaysMatch(),
-        log,
-      );
-      const emitWebhookSpy = sandbox.spy(webhookEmitter, 'emitWebhook');
-      for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
-      }
-
-      await wait(10);
-      expect(emitWebhookSpy).to.have.been.callCount(
-        webhookEmitter.indexEventsToListenFor.length,
-      );
-    });
-
     it('should emit a webhook to all target servers', async () => {
+      const axiosPostStub = sandbox.stub(axios, 'post');
       const emitWebhookToTargetServerSpy = sandbox.spy(
         WebhookEmitter.prototype,
         'emitWebhookToTargetServer',
       );
-
       webhookEmitter = new WebhookEmitter(
         eventEmitter,
         targetServers,
@@ -163,45 +152,26 @@ describe('WebhookEmitter', () => {
       );
 
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
       }
 
-      await wait(10);
+      await webhookEmitter.emissionQueue.drained();
 
       if (webhookEmitter.webhookTargetServers !== undefined) {
-        return expect(emitWebhookToTargetServerSpy).to.have.been.callCount(
-          webhookEmitter.indexEventsToListenFor.length *
-            webhookEmitter.webhookTargetServers.length,
+        expect(emitWebhookToTargetServerSpy).to.have.been.callCount(
+          webhookEmitter.webhookTargetServers.length *
+            webhookEmitter.indexEventsToListenFor.length,
         );
+
+        for (const targetServer of webhookEmitter.webhookTargetServers) {
+          for (const event of webhookEmitter.indexEventsToListenFor) {
+            expect(axiosPostStub).to.have.been.calledWith(targetServer, {
+              event,
+              data: eventData,
+            });
+          }
+        }
       }
-
-      throw new Error();
-    });
-  });
-
-  describe('emitWebhookToTargetServer', () => {
-    it('should emit a webhook to a target server', async () => {
-      const axiosPostStub = sandbox.stub(axios, 'post');
-
-      webhookEmitter = new WebhookEmitter(
-        eventEmitter,
-        ['http://localhost:3000'],
-        new AlwaysMatch(),
-        log,
-      );
-
-      await webhookEmitter.emitWebhookToTargetServer('http://localhost:3000', {
-        event: 'test',
-        data: { id: 'test' },
-      });
-
-      expect(axiosPostStub).to.have.been.calledOnceWith(
-        'http://localhost:3000',
-        {
-          event: 'test',
-          data: { id: 'test' },
-        },
-      );
     });
   });
 
@@ -213,8 +183,9 @@ describe('WebhookEmitter', () => {
         new AlwaysMatch(),
         log,
       );
+
       for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, { id: 'test' });
+        eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(1);
       }
 
