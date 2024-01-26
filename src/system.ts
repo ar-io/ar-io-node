@@ -25,6 +25,7 @@ import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
+import { BundleDataImporter } from './workers/bundle-data-importer.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
@@ -268,6 +269,13 @@ const ans104Unbundler = new Ans104Unbundler({
   workerCount: config.ANS104_UNBUNDLE_WORKERS,
 });
 
+const bundleDataImporter = new BundleDataImporter({
+  log,
+  contiguousDataSource,
+  ans104Unbundler,
+  workerCount: config.ANS104_DOWNLOAD_WORKERS,
+});
+
 eventEmitter.on(
   events.ANS104_BUNDLE_INDEXED,
   async (item: NormalizedDataItem | PartialJsonTransaction) => {
@@ -288,7 +296,7 @@ eventEmitter.on(
           indexFilter: config.ANS104_INDEX_FILTER_STRING,
           queuedAt: currentUnixTimestamp(),
         });
-        ans104Unbundler.queueItem(
+        bundleDataImporter.queueItem(
           {
             index:
               'parent_index' in item && item.parent_index !== undefined
