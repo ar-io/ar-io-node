@@ -132,6 +132,33 @@ Note: ANS-104 indexing support is currently experimental. It has been tested
 successfully with small sets of bundles (using filters), but you may still
 encounter problems with it when indexing larger sets of transactions.
 
+### Webhook Emission
+
+The ar.io gateway includes a feature to emit webhooks to specified servers when a transaction or data item is indexed and matches a predefined filter. This feature allows for real-time notifications and integrations based on the transaction and data indexing.
+
+To use this feature, you need to set up two environment variables in your `.env` file:
+
+1. **WEBHOOK_TARGET_SERVERS**: This is a comma-separated list of servers where the webhooks will be sent.
+
+   Format: `WEBHOOK_TARGET_SERVERS="<server1>,<server2>,..."`
+
+2. **WEBHOOK_INDEX_FILTER**: This filter determines which transactions or data items will trigger the webhook emission.
+
+  The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types include:
+  - `{ "never": true }` (default)
+  - `{ "always": true }`
+  - `{ "attributes": { "owner": <owner key>, ... }}`
+  - `{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, ...]}`
+  - `{ "and": [ <nested filter>, ... ]}`
+  - `{ "or": [ <nested filter>, ... ]}`
+
+  Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp" }]}"`
+
+
+After setting up the environment variables, the ar.io gatway will monitor for transactions or data items that match the `WEBHOOK_INDEX_FILTER`. Once a match is found, a webhook will be emitted to all the servers listed in `WEBHOOK_TARGET_SERVERS`.
+
+Ensure that the target servers are configured to receive and process these webhooks appropriately.
+
 ### ArNS
 
 Add the following to your `.env` file to enable ArNS resolution:
