@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 6] - 2024-01-29
+
+### Fixed
+
+- Update observer to improve reliability of contract state synchronization and
+  evaluation.
+
 ## [Release 5] - 2024-01-25
 
 ### Added
