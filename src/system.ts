@@ -370,10 +370,8 @@ const webhookEmitter = new WebhookEmitter(
 // Handle shutdown signals
 process.on('SIGINT', () => {
   webhookEmitter.shutdown();
-  process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   webhookEmitter.shutdown();
-  process.exit(0);
 });
