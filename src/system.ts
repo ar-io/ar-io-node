@@ -62,6 +62,7 @@ import { TransactionImporter } from './workers/transaction-importer.js';
 import { TransactionRepairWorker } from './workers/transaction-repair-worker.js';
 import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
+import { WebhookEmitter } from './workers/webhook-emitter.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -355,4 +356,27 @@ export const nameResolver = new MemoryCacheArNSResolver({
     log,
     trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   }),
+});
+
+// webhooks
+
+const webhookEmitter = new WebhookEmitter({
+  eventEmitter,
+  targetServersUrls: config.WEBHOOK_TARGET_SERVERS,
+  indexFilter: config.WEBHOOK_INDEX_FILTER,
+  log,
+});
+
+const shutdown = async () => {
+  await webhookEmitter.shutdown();
+  eventEmitter.removeAllListeners();
+};
+
+// Handle shutdown signals
+process.on('SIGINT', async () => {
+  await shutdown();
+});
+
+process.on('SIGTERM', async () => {
+  await shutdown();
 });
