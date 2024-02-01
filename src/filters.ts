@@ -30,6 +30,18 @@ export class NeverMatch implements ItemFilter {
   }
 }
 
+export class NegateMatch implements ItemFilter {
+  private readonly filter: ItemFilter;
+
+  constructor(filter: ItemFilter) {
+    this.filter = filter;
+  }
+
+  async match(item: MatchableItem): Promise<boolean> {
+    return !(await this.filter.match(item));
+  }
+}
+
 export class MatchAll implements ItemFilter {
   private readonly filters: ItemFilter[];
 
@@ -178,6 +190,8 @@ export function createFilter(filter: any): ItemFilter {
     return new MatchTags(filter.tags);
   } else if (filter?.attributes) {
     return new MatchAttributes(filter.attributes);
+  } else if (filter?.not) {
+    return new NegateMatch(createFilter(filter.not));
   } else if (filter?.and) {
     return new MatchAll(filter.and.map(createFilter));
   } else if (filter?.or) {

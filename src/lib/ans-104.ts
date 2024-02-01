@@ -374,6 +374,8 @@ if (!isMainThread) {
             eventName: DATA_ITEM_MATCHED,
             dataItem: normalizedDataItem,
           });
+        } else {
+          diLog.debug('Data item did not match index filter.');
         }
       }
       parentPort?.postMessage({

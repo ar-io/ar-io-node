@@ -26,6 +26,7 @@ import {
   MatchTags,
   NeverMatch,
   createFilter,
+  NegateMatch,
 } from './filters.js';
 import { utf8ToB64Url } from './lib/encoding.js';
 
@@ -36,6 +37,8 @@ function getTx(id: string) {
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 const TX = getTx(TX_ID);
 const TX_OWNER_ADDRESS = 'Th825IP80n4i9F3Rc4cBFh767CGqiV4n7S-Oy5lGLjc';
+const ALWAYS_TRUE_MATCH = { match: async () => true };
+const ALWAYS_FALSE_MATCH = { match: async () => false };
 
 describe('AlwaysMatch', () => {
   const alwaysMatch = new AlwaysMatch();
@@ -55,9 +58,41 @@ describe('NeverMatch', () => {
   });
 });
 
+describe('NegateMatch', () => {
+  it('should return false for a filter that always returns true', async () => {
+    const negateMatch = new NegateMatch(ALWAYS_TRUE_MATCH);
+    const result = await negateMatch.match(TX);
+    expect(result).to.be.false;
+  });
+
+  it('should return true for a filter that always returns false', async () => {
+    const negateMatch = new NegateMatch(ALWAYS_FALSE_MATCH);
+    const result = await negateMatch.match(TX);
+    expect(result).to.be.true;
+  });
+
+  it('should negate a more complex filter', async () => {
+    const complexFilter = new MatchTags([{ name: 'tag1', value: 'value1' }]);
+    const negateMatch = new NegateMatch(complexFilter);
+
+    const matchingTx = getTx(TX_ID);
+    matchingTx.tags = [
+      { name: utf8ToB64Url('tag1'), value: utf8ToB64Url('value1') },
+    ];
+
+    const nonMatchingTx = getTx(TX_ID);
+    nonMatchingTx.tags = [
+      { name: utf8ToB64Url('tag2'), value: utf8ToB64Url('value2') },
+    ];
+
+    expect(await negateMatch.match(matchingTx)).to.be.false;
+    expect(await negateMatch.match(nonMatchingTx)).to.be.true;
+  });
+});
+
 describe('MatchAll', () => {
   it('should return true if all filters match', async () => {
-    const filters = [{ match: async () => true }, { match: async () => true }];
+    const filters = [ALWAYS_TRUE_MATCH, ALWAYS_TRUE_MATCH];
     const matchAll = new MatchAll(filters);
     const result = await matchAll.match(TX);
 
@@ -65,7 +100,7 @@ describe('MatchAll', () => {
   });
 
   it('should return false if any filter does not match', async () => {
-    const filters = [{ match: async () => true }, { match: async () => false }];
+    const filters = [ALWAYS_TRUE_MATCH, ALWAYS_FALSE_MATCH];
     const matchAll = new MatchAll(filters);
     const result = await matchAll.match(TX);
 
@@ -75,7 +110,7 @@ describe('MatchAll', () => {
 
 describe('MatchAny', () => {
   it('should return true if any filters match', async () => {
-    const filters = [{ match: async () => true }, { match: async () => false }];
+    const filters = [ALWAYS_TRUE_MATCH, ALWAYS_FALSE_MATCH];
     const matchAll = new MatchAny(filters);
     const result = await matchAll.match(TX);
 
@@ -83,10 +118,7 @@ describe('MatchAny', () => {
   });
 
   it('should return false if none of the filters match', async () => {
-    const filters = [
-      { match: async () => false },
-      { match: async () => false },
-    ];
+    const filters = [ALWAYS_FALSE_MATCH, ALWAYS_FALSE_MATCH];
     const matchAll = new MatchAny(filters);
     const result = await matchAll.match(TX);
 
@@ -201,6 +233,20 @@ describe('MatchAttributes', () => {
 });
 
 describe('createFilter', () => {
+  it('should create a NegateMatch filter correctly', () => {
+    const filter = { not: { always: true } };
+    expect(createFilter(filter)).to.be.instanceOf(NegateMatch);
+  });
+
+  it('should handle nested negation correctly', () => {
+    const filter = { not: { not: { always: true } } };
+    const createdFilter = createFilter(filter);
+
+    // Double negation should equal an AlwaysMatch filter behavior
+    expect(createdFilter).to.be.instanceOf(NegateMatch);
+    expect(createdFilter.match(TX)).to.eventually.be.true;
+  });
+
   it('should return NeverMatch for undefined or empty filter', () => {
     expect(createFilter(undefined)).to.be.instanceOf(NeverMatch);
     expect(createFilter('')).to.be.instanceOf(NeverMatch);
