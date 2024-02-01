@@ -33,7 +33,7 @@ describe('WebhookEmitter', () => {
   let eventEmitter: EventEmitter;
   let webhookEmitter: WebhookEmitter;
   let sandbox: sinon.SinonSandbox;
-  const targetServers = ['http://localhost:3000', 'http://localhost:3001'];
+  const targetServersUrls = ['http://localhost:3000', 'https://localhost:3001'];
   const eventData = { id: 'test' };
 
   before(async () => {
@@ -51,26 +51,13 @@ describe('WebhookEmitter', () => {
 
   describe('eventListeners', () => {
     it('should not listen for events when the indexFilter is NeverMatch', async () => {
-      webhookEmitter = new WebhookEmitter(
+      webhookEmitter = new WebhookEmitter({
         eventEmitter,
-        targetServers,
-        new NeverMatch(),
+        targetServersUrls,
+        indexFilter: new NeverMatch(),
         log,
-      );
+      });
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
-        eventEmitter.emit(event, eventData);
-        expect(eventEmitter.listenerCount(event)).to.equal(0);
-      }
-    });
-
-    it('should not listen for events when the targetServers is undefined', async () => {
-      webhookEmitter = new WebhookEmitter(
-        eventEmitter,
-        undefined,
-        new AlwaysMatch(),
-        log,
-      );
       for (const event of webhookEmitter.indexEventsToListenFor) {
         eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(0);
@@ -78,12 +65,12 @@ describe('WebhookEmitter', () => {
     });
 
     it('should not listen for events when the targetServers is empty', async () => {
-      webhookEmitter = new WebhookEmitter(
+      webhookEmitter = new WebhookEmitter({
         eventEmitter,
-        [''],
-        new AlwaysMatch(),
+        targetServersUrls: [],
+        indexFilter: new AlwaysMatch(),
         log,
-      );
+      });
       for (const event of webhookEmitter.indexEventsToListenFor) {
         eventEmitter.emit(event, eventData);
         expect(eventEmitter.listenerCount(event)).to.equal(0);
@@ -91,12 +78,12 @@ describe('WebhookEmitter', () => {
     });
 
     it('should not listen for events when the targetServers is not valid and indexFilter is NeverMatch', async () => {
-      webhookEmitter = new WebhookEmitter(
+      webhookEmitter = new WebhookEmitter({
         eventEmitter,
-        undefined,
-        new NeverMatch(),
+        targetServersUrls: [],
+        indexFilter: new NeverMatch(),
         log,
-      );
+      });
 
       for (const event of webhookEmitter.indexEventsToListenFor) {
         eventEmitter.emit(event, eventData);
@@ -105,12 +92,12 @@ describe('WebhookEmitter', () => {
     });
 
     it('should listen for indexed events when the indexFilter is not NeverMatch', async () => {
-      webhookEmitter = new WebhookEmitter(
+      webhookEmitter = new WebhookEmitter({
         eventEmitter,
-        targetServers,
-        new AlwaysMatch(),
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
         log,
-      );
+      });
 
       for (const event of webhookEmitter.indexEventsToListenFor) {
         eventEmitter.emit(event, eventData);
@@ -121,12 +108,12 @@ describe('WebhookEmitter', () => {
 
   describe('emitWebhookToTargetServer', () => {
     it('should not emit a webhook when the indexFilter does not match', async () => {
-      webhookEmitter = new WebhookEmitter(
+      webhookEmitter = new WebhookEmitter({
         eventEmitter,
-        targetServers,
-        new NeverMatch(),
+        targetServersUrls,
+        indexFilter: new NeverMatch(),
         log,
-      );
+      });
       const emitWebhookSpy = sandbox.spy(
         webhookEmitter,
         'emitWebhookToTargetServer',
@@ -144,12 +131,12 @@ describe('WebhookEmitter', () => {
         WebhookEmitter.prototype,
         'emitWebhookToTargetServer',
       );
-      webhookEmitter = new WebhookEmitter(
+      webhookEmitter = new WebhookEmitter({
         eventEmitter,
-        targetServers,
-        new AlwaysMatch(),
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
         log,
-      );
+      });
 
       for (const event of webhookEmitter.indexEventsToListenFor) {
         eventEmitter.emit(event, eventData);
@@ -157,13 +144,13 @@ describe('WebhookEmitter', () => {
 
       await webhookEmitter.emissionQueue.drained();
 
-      if (webhookEmitter.webhookTargetServers !== undefined) {
+      if (webhookEmitter.targetServersUrls !== undefined) {
         expect(emitWebhookToTargetServerSpy).to.have.been.callCount(
-          webhookEmitter.webhookTargetServers.length *
+          webhookEmitter.targetServersUrls.length *
             webhookEmitter.indexEventsToListenFor.length,
         );
 
-        for (const targetServer of webhookEmitter.webhookTargetServers) {
+        for (const targetServer of webhookEmitter.targetServersUrls) {
           for (const event of webhookEmitter.indexEventsToListenFor) {
             expect(axiosPostStub).to.have.been.calledWith(targetServer, {
               event,
@@ -175,14 +162,38 @@ describe('WebhookEmitter', () => {
     });
   });
 
+  describe('validateTargetServersUrls', () => {
+    it('should return true when all target servers are valid http or https urls', async () => {
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
+        log,
+      });
+
+      expect(webhookEmitter.validateTargetServersUrls()).to.equal(true);
+    });
+
+    it('should return false when any target server is not a valid http or https url', async () => {
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls: ['http://localhost:3000', 'localhost:3001'],
+        indexFilter: new AlwaysMatch(),
+        log,
+      });
+
+      expect(webhookEmitter.validateTargetServersUrls()).to.equal(false);
+    });
+  });
+
   describe('shutdown', () => {
     it('should remove all listeners', async () => {
-      webhookEmitter = new WebhookEmitter(
+      webhookEmitter = new WebhookEmitter({
         eventEmitter,
-        targetServers,
-        new AlwaysMatch(),
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
         log,
-      );
+      });
 
       for (const event of webhookEmitter.indexEventsToListenFor) {
         eventEmitter.emit(event, eventData);

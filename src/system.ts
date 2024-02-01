@@ -360,18 +360,23 @@ export const nameResolver = new MemoryCacheArNSResolver({
 
 // webhooks
 
-const webhookEmitter = new WebhookEmitter(
+const webhookEmitter = new WebhookEmitter({
   eventEmitter,
-  config.WEBHOOK_TARGET_SERVERS,
-  config.WEBHOOK_INDEX_FILTER,
+  targetServersUrls: config.WEBHOOK_TARGET_SERVERS,
+  indexFilter: config.WEBHOOK_INDEX_FILTER,
   log,
-);
+});
+
+const shutdown = () => {
+  webhookEmitter.shutdown();
+  eventEmitter.removeAllListeners();
+};
 
 // Handle shutdown signals
 process.on('SIGINT', () => {
-  webhookEmitter.shutdown();
+  shutdown();
 });
 
 process.on('SIGTERM', () => {
-  webhookEmitter.shutdown();
+  shutdown();
 });

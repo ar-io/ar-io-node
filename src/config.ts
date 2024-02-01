@@ -174,7 +174,7 @@ export const WEBHOOK_TARGET_SERVERS_VALUE = env.varOrUndefined(
 export const WEBHOOK_TARGET_SERVERS =
   WEBHOOK_TARGET_SERVERS_VALUE !== undefined
     ? WEBHOOK_TARGET_SERVERS_VALUE.split(',')
-    : undefined;
+    : [];
 
 // The index filter to use for webhooks
 export const WEBHOOK_INDEX_FILTER_STRING = canonicalize(

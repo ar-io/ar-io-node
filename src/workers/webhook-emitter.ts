@@ -17,17 +17,18 @@
  */
 import axios from 'axios';
 import * as EventEmitter from 'node:events';
+import { URL } from 'node:url';
 import * as winston from 'winston';
 import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 
 import * as events from '../events.js';
 import { NeverMatch } from '../filters.js';
-import { ItemFilter } from '../types.js';
+import { ItemFilter, PartialJsonTransaction } from '../types.js';
 
 interface WebhookEventWrapper {
   event: string;
-  data: any;
+  data: PartialJsonTransaction;
 }
 
 interface WebhookEmissionDetails {
@@ -35,82 +36,137 @@ interface WebhookEmissionDetails {
   eventWrapper: WebhookEventWrapper;
 }
 
+const MAX_EMISSION_QUEUE_SIZE = 100;
+const MAX_EMISSION_QUEUE_CONCURRENCY = 5;
+
 // WebhookEmitter class
 export class WebhookEmitter {
+  private log: winston.Logger;
   private eventEmitter: EventEmitter;
   private indexFilter: ItemFilter;
-  private log: winston.Logger;
-  public emissionQueue: queueAsPromised<WebhookEmissionDetails, void>;
+  private listenerReferences: Map<
+    string,
+    (data: PartialJsonTransaction) => Promise<void>
+  >;
+  public targetServersUrls: string[];
   public emissionQueueSize: number;
+  public emissionQueueConcurrency: number;
+  public emissionQueue: queueAsPromised<WebhookEmissionDetails, void>;
   public indexEventsToListenFor: string[];
-  public webhookTargetServers?: string[];
 
-  constructor(
-    eventEmitter: EventEmitter,
-    targetServers: string[] | undefined,
-    indexFilter: ItemFilter,
-    log: winston.Logger,
-  ) {
+  constructor({
+    log,
+    eventEmitter,
+    targetServersUrls,
+    indexFilter,
+    emissionQueueSize = MAX_EMISSION_QUEUE_SIZE,
+    emissionQueueConcurrency = MAX_EMISSION_QUEUE_CONCURRENCY,
+  }: {
+    log: winston.Logger;
+    eventEmitter: EventEmitter;
+    targetServersUrls: string[];
+    indexFilter: ItemFilter;
+    emissionQueueSize?: number;
+    emissionQueueConcurrency?: number;
+  }) {
+    this.log = log.child({ class: 'WebhookEmitter' });
     this.eventEmitter = eventEmitter;
+    this.targetServersUrls = targetServersUrls;
     this.indexFilter = indexFilter;
-    this.webhookTargetServers = targetServers;
+    this.listenerReferences = new Map();
+    this.emissionQueueSize = emissionQueueSize;
+    this.emissionQueueConcurrency = emissionQueueConcurrency;
+    this.emissionQueue = fastq.promise(
+      this.emitWebhookToTargetServer.bind(this),
+      this.emissionQueueConcurrency,
+    );
     this.indexEventsToListenFor = [
       events.TX_INDEXED,
       events.ANS104_DATA_ITEM_INDEXED,
     ];
-    this.emissionQueue = fastq.promise(
-      this.emitWebhookToTargetServer.bind(this),
-      5,
-    );
-    this.emissionQueueSize = 100;
 
-    this.log = log.child({ class: 'WebhookEmitter' });
+    this.start();
+  }
+
+  private async start(): Promise<void> {
+    if (this.targetServersUrls.length === 0) {
+      this.log.info(
+        'WebhookEmitter not initialized. No WEBHOOK_TARGET_SERVERS are set.',
+      );
+      return;
+    }
+
+    if (!this.validateTargetServersUrls()) {
+      this.log.error(
+        'WebhookEmitter not initialized. Some or all WEBHOOK_TARGET_SERVERS URLs are invalid.',
+      );
+      return;
+    }
+
+    if (this.indexFilter.constructor.name === NeverMatch.name) {
+      this.log.info(
+        'WebhookEmitter not initialized. IndexFilter is set to NeverMatch.',
+      );
+      return;
+    }
 
     this.log.info('WebhookEmitter initialized.');
 
-    if (
-      indexFilter.constructor.name === NeverMatch.name ||
-      !this.webhookTargetServers
-    ) {
-      this.log.info('WebhookEmitter will not listen for events.');
-      return;
-    }
-
-    if (this.webhookTargetServers.every((s) => s === '')) {
-      this.log.error('WEBHOOK_TARGET_SERVERS is wrongly set.');
-      return;
-    }
-
-    this.log.debug('Registering WebhookEmitter listeners.');
-    this.registerEventListeners();
+    await this.registerEventListeners();
   }
 
-  public shutdown(): void {
-    this.eventEmitter.removeAllListeners();
+  public validateTargetServersUrls(): boolean {
+    // Check if all target servers URLs are http or https
+    return this.targetServersUrls.every((serverUrl) => {
+      try {
+        const url = new URL(serverUrl);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+      } catch (error) {
+        return false;
+      }
+    });
+  }
+
+  public async shutdown(): Promise<void> {
+    // Remove specific listeners
+    for (const [event, listener] of this.listenerReferences) {
+      this.eventEmitter.removeListener(event, listener);
+    }
+    this.listenerReferences.clear();
+
+    await this.emissionQueue.kill();
     this.log.info('WebhookEmitter shutdown completed.');
   }
 
-  private registerEventListeners(): void {
+  private async registerEventListeners(): Promise<void> {
+    this.log.debug('Registering WebhookEmitter listeners.');
+
     for (const event of this.indexEventsToListenFor) {
-      this.eventEmitter.on(event, async (data) => {
-        if ((await this.indexFilter.match(data)) && this.webhookTargetServers) {
-          for (const targetServer of this.webhookTargetServers) {
+      const listener = async (data: PartialJsonTransaction) => {
+        if (await this.indexFilter.match(data)) {
+          for (const targetServer of this.targetServersUrls) {
             if (this.emissionQueue.length() < this.emissionQueueSize) {
-              this.log.debug('adding webhook to queue', { event, data });
+              this.log.debug('Adding webhook to queue', {
+                event,
+                id: data.id,
+              });
 
               this.emissionQueue.push({
                 targetServer,
-                eventWrapper: { event: event, data: data },
+                eventWrapper: { event, data },
               });
             } else {
-              this.log.debug('webhook queue is full. Skipping webhook:', {
+              this.log.debug('Webhook queue is full. Skipping webhook:', {
                 event,
-                data,
+                id: data.id,
               });
             }
           }
         }
-      });
+      };
+
+      this.listenerReferences.set(event, listener);
+      this.eventEmitter.on(event, listener);
     }
   }
 
@@ -118,14 +174,14 @@ export class WebhookEmitter {
     details: WebhookEmissionDetails,
   ): Promise<void> {
     const { targetServer, eventWrapper } = details;
-    this.log.info(
+    this.log.debug(
       `Emitting webhook to ${targetServer} for ${eventWrapper.event}`,
     );
 
     try {
       const response = await axios.post(targetServer, eventWrapper);
 
-      if (response.status === 200) {
+      if (response.status >= 200 && response.status < 300) {
         this.log.info(
           `Webhook emitted successfully for: ${eventWrapper.data.id}`,
         );
@@ -134,8 +190,12 @@ export class WebhookEmitter {
           `Failed to emit webhook. Status code: ${response.status}`,
         );
       }
-    } catch (error: any) {
-      this.log.error('Error while emitting webhook:', error.message);
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        this.log.error('Error while emitting webhook:', error.message);
+      } else {
+        this.log.error('Unexpected error while emitting webhook:', error);
+      }
     }
   }
 }
