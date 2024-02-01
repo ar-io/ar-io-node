@@ -367,16 +367,16 @@ const webhookEmitter = new WebhookEmitter({
   log,
 });
 
-const shutdown = () => {
-  webhookEmitter.shutdown();
+const shutdown = async () => {
+  await webhookEmitter.shutdown();
   eventEmitter.removeAllListeners();
 };
 
 // Handle shutdown signals
-process.on('SIGINT', () => {
-  shutdown();
+process.on('SIGINT', async () => {
+  await shutdown();
 });
 
-process.on('SIGTERM', () => {
-  shutdown();
+process.on('SIGTERM', async () => {
+  await shutdown();
 });

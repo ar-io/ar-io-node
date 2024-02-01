@@ -25,6 +25,7 @@ import axios from 'axios';
 import log from '../../src/log.js';
 import { WebhookEmitter } from '../../src/workers/webhook-emitter.js';
 import { AlwaysMatch, NeverMatch } from '../filters.js';
+import wait from 'wait';
 
 chai.use(chaiAsPromised);
 chai.use(sinonChai);
@@ -186,7 +187,53 @@ describe('WebhookEmitter', () => {
     });
   });
 
+  describe('emissionQueue', () => {
+    it('should limit the numbers of tasks in the queue', async () => {
+      const emissionQueueSize = 1;
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
+        log,
+        emissionQueueSize,
+      });
+
+      webhookEmitter.emissionQueue.pause();
+
+      for (let i = 0; i < emissionQueueSize + 100; i++) {
+        eventEmitter.emit(webhookEmitter.indexEventsToListenFor[0], eventData);
+      }
+
+      await wait(1);
+
+      expect(webhookEmitter.emissionQueue.length()).to.equal(emissionQueueSize);
+    });
+  });
+
   describe('shutdown', () => {
+    it('should drain the emission queue', async () => {
+      webhookEmitter = new WebhookEmitter({
+        eventEmitter,
+        targetServersUrls,
+        indexFilter: new AlwaysMatch(),
+        log,
+      });
+
+      await webhookEmitter.emissionQueue.pause();
+
+      for (const event of webhookEmitter.indexEventsToListenFor) {
+        eventEmitter.emit(event, eventData);
+      }
+
+      await wait(1);
+
+      expect(webhookEmitter.emissionQueue.length()).to.equal(4);
+
+      webhookEmitter.shutdown();
+
+      expect(webhookEmitter.emissionQueue.length()).to.equal(0);
+    });
+
     it('should remove all listeners', async () => {
       webhookEmitter = new WebhookEmitter({
         eventEmitter,
@@ -200,7 +247,7 @@ describe('WebhookEmitter', () => {
         expect(eventEmitter.listenerCount(event)).to.equal(1);
       }
 
-      webhookEmitter.shutdown();
+      await webhookEmitter.shutdown();
 
       for (const event of webhookEmitter.indexEventsToListenFor) {
         expect(eventEmitter.listenerCount(event)).to.equal(0);
