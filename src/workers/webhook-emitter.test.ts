@@ -189,24 +189,26 @@ describe('WebhookEmitter', () => {
 
   describe('emissionQueue', () => {
     it('should limit the numbers of tasks in the queue', async () => {
-      const emissionQueueSize = 1;
+      const maxEmissionQueueSize = 1;
       webhookEmitter = new WebhookEmitter({
         eventEmitter,
         targetServersUrls,
         indexFilter: new AlwaysMatch(),
         log,
-        emissionQueueSize,
+        maxEmissionQueueSize,
       });
 
       webhookEmitter.emissionQueue.pause();
 
-      for (let i = 0; i < emissionQueueSize + 100; i++) {
+      for (let i = 0; i < maxEmissionQueueSize + 100; i++) {
         eventEmitter.emit(webhookEmitter.indexEventsToListenFor[0], eventData);
       }
 
       await wait(1);
 
-      expect(webhookEmitter.emissionQueue.length()).to.equal(emissionQueueSize);
+      expect(webhookEmitter.emissionQueue.length()).to.equal(
+        maxEmissionQueueSize,
+      );
     });
   });
 

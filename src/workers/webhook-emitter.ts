@@ -37,7 +37,7 @@ interface WebhookEmissionDetails {
 }
 
 const MAX_EMISSION_QUEUE_SIZE = 100;
-const MAX_EMISSION_QUEUE_CONCURRENCY = 5;
+const EMISSION_QUEUE_CONCURRENCY = 5;
 
 // WebhookEmitter class
 export class WebhookEmitter {
@@ -49,7 +49,7 @@ export class WebhookEmitter {
     (data: PartialJsonTransaction) => Promise<void>
   >;
   public targetServersUrls: string[];
-  public emissionQueueSize: number;
+  public maxEmissionQueueSize: number;
   public emissionQueueConcurrency: number;
   public emissionQueue: queueAsPromised<WebhookEmissionDetails, void>;
   public indexEventsToListenFor: string[];
@@ -59,14 +59,14 @@ export class WebhookEmitter {
     eventEmitter,
     targetServersUrls,
     indexFilter,
-    emissionQueueSize = MAX_EMISSION_QUEUE_SIZE,
-    emissionQueueConcurrency = MAX_EMISSION_QUEUE_CONCURRENCY,
+    maxEmissionQueueSize = MAX_EMISSION_QUEUE_SIZE,
+    emissionQueueConcurrency = EMISSION_QUEUE_CONCURRENCY,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     targetServersUrls: string[];
     indexFilter: ItemFilter;
-    emissionQueueSize?: number;
+    maxEmissionQueueSize?: number;
     emissionQueueConcurrency?: number;
   }) {
     this.log = log.child({ class: 'WebhookEmitter' });
@@ -74,7 +74,7 @@ export class WebhookEmitter {
     this.targetServersUrls = targetServersUrls;
     this.indexFilter = indexFilter;
     this.listenerReferences = new Map();
-    this.emissionQueueSize = emissionQueueSize;
+    this.maxEmissionQueueSize = maxEmissionQueueSize;
     this.emissionQueueConcurrency = emissionQueueConcurrency;
     this.emissionQueue = fastq.promise(
       this.emitWebhookToTargetServer.bind(this),
@@ -145,7 +145,7 @@ export class WebhookEmitter {
       const listener = async (data: PartialJsonTransaction) => {
         if (await this.indexFilter.match(data)) {
           for (const targetServer of this.targetServersUrls) {
-            if (this.emissionQueue.length() < this.emissionQueueSize) {
+            if (this.emissionQueue.length() < this.maxEmissionQueueSize) {
               this.log.debug('Adding webhook to queue', {
                 event,
                 id: data.id,
