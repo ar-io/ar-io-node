@@ -264,9 +264,18 @@ export class ArweaveCompositeClient
               url: `/block/height/${height}`,
             })
             .then((response) => {
-              // Delete POA to reduce cache size
+              // Delete PoA and PoA 2 to reduce cache size
               if (response?.data?.poa) {
+                if (response.data.poa.chunk !== '') {
+                  metrics.arweavePoaCounter.inc();
+                }
                 delete response.data.poa;
+              }
+              if (response?.data?.poa2) {
+                if (response.data.poa2.chunk !== '') {
+                  metrics.arweavePoa2Counter.inc();
+                }
+                delete response.data.poa2;
               }
               return response.data;
             });

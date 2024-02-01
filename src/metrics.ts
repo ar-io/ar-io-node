@@ -91,6 +91,16 @@ export const arweavePeerRefreshErrorCounter = new promClient.Counter({
   help: 'Count of errors refreshing the Arweave peers list',
 });
 
+export const arweavePoaCounter = new promClient.Counter({
+  name: 'arweave_poa_total',
+  help: 'Count of fetched blocks with PoA attached',
+});
+
+export const arweavePoa2Counter = new promClient.Counter({
+  name: 'arweave_poa2_total',
+  help: 'Count of fetched blocks with PoA2 attached',
+});
+
 //
 // SQLite metrics
 //
