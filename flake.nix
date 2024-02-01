@@ -7,14 +7,9 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = (import nixpkgs {
-          inherit system;
-        });
-      in
-      {
+    flake-utils.lib.eachDefaultSystem (system:
+      let pkgs = (import nixpkgs { inherit system; });
+      in {
         devShells = {
           default = pkgs.mkShell {
             name = "ar-io-node-shell";
@@ -25,15 +20,12 @@
               yarn
               nodePackages.typescript-language-server
               yaml-language-server
-              nodePackages.prettier
-              nodePackages.eslint
               openjdk
               sqlite-interactive
             ];
           };
         };
-      }
-    );
+      });
 
-  nixConfig.bash-prompt = "\\e[32m\[ar-io-node-shell\]$\\e[0m ";
+  nixConfig.bash-prompt = "\\e[32m[ar-io-node-shell]$\\e[0m ";
 }
