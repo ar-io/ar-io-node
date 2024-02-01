@@ -114,6 +114,7 @@ The following types of filters are supported:
 { "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, ...]}
 { "and": [ <nested filter>, ... ]}
 { "or": [ <nested filter>, ... ]}
+{ "not": [ <nested filter>, ... ]}
 
 ```
 
