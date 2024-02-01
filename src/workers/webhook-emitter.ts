@@ -24,11 +24,17 @@ import type { queueAsPromised } from 'fastq';
 
 import * as events from '../events.js';
 import { NeverMatch } from '../filters.js';
-import { ItemFilter, PartialJsonTransaction } from '../types.js';
+import {
+  ItemFilter,
+  NormalizedDataItem,
+  PartialJsonTransaction,
+} from '../types.js';
+
+type WebhookEmissionData = NormalizedDataItem | PartialJsonTransaction;
 
 interface WebhookEventWrapper {
   event: string;
-  data: PartialJsonTransaction;
+  data: WebhookEmissionData;
 }
 
 interface WebhookEmissionDetails {
@@ -46,7 +52,7 @@ export class WebhookEmitter {
   private indexFilter: ItemFilter;
   private listenerReferences: Map<
     string,
-    (data: PartialJsonTransaction) => Promise<void>
+    (data: WebhookEmissionData) => Promise<void>
   >;
   public targetServersUrls: string[];
   public maxEmissionQueueSize: number;
@@ -69,7 +75,7 @@ export class WebhookEmitter {
     maxEmissionQueueSize?: number;
     emissionQueueConcurrency?: number;
   }) {
-    this.log = log.child({ class: 'WebhookEmitter' });
+    this.log = log.child({ class: this.constructor.name });
     this.eventEmitter = eventEmitter;
     this.targetServersUrls = targetServersUrls;
     this.indexFilter = indexFilter;
@@ -142,7 +148,7 @@ export class WebhookEmitter {
     this.log.debug('Registering WebhookEmitter listeners.');
 
     for (const event of this.indexEventsToListenFor) {
-      const listener = async (data: PartialJsonTransaction) => {
+      const listener = async (data: WebhookEmissionData) => {
         if (await this.indexFilter.match(data)) {
           for (const targetServer of this.targetServersUrls) {
             if (this.emissionQueue.length() < this.maxEmissionQueueSize) {
