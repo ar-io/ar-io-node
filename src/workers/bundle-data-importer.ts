@@ -79,10 +79,12 @@ export class BundleDataImporter {
     item: UnbundleableItem,
     prioritized: boolean | undefined,
   ): Promise<void> {
+    const log = this.log.child({ method: 'queueItem', id: item.id });
     if (this.workerCount === 0) {
+      log.debug('Skipping bundle download, no workers.');
       return;
     }
-    const log = this.log.child({ method: 'queueItem', id: item.id });
+
     if (prioritized === true) {
       log.debug('Queueing prioritized bundle download...');
       this.queue.unshift({ item, prioritized });
