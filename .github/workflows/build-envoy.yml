@@ -16,6 +16,12 @@ jobs:
       # Setup
       - uses: actions/checkout@v3
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v2
+
       # Build and push container image
       - name: Log in to the GitHub Container Registry
         if: ${{ github.ref == 'refs/heads/develop' }}
@@ -24,9 +30,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and push container image
         if: ${{ github.ref == 'refs/heads/develop' }}
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v4
         with:
           context: envoy/
           push: true
