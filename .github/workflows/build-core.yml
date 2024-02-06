@@ -1,4 +1,4 @@
-name: Test, lint, and build AR.IO core
+name: Build AR.IO core
 
 on: [ push, pull_request, workflow_dispatch ]
 
