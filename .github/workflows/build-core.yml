@@ -1,48 +1,30 @@
 name: Test and build AR.IO core
 
-on: [push, pull_request, workflow_dispatch]
+on: [ push, pull_request, workflow_dispatch ]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        node-version: [18.x]
-
     permissions:
-      actions: write
-      id-token: write
       contents: read
       checks: write
-      packages: write
       pull-requests: write
-
-    env:
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
     steps:
       # Setup
       - uses: actions/checkout@v3
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v3
+      - uses: actions/setup-node@v3
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version-file: .nvmrc
+          cache: 'yarn'
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Setup Docker buildx
-        uses: docker/setup-buildx-action@v2
-
-      # Build and test TypeScript
-      - run: yarn --immutable --immutable-cache
+      # Build and test TypeScript - run: yarn --immutable --immutable-cache
       - run: yarn build
+      - run: yarn lint:check
       - run: yarn test:ci
 
-      # Test results report
+      # Report test results
       - name: Report test results
         uses: dorny/test-reporter@v1
         if: >
@@ -58,6 +40,50 @@ jobs:
         uses: codecov/codecov-action@v3
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      # Success notification
+      - name: Send Slack success notification
+        if: success() && github.event_name != 'pull_request'
+        env:
+          SLACK_TITLE: Build succeeded!
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
+
+      # Failure notification
+      - name: Send Slack failure notification
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          SLACK_TITLE: Build failed!
+          SLACK_COLOR: danger
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
+
+
+          # env:
+          #   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          #   AWS_REGION: ${{ secrets.AWS_REGION }}
+          #   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          #build:
+          #  runs-on: ubuntu-latest
+
+          #  strategy:
+          #    matrix:
+          #      node-version: [18.x]
+
+          #  permissions:
+          #    actions: write
+          #    #id-token: write
+          #    contents: read
+          #    checks: write
+          #    #packages: write
+          #    pull-requests: write
+
+          #- name: Set up QEMU
+          #  uses: docker/setup-qemu-action@v2
+
+          #- name: Setup Docker buildx
+          #  uses: docker/setup-buildx-action@v2
+
 
             ## Build and push container image to GCR
             #- name: Log in to the GitHub Container Registry
@@ -107,20 +133,3 @@ jobs:
             #  run: |
             #    aws codepipeline start-pipeline-execution \
             #      --name ${{ secrets.AWS_CODEPIPELINE_NAME }}
-
-            ## Success notification
-            #- name: Send Slack success notification
-            #  if: success() && github.event_name != 'pull_request'
-            #  env:
-            #    SLACK_TITLE: Build succeeded!
-            #    SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-            #  uses: rtCamp/action-slack-notify@v2
-
-            ## Failure notification
-            #- name: Send Slack failure notification
-            #  if: failure() && github.event_name != 'pull_request'
-            #  env:
-            #    SLACK_TITLE: Build failed!
-            #    SLACK_COLOR: danger
-            #    SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-            #  uses: rtCamp/action-slack-notify@v2
