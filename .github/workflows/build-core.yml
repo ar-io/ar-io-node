@@ -19,7 +19,8 @@ jobs:
           node-version-file: .nvmrc
           cache: 'yarn'
 
-      # Build and test TypeScript - run: yarn --immutable --immutable-cache
+      # Build and test TypeScript
+      - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn lint:check
       - run: yarn test:ci
