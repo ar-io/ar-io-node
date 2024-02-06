@@ -70,6 +70,11 @@ jobs:
       id-token: write
       contents: read
 
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
     steps:
       # Build and push container image to ECR
       - name: Configure AWS credentials
