@@ -44,7 +44,7 @@ jobs:
 
       # Success notification
       - name: Send Slack success notification
-        if: success() && github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
+        if: success() && github.event_name != 'pull_request'
         env:
           SLACK_TITLE: Build succeeded!
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
@@ -52,7 +52,7 @@ jobs:
 
       # Failure notification
       - name: Send Slack failure notification
-        if: failure() && github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
+        if: failure() && github.event_name != 'pull_request'
         env:
           SLACK_TITLE: Build failed!
           SLACK_COLOR: danger
