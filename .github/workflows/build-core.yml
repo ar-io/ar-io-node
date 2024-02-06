@@ -42,6 +42,23 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+      # Success notification
+      - name: Send Slack success notification
+        if: success() && github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
+        env:
+          SLACK_TITLE: Build succeeded!
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
+
+      # Failure notification
+      - name: Send Slack failure notification
+        if: failure() && github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
+        env:
+          SLACK_TITLE: Build failed!
+          SLACK_COLOR: danger
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
+
   build:
     runs-on: ubuntu-latest
 
