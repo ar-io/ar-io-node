@@ -1,4 +1,4 @@
-name: Test and build AR.IO core
+name: Test, lint, and build AR.IO core
 
 on: [ push, pull_request, workflow_dispatch ]
 
@@ -41,24 +41,6 @@ jobs:
         uses: codecov/codecov-action@v3
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-      # Success notification
-      - name: Send Slack success notification
-        if: success() && github.event_name != 'pull_request'
-        env:
-          SLACK_TITLE: Build succeeded!
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        uses: rtCamp/action-slack-notify@v2
-
-      # Failure notification
-      - name: Send Slack failure notification
-        if: failure() && github.event_name != 'pull_request'
-        env:
-          SLACK_TITLE: Build failed!
-          SLACK_COLOR: danger
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        uses: rtCamp/action-slack-notify@v2
-
 
           # env:
           #   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
