@@ -35,6 +35,8 @@ jobs:
         if: ${{ github.ref == 'refs/heads/develop' }}
         uses: docker/build-push-action@v5
         with:
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           context: envoy/
           push: true
           platforms: linux/amd64,linux/arm64

@@ -87,7 +87,7 @@ jobs:
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Push image ECR
+      - name: Build and push core container image to ECR
         uses: docker/build-push-action@v5
         with:
           labels: |
@@ -97,7 +97,19 @@ jobs:
             ${{ env.ECR_REGISTRY }}/ar-io-core:develop
             ${{ env.ECR_REGISTRY }}/ar-io-core:${{ github.sha }}
 
-      # Start CodePipeline to test and deploy image
+      - name: Build and push envoy container image to ECR
+        if: ${{ github.ref == 'refs/heads/develop' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: envoy/
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/ar-io-envoy:develop
+            ${{ env.ECR_REGISTRY }}/ar-io-envoy:${{ github.sha }}
+
+      # Start CodePipeline to test and deploy images
       - name: Start CodePipeline
         if: github.ref == 'refs/heads/develop'
         run: |
