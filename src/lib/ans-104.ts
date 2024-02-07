@@ -207,6 +207,17 @@ export class Ans104Parser {
     }
   }
 
+  async stop(): Promise<void> {
+    const log = this.log.child({ method: 'stop' });
+    const promises: Promise<any>[] = [];
+    this.workers.forEach(() => {
+      promises.push(this.queueWork('terminate'));
+    });
+
+    await Promise.all(promises);
+    log.debug('Stopped successfully.');
+  }
+
   drainQueue() {
     for (const worker of this.workers) {
       worker.takeWork();
@@ -326,6 +337,11 @@ export class Ans104Parser {
 if (!isMainThread) {
   const filter = createFilter(JSON.parse(workerData.dataItemIndexFilterString));
   parentPort?.on('message', async (message: any) => {
+    if (message == 'terminate') {
+      parentPort?.postMessage(null);
+      process.exit(0);
+    }
+
     const { rootTxId, parentId, parentIndex, bundlePath } = message;
     let stream: fs.ReadStream | undefined = undefined;
     try {

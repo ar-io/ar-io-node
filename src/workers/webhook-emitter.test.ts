@@ -47,7 +47,7 @@ describe('WebhookEmitter', () => {
 
   afterEach(async () => {
     sandbox.restore();
-    webhookEmitter.shutdown();
+    webhookEmitter.stop();
   });
 
   describe('eventListeners', () => {
@@ -212,7 +212,7 @@ describe('WebhookEmitter', () => {
     });
   });
 
-  describe('shutdown', () => {
+  describe('stop', () => {
     it('should drain the emission queue', async () => {
       webhookEmitter = new WebhookEmitter({
         eventEmitter,
@@ -231,7 +231,7 @@ describe('WebhookEmitter', () => {
 
       expect(webhookEmitter.emissionQueue.length()).to.equal(4);
 
-      webhookEmitter.shutdown();
+      webhookEmitter.stop();
 
       expect(webhookEmitter.emissionQueue.length()).to.equal(0);
     });
@@ -249,7 +249,7 @@ describe('WebhookEmitter', () => {
         expect(eventEmitter.listenerCount(event)).to.equal(1);
       }
 
-      await webhookEmitter.shutdown();
+      await webhookEmitter.stop();
 
       for (const event of webhookEmitter.indexEventsToListenFor) {
         expect(eventEmitter.listenerCount(event)).to.equal(0);

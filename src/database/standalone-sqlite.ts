@@ -2356,23 +2356,30 @@ export class StandaloneSqliteDatabase
     });
   }
 
-  stop() {
+  async stop() {
+    const log = this.log.child({ method: 'stop' });
+    const promises: Promise<void>[] = [];
     WORKER_POOL_NAMES.forEach((pool) => {
       WORKER_ROLE_NAMES.forEach((role) => {
         this.workers[pool][role].forEach(() => {
-          return new Promise((resolve, reject) => {
-            this.workQueues[pool][role].push({
-              resolve,
-              reject,
-              message: {
-                method: 'terminate',
-              },
-            });
-            this.drainQueue();
-          });
+          promises.push(
+            new Promise((resolve, reject) => {
+              this.workQueues[pool][role].push({
+                resolve,
+                reject,
+                message: {
+                  method: 'terminate',
+                },
+              });
+              this.drainQueue();
+            }),
+          );
         });
       });
     });
+
+    await Promise.all(promises);
+    log.debug('Stopped successfully.');
   }
 
   drainQueue() {
@@ -2781,6 +2788,7 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           break;
         case 'terminate':
+          parentPort?.postMessage(null);
           process.exit(0);
       }
     } catch (error) {

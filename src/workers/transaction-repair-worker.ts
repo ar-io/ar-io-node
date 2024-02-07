@@ -28,6 +28,7 @@ export class TransactionRepairWorker {
   private log: winston.Logger;
   private chainIndex: ChainIndex;
   private txFetcher: TransactionFetcher;
+  private intervalId?: NodeJS.Timeout;
 
   constructor({
     log,
@@ -44,7 +45,18 @@ export class TransactionRepairWorker {
   }
 
   async start(): Promise<void> {
-    setInterval(this.retryMissingTransactions.bind(this), DEFAULT_INTERVAL_MS);
+    this.intervalId = setInterval(
+      this.retryMissingTransactions.bind(this),
+      DEFAULT_INTERVAL_MS,
+    );
+  }
+
+  async stop(): Promise<void> {
+    const log = this.log.child({ method: 'stop' });
+
+    this.intervalId && clearInterval(this.intervalId);
+
+    log.debug('Stopped successfully.');
   }
 
   async retryMissingTransactions() {

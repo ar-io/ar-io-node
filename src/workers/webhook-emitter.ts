@@ -133,15 +133,17 @@ export class WebhookEmitter {
     });
   }
 
-  public async shutdown(): Promise<void> {
+  public async stop(): Promise<void> {
+    const log = this.log.child({ method: 'stop' });
     // Remove specific listeners
     for (const [event, listener] of this.listenerReferences) {
       this.eventEmitter.removeListener(event, listener);
     }
     this.listenerReferences.clear();
 
-    await this.emissionQueue.kill();
-    this.log.info('WebhookEmitter shutdown completed.');
+    this.emissionQueue.kill();
+    await this.emissionQueue.drained();
+    log.debug('Stopped successfully.');
   }
 
   private async registerEventListeners(): Promise<void> {

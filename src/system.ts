@@ -17,6 +17,7 @@
  */
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
+import { Server } from 'node:http';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
@@ -366,8 +367,6 @@ export const nameResolver = new MemoryCacheArNSResolver({
   }),
 });
 
-// webhooks
-
 const webhookEmitter = new WebhookEmitter({
   eventEmitter,
   targetServersUrls: config.WEBHOOK_TARGET_SERVERS,
@@ -375,16 +374,36 @@ const webhookEmitter = new WebhookEmitter({
   log,
 });
 
-const shutdown = async () => {
-  await webhookEmitter.shutdown();
-  eventEmitter.removeAllListeners();
+let isShuttingDown = false;
+
+export const shutdown = async (express: Server) => {
+  if (isShuttingDown) {
+    log.info('Shutdown already in progress');
+  } else {
+    isShuttingDown = true;
+    log.info('Shutting down...');
+    express.close(async () => {
+      log.debug('Web server stopped successfully');
+      eventEmitter.removeAllListeners();
+      await blockImporter.stop();
+      await dataItemIndexer.stop();
+      await txRepairWorker.stop();
+      await txImporter.stop();
+      await txFetcher.stop();
+      await txOffsetImporter.stop();
+      await txOffsetRepairWorker.stop();
+      await bundleDataImporter.stop();
+      await bundleRepairWorker.stop();
+      await ans104DataIndexer.stop();
+      await ans104Unbundler.stop();
+      await webhookEmitter.stop();
+      await db.stop();
+
+      if (headerFsCacheCleanupWorker) {
+        await headerFsCacheCleanupWorker.stop();
+      }
+
+      process.exit(0);
+    });
+  }
 };
-
-// Handle shutdown signals
-process.on('SIGINT', async () => {
-  await shutdown();
-});
-
-process.on('SIGTERM', async () => {
-  await shutdown();
-});

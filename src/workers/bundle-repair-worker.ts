@@ -35,6 +35,7 @@ export class BundleRepairWorker {
   private indexFilter: string;
   private shouldBackfillBundles: boolean;
   private filtersChanged: boolean;
+  private intervalIds: NodeJS.Timeout[] = [];
 
   constructor({
     log,
@@ -63,23 +64,41 @@ export class BundleRepairWorker {
   }
 
   async start(): Promise<void> {
-    setInterval(this.retryBundles.bind(this), DEFAULT_RETRY_INTERVAL_MS);
-    setInterval(
+    const defaultInterval = setInterval(
+      this.retryBundles.bind(this),
+      DEFAULT_RETRY_INTERVAL_MS,
+    );
+    this.intervalIds.push(defaultInterval);
+    const defaultUpdateInterval = setInterval(
       this.updateBundleTimestamps.bind(this),
       DEFAULT_UPDATE_INTERVAL_MS,
     );
+    this.intervalIds.push(defaultUpdateInterval);
+
     if (this.shouldBackfillBundles) {
-      setInterval(
+      const backFillInterval = setInterval(
         this.backfillBundles.bind(this),
         DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS,
       );
+      this.intervalIds.push(backFillInterval);
     }
+
     if (this.filtersChanged) {
-      setInterval(
+      const filterInterval = setInterval(
         this.updateForFilterChange.bind(this),
         DEFAULT_FILTER_REPOCESS_INTERVAL_MS,
       );
+      this.intervalIds.push(filterInterval);
     }
+  }
+
+  async stop(): Promise<void> {
+    const log = this.log.child({ method: 'stop' });
+
+    this.intervalIds.forEach((intervalId) => clearInterval(intervalId));
+    this.intervalIds = [];
+
+    log.debug('Stopped successfully.');
   }
 
   async retryBundles() {

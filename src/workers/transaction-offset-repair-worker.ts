@@ -28,6 +28,7 @@ export class TransactionOffsetRepairWorker {
   private log: winston.Logger;
   private chainOffsetIndex: ChainOffsetIndex;
   private txOffsetIndexer: TransactionOffsetImporter;
+  private intervalId?: NodeJS.Timeout;
 
   constructor({
     log,
@@ -47,6 +48,14 @@ export class TransactionOffsetRepairWorker {
     this.fetchMissingOffsets();
   }
 
+  async stop(): Promise<void> {
+    const log = this.log.child({ method: 'stop' });
+
+    this.intervalId && clearInterval(this.intervalId);
+
+    log.debug('Stopped successfully.');
+  }
+
   async fetchMissingOffsets() {
     try {
       const txIds = await this.chainOffsetIndex.getTxIdsMissingOffsets(
@@ -60,6 +69,10 @@ export class TransactionOffsetRepairWorker {
     } catch (error: any) {
       this.log.error('Error retrying missing transactions:', error);
     }
-    setTimeout(this.fetchMissingOffsets.bind(this), DEFAULT_INTERVAL_MS);
+
+    this.intervalId = setTimeout(
+      this.fetchMissingOffsets.bind(this),
+      DEFAULT_INTERVAL_MS,
+    );
   }
 }
