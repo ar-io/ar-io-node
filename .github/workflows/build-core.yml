@@ -1,4 +1,4 @@
-name: Build AR.IO core
+name: Build core
 
 on: [ push, pull_request, workflow_dispatch ]
 
