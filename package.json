@@ -109,5 +109,6 @@
     "test:coverage": "npx c8 -r text -r html mocha --no-warnings",
     "lint:check": "eslint src test",
     "lint:fix": "eslint --fix src test"
-  }
+  },
+  "version": "1.0.0"
 }
