@@ -136,4 +136,12 @@ export class Ans104Unbundler {
       });
     }
   }
+
+  async stop(): Promise<void> {
+    const log = this.log.child({ method: 'stop' });
+    this.queue.kill();
+    await this.queue.drained();
+    await this.ans104Parser.stop();
+    log.debug('Stopped successfully.');
+  }
 }

@@ -17,6 +17,7 @@
  */
 import { default as cors } from 'cors';
 import express from 'express';
+import { Server } from 'node:http';
 
 import * as config from './config.js';
 import log from './log.js';
@@ -58,12 +59,23 @@ const apolloServerInstanceGql = apolloServer(system.db, {
   introspection: true,
   persistedQueries: false,
 });
+
+let server: Server;
 apolloServerInstanceGql.start().then(() => {
   apolloServerInstanceGql.applyMiddleware({
     app,
     path: '/graphql',
   });
-  app.listen(config.PORT, () => {
+  server = app.listen(config.PORT, () => {
     log.info(`Listening on port ${config.PORT}`);
   });
+});
+
+// Handle shutdown signals
+process.on('SIGINT', async () => {
+  await system.shutdown(server);
+});
+
+process.on('SIGTERM', async () => {
+  await system.shutdown(server);
 });
