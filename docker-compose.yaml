@@ -73,7 +73,7 @@ services:
 
   redis:
     image: redis:${REDIS_IMAGE_TAG:-7}
-    command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru
+    command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: on-failure:5
     ports:
       - 6379:6379
