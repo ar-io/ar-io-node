@@ -3,7 +3,7 @@ version: '3.0'
 
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-c6c48f53a8f60ccfd007fdd3dbc2ed481340e25d}
     build:
       context: envoy/
     restart: on-failure:5
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-aad32f56066234a517b3724ac6832d5a21640dd7}
     build:
       context: .
     restart: on-failure:5
