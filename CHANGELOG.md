@@ -4,7 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 7] - 2024-02-14
+
+### Added
+
+- Add support for notifiying other services of transactions and data items
+  using webhooks (see README for details).
+- Add support for filter negation (particularly useful for excluding large
+  bundles from indexing).
+- Improve unbundling throughput by decoupling data fetching from unbundling.
+- Add Envoy and core service ARM builds.
+
+### Changed
+
+- Improve resource cleanup and shutdown behavior.
+- Don't save Redis data to disk by default to help prevent memory issues on
+  startup for small gateways.
+- Reduce the amount of data sampled from large files by the observer.
+- Ensure block poa2 field is not cached to reduce memory consumption.
 
 ## [Release 6] - 2024-01-29
 
