@@ -16,7 +16,15 @@ jobs:
     - name: Install Graphviz
       run: |
         sudo apt-get update
-        sudo apt-get install -y graphviz
+        sudo apt-get install -y graphviz plantuml
+
+    - name: Setup Babashka
+      uses: turtlequeue/setup-babashka@v1.5.0
+      with:
+        babashka-version: 1.3.188
+
+    - name: Build diagrams
+      run: bb build-diagrams
 
     - name: Build bundle schema docs
       run: |

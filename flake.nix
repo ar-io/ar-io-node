@@ -14,14 +14,16 @@
           default = pkgs.mkShell {
             name = "ar-io-node-shell";
             buildInputs = with pkgs; [
+              babashka
               gnumake
               graphviz
-              nodejs
-              yarn
               nodePackages.typescript-language-server
-              yaml-language-server
+              nodejs
               openjdk
+              plantuml
               sqlite-interactive
+              yaml-language-server
+              yarn
             ];
           };
         };

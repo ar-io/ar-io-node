@@ -1,0 +1,9 @@
+{:min-bb-version "0.4.0"
+ :paths ["src"]
+ :tasks
+ {:requires ([metasys.tasks :as tasks])
+  build-diagrams
+  (tasks/build-diagrams)
+
+  send-diagram-notifications
+  (tasks/send-diagram-notifications)}}
