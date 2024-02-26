@@ -33,9 +33,10 @@ export const createArnsMiddleware = ({
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
     if (
-      // Ignore subdomains that are part of the ArNS root hostname.
       !Array.isArray(req.subdomains) ||
-      req.subdomains.length === config.ROOT_HOST_SUBDOMAIN_LENGTH
+      // Ignore subdomains that are part of the ArNS root hostname or are
+      // shorter than it (e.g., localhost).
+      req.subdomains.length <= config.ROOT_HOST_SUBDOMAIN_LENGTH
     ) {
       next();
       return;
