@@ -11,7 +11,7 @@ services:
       - '3000:3000'
       - '9901:9901'
     environment:
-      - LOG_LEVEL=info
+      - LOG_LEVEL=${ENVOY_LOG_LEVEL:-info}
       - TVAL_AR_IO_HOST=core
       - TVAL_AR_IO_PORT=4000
       - TVAL_OBSERVER_HOST=observer
@@ -40,6 +40,7 @@ services:
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
     environment:
       - NODE_ENV=${NODE_ENV:-production}
+      - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
       - LOG_FORMAT=${LOG_FORMAT:-simple}
       - TRUSTED_NODE_URL=${TRUSTED_NODE_URL:-}
       - TRUSTED_GATEWAY_URL=https://${TRUSTED_GATEWAY_HOST:-arweave.net}
@@ -92,6 +93,7 @@ services:
       - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
       - PORT=5000
+      - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-info}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-<example>}
       - CONTRACT_ID=${CONTRACT_ID:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}

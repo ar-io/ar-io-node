@@ -341,6 +341,8 @@ type DebugInfo = {
 };
 
 export class StandaloneSqliteDatabaseWorker {
+  private log: winston.Logger;
+
   private dbs: {
     core: Sqlite.Database;
     data: Sqlite.Database;
@@ -368,16 +370,20 @@ export class StandaloneSqliteDatabaseWorker {
   deleteBundlesStaleNewDataFn: Sqlite.Transaction;
 
   constructor({
+    log,
     coreDbPath,
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
   }: {
+    log: winston.Logger;
     coreDbPath: string;
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
   }) {
+    this.log = log;
+
     const timeout = 30000;
     this.dbs = {
       core: new Sqlite(coreDbPath, { timeout }),
@@ -1565,6 +1571,8 @@ export class StandaloneSqliteDatabaseWorker {
     const sql = sqlParts.join(' ');
     const sqliteParams = toSqliteParams(itemsQueryParams);
 
+    this.log.debug('Querying new transactions...', { sql, sqliteParams });
+
     return this.dbs.core
       .prepare(sql)
       .all(sqliteParams)
@@ -1673,6 +1681,8 @@ export class StandaloneSqliteDatabaseWorker {
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
     const sqliteParams = toSqliteParams(itemsQueryParams);
+
+    this.log.debug('Querying stable transactions...', { sql, sqliteParams });
 
     return this.dbs.core
       .prepare(sql)
@@ -1914,6 +1924,8 @@ export class StandaloneSqliteDatabaseWorker {
     const sql = queryParams.text;
     const sqliteParams = toSqliteParams(queryParams);
 
+    this.log.debug('Querying new blocks...', { sql, sqliteParams });
+
     const blocks = this.dbs.core
       .prepare(`${sql} LIMIT ${pageSize + 1}`)
       .all(sqliteParams)
@@ -1956,6 +1968,8 @@ export class StandaloneSqliteDatabaseWorker {
     const queryParams = query.toParams();
     const sql = queryParams.text;
     const sqliteParams = toSqliteParams(queryParams);
+
+    this.log.debug('Querying stable blocks...', { sql, sqliteParams });
 
     return this.dbs.core
       .prepare(`${sql} LIMIT ${pageSize + 1}`)
@@ -2671,6 +2685,7 @@ type WorkerMessage = {
 
 if (!isMainThread) {
   const worker = new StandaloneSqliteDatabaseWorker({
+    log,
     coreDbPath: workerData.coreDbPath,
     dataDbPath: workerData.dataDbPath,
     moderationDbPath: workerData.moderationDbPath,
