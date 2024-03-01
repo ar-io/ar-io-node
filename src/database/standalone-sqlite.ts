@@ -2266,7 +2266,7 @@ export class StandaloneSqliteDatabase
       (id: string) => {
         return this.queueRead(
           'data',
-          `${this.constructor.name}.getDataParent`,
+          `getDataParent`,
           [id],
         );
       },
@@ -2280,7 +2280,7 @@ export class StandaloneSqliteDatabase
       (id: string) => {
         return this.queueRead(
           'data',
-          `${this.constructor.name}.getDataAttributes`,
+          `getDataAttributes`,
           [id],
         );
       },
