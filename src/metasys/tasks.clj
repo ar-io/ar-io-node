@@ -4,7 +4,9 @@
             [babashka.process :refer [check process]]
             [cheshire.core :as json]
             [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.string :as str])
+  (:import [java.time LocalDateTime]
+           [java.time.format DateTimeFormatter]))
 
 (def diagrams (-> "docs/diagrams/diagrams.edn"
                   slurp
@@ -121,18 +123,29 @@
              :body
              json/parse-string))))))
 
+(defn to-pdf [image pdf]
+  (->> (process ["convert" image pdf]
+                {:err :string
+                 :out :string})
+       check))
+
+(defn date-str []
+  (let [fmt (DateTimeFormatter/ISO_DATE)]
+    (-> (LocalDateTime/now)
+        (.format fmt)
+        str)))
+
 (defn email-diagram [src]
   (when-let [{:keys [output-format]} (diagrams src)]
     (let [image (output-filename src (name output-format))
-          pdf (str (-> image fs/split-ext first) ".pdf")]
-      ;; TODO extract PDF conversion
-      (->> (process ["convert" image pdf]
-                    {:err :string
-                     :out :string})
-           check)
+          pdf (-> image
+                  fs/split-ext
+                  first
+                  (str "-" (date-str) ".pdf"))]
+      (to-pdf image pdf)
       ;; TODO construct raw email
-      ;; - create filename based on current date and git commit
-      ;; - use diagram_email.py
+      ;; - use diagram_email.py to make email body
+      ;; - create JSON to pass to SES ({ "Data": <diagram_email.py output> })
       ;; TODO send email using ses
       ;; - aws ses send-raw-email --raw-message file://encoded_message.txt --region your-region
       )))
