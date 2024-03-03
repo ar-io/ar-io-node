@@ -143,12 +143,22 @@
                   first
                   (str "-" (date-str) ".pdf"))]
       (to-pdf image pdf)
-      ;; TODO construct raw email
-      ;; - use diagram_email.py to make email body
-      ;; - create JSON to pass to SES ({ "Data": <diagram_email.py output> })
-      ;; TODO send email using ses
-      ;; - aws ses send-raw-email --raw-message file://encoded_message.txt --region your-region
-      )))
+      ;; TODO better email file name (tmp dir?)
+      ;; TODO extract this
+      (->> (process ["python3" "scripts/ses_pdf_email.py"]
+                    {:extra-env {"EMAIL_FROM" (or (System/getenv "EMAIL_FROM")
+                                                  "no-reply@ar-io.com")
+                                 "EMAIL_TO" (System/getenv "EMAIL_TO")
+                                 "PDF_FILE" pdf
+                                 "OUTPUT_JSON_FILE" "email.json"}
+                     :err :string
+                     :out :string})
+           check)
+      ;; TODO extract this
+      (->> (process ["aws" "ses" "send-raw-email" "--raw-message" (str "file://email.json") "--region" "us-east-1"]
+                    {:err :string
+                     :out :string})
+           check))))
 
 (defn send-diagram-notifications []
   (let [changed (changed-files)]
