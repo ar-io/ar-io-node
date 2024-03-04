@@ -38,6 +38,8 @@ const NOT_FOUND_MAX_AGE = 60; // 1 minute
 
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
+const REQUEST_METHOD_HEAD = 'HEAD';
+
 const setDataHeaders = ({
   res,
   dataAttributes,
@@ -81,6 +83,7 @@ const handleRangeRequest = (
   log: Logger,
   rangeHeader: string,
   res: Response,
+  req: Request,
   data: ContiguousData,
   dataAttributes: ContiguousDataAttributes | undefined,
 ) => {
@@ -121,6 +124,10 @@ const handleRangeRequest = (
         data.sourceContentType ??
         DEFAULT_CONTENT_TYPE,
     );
+
+    if (req.method === REQUEST_METHOD_HEAD) {
+      res.end();
+    }
 
     // Create a custom Transform stream to filter the range
     let position = 0;
@@ -248,12 +255,17 @@ export const createRawDataHandler = ({
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
         setRawDataHeaders(res);
-        handleRangeRequest(log, rangeHeader, res, data, dataAttributes);
+        handleRangeRequest(log, rangeHeader, res, req, data, dataAttributes);
       } else {
         // Set headers and stream data
         setDataHeaders({ res, dataAttributes, data });
         setRawDataHeaders(res);
         res.header('Content-Length', data.size.toString());
+
+        if (req.method === REQUEST_METHOD_HEAD) {
+          res.end();
+        }
+
         data.stream.pipe(res);
       }
     } catch (error: any) {
@@ -336,7 +348,7 @@ const sendManifestResponse = async ({
           dataAttributes,
           data,
         });
-        handleRangeRequest(log, rangeHeader, res, data, dataAttributes);
+        handleRangeRequest(log, rangeHeader, res, req, data, dataAttributes);
       } else {
         // Set headers and stream data
         setDataHeaders({
@@ -345,6 +357,12 @@ const sendManifestResponse = async ({
           data,
         });
         res.header('Content-Length', data.size.toString());
+
+        if (req.method === REQUEST_METHOD_HEAD) {
+          res.end();
+          return true;
+        }
+
         data.stream.pipe(res);
       }
     } catch (error: any) {
@@ -506,7 +524,7 @@ export const createDataHandler = ({
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined && data !== undefined) {
-        handleRangeRequest(log, rangeHeader, res, data, dataAttributes);
+        handleRangeRequest(log, rangeHeader, res, req, data, dataAttributes);
       } else {
         // Set headers and stream data
         setDataHeaders({
@@ -515,6 +533,11 @@ export const createDataHandler = ({
           data,
         });
         res.header('Content-Length', data.size.toString());
+
+        if (req.method === REQUEST_METHOD_HEAD) {
+          res.end();
+        }
+
         data.stream.pipe(res);
       }
     } catch (error: any) {

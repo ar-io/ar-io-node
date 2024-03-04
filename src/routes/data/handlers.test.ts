@@ -73,11 +73,34 @@ describe('Data routes', () => {
       );
       blockListValidator.isIdBlocked.resolves(false);
       blockListValidator.isHashBlocked.resolves(false);
+
       return request(app)
         .get('/not-a-real-id')
         .expect(200)
         .then((res: any) => {
           expect(res.body.toString()).to.equal('testing...');
+        });
+    });
+
+    it('should return 200 status code and empty data for unblocked data HEAD request', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      blockListValidator.isIdBlocked.resolves(false);
+      blockListValidator.isHashBlocked.resolves(false);
+
+      return request(app)
+        .head('/not-a-real-id')
+        .expect(200)
+        .then((res: any) => {
+          expect(res.body).to.eql({});
         });
     });
 
@@ -96,12 +119,38 @@ describe('Data routes', () => {
           manifestPathResolver,
         }),
       );
+
       return request(app)
         .get('/not-a-real-id')
         .set('Range', 'bytes=2-3')
         .expect(206)
         .then((res: any) => {
           expect(res.body.toString()).to.equal('st');
+        });
+    });
+
+    it('should return 206 status code and empty data for a HEAD range request', async () => {
+      const blockListValidator = {
+        isIdBlocked: sinon.stub(),
+        isHashBlocked: sinon.stub(),
+      };
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+
+      return request(app)
+        .head('/not-a-real-id')
+        .set('Range', 'bytes=2-3')
+        .expect(206)
+        .then((res: any) => {
+          expect(res.body).to.eql({});
         });
     });
 
@@ -117,10 +166,16 @@ describe('Data routes', () => {
           manifestPathResolver,
         }),
       );
-      return request(app)
+      const get = request(app)
         .get('/not-a-real-id')
         .set('Range', 'bytes=1-2,4-5')
         .expect(416);
+      const head = request(app)
+        .head('/not-a-real-id')
+        .set('Range', 'bytes=1-2,4-5')
+        .expect(416);
+
+      await Promise.all([get, head]);
     });
 
     it('should return 404 given a blocked ID', async () => {
@@ -135,7 +190,9 @@ describe('Data routes', () => {
         }),
       );
       blockListValidator.isIdBlocked.resolves(true);
-      return request(app).get('/not-a-real-id-id').expect(404);
+      const get = request(app).get('/not-a-real-id-id').expect(404);
+      const head = request(app).head('/not-a-real-id-id').expect(404);
+      await Promise.all([get, head]);
     });
   });
 });
