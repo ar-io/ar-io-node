@@ -2168,6 +2168,8 @@ const WORKER_POOL_NAMES: Array<WorkerPoolName> = [
   'bundles',
 ];
 
+type WorkerMethodName = keyof StandaloneSqliteDatabase;
+
 type WorkerRoleName = 'read' | 'write';
 const WORKER_ROLE_NAMES: Array<WorkerRoleName> = ['read', 'write'];
 
@@ -2264,11 +2266,7 @@ export class StandaloneSqliteDatabase
 
     this.getDataParentCircuitBreaker = new CircuitBreaker(
       (id: string) => {
-        return this.queueRead(
-          'data',
-          `getDataParent`,
-          [id],
-        );
+        return this.queueRead('data', `getDataParent`, [id]);
       },
       {
         name: 'getDataParent',
@@ -2278,11 +2276,7 @@ export class StandaloneSqliteDatabase
 
     this.getDataAttributesCircuitBreaker = new CircuitBreaker(
       (id: string) => {
-        return this.queueRead(
-          'data',
-          `getDataAttributes`,
-          [id],
-        );
+        return this.queueRead('data', `getDataAttributes`, [id]);
       },
       {
         name: 'getDataAttributes',
@@ -2409,7 +2403,7 @@ export class StandaloneSqliteDatabase
   queueWork(
     workerName: WorkerPoolName,
     role: WorkerRoleName,
-    method: string,
+    method: WorkerMethodName,
     args: any,
   ): Promise<any> {
     const end = metrics.methodDurationSummary.startTimer({
@@ -2432,11 +2426,19 @@ export class StandaloneSqliteDatabase
     return ret;
   }
 
-  queueRead(pool: WorkerPoolName, method: string, args: any): Promise<any> {
+  queueRead(
+    pool: WorkerPoolName,
+    method: WorkerMethodName,
+    args: any,
+  ): Promise<any> {
     return this.queueWork(pool, 'read', method, args);
   }
 
-  queueWrite(pool: WorkerPoolName, method: string, args: any): Promise<any> {
+  queueWrite(
+    pool: WorkerPoolName,
+    method: WorkerMethodName,
+    args: any,
+  ): Promise<any> {
     return this.queueWork(pool, 'write', method, args);
   }
 
