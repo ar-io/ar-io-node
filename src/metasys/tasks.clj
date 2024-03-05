@@ -167,7 +167,7 @@
         (let [c (commit-hash)
               p (previous-commit-hash)]
           (build-diagrams)
-          (email-diagram src)
+          #_(email-diagram src)
           (let [resp (notify-slack-diagram "Updated" src)
                 thread-ts (get-in resp ["file" "shares" "public" (System/getenv "SLACK_CHANNEL") 0 "ts"])]
             (when (fs/exists? src)

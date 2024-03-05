@@ -23,8 +23,8 @@ jobs:
       with:
         babashka-version: 1.3.188
 
-    - name: Build diagrams
-      run: bb build-diagrams
+    - name: Send diagrams notifications
+      run: bb send-diagram-notifications
 
     - name: Build bundle schema docs
       run: |
