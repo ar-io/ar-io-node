@@ -127,6 +127,8 @@ const handleRangeRequest = (
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
+      data.stream.destroy();
+      return;
     }
 
     // Create a custom Transform stream to filter the range
@@ -264,6 +266,8 @@ export const createRawDataHandler = ({
 
         if (req.method === REQUEST_METHOD_HEAD) {
           res.end();
+          data.stream.destroy();
+          return;
         }
 
         data.stream.pipe(res);
@@ -360,6 +364,7 @@ const sendManifestResponse = async ({
 
         if (req.method === REQUEST_METHOD_HEAD) {
           res.end();
+          data.stream.destroy();
           return true;
         }
 
@@ -536,6 +541,8 @@ export const createDataHandler = ({
 
         if (req.method === REQUEST_METHOD_HEAD) {
           res.end();
+          data.stream.destroy();
+          return;
         }
 
         data.stream.pipe(res);
