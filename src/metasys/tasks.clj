@@ -170,8 +170,8 @@
           #_(email-diagram src)
           (let [resp (notify-slack-diagram "Updated" src)
                 thread-ts (get-in resp ["file" "shares" "public" (System/getenv "SLACK_CHANNEL") 0 "ts"])]
-            (when (fs/exists? src)
-              (git-checkout p)
-              (build-diagrams)
-              (notify-slack-diagram "Previous" src thread-ts))
-            (git-checkout c)))))))
+            #_(when (fs/exists? src)
+                (git-checkout p)
+                (build-diagrams)
+                (notify-slack-diagram "Previous" src thread-ts))
+            #_(git-checkout c)))))))
