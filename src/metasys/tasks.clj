@@ -35,9 +35,7 @@
     [(filetype src) output-format]))
 
 (defmethod render [:plantuml :png] [src output-format]
-  (->> (process ["plantuml"
-                 (str "-t" (name output-format))
-                 "-o" output-dir src]
+  (->> (process ["make" (output-filename src output-format)]
                 {:err :string
                  :out :string})
        check))
