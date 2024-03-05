@@ -16,7 +16,7 @@ jobs:
     - name: Install Graphviz and OpenJDK (for PlantUML)
       run: |
         sudo apt-get update
-        sudo apt-get install -y graphviz openjdk
+        sudo apt-get install -y graphviz openjdk-11-jdk-headless
 
     - name: Setup Babashka
       uses: turtlequeue/setup-babashka@v1.5.0
