@@ -9,7 +9,7 @@ plantuml_jar_path := vendor/$(plantuml_jar)
 dot_pngs := $(patsubst docs/diagrams/src/%.dot,docs/diagrams/%.png,$(wildcard docs/diagrams/src/*.dot))
 puml_pngs := $(patsubst docs/diagrams/src/%.puml,docs/diagrams/%.png,$(wildcard docs/diagrams/src/*.puml))
 
-all: $(plantuml_jar_path) $(dot_pngs) $(puml_pngs)
+all: $(dot_pngs) $(puml_pngs)
 
 # Download PlantUML jar
 $(plantuml_jar_path):
@@ -21,5 +21,5 @@ $(dot_pngs): docs/diagrams/%.png: docs/diagrams/src/%.dot
 	dot -Tpng -o $@ $<
 
 # Render PlantUML files
-$(puml_pngs): docs/diagrams/%.png: docs/diagrams/src/%.puml
+$(puml_pngs): docs/diagrams/%.png: docs/diagrams/src/%.puml $(plantuml_jar_path)
 	java -jar $(plantuml_jar_path) -o $(CURDIR)/docs/diagrams -tpng $<
