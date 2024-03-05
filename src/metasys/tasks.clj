@@ -164,8 +164,9 @@
   (let [changed (changed-files)]
     (doseq [src changed]
       (when (diagrams src)
-        (let [c (commit-hash)
-              p (previous-commit-hash)]
+        (let [;;c (commit-hash)
+              ;;p (previous-commit-hash)
+              ]
           (build-diagrams)
           #_(email-diagram src)
           (let [resp (notify-slack-diagram "Updated" src)
