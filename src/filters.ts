@@ -76,7 +76,7 @@ export class MatchAny implements ItemFilter {
 
 type TagValueMatch = {
   name: string;
-  value: string;
+  value?: string;
 };
 
 type TagValueStartsWithMatch = {
@@ -94,33 +94,32 @@ export class MatchTags implements ItemFilter {
   }
 
   async match(item: MatchableItem): Promise<boolean> {
+    if (!Array.isArray(item.tags) || item.tags.length === 0) {
+      return false;
+    }
+
     const matches: Set<number> = new Set();
 
-    if (Array.isArray(item.tags)) {
-      for (const { name, value } of item.tags) {
-        const utf8Name = b64UrlToUtf8(name);
-        const utf8Value = b64UrlToUtf8(value);
-        for (let i = 0; i < this.tags.length; i++) {
-          const tagToMatch = this.tags[i];
-          if (utf8Name === tagToMatch.name) {
-            if ('value' in tagToMatch && utf8Value === tagToMatch.value) {
-              matches.add(i);
-            } else if (
-              'valueStartsWith' in tagToMatch &&
-              utf8Value.startsWith(tagToMatch.valueStartsWith)
-            ) {
-              matches.add(i);
-            }
-          }
+    for (const { name, value } of item.tags) {
+      const utf8Name = b64UrlToUtf8(name);
+      const utf8Value = b64UrlToUtf8(value);
+
+      for (let i = 0; i < this.tags.length; i++) {
+        const tagToMatch = this.tags[i];
+        if (utf8Name !== tagToMatch.name) continue;
+
+        if (
+          ('value' in tagToMatch && utf8Value === tagToMatch.value) || // utf8Value exactly matches tagToMatch.value
+          ('valueStartsWith' in tagToMatch &&
+            utf8Value.startsWith(tagToMatch.valueStartsWith)) || // utf8Value starts with tagToMatch.valueStartsWith
+          !('value' in tagToMatch || 'valueStartsWith' in tagToMatch) // Neither 'value' nor 'valueStartsWith' is in tagToMatch
+        ) {
+          matches.add(i);
         }
       }
     }
 
-    if (matches.size === this.tags.length) {
-      return true;
-    }
-
-    return false;
+    return matches.size === this.tags.length;
   }
 }
 

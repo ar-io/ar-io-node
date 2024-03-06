@@ -131,8 +131,10 @@ describe('MatchTags', () => {
     { name: 'tag1', value: 'value1' },
     { name: 'tag2', valueStartsWith: 'value2' },
   ];
-
   const matchTags = new MatchTags(tags);
+
+  const tagsWithoutValues = [{ name: 'tag1' }, { name: 'tag2' }];
+  const matchTagsWithoutValue = new MatchTags(tagsWithoutValues);
 
   it('should match all tags', async () => {
     const item = getTx(TX_ID);
@@ -141,7 +143,11 @@ describe('MatchTags', () => {
       { name: utf8ToB64Url('tag2'), value: utf8ToB64Url('value2abc') },
     ];
 
-    const result = await matchTags.match(item);
+    let result = await matchTags.match(item);
+    expect(result).to.be.true;
+
+    // Testing using only tag name
+    result = await matchTagsWithoutValue.match(item);
     expect(result).to.be.true;
   });
 
@@ -149,7 +155,11 @@ describe('MatchTags', () => {
     const item = getTx(TX_ID);
     item.tags = [{ name: utf8ToB64Url('tag1'), value: utf8ToB64Url('value1') }];
 
-    const result = await matchTags.match(item);
+    let result = await matchTags.match(item);
+    expect(result).to.be.false;
+
+    // Testing using only tag name
+    result = await matchTagsWithoutValue.match(item);
     expect(result).to.be.false;
   });
 
