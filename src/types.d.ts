@@ -384,6 +384,15 @@ export interface BlockListValidator {
   isHashBlocked(hash: string | undefined): Promise<boolean>;
 }
 
+// TODO consider moving this
+export interface JsonChunkPost {
+  data_root: string;
+  chunk: string;
+  data_size: string;
+  data_path: string;
+  offset: string;
+}
+
 export interface JsonChunk {
   tx_path: string;
   data_path: string;

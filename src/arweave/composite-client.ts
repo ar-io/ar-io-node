@@ -42,6 +42,7 @@ import {
   ChunkDataByAnySource,
   ContiguousData,
   ContiguousDataSource,
+  JsonChunkPost,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockStore,
@@ -65,6 +66,7 @@ interface Peer {
   lastSeen: number;
 }
 
+// TODO implement ChunkSink
 export class ArweaveCompositeClient
   implements
     ChainSource,
@@ -689,5 +691,16 @@ export class ArweaveCompositeClient
     });
 
     return response.data;
+  }
+
+  // TODO create interface for this
+  async broadcastChunk(chunk: JsonChunkPost): Promise<void> {
+    this.failureSimulator.maybeFail();
+
+    await this.trustedNodeRequestQueue.push({
+      method: 'POST',
+      url: `/chunk`,
+      data: chunk,
+    });
   }
 }
