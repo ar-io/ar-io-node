@@ -7,46 +7,25 @@ on:
       - develop
 
 jobs:
-  build:
+  notify:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v3
+      fetch-depth: 2
 
-    - name: Install Graphviz
+    - name: Install Graphviz and OpenJDK (for PlantUML)
       run: |
         sudo apt-get update
-        sudo apt-get install -y graphviz
+        sudo apt-get install -y graphviz openjdk-11-jdk-headless
 
-    - name: Build bundle schema docs
-      run: |
-        sqlite3 data/sqlite/bundles.db < test/bundles-schema.sql
-        ./scripts/schemaspy || true
-        mkdir -p _site/schema/sqlite
-        mv docs/sqlite/bundles _site/schema/sqlite
+    - name: Setup Babashka
+      uses: turtlequeue/setup-babashka@v1.5.0
+      with:
+        babashka-version: 1.3.188
 
-    - name: Fix permissions
-      run: |
-        chmod -c -R +rX "_site/" | while read line; do
-          echo "::warning title=Invalid file permissions automatically fixed::$line"
-        done
-
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v2
-
-  deploy:
-    needs: build
-
-    permissions:
-      pages: write      # to deploy to Pages
-      id-token: write   # to verify the deployment originates from an appropriate source
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v2
+    - name: Send diagrams notifications
+      env:
+        SLACK_API_TOKEN: ${{ secrets.SLACK_API_TOKEN }}
+        SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+      run: bb send-diagram-notifications
