@@ -87,6 +87,7 @@ export class ArweaveCompositeClient
 
   // Trusted node
   private trustedNodeUrl: string;
+  private chunkPostUrls: string[];
   private trustedNodeAxios;
 
   // Peers
@@ -123,6 +124,7 @@ export class ArweaveCompositeClient
     log,
     arweave,
     trustedNodeUrl,
+    chunkPostUrls,
     blockStore,
     chunkCache = new WeakMap(),
     txStore,
@@ -138,6 +140,7 @@ export class ArweaveCompositeClient
     log: winston.Logger;
     arweave: Arweave;
     trustedNodeUrl: string;
+    chunkPostUrls: string[];
     blockStore: PartialJsonBlockStore;
     chunkCache?: WeakMap<
       { absoluteOffset: number },
@@ -157,6 +160,7 @@ export class ArweaveCompositeClient
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
+    this.chunkPostUrls = chunkPostUrls.map((url) => url.replace(/\/$/, ''));
     this.failureSimulator = failureSimulator;
     this.txStore = txStore;
     this.blockStore = blockStore;
@@ -695,12 +699,42 @@ export class ArweaveCompositeClient
 
   // TODO create interface for this
   async broadcastChunk(chunk: JsonChunkPost): Promise<void> {
-    this.failureSimulator.maybeFail();
+    // TODO decide how to handle failure simulation
+    //this.failureSimulator.maybeFail();
 
-    await this.trustedNodeRequestQueue.push({
-      method: 'POST',
-      url: `/chunk`,
-      data: chunk,
-    });
+    // TODO pass this in?
+    const minSuccessCount = Math.max(this.chunkPostUrls.length - 1, 1);
+    let successCount = 0;
+
+    await Promise.allSettled(
+      this.chunkPostUrls.map(async (url) => {
+        try {
+          await axios({
+            url,
+            method: 'POST',
+            data: chunk,
+            // TODO pass in timeout
+            /* eslint-disable */
+            // @ts-ignore - our types don't have timeout
+            signal: AbortSignal.timeout(2000),
+          });
+
+          successCount++;
+        } catch (error: any) {
+          this.log.warn('Failed to broadcast chunk:', {
+            message: error.message,
+            stack: error.stack,
+          });
+        }
+      }),
+    );
+
+    if (successCount < Math.max(this.chunkPostUrls.length - 1, 1)) {
+      throw new Error(
+        `Failed to broadcast chunk to at least ${minSuccessCount} nodes`,
+      );
+    }
+
+    // TODO return success count
   }
 }
