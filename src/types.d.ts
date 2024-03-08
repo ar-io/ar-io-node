@@ -384,19 +384,19 @@ export interface BlockListValidator {
   isHashBlocked(hash: string | undefined): Promise<boolean>;
 }
 
-// TODO consider moving this
+export interface JsonChunk {
+  tx_path: string;
+  data_path: string;
+  chunk: string;
+}
+
+// TODO better name
 export interface JsonChunkPost {
   data_root: string;
   chunk: string;
   data_size: string;
   data_path: string;
   offset: string;
-}
-
-export interface JsonChunk {
-  tx_path: string;
-  data_path: string;
-  chunk: string;
 }
 
 export interface ChunkData {
@@ -441,6 +441,12 @@ export interface ChunkDataByAnySource {
     dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkData>;
+}
+
+// TODO better name?
+export interface ChunkBroadcaster {
+  // TODO better return type
+  broadcastChunk(chunk: JsonChunkPost): Promise<any>;
 }
 
 export interface ContiguousData {

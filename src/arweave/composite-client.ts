@@ -37,6 +37,7 @@ import * as metrics from '../metrics.js';
 import {
   ChainSource,
   Chunk,
+  ChunkBroadcaster,
   ChunkByAnySource,
   ChunkData,
   ChunkDataByAnySource,
@@ -66,10 +67,10 @@ interface Peer {
   lastSeen: number;
 }
 
-// TODO implement ChunkSink
 export class ArweaveCompositeClient
   implements
     ChainSource,
+    ChunkBroadcaster,
     ChunkByAnySource,
     ChunkDataByAnySource,
     ContiguousDataSource
@@ -697,44 +698,57 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
-  // TODO create interface for this
-  async broadcastChunk(chunk: JsonChunkPost): Promise<void> {
-    // TODO decide how to handle failure simulation
+  async broadcastChunk(chunk: JsonChunkPost): Promise<any> {
+    // TODO determine if/how to handle failure simulation
     //this.failureSimulator.maybeFail();
 
-    // TODO pass this in?
-    const minSuccessCount = Math.max(this.chunkPostUrls.length - 1, 1);
     let successCount = 0;
+    let failureCount = 0;
 
-    await Promise.allSettled(
+    const results = await Promise.all(
       this.chunkPostUrls.map(async (url) => {
         try {
-          await axios({
+          // TODO relay chunk origin header to avoid cycles
+          const resp = await axios({
             url,
             method: 'POST',
             data: chunk,
             // TODO pass in timeout
+            // TODO fix types
             /* eslint-disable */
             // @ts-ignore - our types don't have timeout
             signal: AbortSignal.timeout(2000),
           });
 
           successCount++;
+
+          return {
+            // TODO is the conditional necessary? can it be simplified?
+            success: resp.status >= 200 && resp.status < 300,
+            statusCode: resp.status,
+          };
         } catch (error: any) {
           this.log.warn('Failed to broadcast chunk:', {
             message: error.message,
             stack: error.stack,
           });
+
+          failureCount++;
+
+          // TODO timeout failure indicator
+          return {
+            success: false,
+            statusCode: error.response?.status,
+          };
         }
       }),
     );
 
-    if (successCount < Math.max(this.chunkPostUrls.length - 1, 1)) {
-      throw new Error(
-        `Failed to broadcast chunk to at least ${minSuccessCount} nodes`,
-      );
+    return  {
+      success: successCount > 0,
+      successCount,
+      failureCount,
+      results
     }
-
-    // TODO return success count
   }
 }

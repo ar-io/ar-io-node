@@ -26,7 +26,12 @@ arweaveRouter.use(express.json());
 
 arweaveRouter.post('/chunk', async (req, res) => {
   try {
-    await system.arweaveClient.broadcastChunk(req.body);
+    const result = await system.arweaveClient.broadcastChunk(req.body);
+    if (result.success) {
+      res.status(200).send(result);
+    } else {
+      res.status(500).send(result);
+    }
   } catch (error: any) {
     console.log(error.response);
     log.error('Failed to broadcast chunk', {
@@ -34,8 +39,5 @@ arweaveRouter.post('/chunk', async (req, res) => {
       stack: error?.stack,
     });
     res.status(500).send('Failed to broadcast chunk');
-    return;
   }
-
-  res.status(200).send('Chunk broadcast successfully');
 });
