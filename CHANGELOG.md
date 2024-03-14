@@ -4,7 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 8] - 2024-03-14
+
+### Added
+
+- Add GraphQL SQL query debug logging to support trouble shooting and
+  performance optimization.
+- Add support for indexing data items (not GraphQL querying) based solely on
+  tag name (example use case: indexing all IPFS CID tagged data items).
+
+### Changes
+
+- Observer data sampling now uses randomized ranges to generate content hashes.
+- Reference gateway ArNS resolutions are now cached to improve report
+  generation performance.
+- Contract interactions are now tested before posting using `dryWrite` to avoid
+  submitting interactions that would fail.
+- `/ar-io/observer/info` now reports `INVALID` for wallets that fail to load.
+
+### Fixed
+
+- Fix data caching failure caused by incorrect method name in getData* circuit
+  breakers.
+- Fix healthcheck when ARNS_ROOT_HOST includes a subdomain.
 
 ## [Release 7] - 2024-02-14
 
