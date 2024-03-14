@@ -18,6 +18,7 @@
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import { Server } from 'node:http';
+import fs from 'node:fs';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
@@ -127,9 +128,37 @@ export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
   ? new FsCleanupWorker({
       log,
       basePath: 'data/headers',
+    })
+  : undefined;
+
+const contiguousDataCacheCleanupThresholdInSeconds = parseInt(
+  config.CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD,
+);
+
+export const contiguousDataFsCacheCleanupWorker = !isNaN(
+  contiguousDataCacheCleanupThresholdInSeconds,
+)
+  ? new FsCleanupWorker({
+      log,
+      basePath: 'data/contiguous',
       shouldDelete: async (path) => {
-        // Ignore .gitkeep
-        return !path.endsWith('.gitkeep');
+        try {
+          const stats = await fs.promises.stat(path);
+          const mostRecentTime =
+            stats.atime > stats.mtime ? stats.atime : stats.mtime;
+
+          const currentTimestamp = Date.now();
+
+          const thresholdDate = new Date(
+            currentTimestamp -
+              contiguousDataCacheCleanupThresholdInSeconds * 1000,
+          );
+
+          return mostRecentTime <= thresholdDate;
+        } catch (err) {
+          log.error(`Error getting file stats for ${path}`, err);
+          return false;
+        }
       },
     })
   : undefined;
@@ -398,10 +427,8 @@ export const shutdown = async (express: Server) => {
       await ans104Unbundler.stop();
       await webhookEmitter.stop();
       await db.stop();
-
-      if (headerFsCacheCleanupWorker) {
-        await headerFsCacheCleanupWorker.stop();
-      }
+      await headerFsCacheCleanupWorker?.stop();
+      await contiguousDataFsCacheCleanupWorker?.stop();
 
       process.exit(0);
     });

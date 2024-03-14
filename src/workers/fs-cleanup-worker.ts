@@ -98,6 +98,7 @@ export class FsCleanupWorker {
     }
 
     this.log.info(`Deleting ${batch.length} files in ${this.basePath}}`);
+
     await Promise.all(
       batch.map((file) => {
         if (this.deleteCallback !== undefined) {
@@ -123,6 +124,12 @@ export class FsCleanupWorker {
         if (totalFilesProcessed >= this.batchSize) break;
 
         const fullPath = path.join(dir, file.name);
+
+        // Skip .gitkeep files
+        if (file.name === '.gitkeep') {
+          continue;
+        }
+
         if (
           lastPath !== null &&
           (lastPath.startsWith(fullPath) || fullPath >= lastPath) &&
