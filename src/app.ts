@@ -32,6 +32,8 @@ system.arweaveClient.refreshPeers();
 
 system.headerFsCacheCleanupWorker?.start();
 
+system.contiguousDataFsCacheCleanupWorker?.start();
+
 // Allow starting without writers to support SQLite replication
 if (config.START_WRITERS) {
   system.blockImporter.start();

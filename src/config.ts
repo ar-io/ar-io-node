@@ -169,6 +169,12 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =
   env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
 
+// The threshold in seconds to cleanup the filesystem contiguous data cache
+export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
+  'CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
+  '',
+);
+
 //
 // Webhooks
 //
