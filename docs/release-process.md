@@ -6,6 +6,8 @@
 1. Review `CHANGELOG.md` and ensure all changes have been documented.
 1. Add the release date and release number to `CHANGELOG.md`.
 1. Remove the "-pre" suffix from the `release` constant in `src/version.ts`.
+1. Set AR_IO_NODE_RELEASE environment variable in `docker-compose.yaml` to the
+   same value used in `src/version.ts`.
 1. Commit the version change and push to `develop`.
 1. Once images builds are complete, set the envoy and core image tags
    in `docker-compose.yaml`.
@@ -17,5 +19,7 @@
 1. Switch back to the `develop` branch.
 1. Bump the release number and add a "-pre" suffice to `release` constant in
    `src/version.ts`.
+1. Set AR_IO_NODE_RELEASE environment variable in `docker-compose.yaml` to the
+   same value used in `src/version.ts`.
 1. Set envoy and core image tags back to latest in `docker-compose.yaml`.
 1. Create a new `[Unreleased]` entry in `CHANGELOG.md`.
