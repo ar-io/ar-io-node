@@ -24,6 +24,8 @@ import { createDataHandler, createRawDataHandler } from './handlers.js';
 const DATA_PATH_REGEX =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
+const FARCASTER_FRAME_DATA_PATH_REGEX =
+  /^\/local\/farcaster\/frame\/([a-zA-Z0-9-_]{43})\/?$/i;
 
 // Used by ArNS Router
 export const dataHandler = createDataHandler({
@@ -45,3 +47,5 @@ dataRouter.get(
     blockListValidator: system.blockListValidator,
   }),
 );
+dataRouter.get(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);
+dataRouter.post(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);

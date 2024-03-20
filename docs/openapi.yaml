@@ -50,7 +50,13 @@ tags:
       Get data from the AR.IO Gateway index using GQL
   - name: Admin
     description: |
-      Access several password protected features and functions specific to your AR.IO Gateway.  
+      Access several password protected features and functions specific to your AR.IO Gateway.
+  - name: Admin
+    description: |
+      Access several password protected features and functions specific to your AR.IO Gateway.
+  - name: Farcaster Frames
+    description: |
+      Retrieve and interact with Farcaster Frames using Arweave transactions.
 components:
   securitySchemes:
     bearerAuth:
@@ -735,8 +741,8 @@ paths:
     put:
       tags: [Admin]
       summary: Blocks transactions or data-items so your AR.IO Gateway will not serve them.
-      description: | 
-        Submits a TX ID/data-item ID or sha-256 content hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.  
+      description: |
+        Submits a TX ID/data-item ID or sha-256 content hash for content you do not want your AR.IO Gateway to serve. Once submitted, your Gateway will not respond to requests for these transactions or data-items.
 
 
         WARNING - Testing a TX ID here WILL result in that data being blocked by your Gateway.
@@ -770,3 +776,42 @@ paths:
           description: Unauthorized, API key likely incorrect.
       security:
         - bearerAuth: []
+  '/local/farcaster/frame/{txId}':
+    get:
+      tags: [Farcaster Frames]
+      summary: Get transaction.
+      description: Get the content of a specified transaction.
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            Successful operation.
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Transaction'
+    post:
+      tags: [Farcaster Frames]
+      summary: Get transaction.
+      description: Get the content of a specified transaction.
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{43}$'
+      responses:
+        '200':
+          description: |-
+            Successful operation.
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/Transaction'
