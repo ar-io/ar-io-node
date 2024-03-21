@@ -779,8 +779,9 @@ paths:
   '/local/farcaster/frame/{txId}':
     get:
       tags: [Farcaster Frames]
-      summary: Get transaction.
-      description: Get the content of a specified transaction.
+      summary: Handle a Farcaster initial Frame request.
+      description: Responds to a Farcaster initial Frame GET request by
+        returning the content of a specified Arweave transaction or data item.
       parameters:
         - name: txId
           in: path
@@ -798,8 +799,9 @@ paths:
                 '$ref': '#/components/schemas/Transaction'
     post:
       tags: [Farcaster Frames]
-      summary: Get transaction.
-      description: Get the content of a specified transaction.
+      summary: Handle a Farcaster response Frame request.
+      description: Responds to a Farcaster response Frame POST request by
+        returning the content of a specified Arweave transaction or data item.
       parameters:
         - name: txId
           in: path
