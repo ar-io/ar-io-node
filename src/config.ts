@@ -57,12 +57,6 @@ export const TRUSTED_GATEWAY_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
-// Trusted ArNS gateway URL (for resolving ArNS names)
-export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
-  'TRUSTED_ARNS_GATEWAY_URL',
-  'https://__NAME__.arweave.dev',
-);
-
 //
 // Data
 //
@@ -194,6 +188,25 @@ export const WEBHOOK_INDEX_FILTER_STRING = canonicalize(
 );
 export const WEBHOOK_INDEX_FILTER = createFilter(
   JSON.parse(WEBHOOK_INDEX_FILTER_STRING),
+);
+
+//
+// ArNS Resolution
+//
+
+export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
+  'TRUSTED_ARNS_GATEWAY_URL',
+  'https://__NAME__.arweave.dev',
+);
+
+export const TRUSTED_ARNS_RESOLVER_TYPE = env.varOrDefault(
+  'TRUSTED_ARNS_RESOLVER_TYPE',
+  'gateway',
+);
+
+export const TRUSTED_ARNS_RESOLVER_URL = env.varOrDefault(
+  'TRUSTED_ARNS_RESOLVER_URL',
+  TRUSTED_ARNS_GATEWAY_URL,
 );
 
 //
