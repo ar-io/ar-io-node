@@ -20,40 +20,44 @@ import winston from 'winston';
 
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
+import { DEFAULT_ARNS_TTL_SECONDS } from './trusted-gateway-arns-resolver.js';
 
-export const DEFAULT_ARNS_TTL_SECONDS = 60 * 15; // 15 minutes
-
-export class TrustedGatewayArNSResolver implements NameResolver {
+export class StandaloneArNSResolver implements NameResolver {
   private log: winston.Logger;
-  private trustedGatewayUrl: string;
+  private resolverUrl: string;
 
   constructor({
     log,
-    trustedGatewayUrl,
+    resolverUrl,
   }: {
     log: winston.Logger;
-    trustedGatewayUrl: string;
+    resolverUrl: string;
   }) {
-    this.log = log.child({ class: 'TrustedGatewayArNSResolver' });
-    this.trustedGatewayUrl = trustedGatewayUrl;
+    this.log = log.child({
+      class: 'StandaloneArNSResolver',
+      resolverUrl: resolverUrl,
+    });
+    this.resolverUrl = resolverUrl;
   }
 
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
-      const nameUrl = this.trustedGatewayUrl.replace('__NAME__', name);
-      const response = await axios({
-        method: 'HEAD',
-        url: '/',
-        baseURL: nameUrl,
+      const { data } = await axios<{ txId: string; ttlSeconds: number }>({
+        method: 'GET',
+        url: `/ar-io/resolver/records/${name}`,
+        baseURL: this.resolverUrl,
         validateStatus: (status) => status === 200,
       });
-      const resolvedId = response.headers['x-arns-resolved-id'];
-      const ttl =
-        parseInt(response.headers['x-arns-ttl-seconds']) ||
-        DEFAULT_ARNS_TTL_SECONDS;
+
+      const resolvedId = data.txId;
+      const ttl = data.ttlSeconds || DEFAULT_ARNS_TTL_SECONDS;
       if (isValidDataId(resolvedId)) {
-        this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
+        this.log.info('Resolved name', {
+          name,
+          resolvedId,
+          ttl,
+        });
         return {
           name,
           resolvedId,
@@ -63,7 +67,6 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       } else {
         this.log.warn('Invalid resolved data ID', {
           name,
-          nameUrl,
           resolvedId,
           ttl,
         });
