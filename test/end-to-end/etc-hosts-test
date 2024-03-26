@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-
-echo "127.0.0.2 ardrive.ar-io.localhost" >> /etc/hosts
-ping -c 1 ardrive.ar-io.localhost
