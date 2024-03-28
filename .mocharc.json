@@ -1,10 +1,6 @@
 {
   "extension": ["ts"],
   "loader": "ts-node/esm",
-  "spec": [
-    "test/**/*.test.ts",
-    "src/**/*.test.ts"
-  ],
   "require": [
     "ts-node/register/transpile-only",
     "source-map-support/register.js"
