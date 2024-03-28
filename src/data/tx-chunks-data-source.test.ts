@@ -79,6 +79,12 @@ describe('TxChunksDataSource', () => {
             });
           });
       });
+
+      it('should return cached property as false', async () => {
+        const result = await txChunkRetriever.getData(TX_ID);
+
+        expect(result).to.have.property('cached', false);
+      });
     });
 
     describe('a bad piece of chunk data', () => {

@@ -70,6 +70,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       try {
         this.log.info('Found data hash in index', { id, hash });
         const cacheStream = await this.dataStore.get(hash, region);
+
         if (cacheStream === undefined) {
           this.log.info('Unable to find data in cache', {
             id,
@@ -132,13 +133,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       attributes?.hash,
       attributes?.size,
     );
+
     if (cacheData !== undefined) {
       return {
         hash: attributes?.hash,
         stream: cacheData.stream,
         size: cacheData.size,
-        sourceContentType: dataAttributes?.contentType,
-        verified: dataAttributes?.verified ?? false,
+        sourceContentType: attributes?.contentType,
+        verified: attributes?.verified ?? false,
+        cached: true,
       };
     }
 
@@ -187,9 +190,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         }
       }
     });
+
     data.stream.on('data', (chunk) => {
       hasher.update(chunk);
     });
+
     data.stream.pause();
 
     return data;
