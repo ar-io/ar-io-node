@@ -1,6 +1,6 @@
 name: Build core
 
-on: [ push, pull_request, workflow_dispatch ]
+on: [ push, workflow_dispatch ]
 
 jobs:
   test:
@@ -24,6 +24,11 @@ jobs:
       - run: yarn build
       - run: yarn lint:check
       - run: yarn test:ci
+
+      # Run E2E tests if pushing to develop branch
+      - run: yarn test:e2e
+        if: github.ref == 'refs/heads/develop'
+
 
       # Report test results
       - name: Report test results

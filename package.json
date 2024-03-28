@@ -105,9 +105,10 @@
     "watch": "nodemon",
     "db:migrate": "ts-node-esm ./src/migrate.ts",
     "db:dump-test-schemas": "./test/dump-test-schemas",
-    "test": "mocha --no-warnings",
-    "test:ci": "npx c8 -r lcov mocha --no-warnings -R mocha-multi --reporter-options spec=-,json=test-results.json",
-    "test:coverage": "npx c8 -r text -r html mocha --no-warnings",
+    "test": "mocha --no-warnings src/**/*.test.ts",
+    "test:ci": "npx c8 -r lcov mocha --no-warnings -R mocha-multi --reporter-options spec=-,json=test-results.json src/**/*.test.ts",
+    "test:coverage": "npx c8 -r text -r html mocha --no-warnings src/**/*.test.ts",
+    "test:e2e": "mocha --no-warnings test/end-to-end/**/*.test.ts",
     "lint:check": "eslint src test",
     "lint:fix": "eslint --fix src test"
   }
