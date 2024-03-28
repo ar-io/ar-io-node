@@ -631,6 +631,11 @@ export class ArweaveCompositeClient
 
     const size = +dataSizeResponse.data;
     const txData = fromB64Url(dataResponse.data);
-    return { stream: Readable.from(txData), size, verified: false };
+    return {
+      stream: Readable.from(txData),
+      size,
+      verified: false,
+      cached: false,
+    };
   }
 }
