@@ -244,9 +244,11 @@ export interface NormalizedDataItem {
   target: string;
   anchor: string;
   tags: B64uTag[];
-  data_offset?: number;
-  data_size?: number;
+  data_offset: number;
+  data_size: number;
+  data_hash: string;
   filter?: string;
+  content_type?: string;
 }
 
 interface GqlPageInfo {

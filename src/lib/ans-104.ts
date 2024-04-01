@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import crypto from 'node:crypto';
 import arbundles from 'arbundles/stream/index.js';
 import * as EventEmitter from 'node:events';
 import fs from 'node:fs';
@@ -62,6 +63,18 @@ interface ParserMessage {
   matchedItemCount?: number;
 }
 
+interface DataItemInfo {
+  id: string;
+  sigName: string;
+  signature: string;
+  target: string;
+  anchor: string;
+  owner: string;
+  tags: { name: string; value: string }[];
+  dataOffset: number;
+  dataSize: number;
+}
+
 export function normalizeAns104DataItem({
   rootTxId,
   parentId,
@@ -69,6 +82,7 @@ export function normalizeAns104DataItem({
   index,
   filter,
   ans104DataItem,
+  dataHash,
 }: {
   rootTxId: string;
   parentId: string;
@@ -76,6 +90,7 @@ export function normalizeAns104DataItem({
   index: number;
   filter: string;
   ans104DataItem: Record<string, any>;
+  dataHash: string;
 }): NormalizedDataItem {
   const tags = (ans104DataItem.tags || []).map(
     (tag: { name: string; value: string }) => ({
@@ -98,6 +113,7 @@ export function normalizeAns104DataItem({
     tags,
     data_offset: ans104DataItem.dataOffset,
     data_size: ans104DataItem.dataSize,
+    data_hash: dataHash,
     filter,
   } as NormalizedDataItem;
 }
@@ -335,7 +351,31 @@ export class Ans104Parser {
 }
 
 if (!isMainThread) {
+  const hashDataItemData = async (
+    filePath: string,
+    start: number,
+    end: number,
+  ): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const hasher = crypto.createHash('sha256');
+      const stream = fs.createReadStream(filePath, { start, end });
+
+      stream.on('data', (chunk) => {
+        hasher.update(chunk);
+      });
+
+      stream.on('end', () => {
+        resolve(hasher.digest('base64url'));
+      });
+
+      stream.on('error', (err) => {
+        reject(err);
+      });
+    });
+  };
+
   const filter = createFilter(JSON.parse(workerData.dataItemIndexFilterString));
+
   parentPort?.on('message', async (message: any) => {
     if (message == 'terminate') {
       parentPort?.postMessage(null);
@@ -346,7 +386,7 @@ if (!isMainThread) {
     let stream: fs.ReadStream | undefined = undefined;
     try {
       stream = fs.createReadStream(bundlePath);
-      const iterable = await processStream(stream);
+      const iterable: DataItemInfo[] = await processStream(stream);
       const bundleLength = iterable.length;
       let matchedItemCount = 0;
 
@@ -375,13 +415,21 @@ if (!isMainThread) {
           diLog.warn('Skipping data item with missing data offset.');
         }
 
+        // compute the hash of the data item data
+        const dataItemHash = await hashDataItemData(
+          bundlePath,
+          dataItem.dataOffset,
+          dataItem.dataOffset + dataItem.dataSize,
+        );
+
         const normalizedDataItem = normalizeAns104DataItem({
           rootTxId: rootTxId as string,
           parentId: parentId as string,
           parentIndex: parentIndex as number,
           index: index as number,
           filter: workerData.dataItemIndexFilterString,
-          ans104DataItem: dataItem as Record<string, any>,
+          ans104DataItem: dataItem,
+          dataHash: dataItemHash,
         });
 
         if (await filter.match(normalizedDataItem)) {

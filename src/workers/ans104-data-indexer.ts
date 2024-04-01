@@ -22,7 +22,12 @@ import * as winston from 'winston';
 
 import * as events from '../events.js';
 import * as metrics from '../metrics.js';
-import { NestedDataIndexWriter, NormalizedDataItem } from '../types.js';
+import {
+  ContiguousDataIndex,
+  NestedDataIndexWriter,
+  NormalizedDataItem,
+} from '../types.js';
+import { currentUnixTimestamp } from '../lib/time.js';
 
 const DEFAULT_WORKER_COUNT = 2;
 
@@ -31,6 +36,7 @@ export class Ans104DataIndexer {
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
   private indexWriter: NestedDataIndexWriter;
+  private contiguousDataIndex: ContiguousDataIndex;
 
   // Data indexing queue
   private queue: queueAsPromised<NormalizedDataItem, void>;
@@ -39,15 +45,18 @@ export class Ans104DataIndexer {
     log,
     eventEmitter,
     indexWriter,
+    contiguousDataIndex,
     workerCount = DEFAULT_WORKER_COUNT,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     indexWriter: NestedDataIndexWriter;
+    contiguousDataIndex: ContiguousDataIndex;
     workerCount?: number;
   }) {
     this.log = log.child({ class: 'Ans104DataIndexer' });
     this.indexWriter = indexWriter;
+    this.contiguousDataIndex = contiguousDataIndex;
     this.eventEmitter = eventEmitter;
 
     this.queue = fastq.promise(this.indexDataItem.bind(this), workerCount);
@@ -83,6 +92,13 @@ export class Ans104DataIndexer {
         typeof item.data_size === 'number'
       ) {
         log.debug('Indexing data item data...');
+        await this.contiguousDataIndex.saveDataContentAttributes({
+          id: item.id,
+          hash: item.data_hash,
+          dataSize: item.data_size,
+          contentType: item.content_type,
+          cachedAt: currentUnixTimestamp(),
+        });
         await this.indexWriter.saveNestedDataId({
           id: item.id,
           parentId: item.parent_id,

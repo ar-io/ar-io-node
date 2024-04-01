@@ -376,6 +376,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
   log,
   eventEmitter,
   indexWriter: nestedDataIndexWriter,
+  contiguousDataIndex,
 });
 
 eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
