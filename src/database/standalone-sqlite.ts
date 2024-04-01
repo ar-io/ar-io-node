@@ -2150,6 +2150,23 @@ export class StandaloneSqliteDatabaseWorker {
       indexed_at: currentUnixTimestamp(),
     });
   }
+
+  async saveNestedDataHash({
+    hash,
+    parentId,
+    dataOffset,
+  }: {
+    hash: string;
+    parentId: string;
+    dataOffset: number;
+  }) {
+    this.stmts.data.insertNestedDataHash.run({
+      hash: fromB64Url(hash),
+      parent_id: fromB64Url(parentId),
+      data_offset: dataOffset,
+      indexed_at: currentUnixTimestamp(),
+    });
+  }
 }
 
 type WorkerPoolName =
@@ -2678,6 +2695,24 @@ export class StandaloneSqliteDatabase
       },
     ]);
   }
+
+  async saveNestedDataHash({
+    hash,
+    parentId,
+    dataOffset,
+  }: {
+    hash: string;
+    parentId: string;
+    dataOffset: number;
+  }): Promise<void> {
+    return this.queueWrite('data', 'saveNestedDataHash', [
+      {
+        hash,
+        parentId,
+        dataOffset,
+      },
+    ]);
+  }
 }
 
 type WorkerMessage = {
@@ -2802,6 +2837,10 @@ if (!isMainThread) {
           break;
         case 'saveNestedDataId':
           worker.saveNestedDataId(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveNestedDataHash':
+          worker.saveNestedDataHash(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'terminate':

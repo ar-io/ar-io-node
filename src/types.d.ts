@@ -230,6 +230,16 @@ export interface NestedDataIndexWriter {
     dataOffset: number;
     dataSize: number;
   }): Promise<void>;
+
+  saveNestedDataHash({
+    hash,
+    parentId,
+    dataOffset,
+  }: {
+    hash: string;
+    parentId: string;
+    dataOffset: number;
+  }): Promise<void>;
 }
 
 export interface NormalizedDataItem {
