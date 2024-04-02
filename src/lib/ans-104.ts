@@ -92,11 +92,18 @@ export function normalizeAns104DataItem({
   ans104DataItem: Record<string, any>;
   dataHash: string;
 }): NormalizedDataItem {
+  let contentType: string | undefined;
   const tags = (ans104DataItem.tags || []).map(
-    (tag: { name: string; value: string }) => ({
-      name: utf8ToB64Url(tag.name),
-      value: utf8ToB64Url(tag.value),
-    }),
+    (tag: { name: string; value: string }) => {
+      if (tag.name.toLowerCase() === 'content-type') {
+        contentType = tag.value;
+      }
+
+      return {
+        name: utf8ToB64Url(tag.name),
+        value: utf8ToB64Url(tag.value),
+      };
+    },
   );
 
   return {
@@ -115,6 +122,7 @@ export function normalizeAns104DataItem({
     data_size: ans104DataItem.dataSize,
     data_hash: dataHash,
     filter,
+    content_type: contentType,
   } as NormalizedDataItem;
 }
 
@@ -352,13 +360,13 @@ export class Ans104Parser {
 
 if (!isMainThread) {
   const hashDataItemData = async (
-    filePath: string,
+    bundlePath: string,
     start: number,
     end: number,
   ): Promise<string> => {
     return new Promise((resolve, reject) => {
       const hasher = crypto.createHash('sha256');
-      const stream = fs.createReadStream(filePath, { start, end });
+      const stream = fs.createReadStream(bundlePath, { start, end });
 
       stream.on('data', (chunk) => {
         hasher.update(chunk);
