@@ -105,6 +105,11 @@ export class Ans104DataIndexer {
           dataOffset: item.data_offset,
           dataSize: item.data_size,
         });
+        await this.indexWriter.saveNestedDataHash({
+          hash: item.data_hash,
+          parentId: item.parent_id,
+          dataOffset: item.data_offset,
+        });
         metrics.dataItemsIndexedCounter.inc();
         this.eventEmitter.emit(events.ANS104_DATA_ITEM_DATA_INDEXED, item);
         log.debug('Data item data indexed.');
