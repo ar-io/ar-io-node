@@ -71,6 +71,9 @@ const setDataHeaders = ({
     }
   }
 
+  // Indicate whether the data was served from cache
+  res.header('X-Cached', data.cached ? 'HIT' : 'MISS');
+
   // Use the content type from the L1 or data item index if available
   res.contentType(
     dataAttributes?.contentType ??

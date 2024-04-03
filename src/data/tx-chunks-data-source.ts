@@ -107,6 +107,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       stream,
       size,
       verified: true,
+      cached: false,
     };
   }
 }

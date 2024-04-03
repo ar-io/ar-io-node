@@ -70,6 +70,8 @@ services:
       - WEBHOOK_TARGET_SERVERS=${WEBHOOK_TARGET_SERVERS:-}
       - WEBHOOK_INDEX_FILTER=${WEBHOOK_INDEX_FILTER:-}
       - CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD=${CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD:-}
+      - TRUSTED_ARNS_RESOLVER_TYPE=${TRUSTED_ARNS_RESOLVER_TYPE:-gateway}
+      - TRUSTED_ARNS_RESOLVER_URL=${TRUSTED_ARNS_RESOLVER_URL:-https://__NAME__.arweave.dev}
     depends_on:
       - redis
 
@@ -103,3 +105,19 @@ services:
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-9-pre}
+
+  resolver:
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-latest}
+    restart: on-failure:5
+    ports:
+      - 6000:6000
+    environment:
+      - PORT=6000
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - CONTRACT_TX_ID=${CONTRACT_ID:-}
+      - RUN_RESOLVER=${RUN_RESOLVER:-false}
+      - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
+      - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
+      - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
+    volumes:
+      - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns

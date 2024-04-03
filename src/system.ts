@@ -38,7 +38,6 @@ import log from './log.js';
 import * as metrics from './metrics.js';
 import { MemoryCacheArNSResolver } from './resolution/memory-cache-arns-resolver.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
-import { TrustedGatewayArNSResolver } from './resolution/trusted-gateway-arns-resolver.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import {
@@ -66,6 +65,7 @@ import { TransactionRepairWorker } from './workers/transaction-repair-worker.js'
 import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
+import { createArNSResolver } from './init/resolvers.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -391,9 +391,10 @@ export const manifestPathResolver = new StreamingManifestPathResolver({
 
 export const nameResolver = new MemoryCacheArNSResolver({
   log,
-  resolver: new TrustedGatewayArNSResolver({
+  resolver: createArNSResolver({
     log,
-    trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
+    type: config.TRUSTED_ARNS_RESOLVER_TYPE,
+    url: config.TRUSTED_ARNS_RESOLVER_URL,
   }),
 });
 

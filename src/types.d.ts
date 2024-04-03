@@ -398,6 +398,7 @@ export interface ContiguousData {
   size: number;
   verified: boolean;
   sourceContentType?: string;
+  cached: boolean;
 }
 
 export interface ContiguousDataAttributes {
