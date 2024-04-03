@@ -24,32 +24,59 @@ import {
 } from 'testcontainers';
 import { default as wait } from 'wait';
 import Sqlite, { Database } from 'better-sqlite3';
+import crypto from 'node:crypto';
+import { toB64Url } from '../../src/lib/encoding.js';
 
 const projectRootPath = process.cwd();
 
-describe('Indexing', function () {
-  const START_HEIGHT = 1;
-  const STOP_HEIGHT = 11;
+const getHashForIdFromChain = async (id: string): Promise<string> => {
+  const response = await fetch(`https://arweave.net/raw/${id}`);
+  const stream = response.body;
 
-  function getMaxHeight(coreDb: Database) {
-    return coreDb.prepare('SELECT MAX(height) FROM new_blocks').get();
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
   }
 
-  async function waitForBlocks(coreDb: Database) {
-    while (getMaxHeight(coreDb)['MAX(height)'] !== STOP_HEIGHT) {
-      console.log('Waiting for blocks to import...');
-      await wait(5000);
+  if (stream === null) {
+    throw new Error('Stream is null');
+  }
+
+  const reader = stream.getReader();
+
+  const hasher = crypto.createHash('sha256');
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
     }
+
+    hasher.update(value);
   }
 
-  async function fetchGqlHeight(): Promise<number | undefined> {
-    const response = await fetch('http://localhost:4000/graphql', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query: `query {
+  return hasher.digest('base64url');
+};
+
+function getMaxHeight(coreDb: Database) {
+  return coreDb.prepare('SELECT MAX(height) FROM new_blocks').get();
+}
+
+async function waitForBlocks(coreDb: Database, stopHeight: number) {
+  while (getMaxHeight(coreDb)['MAX(height)'] !== stopHeight) {
+    console.log('Waiting for blocks to import...');
+    await wait(5000);
+  }
+}
+
+async function fetchGqlHeight(): Promise<number | undefined> {
+  const response = await fetch('http://localhost:4000/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query: `query {
         blocks(first: 1) {
           edges {
             node {
@@ -58,21 +85,25 @@ describe('Indexing', function () {
           }
         }
       }`,
-      }),
-    });
+    }),
+  });
 
-    if (!response.ok) {
-      console.error('Failed to fetch:', response.statusText);
-      return undefined;
-    }
-
-    const jsonResponse = await response.json();
-    const height = jsonResponse?.data?.blocks?.edges[0]?.node?.height as
-      | number
-      | undefined;
-
-    return height;
+  if (!response.ok) {
+    console.error('Failed to fetch:', response.statusText);
+    return undefined;
   }
+
+  const jsonResponse = await response.json();
+  const height = jsonResponse?.data?.blocks?.edges[0]?.node?.height as
+    | number
+    | undefined;
+
+  return height;
+}
+
+describe('Indexing', function () {
+  const START_HEIGHT = 1;
+  const STOP_HEIGHT = 11;
 
   describe('Initialization', function () {
     let coreDb: Database;
@@ -98,6 +129,7 @@ describe('Indexing', function () {
         .up(['core']);
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+      await waitForBlocks(coreDb, STOP_HEIGHT);
     });
 
     after(async function () {
@@ -105,19 +137,11 @@ describe('Indexing', function () {
     });
 
     it('Verifying if blocks were indexed correctly in the database', async function () {
-      // 5 minutes timeout waiting for the blocks to be indexed
-      this.timeout(300000);
-      await waitForBlocks(coreDb);
-
       const maxHeight = getMaxHeight(coreDb)['MAX(height)'];
       expect(maxHeight).to.equal(STOP_HEIGHT);
     });
 
     it('Verifying if blocks were exposed correctly through GraphQL', async function () {
-      // 5 minutes timeout waiting for the blocks to be indexed
-      this.timeout(300000);
-      await waitForBlocks(coreDb);
-
       const gqlHeight = await fetchGqlHeight();
       expect(gqlHeight).to.equal(STOP_HEIGHT);
     });
@@ -130,7 +154,6 @@ describe('Indexing', function () {
     before(async function () {
       // 10 minutes timeout to build the image
       this.timeout(600000);
-
       rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       compose = await new DockerComposeEnvironment(
@@ -147,6 +170,7 @@ describe('Indexing', function () {
         .up(['core']);
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+      await waitForBlocks(coreDb, STOP_HEIGHT);
     });
 
     after(async function () {
@@ -154,21 +178,146 @@ describe('Indexing', function () {
     });
 
     it('Verifying if blocks were indexed correctly in the database', async function () {
-      // 5 minutes timeout waiting for the blocks to be indexed
-      this.timeout(300000);
-      await waitForBlocks(coreDb);
-
       const maxHeight = getMaxHeight(coreDb)['MAX(height)'];
       expect(maxHeight).to.equal(STOP_HEIGHT);
     });
 
     it('Verifying if blocks were exposed correctly through GraphQL', async function () {
-      // 5 minutes timeout waiting for the blocks to be indexed
-      this.timeout(300000);
-      await waitForBlocks(coreDb);
-
       const gqlHeight = await fetchGqlHeight();
       expect(gqlHeight).to.equal(STOP_HEIGHT);
+    });
+  });
+
+  describe('DataItem indexing', function () {
+    let dataDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAll = () =>
+        dataDb.prepare('SELECT * FROM contiguous_data_parents').all();
+
+      while (getAll().length === 0) {
+        console.log('Waiting for data items to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    before(async function () {
+      // 10 minutes timeout to build the image
+      this.timeout(600000);
+
+      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
+      compose = await new DockerComposeEnvironment(
+        projectRootPath,
+        'docker-compose.yaml',
+      )
+        .withEnvironment({
+          START_HEIGHT: '0',
+          STOP_HEIGHT: '0',
+          ANS104_UNBUNDLE_FILTER: '{"always": true}',
+          ANS104_INDEX_FILTER: '{"always": true}',
+          ADMIN_API_KEY: 'secret',
+        })
+        .withBuild()
+        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+        .up(['core']);
+
+      dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
+
+      // queue bundle kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      // bundle structure:
+      // - kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      //   - 10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs
+      //     - EL_2rm9QpBT2n831U1mQQliGjO_FereFS5Zx-WVQMqE
+      //     - BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM
+      //   - 9dpPBLhon3Gm32G0PF5ayz8mKL4Zc2Xk8nZXPS8zDNk
+      //     - -Bnyyuo7VII7UljnJQE6E0Tejo4suHL3O6DpWJ81qmM
+      //   - GUUjPw19kKr8tetPs9yOhgFF_FNizsF2r1C6umjs0oQ
+      //   - hpzGxQy0YMM83y9Ehv-YJXkYwwV7rjvol4D4YvX8o7A
+      //     - XqW_HJMypBk74rzJVVHtVGMm5SMijd1Ffub5F244urM
+      //   - M8skxUWsHmqu4Rr4d7_DiHdwP_c4hjgRRSRNYlgKFfA
+      //   - oS1UlSpn-n8nAYWPGromctIKygTGjGyRi1KtK9m1AEs
+      //     - SRmeMXAf0HIR5zGyEQ_a3UpH508TpdzOnYQ0qjcIToI
+      //     - ykLYuWsexzA2gNVrEZpJcpuBlsBNVoZ0P-ZvwkenM-Q
+      //   - R5gMwFVviSQZnkPI2LAcB4qkrFAWuGOfzdVP-GR2qw4
+      //   - TKmWgTHZOnW4y0x0Y0S0Jzo6HXuybb0FOpdFL-hkiH8
+      //   - uLev-0kcr0fHACt9h5iQAqnH19diPE09ETn9iT6MNuo
+      //     - cdmhEOYCBCtxLp-KLlrcIdlQtvulobS9c6VT9Oy3H9g
+      //     - YdNeWprLu5YjPcPTUFK1avUp6XGKCMxJAkhyM2z0FmE
+      //   - vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM
+      await fetch('http://localhost:4000/ar-io/admin/queue-tx', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: 'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+        }),
+      });
+
+      await waitForIndexing();
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('Verifying if all DataItems were indexed', async function () {
+      await wait(10000);
+      const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
+      const idList = [
+        'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+        '10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs',
+        'EL_2rm9QpBT2n831U1mQQliGjO_FereFS5Zx-WVQMqE',
+        'BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM',
+        '9dpPBLhon3Gm32G0PF5ayz8mKL4Zc2Xk8nZXPS8zDNk',
+        '-Bnyyuo7VII7UljnJQE6E0Tejo4suHL3O6DpWJ81qmM',
+        'GUUjPw19kKr8tetPs9yOhgFF_FNizsF2r1C6umjs0oQ',
+        'hpzGxQy0YMM83y9Ehv-YJXkYwwV7rjvol4D4YvX8o7A',
+        'XqW_HJMypBk74rzJVVHtVGMm5SMijd1Ffub5F244urM',
+        'M8skxUWsHmqu4Rr4d7_DiHdwP_c4hjgRRSRNYlgKFfA',
+        'oS1UlSpn-n8nAYWPGromctIKygTGjGyRi1KtK9m1AEs',
+        'SRmeMXAf0HIR5zGyEQ_a3UpH508TpdzOnYQ0qjcIToI',
+        'ykLYuWsexzA2gNVrEZpJcpuBlsBNVoZ0P-ZvwkenM-Q',
+        'R5gMwFVviSQZnkPI2LAcB4qkrFAWuGOfzdVP-GR2qw4',
+        'TKmWgTHZOnW4y0x0Y0S0Jzo6HXuybb0FOpdFL-hkiH8',
+        'uLev-0kcr0fHACt9h5iQAqnH19diPE09ETn9iT6MNuo',
+        'cdmhEOYCBCtxLp-KLlrcIdlQtvulobS9c6VT9Oy3H9g',
+        'YdNeWprLu5YjPcPTUFK1avUp6XGKCMxJAkhyM2z0FmE',
+        'vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM',
+      ];
+
+      const ids = stmt.all().map((row) => toB64Url(row.id));
+
+      expect(ids).to.have.lengthOf(idList.length);
+      expect(ids).to.have.members(idList);
+    });
+
+    it('Verifying if DataItem hash was correctly indexed', async function () {
+      const bundleHash = await getHashForIdFromChain(
+        'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+      );
+      const dataItemHash = await getHashForIdFromChain(
+        '10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs',
+      );
+
+      const nestedDataItemHash = await getHashForIdFromChain(
+        'BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM',
+      );
+
+      const stmt = dataDb.prepare(
+        'SELECT hash, parent_hash FROM contiguous_data_parents',
+      );
+
+      const parentHashByDataHash = stmt.all().reduce((acc, row) => {
+        acc[toB64Url(row.hash)] = toB64Url(row.parent_hash);
+        return acc;
+      }, {});
+
+      expect(parentHashByDataHash[dataItemHash]).to.equal(bundleHash);
+      expect(parentHashByDataHash[nestedDataItemHash]).to.equal(dataItemHash);
     });
   });
 });

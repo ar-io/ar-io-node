@@ -366,9 +366,17 @@ if (!isMainThread) {
   ): Promise<string> => {
     return new Promise((resolve, reject) => {
       const hasher = crypto.createHash('sha256');
+
+      // Handle data item with no data
+      if (start > end) {
+        hasher.update('');
+        resolve(hasher.digest('base64url'));
+      }
+
       const stream = fs.createReadStream(bundlePath, { start, end });
 
       stream.on('data', (chunk) => {
+        console.log('chunk', chunk);
         hasher.update(chunk);
       });
 
@@ -427,7 +435,7 @@ if (!isMainThread) {
         const dataItemHash = await hashDataItemData(
           bundlePath,
           dataItem.dataOffset,
-          dataItem.dataOffset + dataItem.dataSize,
+          dataItem.dataOffset + dataItem.dataSize - 1,
         );
 
         const normalizedDataItem = normalizeAns104DataItem({
