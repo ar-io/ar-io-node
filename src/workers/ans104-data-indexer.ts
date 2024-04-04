@@ -27,7 +27,6 @@ import {
   NestedDataIndexWriter,
   NormalizedDataItem,
 } from '../types.js';
-import { currentUnixTimestamp } from '../lib/time.js';
 
 const DEFAULT_WORKER_COUNT = 2;
 
@@ -97,7 +96,6 @@ export class Ans104DataIndexer {
           hash: item.data_hash,
           dataSize: item.data_size,
           contentType: item.content_type,
-          cachedAt: currentUnixTimestamp(),
         });
         await this.indexWriter.saveNestedDataId({
           id: item.id,
