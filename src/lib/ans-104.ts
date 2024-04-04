@@ -92,7 +92,7 @@ export function normalizeAns104DataItem({
   ans104DataItem: Record<string, any>;
   dataHash: string;
 }): NormalizedDataItem {
-  let contentType: string;
+  let contentType: string | undefined;
 
   const tags = (ans104DataItem.tags || []).map(
     (tag: { name: string; value: string }) => {
