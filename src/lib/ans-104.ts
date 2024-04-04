@@ -92,10 +92,15 @@ export function normalizeAns104DataItem({
   ans104DataItem: Record<string, any>;
   dataHash: string;
 }): NormalizedDataItem {
-  let contentType: string | undefined;
+  let contentType: string;
+
   const tags = (ans104DataItem.tags || []).map(
     (tag: { name: string; value: string }) => {
-      if (tag.name.toLowerCase() === 'content-type') {
+      // get content type from the first content-type tag
+      if (
+        contentType === undefined &&
+        tag.name.toLowerCase() === 'content-type'
+      ) {
         contentType = tag.value;
       }
 
