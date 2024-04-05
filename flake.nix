@@ -8,7 +8,7 @@
 
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
-      let pkgs = (import nixpkgs { inherit system; });
+      let pkgs = import nixpkgs { inherit system; };
       in {
         devShells = {
           default = pkgs.mkShell {
@@ -16,12 +16,13 @@
             buildInputs = with pkgs; [
               gnumake
               graphviz
-              nodejs
+              nodejs_20
               yarn
               nodePackages.typescript-language-server
               yaml-language-server
               openjdk
               sqlite-interactive
+              python3
             ];
           };
         };

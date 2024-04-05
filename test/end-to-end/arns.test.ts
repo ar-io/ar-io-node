@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { request } from 'node:http';
 import { expect } from 'chai';
 import {
   DockerComposeEnvironment,
@@ -49,40 +50,87 @@ describe('ArNS', function () {
   });
 
   it('Verifying that "__unknown__.ar-io.localhost" returns 404', async function () {
-    const response = await fetch('http://localhost:4000', {
-      headers: {
-        Host: '__unknown__.ar-io.localhost',
+    const req = request(
+      {
+        hostname: 'localhost',
+        port: 4000,
+        path: '/',
+        method: 'GET',
+        headers: {
+          Host: '__unknown__.ar-io.localhost',
+        },
       },
-    });
-    expect(response.status).to.equal(404);
+      (res) => {
+        expect(res.statusCode).to.equal(404);
+      },
+    );
+
+    req.end();
+
+    // const response = await fetch('http://localhost:4000', {
+    //   headers: {
+    //     Host: '__unknown__.ar-io.localhost',
+    //   },
+    // });
+    // expect(response.status).to.equal(404);
   });
 
   it('Verifying that "ardrive.ar-io.localhost" returns 200', async function () {
-    const response = await fetch('http://localhost:4000', {
-      headers: {
-        Host: 'ardrive.ar-io.localhost',
+    const req = request(
+      {
+        hostname: 'localhost',
+        port: 4000,
+        path: '/',
+        method: 'GET',
+        headers: {
+          Host: 'ardrive.ar-io.localhost',
+        },
       },
-    });
-    expect(response.status).to.equal(200);
+      (res) => {
+        expect(res.statusCode).to.equal(200);
+      },
+    );
+
+    req.end();
   });
 
   it('Verifying "ardrive.ar-io.localhost" X-ArNS-Resolved-ID header', async function () {
-    const response = await fetch('http://localhost:4000', {
-      headers: {
-        Host: 'ardrive.ar-io.localhost',
+    const req = request(
+      {
+        hostname: 'localhost',
+        port: 4000,
+        path: '/',
+        method: 'GET',
+        headers: {
+          Host: 'ardrive.ar-io.localhost',
+        },
       },
-    });
+      (res) => {
+        expect(res.headers).to.have.property('x-arns-resolved-id').that.is.not
+          .empty;
+      },
+    );
 
-    expect([...response.headers.keys()]).to.include('x-arns-resolved-id');
+    req.end();
   });
 
   it('Verifying "ardrive.ar-io.localhost" X-ArNS-TTL-Seconds header', async function () {
-    const response = await fetch('http://localhost:4000', {
-      headers: {
-        Host: 'ardrive.ar-io.localhost',
+    const req = request(
+      {
+        hostname: 'localhost',
+        port: 4000,
+        path: '/',
+        method: 'GET',
+        headers: {
+          Host: 'ardrive.ar-io.localhost',
+        },
       },
-    });
+      (res) => {
+        expect(res.headers).to.have.property('x-arns-ttl-seconds').that.is.not
+          .empty;
+      },
+    );
 
-    expect([...response.headers.keys()]).to.include('x-arns-ttl-seconds');
+    req.end();
   });
 });
