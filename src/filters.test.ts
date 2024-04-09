@@ -15,8 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { expect } from 'chai';
 import fs from 'node:fs';
+import assert from 'node:assert';
+import { describe, it } from 'node:test';
 
 import {
   AlwaysMatch,
@@ -45,7 +46,7 @@ describe('AlwaysMatch', () => {
 
   it('should always return true', async () => {
     const result = await alwaysMatch.match(TX);
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
   });
 });
 
@@ -54,7 +55,7 @@ describe('NeverMatch', () => {
 
   it('should always return false', async () => {
     const result = await neverMatch.match(TX);
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 });
 
@@ -62,13 +63,13 @@ describe('NegateMatch', () => {
   it('should return false for a filter that always returns true', async () => {
     const negateMatch = new NegateMatch(ALWAYS_TRUE_MATCH);
     const result = await negateMatch.match(TX);
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 
   it('should return true for a filter that always returns false', async () => {
     const negateMatch = new NegateMatch(ALWAYS_FALSE_MATCH);
     const result = await negateMatch.match(TX);
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
   });
 
   it('should negate a more complex filter', async () => {
@@ -85,8 +86,8 @@ describe('NegateMatch', () => {
       { name: utf8ToB64Url('tag2'), value: utf8ToB64Url('value2') },
     ];
 
-    expect(await negateMatch.match(matchingTx)).to.be.false;
-    expect(await negateMatch.match(nonMatchingTx)).to.be.true;
+    assert.strictEqual(await negateMatch.match(matchingTx), false);
+    assert.strictEqual(await negateMatch.match(nonMatchingTx), true);
   });
 });
 
@@ -96,7 +97,7 @@ describe('MatchAll', () => {
     const matchAll = new MatchAll(filters);
     const result = await matchAll.match(TX);
 
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
   });
 
   it('should return false if any filter does not match', async () => {
@@ -104,7 +105,7 @@ describe('MatchAll', () => {
     const matchAll = new MatchAll(filters);
     const result = await matchAll.match(TX);
 
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 });
 
@@ -114,7 +115,7 @@ describe('MatchAny', () => {
     const matchAll = new MatchAny(filters);
     const result = await matchAll.match(TX);
 
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
   });
 
   it('should return false if none of the filters match', async () => {
@@ -122,7 +123,7 @@ describe('MatchAny', () => {
     const matchAll = new MatchAny(filters);
     const result = await matchAll.match(TX);
 
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 });
 
@@ -144,11 +145,11 @@ describe('MatchTags', () => {
     ];
 
     let result = await matchTags.match(item);
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
 
     // Testing using only tag name
     result = await matchTagsWithoutValue.match(item);
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
   });
 
   it('should not match if some tags are missing', async () => {
@@ -156,11 +157,11 @@ describe('MatchTags', () => {
     item.tags = [{ name: utf8ToB64Url('tag1'), value: utf8ToB64Url('value1') }];
 
     let result = await matchTags.match(item);
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
 
     // Testing using only tag name
     result = await matchTagsWithoutValue.match(item);
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 
   it('should not match if some tag values are incorrect', async () => {
@@ -171,7 +172,7 @@ describe('MatchTags', () => {
     ];
 
     const result = await matchTags.match(item);
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 
   it('should not match if some tag value prefixes are incorrect', async () => {
@@ -182,7 +183,7 @@ describe('MatchTags', () => {
     ];
 
     const result = await matchTags.match(item);
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 });
 
@@ -197,7 +198,7 @@ describe('MatchAttributes', () => {
 
     const result = await matchAttributes.match(TX);
 
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
   });
 
   it('should not match if any attribute is different', async () => {
@@ -210,7 +211,7 @@ describe('MatchAttributes', () => {
 
     const result = await matchAttributes.match(TX);
 
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 
   it('should not match if any attribute is missing', async () => {
@@ -226,7 +227,7 @@ describe('MatchAttributes', () => {
 
     const result = await matchAttributes.match(tx);
 
-    expect(result).to.be.false;
+    assert.strictEqual(result, false);
   });
 
   it('should match owner given an owner address', async () => {
@@ -238,28 +239,32 @@ describe('MatchAttributes', () => {
 
     const result = await matchAttributes.match(TX);
 
-    expect(result).to.be.true;
+    assert.strictEqual(result, true);
   });
 });
 
 describe('createFilter', () => {
   it('should create a NegateMatch filter correctly', () => {
     const filter = { not: { always: true } };
-    expect(createFilter(filter)).to.be.instanceOf(NegateMatch);
+    const createdFilter = createFilter(filter);
+    assert.ok(
+      createdFilter instanceof NegateMatch,
+      `Expected object to be an instance of NegateMatch, but got ${typeof createFilter}`,
+    );
   });
 
-  it('should handle nested negation correctly', () => {
+  it('should handle nested negation correctly', async () => {
     const filter = { not: { not: { always: true } } };
     const createdFilter = createFilter(filter);
 
     // Double negation should equal an AlwaysMatch filter behavior
-    expect(createdFilter).to.be.instanceOf(NegateMatch);
-    expect(createdFilter.match(TX)).to.eventually.be.true;
+    assert.ok(createdFilter instanceof NegateMatch);
+    assert.strictEqual(await createdFilter.match(TX), true);
   });
 
   it('should return NeverMatch for undefined or empty filter', () => {
-    expect(createFilter(undefined)).to.be.instanceOf(NeverMatch);
-    expect(createFilter('')).to.be.instanceOf(NeverMatch);
+    assert.ok(createFilter(undefined) instanceof NeverMatch);
+    assert.ok(createFilter('') instanceof NeverMatch);
   });
 
   it('should return MatchTags for filter with tags', () => {
@@ -269,7 +274,7 @@ describe('createFilter', () => {
         { name: 'tag2', value: 'value2' },
       ],
     };
-    expect(createFilter(filter)).to.be.instanceOf(MatchTags);
+    assert.ok(createFilter(filter) instanceof MatchTags);
   });
 
   it('should return MatchAttributes for filter with tags', () => {
@@ -278,7 +283,7 @@ describe('createFilter', () => {
         name: 'someowner',
       },
     };
-    expect(createFilter(filter)).to.be.instanceOf(MatchAttributes);
+    assert.ok(createFilter(filter) instanceof MatchAttributes);
   });
 
   it('should return MatchAll for filter with and', () => {
@@ -292,7 +297,7 @@ describe('createFilter', () => {
         },
       ],
     };
-    expect(createFilter(filter)).to.be.instanceOf(MatchAll);
+    assert.ok(createFilter(filter) instanceof MatchAll);
   });
 
   it('should return MatchAny for filter with or', () => {
@@ -306,21 +311,21 @@ describe('createFilter', () => {
         },
       ],
     };
-    expect(createFilter(filter)).to.be.instanceOf(MatchAny);
+    assert.ok(createFilter(filter) instanceof MatchAny);
   });
 
   it('should return NeverMatch for filter with never', () => {
     const filter = { never: true };
-    expect(createFilter(filter)).to.be.instanceOf(NeverMatch);
+    assert.ok(createFilter(filter) instanceof NeverMatch);
   });
 
   it('should return AlwaysMatch for filter with always', () => {
     const filter = { always: true };
-    expect(createFilter(filter)).to.be.instanceOf(AlwaysMatch);
+    assert.ok(createFilter(filter) instanceof AlwaysMatch);
   });
 
   it('should throw an error for invalid filter', () => {
     const filter = { invalid: true };
-    expect(() => createFilter(filter)).to.throw(Error);
+    assert.throws(() => createFilter(filter));
   });
 });

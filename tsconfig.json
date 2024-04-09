@@ -19,7 +19,8 @@
     "noUnusedParameters": true
   },
   "ts-node": {
-    "swc": true
+    "swc": true,
+    "esm": true
   },
   "include": ["src", "test"]
 }

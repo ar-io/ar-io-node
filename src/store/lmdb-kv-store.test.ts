@@ -15,7 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { expect } from 'chai';
+import { strict as assert } from 'node:assert';
+import { after, describe, it } from 'node:test';
 import fs from 'node:fs';
 
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
@@ -39,8 +40,8 @@ describe('LmdbKvStore', () => {
     const value = fromB64Url('test');
     await lmdbKvStore.set(key, value);
     const result = await lmdbKvStore.get(key);
-    expect(result).not.to.be.undefined;
-    expect(toB64Url(result!)).to.equal('test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.notEqual(result, undefined);
+    assert.equal(toB64Url(result!), 'test');
   });
 
   it('should properly delete buffer', async () => {
@@ -49,7 +50,7 @@ describe('LmdbKvStore', () => {
     await lmdbKvStore.set(key, value);
     await lmdbKvStore.del(key);
     const result = await lmdbKvStore.get(key);
-    expect(result).to.be.undefined;
+    assert.equal(result, undefined);
   });
 
   it('should not override existing buffer when key already exists in cache', async () => {
@@ -58,20 +59,20 @@ describe('LmdbKvStore', () => {
     await lmdbKvStore.set(key, value);
     await lmdbKvStore.set(key, Buffer.from('test2', 'base64url'));
     const result = await lmdbKvStore.get(key);
-    expect(result).not.to.be.undefined;
-    expect(toB64Url(result!)).to.equal('test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.notEqual(result, undefined);
+    assert.equal(toB64Url(result!), 'test');
   });
 
   it('should return a buffer when a Uint8Array is stored in the cache', async () => {
     const key = 'key';
     const value = new Uint8Array(Buffer.from('test', 'base64url'));
     // sanity check
-    expect(Buffer.isBuffer(value)).to.equal(false);
+    assert.equal(Buffer.isBuffer(value), false);
     // intentional cast as LMDB does this under the hood
     await lmdbKvStore.set(key, value as Buffer);
     const result = await lmdbKvStore.get(key);
-    expect(result).not.to.be.undefined;
-    expect(Buffer.isBuffer(result)).to.equal(true);
-    expect(toB64Url(result!)).to.equal('test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.notEqual(result, undefined);
+    assert.equal(Buffer.isBuffer(result), true);
+    assert.equal(toB64Url(result!), 'test');
   });
 });

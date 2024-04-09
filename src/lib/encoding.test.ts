@@ -15,7 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { expect } from 'chai';
+import { strict as assert } from 'node:assert';
+import { describe, it } from 'node:test';
 import msgpack from 'msgpack-lite';
 
 import {
@@ -53,7 +54,8 @@ const TEST_BASE_64_SHA_256_STRING =
 describe('Base64 URL encoding functions', () => {
   describe('fromB64Url', () => {
     it('should convert a Base64 URL encoded string to a Buffer', () => {
-      expect(fromB64Url(TEST_BASE_64_URL_ENCODED_STRING)).to.deep.equal(
+      assert.deepEqual(
+        fromB64Url(TEST_BASE_64_URL_ENCODED_STRING),
         TEST_BASE_64_BUFFER,
       );
     });
@@ -61,13 +63,15 @@ describe('Base64 URL encoding functions', () => {
 
   describe('toB64Url', () => {
     it('should convert a Buffer to a Base64 URL encoded string', () => {
-      expect(toB64Url(TEST_BASE_64_BUFFER)).to.equal(
+      assert.deepEqual(
+        toB64Url(TEST_BASE_64_BUFFER),
         TEST_BASE_64_URL_ENCODED_STRING,
       );
     });
 
     it('should convert a Buffer with padding to Base64 URL encoded string', () => {
-      expect(toB64Url(TEST_BASE_64_BUFFER_WITH_PADDING)).to.deep.equal(
+      assert.deepEqual(
+        toB64Url(TEST_BASE_64_BUFFER_WITH_PADDING),
         TEST_BASE_64_URL_ENCODED_STRING,
       );
     });
@@ -75,7 +79,8 @@ describe('Base64 URL encoding functions', () => {
 
   describe('sha256B64Url', () => {
     it('should convert a Buffer to a Base64 URL encoded SHA256 string', () => {
-      expect(sha256B64Url(TEST_BASE_64_BUFFER)).to.deep.equal(
+      assert.deepEqual(
+        sha256B64Url(TEST_BASE_64_BUFFER),
         TEST_BASE_64_SHA_256_STRING,
       );
     });
@@ -83,7 +88,8 @@ describe('Base64 URL encoding functions', () => {
 
   describe('utf8ToB64Url', () => {
     it('should convet a UTF8 string to a Base64 URL encoded string', () => {
-      expect(utf8ToB64Url(TEST_STRING)).to.deep.equal(
+      assert.deepEqual(
+        utf8ToB64Url(TEST_STRING),
         TEST_BASE_64_URL_ENCODED_STRING,
       );
     });
@@ -91,7 +97,8 @@ describe('Base64 URL encoding functions', () => {
 
   describe('b64UrlToUtf8', () => {
     it('should convert a Base64 URL encoded string to UTF8', () => {
-      expect(b64UrlToUtf8(TEST_BASE_64_URL_ENCODED_STRING)).to.deep.equal(
+      assert.deepEqual(
+        b64UrlToUtf8(TEST_BASE_64_URL_ENCODED_STRING),
         TEST_STRING,
       );
     });
@@ -109,7 +116,7 @@ describe('Message pack encoding and decoding functions', () => {
       const testBuffer = toMsgpack(testObject);
       const testObject2 = fromMsgpack(testBuffer);
 
-      expect(testObject2).to.deep.equal(testObject);
+      assert.deepEqual(testObject2, testObject);
     });
 
     it("should preserve compatibility with 'standard' MessagePack", () => {
@@ -121,12 +128,12 @@ describe('Message pack encoding and decoding functions', () => {
       const testBuffer = toMsgpack(testObject);
       const testObject2 = msgpack.decode(testBuffer);
 
-      expect(testObject2).to.deep.equal(testObject);
+      assert.deepEqual(testObject2, testObject);
 
       const testBuffer2 = msgpack.encode(testObject);
       const testObject3 = fromMsgpack(testBuffer2);
 
-      expect(testObject3).to.deep.equal(testObject);
+      assert.deepEqual(testObject3, testObject);
     });
   });
 });
@@ -150,11 +157,9 @@ describe('Block message pack encoding and decoding functions', () => {
           // on the jsonBlock but missing on the block
           for (const key in jsonBlock) {
             if ((block as any)[key] !== undefined) {
-              expect((jsonBlock as any)[key]).to.deep.equal(
-                (block as any)[key],
-              );
+              assert.deepEqual((jsonBlock as any)[key], (block as any)[key]);
             } else {
-              expect((jsonBlock as any)[key]).to.be.undefined;
+              assert.equal((jsonBlock as any)[key], undefined);
             }
           }
         }),
@@ -180,11 +185,9 @@ describe('Block message pack encoding and decoding functions', () => {
           // on the jsonBlock but missing on the block
           for (const key in jsonBlock) {
             if ((block as any)[key] !== undefined) {
-              expect((jsonBlock as any)[key]).to.deep.equal(
-                (block as any)[key],
-              );
+              assert.deepEqual((jsonBlock as any)[key], (block as any)[key]);
             } else {
-              expect((jsonBlock as any)[key]).to.be.undefined;
+              assert.equal((jsonBlock as any)[key], undefined);
             }
           }
         }),
@@ -211,7 +214,7 @@ describe('Transaction message pack encoding and decoding functions', () => {
           const msgpackTx = jsonTxToMsgpackTx(tx);
           const jsonTx = msgpackTxToJsonTx(msgpackTx);
 
-          expect(jsonTx).to.deep.equal(tx);
+          assert.deepEqual(jsonTx, tx);
         }),
       );
     });
@@ -233,7 +236,7 @@ describe('Transaction message pack encoding and decoding functions', () => {
         const buffer = jsonTxToMsgpack(tx);
         const jsonTx = msgpackToJsonTx(buffer);
 
-        expect(jsonTx).to.deep.equal(tx);
+        assert.deepEqual(jsonTx, tx);
       });
     });
   });
@@ -244,7 +247,7 @@ describe('Manifest parsing', () => {
   describe('resolveManifestStreamPath', () => {
     it('should return the ID for the index path', async () => {
       const id = await resolveManifestStreamPath(exampleManifestStream());
-      expect(id).to.equal('cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+      assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
     });
 
     it('should return the ID for non-index paths', async () => {
@@ -253,20 +256,20 @@ describe('Manifest parsing', () => {
         exampleManifestStream(),
         'css/mobile.css',
       );
-      expect(id1).to.equal('fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
+      assert.equal(id1, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
 
       const id2 = await resolveManifestStreamPath(
         exampleManifestStream(),
         'assets/img/icon.png',
       );
-      expect(id2).to.equal('0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
+      assert.equal(id2, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
 
       // somewhat contrived, but this tests a trailing slashes is ignored
       const id3 = await resolveManifestStreamPath(
         exampleManifestStream(),
         'assets/img/icon.png/',
       );
-      expect(id3).to.equal('0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
+      assert.equal(id3, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
     });
 
     it('should return undefined if the path is not found', async () => {
@@ -274,7 +277,7 @@ describe('Manifest parsing', () => {
         exampleManifestStream(),
         'missing',
       );
-      expect(id).to.be.undefined;
+      assert.equal(id, undefined);
     });
   });
 });
