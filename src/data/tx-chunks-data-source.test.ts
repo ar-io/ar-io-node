@@ -15,10 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import chai, { expect } from 'chai';
+import { strict as assert } from 'node:assert';
+import { afterEach, before, describe, it, mock } from 'node:test';
 import { Readable } from 'node:stream';
-import sinon from 'sinon';
-import sinonChai from 'sinon-chai';
 import * as winston from 'winston';
 
 import {
@@ -27,7 +26,6 @@ import {
 } from '../../test/stubs.js';
 import { TxChunksDataSource } from './tx-chunks-data-source.js';
 
-chai.use(sinonChai);
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 
 describe('TxChunksDataSource', () => {
@@ -48,34 +46,36 @@ describe('TxChunksDataSource', () => {
   });
 
   afterEach(() => {
-    sinon.restore();
+    mock.restoreAll();
   });
 
   describe('getContiguousData', () => {
     describe('an invalid transaction id', () => {
       it('should throw an error', async () => {
-        await expect(txChunkRetriever.getData('bad-tx-id')).to.be.rejectedWith(
-          Error,
+        await assert.rejects(
+          async () => {
+            await txChunkRetriever.getData('bad-tx-id');
+          },
+          {
+            name: 'Error',
+            message: 'Offset for bad-tx-id not found',
+          },
         );
       });
     });
 
     describe('a valid transaction id', () => {
-      it('should return chunk data of the correct size for a known chunk', (done) => {
+      it('should return chunk data of the correct size for a known chunk', () => {
         txChunkRetriever
           .getData(TX_ID)
           .then((res: { stream: Readable; size: number }) => {
             const { stream, size } = res;
             let bytes = 0;
-            stream.on('error', (error: any) => {
-              done(error);
-            });
             stream.on('data', (c) => {
               bytes += c.length;
             });
             stream.on('end', () => {
-              expect(bytes).to.equal(size);
-              done();
+              assert.strictEqual(bytes, size);
             });
           });
       });
@@ -83,21 +83,22 @@ describe('TxChunksDataSource', () => {
       it('should return cached property as false', async () => {
         const result = await txChunkRetriever.getData(TX_ID);
 
-        expect(result).to.have.property('cached', false);
+        assert.strictEqual(result.cached, false);
       });
     });
 
     describe('a bad piece of chunk data', () => {
-      it('should throw an error', function (done) {
+      it('should throw an error', () => {
         const error = new Error('missing chunk');
-        sinon.stub(chunkSource, 'getChunkDataByAny').rejects(error);
+        mock.method(chunkSource, 'getChunkDataByAny', () =>
+          Promise.reject(error),
+        );
         txChunkRetriever
           .getData(TX_ID)
           .then((res: { stream: Readable; size: number }) => {
             const { stream } = res;
             stream.on('error', (e: any) => {
-              expect(e).to.deep.equal(error);
-              done();
+              assert.strictEqual(e, error);
             });
             // do nothing
             stream.on('data', () => {
@@ -107,16 +108,17 @@ describe('TxChunksDataSource', () => {
       });
 
       describe('an invalid chunk', () => {
-        it('should throw an error', function (done) {
+        it('should throw an error', () => {
           const error = new Error('Invalid chunk');
-          sinon.stub(chunkSource, 'getChunkByAny').rejects(error);
+          mock.method(chunkSource, 'getChunkByAny', () =>
+            Promise.reject(error),
+          );
           txChunkRetriever
             .getData(TX_ID)
             .then((res: { stream: Readable; size: number }) => {
               const { stream } = res;
               stream.on('error', (error: any) => {
-                expect(error).to.deep.equal(error);
-                done();
+                assert.strictEqual(error, error);
               });
               // do nothing
               stream.on('data', () => {

@@ -15,9 +15,10 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { strict as assert } from 'node:assert';
+import { after, before, beforeEach, describe, it } from 'node:test';
 import { ValidationError } from 'apollo-server-express';
 import arbundles from 'arbundles/stream/index.js';
-import { expect } from 'chai';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -43,8 +44,6 @@ import { ArweaveChainSourceStub, stubAns104Bundle } from '../../test/stubs.js';
 import { normalizeAns104DataItem } from '../lib/ans-104.js';
 import log from '../log.js';
 
-//import { NormalizedDataItem } from '../types.js';
-
 /* eslint-disable */
 // @ts-ignore
 const { default: processStream } = arbundles;
@@ -58,7 +57,7 @@ const CURSOR =
 describe('SQLite helper functions', () => {
   describe('toSqliteParams', () => {
     it('should convert SQL Bricks param values to better-sqlite3 params', () => {
-      expect(toSqliteParams({ values: [820389, 820389] })).to.deep.equal({
+      assert.deepEqual(toSqliteParams({ values: [820389, 820389] }), {
         '1': 820389,
         '2': 820389,
       });
@@ -69,19 +68,20 @@ describe('SQLite helper functions', () => {
 describe('SQLite GraphQL cursor functions', () => {
   describe('encodeTransactionGqlCursor', () => {
     it('should encode a cursor given a height and blockTransactionIndex', () => {
-      expect(
+      assert.equal(
         encodeTransactionGqlCursor({
           height: HEIGHT,
           blockTransactionIndex: BLOCK_TX_INDEX,
           dataItemId: DATA_ITEM_ID,
         }),
-      ).to.equal(CURSOR);
+        CURSOR,
+      );
     });
   });
 
   describe('decodeTransactionGqlCursor', () => {
     it('should decode a height and blockTransactionIndex given an encoded cursor', () => {
-      expect(decodeTransactionGqlCursor(CURSOR)).to.deep.equal({
+      assert.deepEqual(decodeTransactionGqlCursor(CURSOR), {
         height: HEIGHT,
         blockTransactionIndex: BLOCK_TX_INDEX,
         dataItemId: DATA_ITEM_ID,
@@ -89,7 +89,7 @@ describe('SQLite GraphQL cursor functions', () => {
     });
 
     it('should return an undefined height, blockTransactionIndex, and dataItemId given an undefined cursor', () => {
-      expect(decodeTransactionGqlCursor(undefined)).to.deep.equal({
+      assert.deepEqual(decodeTransactionGqlCursor(undefined), {
         height: undefined,
         blockTransactionIndex: undefined,
         dataItemId: undefined,
@@ -97,39 +97,47 @@ describe('SQLite GraphQL cursor functions', () => {
     });
 
     it('should throw an error given an invalid cursor', async () => {
-      expect(() => {
-        decodeTransactionGqlCursor('123');
-      }).to.throw(ValidationError, 'Invalid transaction cursor');
+      await assert.rejects(
+        async () => {
+          decodeTransactionGqlCursor('123');
+        },
+        {
+          name: ValidationError.name,
+          message: 'Invalid transaction cursor',
+        },
+      );
     });
   });
 
   describe('encodeBlockGqlCursor', () => {
     it('should encode a cursor given a height', () => {
-      expect(
-        encodeBlockGqlCursor({
-          height: HEIGHT,
-        }),
-      ).to.equal('WzExMzhd');
+      assert.equal(encodeBlockGqlCursor({ height: HEIGHT }), 'WzExMzhd');
     });
   });
 
   describe('decodeBlockGqlCursor', () => {
     it('should decode a height given an encoded cursor', () => {
-      expect(decodeBlockGqlCursor('WzExMzhd')).to.deep.equal({
+      assert.deepEqual(decodeBlockGqlCursor('WzExMzhd'), {
         height: HEIGHT,
       });
     });
 
     it('should return an undefined height given an undefined cursor', () => {
-      expect(decodeBlockGqlCursor(undefined)).to.deep.equal({
+      assert.deepEqual(decodeBlockGqlCursor(undefined), {
         height: undefined,
       });
     });
 
     it('should throw an error given an invalid cursor', async () => {
-      expect(() => {
-        decodeBlockGqlCursor('123');
-      }).to.throw(ValidationError, 'Invalid block cursor');
+      await assert.rejects(
+        async () => {
+          decodeBlockGqlCursor('123');
+        },
+        {
+          name: ValidationError.name,
+          message: 'Invalid block cursor',
+        },
+      );
     });
   });
 });
@@ -146,13 +154,16 @@ describe('SQLite data conversion functions', () => {
           parentIndex: -1,
           index: 0,
           ans104DataItem: dataItem,
+          filter: '',
+          dataHash: '',
         });
         const rows = dataItemToDbRows(normalizedDataItem);
-        expect(rows.tagNames.length).to.be.above(0);
-        expect(rows.tagValues.length).to.be.above(0);
-        expect(rows.newDataItemTags.length).to.be.above(0);
-        expect(rows.wallets.length).to.be.above(0);
-        expect(rows.newDataItem).to.be.an('object');
+
+        assert.ok(rows.tagNames.length > 0);
+        assert.ok(rows.tagValues.length > 0);
+        assert.ok(rows.newDataItemTags.length > 0);
+        assert.ok(rows.wallets.length > 0);
+        assert.equal(typeof rows.newDataItem, 'object');
       }
     });
   });
@@ -172,6 +183,7 @@ describe('StandaloneSqliteDatabase', () => {
       bundlesDbPath,
     });
     dbWorker = new StandaloneSqliteDatabaseWorker({
+      log,
       coreDbPath,
       dataDbPath,
       moderationDbPath,
@@ -194,7 +206,7 @@ describe('StandaloneSqliteDatabase', () => {
       await db.saveBlockAndTxs(block, txs, missingTxIds);
 
       const stats = await db.getDebugInfo();
-      expect(stats.counts.newBlocks).to.equal(1);
+      assert.equal(stats.counts.newBlocks, 1);
 
       const dbBlock = coreDb
         .prepare(`SELECT * FROM new_blocks WHERE height = ${height}`)
@@ -211,53 +223,60 @@ describe('StandaloneSqliteDatabase', () => {
         'tx_root',
       ];
       for (const field of binaryFields) {
-        expect(dbBlock[field]).to.be.an.instanceof(Buffer);
-        expect(toB64Url(dbBlock[field])).to.equal((block as any)[field]);
+        assert.ok(dbBlock[field] instanceof Buffer);
+        assert.equal(toB64Url(dbBlock[field]), (block as any)[field]);
       }
 
       const stringFields = ['diff', 'cumulative_diff'];
       for (const field of stringFields) {
-        expect(dbBlock[field]).to.be.a('string');
-        expect(dbBlock[field]).to.equal((block as any)[field]);
+        assert.equal(typeof dbBlock[field], 'string');
+        assert.equal(dbBlock[field], (block as any)[field]);
       }
 
       // Note: 'timestamp' is renamed to 'block_timestamp' to avoid collision
       // with the SQLite timestamp data type
-      expect(dbBlock.block_timestamp).to.be.a('number');
-      expect(dbBlock.block_timestamp).to.equal(block.timestamp);
+      assert.equal(typeof dbBlock.block_timestamp, 'number');
+      assert.equal(dbBlock.block_timestamp, block.timestamp);
 
       const integerFields = ['height', 'last_retarget'];
       for (const field of integerFields) {
-        expect(dbBlock[field]).to.be.a('number');
-        expect(dbBlock[field]).to.equal((block as any)[field]);
+        assert.equal(typeof dbBlock[field], 'number');
+        assert.equal(dbBlock[field], (block as any)[field]);
       }
 
       // These fields are strings in JSON blocks but 64 bit integers in SQLite
       const stringIntegerFields = ['block_size', 'weave_size'];
       for (const field of stringIntegerFields) {
-        expect(dbBlock[field]).to.be.a('number');
-        expect((block as any)[field]).to.be.a('string');
-        expect(dbBlock[field].toString()).to.equal((block as any)[field]);
+        assert.equal(typeof dbBlock[field], 'number');
+        assert.equal(typeof (block as any)[field], 'string');
+        assert.equal(dbBlock[field].toString(), (block as any)[field]);
       }
 
-      expect(dbBlock.usd_to_ar_rate_dividend).to.be.a('number');
-      expect((block.usd_to_ar_rate ?? [])[0]).to.be.a('string');
-      expect(dbBlock.usd_to_ar_rate_dividend.toString()).to.equal(
+      assert.equal(typeof dbBlock.usd_to_ar_rate_dividend, 'number');
+      assert.equal(typeof (block.usd_to_ar_rate ?? [])[0], 'string');
+      assert.equal(
+        dbBlock.usd_to_ar_rate_dividend.toString(),
         (block.usd_to_ar_rate ?? [])[0],
       );
-      expect(dbBlock.usd_to_ar_rate_divisor).to.be.a('number');
-      expect((block.usd_to_ar_rate ?? [])[1]).to.be.a('string');
-      expect(dbBlock.usd_to_ar_rate_divisor.toString()).to.equal(
+
+      assert.equal(typeof dbBlock.usd_to_ar_rate_divisor, 'number');
+      assert.equal(typeof (block.usd_to_ar_rate ?? [])[1], 'string');
+      assert.equal(
+        dbBlock.usd_to_ar_rate_divisor.toString(),
         (block.usd_to_ar_rate ?? [])[1],
       );
-      expect(dbBlock.scheduled_usd_to_ar_rate_dividend).to.be.a('number');
-      expect((block.scheduled_usd_to_ar_rate ?? [])[0]).to.be.a('string');
-      expect(dbBlock.scheduled_usd_to_ar_rate_dividend.toString()).to.equal(
+
+      assert.equal(typeof dbBlock.scheduled_usd_to_ar_rate_dividend, 'number');
+      assert.equal(typeof (block.scheduled_usd_to_ar_rate ?? [])[0], 'string');
+      assert.equal(
+        dbBlock.scheduled_usd_to_ar_rate_dividend.toString(),
         (block.scheduled_usd_to_ar_rate ?? [])[0],
       );
-      expect(dbBlock.scheduled_usd_to_ar_rate_divisor).to.be.a('number');
-      expect((block.scheduled_usd_to_ar_rate ?? [])[1]).to.be.a('string');
-      expect(dbBlock.scheduled_usd_to_ar_rate_divisor.toString()).to.equal(
+
+      assert.equal(typeof dbBlock.scheduled_usd_to_ar_rate_divisor, 'number');
+      assert.equal(typeof (block.scheduled_usd_to_ar_rate ?? [])[1], 'string');
+      assert.equal(
+        dbBlock.scheduled_usd_to_ar_rate_divisor.toString(),
         (block.scheduled_usd_to_ar_rate ?? [])[1],
       );
     });
@@ -271,7 +290,7 @@ describe('StandaloneSqliteDatabase', () => {
       await db.saveBlockAndTxs(block, txs, missingTxIds);
 
       const stats = await db.getDebugInfo();
-      expect(stats.counts.newTxs).to.equal(txs.length);
+      assert.equal(stats.counts.newTxs, txs.length);
 
       const sql = `
         SELECT
@@ -303,7 +322,7 @@ describe('StandaloneSqliteDatabase', () => {
           .createHash('sha256')
           .update(fromB64Url(tx.owner))
           .digest();
-        expect(dbTransactions[i].owner_address).to.deep.equal(ownerAddress);
+        assert.deepEqual(dbTransactions[i].owner_address, ownerAddress);
 
         const binaryFields = [
           'id',
@@ -315,31 +334,27 @@ describe('StandaloneSqliteDatabase', () => {
         ];
 
         for (const field of binaryFields) {
-          expect(dbTransactions[i][field]).to.be.an.instanceof(Buffer);
-          expect(toB64Url(dbTransactions[i][field])).to.equal(
-            (tx as any)[field],
-          );
+          assert.ok(dbTransactions[i][field] instanceof Buffer);
+          assert.equal(toB64Url(dbTransactions[i][field]), (tx as any)[field]);
         }
 
         const stringFields = ['quantity', 'reward'];
         for (const field of stringFields) {
-          expect(dbTransactions[i][field]).to.be.a('string');
-          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+          assert.equal(typeof dbTransactions[i][field], 'string');
+          assert.equal(dbTransactions[i][field], (tx as any)[field]);
         }
 
         const integerFields = ['format'];
         for (const field of integerFields) {
-          expect(dbTransactions[i][field]).to.be.a('number');
-          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+          assert.equal(typeof dbTransactions[i][field], 'number');
+          assert.equal(dbTransactions[i][field], (tx as any)[field]);
         }
 
         const stringIntegerFields = ['data_size'];
         for (const field of stringIntegerFields) {
-          expect(dbTransactions[i][field]).to.be.a('number');
-          expect((tx as any)[field]).to.be.a('string');
-          expect(dbTransactions[i][field].toString()).to.equal(
-            (tx as any)[field],
-          );
+          assert.equal(typeof dbTransactions[i][field], 'number');
+          assert.equal(typeof (tx as any)[field], 'string');
+          assert.equal(dbTransactions[i][field].toString(), (tx as any)[field]);
         }
 
         const sql = `
@@ -357,17 +372,19 @@ describe('StandaloneSqliteDatabase', () => {
           .prepare(sql)
           .all({ transaction_id: fromB64Url(txId) });
 
-        expect(dbTags.length).to.equal(tx.tags.length);
+        assert.equal(dbTags.length, tx.tags.length);
 
         tx.tags.forEach((tag: any, j: number) => {
-          expect(dbTags[j].tag_name_hash).to.deep.equal(
+          assert.deepEqual(
+            dbTags[j].tag_name_hash,
             crypto.createHash('sha1').update(fromB64Url(tag.name)).digest(),
           );
-          expect(dbTags[j].tag_value_hash).to.deep.equal(
+          assert.deepEqual(
+            dbTags[j].tag_value_hash,
             crypto.createHash('sha1').update(fromB64Url(tag.value)).digest(),
           );
-          expect(toB64Url(dbTags[j].name)).to.equal(tag.name);
-          expect(toB64Url(dbTags[j].value)).to.equal(tag.value);
+          assert.equal(toB64Url(dbTags[j].name), tag.name);
+          assert.equal(toB64Url(dbTags[j].value), tag.value);
         });
       });
     });
@@ -480,16 +497,18 @@ describe('StandaloneSqliteDatabase', () => {
         },
       ];
 
-      expect(dbMissingTxs.length).to.equal(missingTxs.length);
+      assert.equal(dbMissingTxs.length, missingTxs.length);
 
       missingTxs.forEach((missingTx, i) => {
-        expect(dbMissingTxs[i].block_indep_hash).to.deep.equal(
+        assert.deepEqual(
+          dbMissingTxs[i].block_indep_hash,
           fromB64Url(missingTx.block_indep_hash),
         );
-        expect(dbMissingTxs[i].transaction_id).to.deep.equal(
+        assert.deepEqual(
+          dbMissingTxs[i].transaction_id,
           fromB64Url(missingTx.transaction_id),
         );
-        expect(dbMissingTxs[i].height).to.equal(missingTx.height);
+        assert.equal(dbMissingTxs[i].height, missingTx.height);
       });
     });
 
@@ -503,7 +522,7 @@ describe('StandaloneSqliteDatabase', () => {
 
       // TODO replace with queries to make more focused
       const stats = await db.getDebugInfo();
-      expect(stats.counts.stableBlocks).to.equal(149);
+      assert.equal(stats.counts.stableBlocks, 149);
     });
 
     it('should save stable transaction IDs to stable_block_transactions', async () => {
@@ -596,18 +615,22 @@ describe('StandaloneSqliteDatabase', () => {
         },
       ];
 
-      expect(dbStableBlockTransactions.length).to.equal(
+      assert.equal(
+        dbStableBlockTransactions.length,
         stableBlockTransactions.length,
       );
 
       stableBlockTransactions.forEach((stableBlockTransaction, i) => {
-        expect(dbStableBlockTransactions[i].block_indep_hash).to.deep.equal(
+        assert.deepEqual(
+          dbStableBlockTransactions[i].block_indep_hash,
           fromB64Url(stableBlockTransaction.block_indep_hash),
         );
-        expect(dbStableBlockTransactions[i].transaction_id).to.deep.equal(
+        assert.deepEqual(
+          dbStableBlockTransactions[i].transaction_id,
           fromB64Url(stableBlockTransaction.transaction_id),
         );
-        expect(dbStableBlockTransactions[i].block_transaction_index).to.equal(
+        assert.equal(
+          dbStableBlockTransactions[i].block_transaction_index,
           stableBlockTransaction.block_transaction_index,
         );
       });
@@ -623,7 +646,7 @@ describe('StandaloneSqliteDatabase', () => {
       dbWorker.saveCoreStableDataFn(height + 1);
 
       const stats = await db.getDebugInfo();
-      expect(stats.counts.stableBlocks).to.equal(1);
+      assert.equal(stats.counts.stableBlocks, 1);
 
       const dbBlock = coreDb
         .prepare(`SELECT * FROM stable_blocks WHERE height = ${height}`)
@@ -640,53 +663,60 @@ describe('StandaloneSqliteDatabase', () => {
         'tx_root',
       ];
       for (const field of binaryFields) {
-        expect(dbBlock[field]).to.be.an.instanceof(Buffer);
-        expect(toB64Url(dbBlock[field])).to.equal((block as any)[field]);
+        assert.ok(dbBlock[field] instanceof Buffer);
+        assert.equal(toB64Url(dbBlock[field]), (block as any)[field]);
       }
 
       const stringFields = ['diff', 'cumulative_diff'];
       for (const field of stringFields) {
-        expect(dbBlock[field]).to.be.a('string');
-        expect(dbBlock[field]).to.equal((block as any)[field]);
+        assert.equal(typeof dbBlock[field], 'string');
+        assert.equal(dbBlock[field], (block as any)[field]);
       }
 
       // Note: 'timestamp' is renamed to 'block_timestamp' to avoid collision
       // with the SQLite timestamp data type
-      expect(dbBlock.block_timestamp).to.be.a('number');
-      expect(dbBlock.block_timestamp).to.equal(block.timestamp);
+      assert.equal(typeof dbBlock.block_timestamp, 'number');
+      assert.equal(dbBlock.block_timestamp, block.timestamp);
 
       const integerFields = ['height', 'last_retarget'];
       for (const field of integerFields) {
-        expect(dbBlock[field]).to.be.a('number');
-        expect(dbBlock[field]).to.equal((block as any)[field]);
+        assert.equal(typeof dbBlock[field], 'number');
+        assert.equal(dbBlock[field], (block as any)[field]);
       }
 
       // These fields are strings in JSON blocks but 64 bit integers in SQLite
       const stringIntegerFields = ['block_size', 'weave_size'];
       for (const field of stringIntegerFields) {
-        expect(dbBlock[field]).to.be.a('number');
-        expect((block as any)[field]).to.be.a('string');
-        expect(dbBlock[field].toString()).to.equal((block as any)[field]);
+        assert.equal(typeof dbBlock[field], 'number');
+        assert.equal(typeof (block as any)[field], 'string');
+        assert.equal(dbBlock[field].toString(), (block as any)[field]);
       }
 
-      expect(dbBlock.usd_to_ar_rate_dividend).to.be.a('number');
-      expect((block.usd_to_ar_rate ?? [])[0]).to.be.a('string');
-      expect(dbBlock.usd_to_ar_rate_dividend.toString()).to.equal(
-        (block.usd_to_ar_rate ?? [])[0],
-      );
-      expect(dbBlock.usd_to_ar_rate_divisor).to.be.a('number');
-      expect((block.usd_to_ar_rate ?? [])[1]).to.be.a('string');
-      expect(dbBlock.usd_to_ar_rate_divisor.toString()).to.equal(
+      assert.equal(typeof dbBlock.usd_to_ar_rate_divisor, 'number');
+      assert.equal(typeof (block.usd_to_ar_rate ?? [])[1], 'string');
+      assert.equal(
+        dbBlock.usd_to_ar_rate_divisor.toString(),
         (block.usd_to_ar_rate ?? [])[1],
       );
-      expect(dbBlock.scheduled_usd_to_ar_rate_dividend).to.be.a('number');
-      expect((block.scheduled_usd_to_ar_rate ?? [])[0]).to.be.a('string');
-      expect(dbBlock.scheduled_usd_to_ar_rate_dividend.toString()).to.equal(
+
+      assert.equal(typeof dbBlock.usd_to_ar_rate_divisor, 'number');
+      assert.equal(typeof (block.usd_to_ar_rate ?? [])[1], 'string');
+      assert.equal(
+        dbBlock.usd_to_ar_rate_divisor.toString(),
+        (block.usd_to_ar_rate ?? [])[1],
+      );
+
+      assert.equal(typeof dbBlock.scheduled_usd_to_ar_rate_dividend, 'number');
+      assert.equal(typeof (block.scheduled_usd_to_ar_rate ?? [])[0], 'string');
+      assert.equal(
+        dbBlock.scheduled_usd_to_ar_rate_dividend.toString(),
         (block.scheduled_usd_to_ar_rate ?? [])[0],
       );
-      expect(dbBlock.scheduled_usd_to_ar_rate_divisor).to.be.a('number');
-      expect((block.scheduled_usd_to_ar_rate ?? [])[1]).to.be.a('string');
-      expect(dbBlock.scheduled_usd_to_ar_rate_divisor.toString()).to.equal(
+
+      assert.equal(typeof dbBlock.scheduled_usd_to_ar_rate_divisor, 'number');
+      assert.equal(typeof (block.scheduled_usd_to_ar_rate ?? [])[1], 'string');
+      assert.equal(
+        dbBlock.scheduled_usd_to_ar_rate_divisor.toString(),
         (block.scheduled_usd_to_ar_rate ?? [])[1],
       );
     });
@@ -700,7 +730,7 @@ describe('StandaloneSqliteDatabase', () => {
       await db.saveBlockAndTxs(block, txs, missingTxIds);
 
       const stats = await db.getDebugInfo();
-      expect(stats.counts.newTxs).to.equal(txs.length);
+      assert.equal(stats.counts.newTxs, txs.length);
 
       await db.saveBlockAndTxs(block, txs, missingTxIds);
       dbWorker.saveCoreStableDataFn(height + 1);
@@ -730,7 +760,7 @@ describe('StandaloneSqliteDatabase', () => {
           .createHash('sha256')
           .update(fromB64Url(tx.owner))
           .digest();
-        expect(dbTransactions[i].owner_address).to.deep.equal(ownerAddress);
+        assert.deepEqual(dbTransactions[i].owner_address, ownerAddress);
 
         const binaryFields = [
           'id',
@@ -742,31 +772,27 @@ describe('StandaloneSqliteDatabase', () => {
         ];
 
         for (const field of binaryFields) {
-          expect(dbTransactions[i][field]).to.be.an.instanceof(Buffer);
-          expect(toB64Url(dbTransactions[i][field])).to.equal(
-            (tx as any)[field],
-          );
+          assert.ok(dbTransactions[i][field] instanceof Buffer);
+          assert.equal(toB64Url(dbTransactions[i][field]), (tx as any)[field]);
         }
 
         const stringFields = ['quantity', 'reward'];
         for (const field of stringFields) {
-          expect(dbTransactions[i][field]).to.be.a('string');
-          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+          assert.equal(typeof dbTransactions[i][field], 'string');
+          assert.equal(dbTransactions[i][field], (tx as any)[field]);
         }
 
         const integerFields = ['format'];
         for (const field of integerFields) {
-          expect(dbTransactions[i][field]).to.be.a('number');
-          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+          assert.equal(typeof dbTransactions[i][field], 'number');
+          assert.equal(dbTransactions[i][field], (tx as any)[field]);
         }
 
         const stringIntegerFields = ['data_size'];
         for (const field of stringIntegerFields) {
-          expect(dbTransactions[i][field]).to.be.a('number');
-          expect((tx as any)[field]).to.be.a('string');
-          expect(dbTransactions[i][field].toString()).to.equal(
-            (tx as any)[field],
-          );
+          assert.equal(typeof dbTransactions[i][field], 'number');
+          assert.equal(typeof (tx as any)[field], 'string');
+          assert.equal(dbTransactions[i][field].toString(), (tx as any)[field]);
         }
 
         const sql = `
@@ -783,17 +809,19 @@ describe('StandaloneSqliteDatabase', () => {
           .prepare(sql)
           .all({ transaction_id: fromB64Url(txId) });
 
-        expect(dbTags.length).to.equal(tx.tags.length);
+        assert.equal(dbTags.length, tx.tags.length);
 
         tx.tags.forEach((tag: any, j: number) => {
-          expect(dbTags[j].tag_name_hash).to.deep.equal(
+          assert.deepEqual(
+            dbTags[j].tag_name_hash,
             crypto.createHash('sha1').update(fromB64Url(tag.name)).digest(),
           );
-          expect(dbTags[j].tag_value_hash).to.deep.equal(
+          assert.deepEqual(
+            dbTags[j].tag_value_hash,
             crypto.createHash('sha1').update(fromB64Url(tag.value)).digest(),
           );
-          expect(toB64Url(dbTags[j].name)).to.equal(tag.name);
-          expect(toB64Url(dbTags[j].value)).to.equal(tag.value);
+          assert.equal(toB64Url(dbTags[j].name), tag.name);
+          assert.equal(toB64Url(dbTags[j].value), tag.value);
         });
       });
     });
@@ -807,7 +835,7 @@ describe('StandaloneSqliteDatabase', () => {
       await db.saveBlockAndTxs(block, txs, missingTxIds);
 
       const stats = await db.getDebugInfo();
-      expect(stats.counts.newTxs).to.equal(txs.length);
+      assert.equal(stats.counts.newTxs, txs.length);
 
       await db.saveBlockAndTxs(block, txs, missingTxIds);
       dbWorker.saveCoreStableDataFn(height + 1);
@@ -833,7 +861,7 @@ describe('StandaloneSqliteDatabase', () => {
           .createHash('sha256')
           .update(fromB64Url(tx.owner))
           .digest();
-        expect(dbTransactions[i].owner_address).to.deep.equal(ownerAddress);
+        assert.deepEqual(dbTransactions[i].owner_address, ownerAddress);
 
         const binaryFields = [
           'id',
@@ -845,31 +873,27 @@ describe('StandaloneSqliteDatabase', () => {
         ];
 
         for (const field of binaryFields) {
-          expect(dbTransactions[i][field]).to.be.an.instanceof(Buffer);
-          expect(toB64Url(dbTransactions[i][field])).to.equal(
-            (tx as any)[field],
-          );
+          assert.ok(dbTransactions[i][field] instanceof Buffer);
+          assert.equal(toB64Url(dbTransactions[i][field]), (tx as any)[field]);
         }
 
         const stringFields = ['quantity', 'reward'];
         for (const field of stringFields) {
-          expect(dbTransactions[i][field]).to.be.a('string');
-          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+          assert.equal(typeof dbTransactions[i][field], 'string');
+          assert.equal(dbTransactions[i][field], (tx as any)[field]);
         }
 
         const integerFields = ['format'];
         for (const field of integerFields) {
-          expect(dbTransactions[i][field]).to.be.a('number');
-          expect(dbTransactions[i][field]).to.equal((tx as any)[field]);
+          assert.equal(typeof dbTransactions[i][field], 'number');
+          assert.equal(dbTransactions[i][field], (tx as any)[field]);
         }
 
         const stringIntegerFields = ['data_size'];
         for (const field of stringIntegerFields) {
-          expect(dbTransactions[i][field]).to.be.a('number');
-          expect((tx as any)[field]).to.be.a('string');
-          expect(dbTransactions[i][field].toString()).to.equal(
-            (tx as any)[field],
-          );
+          assert.equal(typeof dbTransactions[i][field], 'number');
+          assert.equal(typeof (tx as any)[field], 'string');
+          assert.equal(dbTransactions[i][field].toString(), (tx as any)[field]);
         }
 
         const sql = `
@@ -886,17 +910,19 @@ describe('StandaloneSqliteDatabase', () => {
           .prepare(sql)
           .all({ transaction_id: fromB64Url(txId) });
 
-        expect(dbTags.length).to.equal(tx.tags.length);
+        assert.equal(dbTags.length, tx.tags.length);
 
         tx.tags.forEach((tag: any, j: number) => {
-          expect(dbTags[j].tag_name_hash).to.deep.equal(
+          assert.deepEqual(
+            dbTags[j].tag_name_hash,
             crypto.createHash('sha1').update(fromB64Url(tag.name)).digest(),
           );
-          expect(dbTags[j].tag_value_hash).to.deep.equal(
+          assert.deepEqual(
+            dbTags[j].tag_value_hash,
             crypto.createHash('sha1').update(fromB64Url(tag.value)).digest(),
           );
-          expect(toB64Url(dbTags[j].name)).to.equal(tag.name);
-          expect(toB64Url(dbTags[j].value)).to.equal(tag.value);
+          assert.equal(toB64Url(dbTags[j].name), tag.name);
+          assert.equal(toB64Url(dbTags[j].value), tag.value);
         });
       });
     });
@@ -920,9 +946,10 @@ describe('StandaloneSqliteDatabase', () => {
         WHERE id = @transaction_id
       `;
 
-      expect(
+      assert.equal(
         coreDb.prepare(sql).get({ transaction_id: fromB64Url(txId) }).cnt,
-      ).to.be.equal(1);
+        1,
+      );
     });
 
     it('should insert into tag_names', async () => {
@@ -931,7 +958,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM tag_names
       `;
 
-      expect(coreDb.prepare(sql).get().cnt).to.be.equal(12);
+      assert.equal(coreDb.prepare(sql).get().cnt, 12);
     });
 
     it('should insert into tag_values', async () => {
@@ -940,7 +967,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM tag_values
       `;
 
-      expect(coreDb.prepare(sql).get().cnt).to.be.equal(12);
+      assert.equal(coreDb.prepare(sql).get().cnt, 12);
     });
 
     it('should insert into new_transaction_tags', async () => {
@@ -949,7 +976,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM new_transaction_tags
       `;
 
-      expect(coreDb.prepare(sql).get().cnt).to.be.equal(12);
+      assert.equal(coreDb.prepare(sql).get().cnt, 12);
     });
 
     it('should insert into wallets', async () => {
@@ -958,7 +985,7 @@ describe('StandaloneSqliteDatabase', () => {
         FROM wallets
       `;
 
-      expect(coreDb.prepare(sql).get().cnt).to.be.equal(1);
+      assert.equal(coreDb.prepare(sql).get().cnt, 1);
     });
   });
 });

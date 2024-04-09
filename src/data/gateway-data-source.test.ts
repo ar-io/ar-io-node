@@ -15,82 +15,83 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { strict as assert } from 'node:assert';
+import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import axios from 'axios';
-import chai, { expect } from 'chai';
-import sinon, { SinonSandbox } from 'sinon';
-import sinonChai from 'sinon-chai';
 import * as winston from 'winston';
 import { GatewayDataSource } from './gateway-data-source.js';
 
-chai.use(sinonChai);
+let log: winston.Logger;
+let dataSource: GatewayDataSource;
+let mockedAxiosInstance: any;
 
-describe('GatewayDataSource', function () {
-  let log: winston.Logger;
-  let sandbox: SinonSandbox;
-  let dataSource: GatewayDataSource;
-  let mockedAxiosInstance: any;
+before(async () => {
+  log = winston.createLogger({ silent: true });
+});
 
-  before(function () {
-    log = winston.createLogger({ silent: true });
-  });
-
-  beforeEach(function () {
-    sandbox = sinon.createSandbox();
-
-    mockedAxiosInstance = {
-      request: sandbox.stub().resolves({
-        status: 200,
-        data: 'mocked stream',
-        headers: {
-          'content-length': '123',
-          'content-type': 'application/json',
-        },
-      }),
-      defaults: {
-        baseURL: 'https://gateway.domain', // Ensure this matches what you expect
+beforeEach(async () => {
+  mockedAxiosInstance = {
+    request: async () => ({
+      status: 200,
+      data: 'mocked stream',
+      headers: {
+        'content-length': '123',
+        'content-type': 'application/json',
       },
-    };
-    sandbox.stub(axios, 'create').returns(mockedAxiosInstance as any);
+    }),
+    defaults: {
+      baseURL: 'https://gateway.domain',
+    },
+  };
 
-    dataSource = new GatewayDataSource({
-      log,
-      trustedGatewayUrl: 'https://gateway.domain',
-    });
+  mock.method(axios, 'create', () => mockedAxiosInstance);
+
+  dataSource = new GatewayDataSource({
+    log,
+    trustedGatewayUrl: 'https://gateway.domain',
   });
+});
 
-  afterEach(function () {
-    sandbox.restore();
-  });
+afterEach(async () => {
+  mock.restoreAll();
+});
 
-  describe('getData', function () {
-    it('should fetch data successfully from the gateway', async function () {
+describe('GatewayDataSource', () => {
+  describe('getData', () => {
+    it('should fetch data successfully from the gateway', async () => {
       const data = await dataSource.getData('some-id');
 
-      expect(data).to.have.property('stream', 'mocked stream');
-      expect(data).to.have.property('size', 123);
-      expect(data).to.have.property('sourceContentType', 'application/json');
-      expect(data).to.have.property('verified', false);
-      expect(data).to.have.property('cached', false);
+      assert.deepEqual(data, {
+        stream: 'mocked stream',
+        size: 123,
+        sourceContentType: 'application/json',
+        verified: false,
+        cached: false,
+      });
     });
 
-    it('should throw an error for unexpected status code', async function () {
-      mockedAxiosInstance.request.resolves({ status: 404 });
+    it('should throw an error for unexpected status code', async () => {
+      mockedAxiosInstance.request = async () => ({ status: 404 });
 
       try {
         await dataSource.getData('bad-id');
+        assert.fail('Expected an error to be thrown');
       } catch (error: any) {
-        expect(error.message).to.equal(
-          'Unexpected status code from gateway: 404',
-        );
+        assert.equal(error.message, 'Unexpected status code from gateway: 404');
       }
     });
 
-    it('should handle network or Axios errors gracefully', async function () {
-      mockedAxiosInstance.request.rejects(new Error('Network Error'));
+    it('should handle network or Axios errors gracefully', async () => {
+      mockedAxiosInstance.request = async () => {
+        throw new Error('Network Error');
+      };
 
-      await expect(dataSource.getData('bad-id')).to.be.rejectedWith(
-        'Network Error',
-      );
+      try {
+        await dataSource.getData('bad-id');
+        assert.fail('Expected an error to be thrown');
+      } catch (error: any) {
+        assert.equal(error.message, 'Network Error');
+      }
     });
   });
 });

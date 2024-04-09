@@ -15,10 +15,10 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { expect } from 'chai';
+import { strict as assert } from 'node:assert';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import express from 'express';
 import { Readable } from 'node:stream';
-import sinon from 'sinon';
 import { default as request } from 'supertest';
 
 import log from '../../log.js';
@@ -40,24 +40,41 @@ describe('Data routes', () => {
     beforeEach(() => {
       app = express();
       dataIndex = {
-        getDataAttributes: sinon.stub(),
-        getDataParent: sinon.stub(),
-        saveDataContentAttributes: sinon.stub(),
+        getDataAttributes: () => Promise.resolve(undefined),
+        getDataParent: () => Promise.resolve(undefined),
+        saveDataContentAttributes: () => Promise.resolve(undefined),
       };
       dataSource = {
-        getData: sinon.stub().returns({
-          stream: Readable.from(Buffer.from('testing...')),
-          size: 10,
-        }),
+        getData: () =>
+          Promise.resolve({
+            stream: Readable.from(Buffer.from('testing...')),
+            size: 10,
+            verified: false,
+            cached: false,
+          }),
       };
       blockListValidator = {
-        isIdBlocked: sinon.stub(),
-        isHashBlocked: sinon.stub(),
+        isIdBlocked: () => Promise.resolve(false),
+        isHashBlocked: () => Promise.resolve(false),
       };
       manifestPathResolver = {
-        resolveFromIndex: sinon.stub(),
-        resolveFromData: sinon.stub(),
+        resolveFromIndex: () =>
+          Promise.resolve({
+            id: 'not-a-real-id',
+            resolvedId: 'not-a-real-id',
+            complete: false,
+          }),
+        resolveFromData: () =>
+          Promise.resolve({
+            id: 'not-a-real-id',
+            resolvedId: 'not-a-real-id',
+            complete: false,
+          }),
       };
+    });
+
+    afterEach(() => {
+      mock.restoreAll();
     });
 
     it('should return 200 status code and data for unblocked data request', async () => {
@@ -71,14 +88,12 @@ describe('Data routes', () => {
           manifestPathResolver,
         }),
       );
-      blockListValidator.isIdBlocked.resolves(false);
-      blockListValidator.isHashBlocked.resolves(false);
 
       return request(app)
         .get('/not-a-real-id')
         .expect(200)
         .then((res: any) => {
-          expect(res.body.toString()).to.equal('testing...');
+          assert.equal(res.body.toString(), 'testing...');
         });
     });
 
@@ -93,22 +108,16 @@ describe('Data routes', () => {
           manifestPathResolver,
         }),
       );
-      blockListValidator.isIdBlocked.resolves(false);
-      blockListValidator.isHashBlocked.resolves(false);
 
       return request(app)
         .head('/not-a-real-id')
         .expect(200)
         .then((res: any) => {
-          expect(res.body).to.eql({});
+          assert.deepEqual(res.body, {});
         });
     });
 
     it('should return 206 status code and partial data for a range request', async () => {
-      const blockListValidator = {
-        isIdBlocked: sinon.stub(),
-        isHashBlocked: sinon.stub(),
-      };
       app.get(
         '/:id',
         createDataHandler({
@@ -125,15 +134,11 @@ describe('Data routes', () => {
         .set('Range', 'bytes=2-3')
         .expect(206)
         .then((res: any) => {
-          expect(res.body.toString()).to.equal('st');
+          assert.equal(res.body.toString(), 'st');
         });
     });
 
     it('should return 206 status code and empty data for a HEAD range request', async () => {
-      const blockListValidator = {
-        isIdBlocked: sinon.stub(),
-        isHashBlocked: sinon.stub(),
-      };
       app.get(
         '/:id',
         createDataHandler({
@@ -150,7 +155,7 @@ describe('Data routes', () => {
         .set('Range', 'bytes=2-3')
         .expect(206)
         .then((res: any) => {
-          expect(res.body).to.eql({});
+          assert.deepEqual(res.body, {});
         });
     });
 
@@ -189,7 +194,11 @@ describe('Data routes', () => {
           manifestPathResolver,
         }),
       );
-      blockListValidator.isIdBlocked.resolves(true);
+
+      mock.method(blockListValidator, 'isIdBlocked', () =>
+        Promise.resolve(true),
+      );
+
       const get = request(app).get('/not-a-real-id-id').expect(404);
       const head = request(app).head('/not-a-real-id-id').expect(404);
       await Promise.all([get, head]);

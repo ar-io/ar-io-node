@@ -15,7 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { expect } from 'chai';
+import { strict as assert } from 'node:assert';
+import { describe, it } from 'node:test';
 
 import {
   DEFAULT_PAGE_SIZE,
@@ -47,35 +48,36 @@ const GQL_TX = {
   height: 834713,
   blockPreviousBlock:
     '-WmnSux8p6DccMRwGh-jq3_wv_deZc0XsgpZnzt0WhPVpA5GmmBW14zhRMT3DbiT',
+  parentId: null,
 };
 
 describe('getPageSize', () => {
   it("should return DEFAULT_PAGE_SIZE if 'first' is not set", () => {
-    expect(DEFAULT_PAGE_SIZE).to.equal(getPageSize({ first: undefined }));
+    assert.equal(DEFAULT_PAGE_SIZE, getPageSize({ first: undefined }));
   });
 
   it("should return 'first' if it is set and less than MAX_PAGE_SIZE", () => {
     const first = MAX_PAGE_SIZE - 1;
-    expect(first).to.equal(getPageSize({ first }));
+    assert.equal(first, getPageSize({ first }));
   });
 
   it("should return MAX_PAGE_SIZE if 'first' is greater than MAX_PAGE_SIZE", () => {
     const first = MAX_PAGE_SIZE + 1;
-    expect(MAX_PAGE_SIZE).to.equal(getPageSize({ first }));
+    assert.equal(MAX_PAGE_SIZE, getPageSize({ first }));
   });
 });
 
 describe('resolveTxRecipient', () => {
   it('should return the recipient', () => {
     const recipient = resolveTxRecipient(GQL_TX);
-    expect(recipient).to.equal('6p817XK-yIX-hBCQ0qD5wbcP05WPQgPKFmwNYC2xtwM');
+    assert.equal(recipient, '6p817XK-yIX-hBCQ0qD5wbcP05WPQgPKFmwNYC2xtwM');
   });
 
   // arweave.net compatibility
   it('should return empty string if recipient is undefined', () => {
     const tx = { ...GQL_TX, recipient: undefined };
     const recipient = resolveTxRecipient(tx);
-    expect(recipient).to.equal('');
+    assert.equal(recipient, '');
   });
 });
 
@@ -84,34 +86,30 @@ describe('resolveTxData', () => {
     // TODO find a tx with content type set
     const tx = { ...GQL_TX, contentType: 'text/plain' };
     const dataResult = resolveTxData(tx);
-    expect(dataResult.size).to.equal('0');
-    expect(dataResult.type).to.equal('text/plain');
+    assert.deepEqual(dataResult, { size: '0', type: 'text/plain' });
   });
 });
 
 describe('resolveTxQuantity', () => {
   it('should return quantity in AR and winstons', () => {
     const quantity = resolveTxQuantity(GQL_TX);
-    expect(quantity.ar).to.equal('0.000007896935');
-    expect(quantity.winston).to.equal('7896935');
+    assert.deepEqual(quantity, { ar: '0.000007896935', winston: '7896935' });
   });
 });
 
 describe('resolveTxFee', () => {
   it('should return quantity in AR and winstons', () => {
     const fee = resolveTxFee(GQL_TX);
-    expect(fee.ar).to.equal('0.000000477648');
-    expect(fee.winston).to.equal('477648');
+    assert.deepEqual(fee, { ar: '0.000000477648', winston: '477648' });
   });
 });
 
 describe('resolveTxOwner', () => {
   it('should return owner address and key', () => {
     const owner = resolveTxOwner(GQL_TX);
-    expect(owner.address).to.equal(
-      'k3hNqeW_8_WDBz6hwUAsu6DQ47sGXZUP5Q8MJP8BdsE',
-    );
-    expect(owner.key).to.equal(
+    assert.equal(owner.address, 'k3hNqeW_8_WDBz6hwUAsu6DQ47sGXZUP5Q8MJP8BdsE');
+    assert.equal(
+      owner.key,
       '0BUYi-XqwHu9NwKi7uvURVTcJgschq1MAliInZDXLXw300bN4usI6eUP-9RVLsocfcoXjNjyz6Xj603oD9iM7K8YxjTPfbLHzZ0MhphYD-1cn8fXta7PCXItjG9XIZZbkq7DCOgmljF1tjgtimQgUrjGZr3f9ddzIXDHdSzbLhrakxkeqFidXQctgIJyCInbMHenAfJyAfzLeGUO107vWmzEFDzO_-0FUYuLTQfNLhZw9WPSNKp3D8wSM2Z8BnQmuot827zrthR0vX7JAQQoTuAGREtalD4f1ysh2mcJJi9tmlN_9FCqZvhhQqrK2dJrtf11QXCQyCkKHiP47TyK2dAYnWl2mrQc9ntpMMC2Fqsa8Qb5z5zaaxGiM3mw-mLKpmTtywSVFYsn3kQtxG7_e04NIns6bL6PNLS5_7IX-6BNq8y1nHBARane4iHgQdHSBXCUkeagGTy6HjHc9g8zmRzi-VwWS8CD37bCadoVwZjA1oUB0vwvZ6pPeRQROS-iIQPuZgEQinGiuNbSbs3ezRPow1z7GbpbrYEy3Rgv3ozHZcGXwkHyohD5i0ST7H6VHZn27ieFiu48Hub0oA3XMJZRYJhBEopW8jjAQ_nPaQz-bioI2Jd_svwwlAcaIYfzUImoxYyQwzgnstkhIFk9tIFG4VratxdVH0HwOQY0jhE',
     );
   });
