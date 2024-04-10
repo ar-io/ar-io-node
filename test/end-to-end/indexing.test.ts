@@ -15,7 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { expect } from 'chai';
+import { strict as assert } from 'node:assert';
+import { after, before, describe, it } from 'node:test';
 import { rimrafSync } from 'rimraf';
 import {
   DockerComposeEnvironment,
@@ -110,9 +111,6 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      // 10 minutes timeout to build the image
-      this.timeout(600000);
-
       rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       compose = await new DockerComposeEnvironment(
@@ -138,12 +136,12 @@ describe('Indexing', function () {
 
     it('Verifying if blocks were indexed correctly in the database', async function () {
       const maxHeight = getMaxHeight(coreDb)['MAX(height)'];
-      expect(maxHeight).to.equal(STOP_HEIGHT);
+      assert.equal(maxHeight, STOP_HEIGHT);
     });
 
     it('Verifying if blocks were exposed correctly through GraphQL', async function () {
       const gqlHeight = await fetchGqlHeight();
-      expect(gqlHeight).to.equal(STOP_HEIGHT);
+      assert.equal(gqlHeight, STOP_HEIGHT);
     });
   });
 
@@ -152,8 +150,6 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      // 10 minutes timeout to build the image
-      this.timeout(600000);
       rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       compose = await new DockerComposeEnvironment(
@@ -179,12 +175,12 @@ describe('Indexing', function () {
 
     it('Verifying if blocks were indexed correctly in the database', async function () {
       const maxHeight = getMaxHeight(coreDb)['MAX(height)'];
-      expect(maxHeight).to.equal(STOP_HEIGHT);
+      assert.equal(maxHeight, STOP_HEIGHT);
     });
 
     it('Verifying if blocks were exposed correctly through GraphQL', async function () {
       const gqlHeight = await fetchGqlHeight();
-      expect(gqlHeight).to.equal(STOP_HEIGHT);
+      assert.equal(gqlHeight, STOP_HEIGHT);
     });
   });
 
@@ -203,9 +199,6 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      // 10 minutes timeout to build the image
-      this.timeout(600000);
-
       rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       compose = await new DockerComposeEnvironment(
@@ -291,8 +284,8 @@ describe('Indexing', function () {
 
       const ids = stmt.all().map((row) => toB64Url(row.id));
 
-      expect(ids).to.have.lengthOf(idList.length);
-      expect(ids).to.have.members(idList);
+      assert.equal(ids.length, idList.length);
+      assert.deepEqual(ids.slice().sort(), idList.slice().sort());
     });
 
     it('Verifying if DataItem hash was correctly indexed', async function () {
@@ -316,8 +309,8 @@ describe('Indexing', function () {
         return acc;
       }, {});
 
-      expect(parentHashByDataHash[dataItemHash]).to.equal(bundleHash);
-      expect(parentHashByDataHash[nestedDataItemHash]).to.equal(dataItemHash);
+      assert.equal(parentHashByDataHash[dataItemHash], bundleHash);
+      assert.equal(parentHashByDataHash[nestedDataItemHash], dataItemHash);
     });
   });
 });
