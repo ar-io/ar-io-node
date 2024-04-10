@@ -4,7 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 9] - 2024-04-10
+
+### Added
+
+- Added experimental Farcaster Frames support enabling simple Areave based
+  Frames with button navigation. Transaction and data item data is now served
+  under `/local/farcaster/frame/<ID>`. `/local` is used as a prefix to indicate
+  this functionality is both experimental and local to a particular the gateway
+  rather than part of the global gateway API. Both GET and POST requests are
+  supported.
+- Added an experimental local ArNS resolver. When enabled it removes dependence
+  on arweave.net for ArNS resolution! Enable it by setting `RUN_RESOLVER=true`,
+  `TRUSTED_ARNS_RESOLVER_TYPE=resolver`, and
+  `TRUSTED_ARNS_RESOLVER_URL=http://resolver:6000` in your `.env` file.
+- Added a `CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD` environment variable
+  that represents a threshold age in seconds to be compared with a contiguous
+  data file age. If file is older than the amount of seconds set in the
+  enviroment variable it will be deleted.
+- Added an 'X-Cached' header to data responses to indicate when data is served
+  from the local cache rather than being retrieved from an external source. This
+  is helpful for interfacing with external systems, debugging, and end-to-end
+  testing.
+- Save hashes for unbundled data items during indexing. This enables reduction
+  in data storage via hash based deduplication as well as more efficient
+  peer-to-peer data retrieval in the future.
 
 ## [Release 8] - 2024-03-14
 

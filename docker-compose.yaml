@@ -105,6 +105,7 @@ services:
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-9}
+      - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
 
   resolver:
     image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-latest}
