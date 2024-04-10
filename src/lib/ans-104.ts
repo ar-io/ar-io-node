@@ -184,30 +184,33 @@ export class Ans104Parser {
           takeWork();
         })
         .on('message', (message: ParserMessage) => {
-          switch (message.eventName) {
-            case DATA_ITEM_MATCHED:
-              eventEmitter.emit(
-                events.ANS104_DATA_ITEM_MATCHED,
-                message.dataItem,
-              );
-              break;
-            case UNBUNDLE_COMPLETE:
-              const { eventName, ...eventBody } = message;
-              eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
-                dataItemIndexFilterString,
-                ...eventBody,
-              });
-              job.resolve();
-              job = null;
-              break;
-            case UNBUNDLE_ERROR:
-              job.reject(new Error('Worker error'));
-              job = null;
-              break;
-            default:
-              job.reject(new Error('Unknown worker message'));
-              job = null;
-              break;
+          // Handle termination message from worker
+          if (message !== null) {
+            switch (message.eventName) {
+              case DATA_ITEM_MATCHED:
+                eventEmitter.emit(
+                  events.ANS104_DATA_ITEM_MATCHED,
+                  message.dataItem,
+                );
+                break;
+              case UNBUNDLE_COMPLETE:
+                const { eventName, ...eventBody } = message;
+                eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
+                  dataItemIndexFilterString,
+                  ...eventBody,
+                });
+                job.resolve();
+                job = null;
+                break;
+              case UNBUNDLE_ERROR:
+                job.reject(new Error('Worker error'));
+                job = null;
+                break;
+              default:
+                job.reject(new Error('Unknown worker message'));
+                job = null;
+                break;
+            }
           }
           takeWork(); // Check if there's more work to do
         })
@@ -220,7 +223,12 @@ export class Ans104Parser {
             (w: any) => w.takeWork !== takeWork,
           );
           if (job) {
-            job.reject(error || new Error('worker died'));
+            // handle worker termination
+            if (job.message === 'terminate') {
+              job.resolve();
+            } else {
+              job.reject(error || new Error('worker died'));
+            }
           }
           if (code !== 0) {
             self.log.error('Worker stopped with exit code ' + code, {
