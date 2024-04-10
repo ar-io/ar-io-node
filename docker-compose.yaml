@@ -114,7 +114,7 @@ services:
     environment:
       - PORT=6000
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - CONTRACT_TX_ID=${CONTRACT_ID:-}
+      - CONTRACT_ID=${CONTRACT_ID:-}
       - RUN_RESOLVER=${RUN_RESOLVER:-false}
       - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
       - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
