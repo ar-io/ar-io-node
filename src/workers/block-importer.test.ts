@@ -16,12 +16,19 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { strict as assert } from 'node:assert';
-import { after, before, beforeEach, describe, it, mock } from 'node:test';
+import {
+  after,
+  afterEach,
+  before,
+  beforeEach,
+  describe,
+  it,
+  mock,
+} from 'node:test';
 import { EventEmitter } from 'node:events';
 import { default as wait } from 'wait';
 
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
-import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
 import {
   bundlesDbPath,
@@ -30,8 +37,10 @@ import {
   moderationDbPath,
 } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
+import * as winston from 'winston';
 
 describe('BlockImporter', () => {
+  let log: winston.Logger;
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
@@ -39,9 +48,11 @@ describe('BlockImporter', () => {
 
   const createBlockImporter = ({
     startHeight,
+    stopHeight,
     heightPollingIntervalMs,
   }: {
     startHeight: number;
+    stopHeight?: number;
     heightPollingIntervalMs?: number;
   }) => {
     return new BlockImporter({
@@ -50,11 +61,13 @@ describe('BlockImporter', () => {
       chainIndex: db,
       eventEmitter,
       startHeight,
+      stopHeight,
       heightPollingIntervalMs,
     });
   };
 
   before(async () => {
+    log = winston.createLogger({ silent: true });
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
     db = new StandaloneSqliteDatabase({
@@ -67,7 +80,11 @@ describe('BlockImporter', () => {
   });
 
   after(async () => {
-    db.stop();
+    await db.stop();
+  });
+
+  afterEach(async () => {
+    await blockImporter.stop();
   });
 
   describe('importBlock', () => {
@@ -250,11 +267,11 @@ describe('BlockImporter', () => {
 
   describe('start', () => {
     beforeEach(async () => {
-      blockImporter = createBlockImporter({ startHeight: 1 });
+      blockImporter = createBlockImporter({ startHeight: 1, stopHeight: 2 });
     });
 
     it('should not throw an exception when called (smoke test)', async () => {
-      blockImporter.start();
+      await blockImporter.start();
       await wait(5);
       await blockImporter.stop();
     });
@@ -262,7 +279,7 @@ describe('BlockImporter', () => {
 
   describe('stop', () => {
     beforeEach(async () => {
-      blockImporter = createBlockImporter({ startHeight: 0 });
+      blockImporter = createBlockImporter({ startHeight: 0, stopHeight: 1 });
     });
 
     it('should not throw an exception when called (smoke test)', async () => {
