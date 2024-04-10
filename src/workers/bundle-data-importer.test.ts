@@ -17,28 +17,47 @@
  */
 import { strict as assert } from 'node:assert';
 import { Readable } from 'node:stream';
-import { EventEmitter } from 'node:events';
-import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
+import {
+  after,
+  afterEach,
+  before,
+  beforeEach,
+  describe,
+  it,
+  mock,
+} from 'node:test';
 import winston from 'winston';
 import { ContiguousDataSource } from '../types.js';
-import { Ans104Unbundler } from './ans104-unbundler.js';
 import { BundleDataImporter } from './bundle-data-importer.js';
 
+class Ans104UnbundlerStub {
+  async queueItem(): Promise<void> {
+    return;
+  }
+
+  async unbundle(): Promise<void> {
+    return;
+  }
+
+  async stop(): Promise<void> {
+    return;
+  }
+}
+
 describe('BundleDataImporter', () => {
+  let log: winston.Logger;
   let bundleDataImporter: BundleDataImporter;
   let bundleDataImporterWithFullQueue: BundleDataImporter;
-  let log: winston.Logger;
   let contiguousDataSource: ContiguousDataSource;
-  let ans104Unbundler: Ans104Unbundler;
+  let ans104Unbundler: any;
   let mockItem: any;
 
   before(() => {
     log = winston.createLogger({ silent: true });
+    // log = winston.createLogger();
 
     mockItem = { id: 'testId', index: 1 };
-  });
 
-  beforeEach(() => {
     contiguousDataSource = {
       getData: () =>
         Promise.resolve({
@@ -48,17 +67,23 @@ describe('BundleDataImporter', () => {
           cached: false,
         }),
     };
+  });
 
-    ans104Unbundler = new Ans104Unbundler({
-      log,
-      eventEmitter: new EventEmitter(),
-      filter: { match: () => Promise.resolve(true) },
-      contiguousDataSource,
-      dataItemIndexFilterString: '',
-      workerCount: 1,
-      maxQueueSize: 1,
-    });
+  after(async () => {
+    console.log(
+      'Stopping bundleDataImporter, bundleDataImporterWithFullQueue, and ans104Unbundler',
+    );
+    // await wait(1000);
+    await bundleDataImporter.stop();
+    console.log('bundleDataImporter stopped');
+    await bundleDataImporterWithFullQueue.stop();
+    console.log('bundleDataImporterWithFullQueue stopped');
+    // await ans104Unbundler.stop();
+    console.log('ans104Unbundler stopped');
+  });
 
+  beforeEach(() => {
+    ans104Unbundler = new Ans104UnbundlerStub();
     bundleDataImporter = new BundleDataImporter({
       log,
       contiguousDataSource,
@@ -66,7 +91,6 @@ describe('BundleDataImporter', () => {
       workerCount: 1,
       maxQueueSize: 1,
     });
-
     bundleDataImporterWithFullQueue = new BundleDataImporter({
       log,
       contiguousDataSource,
@@ -76,7 +100,7 @@ describe('BundleDataImporter', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     mock.restoreAll();
   });
 
@@ -126,6 +150,13 @@ describe('BundleDataImporter', () => {
   describe('download', () => {
     it('should download and queue the item for unbundling', async () => {
       mock.method(ans104Unbundler, 'queueItem');
+      bundleDataImporter = new BundleDataImporter({
+        log,
+        contiguousDataSource,
+        ans104Unbundler: ans104Unbundler,
+        workerCount: 1,
+        maxQueueSize: 1,
+      });
 
       await bundleDataImporter.download({ item: mockItem, prioritized: true });
 
