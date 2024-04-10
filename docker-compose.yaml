@@ -3,7 +3,7 @@ version: '3.0'
 
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-f6576577e421a4c9173d6d5d39b4540766b366ae}
     build:
       context: envoy/
     restart: on-failure:5
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-af52a298c741267675ce31b7492eed13b893ce66}
     build:
       context: .
     restart: on-failure:5
@@ -108,7 +108,7 @@ services:
       - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-f90dc9fa07e6beae654ed4087ca129dde589ab08}
     restart: on-failure:5
     ports:
       - 6000:6000
