@@ -130,7 +130,7 @@ describe('WebhookEmitter', () => {
       mock.method(
         WebhookEmitter.prototype,
         'emitWebhookToTargetServer',
-        () => {},
+        async () => Promise.resolve(),
       );
       mock.method(axios, 'post');
 

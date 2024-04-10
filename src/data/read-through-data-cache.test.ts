@@ -75,7 +75,7 @@ describe('ReadThroughDataCache', function () {
         });
         return stream;
       },
-      finalize: async (_, __) => {},
+      finalize: async (_, __) => Promise.resolve(),
     };
 
     mockContiguousDataIndex = {
@@ -104,6 +104,8 @@ describe('ReadThroughDataCache', function () {
 
         return undefined;
       },
+
+      // eslint-disable-next-line no-empty-pattern
       saveDataContentAttributes: async ({}: {
         id: string;
         dataRoot?: string;
@@ -145,7 +147,7 @@ describe('ReadThroughDataCache', function () {
         123,
       );
 
-      assert.deepEqual(calledWithArgument!, 'test-hash');
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
       assert.deepEqual(result?.stream, mockStream);
       assert.deepEqual(result?.size, 123);
     });
@@ -164,7 +166,8 @@ describe('ReadThroughDataCache', function () {
         123,
       );
 
-      assert.deepEqual(calledWithArgument!, 'test-hash');
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
       assert.deepEqual(result, undefined);
     });
 
@@ -198,8 +201,10 @@ describe('ReadThroughDataCache', function () {
         20,
       );
 
-      assert.deepEqual(calledWithArgument!, 'test-hash');
-      assert.deepEqual(calledWithParentArgument!, 'test-parent-hash');
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
+      assert.deepEqual(calledWithParentArgument!, 'test-parent-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
       assert.deepEqual(result?.stream, mockStream);
       assert.deepEqual(result?.size, 20);
     });
@@ -240,7 +245,7 @@ describe('ReadThroughDataCache', function () {
         verified: true,
         cached: true,
       });
-      assert.deepEqual(calledWithArgument!, 'test-hash');
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
     });
 
     it('should fetch data from the source and cache it when not available in cache', async function () {
@@ -275,7 +280,8 @@ describe('ReadThroughDataCache', function () {
 
       const result = await readThroughDataCache.getData('test-id');
 
-      assert.deepEqual(calledWithArgument!, 'test-id');
+      assert.deepEqual(calledWithArgument!, 'test-id'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
       assert.deepEqual(
         (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
         1,

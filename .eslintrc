@@ -8,7 +8,6 @@
     "@typescript-eslint",
     "header",
     "jest-formatting",
-    "mocha",
     "prettier",
     "unicorn"
   ],
