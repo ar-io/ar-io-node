@@ -25,6 +25,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
+  RequestAttributes,
 } from '../types.js';
 import { ReadThroughDataCache } from './read-through-data-cache.js';
 
@@ -34,6 +35,7 @@ describe('ReadThroughDataCache', function () {
   let mockContiguousDataStore: ContiguousDataStore;
   let mockContiguousDataIndex: ContiguousDataIndex;
   let readThroughDataCache: ReadThroughDataCache;
+  let requestAttributes: RequestAttributes;
 
   before(() => {
     log = winston.createLogger({ silent: true });
@@ -124,6 +126,11 @@ describe('ReadThroughDataCache', function () {
       dataStore: mockContiguousDataStore,
       contiguousDataIndex: mockContiguousDataIndex,
     });
+
+    requestAttributes = {
+      origin: 'node-url',
+      hops: 0,
+    };
   });
 
   afterEach(() => {
@@ -235,7 +242,10 @@ describe('ReadThroughDataCache', function () {
         );
       });
 
-      const result = await readThroughDataCache.getData('test-id');
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
 
       assert.deepEqual(result, {
         hash: 'test-hash',
@@ -244,6 +254,10 @@ describe('ReadThroughDataCache', function () {
         sourceContentType: 'plain/text',
         verified: true,
         cached: true,
+        requestAttributes: {
+          hops: requestAttributes.hops + 1,
+          origin: 'node-url',
+        },
       });
       assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
     });
@@ -278,10 +292,17 @@ describe('ReadThroughDataCache', function () {
         });
       });
 
-      const result = await readThroughDataCache.getData('test-id');
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
 
-      assert.deepEqual(calledWithArgument!, 'test-id'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
-
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      assert.deepEqual(calledWithArgument!, {
+        id: 'test-id',
+        dataAttributes: undefined,
+        requestAttributes,
+      });
       assert.deepEqual(
         (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
         1,

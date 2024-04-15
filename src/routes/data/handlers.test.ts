@@ -51,6 +51,10 @@ describe('Data routes', () => {
             size: 10,
             verified: false,
             cached: false,
+            requestAttributes: {
+              origin: 'node-url',
+              hops: 0,
+            },
           }),
       };
       blockListValidator = {
