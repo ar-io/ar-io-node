@@ -17,6 +17,7 @@
  */
 import { default as axios } from 'axios';
 import winston from 'winston';
+import { headerNames } from '../constants.js';
 
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
@@ -48,9 +49,10 @@ export class TrustedGatewayArNSResolver implements NameResolver {
         baseURL: nameUrl,
         validateStatus: (status) => status === 200,
       });
-      const resolvedId = response.headers['x-arns-resolved-id'];
+      const resolvedId =
+        response.headers[headerNames.arnsResolvedId.toLowerCase()];
       const ttl =
-        parseInt(response.headers['x-arns-ttl-seconds']) ||
+        parseInt(response.headers[headerNames.arnsTtlSeconds.toLowerCase()]) ||
         DEFAULT_ARNS_TTL_SECONDS;
       if (isValidDataId(resolvedId)) {
         this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
