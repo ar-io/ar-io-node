@@ -26,6 +26,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
+  RequestAttributes,
 } from '../types.js';
 
 export class ReadThroughDataCache implements ContiguousDataSource {
@@ -118,10 +119,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     return undefined;
   }
 
-  async getData(
-    id: string,
-    dataAttributes?: ContiguousDataAttributes,
-  ): Promise<ContiguousData> {
+  async getData({
+    id,
+    dataAttributes,
+    requestAttributes,
+  }: {
+    id: string;
+    dataAttributes?: ContiguousDataAttributes;
+    requestAttributes?: RequestAttributes;
+  }): Promise<ContiguousData> {
     this.log.info('Checking for cached data...', {
       id,
     });
@@ -142,10 +148,21 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         sourceContentType: attributes?.contentType,
         verified: attributes?.verified ?? false,
         cached: true,
+        requestAttributes: {
+          hops:
+            requestAttributes?.hops !== undefined
+              ? requestAttributes.hops + 1
+              : 0,
+          origin: requestAttributes?.origin,
+        },
       };
     }
 
-    const data = await this.dataSource.getData(id, dataAttributes);
+    const data = await this.dataSource.getData({
+      id,
+      dataAttributes,
+      requestAttributes,
+    });
     const hasher = crypto.createHash('sha256');
     const cacheStream = await this.dataStore.createWriteStream();
     pipeline(data.stream, cacheStream, async (error: any) => {

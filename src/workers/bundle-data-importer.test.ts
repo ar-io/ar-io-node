@@ -70,16 +70,8 @@ describe('BundleDataImporter', () => {
   });
 
   after(async () => {
-    console.log(
-      'Stopping bundleDataImporter, bundleDataImporterWithFullQueue, and ans104Unbundler',
-    );
-    // await wait(1000);
     await bundleDataImporter.stop();
-    console.log('bundleDataImporter stopped');
     await bundleDataImporterWithFullQueue.stop();
-    console.log('bundleDataImporterWithFullQueue stopped');
-    // await ans104Unbundler.stop();
-    console.log('ans104Unbundler stopped');
   });
 
   beforeEach(() => {
@@ -110,9 +102,9 @@ describe('BundleDataImporter', () => {
 
       await bundleDataImporter.queueItem(mockItem, false);
 
-      assert.equal(
+      assert.deepEqual(
         (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
-        mockItem.id,
+        { id: mockItem.id },
       );
     });
 
@@ -129,9 +121,9 @@ describe('BundleDataImporter', () => {
 
       await bundleDataImporter.queueItem(mockItem, true);
 
-      assert.equal(
+      assert.deepEqual(
         (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
-        mockItem.id,
+        { id: mockItem.id },
       );
     });
 
@@ -140,9 +132,9 @@ describe('BundleDataImporter', () => {
 
       await bundleDataImporterWithFullQueue.queueItem(mockItem, true);
 
-      assert.equal(
+      assert.deepEqual(
         (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
-        mockItem.id,
+        { id: mockItem.id },
       );
     });
   });

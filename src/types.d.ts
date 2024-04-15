@@ -310,6 +310,11 @@ interface GqlBlocksResult {
   edges: GqlBlockEdge[];
 }
 
+interface RequestAttributes {
+  hops: number;
+  origin?: string;
+}
+
 export interface GqlQueryable {
   getGqlTransaction(args: { id: string }): Promise<GqlTransaction>;
 
@@ -399,6 +404,7 @@ export interface ContiguousData {
   verified: boolean;
   sourceContentType?: string;
   cached: boolean;
+  requestAttributes?: RequestAttributes;
 }
 
 export interface ContiguousDataAttributes {
@@ -439,10 +445,15 @@ export interface ContiguousDataIndex {
 }
 
 export interface ContiguousDataSource {
-  getData(
-    id: string,
-    dataAttributes?: ContiguousDataAttributes,
-  ): Promise<ContiguousData>;
+  getData({
+    id,
+    dataAttributes,
+    requestAttributes,
+  }: {
+    id: string;
+    dataAttributes?: ContiguousDataAttributes;
+    requestAttributes?: RequestAttributes;
+  }): Promise<ContiguousData>;
 }
 
 export interface ManifestResolution {

@@ -20,10 +20,12 @@ import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import axios from 'axios';
 import * as winston from 'winston';
 import { GatewayDataSource } from './gateway-data-source.js';
+import { RequestAttributes } from '../types.js';
 
 let log: winston.Logger;
 let dataSource: GatewayDataSource;
 let mockedAxiosInstance: any;
+let requestAttributes: RequestAttributes;
 
 before(async () => {
   log = winston.createLogger({ silent: true });
@@ -50,6 +52,8 @@ beforeEach(async () => {
     log,
     trustedGatewayUrl: 'https://gateway.domain',
   });
+
+  requestAttributes = { origin: 'node-url', hops: 0 };
 });
 
 afterEach(async () => {
@@ -59,7 +63,10 @@ afterEach(async () => {
 describe('GatewayDataSource', () => {
   describe('getData', () => {
     it('should fetch data successfully from the gateway', async () => {
-      const data = await dataSource.getData('some-id');
+      const data = await dataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
 
       assert.deepEqual(data, {
         stream: 'mocked stream',
@@ -67,6 +74,10 @@ describe('GatewayDataSource', () => {
         sourceContentType: 'application/json',
         verified: false,
         cached: false,
+        requestAttributes: {
+          hops: requestAttributes.hops + 1,
+          origin: requestAttributes.origin,
+        },
       });
     });
 
@@ -74,7 +85,7 @@ describe('GatewayDataSource', () => {
       mockedAxiosInstance.request = async () => ({ status: 404 });
 
       try {
-        await dataSource.getData('bad-id');
+        await dataSource.getData({ id: 'bad-id', requestAttributes });
         assert.fail('Expected an error to be thrown');
       } catch (error: any) {
         assert.equal(error.message, 'Unexpected status code from gateway: 404');
@@ -87,11 +98,92 @@ describe('GatewayDataSource', () => {
       };
 
       try {
-        await dataSource.getData('bad-id');
+        await dataSource.getData({ id: 'bad-id', requestAttributes });
         assert.fail('Expected an error to be thrown');
       } catch (error: any) {
         assert.equal(error.message, 'Network Error');
       }
+    });
+
+    it('should send hops and origin headers if provided', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+        };
+      };
+
+      await dataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
+
+      assert.equal(
+        requestParams.headers['X-AR-IO-Hops'],
+        requestAttributes.hops.toString(),
+      );
+      assert.equal(
+        requestParams.headers['X-AR-IO-Origin'],
+        requestAttributes.origin,
+      );
+    });
+
+    it('should not send origin header if not provided', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+        };
+      };
+
+      await dataSource.getData({
+        id: 'some-id',
+        requestAttributes: { hops: 0 },
+      });
+
+      assert.equal(requestParams.headers['X-AR-IO-Hops'], '0');
+      assert.equal(requestParams.headers['X-AR-IO-Origin'], undefined);
+    });
+
+    it('should not send hops or origin headers if not provided', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+        };
+      };
+
+      await dataSource.getData({
+        id: 'some-id',
+      });
+
+      assert.equal(requestParams.headers['X-AR-IO-Hops'], undefined);
+      assert.equal(requestParams.headers['X-AR-IO-Origin'], undefined);
+    });
+
+    it('should return hops 1 in the response if not provided', async () => {
+      const data = await dataSource.getData({
+        id: 'some-id',
+      });
+
+      assert.equal(data.requestAttributes?.hops, 1);
+      assert.equal(data.requestAttributes?.origin, undefined);
+    });
+
+    it('should increment hops in the response', async () => {
+      const data = await dataSource.getData({
+        id: 'some-id',
+        requestAttributes: { hops: 5 },
+      });
+
+      assert.equal(data.requestAttributes?.hops, 6);
+      assert.equal(data.requestAttributes?.origin, undefined);
     });
   });
 });

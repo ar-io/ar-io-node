@@ -25,6 +25,7 @@ import {
   ArweaveChunkSourceStub,
 } from '../../test/stubs.js';
 import { TxChunksDataSource } from './tx-chunks-data-source.js';
+import { RequestAttributes } from '../types.js';
 
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 
@@ -33,6 +34,7 @@ describe('TxChunksDataSource', () => {
   let chainSource: ArweaveChainSourceStub;
   let chunkSource: ArweaveChunkSourceStub;
   let txChunkRetriever: TxChunksDataSource;
+  let requestAttributes: RequestAttributes;
 
   before(() => {
     log = winston.createLogger({ silent: true });
@@ -43,6 +45,7 @@ describe('TxChunksDataSource', () => {
       chainSource,
       chunkSource,
     });
+    requestAttributes = { origin: 'node-url', hops: 0 };
   });
 
   afterEach(() => {
@@ -54,7 +57,10 @@ describe('TxChunksDataSource', () => {
       it('should throw an error', async () => {
         await assert.rejects(
           async () => {
-            await txChunkRetriever.getData('bad-tx-id');
+            await txChunkRetriever.getData({
+              id: 'bad-tx-id',
+              requestAttributes,
+            });
           },
           {
             name: 'Error',
@@ -67,7 +73,10 @@ describe('TxChunksDataSource', () => {
     describe('a valid transaction id', () => {
       it('should return chunk data of the correct size for a known chunk', () => {
         txChunkRetriever
-          .getData(TX_ID)
+          .getData({
+            id: TX_ID,
+            requestAttributes,
+          })
           .then((res: { stream: Readable; size: number }) => {
             const { stream, size } = res;
             let bytes = 0;
@@ -81,7 +90,10 @@ describe('TxChunksDataSource', () => {
       });
 
       it('should return cached property as false', async () => {
-        const result = await txChunkRetriever.getData(TX_ID);
+        const result = await txChunkRetriever.getData({
+          id: TX_ID,
+          requestAttributes,
+        });
 
         assert.strictEqual(result.cached, false);
       });
@@ -94,7 +106,7 @@ describe('TxChunksDataSource', () => {
           Promise.reject(error),
         );
         txChunkRetriever
-          .getData(TX_ID)
+          .getData({ id: TX_ID, requestAttributes })
           .then((res: { stream: Readable; size: number }) => {
             const { stream } = res;
             stream.on('error', (e: any) => {
@@ -114,7 +126,7 @@ describe('TxChunksDataSource', () => {
             Promise.reject(error),
           );
           txChunkRetriever
-            .getData(TX_ID)
+            .getData({ id: TX_ID, requestAttributes })
             .then((res: { stream: Readable; size: number }) => {
               const { stream } = res;
               stream.on('error', (error: any) => {

@@ -288,7 +288,7 @@ export class Ans104Parser {
         const log = this.log.child({ parentId });
 
         // Get data stream
-        data = await this.contiguousDataSource.getData(parentId);
+        data = await this.contiguousDataSource.getData({ id: parentId });
 
         // Construct temp path for passing data to worker
         await fsPromises.mkdir(path.join(process.cwd(), 'data/tmp/ans-104'), {
