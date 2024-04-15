@@ -19,6 +19,7 @@ import { Handler } from 'express';
 import { asyncMiddleware } from 'middleware-async';
 
 import * as config from '../config.js';
+import { headerNames } from '../constants.js';
 import { sendNotFound } from '../routes/data/handlers.js';
 import { NameResolver } from '../types.js';
 
@@ -58,8 +59,8 @@ export const createArnsMiddleware = ({
       sendNotFound(res);
       return;
     }
-    res.header('X-ArNS-Resolved-Id', resolvedId);
-    res.header('X-ArNS-TTL-Seconds', ttl.toString());
+    res.header(headerNames.arnsResolvedId, resolvedId);
+    res.header(headerNames.arnsTtlSeconds, ttl.toString());
     res.header('Cache-Control', `public, max-age=${ttl}`);
     dataHandler(req, res, next);
   });
