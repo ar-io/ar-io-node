@@ -29,8 +29,8 @@ import {
   Wait,
 } from 'testcontainers';
 import { createServer } from 'node:http';
-import { default as wait } from 'wait';
 import axios from 'axios';
+import { default as wait } from 'wait';
 
 const projectRootPath = process.cwd();
 
@@ -273,7 +273,8 @@ describe('X-Cached header', function () {
     req.end();
   });
 
-  it('Verifying x-cached header when cache is available', function () {
+  it('Verifying x-cached header when cache is available', async function () {
+    await wait(1000);
     const req = get(`http://localhost:4000/raw/${tx1}`, (res) =>
       assert.equal(res.headers['x-cached'], 'HIT'),
     );
@@ -281,7 +282,7 @@ describe('X-Cached header', function () {
   });
 });
 
-describe.only('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
+describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
   describe('with ARNS_ROOT_HOST', function () {
     let compose: StartedDockerComposeEnvironment;
 
@@ -519,31 +520,41 @@ describe.only('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
     });
   });
 
-  describe.only('with fake trusted node', function () {
+  describe('with fake trusted node', function () {
     let fakeGateway: Server;
+    let containerBuilder: GenericContainer;
     let core: StartedTestContainer;
     let corePort: number;
 
     before(async function () {
-      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-
-      fakeGateway = createServer((_, res) => {
+      fakeGateway = createServer((req, res) => {
+        const hops = req.headers['x-ar-io-hops'] as string;
+        const origin = req.headers['x-ar-io-origin'] as string;
         res.writeHead(200, {
           'Content-Type': 'text/plain',
           'Content-Length': '11',
-          'X-AR-IO-Hops': '7',
+          'X-AR-IO-Hops': hops ? (parseInt(hops) + 1).toString() : '1',
+          'X-AR-IO-Origin': origin ?? 'fake-gateway',
         });
         res.end('hello world');
       });
       fakeGateway.listen(4001);
 
-      await TestContainers.exposeHostPorts(4001);
-
-      const container = await GenericContainer.fromDockerfile(
+      containerBuilder = await GenericContainer.fromDockerfile(
         projectRootPath,
       ).build('core', { deleteOnExit: false });
 
-      core = await container
+      await TestContainers.exposeHostPorts(4001);
+    });
+
+    after(async function () {
+      fakeGateway.close();
+    });
+
+    beforeEach(async function () {
+      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
+      core = await containerBuilder
         .withEnvironment({
           START_HEIGHT: '0',
           STOP_HEIGHT: '0',
@@ -557,15 +568,14 @@ describe.only('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
       corePort = core.getMappedPort(4000);
     });
 
-    after(async function () {
-      fakeGateway.close();
+    afterEach(async function () {
       await core.stop();
     });
 
-    it.only('Verifying that /raw/<id> returns expected response', async function () {
-      const req = await axios.get(`http://localhost:${corePort}/raw/${tx3}`);
+    it('Verifying that /raw/<id> returns expected response', async function () {
+      const req = await axios.get(`http://localhost:${corePort}/raw/${tx2}`);
 
-      assert.equal(req.headers['x-ar-io-hops'], '7');
+      assert.equal(req.headers['x-ar-io-hops'], '2');
       assert.equal(req.headers['x-ar-io-origin'], 'ar-io.localhost');
 
       const reqWithHeaders = await axios.get(
@@ -578,17 +588,17 @@ describe.only('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
         },
       );
 
-      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '12');
+      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '7');
       assert.equal(reqWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
 
     it('Verifying that /<id> returns expected response', async function () {
-      const req = await axios.get(`http://localhost:${corePort}/${tx3}`, {
+      const req = await axios.get(`http://localhost:${corePort}/${tx2}`, {
         headers: {
-          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
+          Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
         },
       });
-      assert.equal(req.headers['x-ar-io-hops'], '8');
+      assert.equal(req.headers['x-ar-io-hops'], '2');
       assert.equal(req.headers['x-ar-io-origin'], 'ar-io.localhost');
 
       const reqWithHeaders = await axios.get(
@@ -596,13 +606,13 @@ describe.only('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
         {
           headers: {
             Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-            'X-AR-IO-Hops': '5',
+            'X-AR-IO-Hops': '10',
             'X-Ar-IO-Origin': 'another-host',
           },
         },
       );
 
-      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '13');
+      assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '12');
       assert.equal(reqWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
   });
