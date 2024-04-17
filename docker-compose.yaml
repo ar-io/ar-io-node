@@ -43,7 +43,7 @@ services:
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
       - LOG_FORMAT=${LOG_FORMAT:-simple}
       - TRUSTED_NODE_URL=${TRUSTED_NODE_URL:-}
-      - TRUSTED_GATEWAY_URL=${TRUSTED_GATEWAY_URL:-https://arweave.net}
+      - TRUSTED_GATEWAY_URL=https://${TRUSTED_GATEWAY_HOST:-arweave.net}
       - START_HEIGHT=${START_HEIGHT:-}
       - STOP_HEIGHT=${STOP_HEIGHT:-}
       - SKIP_CACHE=${SKIP_CACHE:-}
