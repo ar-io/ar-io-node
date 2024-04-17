@@ -122,7 +122,7 @@ describe('GatewayDataSource', () => {
 
       assert.equal(
         requestParams.headers['X-AR-IO-Hops'],
-        requestAttributes.hops.toString(),
+        (requestAttributes.hops + 1).toString(),
       );
       assert.equal(
         requestParams.headers['X-AR-IO-Origin'],
@@ -145,7 +145,7 @@ describe('GatewayDataSource', () => {
         requestAttributes: { hops: 0 },
       });
 
-      assert.equal(requestParams.headers['X-AR-IO-Hops'], '0');
+      assert.equal(requestParams.headers['X-AR-IO-Hops'], '1');
       assert.equal(requestParams.headers['X-AR-IO-Origin'], undefined);
     });
 

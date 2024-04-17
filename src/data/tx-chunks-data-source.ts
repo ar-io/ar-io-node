@@ -119,7 +119,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         hops:
           requestAttributes?.hops !== undefined
             ? requestAttributes.hops + 1
-            : 0,
+            : 1,
         origin: requestAttributes?.origin,
       },
     };

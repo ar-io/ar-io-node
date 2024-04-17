@@ -61,22 +61,26 @@ export class GatewayDataSource implements ContiguousDataSource {
       path,
     });
 
-    const reqOriginAndHopsHeaders: { [key: string]: string } = {};
-    const reqHops = requestAttributes?.hops ?? 0;
+    const requestOriginAndHopsHeaders: { [key: string]: string } = {};
+    let hops;
     let origin;
     if (requestAttributes !== undefined) {
-      reqOriginAndHopsHeaders[headerNames.hops] = reqHops.toString();
+      hops = requestAttributes.hops + 1;
+      requestOriginAndHopsHeaders[headerNames.hops] = hops.toString();
+
       if (requestAttributes.origin !== undefined) {
         origin = requestAttributes.origin;
-        reqOriginAndHopsHeaders[headerNames.origin] = requestAttributes.origin;
+        requestOriginAndHopsHeaders[headerNames.origin] = origin;
       }
+    } else {
+      hops = 1;
     }
 
     const response = await this.trustedGatewayAxios.request({
       method: 'GET',
       headers: {
         'Accept-Encoding': 'identity',
-        ...reqOriginAndHopsHeaders,
+        ...requestOriginAndHopsHeaders,
       },
       url: path,
       responseType: 'stream',
@@ -97,9 +101,8 @@ export class GatewayDataSource implements ContiguousDataSource {
       requestAttributes: {
         hops:
           response.headers[headerNames.hops.toLowerCase()] !== undefined
-            ? parseInt(response.headers[headerNames.hops.toLowerCase()]) +
-              reqHops
-            : reqHops + 1,
+            ? parseInt(response.headers[headerNames.hops.toLowerCase()])
+            : hops,
         origin,
       },
     };
