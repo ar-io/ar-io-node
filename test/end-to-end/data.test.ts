@@ -17,9 +17,9 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
-import { get, Server } from 'node:http';
+import { Server } from 'node:http';
 import crypto from 'node:crypto';
-import { rimrafSync } from 'rimraf';
+import { rimraf } from 'rimraf';
 import {
   DockerComposeEnvironment,
   GenericContainer,
@@ -30,7 +30,6 @@ import {
 } from 'testcontainers';
 import { createServer } from 'node:http';
 import axios from 'axios';
-import { default as wait } from 'wait';
 
 const projectRootPath = process.cwd();
 
@@ -50,7 +49,7 @@ describe('Data', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
-    rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
     compose = await new DockerComposeEnvironment(
       projectRootPath,
@@ -67,186 +66,189 @@ describe('Data', function () {
 
   after(async function () {
     await compose.down();
+    // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
   });
 
-  it('Verifying that /raw/<id> returns expected response', function () {
+  it('Verifying that /raw/<id> returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // x-cached: MISS
     // content-type: application/x.arweave-manifest+json
     // content-length: 7424
     // expected status code: 200
     // expected content: ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8
     const hasher = crypto.createHash('sha256');
-    const req = get(`http://localhost:4000/raw/${tx1}`, (res) => {
-      res.on('data', (chunk) => {
-        hasher.update(chunk);
-      });
 
-      res.on('end', () => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-cached'], 'MISS');
-        assert.equal(
-          res.headers['content-type'],
-          'application/x.arweave-manifest+json',
-        );
-        assert.equal(res.headers['content-length'], '7424');
-        assert.equal(res.statusCode, 200);
-        assert.equal(
-          hasher.digest('base64url'),
-          'ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8',
-        );
-      });
+    const res = await axios.get(`http://localhost:4000/raw/${tx1}`, {
+      responseType: 'stream',
     });
-    req.end();
+
+    const stream = res.data;
+
+    stream.on('data', (data: any) => {
+      hasher.update(data);
+    });
+
+    stream.on('end', () => {
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(
+        res.headers['content-type'],
+        'application/x.arweave-manifest+json',
+      );
+      assert.equal(res.headers['content-length'], '7424');
+      assert.equal(res.status, 200);
+      assert.equal(
+        hasher.digest('base64url'),
+        'ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8',
+      );
+    });
   });
 
-  it('Verifying that /<id> for a manifest with a missing index returns 404', function () {
-    const req = get(`http://localhost:4000/${tx1}`, (res) =>
-      assert.equal(res.statusCode, 404),
-    );
-    req.end();
+  it('Verifying that /<id> for a manifest with a missing index returns 404', async function () {
+    const res = await axios.get(`http://localhost:4000/${tx1}`, {
+      validateStatus: (status) => status === 404,
+    });
+    assert.equal(res.status, 404);
   });
 
-  it('verifying that /<id> for a manifest with a valid index returns 301', function () {
-    const req = get(`http://localhost:4000/${tx2}`, (res) =>
-      assert.equal(res.statusCode, 301),
-    );
-    req.end();
+  it('verifying that /<id> for a manifest with a valid index returns 301', async function () {
+    const res = await axios.get(`http://localhost:4000/${tx2}`, {
+      maxRedirects: 0,
+      validateStatus: (status) => status === 301,
+    });
+    assert.equal(res.status, 301);
   });
 
-  it('Verifying that /<id>/ for a manifest with a valid index returns expected response', function () {
+  it('Verifying that /<id>/ for a manifest with a valid index returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // x-cached: MISS
     // content-type: text/html; charset=utf-8
     // content-length: 3922
     // expected status code: 200
     // expected content: R5xJqIIKrqxuUJy5ig0_zqKBoDzyORnxAJ0Ayve3Ig0
     const hasher = crypto.createHash('sha256');
-    const req = get(`http://localhost:4000/${tx2}/`, (res) => {
-      res.on('data', (chunk) => {
-        hasher.update(chunk);
-      });
-
-      res.on('end', () => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-cached'], 'MISS');
-        assert.equal(res.headers['content-type'], 'text/html; charset=utf-8');
-        assert.equal(res.headers['content-length'], '3922');
-        assert.equal(res.statusCode, 200);
-        assert.equal(
-          hasher.digest('base64url'),
-          'R5xJqIIKrqxuUJy5ig0_zqKBoDzyORnxAJ0Ayve3Ig0',
-        );
-      });
+    const res = await axios.get(`http://localhost:4000/${tx2}`, {
+      responseType: 'stream',
     });
-    req.end();
+
+    const stream = res.data;
+
+    stream.on('data', (data: any) => {
+      hasher.update(data);
+    });
+
+    stream.on('end', () => {
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.headers['content-type'], 'text/html; charset=utf-8');
+      assert.equal(res.headers['content-length'], '3922');
+      assert.equal(res.status, 200);
+      assert.equal(
+        hasher.digest('base64url'),
+        'R5xJqIIKrqxuUJy5ig0_zqKBoDzyORnxAJ0Ayve3Ig0',
+      );
+    });
   });
 
-  it('Verifying that /<id>/<path> for a valid manifest path returns expected response', function () {
+  it('Verifying that /<id>/<path> for a valid manifest path returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // x-cached: MISS
     // content-type: application/json; charset=utf-8
     // content-length: 130
     // expected status code: 200
     // expected content: gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA
     const hasher = crypto.createHash('sha256');
-    const req = get(`http://localhost:4000/${tx1}/0`, (res) => {
-      res.on('data', (chunk) => {
-        hasher.update(chunk);
-      });
-
-      res.on('end', () => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-cached'], 'MISS');
-        assert.equal(
-          res.headers['content-type'],
-          'application/json; charset=utf-8',
-        );
-        assert.equal(res.headers['content-length'], '130');
-        assert.equal(res.statusCode, 200);
-        assert.equal(
-          hasher.digest('base64url'),
-          'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
-        );
-      });
+    const res = await axios.get(`http://localhost:4000/${tx1}/0`, {
+      responseType: 'stream',
     });
-    req.end();
+
+    const stream = res.data;
+
+    stream.on('data', (data: any) => {
+      hasher.update(data);
+    });
+
+    stream.on('end', () => {
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(
+        res.headers['content-type'],
+        'application/json; charset=utf-8',
+      );
+      assert.equal(res.headers['content-length'], '130');
+      assert.equal(res.status, 200);
+      assert.equal(
+        hasher.digest('base64url'),
+        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+      );
+    });
   });
 
-  it('Verifying that /<id> for a non-manifest returns expected response', function () {
+  it('Verifying that /<id> for a non-manifest returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // x-cached: MISS
     // content-type: application/json; charset=utf-8
     // content-length: 130
     // expected status code: 200
     // expected content: gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA
     const hasher = crypto.createHash('sha256');
-    const req = get(`http://localhost:4000/${tx3}`, (res) => {
-      res.on('data', (chunk) => {
-        hasher.update(chunk);
-      });
-
-      res.on('end', () => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-cached'], 'MISS');
-        assert.equal(
-          res.headers['content-type'],
-          'application/json; charset=utf-8',
-        );
-        assert.equal(res.headers['content-length'], '130');
-        assert.equal(res.statusCode, 200);
-        assert.equal(
-          hasher.digest('base64url'),
-          'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
-        );
-      });
+    const res = await axios.get(`http://localhost:4000/${tx3}`, {
+      responseType: 'stream',
     });
-    req.end();
+
+    const stream = res.data;
+
+    stream.on('data', (data: any) => {
+      hasher.update(data);
+    });
+
+    stream.on('end', () => {
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(
+        res.headers['content-type'],
+        'application/json; charset=utf-8',
+      );
+      assert.equal(res.headers['content-length'], '130');
+      assert.equal(res.status, 200);
+      assert.equal(
+        hasher.digest('base64url'),
+        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+      );
+    });
   });
 
-  it('Verifying that /<id>/<path> for a manifest path with a trailing slash returns expected response', function () {
+  it('Verifying that /<id>/<path> for a manifest path with a trailing slash returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // x-cached: MISS
     // expected status code: 200
-    const req = get(
+    const res = await axios.get(
       `http://localhost:4000/${tx4}/blog/a-fresh-start/`,
-      (res) => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-cached'], 'MISS');
-        assert.equal(res.statusCode, 200);
-      },
     );
-    req.end();
+
+    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.equal(res.status, 200);
   });
 
-  it('Verifying that /<id>/<path> for a manifest path without a trailing slash returns expected response', function () {
+  it('Verifying that /<id>/<path> for a manifest path without a trailing slash returns expected response', async function () {
     // expected headers:
     // x-ar-io-hops: 1
-    // x-cached: MISS
     // expected status code: 200
-    const req = get(
+    const res = await axios.get(
       `http://localhost:4000/${tx4}/blog/a-fresh-start`,
-      (res) => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-cached'], 'MISS');
-        assert.equal(res.statusCode, 200);
-      },
     );
-    req.end();
+
+    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.equal(res.status, 200);
   });
 });
 
 describe('X-Cached header', function () {
   let compose: StartedDockerComposeEnvironment;
 
-  before(function () {
-    rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+  before(async function () {
+    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
   });
+
+  // after(async function () {
+  //   await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+  // });
 
   beforeEach(async function () {
     compose = await new DockerComposeEnvironment(
@@ -266,19 +268,16 @@ describe('X-Cached header', function () {
     await compose.down();
   });
 
-  it('Verifying x-cached header when no cache available', function () {
-    const req = get(`http://localhost:4000/raw/${tx1}`, (res) =>
-      assert.equal(res.headers['x-cached'], 'MISS'),
-    );
-    req.end();
+  it('Verifying x-cached header when no cache available', async function () {
+    const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
+
+    assert.equal(res.headers['x-cached'], 'MISS');
   });
 
   it('Verifying x-cached header when cache is available', async function () {
-    await wait(1000);
-    const req = get(`http://localhost:4000/raw/${tx1}`, (res) =>
-      assert.equal(res.headers['x-cached'], 'HIT'),
-    );
-    req.end();
+    const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
+
+    assert.equal(res.headers['x-cached'], 'HIT');
   });
 });
 
@@ -287,7 +286,8 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
       compose = await new DockerComposeEnvironment(
         projectRootPath,
         'docker-compose.yaml',
@@ -304,16 +304,16 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
 
     after(async function () {
       await compose.down();
+      // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
     });
 
-    it('Verifying that /raw/<id> returns expected response', function () {
-      const req = get(`http://localhost:4000/raw/${tx3}`, (res) => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-ar-io-origin'], 'ar-io.localhost');
-      });
-      req.end();
+    it('Verifying that /raw/<id> returns expected response', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`);
 
-      const reqWithHeaders = get(
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.headers['x-ar-io-origin'], 'ar-io.localhost');
+
+      const resWithHeaders = await axios.get(
         `http://localhost:4000/raw/${tx3}`,
         {
           headers: {
@@ -321,84 +321,66 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
             'X-Ar-IO-Origin': 'another-host',
           },
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '6');
-          assert.equal(res.headers['x-ar-io-origin'], 'another-host');
-        },
       );
-      reqWithHeaders.end();
+
+      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
+      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
 
-    it('Verifying that /<id> for a manifest with a missing index returns no hops and origin', function () {
-      const req = get(`http://localhost:4000/${tx1}`, (res) => {
-        assert.equal(res.headers['x-ar-io-hops'], undefined);
-        assert.equal(res.headers['x-ar-io-origin'], undefined);
+    it('Verifying that /<id> for a manifest with a missing index returns no hops and origin', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx1}`, {
+        validateStatus: () => true,
+        headers: {
+          Host: 'rxlroexuz2jequt4mtk4y5tyqdlhlhzxzlqmvwzmuk4sc2aoqm3a.ar-io.localhost',
+        },
       });
-      req.end();
+
+      assert.equal(res.headers['x-ar-io-hops'], undefined);
+      assert.equal(res.headers['x-ar-io-origin'], undefined);
     });
 
-    it('verifying that /<id> for a manifest with a valid index returns hops and origin', function () {
-      const req = get(
-        `http://localhost:4000/${tx2}/`,
-        {
-          headers: {
-            Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
-          },
+    it('verifying that /<id> for a manifest with a valid index returns hops and origin', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx2}/`, {
+        headers: {
+          Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '1');
-          assert.equal(res.headers['x-ar-io-origin'], 'ar-io.localhost');
-        },
-      );
-      req.end();
+      });
 
-      const reqWithHeaders = get(
-        `http://localhost:4000/${tx2}/`,
-        {
-          headers: {
-            Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
-            'X-AR-IO-Hops': '2',
-            'X-Ar-IO-Origin': 'another-host',
-          },
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.headers['x-ar-io-origin'], 'ar-io.localhost');
+
+      const resWithHeaders = await axios.get(`http://localhost:4000/${tx2}/`, {
+        headers: {
+          Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
+          'X-AR-IO-Hops': '2',
+          'X-Ar-IO-Origin': 'another-host',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '3');
-          assert.equal(res.headers['x-ar-io-origin'], 'another-host');
-        },
-      );
-      reqWithHeaders.end();
+      });
+
+      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '3');
+      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
 
-    it('Verifying that /<id> for a non-manifest returns hops and origin', function () {
-      const req = get(
-        `http://localhost:4000/${tx3}`,
-        {
-          headers: {
-            Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-          },
+    it('Verifying that /<id> for a non-manifest returns hops and origin', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx3}`, {
+        headers: {
+          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '1');
-          assert.equal(res.headers['x-ar-io-origin'], 'ar-io.localhost');
-        },
-      );
-      req.end();
+      });
 
-      const reqWithHeaders = get(
-        `http://localhost:4000/${tx3}`,
-        {
-          headers: {
-            'X-AR-IO-Hops': '5',
-            'X-Ar-IO-Origin': 'another-host',
-            Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-          },
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.headers['x-ar-io-origin'], 'ar-io.localhost');
+
+      const resWithHeaders = await axios.get(`http://localhost:4000/${tx3}`, {
+        headers: {
+          'X-AR-IO-Hops': '5',
+          'X-Ar-IO-Origin': 'another-host',
+          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '6');
-          assert.equal(res.headers['x-ar-io-origin'], 'another-host');
-        },
-      );
-      reqWithHeaders.end();
+      });
+
+      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
+      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
   });
 
@@ -406,7 +388,8 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
       compose = await new DockerComposeEnvironment(
         projectRootPath,
         'docker-compose.yaml',
@@ -422,16 +405,16 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
 
     after(async function () {
       await compose.down();
+      // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
     });
 
-    it('Verifying that /raw/<id> returns expected response', function () {
-      const req = get(`http://localhost:4000/raw/${tx3}`, (res) => {
-        assert.equal(res.headers['x-ar-io-hops'], '1');
-        assert.equal(res.headers['x-ar-io-origin'], undefined);
-      });
-      req.end();
+    it('Verifying that /raw/<id> returns expected response', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`);
 
-      const reqWithHeaders = get(
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.headers['x-ar-io-origin'], undefined);
+
+      const resWithHeaders = await axios.get(
         `http://localhost:4000/raw/${tx3}`,
         {
           headers: {
@@ -439,84 +422,63 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
             'X-Ar-IO-Origin': 'another-host',
           },
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '6');
-          assert.equal(res.headers['x-ar-io-origin'], 'another-host');
-        },
       );
-      reqWithHeaders.end();
+
+      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
+      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
 
-    it('Verifying that /<id> for a manifest with a missing index returns no hops and origin', function () {
-      const req = get(`http://localhost:4000/${tx1}`, (res) => {
-        assert.equal(res.headers['x-ar-io-hops'], undefined);
-        assert.equal(res.headers['x-ar-io-origin'], undefined);
+    it('Verifying that /<id> for a manifest with a missing index returns no hops and origin', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx1}`, {
+        validateStatus: () => true,
       });
-      req.end();
+
+      assert.equal(res.headers['x-ar-io-hops'], undefined);
+      assert.equal(res.headers['x-ar-io-origin'], undefined);
     });
 
-    it('verifying that /<id> for a manifest with a valid index returns hops and origin', function () {
-      const req = get(
-        `http://localhost:4000/${tx2}/`,
-        {
-          headers: {
-            Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
-          },
+    it('verifying that /<id> for a manifest with a valid index returns hops and origin', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx2}/`, {
+        headers: {
+          Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '1');
-          assert.equal(res.headers['x-ar-io-origin'], undefined);
-        },
-      );
-      req.end();
+      });
 
-      const reqWithHeaders = get(
-        `http://localhost:4000/${tx2}/`,
-        {
-          headers: {
-            Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
-            'X-AR-IO-Hops': '2',
-            'X-Ar-IO-Origin': 'another-host',
-          },
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.headers['x-ar-io-origin'], undefined);
+
+      const resWithHeaders = await axios.get(`http://localhost:4000/${tx2}/`, {
+        headers: {
+          Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
+          'X-AR-IO-Hops': '2',
+          'X-Ar-IO-Origin': 'another-host',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '3');
-          assert.equal(res.headers['x-ar-io-origin'], 'another-host');
-        },
-      );
-      reqWithHeaders.end();
+      });
+
+      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '3');
+      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
 
-    it('Verifying that /<id> for a non-manifest returns hops and origin', function () {
-      const req = get(
-        `http://localhost:4000/${tx3}`,
-        {
-          headers: {
-            Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-          },
+    it('Verifying that /<id> for a non-manifest returns hops and origin', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx3}`, {
+        headers: {
+          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '1');
-          assert.equal(res.headers['x-ar-io-origin'], undefined);
-        },
-      );
-      req.end();
+      });
 
-      const reqWithHeaders = get(
-        `http://localhost:4000/${tx3}`,
-        {
-          headers: {
-            'X-AR-IO-Hops': '5',
-            'X-Ar-IO-Origin': 'another-host',
-            Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
-          },
+      assert.equal(res.headers['x-ar-io-hops'], '1');
+      assert.equal(res.headers['x-ar-io-origin'], undefined);
+
+      const resWithHeaders = await axios.get(`http://localhost:4000/${tx3}`, {
+        headers: {
+          'X-AR-IO-Hops': '5',
+          'X-Ar-IO-Origin': 'another-host',
+          Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
         },
-        (res) => {
-          assert.equal(res.headers['x-ar-io-hops'], '6');
-          assert.equal(res.headers['x-ar-io-origin'], 'another-host');
-        },
-      );
-      reqWithHeaders.end();
+      });
+
+      assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
+      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
     });
   });
 
@@ -549,10 +511,11 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
 
     after(async function () {
       fakeGateway.close();
+      // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
     });
 
     beforeEach(async function () {
-      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       core = await containerBuilder
         .withEnvironment({

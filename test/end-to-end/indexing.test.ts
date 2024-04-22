@@ -17,12 +17,13 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
-import { rimrafSync } from 'rimraf';
+import { rimraf } from 'rimraf';
 import {
   DockerComposeEnvironment,
   StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
+import axios from 'axios';
 import { default as wait } from 'wait';
 import Sqlite, { Database } from 'better-sqlite3';
 import crypto from 'node:crypto';
@@ -31,29 +32,19 @@ import { toB64Url } from '../../src/lib/encoding.js';
 const projectRootPath = process.cwd();
 
 const getHashForIdFromChain = async (id: string): Promise<string> => {
-  const response = await fetch(`https://arweave.net/raw/${id}`);
-  const stream = response.body;
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
-  }
+  const res = await axios.get(`https://arweave.net/raw/${id}`, {
+    responseType: 'stream',
+  });
+  const stream = res.data;
 
   if (stream === null) {
     throw new Error('Stream is null');
   }
 
-  const reader = stream.getReader();
-
   const hasher = crypto.createHash('sha256');
 
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    hasher.update(value);
+  for await (const chunk of stream) {
+    hasher.update(chunk);
   }
 
   return hasher.digest('base64url');
@@ -71,35 +62,38 @@ async function waitForBlocks(coreDb: Database, stopHeight: number) {
 }
 
 async function fetchGqlHeight(): Promise<number | undefined> {
-  const response = await fetch('http://localhost:4000/graphql', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      query: `query {
-        blocks(first: 1) {
-          edges {
-            node {
-              height
+  try {
+    const response = await axios({
+      method: 'post',
+      url: 'http://localhost:4000/graphql',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      data: JSON.stringify({
+        query: `query {
+          blocks(first: 1) {
+            edges {
+              node {
+                height
+              }
             }
           }
-        }
-      }`,
-    }),
-  });
+        }`,
+      }),
+    });
 
-  if (!response.ok) {
-    console.error('Failed to fetch:', response.statusText);
+    const height = response.data?.data?.blocks?.edges[0]?.node?.height as
+      | number
+      | undefined;
+
+    return height;
+  } catch (error: any) {
+    console.error(
+      'Failed to fetch:',
+      error.response ? error.response.statusText : error.message,
+    );
     return undefined;
   }
-
-  const jsonResponse = await response.json();
-  const height = jsonResponse?.data?.blocks?.edges[0]?.node?.height as
-    | number
-    | undefined;
-
-  return height;
 }
 
 describe('Indexing', function () {
@@ -111,7 +105,7 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       compose = await new DockerComposeEnvironment(
         projectRootPath,
@@ -150,7 +144,7 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       compose = await new DockerComposeEnvironment(
         projectRootPath,
@@ -199,7 +193,7 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      rimrafSync(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       compose = await new DockerComposeEnvironment(
         projectRootPath,
@@ -239,15 +233,16 @@ describe('Indexing', function () {
       //     - cdmhEOYCBCtxLp-KLlrcIdlQtvulobS9c6VT9Oy3H9g
       //     - YdNeWprLu5YjPcPTUFK1avUp6XGKCMxJAkhyM2z0FmE
       //   - vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM
-      await fetch('http://localhost:4000/ar-io/admin/queue-tx', {
-        method: 'POST',
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
         headers: {
           Authorization: 'Bearer secret',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
+        data: {
           id: 'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
-        }),
+        },
       });
 
       await waitForIndexing();
