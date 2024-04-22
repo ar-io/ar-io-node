@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { get } from 'node:http';
 import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
 import {
@@ -23,11 +22,15 @@ import {
   StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
+import axios from 'axios';
+import { rimraf } from 'rimraf';
 
 const projectRootPath = process.cwd();
 let compose: StartedDockerComposeEnvironment;
 
 before(async function () {
+  await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
   compose = await new DockerComposeEnvironment(
     projectRootPath,
     'docker-compose.yaml',
@@ -47,51 +50,36 @@ after(async function () {
 });
 
 describe('ArNS', function () {
-  it('Verifying that "__unknown__.ar-io.localhost" returns 404', function () {
-    const req = get(
-      'http://localhost:4000',
-      { headers: { Host: '__unknown__.ar-io.localhost' } },
-      (res) => {
-        assert.strictEqual(res.statusCode, 404);
-      },
-    );
+  it('Verifying that "__unknown__.ar-io.localhost" returns 404', async function () {
+    const res = await axios.get('http://localhost:4000', {
+      headers: { Host: '__unknown__.ar-io.localhost' },
+      validateStatus: () => true,
+    });
 
-    req.end();
+    assert.strictEqual(res.status, 404);
   });
 
-  it('Verifying that "ardrive.ar-io.localhost" returns 200', function () {
-    const req = get(
-      'http://localhost:4000',
-      { headers: { Host: 'ardrive.ar-io.localhost' } },
-      (res) => {
-        assert.strictEqual(res.statusCode, 200);
-      },
-    );
+  it('Verifying that "ardrive.ar-io.localhost" returns 200', async function () {
+    const res = await axios.get('http://localhost:4000', {
+      headers: { Host: 'ardrive.ar-io.localhost' },
+    });
 
-    req.end();
+    assert.strictEqual(res.status, 200);
   });
 
-  it('Verifying "ardrive.ar-io.localhost" X-ArNS-Resolved-ID header', function () {
-    const req = get(
-      'http://localhost:4000',
-      { headers: { host: 'ardrive.ar-io.localhost' } },
-      (res) => {
-        assert.strictEqual(typeof res.headers['x-arns-resolved-id'], 'string');
-      },
-    );
+  it('Verifying "ardrive.ar-io.localhost" X-ArNS-Resolved-ID header', async function () {
+    const res = await axios.get('http://localhost:4000', {
+      headers: { Host: 'ardrive.ar-io.localhost' },
+    });
 
-    req.end();
+    assert.strictEqual(typeof res.headers['x-arns-resolved-id'], 'string');
   });
 
-  it('Verifying "ardrive.ar-io.localhost" X-ArNS-TTL-Seconds header', function () {
-    const req = get(
-      'http://localhost:4000',
-      { headers: { host: 'ardrive.ar-io.localhost' } },
-      (res) => {
-        assert.strictEqual(typeof res.headers['x-arns-ttl-seconds'], 'string');
-      },
-    );
+  it('Verifying "ardrive.ar-io.localhost" X-ArNS-TTL-Seconds header', async function () {
+    const res = await axios.get('http://localhost:4000', {
+      headers: { Host: 'ardrive.ar-io.localhost' },
+    });
 
-    req.end();
+    assert.strictEqual(typeof res.headers['x-arns-ttl-seconds'], 'string');
   });
 });
