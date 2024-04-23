@@ -70,6 +70,13 @@ export class TransactionFetcher {
   async queueTxId(txId: string): Promise<void> {
     const log = this.log.child({ method: 'queueTxId', txId });
     log.info('Queuing transaction...');
+
+    const queueedItems = this.queue.getQueue();
+    if (queueedItems.includes(txId)) {
+      log.info('Transaction already queued.');
+      return;
+    }
+
     this.queue.push(txId);
     log.info('Transaction queued.');
   }
