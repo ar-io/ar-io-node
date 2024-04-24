@@ -65,7 +65,7 @@ export class TransactionRepairWorker {
         await this.chainIndex.getMissingTxIds(DEFAULT_TXS_TO_RETRY);
       for (const txId of missingTxIds) {
         this.log.info('Retrying missing transaction', { txId });
-        await this.txFetcher.queueTxId(txId);
+        await this.txFetcher.queueTxId({ txId });
       }
     } catch (error: any) {
       this.log.error('Error retrying missing transactions:', error);

@@ -297,7 +297,7 @@ export class ArweaveCompositeClient
             // Prefetch transactions
             if (prefetchTxs) {
               block.txs.forEach(async (txId: string) => {
-                this.prefetchTx(txId);
+                this.prefetchTx({ txId });
               });
             }
 
@@ -389,7 +389,13 @@ export class ArweaveCompositeClient
     });
   }
 
-  prefetchTx(txId: string): Promise<PartialJsonTransaction | undefined> {
+  prefetchTx({
+    txId,
+    isPendingTx = false,
+  }: {
+    txId: string;
+    isPendingTx?: boolean;
+  }): Promise<PartialJsonTransaction | undefined> {
     const cachedResponsePromise = this.txPromiseCache.get(txId);
     if (cachedResponsePromise) {
       // Update TTL if block promise is already cached
@@ -407,6 +413,18 @@ export class ArweaveCompositeClient
         // Return cached TX if it exists
         if (!this.skipCache && tx) {
           return tx;
+        }
+
+        if (isPendingTx) {
+          // Request pending TX from trusted node
+          return this.trustedNodeRequestQueue
+            .push({
+              method: 'GET',
+              url: `/unconfirmed_tx/${txId}`,
+            })
+            .then((response) => {
+              return response.data;
+            });
         }
 
         return this.peerGetTx(txId)
@@ -452,10 +470,16 @@ export class ArweaveCompositeClient
     return responsePromise as Promise<PartialJsonTransaction | undefined>;
   }
 
-  async getTx(txId: string): Promise<PartialJsonTransaction> {
+  async getTx({
+    txId,
+    isPendingTx = false,
+  }: {
+    txId: string;
+    isPendingTx?: boolean;
+  }): Promise<PartialJsonTransaction> {
     try {
       // Wait for TX response
-      const tx = await this.prefetchTx(txId);
+      const tx = await this.prefetchTx({ txId, isPendingTx });
 
       // Check that a response was returned since the promise returns undefined
       // on failure
@@ -514,7 +538,7 @@ export class ArweaveCompositeClient
     await Promise.all(
       block.txs.map(async (txId) => {
         try {
-          const tx = await this.getTx(txId);
+          const tx = await this.getTx({ txId });
           txs.push(tx);
         } catch (error) {
           missingTxIds.push(txId);
@@ -637,5 +661,14 @@ export class ArweaveCompositeClient
       verified: false,
       cached: false,
     };
+  }
+
+  async getPendingTxIds(): Promise<string[]> {
+    const response = await this.trustedNodeRequest({
+      method: 'GET',
+      url: '/tx/pending',
+    });
+
+    return response.data;
   }
 }

@@ -41,6 +41,7 @@ if (config.START_WRITERS) {
   system.txOffsetRepairWorker.start();
   system.txRepairWorker.start();
   system.bundleRepairWorker.start();
+  system.mempoolWatcher?.start();
 }
 
 // HTTP server

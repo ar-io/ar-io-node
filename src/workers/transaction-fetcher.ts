@@ -39,7 +39,7 @@ export class TransactionFetcher {
   private retryWaitMs: number;
 
   // TX fetch queue
-  private queue: queueAsPromised<string, void>;
+  private queue: queueAsPromised<{ txId: string; isPendingTx?: boolean }, void>;
 
   constructor({
     log,
@@ -67,21 +67,33 @@ export class TransactionFetcher {
     this.queue = fastq.promise(this.fetchTx.bind(this), workerCount);
   }
 
-  async queueTxId(txId: string): Promise<void> {
+  async queueTxId({
+    txId,
+    isPendingTx = false,
+  }: {
+    txId: string;
+    isPendingTx?: boolean;
+  }): Promise<void> {
     const log = this.log.child({ method: 'queueTxId', txId });
     log.info('Queuing transaction...');
 
-    const queueedItems = this.queue.getQueue();
-    if (queueedItems.includes(txId)) {
+    const queuedItems = this.queue.getQueue();
+    if (queuedItems.some((item) => item.txId === txId)) {
       log.info('Transaction already queued.');
       return;
     }
 
-    this.queue.push(txId);
+    this.queue.push({ txId, isPendingTx });
     log.info('Transaction queued.');
   }
 
-  async fetchTx(txId: string): Promise<void> {
+  async fetchTx({
+    txId,
+    isPendingTx = false,
+  }: {
+    txId: string;
+    isPendingTx?: boolean;
+  }): Promise<void> {
     const log = this.log.child({ txId });
 
     let attempts = 0;
@@ -89,7 +101,7 @@ export class TransactionFetcher {
     while (attempts < this.maxAttempts && !tx) {
       try {
         log.info('Fetching transaction...');
-        tx = await this.chainSource.getTx(txId);
+        tx = await this.chainSource.getTx({ txId, isPendingTx });
         this.eventEmitter.emit(events.TX_FETCHED, tx);
         log.info('Transaction fetched.');
       } catch (error: any) {
