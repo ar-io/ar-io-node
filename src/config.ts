@@ -210,6 +210,18 @@ export const TRUSTED_ARNS_RESOLVER_URL = env.varOrDefault(
 );
 
 //
+// Mempool watcher
+//
+//
+export const ENABLE_MEMPOOL_WATCHER =
+  env.varOrDefault('ENABLE_MEMPOOL_WATCHER', 'false') === 'true';
+
+export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
+  'MEMPOOL_POLLING_INTERVAL_MS',
+  '300000', // 5 minutes
+);
+
+//
 // Development and testing
 //
 

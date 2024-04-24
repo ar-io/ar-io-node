@@ -66,6 +66,7 @@ import { TransactionOffsetImporter } from './workers/transaction-offset-importer
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSResolver } from './init/resolvers.js';
+import { MempoolWatcher } from './workers/mempool-watcher.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -405,6 +406,15 @@ const webhookEmitter = new WebhookEmitter({
   log,
 });
 
+export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
+  ? new MempoolWatcher({
+      log,
+      arweaveClient,
+      txFetcher,
+      mempoolPoolingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
+    })
+  : undefined;
+
 let isShuttingDown = false;
 
 export const shutdown = async (express: Server) => {
@@ -416,6 +426,7 @@ export const shutdown = async (express: Server) => {
     express.close(async () => {
       log.debug('Web server stopped successfully');
       eventEmitter.removeAllListeners();
+      await mempoolWatcher?.stop();
       await blockImporter.stop();
       await dataItemIndexer.stop();
       await txRepairWorker.stop();
