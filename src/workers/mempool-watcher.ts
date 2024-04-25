@@ -17,7 +17,7 @@
  */
 import { default as wait } from 'wait';
 import * as winston from 'winston';
-import { ArweaveCompositeClient } from '../arweave/composite-client.js';
+import { ChainSource } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
 enum TxState {
@@ -27,7 +27,7 @@ enum TxState {
 export class MempoolWatcher {
   // Dependencies
   private log: winston.Logger;
-  private arweaveClient: ArweaveCompositeClient;
+  private chainSource: ChainSource;
   private txFetcher: TransactionFetcher;
 
   // Parameters
@@ -39,17 +39,17 @@ export class MempoolWatcher {
 
   constructor({
     log,
-    arweaveClient,
+    chainSource,
     txFetcher,
     mempoolPollingIntervalMs,
   }: {
     log: winston.Logger;
-    arweaveClient: ArweaveCompositeClient;
+    chainSource: ChainSource;
     txFetcher: TransactionFetcher;
     mempoolPollingIntervalMs: number;
   }) {
     this.log = log.child({ class: 'MempoolWatcher' });
-    this.arweaveClient = arweaveClient;
+    this.chainSource = chainSource;
     this.txFetcher = txFetcher;
     this.mempoolPollingIntervalMs = mempoolPollingIntervalMs;
     this.shouldRun = false;
@@ -78,7 +78,7 @@ export class MempoolWatcher {
     while (this.shouldRun) {
       this.log.info('Fetching mempool...');
       try {
-        const pendingTxsList = await this.arweaveClient.getPendingTxIds();
+        const pendingTxsList = await this.chainSource.getPendingTxIds();
 
         this.normalizePendingTxs(pendingTxsList);
 
