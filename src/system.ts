@@ -411,7 +411,7 @@ export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
       log,
       arweaveClient,
       txFetcher,
-      mempoolPoolingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
+      mempoolPollingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
     })
   : undefined;
 
