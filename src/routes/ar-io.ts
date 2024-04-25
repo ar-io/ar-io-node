@@ -98,7 +98,7 @@ arIoRouter.post('/ar-io/admin/queue-tx', express.json(), async (req, res) => {
       return;
     }
     system.prioritizedTxIds.add(id);
-    system.txFetcher.queueTxId(id);
+    system.txFetcher.queueTxId({ txId: id });
     res.json({ message: 'TX queued' });
   } catch (error: any) {
     res.status(500).send(error?.message);
