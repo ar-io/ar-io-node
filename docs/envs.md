@@ -46,5 +46,5 @@ This document describes the environment variables that can be used to configure 
 | WEBHOOK_INDEX_FILTER                    | String               | {"never": true}                               | Only emit webhooks for transactions and data items compliant with this filter                                                   |
 | CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD | Number               | undefined                                     | Sets the age threshold in seconds; files older than this are candidates for contiguous data cache cleanup                       |
 | ENABLE_MEMPOOL_WATCHER                  | Boolean              | false                                         | If true, the observer will start indexing pending tx from the mempool                                                           |
-| MEMPOOL_POLLING_INTERVAL_MS             | Number               | 300000                                        | Sets the mempool polling interval in milliseconds                                                                               |
+| MEMPOOL_POLLING_INTERVAL_MS             | Number               | 30000                                         | Sets the mempool polling interval in milliseconds                                                                               |
 

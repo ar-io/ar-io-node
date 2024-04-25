@@ -218,7 +218,7 @@ export const ENABLE_MEMPOOL_WATCHER =
 
 export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
   'MEMPOOL_POLLING_INTERVAL_MS',
-  '300000', // 5 minutes
+  '30000', // 30 seconds
 );
 
 //
