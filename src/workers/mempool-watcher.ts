@@ -51,11 +51,10 @@ export class MempoolWatcher {
     this.shouldRun = false;
   }
 
-  private normalizePendingTxs(txs: string[]): void {
-    const mempoolTxs = new Set(txs);
+  private normalizePendingTxs(mempoolTxs: string[]): void {
     // Remove items from the pendingTxs that aren't in the mempool and were already fetched
     for (const [key, value] of this.pendingTxs) {
-      if (!mempoolTxs.has(key) && value === true) {
+      if (!mempoolTxs.includes(key) && value === true) {
         this.pendingTxs.delete(key);
       }
     }
