@@ -389,7 +389,6 @@ if (!isMainThread) {
       const stream = fs.createReadStream(bundlePath, { start, end });
 
       stream.on('data', (chunk) => {
-        console.log('chunk', chunk);
         hasher.update(chunk);
       });
 

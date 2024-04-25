@@ -70,8 +70,7 @@ describe('ReadThroughDataCache', function () {
       },
       createWriteStream: async () => {
         const stream = new Writable({
-          write(chunk, _, callback) {
-            console.log(chunk.toString());
+          write(_chunk, _, callback) {
             callback();
           },
         });
