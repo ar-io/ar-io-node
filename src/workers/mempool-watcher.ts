@@ -20,6 +20,10 @@ import * as winston from 'winston';
 import { ArweaveCompositeClient } from '../arweave/composite-client.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
+enum TxState {
+  Pending,
+  Fetched,
+}
 export class MempoolWatcher {
   // Dependencies
   private log: winston.Logger;
@@ -31,7 +35,7 @@ export class MempoolWatcher {
 
   // State
   private shouldRun: boolean;
-  private pendingTxs: Map<string, boolean> = new Map();
+  private pendingTxs: Map<string, TxState> = new Map();
 
   constructor({
     log,
@@ -54,7 +58,7 @@ export class MempoolWatcher {
   private normalizePendingTxs(mempoolTxs: string[]): void {
     // Remove items from the pendingTxs that aren't in the mempool and were already fetched
     for (const [key, value] of this.pendingTxs) {
-      if (!mempoolTxs.includes(key) && value === true) {
+      if (!mempoolTxs.includes(key) && value === TxState.Fetched) {
         this.pendingTxs.delete(key);
       }
     }
@@ -62,7 +66,7 @@ export class MempoolWatcher {
     // Add items from the mempool to the pendingTxs if they are not already there
     for (const item of mempoolTxs) {
       if (!this.pendingTxs.has(item)) {
-        this.pendingTxs.set(item, false);
+        this.pendingTxs.set(item, TxState.Pending);
       }
     }
   }
@@ -79,9 +83,9 @@ export class MempoolWatcher {
         this.normalizePendingTxs(pendingTxsList);
 
         for (const [key, value] of this.pendingTxs) {
-          if (value === false) {
+          if (value === TxState.Pending) {
             this.txFetcher.queueTxId({ txId: key, isPendingTx: true });
-            this.pendingTxs.set(key, true);
+            this.pendingTxs.set(key, TxState.Fetched);
           }
         }
 
