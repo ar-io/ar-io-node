@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 
 import { fromB64Url } from '../src/lib/encoding.js';
@@ -76,7 +77,7 @@ export class ArweaveChainSourceStub implements ChainSource {
     this.missingTxIds = this.missingTxIds.concat(txIds);
   }
 
-  async getTx(txId: string): Promise<PartialJsonTransaction> {
+  async getTx({ txId }: { txId: string }): Promise<PartialJsonTransaction> {
     if (fs.existsSync(`test/mock_files/txs/${txId}.json`)) {
       return JSON.parse(
         fs.readFileSync(`test/mock_files/txs/${txId}.json`, 'utf8'),
@@ -100,7 +101,7 @@ export class ArweaveChainSourceStub implements ChainSource {
     txId: string,
     field: K,
   ): Promise<PartialJsonTransaction[K]> {
-    const tx = await this.getTx(txId);
+    const tx = await this.getTx({ txId });
     return tx[field];
   }
 
@@ -114,7 +115,7 @@ export class ArweaveChainSourceStub implements ChainSource {
         if (this.missingTxIds.includes(txId)) {
           missingTxIds.push(txId);
         } else {
-          txs.push(await this.getTx(txId));
+          txs.push(await this.getTx({ txId }));
         }
       } catch (e) {
         missingTxIds.push(txId);
@@ -130,6 +131,15 @@ export class ArweaveChainSourceStub implements ChainSource {
 
   setHeight(height: number) {
     this.height = height;
+  }
+
+  async getPendingTxIds(): Promise<string[]> {
+    const mockedTxPath = 'test/mock_files/txs';
+    const mockedTxsFiles = fs.readdirSync(mockedTxPath);
+
+    return mockedTxsFiles
+      .filter((file) => path.extname(file).toLowerCase() === '.json')
+      .map((file) => path.basename(file, '.json'));
   }
 }
 

@@ -205,7 +205,7 @@ describe('Transaction message pack encoding and decoding functions', () => {
           '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
         ].map(async (txId) => {
           const chainSource = new ArweaveChainSourceStub();
-          const tx = await chainSource.getTx(txId);
+          const tx = await chainSource.getTx({ txId });
 
           // Remove extranious header fields
           delete (tx as any).data;
@@ -227,7 +227,7 @@ describe('Transaction message pack encoding and decoding functions', () => {
         '8V0K0DltgqPzBDa_FYyOdWnfhSngRj7ORH0lnOeqChw', // data TX from block 800,000
       ].forEach(async (txId) => {
         const chainSource = new ArweaveChainSourceStub();
-        const tx = await chainSource.getTx(txId);
+        const tx = await chainSource.getTx({ txId });
 
         // Remove extranious header fields
         delete (tx as any).data;

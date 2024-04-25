@@ -409,7 +409,7 @@ const webhookEmitter = new WebhookEmitter({
 export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
   ? new MempoolWatcher({
       log,
-      arweaveClient,
+      chainSource: arweaveClient,
       txFetcher,
       mempoolPollingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
     })
