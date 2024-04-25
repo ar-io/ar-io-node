@@ -27,7 +27,7 @@ export class MempoolWatcher {
   private txFetcher: TransactionFetcher;
 
   // Parameters
-  private mempoolPoolingIntervalMs: number;
+  private mempoolPollingIntervalMs: number;
 
   // State
   private shouldRun: boolean;
@@ -37,17 +37,17 @@ export class MempoolWatcher {
     log,
     arweaveClient,
     txFetcher,
-    mempoolPoolingIntervalMs,
+    mempoolPollingIntervalMs,
   }: {
     log: winston.Logger;
     arweaveClient: ArweaveCompositeClient;
     txFetcher: TransactionFetcher;
-    mempoolPoolingIntervalMs: number;
+    mempoolPollingIntervalMs: number;
   }) {
     this.log = log.child({ class: 'MempoolWatcher' });
     this.arweaveClient = arweaveClient;
     this.txFetcher = txFetcher;
-    this.mempoolPoolingIntervalMs = mempoolPoolingIntervalMs;
+    this.mempoolPollingIntervalMs = mempoolPollingIntervalMs;
     this.shouldRun = false;
   }
 
@@ -90,7 +90,7 @@ export class MempoolWatcher {
         this.log.error('Failed to fetch mempool.', err);
       }
 
-      await wait(this.mempoolPoolingIntervalMs);
+      await wait(this.mempoolPollingIntervalMs);
     }
   }
 
