@@ -97,8 +97,8 @@ async function fetchGqlHeight(): Promise<number | undefined> {
 }
 
 describe('Indexing', function () {
-  const START_HEIGHT = 1;
-  const STOP_HEIGHT = 11;
+  const START_HEIGHT = 0;
+  const STOP_HEIGHT = 1;
 
   describe('Initialization', function () {
     let coreDb: Database;
@@ -200,8 +200,8 @@ describe('Indexing', function () {
         'docker-compose.yaml',
       )
         .withEnvironment({
-          START_HEIGHT: '0',
-          STOP_HEIGHT: '0',
+          START_HEIGHT: '1',
+          STOP_HEIGHT: '1',
           ANS104_UNBUNDLE_FILTER: '{"always": true}',
           ANS104_INDEX_FILTER: '{"always": true}',
           ADMIN_API_KEY: 'secret',
@@ -306,6 +306,56 @@ describe('Indexing', function () {
 
       assert.equal(parentHashByDataHash[dataItemHash], bundleHash);
       assert.equal(parentHashByDataHash[nestedDataItemHash], dataItemHash);
+    });
+  });
+
+  describe('Mempool indexing', function () {
+    let coreDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAll = () =>
+        coreDb.prepare('SELECT * FROM new_transactions').all();
+
+      while (getAll().length === 0) {
+        console.log('Waiting for pending txs to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    before(async function () {
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
+      compose = await new DockerComposeEnvironment(
+        projectRootPath,
+        'docker-compose.yaml',
+      )
+        .withEnvironment({
+          START_HEIGHT: '1',
+          STOP_HEIGHT: '1',
+          // ANS104_UNBUNDLE_FILTER: '{"always": true}',
+          // ANS104_INDEX_FILTER: '{"always": true}',
+          ENABLE_MEMPOOL_WATCHER: 'true',
+          MEMPOOL_POLLING_INTERVAL_MS: '10000000',
+        })
+        .withBuild()
+        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+        .up(['core']);
+
+      coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+
+      await waitForIndexing();
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('Verifying if pending transactions were indexed', async function () {
+      const stmt = coreDb.prepare('SELECT * FROM new_transactions');
+      const txs = stmt.all();
+
+      assert.ok(txs.length >= 1);
     });
   });
 });

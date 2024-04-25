@@ -204,7 +204,7 @@ export const txFetcher = new TransactionFetcher({
 
 // Async fetch block TXs that failed sync fetch
 eventEmitter.on(events.BLOCK_TX_FETCH_FAILED, ({ id: txId }) => {
-  txFetcher.queueTxId(txId);
+  txFetcher.queueTxId({ txId });
 });
 
 const txImporter = new TransactionImporter({
