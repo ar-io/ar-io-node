@@ -1,0 +1,13 @@
+dbs:
+  - path: /app/data/sqlite/core.db
+    replicas:
+      - type: s3
+        endpoint: https://your-minio-or-s3-endpoint.example.com
+        name: core.db
+        bucket: my-awesome-backup-bucket
+        path: core.db
+        region: us-east-1
+        forcePathStyle: true
+        sync-interval: 1s
+        access-key-id: your-aws-slash-minio-access-key
+        secret-access-key: your-aws-slash-minio-secret-key

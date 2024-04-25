@@ -1,5 +1,10 @@
----
-version: '3.0'
+version: '3.8'
+
+volumes:
+  chunks-data:
+  contiguous-data:
+  headers-data:
+  db-data:
 
 services:
   envoy:
@@ -32,10 +37,10 @@ services:
     ports:
       - 4000:4000
     volumes:
-      - ${CHUNKS_DATA_PATH:-./data/chunks}:/app/data/chunks
-      - ${CONTIGUOUS_DATA_PATH:-./data/contiguous}:/app/data/contiguous
-      - ${HEADERS_DATA_PATH:-./data/headers}:/app/data/headers
-      - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
+      - db-data:/app/data/sqlite
+      - chunks-data:/app/data/chunks
+      - contiguous-data:/app/data/contiguous
+      - headers-data:/app/data/headers
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
     environment:
@@ -122,3 +127,13 @@ services:
       - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
     volumes:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
+
+  backup-container:
+    image: litestream/litestream
+    profiles:
+      - litestream
+    volumes:
+      - db-data:/app/data/sqlite
+      - ${LITESTREAM_CONFIG_PATH:-./litestream.yaml}:/etc/litestream.yml
+    entrypoint: /usr/local/bin/litestream
+    command: replicate -config /etc/litestream.yml
