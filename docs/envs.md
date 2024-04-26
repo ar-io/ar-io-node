@@ -1,8 +1,9 @@
 # ENVs
+
 This document describes the environment variables that can be used to configure the `ar.io` node.
 
 | ENV_NAME                                | TYPE                 | DEFAULT_VALUE                                 | DESCRIPTION                                                                                                                     |
-|-----------------------------------------|----------------------|-----------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| --------------------------------------- | -------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | START_HEIGHT                            | Number or "Infinity" | 0                                             | Starting block height for node synchronization (0 = start from the beginning)                                                   |
 | STOP_HEIGHT                             | Number or "Infinity" | "Infinity"                                    | Stop block height for node synchronization (Infinity = keep syncing until stopped)                                              |
 | TRUSTED_NODE_URL                        | String               | "https://arweave.net"                         | Arweave node to use for fetching data                                                                                           |
@@ -31,7 +32,6 @@ This document describes the environment variables that can be used to configure 
 | CHUNKS_DATA_PATH                        | String               | "./data/chunks"                               | Sets the location for chunked data to be saved. If omitted, chunked data will be stored in the `data` directory                 |
 | CONTIGUOUS_DATA_PATH                    | String               | "./data/contiguous"                           | Sets the location for contiguous data to be saved. If omitted, contiguous data will be stored in the `data` directory           |
 | HEADERS_DATA_PATH                       | String               | "./data/headers"                              | Sets the location for header data to be saved. If omitted, header data will be stored in the `data` directory                   |
-| SQLITE_DATA_PATH                        | String               | "./data/sqlite"                               | Sets the location for sqlite indexed data to be saved. If omitted, sqlite data will be stored in the `data` directory           |
 | TEMP_DATA_PATH                          | String               | "./data/tmp"                                  | Sets the location for temporary data to be saved. If omitted, temporary data will be stored in the `data` directory             |
 | LMDB_DATA_PATH                          | String               | "./data/LMDB"                                 | Sets the location for LMDB data to be saved. If omitted, LMDB data will be stored in the `data` directory                       |
 | CHAIN_CACHE_TYPE                        | String               | "redis"                                       | Sets the method for caching chain data, defaults redis if gateway is started with docker-compose, otherwise defaults to LMDB    |
@@ -45,4 +45,3 @@ This document describes the environment variables that can be used to configure 
 | WEBHOOK_TARGET_SERVERS                  | String               | undefined                                     | Target servers for webhooks                                                                                                     |
 | WEBHOOK_INDEX_FILTER                    | String               | {"never": true}                               | Only emit webhooks for transactions and data items compliant with this filter                                                   |
 | CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD | Number               | undefined                                     | Sets the age threshold in seconds; files older than this are candidates for contiguous data cache cleanup                       |
-

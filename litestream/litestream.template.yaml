@@ -1,0 +1,12 @@
+dbs:
+  - path: /app/data/sqlite/core.db
+    replicas:
+      - type: s3
+        endpoint: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_URL
+        name: ar_io_node_core.backup.db
+        bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
+        region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
+        forcePathStyle: true
+        sync-interval: 1s
+        access-key-id: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_ACCESS_KEY
+        secret-access-key: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY
