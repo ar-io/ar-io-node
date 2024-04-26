@@ -74,7 +74,7 @@ const setDataHeaders = ({
   }
 
   // Indicate whether the data was served from cache
-  res.header(headerNames.cached, data.cached ? 'HIT' : 'MISS');
+  res.header(headerNames.cache, data.cached ? 'HIT' : 'MISS');
 
   // Indicate the number of hops the request has made and origin
   if (data.requestAttributes !== undefined) {

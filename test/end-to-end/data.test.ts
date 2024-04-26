@@ -239,7 +239,7 @@ describe('Data', function () {
   });
 });
 
-describe('X-Cached header', function () {
+describe('X-Cache header', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
@@ -268,16 +268,16 @@ describe('X-Cached header', function () {
     await compose.down();
   });
 
-  it('Verifying x-cached header when no cache available', async function () {
+  it('Verifying x-cache header when no cache available', async function () {
     const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
 
-    assert.equal(res.headers['x-cached'], 'MISS');
+    assert.equal(res.headers['x-cache'], 'MISS');
   });
 
-  it('Verifying x-cached header when cache is available', async function () {
+  it('Verifying x-cache header when cache is available', async function () {
     const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
 
-    assert.equal(res.headers['x-cached'], 'HIT');
+    assert.equal(res.headers['x-cache'], 'HIT');
   });
 });
 

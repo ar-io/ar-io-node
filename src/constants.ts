@@ -19,7 +19,7 @@
 const headerNames = {
   hops: 'X-AR-IO-Hops',
   origin: 'X-AR-IO-Origin',
-  cached: 'X-Cached',
+  cache: 'X-Cache',
   arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
 };
