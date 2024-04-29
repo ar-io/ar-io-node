@@ -2349,7 +2349,12 @@ export class StandaloneSqliteDatabase
           takeWork(); // Check if there's more work to do
         })
         .on('error', (err) => {
-          self.log.error('Worker error', err);
+          self.log.error(
+            'Worker error',
+            typeof err === 'object' && err !== null
+              ? JSON.stringify(err, Object.getOwnPropertyNames(err))
+              : err,
+          );
           error = err;
         })
         .on('exit', (code) => {
