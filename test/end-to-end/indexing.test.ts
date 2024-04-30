@@ -333,8 +333,6 @@ describe('Indexing', function () {
         .withEnvironment({
           START_HEIGHT: '1',
           STOP_HEIGHT: '1',
-          // ANS104_UNBUNDLE_FILTER: '{"always": true}',
-          // ANS104_INDEX_FILTER: '{"always": true}',
           ENABLE_MEMPOOL_WATCHER: 'true',
           MEMPOOL_POLLING_INTERVAL_MS: '10000000',
         })
