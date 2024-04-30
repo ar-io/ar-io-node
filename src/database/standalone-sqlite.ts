@@ -84,9 +84,9 @@ export function encodeTransactionGqlCursor({
   blockTransactionIndex,
   dataItemId,
 }: {
-  height?: number;
-  blockTransactionIndex?: number;
-  dataItemId?: string;
+  height: number | null;
+  blockTransactionIndex: number;
+  dataItemId: string | null;
 }) {
   return utf8ToB64Url(
     JSON.stringify([height, blockTransactionIndex, dataItemId]),
@@ -1124,12 +1124,13 @@ export class StandaloneSqliteDatabaseWorker {
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
         "'' AS parent_id",
+        'nt.indexed_at AS indexed_at',
       )
       .from('new_transactions nt')
-      .join('new_block_transactions nbt', {
+      .leftJoin('new_block_transactions nbt', {
         'nbt.transaction_id': 'nt.id',
       })
-      .join('new_blocks nb', {
+      .leftJoin('new_blocks nb', {
         'nb.indep_hash': 'nbt.block_indep_hash',
       })
       .join('wallets w', {
@@ -1158,12 +1159,13 @@ export class StandaloneSqliteDatabaseWorker {
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
         'ndi.parent_id',
+        'ndi.indexed_at AS indexed_at',
       )
       .from('new_data_items ndi')
-      .join('new_block_transactions nbt', {
+      .leftJoin('new_block_transactions nbt', {
         'nbt.transaction_id': 'ndi.root_transaction_id',
       })
-      .join('new_blocks nb', {
+      .leftJoin('new_blocks nb', {
         'nb.indep_hash': 'nbt.block_indep_hash',
       })
       .join('bundles.wallets w', {
@@ -1192,6 +1194,7 @@ export class StandaloneSqliteDatabaseWorker {
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
         "'' AS parent_id",
+        '0 AS indexed_at',
       )
       .from('stable_transactions st')
       .join('stable_blocks sb', {
@@ -1223,6 +1226,7 @@ export class StandaloneSqliteDatabaseWorker {
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
         'sdi.parent_id',
+        'sdi.indexed_at AS indexed_at',
       )
       .from('bundles.stable_data_items sdi')
       .join('stable_blocks sb', {
@@ -1448,6 +1452,7 @@ export class StandaloneSqliteDatabaseWorker {
       } else {
         orderBy += `, 3 DESC`;
       }
+      orderBy += `, indexed_at ASC`;
       query.orderBy(orderBy);
     } else {
       if (
@@ -1488,6 +1493,7 @@ export class StandaloneSqliteDatabaseWorker {
       } else {
         orderBy += `, 3 ASC`;
       }
+      orderBy += `, indexed_at ASC`;
       query.orderBy(orderBy);
     }
   }
@@ -1514,7 +1520,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
-  }) {
+  }): GqlTransaction[] {
     const txsQuery = this.getGqlNewTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -1565,8 +1571,9 @@ export class StandaloneSqliteDatabaseWorker {
     if (bundledIn === undefined || Array.isArray(bundledIn)) {
       sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
     }
+
     sqlParts.push(
-      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}`,
+      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, indexed_at ${sqlSortOrder}`,
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
@@ -1580,11 +1587,11 @@ export class StandaloneSqliteDatabaseWorker {
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
-        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : undefined,
+        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : null,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
-        recipient: tx.target ? toB64Url(tx.target) : undefined,
+        recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
         fee: tx.reward,
@@ -1595,9 +1602,13 @@ export class StandaloneSqliteDatabaseWorker {
             ? this.getGqlNewDataItemTags(tx.id)
             : this.getGqlNewTransactionTags(tx.id),
         contentType: tx.content_type,
-        blockIndepHash: toB64Url(tx.block_indep_hash),
+        blockIndepHash: tx.block_indep_hash
+          ? toB64Url(tx.block_indep_hash)
+          : null,
         blockTimestamp: tx.block_timestamp,
-        blockPreviousBlock: toB64Url(tx.block_previous_block),
+        blockPreviousBlock: tx.block_previous_block
+          ? toB64Url(tx.block_previous_block)
+          : null,
         parentId: tx.parent_id ? toB64Url(tx.parent_id) : null,
       }));
   }
@@ -1624,7 +1635,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
-  }) {
+  }): GqlTransaction[] {
     const txsQuery = this.getGqlStableTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -1691,11 +1702,11 @@ export class StandaloneSqliteDatabaseWorker {
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
-        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : undefined,
+        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : null,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
-        recipient: tx.target ? toB64Url(tx.target) : undefined,
+        recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
         fee: tx.reward,
@@ -1817,7 +1828,7 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
-  getGqlTransaction({ id }: { id: string }) {
+  getGqlTransaction({ id }: { id: string }): GqlTransaction {
     let tx = this.getGqlStableTransactions({ pageSize: 1, ids: [id] })[0];
     if (!tx) {
       tx = this.getGqlNewTransactions({ pageSize: 1, ids: [id] })[0];
