@@ -333,8 +333,6 @@ describe('Indexing', function () {
         .withEnvironment({
           START_HEIGHT: '1',
           STOP_HEIGHT: '1',
-          // ANS104_UNBUNDLE_FILTER: '{"always": true}',
-          // ANS104_INDEX_FILTER: '{"always": true}',
           ENABLE_MEMPOOL_WATCHER: 'true',
           MEMPOOL_POLLING_INTERVAL_MS: '10000000',
         })
@@ -356,6 +354,128 @@ describe('Indexing', function () {
       const txs = stmt.all();
 
       assert.ok(txs.length >= 1);
+    });
+  });
+
+  describe('Pending TX GQL indexing', function () {
+    let coreDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAll = () =>
+        coreDb.prepare('SELECT * FROM new_transactions').all();
+
+      while (getAll().length === 0) {
+        console.log('Waiting for pending txs to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    const fetchGqlTxs = async () => {
+      try {
+        const response = await axios({
+          method: 'post',
+          url: 'http://localhost:4000/graphql',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          data: JSON.stringify({
+            query: `query {
+              transactions {
+                edges {
+                  node {
+                    id
+                    bundledIn {
+                      id
+                    }
+                  }
+                }
+              }
+            }`,
+          }),
+        });
+
+        return response.data?.data?.transactions?.edges.map(
+          (tx: any) => tx.node,
+        );
+      } catch (error: any) {
+        console.error(
+          'Failed to fetch:',
+          error.response ? error.response.statusText : error.message,
+        );
+        return undefined;
+      }
+    };
+
+    before(async function () {
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
+      compose = await new DockerComposeEnvironment(
+        projectRootPath,
+        'docker-compose.yaml',
+      )
+        .withEnvironment({
+          START_HEIGHT: '1',
+          STOP_HEIGHT: '1',
+          ANS104_UNBUNDLE_FILTER: '{"always": true}',
+          ANS104_INDEX_FILTER: '{"always": true}',
+          ADMIN_API_KEY: 'secret',
+        })
+        .withBuild()
+        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+        .up(['core']);
+
+      coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+
+      // queue bundle C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk
+      // bundle structure:
+      // - C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk
+      //   - 8RMvY06r7KjGuJfzc0VAKQku-eMaNtTPKyPA7RO0fv0
+      //   - CKcFeFmIXqEYpn5UdEaXsliQJ5GFKLsO-NKO4X3rcOA
+      //   - g3Ohm5AfSFrOzwk4smBML2uVhO_yzkXnmzi2jVw3eNk
+      //   - ipuEMR4iteGun2eziUDT1_n0_d7UXp2LkpJu9dzO_XU
+      //   - sO-OaJNBuXvJW1fPiXZIDm_Zg1xBWOxByMILqMJ2-R4
+      //   - vUAI-39ZSja9ENsNgqsiTTWGU7H67Fl_dMuvtvq-cFc
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: {
+          id: 'C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk',
+        },
+      });
+
+      await waitForIndexing();
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('Verifying pending transactions in GQL', async function () {
+      const expectedTxIds = [
+        'C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk',
+        '8RMvY06r7KjGuJfzc0VAKQku-eMaNtTPKyPA7RO0fv0',
+        'CKcFeFmIXqEYpn5UdEaXsliQJ5GFKLsO-NKO4X3rcOA',
+        'g3Ohm5AfSFrOzwk4smBML2uVhO_yzkXnmzi2jVw3eNk',
+        'ipuEMR4iteGun2eziUDT1_n0_d7UXp2LkpJu9dzO_XU',
+        'sO-OaJNBuXvJW1fPiXZIDm_Zg1xBWOxByMILqMJ2-R4',
+        'vUAI-39ZSja9ENsNgqsiTTWGU7H67Fl_dMuvtvq-cFc',
+      ];
+
+      const gqlTxs = await fetchGqlTxs();
+      const gqlTxsIds = gqlTxs.map((tx: any) => tx.id);
+      assert.equal(gqlTxsIds.length, expectedTxIds.length);
+      assert.deepEqual(gqlTxsIds.slice().sort(), expectedTxIds.slice().sort());
+
+      gqlTxs?.forEach((tx: any) => {
+        if (tx.bundledIn) {
+          assert.equal(tx.bundledIn.id, expectedTxIds[0]);
+        }
+      });
     });
   });
 });

@@ -276,18 +276,21 @@ interface GqlTransaction {
   id: string;
   anchor: string;
   signature: string;
-  recipient: string | undefined;
+  recipient: string | null;
   ownerAddress: string;
   ownerKey: string;
   fee: string;
   quantity: string;
   dataSize: string;
-  contentType: string | undefined;
-  blockIndepHash: string | undefined;
-  blockTimestamp: number | undefined;
-  height: number | undefined;
-  blockPreviousBlock: string | undefined;
+  contentType: string | null;
+  blockIndepHash: string | null;
+  blockTimestamp: number | null;
+  height: number | null;
+  blockPreviousBlock: string | null;
   parentId: string | null;
+  blockTransactionIndex: number;
+  dataItemId: string | null;
+  tags: { name: any; value: any }[];
 }
 
 interface GqlTransactionEdge {

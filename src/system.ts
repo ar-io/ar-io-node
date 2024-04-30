@@ -214,7 +214,7 @@ const txImporter = new TransactionImporter({
 });
 
 // Queue fetched TXs to
-eventEmitter.addListener('tx-fetched', (tx: PartialJsonTransaction) => {
+eventEmitter.addListener(events.TX_FETCHED, (tx: PartialJsonTransaction) => {
   txImporter.queueTx(tx);
 });
 
