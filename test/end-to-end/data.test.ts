@@ -30,6 +30,7 @@ import {
 } from 'testcontainers';
 import { createServer } from 'node:http';
 import axios from 'axios';
+import wait from 'wait';
 
 const projectRootPath = process.cwd();
 
@@ -66,7 +67,6 @@ describe('Data', function () {
 
   after(async function () {
     await compose.down();
-    // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
   });
 
   it('Verifying that /raw/<id> returns expected response', async function () {
@@ -244,13 +244,7 @@ describe('X-Cache header', function () {
 
   before(async function () {
     await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-  });
 
-  // after(async function () {
-  //   await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-  // });
-
-  beforeEach(async function () {
     compose = await new DockerComposeEnvironment(
       projectRootPath,
       'docker-compose.yaml',
@@ -258,13 +252,14 @@ describe('X-Cache header', function () {
       .withEnvironment({
         START_HEIGHT: '0',
         STOP_HEIGHT: '0',
+        GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
       })
       .withBuild()
       .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
       .up(['core']);
   });
 
-  afterEach(async function () {
+  after(async function () {
     await compose.down();
   });
 
@@ -272,6 +267,7 @@ describe('X-Cache header', function () {
     const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
 
     assert.equal(res.headers['x-cache'], 'MISS');
+    await wait(5000);
   });
 
   it('Verifying x-cache header when cache is available', async function () {
@@ -304,7 +300,6 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
 
     after(async function () {
       await compose.down();
-      // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
     });
 
     it('Verifying that /raw/<id> returns expected response', async function () {
@@ -405,7 +400,6 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
 
     after(async function () {
       await compose.down();
-      // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
     });
 
     it('Verifying that /raw/<id> returns expected response', async function () {
@@ -511,7 +505,6 @@ describe('X-AR-IO-Hops and X-Ar-IO-Origin headers', function () {
 
     after(async function () {
       fakeGateway.close();
-      // await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
     });
 
     beforeEach(async function () {
