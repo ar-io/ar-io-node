@@ -62,6 +62,7 @@ import {
   PartialJsonBlock,
   PartialJsonTransaction,
 } from '../types.js';
+import * as config from '../config.js';
 
 const CPU_COUNT = os.cpus().length;
 const MAX_WORKER_COUNT = 12;
@@ -2286,7 +2287,7 @@ export class StandaloneSqliteDatabase
     //
 
     const dataIndexCircuitBreakerOptions = {
-      timeout: 500,
+      timeout: config.GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage: 50,
       rollingCountTimeout: 5000,
       resetTimeout: 10000,

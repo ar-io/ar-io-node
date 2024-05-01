@@ -233,3 +233,9 @@ export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',
   '0',
 );
+
+// Circuit breaker timeout for getDataParentCircuitBreaker and getDataAttributesCircuitBreaker
+export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
+  'GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS',
+  '500',
+);
