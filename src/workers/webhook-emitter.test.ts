@@ -39,7 +39,7 @@ describe('WebhookEmitter', () => {
 
   afterEach(async () => {
     mock.restoreAll();
-    webhookEmitter.stop();
+    webhookEmitter?.stop();
   });
 
   describe('eventListeners', () => {
@@ -50,10 +50,11 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new NeverMatch(),
+        blockFilter: new NeverMatch(),
         log,
       });
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
         assert.equal((eventEmitter.listenerCount as any).mock.callCount(), 0);
       }
@@ -66,9 +67,10 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls: [],
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
       });
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
         assert.equal((eventEmitter.listenerCount as any).mock.callCount(), 0);
       }
@@ -81,10 +83,11 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls: [],
         indexFilter: new NeverMatch(),
+        blockFilter: new NeverMatch(),
         log,
       });
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
         assert.equal((eventEmitter.listenerCount as any).mock.callCount(), 0);
       }
@@ -97,10 +100,11 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
       });
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
         assert.equal((eventEmitter.listenerCount as any).mock.callCount(), 0);
       }
@@ -113,11 +117,12 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new NeverMatch(),
+        blockFilter: new NeverMatch(),
         log,
       });
       mock.method(webhookEmitter, 'emitWebhookToTargetServer');
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
         assert.equal(
           (webhookEmitter.emitWebhookToTargetServer as any).mock.callCount(),
@@ -138,19 +143,22 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
       });
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
       }
+
+      await wait(0);
 
       await webhookEmitter.emissionQueue.drained();
 
       assert.equal(
         (webhookEmitter.emitWebhookToTargetServer as any).mock.callCount(),
         webhookEmitter.targetServersUrls.length *
-          webhookEmitter.indexEventsToListenFor.length,
+          webhookEmitter.eventsToListenFor.length,
       );
 
       // skipping axios post call test for now
@@ -174,6 +182,7 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
       });
 
@@ -185,6 +194,7 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls: ['http://localhost:3000', 'localhost:3001'],
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
       });
 
@@ -199,6 +209,7 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
         maxEmissionQueueSize,
       });
@@ -206,7 +217,7 @@ describe('WebhookEmitter', () => {
       webhookEmitter.emissionQueue.pause();
 
       for (let i = 0; i < maxEmissionQueueSize + 100; i++) {
-        eventEmitter.emit(webhookEmitter.indexEventsToListenFor[0], eventData);
+        eventEmitter.emit(webhookEmitter.eventsToListenFor[0], eventData);
       }
 
       await wait(1);
@@ -221,18 +232,19 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
       });
 
       await webhookEmitter.emissionQueue.pause();
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
       }
 
       await wait(1);
 
-      assert.equal(webhookEmitter.emissionQueue.length(), 4);
+      assert.equal(webhookEmitter.emissionQueue.length(), 6);
 
       webhookEmitter.stop();
 
@@ -244,17 +256,18 @@ describe('WebhookEmitter', () => {
         eventEmitter,
         targetServersUrls,
         indexFilter: new AlwaysMatch(),
+        blockFilter: new AlwaysMatch(),
         log,
       });
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         eventEmitter.emit(event, eventData);
         assert.equal(eventEmitter.listenerCount(event), 1);
       }
 
       await webhookEmitter.stop();
 
-      for (const event of webhookEmitter.indexEventsToListenFor) {
+      for (const event of webhookEmitter.eventsToListenFor) {
         assert.equal(eventEmitter.listenerCount(event), 0);
       }
     });

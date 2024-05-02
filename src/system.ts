@@ -403,6 +403,7 @@ const webhookEmitter = new WebhookEmitter({
   eventEmitter,
   targetServersUrls: config.WEBHOOK_TARGET_SERVERS,
   indexFilter: config.WEBHOOK_INDEX_FILTER,
+  blockFilter: config.WEBHOOK_BLOCK_FILTER,
   log,
 });
 

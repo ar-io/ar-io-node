@@ -190,6 +190,14 @@ export const WEBHOOK_INDEX_FILTER = createFilter(
   JSON.parse(WEBHOOK_INDEX_FILTER_STRING),
 );
 
+// Block filter to use for webhooks
+export const WEBHOOK_BLOCK_FILTER_STRING = canonicalize(
+  JSON.parse(env.varOrDefault('WEBHOOK_BLOCK_FILTER', '{"never": true}')),
+);
+export const WEBHOOK_BLOCK_FILTER = createFilter(
+  JSON.parse(WEBHOOK_BLOCK_FILTER_STRING),
+);
+
 //
 // ArNS Resolution
 //
