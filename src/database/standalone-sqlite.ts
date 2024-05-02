@@ -1110,6 +1110,7 @@ export class StandaloneSqliteDatabaseWorker {
         'nt.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         "x'00' AS data_item_id",
+        'nt.indexed_at AS indexed_at',
         'id',
         'last_tx AS anchor',
         'signature',
@@ -1124,7 +1125,6 @@ export class StandaloneSqliteDatabaseWorker {
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
         "'' AS parent_id",
-        'nt.indexed_at AS indexed_at',
       )
       .from('new_transactions nt')
       .leftJoin('new_block_transactions nbt', {
@@ -1145,6 +1145,7 @@ export class StandaloneSqliteDatabaseWorker {
         'ndi.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         'id AS data_item_id',
+        'ndi.indexed_at AS indexed_at',
         'id',
         'anchor',
         'signature',
@@ -1159,7 +1160,6 @@ export class StandaloneSqliteDatabaseWorker {
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
         'ndi.parent_id',
-        'ndi.indexed_at AS indexed_at',
       )
       .from('new_data_items ndi')
       .leftJoin('new_block_transactions nbt', {
@@ -1180,6 +1180,7 @@ export class StandaloneSqliteDatabaseWorker {
         'st.height AS height',
         'st.block_transaction_index AS block_transaction_index',
         "x'00' AS data_item_id",
+        '0 AS indexed_at',
         'id',
         'last_tx AS anchor',
         'signature',
@@ -1194,7 +1195,6 @@ export class StandaloneSqliteDatabaseWorker {
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
         "'' AS parent_id",
-        '0 AS indexed_at',
       )
       .from('stable_transactions st')
       .join('stable_blocks sb', {
@@ -1212,6 +1212,7 @@ export class StandaloneSqliteDatabaseWorker {
         'sdi.height AS height',
         'sdi.block_transaction_index AS block_transaction_index',
         'sdi.id AS data_item_id',
+        'sdi.indexed_at AS indexed_at',
         'id',
         'anchor',
         'signature',
@@ -1226,7 +1227,6 @@ export class StandaloneSqliteDatabaseWorker {
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
         'sdi.parent_id',
-        'sdi.indexed_at AS indexed_at',
       )
       .from('bundles.stable_data_items sdi')
       .join('stable_blocks sb', {
@@ -1573,7 +1573,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     sqlParts.push(
-      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, indexed_at ${sqlSortOrder}`,
+      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}`,
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
