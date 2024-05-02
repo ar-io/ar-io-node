@@ -506,13 +506,16 @@ export interface NameResolver {
 }
 
 export interface MatchableItem {
-  id: string;
-  signature: string;
-  owner: string;
+  id?: string;
+  signature?: string;
+  owner?: string;
   owner_address?: string;
   target?: string;
   quantity?: string;
   tags: B64uTag[];
+  height?: number;
+  txs?: string[];
+  reward_addr?: string;
 }
 
 export interface ItemFilter {

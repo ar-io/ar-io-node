@@ -27,10 +27,14 @@ import { NeverMatch } from '../filters.js';
 import {
   ItemFilter,
   NormalizedDataItem,
+  PartialJsonBlock,
   PartialJsonTransaction,
 } from '../types.js';
 
-type WebhookEmissionData = NormalizedDataItem | PartialJsonTransaction;
+type WebhookEmissionData =
+  | NormalizedDataItem
+  | PartialJsonTransaction
+  | PartialJsonBlock;
 
 interface WebhookEventWrapper {
   event: string;
@@ -50,6 +54,7 @@ export class WebhookEmitter {
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
   private indexFilter: ItemFilter;
+  private blockFilter: ItemFilter;
   private listenerReferences: Map<
     string,
     (data: WebhookEmissionData) => Promise<void>
@@ -58,13 +63,14 @@ export class WebhookEmitter {
   public maxEmissionQueueSize: number;
   public emissionQueueConcurrency: number;
   public emissionQueue: queueAsPromised<WebhookEmissionDetails, void>;
-  public indexEventsToListenFor: string[];
+  public eventsToListenFor: string[];
 
   constructor({
     log,
     eventEmitter,
     targetServersUrls,
     indexFilter,
+    blockFilter,
     maxEmissionQueueSize = MAX_EMISSION_QUEUE_SIZE,
     emissionQueueConcurrency = EMISSION_QUEUE_CONCURRENCY,
   }: {
@@ -72,6 +78,7 @@ export class WebhookEmitter {
     eventEmitter: EventEmitter;
     targetServersUrls: string[];
     indexFilter: ItemFilter;
+    blockFilter: ItemFilter;
     maxEmissionQueueSize?: number;
     emissionQueueConcurrency?: number;
   }) {
@@ -79,6 +86,7 @@ export class WebhookEmitter {
     this.eventEmitter = eventEmitter;
     this.targetServersUrls = targetServersUrls;
     this.indexFilter = indexFilter;
+    this.blockFilter = blockFilter;
     this.listenerReferences = new Map();
     this.maxEmissionQueueSize = maxEmissionQueueSize;
     this.emissionQueueConcurrency = emissionQueueConcurrency;
@@ -86,9 +94,10 @@ export class WebhookEmitter {
       this.emitWebhookToTargetServer.bind(this),
       this.emissionQueueConcurrency,
     );
-    this.indexEventsToListenFor = [
+    this.eventsToListenFor = [
       events.TX_INDEXED,
       events.ANS104_DATA_ITEM_INDEXED,
+      events.BLOCK_INDEXED,
     ];
 
     this.start();
@@ -109,9 +118,12 @@ export class WebhookEmitter {
       return;
     }
 
-    if (this.indexFilter.constructor.name === NeverMatch.name) {
+    if (
+      this.indexFilter.constructor.name === NeverMatch.name &&
+      this.blockFilter.constructor.name === NeverMatch.name
+    ) {
       this.log.info(
-        'WebhookEmitter not initialized. IndexFilter is set to NeverMatch.',
+        'WebhookEmitter not initialized. Filters are set to NeverMatch.',
       );
       return;
     }
@@ -135,6 +147,7 @@ export class WebhookEmitter {
 
   public async stop(): Promise<void> {
     const log = this.log.child({ method: 'stop' });
+
     // Remove specific listeners
     for (const [event, listener] of this.listenerReferences) {
       this.eventEmitter.removeListener(event, listener);
@@ -149,14 +162,40 @@ export class WebhookEmitter {
   private async registerEventListeners(): Promise<void> {
     this.log.debug('Registering WebhookEmitter listeners.');
 
-    for (const event of this.indexEventsToListenFor) {
+    for (const event of this.eventsToListenFor) {
       const listener = async (data: WebhookEmissionData) => {
-        if (await this.indexFilter.match(data)) {
+        let filterMatch = false;
+        switch (event) {
+          case events.TX_INDEXED:
+            filterMatch = await this.indexFilter.match(
+              data as PartialJsonTransaction,
+            );
+            break;
+          case events.ANS104_DATA_ITEM_INDEXED:
+            filterMatch = await this.indexFilter.match(
+              data as NormalizedDataItem,
+            );
+            break;
+          case events.BLOCK_INDEXED:
+            filterMatch = await this.blockFilter.match(
+              data as PartialJsonBlock,
+            );
+            break;
+          default:
+            this.log.error('Unknown event:', event);
+            return;
+        }
+
+        if (filterMatch) {
           for (const targetServer of this.targetServersUrls) {
+            const id = (data as any).id;
+            const height = (data as any).height;
+
             if (this.emissionQueue.length() < this.maxEmissionQueueSize) {
               this.log.debug('Adding webhook to queue', {
                 event,
-                id: data.id,
+                id,
+                height,
               });
 
               this.emissionQueue.push({
@@ -166,7 +205,8 @@ export class WebhookEmitter {
             } else {
               this.log.debug('Webhook queue is full. Skipping webhook:', {
                 event,
-                id: data.id,
+                id,
+                height,
               });
             }
           }
@@ -191,7 +231,9 @@ export class WebhookEmitter {
 
       if (response.status >= 200 && response.status < 300) {
         this.log.info(
-          `Webhook emitted successfully for: ${eventWrapper.data.id}`,
+          `Webhook emitted successfully for: ${
+            (eventWrapper.data as any).id ?? (eventWrapper.data as any).height
+          }`,
         );
       } else {
         this.log.error(
@@ -199,11 +241,7 @@ export class WebhookEmitter {
         );
       }
     } catch (error) {
-      if (axios.isAxiosError(error)) {
-        this.log.error('Error while emitting webhook:', error.message);
-      } else {
-        this.log.error('Unexpected error while emitting webhook:', error);
-      }
+      this.log.error('Unexpected error while emitting webhook:', error);
     }
   }
 }

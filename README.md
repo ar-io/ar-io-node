@@ -146,6 +146,8 @@ To use this feature, you need to set up two environment variables in your `.env`
 
 2. **WEBHOOK_INDEX_FILTER**: This filter determines which transactions or data items will trigger the webhook emission.
 
+2. **WEBHOOK_BLOCK_FILTER**: This filter determines which blocks will trigger the webhook emission.
+
   The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types include:
   - `{ "never": true }` (default)
   - `{ "always": true }`
