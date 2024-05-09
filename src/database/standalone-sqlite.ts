@@ -83,13 +83,17 @@ export function encodeTransactionGqlCursor({
   height,
   blockTransactionIndex,
   dataItemId,
+  indexedAt,
+  id,
 }: {
   height: number | null;
-  blockTransactionIndex: number;
+  blockTransactionIndex: number | null;
   dataItemId: string | null;
+  indexedAt: number | null;
+  id: string | null;
 }) {
   return utf8ToB64Url(
-    JSON.stringify([height, blockTransactionIndex, dataItemId]),
+    JSON.stringify([height, blockTransactionIndex, dataItemId, indexedAt, id]),
   );
 }
 
@@ -97,17 +101,24 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
       return {
-        height: undefined,
-        blockTransactionIndex: undefined,
-        dataItemId: undefined,
+        height: null,
+        blockTransactionIndex: null,
+        dataItemId: null,
+        indexedAt: null,
+        id: null,
       };
     }
 
-    const [height, blockTransactionIndex, dataItemId] = JSON.parse(
-      b64UrlToUtf8(cursor),
-    ) as [number, number, string | undefined];
+    const [height, blockTransactionIndex, dataItemId, indexedAt, id] =
+      JSON.parse(b64UrlToUtf8(cursor)) as [
+        number | null,
+        number | null,
+        string | null,
+        number | null,
+        string | null,
+      ];
 
-    return { height, blockTransactionIndex, dataItemId };
+    return { height, blockTransactionIndex, dataItemId, indexedAt, id };
   } catch (error) {
     throw new ValidationError('Invalid transaction cursor');
   }
@@ -120,7 +131,7 @@ export function encodeBlockGqlCursor({ height }: { height: number }) {
 export function decodeBlockGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
-      return { height: undefined };
+      return { height: null };
     }
 
     const [height] = JSON.parse(b64UrlToUtf8(cursor)) as [number];
@@ -1411,13 +1422,42 @@ export class StandaloneSqliteDatabaseWorker {
       height: cursorHeight,
       blockTransactionIndex: cursorBlockTransactionIndex,
       dataItemId: cursorDataItemId,
+      indexedAt: cursorIndexedAt,
+      id: cursorId,
     } = decodeTransactionGqlCursor(cursor);
 
     if (sortOrder === 'HEIGHT_DESC') {
       if (
-        cursorHeight != undefined &&
-        cursorBlockTransactionIndex != undefined
+        ['new_txs', 'new_items'].includes(source) &&
+        cursorHeight == null &&
+        cursorIndexedAt != null
       ) {
+        query.where(
+          sql.or(
+            sql.and(
+              // indexed_at is only considered when the height is null
+              sql.isNull(`${heightSortTableAlias}.height`),
+              sql.or(
+                // If the indexed_at is less than the cursor, the ID is not
+                // considered
+                sql.lt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                sql.and(
+                  // If the indexedAt is the same as the cursor, the ID is
+                  // compared
+                  sql.lte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                  sql.lt(
+                    'id',
+                    cursorId ? fromB64Url(cursorId) : Buffer.from([0]),
+                  ),
+                ),
+              ),
+            ),
+            // Non-null heights are always after pending transactions and data
+            // items when sorting in descending order
+            sql.isNotNull(`${heightSortTableAlias}.height`),
+          ),
+        );
+      } else if (cursorHeight != null && cursorBlockTransactionIndex != null) {
         let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
         query.where(
           sql.lte(`${heightSortTableAlias}.height`, cursorHeight),
@@ -1446,16 +1486,38 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       }
-      let orderBy = `${heightSortTableAlias}.height DESC, ${blockTransactionIndexSortTableAlias}.block_transaction_index DESC`;
+      let orderBy = `${heightSortTableAlias}.height DESC NULLS FIRST`;
+      orderBy += `, ${blockTransactionIndexSortTableAlias}.block_transaction_index DESC NULLS FIRST`;
       if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
         orderBy += `, ${dataItemSortTableAlias}.data_item_id DESC`;
       } else {
         orderBy += `, 3 DESC`;
       }
-      orderBy += `, indexed_at ASC`;
+      orderBy += `, indexed_at DESC`;
+      orderBy += `, 5 DESC`;
       query.orderBy(orderBy);
     } else {
       if (
+        ['new_txs', 'new_items'].includes(source) &&
+        cursorHeight == null &&
+        cursorIndexedAt != null
+      ) {
+        query.where(
+          // indexed_at is only considered when the height is null
+          sql.isNull(`${heightSortTableAlias}.height`),
+          sql.or(
+            // If the indexed_at is greater than the cursor, the ID is not
+            // considered
+            sql.gt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+            sql.and(
+              // If the indexed_at is the same as the cursor, the ID is
+              // compared
+              sql.gte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+              sql.gt('id', cursorId ? fromB64Url(cursorId) : Buffer.from([0])),
+            ),
+          ),
+        );
+      } else if (
         cursorHeight != undefined &&
         cursorBlockTransactionIndex != undefined
       ) {
@@ -1487,13 +1549,15 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       }
-      let orderBy = `${heightSortTableAlias}.height ASC, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC`;
+      let orderBy = `${heightSortTableAlias}.height ASC NULLS LAST`;
+      orderBy += `, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC NULLS LAST`;
       if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
         orderBy += `, ${dataItemSortTableAlias}.data_item_id ASC`;
       } else {
         orderBy += `, 3 ASC`;
       }
       orderBy += `, indexed_at ASC`;
+      orderBy += `, 5 ASC`;
       query.orderBy(orderBy);
     }
   }
@@ -1573,7 +1637,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     sqlParts.push(
-      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}`,
+      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
@@ -1588,6 +1652,7 @@ export class StandaloneSqliteDatabaseWorker {
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
         dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : null,
+        indexedAt: tx.indexed_at,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
@@ -1703,6 +1768,7 @@ export class StandaloneSqliteDatabaseWorker {
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
         dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : null,
+        indexedAt: tx.indexed_at,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
