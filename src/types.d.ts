@@ -291,6 +291,7 @@ interface GqlTransaction {
   blockTransactionIndex: number;
   dataItemId: string | null;
   tags: { name: any; value: any }[];
+  indexedAt: number;
 }
 
 interface GqlTransactionEdge {

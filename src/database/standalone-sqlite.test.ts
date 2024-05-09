@@ -52,7 +52,8 @@ const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
 const DATA_ITEM_ID = 'zoljIRyzG5hp-R4EZV2q8kFI49OAoy23_B9YJ_yEEws';
 const CURSOR =
-  'WzExMzgsNDIsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiXQ';
+  'WzExMzgsNDIsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiLDE2MzAwMDAwMDAsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiXQ';
+const INDEXED_AT = 1630000000;
 
 describe('SQLite helper functions', () => {
   describe('toSqliteParams', () => {
@@ -67,12 +68,14 @@ describe('SQLite helper functions', () => {
 
 describe('SQLite GraphQL cursor functions', () => {
   describe('encodeTransactionGqlCursor', () => {
-    it('should encode a cursor given a height and blockTransactionIndex', () => {
+    it('should encode a height, blockTransactionIndex, indexedAt, and dataItemId', () => {
       assert.equal(
         encodeTransactionGqlCursor({
           height: HEIGHT,
           blockTransactionIndex: BLOCK_TX_INDEX,
           dataItemId: DATA_ITEM_ID,
+          indexedAt: INDEXED_AT,
+          id: DATA_ITEM_ID,
         }),
         CURSOR,
       );
@@ -80,19 +83,23 @@ describe('SQLite GraphQL cursor functions', () => {
   });
 
   describe('decodeTransactionGqlCursor', () => {
-    it('should decode a height and blockTransactionIndex given an encoded cursor', () => {
+    it('should decode a height, blockTransactionIndex, indexedAt, and dataItemId given an encoded cursor', () => {
       assert.deepEqual(decodeTransactionGqlCursor(CURSOR), {
         height: HEIGHT,
         blockTransactionIndex: BLOCK_TX_INDEX,
         dataItemId: DATA_ITEM_ID,
+        indexedAt: INDEXED_AT,
+        id: DATA_ITEM_ID,
       });
     });
 
-    it('should return an undefined height, blockTransactionIndex, and dataItemId given an undefined cursor', () => {
+    it('should return an null values given an undefined cursor', () => {
       assert.deepEqual(decodeTransactionGqlCursor(undefined), {
-        height: undefined,
-        blockTransactionIndex: undefined,
-        dataItemId: undefined,
+        height: null,
+        blockTransactionIndex: null,
+        dataItemId: null,
+        indexedAt: null,
+        id: null,
       });
     });
 
@@ -122,9 +129,9 @@ describe('SQLite GraphQL cursor functions', () => {
       });
     });
 
-    it('should return an undefined height given an undefined cursor', () => {
+    it('should return a null height value given an undefined cursor', () => {
       assert.deepEqual(decodeBlockGqlCursor(undefined), {
-        height: undefined,
+        height: null,
       });
     });
 
