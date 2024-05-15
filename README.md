@@ -77,6 +77,16 @@ docker-compose up --build
 
 Once running, requests can be directed to Envoy server at `localhost:3000`.
 
+### Run a Turbo Bundler as a Sidecar
+
+You can run a turbo bundler as a sidecar to the ar.io gateway:
+
+```shell
+docker-compose -f docker-compose.bundler.yaml up
+```
+
+This will start a suite of containers necessary for running a stand alone bundler service. On port 5100 there will be an upload service exposed for accepting data items.
+
 ## Configuration
 
 When running via docker-compose, it will read a `.env` file in the project root
@@ -146,16 +156,16 @@ To use this feature, you need to set up two environment variables in your `.env`
 
 2. **WEBHOOK_INDEX_FILTER**: This filter determines which transactions or data items will trigger the webhook emission.
 
-  The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types include:
-  - `{ "never": true }` (default)
-  - `{ "always": true }`
-  - `{ "attributes": { "owner": <owner key>, ... }}`
-  - `{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, { "name": <utf8 tag name> }, ...]}`
-  - `{ "and": [ <nested filter>, ... ]}`
-  - `{ "or": [ <nested filter>, ... ]}`
+The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types include:
 
-  Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp" }, { "name": "IPFS-Add" }]}"`
+- `{ "never": true }` (default)
+- `{ "always": true }`
+- `{ "attributes": { "owner": <owner key>, ... }}`
+- `{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, { "name": <utf8 tag name> }, ...]}`
+- `{ "and": [ <nested filter>, ... ]}`
+- `{ "or": [ <nested filter>, ... ]}`
 
+Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp" }, { "name": "IPFS-Add" }]}"`
 
 After setting up the environment variables, the ar.io gatway will monitor for transactions or data items that match the `WEBHOOK_INDEX_FILTER`. Once a match is found, a webhook will be emitted to all the servers listed in `WEBHOOK_TARGET_SERVERS`.
 

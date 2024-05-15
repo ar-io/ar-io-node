@@ -1,6 +1,10 @@
 ---
 version: '3.0'
 
+networks:
+  default:
+    name: ar-io
+
 services:
   envoy:
     image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-f6576577e421a4c9173d6d5d39b4540766b366ae}
