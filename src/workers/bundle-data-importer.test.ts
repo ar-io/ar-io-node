@@ -15,96 +15,167 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { strict as assert } from 'node:assert';
+import { Readable } from 'node:stream';
+import {
+  after,
+  afterEach,
+  before,
+  beforeEach,
+  describe,
+  it,
+  mock,
+} from 'node:test';
 import winston from 'winston';
-import { Ans104Unbundler } from './ans104-unbundler.js';
+import { ContiguousDataSource } from '../types.js';
 import { BundleDataImporter } from './bundle-data-importer.js';
-import { expect } from 'chai';
-import sinon from 'sinon';
+
+class Ans104UnbundlerStub {
+  async queueItem(): Promise<void> {
+    return;
+  }
+
+  async unbundle(): Promise<void> {
+    return;
+  }
+
+  async stop(): Promise<void> {
+    return;
+  }
+}
 
 describe('BundleDataImporter', () => {
+  let log: winston.Logger;
   let bundleDataImporter: BundleDataImporter;
   let bundleDataImporterWithFullQueue: BundleDataImporter;
-  let log: winston.Logger;
-  let mockContiguousDataSource: any;
-  let mockAns104Unbundler: Ans104Unbundler;
+  let contiguousDataSource: ContiguousDataSource;
+  let ans104Unbundler: any;
   let mockItem: any;
-  let mockData: any;
-  let sandbox: sinon.SinonSandbox;
 
   before(() => {
     log = winston.createLogger({ silent: true });
+    // log = winston.createLogger();
+
+    mockItem = { id: 'testId', index: 1 };
+
+    contiguousDataSource = {
+      getData: () =>
+        Promise.resolve({
+          stream: Readable.from(Buffer.from('testing...')),
+          size: 10,
+          verified: false,
+          cached: false,
+        }),
+    };
+  });
+
+  after(async () => {
+    await bundleDataImporter.stop();
+    await bundleDataImporterWithFullQueue.stop();
   });
 
   beforeEach(() => {
-    mockContiguousDataSource = {
-      getData: sinon.stub(),
-    };
-    mockAns104Unbundler = sinon.createStubInstance(Ans104Unbundler);
-    mockItem = { id: 'testId', index: 1 };
-    mockData = { stream: { on: sinon.stub(), resume: sinon.stub() } };
-
+    ans104Unbundler = new Ans104UnbundlerStub();
     bundleDataImporter = new BundleDataImporter({
       log,
-      contiguousDataSource: mockContiguousDataSource,
-      ans104Unbundler: mockAns104Unbundler,
+      contiguousDataSource,
+      ans104Unbundler,
       workerCount: 1,
       maxQueueSize: 1,
     });
-
     bundleDataImporterWithFullQueue = new BundleDataImporter({
       log,
-      contiguousDataSource: mockContiguousDataSource,
-      ans104Unbundler: mockAns104Unbundler,
+      contiguousDataSource,
+      ans104Unbundler,
       workerCount: 1,
       maxQueueSize: 0,
     });
+  });
 
-    sandbox = sinon.createSandbox();
+  afterEach(async () => {
+    mock.restoreAll();
   });
 
   describe('queueItem', () => {
     it('should queue a non-prioritized item if queue is not full', async () => {
+      mock.method(contiguousDataSource, 'getData');
+
       await bundleDataImporter.queueItem(mockItem, false);
-      expect(mockContiguousDataSource.getData).to.be.calledWith(mockItem.id);
+
+      assert.deepEqual(
+        (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
+        { id: mockItem.id },
+      );
     });
 
     it('should not queue a non-prioritized item if queue is full', async () => {
+      mock.method(contiguousDataSource, 'getData');
+
       await bundleDataImporterWithFullQueue.queueItem(mockItem, false);
-      expect(mockContiguousDataSource.getData).to.not.be.called;
+
+      assert.equal((contiguousDataSource.getData as any).mock.callCount(), 0);
     });
 
     it('should queue a prioritized item if the queue is not full', async () => {
+      mock.method(contiguousDataSource, 'getData');
+
       await bundleDataImporter.queueItem(mockItem, true);
-      expect(mockContiguousDataSource.getData).to.be.calledWith(mockItem.id);
+
+      assert.deepEqual(
+        (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
+        { id: mockItem.id },
+      );
     });
 
     it('should queue a prioritized item if the queue is full', async () => {
+      mock.method(contiguousDataSource, 'getData');
+
       await bundleDataImporterWithFullQueue.queueItem(mockItem, true);
-      expect(mockContiguousDataSource.getData).to.be.calledWith(mockItem.id);
+
+      assert.deepEqual(
+        (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
+        { id: mockItem.id },
+      );
     });
   });
 
   describe('download', () => {
     it('should download and queue the item for unbundling', async () => {
-      mockData.stream.on.callsArgOn(1, mockData.stream);
-      mockContiguousDataSource.getData.returns(mockData);
+      mock.method(ans104Unbundler, 'queueItem');
+      bundleDataImporter = new BundleDataImporter({
+        log,
+        contiguousDataSource,
+        ans104Unbundler: ans104Unbundler,
+        workerCount: 1,
+        maxQueueSize: 1,
+      });
+
       await bundleDataImporter.download({ item: mockItem, prioritized: true });
-      expect(mockAns104Unbundler.queueItem).to.be.calledWith(mockItem, true);
+
+      assert.deepEqual(
+        (ans104Unbundler.queueItem as any).mock.calls[0].arguments,
+        [mockItem, true],
+      );
     });
 
     it('should handle download errors', async () => {
       const error = new Error('Download error');
-      mockData.stream.on.onSecondCall().callsArgWith(1, error);
-      mockContiguousDataSource.getData.returns(mockData);
-      try {
-        await bundleDataImporter.download({
-          item: mockItem,
-          prioritized: true,
-        });
-      } catch (error) {
-        expect(error).to.not.be.undefined;
-      }
-      expect(mockAns104Unbundler.queueItem).to.not.be.called;
+      mock.method(ans104Unbundler, 'queueItem');
+      mock.method(contiguousDataSource, 'getData', () => Promise.reject(error));
+
+      await assert.rejects(
+        async () => {
+          await bundleDataImporter.download({
+            item: mockItem,
+            prioritized: true,
+          });
+        },
+        {
+          name: 'Error',
+          message: 'Download error',
+        },
+      );
+      assert.equal((ans104Unbundler.queueItem as any).mock.callCount(), 0);
     });
   });
 });

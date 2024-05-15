@@ -16,4 +16,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-export const release = '10-pre';
+const headerNames = {
+  hops: 'X-AR-IO-Hops',
+  origin: 'X-AR-IO-Origin',
+  cache: 'X-Cache',
+  arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
+  arnsResolvedId: 'X-ArNS-Resolved-Id',
+};
+
+export { headerNames };

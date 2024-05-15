@@ -21,6 +21,7 @@ import { Transform } from 'node:stream';
 import url from 'node:url';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
+import { headerNames } from '../../constants.js';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import {
@@ -30,6 +31,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ManifestPathResolver,
+  RequestAttributes,
 } from '../../types.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
@@ -72,7 +74,15 @@ const setDataHeaders = ({
   }
 
   // Indicate whether the data was served from cache
-  res.header('X-Cached', data.cached ? 'HIT' : 'MISS');
+  res.header(headerNames.cache, data.cached ? 'HIT' : 'MISS');
+
+  // Indicate the number of hops the request has made and origin
+  if (data.requestAttributes !== undefined) {
+    res.header(headerNames.hops, data.requestAttributes.hops.toString());
+    if (data.requestAttributes.origin !== undefined) {
+      res.header(headerNames.origin, data.requestAttributes.origin);
+    }
+  }
 
   // Use the content type from the L1 or data item index if available
   res.contentType(
@@ -80,6 +90,22 @@ const setDataHeaders = ({
       data.sourceContentType ??
       DEFAULT_CONTENT_TYPE,
   );
+};
+
+const getRequestAttributes = (
+  req: Request,
+  arnsRootHost?: string,
+): RequestAttributes => {
+  let origin: string | undefined;
+  const originHeader = req.headers[headerNames.origin.toLowerCase()] as string;
+  const hopsHeader = req.headers[headerNames.hops.toLowerCase()] as string;
+  if (originHeader !== undefined) {
+    origin = originHeader;
+  } else if (arnsRootHost !== undefined) {
+    origin = arnsRootHost;
+  }
+  const hops = parseInt(hopsHeader) || 0;
+  return { origin, hops };
 };
 
 const handleRangeRequest = (
@@ -200,13 +226,16 @@ export const createRawDataHandler = ({
   dataIndex,
   dataSource,
   blockListValidator,
+  arnsRootHost,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
   blockListValidator: BlockListValidator;
+  arnsRootHost?: string;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
+    const requestAttributes = getRequestAttributes(req, arnsRootHost);
     const id = req.params[0];
 
     // Return 404 if the data is blocked by ID
@@ -255,7 +284,11 @@ export const createRawDataHandler = ({
     // Set headers and attempt to retrieve and stream data
     let data: ContiguousData | undefined;
     try {
-      data = await dataSource.getData(id, dataAttributes);
+      data = await dataSource.getData({
+        id,
+        dataAttributes,
+        requestAttributes,
+      });
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
@@ -297,6 +330,7 @@ const sendManifestResponse = async ({
   id,
   resolvedId,
   complete,
+  requestAttributes,
 }: {
   log: Logger;
   req: Request;
@@ -306,6 +340,7 @@ const sendManifestResponse = async ({
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
+  requestAttributes: RequestAttributes;
 }): Promise<boolean> => {
   let data: ContiguousData | undefined;
   if (resolvedId !== undefined) {
@@ -334,7 +369,11 @@ const sendManifestResponse = async ({
 
     // Retrieve data based on ID resolved from manifest path or index
     try {
-      data = await dataSource.getData(resolvedId, dataAttributes);
+      data = await dataSource.getData({
+        id: resolvedId,
+        dataAttributes,
+        requestAttributes,
+      });
     } catch (error: any) {
       log.warn('Unable to retrieve contiguous data:', {
         dataId: resolvedId,
@@ -406,15 +445,18 @@ export const createDataHandler = ({
   dataSource,
   blockListValidator,
   manifestPathResolver,
+  arnsRootHost,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
   blockListValidator: BlockListValidator;
   manifestPathResolver: ManifestPathResolver;
+  arnsRootHost?: string;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
-    const arnsResolvedId = res.getHeader('X-ArNS-Resolved-Id');
+    const requestAttributes = getRequestAttributes(req, arnsRootHost);
+    const arnsResolvedId = res.getHeader(headerNames.arnsResolvedId);
     let id: string | undefined;
     let manifestPath: string | undefined;
     if (typeof arnsResolvedId === 'string') {
@@ -475,6 +517,7 @@ export const createDataHandler = ({
             res,
             dataIndex,
             dataSource,
+            requestAttributes,
             ...manifestResolution,
           })
         ) {
@@ -485,7 +528,11 @@ export const createDataHandler = ({
 
       // Attempt to retrieve data
       try {
-        data = await dataSource.getData(id, dataAttributes);
+        data = await dataSource.getData({
+          id,
+          dataAttributes,
+          requestAttributes,
+        });
       } catch (error: any) {
         log.warn('Unable to retrieve contiguous data:', {
           dataId: id,
@@ -519,6 +566,7 @@ export const createDataHandler = ({
             res,
             dataIndex,
             dataSource,
+            requestAttributes,
             ...manifestResolution,
           }))
         ) {

@@ -15,15 +15,20 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import chai, { expect } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
+import { strict as assert } from 'node:assert';
+import {
+  after,
+  afterEach,
+  before,
+  beforeEach,
+  describe,
+  it,
+  mock,
+} from 'node:test';
 import { EventEmitter } from 'node:events';
-import * as sinon from 'sinon';
-import sinonChai from 'sinon-chai';
 import { default as wait } from 'wait';
 
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
-import log from '../../src/log.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';
 import {
   bundlesDbPath,
@@ -32,22 +37,22 @@ import {
   moderationDbPath,
 } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
-
-chai.use(chaiAsPromised);
-chai.use(sinonChai);
+import * as winston from 'winston';
 
 describe('BlockImporter', () => {
+  let log: winston.Logger;
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
   let db: StandaloneSqliteDatabase;
-  let sandbox: sinon.SinonSandbox;
 
   const createBlockImporter = ({
     startHeight,
+    stopHeight,
     heightPollingIntervalMs,
   }: {
     startHeight: number;
+    stopHeight?: number;
     heightPollingIntervalMs?: number;
   }) => {
     return new BlockImporter({
@@ -56,11 +61,13 @@ describe('BlockImporter', () => {
       chainIndex: db,
       eventEmitter,
       startHeight,
+      stopHeight,
       heightPollingIntervalMs,
     });
   };
 
   before(async () => {
+    log = winston.createLogger({ silent: true });
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
     db = new StandaloneSqliteDatabase({
@@ -73,15 +80,11 @@ describe('BlockImporter', () => {
   });
 
   after(async () => {
-    db.stop();
-  });
-
-  beforeEach(async () => {
-    sandbox = sinon.createSandbox();
+    await db.stop();
   });
 
   afterEach(async () => {
-    sandbox.restore();
+    await blockImporter.stop();
   });
 
   describe('importBlock', () => {
@@ -93,17 +96,17 @@ describe('BlockImporter', () => {
 
       it('should increase the max height', async () => {
         const maxHeight = await db.getMaxHeight();
-        expect(maxHeight).to.equal(982575);
+        assert.equal(maxHeight, 982575);
       });
 
       it('should add the block to the DB', async () => {
         const stats = await db.getDebugInfo();
-        expect(stats.counts.newBlocks).to.equal(1);
+        assert.equal(stats.counts.newBlocks, 1);
       });
 
       it("should add the block's transactions to the DB", async () => {
         const stats = await db.getDebugInfo();
-        expect(stats.counts.newTxs).to.equal(3);
+        assert.equal(stats.counts.newTxs, 3);
       });
     });
 
@@ -118,22 +121,22 @@ describe('BlockImporter', () => {
 
       it('should increase the max height', async () => {
         const maxHeight = await db.getMaxHeight();
-        expect(maxHeight).to.equal(982575);
+        assert.equal(maxHeight, 982575);
       });
 
       it('should add the block to the DB', async () => {
         const stats = await db.getDebugInfo();
-        expect(stats.counts.newBlocks).to.equal(1);
+        assert.equal(stats.counts.newBlocks, 1);
       });
 
       it("should add the block's transactions to the DB", async () => {
         const stats = await db.getDebugInfo();
-        expect(stats.counts.newTxs).to.equal(2);
+        assert.equal(stats.counts.newTxs, 2);
       });
 
       it('should add the IDs of the missing transactions to DB', async () => {
         const stats = await db.getDebugInfo();
-        expect(stats.counts.missingTxs).to.equal(1);
+        assert.equal(stats.counts.missingTxs, 1);
       });
     });
 
@@ -146,12 +149,12 @@ describe('BlockImporter', () => {
 
       it('should import the first block at the start of the gap', async () => {
         const stats = await db.getDebugInfo();
-        expect(stats.counts.newBlocks).to.equal(2);
+        assert.equal(stats.counts.newBlocks, 2);
       });
 
       it('should import only 1 block', async () => {
         const maxHeight = await db.getMaxHeight();
-        expect(maxHeight).to.equal(2);
+        assert.equal(maxHeight, 2);
       });
     });
 
@@ -168,16 +171,17 @@ describe('BlockImporter', () => {
       it('should reset the height to where the fork occured', async () => {
         await blockImporter.importBlock(2);
         const maxHeight = await db.getMaxHeight();
-        expect(maxHeight).to.equal(1);
+        assert.equal(maxHeight, 1);
       });
 
       it('should reimport the block where the fork occured', async () => {
-        sandbox.spy(db, 'saveBlockAndTxs');
+        mock.method(db, 'saveBlockAndTxs');
         await blockImporter.importBlock(2);
-        expect(db.saveBlockAndTxs).to.have.been.calledOnce;
-        expect(db.saveBlockAndTxs).to.have.been.calledWithMatch({
-          height: 1,
-        });
+        assert.equal((db.saveBlockAndTxs as any).mock.callCount(), 1);
+        assert.equal(
+          (db.saveBlockAndTxs as any).mock.calls[0].arguments[0].height,
+          1,
+        );
       });
     });
 
@@ -187,8 +191,14 @@ describe('BlockImporter', () => {
       });
 
       it('should throw an exception', async () => {
-        await expect(blockImporter.importBlock(51)).to.be.rejectedWith(
-          'Maximum fork depth exceeded',
+        await assert.rejects(
+          async () => {
+            await blockImporter.importBlock(51);
+          },
+          {
+            name: 'Error',
+            message: 'Maximum fork depth exceeded',
+          },
         );
       });
     });
@@ -202,7 +212,7 @@ describe('BlockImporter', () => {
 
       it('should return the start height', async () => {
         const nextHeight = await blockImporter.getNextHeight();
-        expect(nextHeight).to.equal(0);
+        assert.equal(nextHeight, 0);
       });
     });
 
@@ -214,7 +224,7 @@ describe('BlockImporter', () => {
 
       it('should return one more than the max height in the DB', async () => {
         const nextHeight = await blockImporter.getNextHeight();
-        expect(nextHeight).to.equal(2);
+        assert.equal(nextHeight, 2);
       });
     });
 
@@ -241,27 +251,27 @@ describe('BlockImporter', () => {
             return false;
           })(),
         ]);
-        expect(getNextHeightWaited).to.be.true;
+        assert.ok(getNextHeightWaited);
 
         chainSource.setHeight(2);
-        expect(await nextHeightPromise).to.equal(2);
+        assert.equal(await nextHeightPromise, 2);
       });
 
       it('should return one more than the max height in the DB if multiple blocks are produced while waiting', async () => {
         const nextHeightPromise = blockImporter.getNextHeight();
         chainSource.setHeight(3);
-        expect(await nextHeightPromise).to.equal(2);
+        assert.equal(await nextHeightPromise, 2);
       });
     });
   });
 
   describe('start', () => {
     beforeEach(async () => {
-      blockImporter = createBlockImporter({ startHeight: 1 });
+      blockImporter = createBlockImporter({ startHeight: 1, stopHeight: 2 });
     });
 
     it('should not throw an exception when called (smoke test)', async () => {
-      blockImporter.start();
+      await blockImporter.start();
       await wait(5);
       await blockImporter.stop();
     });
@@ -269,7 +279,7 @@ describe('BlockImporter', () => {
 
   describe('stop', () => {
     beforeEach(async () => {
-      blockImporter = createBlockImporter({ startHeight: 0 });
+      blockImporter = createBlockImporter({ startHeight: 0, stopHeight: 1 });
     });
 
     it('should not throw an exception when called (smoke test)', async () => {

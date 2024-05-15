@@ -156,7 +156,16 @@ To use this feature, you need to set up two environment variables in your `.env`
 
 2. **WEBHOOK_INDEX_FILTER**: This filter determines which transactions or data items will trigger the webhook emission.
 
+3. **WEBHOOK_BLOCK_FILTER**: This filter determines which blocks will trigger the webhook emission.
+
 The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types include:
+
+- `{ "never": true }` (default)
+- `{ "always": true }`
+- `{ "attributes": { "owner": <owner key>, ... }}`
+- `{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, { "name": <utf8 tag name> }, ...]}`
+- `{ "and": [ <nested filter>, ... ]}`
+- `{ "or": [ <nested filter>, ... ]}`
 
 - `{ "never": true }` (default)
 - `{ "always": true }`

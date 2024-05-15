@@ -8,7 +8,6 @@
     "@typescript-eslint",
     "header",
     "jest-formatting",
-    "mocha",
     "prettier",
     "unicorn"
   ],
@@ -16,7 +15,6 @@
     "eslint:recommended",
     "plugin:@typescript-eslint/eslint-recommended",
     "plugin:@typescript-eslint/recommended",
-    "plugin:mocha/recommended",
     "prettier"
   ],
   "rules": {

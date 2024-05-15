@@ -15,10 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import chai, { expect } from 'chai';
 import fs from 'node:fs';
-import sinon, { SinonSandbox } from 'sinon';
-import sinonChai from 'sinon-chai';
+import { strict as assert } from 'node:assert';
+import { afterEach, before, describe, it, mock } from 'node:test';
 import * as winston from 'winston';
 
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
@@ -27,43 +26,32 @@ import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
 import { Chunk, ChunkData, ChunkDataStore } from '../types.js';
 import { ReadThroughChunkDataCache } from './read-through-chunk-data-cache.js';
 
-chai.use(sinonChai);
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
 const TX_SIZE = 256000;
 const ABSOLUTE_OFFSET = 51530681327863;
 const RELATIVE_OFFSET = 0;
 
+let log: winston.Logger;
+let chunkSource: ArweaveChunkSourceStub;
+let chunkDataStore: ChunkDataStore;
+let chunkCache: ReadThroughChunkDataCache;
+
+before(() => {
+  log = winston.createLogger({ silent: true });
+  chunkSource = new ArweaveChunkSourceStub();
+  chunkDataStore = new FsChunkDataStore({
+    log,
+    baseDir: 'data/chunks',
+  });
+  chunkCache = new ReadThroughChunkDataCache({
+    log,
+    chunkSource,
+    chunkDataStore,
+  });
+});
+
 describe('ReadThroughChunkDataCache', () => {
-  let log: winston.Logger;
-  let chunkSource: ArweaveChunkSourceStub;
-  let chunkDataStore: ChunkDataStore;
-  let chunkCache: ReadThroughChunkDataCache;
-  let sandbox: SinonSandbox;
-
-  before(() => {
-    log = winston.createLogger({ silent: true });
-    chunkSource = new ArweaveChunkSourceStub();
-    chunkDataStore = new FsChunkDataStore({
-      log,
-      baseDir: 'data/chunks',
-    });
-    chunkCache = new ReadThroughChunkDataCache({
-      log,
-      chunkSource,
-      chunkDataStore,
-    });
-  });
-
-  beforeEach(() => {
-    sandbox = sinon.createSandbox();
-  });
-
-  afterEach(() => {
-    sandbox.restore();
-  });
-
   // TODO remove mocks from tests
-
   describe('getChunkDataByAny', () => {
     let mockedChunk: Chunk;
     let mockedChunkData: ChunkData;
@@ -76,9 +64,9 @@ describe('ReadThroughChunkDataCache', () => {
         ),
       );
       const txPath = fromB64Url(jsonChunk.tx_path);
-      const dataRootBuffer = txPath.slice(-64, -32);
+      const dataRootBuffer = txPath.subarray(-64, -32);
       const dataPath = fromB64Url(jsonChunk.data_path);
-      const hash = dataPath.slice(-64, -32);
+      const hash = dataPath.subarray(-64, -32);
       mockedChunk = {
         tx_path: txPath,
         data_root: dataRootBuffer,
@@ -97,55 +85,68 @@ describe('ReadThroughChunkDataCache', () => {
       };
     });
 
+    afterEach(() => {
+      mock.restoreAll();
+    });
+
     it('should fetch chunk data from cache when available', async () => {
-      // mock the file exists
-      const storeGetSpy = sandbox
-        .stub(chunkDataStore, 'get')
-        .resolves(mockedChunkData);
-      const networkSpy = sandbox.spy(chunkSource, 'getChunkByAny');
+      mock.method(chunkDataStore, 'get', async () => mockedChunkData);
+      mock.method(chunkSource, 'getChunkByAny');
+
       await chunkCache.getChunkDataByAny(
         TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
         0,
       );
-      expect(networkSpy).not.to.have.been.called;
-      expect(storeGetSpy).to.have.been.called;
+
+      assert.deepEqual((chunkSource.getChunkByAny as any).mock.callCount(), 0);
+      assert.deepEqual((chunkDataStore.get as any).mock.callCount(), 1);
     });
 
     it('should fetch chunk data from network when not in local cache', async () => {
-      // mock file does not exist
-      const storeHasSpy = sandbox.stub(chunkDataStore, 'has').resolves(false);
-      const storeGetSpy = sandbox.spy(chunkDataStore, 'get');
-      const networkSpy = sandbox
-        .stub(chunkSource, 'getChunkByAny')
-        .resolves(mockedChunk);
+      const chuunkDataStoreHasSpy = mock.method(
+        chunkDataStore,
+        'has',
+        async () => false,
+      );
+      const chunkDataStoreGetSpy = mock.method(chunkDataStore, 'get');
+      const networkSpy = mock.method(
+        chunkSource,
+        'getChunkByAny',
+        async () => mockedChunk,
+      );
       await chunkCache.getChunkDataByAny(
         TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
         0,
       );
-      expect(storeGetSpy).to.have.been.called;
-      expect(storeHasSpy).to.have.been.called;
-      expect(networkSpy).to.have.been.called;
+      assert.deepEqual(chunkDataStoreGetSpy.mock.callCount(), 1);
+      assert.deepEqual(chuunkDataStoreHasSpy.mock.callCount(), 1);
+      assert.deepEqual(networkSpy.mock.callCount(), 1);
     });
 
     it('should fetch chunk data from network when an error occurs fetching from local cache', async () => {
-      const storeHasSpy = sandbox.stub(chunkDataStore, 'has').rejects();
-      const storeGetSpy = sandbox.spy(chunkDataStore, 'get');
-      const networkSpy = sandbox
-        .stub(chunkSource, 'getChunkByAny')
-        .resolves(mockedChunk);
+      const storeHasSpy = mock.method(chunkDataStore, 'has', async () => {
+        throw new Error('Error');
+      });
+      const storeGetSpy = mock.method(chunkDataStore, 'get');
+      const networkSpy = mock.method(
+        chunkSource,
+        'getChunkByAny',
+        async () => mockedChunk,
+      );
       await chunkCache.getChunkDataByAny(
         TX_SIZE,
         ABSOLUTE_OFFSET,
         B64_DATA_ROOT,
         0,
       );
-      expect(storeGetSpy).to.have.been.called;
-      expect(storeHasSpy).to.have.been.called;
-      expect(networkSpy).to.have.been.called;
+
+      assert.deepEqual(storeGetSpy.mock.callCount(), 1);
+      assert.deepEqual(storeHasSpy.mock.callCount(), 1);
+      assert.deepEqual(networkSpy.mock.callCount(), 1);
     });
   });
 });

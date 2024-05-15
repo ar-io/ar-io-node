@@ -15,82 +15,175 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { strict as assert } from 'node:assert';
+import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import axios from 'axios';
-import chai, { expect } from 'chai';
-import sinon, { SinonSandbox } from 'sinon';
-import sinonChai from 'sinon-chai';
 import * as winston from 'winston';
 import { GatewayDataSource } from './gateway-data-source.js';
+import { RequestAttributes } from '../types.js';
 
-chai.use(sinonChai);
+let log: winston.Logger;
+let dataSource: GatewayDataSource;
+let mockedAxiosInstance: any;
+let requestAttributes: RequestAttributes;
 
-describe('GatewayDataSource', function () {
-  let log: winston.Logger;
-  let sandbox: SinonSandbox;
-  let dataSource: GatewayDataSource;
-  let mockedAxiosInstance: any;
+before(async () => {
+  log = winston.createLogger({ silent: true });
+});
 
-  before(function () {
-    log = winston.createLogger({ silent: true });
-  });
-
-  beforeEach(function () {
-    sandbox = sinon.createSandbox();
-
-    mockedAxiosInstance = {
-      request: sandbox.stub().resolves({
-        status: 200,
-        data: 'mocked stream',
-        headers: {
-          'content-length': '123',
-          'content-type': 'application/json',
-        },
-      }),
-      defaults: {
-        baseURL: 'https://gateway.domain', // Ensure this matches what you expect
+beforeEach(async () => {
+  mockedAxiosInstance = {
+    request: async () => ({
+      status: 200,
+      data: 'mocked stream',
+      headers: {
+        'content-length': '123',
+        'content-type': 'application/json',
       },
-    };
-    sandbox.stub(axios, 'create').returns(mockedAxiosInstance as any);
+    }),
+    defaults: {
+      baseURL: 'https://gateway.domain',
+    },
+  };
 
-    dataSource = new GatewayDataSource({
-      log,
-      trustedGatewayUrl: 'https://gateway.domain',
-    });
+  mock.method(axios, 'create', () => mockedAxiosInstance);
+
+  dataSource = new GatewayDataSource({
+    log,
+    trustedGatewayUrl: 'https://gateway.domain',
   });
 
-  afterEach(function () {
-    sandbox.restore();
-  });
+  requestAttributes = { origin: 'node-url', hops: 0 };
+});
 
-  describe('getData', function () {
-    it('should fetch data successfully from the gateway', async function () {
-      const data = await dataSource.getData('some-id');
+afterEach(async () => {
+  mock.restoreAll();
+});
 
-      expect(data).to.have.property('stream', 'mocked stream');
-      expect(data).to.have.property('size', 123);
-      expect(data).to.have.property('sourceContentType', 'application/json');
-      expect(data).to.have.property('verified', false);
-      expect(data).to.have.property('cached', false);
+describe('GatewayDataSource', () => {
+  describe('getData', () => {
+    it('should fetch data successfully from the gateway', async () => {
+      const data = await dataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, {
+        stream: 'mocked stream',
+        size: 123,
+        sourceContentType: 'application/json',
+        verified: false,
+        cached: false,
+        requestAttributes: {
+          hops: requestAttributes.hops + 1,
+          origin: requestAttributes.origin,
+        },
+      });
     });
 
-    it('should throw an error for unexpected status code', async function () {
-      mockedAxiosInstance.request.resolves({ status: 404 });
+    it('should throw an error for unexpected status code', async () => {
+      mockedAxiosInstance.request = async () => ({ status: 404 });
 
       try {
-        await dataSource.getData('bad-id');
+        await dataSource.getData({ id: 'bad-id', requestAttributes });
+        assert.fail('Expected an error to be thrown');
       } catch (error: any) {
-        expect(error.message).to.equal(
-          'Unexpected status code from gateway: 404',
-        );
+        assert.equal(error.message, 'Unexpected status code from gateway: 404');
       }
     });
 
-    it('should handle network or Axios errors gracefully', async function () {
-      mockedAxiosInstance.request.rejects(new Error('Network Error'));
+    it('should handle network or Axios errors gracefully', async () => {
+      mockedAxiosInstance.request = async () => {
+        throw new Error('Network Error');
+      };
 
-      await expect(dataSource.getData('bad-id')).to.be.rejectedWith(
-        'Network Error',
+      try {
+        await dataSource.getData({ id: 'bad-id', requestAttributes });
+        assert.fail('Expected an error to be thrown');
+      } catch (error: any) {
+        assert.equal(error.message, 'Network Error');
+      }
+    });
+
+    it('should send hops and origin headers if provided', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+        };
+      };
+
+      await dataSource.getData({
+        id: 'some-id',
+        requestAttributes,
+      });
+
+      assert.equal(
+        requestParams.headers['X-AR-IO-Hops'],
+        (requestAttributes.hops + 1).toString(),
       );
+      assert.equal(
+        requestParams.headers['X-AR-IO-Origin'],
+        requestAttributes.origin,
+      );
+    });
+
+    it('should not send origin header if not provided', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+        };
+      };
+
+      await dataSource.getData({
+        id: 'some-id',
+        requestAttributes: { hops: 0 },
+      });
+
+      assert.equal(requestParams.headers['X-AR-IO-Hops'], '1');
+      assert.equal(requestParams.headers['X-AR-IO-Origin'], undefined);
+    });
+
+    it('should not send hops or origin headers if not provided', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 200,
+          headers: { 'content-length': '123' },
+        };
+      };
+
+      await dataSource.getData({
+        id: 'some-id',
+      });
+
+      assert.equal(requestParams.headers['X-AR-IO-Hops'], undefined);
+      assert.equal(requestParams.headers['X-AR-IO-Origin'], undefined);
+    });
+
+    it('should return hops 1 in the response if not provided', async () => {
+      const data = await dataSource.getData({
+        id: 'some-id',
+      });
+
+      assert.equal(data.requestAttributes?.hops, 1);
+      assert.equal(data.requestAttributes?.origin, undefined);
+    });
+
+    it('should increment hops in the response', async () => {
+      const data = await dataSource.getData({
+        id: 'some-id',
+        requestAttributes: { hops: 5 },
+      });
+
+      assert.equal(data.requestAttributes?.hops, 6);
+      assert.equal(data.requestAttributes?.origin, undefined);
     });
   });
 });

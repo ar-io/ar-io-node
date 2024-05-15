@@ -21,6 +21,7 @@ import {
   ContiguousData,
   ContiguousDataAttributes,
   ContiguousDataSource,
+  RequestAttributes,
 } from '../types.js';
 
 export class SequentialDataSource implements ContiguousDataSource {
@@ -38,22 +39,31 @@ export class SequentialDataSource implements ContiguousDataSource {
     this.dataSources = dataSources;
   }
 
-  async getData(
-    txId: string,
-    dataAttributes?: ContiguousDataAttributes,
-  ): Promise<ContiguousData> {
+  async getData({
+    id,
+    dataAttributes,
+    requestAttributes,
+  }: {
+    id: string;
+    dataAttributes?: ContiguousDataAttributes;
+    requestAttributes?: RequestAttributes;
+  }): Promise<ContiguousData> {
     this.log.info('Sequentialy fetching from data sources', {
-      txId,
+      id,
     });
 
     for (const dataSource of this.dataSources) {
       try {
-        const data = await dataSource.getData(txId, dataAttributes);
+        const data = await dataSource.getData({
+          id,
+          dataAttributes,
+          requestAttributes,
+        });
         return data;
       } catch (error: any) {
         // Some errors are expected, so log them as warnings
         this.log.warn('Unable to fetch data from data source', {
-          txId,
+          id,
           message: error.message,
           stack: error.stack,
         });

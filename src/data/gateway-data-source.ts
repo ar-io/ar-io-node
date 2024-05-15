@@ -17,8 +17,13 @@
  */
 import { default as axios } from 'axios';
 import winston from 'winston';
+import { headerNames } from '../constants.js';
 
-import { ContiguousData, ContiguousDataSource } from '../types.js';
+import {
+  ContiguousData,
+  ContiguousDataSource,
+  RequestAttributes,
+} from '../types.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 
@@ -42,7 +47,13 @@ export class GatewayDataSource implements ContiguousDataSource {
     });
   }
 
-  async getData(id: string): Promise<ContiguousData> {
+  async getData({
+    id,
+    requestAttributes,
+  }: {
+    id: string;
+    requestAttributes?: RequestAttributes;
+  }): Promise<ContiguousData> {
     const path = `/raw/${id}`;
     this.log.info('Fetching contiguous data from gateway', {
       id,
@@ -50,10 +61,26 @@ export class GatewayDataSource implements ContiguousDataSource {
       path,
     });
 
+    const requestOriginAndHopsHeaders: { [key: string]: string } = {};
+    let hops;
+    let origin;
+    if (requestAttributes !== undefined) {
+      hops = requestAttributes.hops + 1;
+      requestOriginAndHopsHeaders[headerNames.hops] = hops.toString();
+
+      if (requestAttributes.origin !== undefined) {
+        origin = requestAttributes.origin;
+        requestOriginAndHopsHeaders[headerNames.origin] = origin;
+      }
+    } else {
+      hops = 1;
+    }
+
     const response = await this.trustedGatewayAxios.request({
       method: 'GET',
       headers: {
         'Accept-Encoding': 'identity',
+        ...requestOriginAndHopsHeaders,
       },
       url: path,
       responseType: 'stream',
@@ -71,6 +98,13 @@ export class GatewayDataSource implements ContiguousDataSource {
       verified: false,
       sourceContentType: response.headers['content-type'],
       cached: false,
+      requestAttributes: {
+        hops:
+          response.headers[headerNames.hops.toLowerCase()] !== undefined
+            ? parseInt(response.headers[headerNames.hops.toLowerCase()])
+            : hops,
+        origin,
+      },
     };
   }
 }

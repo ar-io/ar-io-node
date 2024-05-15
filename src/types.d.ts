@@ -157,7 +157,13 @@ export interface ContiguousDataStore {
 
 export interface ChainSource {
   getBlockByHeight(height: number): Promise<PartialJsonBlock>;
-  getTx(txId: string): Promise<PartialJsonTransaction>;
+  getTx({
+    txId,
+    isPendingTx,
+  }: {
+    txId: string;
+    isPendingTx?: boolean;
+  }): Promise<PartialJsonTransaction>;
   getTxOffset(txId: string): Promise<JsonTransactionOffset>;
   getTxField<K extends keyof PartialJsonTransaction>(
     txId: string,
@@ -169,6 +175,7 @@ export interface ChainSource {
     missingTxIds: string[];
   }>;
   getHeight(): Promise<number>;
+  getPendingTxIds(): Promise<string[]>;
 }
 
 export interface ChainIndex {
@@ -269,18 +276,22 @@ interface GqlTransaction {
   id: string;
   anchor: string;
   signature: string;
-  recipient: string | undefined;
+  recipient: string | null;
   ownerAddress: string;
   ownerKey: string;
   fee: string;
   quantity: string;
   dataSize: string;
-  contentType: string | undefined;
-  blockIndepHash: string | undefined;
-  blockTimestamp: number | undefined;
-  height: number | undefined;
-  blockPreviousBlock: string | undefined;
+  contentType: string | null;
+  blockIndepHash: string | null;
+  blockTimestamp: number | null;
+  height: number | null;
+  blockPreviousBlock: string | null;
   parentId: string | null;
+  blockTransactionIndex: number;
+  dataItemId: string | null;
+  tags: { name: any; value: any }[];
+  indexedAt: number;
 }
 
 interface GqlTransactionEdge {
@@ -308,6 +319,11 @@ interface GqlBlockEdge {
 interface GqlBlocksResult {
   pageInfo: GqlPageInfo;
   edges: GqlBlockEdge[];
+}
+
+interface RequestAttributes {
+  hops: number;
+  origin?: string;
 }
 
 export interface GqlQueryable {
@@ -399,6 +415,7 @@ export interface ContiguousData {
   verified: boolean;
   sourceContentType?: string;
   cached: boolean;
+  requestAttributes?: RequestAttributes;
 }
 
 export interface ContiguousDataAttributes {
@@ -439,10 +456,15 @@ export interface ContiguousDataIndex {
 }
 
 export interface ContiguousDataSource {
-  getData(
-    id: string,
-    dataAttributes?: ContiguousDataAttributes,
-  ): Promise<ContiguousData>;
+  getData({
+    id,
+    dataAttributes,
+    requestAttributes,
+  }: {
+    id: string;
+    dataAttributes?: ContiguousDataAttributes;
+    requestAttributes?: RequestAttributes;
+  }): Promise<ContiguousData>;
 }
 
 export interface ManifestResolution {
@@ -485,13 +507,16 @@ export interface NameResolver {
 }
 
 export interface MatchableItem {
-  id: string;
-  signature: string;
-  owner: string;
+  id?: string;
+  signature?: string;
+  owner?: string;
   owner_address?: string;
   target?: string;
   quantity?: string;
   tags: B64uTag[];
+  height?: number;
+  txs?: string[];
+  reward_addr?: string;
 }
 
 export interface ItemFilter {

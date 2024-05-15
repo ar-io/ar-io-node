@@ -17,6 +17,7 @@
  */
 import Sqlite from 'better-sqlite3';
 import fs from 'node:fs';
+import { afterEach, before } from 'node:test';
 
 import log from '../src/log.js';
 
@@ -50,7 +51,10 @@ before(async () => {
 
   // Moderation DB
   moderationDb = new Sqlite(moderationDbPath);
-  const moderationSchema = fs.readFileSync('test/moderation-schema.sql', 'utf8');
+  const moderationSchema = fs.readFileSync(
+    'test/moderation-schema.sql',
+    'utf8',
+  );
   moderationDb.exec(moderationSchema);
 
   // Bundles DB

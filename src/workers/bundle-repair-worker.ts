@@ -108,7 +108,7 @@ export class BundleRepairWorker {
       );
       for (const bundleId of bundleIds) {
         this.log.info('Retrying failed bundle', { bundleId });
-        await this.txFetcher.queueTxId(bundleId);
+        await this.txFetcher.queueTxId({ txId: bundleId });
       }
     } catch (error: any) {
       this.log.error('Error retrying failed bundles:', error);

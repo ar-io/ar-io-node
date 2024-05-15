@@ -20,6 +20,7 @@ import express from 'express';
 import { Server } from 'node:http';
 
 import * as config from './config.js';
+import { headerNames } from './constants.js';
 import log from './log.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
@@ -40,6 +41,7 @@ if (config.START_WRITERS) {
   system.txOffsetRepairWorker.start();
   system.txRepairWorker.start();
   system.bundleRepairWorker.start();
+  system.mempoolWatcher?.start();
 }
 
 // HTTP server
@@ -47,7 +49,7 @@ const app = express();
 
 app.use(
   cors({
-    exposedHeaders: ['X-ArNS-Resolved-Id', 'X-ArNS-TTL-Seconds'],
+    exposedHeaders: [headerNames.arnsResolvedId, headerNames.arnsTtlSeconds],
   }),
 );
 

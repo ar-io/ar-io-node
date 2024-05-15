@@ -62,6 +62,7 @@ import {
   PartialJsonBlock,
   PartialJsonTransaction,
 } from '../types.js';
+import * as config from '../config.js';
 
 const CPU_COUNT = os.cpus().length;
 const MAX_WORKER_COUNT = 12;
@@ -82,13 +83,17 @@ export function encodeTransactionGqlCursor({
   height,
   blockTransactionIndex,
   dataItemId,
+  indexedAt,
+  id,
 }: {
-  height?: number;
-  blockTransactionIndex?: number;
-  dataItemId?: string;
+  height: number | null;
+  blockTransactionIndex: number | null;
+  dataItemId: string | null;
+  indexedAt: number | null;
+  id: string | null;
 }) {
   return utf8ToB64Url(
-    JSON.stringify([height, blockTransactionIndex, dataItemId]),
+    JSON.stringify([height, blockTransactionIndex, dataItemId, indexedAt, id]),
   );
 }
 
@@ -96,17 +101,24 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
       return {
-        height: undefined,
-        blockTransactionIndex: undefined,
-        dataItemId: undefined,
+        height: null,
+        blockTransactionIndex: null,
+        dataItemId: null,
+        indexedAt: null,
+        id: null,
       };
     }
 
-    const [height, blockTransactionIndex, dataItemId] = JSON.parse(
-      b64UrlToUtf8(cursor),
-    ) as [number, number, string | undefined];
+    const [height, blockTransactionIndex, dataItemId, indexedAt, id] =
+      JSON.parse(b64UrlToUtf8(cursor)) as [
+        number | null,
+        number | null,
+        string | null,
+        number | null,
+        string | null,
+      ];
 
-    return { height, blockTransactionIndex, dataItemId };
+    return { height, blockTransactionIndex, dataItemId, indexedAt, id };
   } catch (error) {
     throw new ValidationError('Invalid transaction cursor');
   }
@@ -119,7 +131,7 @@ export function encodeBlockGqlCursor({ height }: { height: number }) {
 export function decodeBlockGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
-      return { height: undefined };
+      return { height: null };
     }
 
     const [height] = JSON.parse(b64UrlToUtf8(cursor)) as [number];
@@ -1109,6 +1121,7 @@ export class StandaloneSqliteDatabaseWorker {
         'nt.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         "x'00' AS data_item_id",
+        'nt.indexed_at AS indexed_at',
         'id',
         'last_tx AS anchor',
         'signature',
@@ -1125,10 +1138,10 @@ export class StandaloneSqliteDatabaseWorker {
         "'' AS parent_id",
       )
       .from('new_transactions nt')
-      .join('new_block_transactions nbt', {
+      .leftJoin('new_block_transactions nbt', {
         'nbt.transaction_id': 'nt.id',
       })
-      .join('new_blocks nb', {
+      .leftJoin('new_blocks nb', {
         'nb.indep_hash': 'nbt.block_indep_hash',
       })
       .join('wallets w', {
@@ -1143,6 +1156,7 @@ export class StandaloneSqliteDatabaseWorker {
         'ndi.height AS height',
         'nbt.block_transaction_index AS block_transaction_index',
         'id AS data_item_id',
+        'ndi.indexed_at AS indexed_at',
         'id',
         'anchor',
         'signature',
@@ -1159,10 +1173,10 @@ export class StandaloneSqliteDatabaseWorker {
         'ndi.parent_id',
       )
       .from('new_data_items ndi')
-      .join('new_block_transactions nbt', {
+      .leftJoin('new_block_transactions nbt', {
         'nbt.transaction_id': 'ndi.root_transaction_id',
       })
-      .join('new_blocks nb', {
+      .leftJoin('new_blocks nb', {
         'nb.indep_hash': 'nbt.block_indep_hash',
       })
       .join('bundles.wallets w', {
@@ -1177,6 +1191,7 @@ export class StandaloneSqliteDatabaseWorker {
         'st.height AS height',
         'st.block_transaction_index AS block_transaction_index',
         "x'00' AS data_item_id",
+        '0 AS indexed_at',
         'id',
         'last_tx AS anchor',
         'signature',
@@ -1208,6 +1223,7 @@ export class StandaloneSqliteDatabaseWorker {
         'sdi.height AS height',
         'sdi.block_transaction_index AS block_transaction_index',
         'sdi.id AS data_item_id',
+        'sdi.indexed_at AS indexed_at',
         'id',
         'anchor',
         'signature',
@@ -1406,13 +1422,42 @@ export class StandaloneSqliteDatabaseWorker {
       height: cursorHeight,
       blockTransactionIndex: cursorBlockTransactionIndex,
       dataItemId: cursorDataItemId,
+      indexedAt: cursorIndexedAt,
+      id: cursorId,
     } = decodeTransactionGqlCursor(cursor);
 
     if (sortOrder === 'HEIGHT_DESC') {
       if (
-        cursorHeight != undefined &&
-        cursorBlockTransactionIndex != undefined
+        ['new_txs', 'new_items'].includes(source) &&
+        cursorHeight == null &&
+        cursorIndexedAt != null
       ) {
+        query.where(
+          sql.or(
+            sql.and(
+              // indexed_at is only considered when the height is null
+              sql.isNull(`${heightSortTableAlias}.height`),
+              sql.or(
+                // If the indexed_at is less than the cursor, the ID is not
+                // considered
+                sql.lt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                sql.and(
+                  // If the indexedAt is the same as the cursor, the ID is
+                  // compared
+                  sql.lte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+                  sql.lt(
+                    'id',
+                    cursorId ? fromB64Url(cursorId) : Buffer.from([0]),
+                  ),
+                ),
+              ),
+            ),
+            // Non-null heights are always after pending transactions and data
+            // items when sorting in descending order
+            sql.isNotNull(`${heightSortTableAlias}.height`),
+          ),
+        );
+      } else if (cursorHeight != null && cursorBlockTransactionIndex != null) {
         let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
         query.where(
           sql.lte(`${heightSortTableAlias}.height`, cursorHeight),
@@ -1441,15 +1486,38 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       }
-      let orderBy = `${heightSortTableAlias}.height DESC, ${blockTransactionIndexSortTableAlias}.block_transaction_index DESC`;
+      let orderBy = `${heightSortTableAlias}.height DESC NULLS FIRST`;
+      orderBy += `, ${blockTransactionIndexSortTableAlias}.block_transaction_index DESC NULLS FIRST`;
       if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
         orderBy += `, ${dataItemSortTableAlias}.data_item_id DESC`;
       } else {
         orderBy += `, 3 DESC`;
       }
+      orderBy += `, indexed_at DESC`;
+      orderBy += `, 5 DESC`;
       query.orderBy(orderBy);
     } else {
       if (
+        ['new_txs', 'new_items'].includes(source) &&
+        cursorHeight == null &&
+        cursorIndexedAt != null
+      ) {
+        query.where(
+          // indexed_at is only considered when the height is null
+          sql.isNull(`${heightSortTableAlias}.height`),
+          sql.or(
+            // If the indexed_at is greater than the cursor, the ID is not
+            // considered
+            sql.gt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+            sql.and(
+              // If the indexed_at is the same as the cursor, the ID is
+              // compared
+              sql.gte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
+              sql.gt('id', cursorId ? fromB64Url(cursorId) : Buffer.from([0])),
+            ),
+          ),
+        );
+      } else if (
         cursorHeight != undefined &&
         cursorBlockTransactionIndex != undefined
       ) {
@@ -1481,12 +1549,15 @@ export class StandaloneSqliteDatabaseWorker {
           ),
         );
       }
-      let orderBy = `${heightSortTableAlias}.height ASC, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC`;
+      let orderBy = `${heightSortTableAlias}.height ASC NULLS LAST`;
+      orderBy += `, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC NULLS LAST`;
       if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
         orderBy += `, ${dataItemSortTableAlias}.data_item_id ASC`;
       } else {
         orderBy += `, 3 ASC`;
       }
+      orderBy += `, indexed_at ASC`;
+      orderBy += `, 5 ASC`;
       query.orderBy(orderBy);
     }
   }
@@ -1513,7 +1584,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
-  }) {
+  }): GqlTransaction[] {
     const txsQuery = this.getGqlNewTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -1564,8 +1635,9 @@ export class StandaloneSqliteDatabaseWorker {
     if (bundledIn === undefined || Array.isArray(bundledIn)) {
       sqlParts.push(`SELECT * FROM (${itemsFinalSql})`);
     }
+
     sqlParts.push(
-      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}`,
+      `ORDER BY 1 ${sqlSortOrder}, 2 ${sqlSortOrder}, 3 ${sqlSortOrder}, 4 ${sqlSortOrder}, 5 ${sqlSortOrder}`,
     );
     sqlParts.push(`LIMIT ${pageSize + 1}`);
     const sql = sqlParts.join(' ');
@@ -1579,11 +1651,12 @@ export class StandaloneSqliteDatabaseWorker {
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
-        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : undefined,
+        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : null,
+        indexedAt: tx.indexed_at,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
-        recipient: tx.target ? toB64Url(tx.target) : undefined,
+        recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
         fee: tx.reward,
@@ -1594,9 +1667,13 @@ export class StandaloneSqliteDatabaseWorker {
             ? this.getGqlNewDataItemTags(tx.id)
             : this.getGqlNewTransactionTags(tx.id),
         contentType: tx.content_type,
-        blockIndepHash: toB64Url(tx.block_indep_hash),
+        blockIndepHash: tx.block_indep_hash
+          ? toB64Url(tx.block_indep_hash)
+          : null,
         blockTimestamp: tx.block_timestamp,
-        blockPreviousBlock: toB64Url(tx.block_previous_block),
+        blockPreviousBlock: tx.block_previous_block
+          ? toB64Url(tx.block_previous_block)
+          : null,
         parentId: tx.parent_id ? toB64Url(tx.parent_id) : null,
       }));
   }
@@ -1623,7 +1700,7 @@ export class StandaloneSqliteDatabaseWorker {
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
-  }) {
+  }): GqlTransaction[] {
     const txsQuery = this.getGqlStableTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -1690,11 +1767,12 @@ export class StandaloneSqliteDatabaseWorker {
       .map((tx) => ({
         height: tx.height,
         blockTransactionIndex: tx.block_transaction_index,
-        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : undefined,
+        dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : null,
+        indexedAt: tx.indexed_at,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: toB64Url(tx.signature),
-        recipient: tx.target ? toB64Url(tx.target) : undefined,
+        recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
         fee: tx.reward,
@@ -1816,7 +1894,7 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
-  getGqlTransaction({ id }: { id: string }) {
+  getGqlTransaction({ id }: { id: string }): GqlTransaction {
     let tx = this.getGqlStableTransactions({ pageSize: 1, ids: [id] })[0];
     if (!tx) {
       tx = this.getGqlNewTransactions({ pageSize: 1, ids: [id] })[0];
@@ -2275,7 +2353,7 @@ export class StandaloneSqliteDatabase
     //
 
     const dataIndexCircuitBreakerOptions = {
-      timeout: 500,
+      timeout: config.GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage: 50,
       rollingCountTimeout: 5000,
       resetTimeout: 10000,

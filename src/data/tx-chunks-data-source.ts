@@ -24,6 +24,7 @@ import {
   ChunkDataByAnySource,
   ContiguousData,
   ContiguousDataSource,
+  RequestAttributes,
 } from '../types.js';
 
 export class TxChunksDataSource implements ContiguousDataSource {
@@ -45,12 +46,18 @@ export class TxChunksDataSource implements ContiguousDataSource {
     this.chunkSource = chunkSource;
   }
 
-  async getData(txId: string): Promise<ContiguousData> {
-    this.log.info('Fetching chunk data for TX', { txId });
+  async getData({
+    id,
+    requestAttributes,
+  }: {
+    id: string;
+    requestAttributes?: RequestAttributes;
+  }): Promise<ContiguousData> {
+    this.log.info('Fetching chunk data for TX', { id });
 
     const [txDataRoot, txOffset] = await Promise.all([
-      this.chainSource.getTxField(txId, 'data_root'),
-      this.chainSource.getTxOffset(txId),
+      this.chainSource.getTxField(id, 'data_root'),
+      this.chainSource.getTxOffset(id),
     ]);
     const size = +txOffset.size;
     const offset = +txOffset.offset;
@@ -108,6 +115,13 @@ export class TxChunksDataSource implements ContiguousDataSource {
       size,
       verified: true,
       cached: false,
+      requestAttributes: {
+        hops:
+          requestAttributes?.hops !== undefined
+            ? requestAttributes.hops + 1
+            : 1,
+        origin: requestAttributes?.origin,
+      },
     };
   }
 }

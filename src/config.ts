@@ -190,6 +190,14 @@ export const WEBHOOK_INDEX_FILTER = createFilter(
   JSON.parse(WEBHOOK_INDEX_FILTER_STRING),
 );
 
+// Block filter to use for webhooks
+export const WEBHOOK_BLOCK_FILTER_STRING = canonicalize(
+  JSON.parse(env.varOrDefault('WEBHOOK_BLOCK_FILTER', '{"never": true}')),
+);
+export const WEBHOOK_BLOCK_FILTER = createFilter(
+  JSON.parse(WEBHOOK_BLOCK_FILTER_STRING),
+);
+
 //
 // ArNS Resolution
 //
@@ -210,6 +218,18 @@ export const TRUSTED_ARNS_RESOLVER_URL = env.varOrDefault(
 );
 
 //
+// Mempool watcher
+//
+//
+export const ENABLE_MEMPOOL_WATCHER =
+  env.varOrDefault('ENABLE_MEMPOOL_WATCHER', 'false') === 'true';
+
+export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
+  'MEMPOOL_POLLING_INTERVAL_MS',
+  '30000', // 30 seconds
+);
+
+//
 // Development and testing
 //
 
@@ -220,4 +240,10 @@ export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',
   '0',
+);
+
+// Circuit breaker timeout for getDataParentCircuitBreaker and getDataAttributesCircuitBreaker
+export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
+  'GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS',
+  '500',
 );

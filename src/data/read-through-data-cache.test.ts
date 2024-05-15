@@ -15,63 +15,137 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import chai, { expect } from 'chai';
+import { strict as assert } from 'node:assert';
+import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable, Writable } from 'node:stream';
-import sinon, { SinonSandbox, SinonStubbedInstance } from 'sinon';
-import sinonChai from 'sinon-chai';
 import * as winston from 'winston';
 import {
+  ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
+  RequestAttributes,
 } from '../types.js';
 import { ReadThroughDataCache } from './read-through-data-cache.js';
 
-chai.use(sinonChai);
-
 describe('ReadThroughDataCache', function () {
   let log: winston.Logger;
-  let sandbox: SinonSandbox;
-  let dataSourceStub: SinonStubbedInstance<ContiguousDataSource>;
-  let dataStoreStub: SinonStubbedInstance<ContiguousDataStore>;
-  let contiguousDataIndexStub: SinonStubbedInstance<ContiguousDataIndex>;
+  let mockContiguousDataSource: ContiguousDataSource;
+  let mockContiguousDataStore: ContiguousDataStore;
+  let mockContiguousDataIndex: ContiguousDataIndex;
   let readThroughDataCache: ReadThroughDataCache;
+  let requestAttributes: RequestAttributes;
 
-  beforeEach(function () {
+  before(() => {
     log = winston.createLogger({ silent: true });
-    sandbox = sinon.createSandbox();
-    dataSourceStub = {
-      getData: sandbox.stub(),
+  });
+
+  beforeEach(() => {
+    const mockContiguousData: ContiguousData = {
+      stream: new Readable(),
+      size: 100,
+      verified: false,
+      cached: false,
     };
-    dataStoreStub = {
-      get: sinon.stub(),
-      createWriteStream: sinon.stub(),
-      finalize: sandbox.stub().resolves(),
-    } as any;
-    contiguousDataIndexStub = {
-      getDataParent: sandbox.stub(),
-      getDataAttributes: sandbox.stub(),
-      saveDataContentAttributes: sandbox.stub(),
+
+    mockContiguousDataSource = {
+      getData(_, __?: ContiguousDataAttributes): Promise<ContiguousData> {
+        return Promise.resolve(mockContiguousData);
+      },
+    };
+
+    mockContiguousDataStore = {
+      has: async (_) => {
+        return true;
+      },
+      get: async (hash, __) => {
+        if (hash === 'knownHash') {
+          const stream = new Readable();
+          stream.push('simulated data');
+          stream.push(null);
+          return stream;
+        }
+        return undefined;
+      },
+      createWriteStream: async () => {
+        const stream = new Writable({
+          write(_chunk, _, callback) {
+            callback();
+          },
+        });
+        return stream;
+      },
+      finalize: async (_, __) => Promise.resolve(),
+    };
+
+    mockContiguousDataIndex = {
+      getDataAttributes: async (id: string) => {
+        if (id === 'knownId') {
+          return {
+            size: 100,
+            contentType: undefined,
+            isManifest: false,
+            stable: false,
+            verified: false,
+          };
+        }
+
+        return undefined;
+      },
+      getDataParent: async (id: string) => {
+        if (id === 'knownChildId') {
+          return {
+            parentId: 'knownParentId',
+            hash: 'parentHash',
+            offset: 0,
+            size: 2048,
+          };
+        }
+
+        return undefined;
+      },
+
+      // eslint-disable-next-line no-empty-pattern
+      saveDataContentAttributes: async ({}: {
+        id: string;
+        dataRoot?: string;
+        hash: string;
+        dataSize: number;
+        contentType?: string;
+        cachedAt?: number;
+      }) => {
+        return Promise.resolve();
+      },
     };
 
     readThroughDataCache = new ReadThroughDataCache({
       log,
-      dataSource: dataSourceStub,
-      dataStore: dataStoreStub,
-      contiguousDataIndex: contiguousDataIndexStub,
+      dataSource: mockContiguousDataSource,
+      dataStore: mockContiguousDataStore,
+      contiguousDataIndex: mockContiguousDataIndex,
     });
+
+    requestAttributes = {
+      origin: 'node-url',
+      hops: 0,
+    };
   });
 
-  afterEach(function () {
-    sandbox.restore();
+  afterEach(() => {
+    mock.restoreAll();
   });
 
-  describe('getCachedData', function () {
-    it('should return data from cache when available', async function () {
+  describe('getCachedData', () => {
+    it('should return data from cache when available', async () => {
+      let calledWithArgument: string;
       const mockStream = new Readable();
       mockStream.push('cached data');
       mockStream.push(null);
-      dataStoreStub.get.resolves(mockStream);
+      mock.method(mockContiguousDataStore, 'get', (hash: string) => {
+        calledWithArgument = hash;
+        return Promise.resolve(mockStream);
+      });
 
       const result = await readThroughDataCache.getCacheData(
         'test-id',
@@ -79,13 +153,18 @@ describe('ReadThroughDataCache', function () {
         123,
       );
 
-      expect(dataStoreStub.get).to.have.been.calledWith('test-hash');
-      expect(result).to.have.property('stream').that.equals(mockStream);
-      expect(result).to.have.property('size', 123);
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.deepEqual(result?.stream, mockStream);
+      assert.deepEqual(result?.size, 123);
     });
 
     it('should return undefined when data is not found in cache', async function () {
-      dataStoreStub.get.resolves(undefined);
+      let calledWithArgument: string;
+      mock.method(mockContiguousDataStore, 'get', (hash: string) => {
+        calledWithArgument = hash;
+
+        return Promise.resolve(undefined);
+      });
 
       const result = await readThroughDataCache.getCacheData(
         'test-id',
@@ -93,21 +172,33 @@ describe('ReadThroughDataCache', function () {
         123,
       );
 
-      expect(dataStoreStub.get).to.have.been.calledWith('test-hash');
-      expect(result).to.be.undefined;
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
+      assert.deepEqual(result, undefined);
     });
 
     it('should return parent if found in cache when data is not found in cache', async function () {
+      let calledWithArgument: string;
+      let calledWithParentArgument: string;
       const mockStream = new Readable();
       mockStream.push('cached data');
       mockStream.push(null);
-      dataStoreStub.get.withArgs('test-hash').resolves(undefined);
-      dataStoreStub.get.withArgs('test-parent-hash').resolves(mockStream);
-      contiguousDataIndexStub.getDataParent.resolves({
-        parentId: 'test-parent-id',
-        parentHash: 'test-parent-hash',
-        offset: 0,
-        size: 10,
+      mock.method(mockContiguousDataStore, 'get', (hash: string) => {
+        if (hash === 'test-parent-hash') {
+          calledWithParentArgument = hash;
+          return Promise.resolve(mockStream);
+        }
+        calledWithArgument = hash;
+
+        return Promise.resolve(undefined);
+      });
+      mock.method(mockContiguousDataIndex, 'getDataParent', () => {
+        return Promise.resolve({
+          parentId: 'test-parent-id',
+          parentHash: 'test-parent-hash',
+          offset: 0,
+          size: 10,
+        });
       });
 
       const result = await readThroughDataCache.getCacheData(
@@ -116,77 +207,111 @@ describe('ReadThroughDataCache', function () {
         20,
       );
 
-      expect(dataStoreStub.get).to.have.been.calledWith('test-hash');
-      expect(dataStoreStub.get).to.have.been.calledWith('test-parent-hash');
-      expect(result).to.have.property('stream').that.equals(mockStream);
-      expect(result).to.have.property('size', 20);
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
+      assert.deepEqual(calledWithParentArgument!, 'test-parent-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
+      assert.deepEqual(result?.stream, mockStream);
+      assert.deepEqual(result?.size, 20);
     });
   });
 
   describe('getData', function () {
     it('should fetch cached data successfully', async function () {
-      contiguousDataIndexStub.getDataAttributes.resolves({
-        hash: 'test-hash',
-        size: 100,
-        contentType: 'plain/text',
-        isManifest: false,
-        stable: true,
-        verified: true,
+      let calledWithArgument: string;
+      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          size: 100,
+          contentType: 'plain/text',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
       });
-      dataStoreStub.get.resolves(
-        new Readable({
-          read() {
-            this.push('test data');
-            this.push(null);
-          },
-        }),
-      );
+      mock.method(mockContiguousDataStore, 'get', (hash: string) => {
+        calledWithArgument = hash;
+        return Promise.resolve(
+          new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+        );
+      });
 
-      const result = await readThroughDataCache.getData('test-id');
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
 
-      expect(result).to.have.property('hash', 'test-hash');
-      expect(result).to.have.property('stream').that.is.instanceOf(Readable);
-      expect(result).to.have.property('size', 100);
-      expect(result).to.have.property('sourceContentType', 'plain/text');
-      expect(result).to.have.property('verified', true);
-      expect(result).to.have.property('cached', true);
-      expect(dataStoreStub.get).to.have.been.calledWith('test-hash');
+      assert.deepEqual(result, {
+        hash: 'test-hash',
+        stream: result.stream,
+        size: 100,
+        sourceContentType: 'plain/text',
+        verified: true,
+        cached: true,
+        requestAttributes: {
+          hops: requestAttributes.hops + 1,
+          origin: 'node-url',
+        },
+      });
+      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
     });
 
     it('should fetch data from the source and cache it when not available in cache', async function () {
-      dataStoreStub.get.resolves(undefined);
-      dataStoreStub.createWriteStream.resolves(
-        new Writable({
-          write(_, __, callback) {
-            callback();
-          },
-        }),
+      let calledWithArgument: string;
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
       );
-      dataSourceStub.getData.resolves({
-        hash: 'test-hash',
-        stream: new Readable({
-          read() {
-            this.push('test data');
-            this.push(null);
-          },
-        }),
-        size: 99,
-        verified: true,
-        sourceContentType: 'plain/text',
-        cached: false,
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+      mock.method(mockContiguousDataSource, 'getData', (id: string) => {
+        calledWithArgument = id;
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+          size: 99,
+          sourceContentType: 'plain/text',
+          verified: true,
+          cached: false,
+        });
       });
 
-      const result = await readThroughDataCache.getData('test-id');
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
 
-      expect(dataSourceStub.getData).to.have.been.calledOnceWith('test-id');
-      expect(dataStoreStub.createWriteStream).to.have.been.calledOnce;
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      assert.deepEqual(calledWithArgument!, {
+        id: 'test-id',
+        dataAttributes: undefined,
+        requestAttributes,
+      });
+      assert.deepEqual(
+        (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
+        1,
+      );
 
-      expect(result).to.have.property('hash', 'test-hash');
-      expect(result).to.have.property('stream').that.is.instanceOf(Readable);
-      expect(result).to.have.property('size', 99);
-      expect(result).to.have.property('sourceContentType', 'plain/text');
-      expect(result).to.have.property('verified', true);
-      expect(result).to.have.property('cached', false);
+      assert.ok(result.stream instanceof Readable);
+      assert.equal(result.size, 99);
+      assert.equal(result.sourceContentType, 'plain/text');
+      assert.equal(result.verified, true);
+      assert.equal(result.cached, false);
     });
   });
 });

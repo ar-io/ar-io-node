@@ -66,6 +66,7 @@ import { TransactionOffsetImporter } from './workers/transaction-offset-importer
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSResolver } from './init/resolvers.js';
+import { MempoolWatcher } from './workers/mempool-watcher.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -203,7 +204,7 @@ export const txFetcher = new TransactionFetcher({
 
 // Async fetch block TXs that failed sync fetch
 eventEmitter.on(events.BLOCK_TX_FETCH_FAILED, ({ id: txId }) => {
-  txFetcher.queueTxId(txId);
+  txFetcher.queueTxId({ txId });
 });
 
 const txImporter = new TransactionImporter({
@@ -213,7 +214,7 @@ const txImporter = new TransactionImporter({
 });
 
 // Queue fetched TXs to
-eventEmitter.addListener('tx-fetched', (tx: PartialJsonTransaction) => {
+eventEmitter.addListener(events.TX_FETCHED, (tx: PartialJsonTransaction) => {
   txImporter.queueTx(tx);
 });
 
@@ -402,8 +403,18 @@ const webhookEmitter = new WebhookEmitter({
   eventEmitter,
   targetServersUrls: config.WEBHOOK_TARGET_SERVERS,
   indexFilter: config.WEBHOOK_INDEX_FILTER,
+  blockFilter: config.WEBHOOK_BLOCK_FILTER,
   log,
 });
+
+export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
+  ? new MempoolWatcher({
+      log,
+      chainSource: arweaveClient,
+      txFetcher,
+      mempoolPollingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
+    })
+  : undefined;
 
 let isShuttingDown = false;
 
@@ -416,6 +427,7 @@ export const shutdown = async (express: Server) => {
     express.close(async () => {
       log.debug('Web server stopped successfully');
       eventEmitter.removeAllListeners();
+      await mempoolWatcher?.stop();
       await blockImporter.stop();
       await dataItemIndexer.stop();
       await txRepairWorker.stop();

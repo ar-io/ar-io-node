@@ -7,7 +7,7 @@ networks:
 
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-f6576577e421a4c9173d6d5d39b4540766b366ae}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: on-failure:5
@@ -29,7 +29,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-af52a298c741267675ce31b7492eed13b893ce66}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: on-failure:5
@@ -73,9 +73,12 @@ services:
       - ON_DEMAND_RETRIEVAL_ORDER=${ON_DEMAND_RETRIEVAL_ORDER:-}
       - WEBHOOK_TARGET_SERVERS=${WEBHOOK_TARGET_SERVERS:-}
       - WEBHOOK_INDEX_FILTER=${WEBHOOK_INDEX_FILTER:-}
+      - WEBHOOK_BLOCK_FILTER=${WEBHOOK_INDEX_FILTER:-}
       - CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD=${CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD:-}
       - TRUSTED_ARNS_RESOLVER_TYPE=${TRUSTED_ARNS_RESOLVER_TYPE:-gateway}
       - TRUSTED_ARNS_RESOLVER_URL=${TRUSTED_ARNS_RESOLVER_URL:-https://__NAME__.arweave.dev}
+      - ENABLE_MEMPOOL_WATCHER=${ENABLE_MEMPOOL_WATCHER:-false}
+      - MEMPOOL_POOLING_INTERVAL_MS=${MEMPOOL_POOLING_INTERVAL_MS:-}
     depends_on:
       - redis
 
@@ -108,7 +111,7 @@ services:
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-9}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-10-pre}
       - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
 
   resolver:
@@ -119,7 +122,7 @@ services:
     environment:
       - PORT=6000
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - CONTRACT_TX_ID=${CONTRACT_ID:-}
+      - CONTRACT_ID=${CONTRACT_ID:-}
       - RUN_RESOLVER=${RUN_RESOLVER:-false}
       - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
       - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}

@@ -107,7 +107,7 @@ export class BundleDataImporter {
   }): Promise<void> {
     const log = this.log.child({ method: 'download', id: item.id });
 
-    const data = await this.contiguousDataSource.getData(item.id);
+    const data = await this.contiguousDataSource.getData({ id: item.id });
 
     return new Promise((resolve, reject) => {
       data.stream.on('end', () => {

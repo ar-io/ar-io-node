@@ -10,7 +10,7 @@
 /node_modules
 /vendor
 /wallets
-test-results.json
+test-results.xml
 
 # Generated docs
 /docs/sqlite/bundles
