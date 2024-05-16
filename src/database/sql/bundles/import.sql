@@ -86,4 +86,7 @@ INSERT INTO new_data_items (
   @id, @parent_id, @root_transaction_id, @height, @signature, @anchor,
   @owner_address, @target, @data_offset, @data_size, @content_type,
   @tag_count, @indexed_at
-) ON CONFLICT DO UPDATE SET height = IFNULL(@height, height)
+) ON CONFLICT DO
+UPDATE SET
+  height = IFNULL(@height, height),
+  root_transaction_id = @root_transaction_id

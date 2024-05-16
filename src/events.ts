@@ -57,6 +57,9 @@ export const ANS104_NESTED_BUNDLE_INDEXED = 'ans104-nested-bundle-indexed';
 /** An ANS-104 bundle was fully unbundled */
 export const ANS104_UNBUNDLE_COMPLETE = 'ans104-unbundle-complete';
 
+/** An ANS-104 bundle was queued to be unbundled */
+export const ANS104_BUNDLE_QUEUED = 'ans104-bundle-queued';
+
 //==============================================================================
 // ANS-104 data item matching and indexing
 //==============================================================================
