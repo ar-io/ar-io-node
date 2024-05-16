@@ -20,6 +20,7 @@ import createPrometheusMiddleware from 'express-prometheus-middleware';
 
 import * as config from '../config.js';
 import * as system from '../system.js';
+import * as events from '../events.js';
 import { release } from '../version.js';
 
 export const arIoRouter = Router();
@@ -104,3 +105,26 @@ arIoRouter.post('/ar-io/admin/queue-tx', express.json(), async (req, res) => {
     res.status(500).send(error?.message);
   }
 });
+
+// Queue a bundle for processing
+arIoRouter.post(
+  '/ar-io/admin/queue-bundle',
+  express.json(),
+  async (req, res) => {
+    try {
+      const { id } = req.body;
+      if (id === undefined) {
+        res.status(400).send("Must provide 'id'");
+        return;
+      }
+      system.prioritizedTxIds.add(id);
+      system.eventEmitter.emit(events.ANS104_BUNDLE_QUEUED, {
+        id,
+        root_tx_id: id,
+      });
+      res.json({ message: 'Bundle queued' });
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
