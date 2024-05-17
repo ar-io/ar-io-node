@@ -127,7 +127,7 @@ services:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
 
   upload-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-0b95dff4aded40a79a8187c698fb3b13dde485cc}
+    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       PORT: ${UPLOAD_SERVICE_PORT:-5100}
@@ -164,7 +164,7 @@ services:
     profiles: ['bundler']
 
   fulfillment-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-0b95dff4aded40a79a8187c698fb3b13dde485cc}
+    image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       NODE_ENV: ${NODE_ENV:-local}
@@ -212,7 +212,7 @@ services:
 
   localstack:
     container_name: '${LOCALSTACK_DOCKER_NAME:-localstack}'
-    image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-0b95dff4aded40a79a8187c698fb3b13dde485cc}
+    image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
     ports:
       - '127.0.0.1:4566:4566'
       #- "127.0.0.1:4510-4559:4510-4559" # external services port range
