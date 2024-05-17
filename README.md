@@ -79,13 +79,22 @@ Once running, requests can be directed to Envoy server at `localhost:3000`.
 
 ### Run a Turbo Bundler as a Sidecar
 
-You can run a turbo bundler as a sidecar to the ar.io gateway:
+You can run a turbo bundler as a sidecar to the ar.io gateway. This will allow the gateway to accept data items and bundle them into a single transaction before submitting them to the network.
 
-```shell
-docker-compose -f docker-compose.bundler.yaml up
+First, supply the necessary environment variables in a `.env` file:
+
+```env
+BUNDLER_ARWEAVE_WALLET='Stringified JWK Wallet'
+BUNDLER_ARWEAVE_ADDRESS='Base64-encoded wallet address for above wallet'
 ```
 
-This will start a suite of containers necessary for running a stand alone bundler service. On port 5100 there will be an upload service exposed for accepting data items.
+Then, run docker compose with the `bundler` profile.
+
+```shell
+docker-compose --profile bundler up
+```
+
+Now, the bundler service will be running alongside the ar.io gateway. Your gateway will now accept data items at `https://my-gateway.net/bundler/tx` 🚀
 
 ## Configuration
 
@@ -97,7 +106,7 @@ directory and use the environment variables set there.
 Add the following to your `.env` file to proxy GraphQL to another server while
 using the ar.io gateway to serve data (using arweave.net GraphQL as an example):
 
-```
+```env
 GRAPHQL_HOST=arweave.net
 GRAPHQL_PORT=443
 ```
