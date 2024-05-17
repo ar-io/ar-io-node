@@ -176,13 +176,6 @@ The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types 
 - `{ "and": [ <nested filter>, ... ]}`
 - `{ "or": [ <nested filter>, ... ]}`
 
-- `{ "never": true }` (default)
-- `{ "always": true }`
-- `{ "attributes": { "owner": <owner key>, ... }}`
-- `{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, { "name": <utf8 tag name> }, ...]}`
-- `{ "and": [ <nested filter>, ... ]}`
-- `{ "or": [ <nested filter>, ... ]}`
-
 Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp" }, { "name": "IPFS-Add" }]}"`
 
 After setting up the environment variables, the ar.io gatway will monitor for transactions or data items that match the `WEBHOOK_INDEX_FILTER`. Once a match is found, a webhook will be emitted to all the servers listed in `WEBHOOK_TARGET_SERVERS`.
