@@ -415,24 +415,14 @@ export class ArweaveCompositeClient
           return tx;
         }
 
-        if (isPendingTx) {
-          // Request pending TX from trusted node
-          return this.trustedNodeRequestQueue
-            .push({
-              method: 'GET',
-              url: `/unconfirmed_tx/${txId}`,
-            })
-            .then((response) => {
-              return response.data;
-            });
-        }
-
         return this.peerGetTx(txId)
           .catch(async () => {
+            const url = `/${isPendingTx ? 'unconfirmed_tx' : 'tx'}/${txId}`;
+
             // Request TX from trusted node if peer fetch failed
             return this.trustedNodeRequestQueue.push({
               method: 'GET',
-              url: `/tx/${txId}`,
+              url,
             });
           })
           .then((response) => {
