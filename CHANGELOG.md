@@ -4,7 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 10] - 2024-05-20
+
+- Added experimental support for streaming SQLite backups to S3 (and compatible
+  services) using [Litestream](https://litestream.io/). Start the service using
+  the docker-compose 'litestream' profile to use it, and see the
+  `AR_IO_SQLITE_BACKUP_*` [environment variables documentation](docs/env.md) for
+  further details.
+- Added `/ar-io/admin/queue-bundle` endpoint for queuing bundles for import
+  before they're in the mempool. In the future, this will enable optimistic
+  indexing when combined with a local trusted bundler.
+- Added support for triggering webhooks when blocks are imported that match the
+  filter specified by the `WEBHOOK_BLOCK_FILTER` environment variable.
+- Added experimental support for indexing transactions and related data items
+  from the mempool. Enable it by setting the `ENABLE_MEMPOOL_WATCHER` environment
+  variable to 'true'.
+- Made on-demand data caching circuit breakers configurable via the
+  `GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS` environment variable. This allows gateway
+  operators to decide how much latency they will tolerate when serving data in
+  exchange for more complete data indexing and caching.
+- Renamed cache header from `X-Cached` to `X-Cache` to mimic typical CDN
+  practices.
+- Added `X-AR-IO-Hops` and `X-AR-IO-Origin` headers in preparation for future
+  peer-to-peer data functionality.
+- Upgrade to Node.js v20 and switch to the native test runner.
 
 ## [Release 9] - 2024-04-10
 
