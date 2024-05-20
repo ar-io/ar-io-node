@@ -106,7 +106,7 @@ directory and use the environment variables set there.
 Add the following to your `.env` file to proxy GraphQL to another server while
 using the ar.io gateway to serve data (using arweave.net GraphQL as an example):
 
-```env
+```
 GRAPHQL_HOST=arweave.net
 GRAPHQL_PORT=443
 ```

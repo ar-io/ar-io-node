@@ -69,7 +69,17 @@ volumes:
       o: bind
       device: ${WALLETS_PATH:-$PWD/wallets}
   upload-service-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${UPLOAD_SERVICE_DATA_PATH:-$PWD/data/upload-service}
   upload-service-data-items:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${UPLOAD_SERVICE_DATA_ITEMS_PATH:-$PWD/data/upload-service/items}
 
 services:
   envoy:
@@ -310,7 +320,11 @@ services:
       - '${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack'
       - '/var/run/docker.sock:/var/run/docker.sock'
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:4566/_localstack/health']
+      test:
+        [
+          'CMD-SHELL',
+          'curl -f http://localhost:4566/_localstack/health || exit 1',
+        ]
       interval: 90s
       timeout: 30s
       retries: 1
