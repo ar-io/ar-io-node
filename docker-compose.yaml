@@ -7,67 +7,67 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: ${SQLITE_DATA_PATH:-./data/sqlite}
+      device: ${SQLITE_DATA_PATH:-$PWD/data/sqlite}
   chunks-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${CHUNKS_DATA_PATH:-./data/chunks}
+      device: ${CHUNKS_DATA_PATH:-$PWD/data/chunks}
   contiguous-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${CONTIGUOUS_DATA_PATH:-./data/contiguous}
+      device: ${CONTIGUOUS_DATA_PATH:-$PWD/data/contiguous}
   headers-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${HEADERS_DATA_PATH:-./data/headers}
+      device: ${HEADERS_DATA_PATH:-$PWD/data/headers}
   temp-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${TEMP_DATA_PATH:-./data/tmp}
+      device: ${TEMP_DATA_PATH:-$PWD/data/tmp}
   lmdb-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${LMBD_DATA_PATH:-./data/lmdb}
+      device: ${LMBD_DATA_PATH:-$PWD/data/lmdb}
   redis-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${REDIS_DATA_PATH:-./data/redis}
+      device: ${REDIS_DATA_PATH:-$PWD/data/redis}
   arns-cache:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${ARNS_CACHE_PATH:-./data/arns}
+      device: ${ARNS_CACHE_PATH:-$PWD/data/arns}
   reports-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${REPORTS_DATA_PATH:-./data/reports}
+      device: ${REPORTS_DATA_PATH:-$PWD/data/reports}
   warp-cache:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${WARP_CACHE_PATH:-./data/warp/cache}
+      device: ${WARP_CACHE_PATH:-$PWD/data/warp/cache}
   wallets-data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ${WALLETS_PATH:-./wallets}
+      device: ${WALLETS_PATH:-$PWD/wallets}
   upload-service-data:
   upload-service-data-items:
 
