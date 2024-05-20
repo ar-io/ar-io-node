@@ -1,0 +1,40 @@
+#@ load("@ytt:data", "data")
+
+#@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_ACCESS_KEY != "":
+access-key-id: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_ACCESS_KEY
+secret-access-key: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY
+#@ end
+
+dbs:
+  - path: /app/data/sqlite/core.db
+    replicas:
+      - type: s3
+        name: ar_io_node_core.backup.db
+        bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
+        region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
+        forcePathStyle: true
+        sync-interval: 1s
+  - path: /app/data/sqlite/data.db
+    replicas:
+      - type: s3
+        name: ar_io_node_data.backup.db
+        bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
+        region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
+        forcePathStyle: true
+        sync-interval: 1s
+  - path: /app/data/sqlite/moderation.db
+    replicas:
+      - type: s3
+        name: ar_io_node_moderation.backup.db
+        bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
+        region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
+        forcePathStyle: true
+        sync-interval: 1s
+  - path: /app/data/sqlite/bundles.db
+    replicas:
+      - type: s3
+        name: ar_io_node_bundles.backup.db
+        bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
+        region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
+        forcePathStyle: true
+        sync-interval: 1s
