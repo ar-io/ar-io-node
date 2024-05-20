@@ -405,6 +405,8 @@ export class ArweaveCompositeClient
       >;
     }
 
+    let downloadedFromPeer = true;
+
     const responsePromise = this.txStore
       .get(txId)
       .then((tx) => {
@@ -417,6 +419,7 @@ export class ArweaveCompositeClient
 
         return this.peerGetTx(txId)
           .catch(async () => {
+            downloadedFromPeer = false;
             const url = `/${isPendingTx ? 'unconfirmed_tx' : 'tx'}/${txId}`;
 
             // Request TX from trusted node if peer fetch failed
@@ -436,6 +439,9 @@ export class ArweaveCompositeClient
       })
       .then(async (tx) => {
         try {
+          metrics.arweaveTxFetchCounter.inc({
+            node_type: downloadedFromPeer ? 'arweave_peer' : 'trusted',
+          });
           // Sanity check to guard against accidental bad data from both
           // cache and trusted node
           sanityCheckTx(tx);
