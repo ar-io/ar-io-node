@@ -407,6 +407,7 @@ export class ArweaveCompositeClient
 
     const transactionType = isPendingTx ? 'unconfirmed_tx' : 'tx';
     const url = `/${transactionType}/${txId}`;
+    let downloadedFromPeer = true;
 
     const responsePromise = this.txStore
       .get(txId)
@@ -420,6 +421,8 @@ export class ArweaveCompositeClient
 
         return this.peerGetTx(url)
           .catch(async () => {
+            downloadedFromPeer = false;
+
             // Request TX from trusted node if peer fetch failed
             return this.trustedNodeRequestQueue.push({
               method: 'GET',
@@ -437,6 +440,9 @@ export class ArweaveCompositeClient
       })
       .then(async (tx) => {
         try {
+          metrics.arweaveTxFetchCounter.inc({
+            node_type: downloadedFromPeer ? 'arweave_peer' : 'trusted',
+          });
           // Sanity check to guard against accidental bad data from both
           // cache and trusted node
           sanityCheckTx(tx);
