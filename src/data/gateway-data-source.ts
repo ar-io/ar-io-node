@@ -24,6 +24,7 @@ import {
   ContiguousDataSource,
   RequestAttributes,
 } from '../types.js';
+import * as metrics from '../metrics.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 
@@ -85,6 +86,8 @@ export class GatewayDataSource implements ContiguousDataSource {
       url: path,
       responseType: 'stream',
     });
+
+    metrics.arweaveTxFetchCounter.inc({ node_type: 'trusted' });
 
     if (response.status !== 200) {
       throw new Error(
