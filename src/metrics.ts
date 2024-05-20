@@ -101,12 +101,6 @@ export const arweavePoa2Counter = new promClient.Counter({
   help: 'Count of fetched blocks with PoA2 attached',
 });
 
-export const arweaveTxFetchCounter = new promClient.Counter({
-  name: 'arweave_tx_fetch_total',
-  help: 'Count of fetched transactions',
-  labelNames: ['node_type'],
-});
-
 //
 // SQLite metrics
 //
