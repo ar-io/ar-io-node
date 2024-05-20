@@ -71,7 +71,7 @@ volumes:
 
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-f6576577e421a4c9173d6d5d39b4540766b366ae}
     build:
       context: envoy/
     restart: on-failure:5
@@ -92,7 +92,7 @@ services:
       - core
       - observer
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-f462e82ee30208eb64c5a68211b3cd180193c5b0}
     build:
       context: .
     restart: on-failure:5
@@ -155,7 +155,7 @@ services:
       - redis-data:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-953883ef8cfbce33dd9fa85b5e58c5e67ed4bfa3}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-624b6090acd1060c89f7bb1995a86df310388b72}
     restart: on-failure:5
     ports:
       - 5000:5000
@@ -178,7 +178,7 @@ services:
       - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-f90dc9fa07e6beae654ed4087ca129dde589ab08}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-fe035b80cc9e6038b4d4bec671ec9b33ac184e18}
     restart: on-failure:5
     ports:
       - 6000:6000
@@ -194,6 +194,7 @@ services:
       - arns-cache:/app/data/arns
 
   litestream:
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-07458922bece28b209ed9d3bd9886fa1a4a9434f}
     build:
       context: litestream/
       dockerfile: Dockerfile
