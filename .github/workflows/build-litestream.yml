@@ -12,6 +12,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    permissions:
+      packages: write
+
     steps:
       # Setup
       - uses: actions/checkout@v4
