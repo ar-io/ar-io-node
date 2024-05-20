@@ -478,4 +478,79 @@ describe('Indexing', function () {
       });
     });
   });
+
+  describe('Queue bundle', function () {
+    let bundlesDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAll = () =>
+        bundlesDb.prepare('SELECT * FROM new_data_items').all();
+
+      while (getAll().length === 0) {
+        console.log('Waiting for data items to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    before(async function () {
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
+      compose = await new DockerComposeEnvironment(
+        projectRootPath,
+        'docker-compose.yaml',
+      )
+        .withEnvironment({
+          START_HEIGHT: '1',
+          STOP_HEIGHT: '1',
+          ANS104_UNBUNDLE_FILTER: '{"always": true}',
+          ANS104_INDEX_FILTER: '{"always": true}',
+          ADMIN_API_KEY: 'secret',
+        })
+        .withBuild()
+        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+        .up(['core']);
+
+      bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
+
+      // queue bundle R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA
+      // bundle structure:
+      // - R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA
+      //   - hSO-1WQWf4QSeGQLrCsVG_aVT8UZ0yjsgPvIJgil_CE
+      //   - py4Z2DwWy-HMTvak7H7D14t107NpwI4Vj7KzqfCdJVw
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-bundle',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: {
+          id: 'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+        },
+      });
+
+      await waitForIndexing();
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('Verifying if bundle was unbundled and indexed', async function () {
+      const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
+      const dataItems = stmt.all();
+
+      dataItems.forEach((dataItem) => {
+        assert.equal(
+          toB64Url(dataItem.parent_id),
+          'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+        );
+        assert.equal(
+          toB64Url(dataItem.root_transaction_id),
+          'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+        );
+      });
+    });
+  });
 });

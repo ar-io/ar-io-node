@@ -110,7 +110,7 @@ export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
 
 // Workers
-const eventEmitter = new EventEmitter();
+export const eventEmitter = new EventEmitter();
 
 export const blockImporter = new BlockImporter({
   log,
@@ -307,48 +307,61 @@ const bundleDataImporter = new BundleDataImporter({
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
 });
 
+async function queueBundle(item: NormalizedDataItem | PartialJsonTransaction) {
+  try {
+    await db.saveBundle({
+      id: item.id,
+      rootTransactionId: 'root_tx_id' in item ? item.root_tx_id : item.id,
+      format: 'ans-104',
+    });
+
+    const isPrioritized = prioritizedTxIds.has(item.id);
+    prioritizedTxIds.delete(item.id);
+
+    if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
+      metrics.bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
+      await db.saveBundle({
+        id: item.id,
+        format: 'ans-104',
+        unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+        indexFilter: config.ANS104_INDEX_FILTER_STRING,
+        queuedAt: currentUnixTimestamp(),
+      });
+      bundleDataImporter.queueItem(
+        {
+          index:
+            'parent_index' in item && item.parent_index !== undefined
+              ? item.parent_index
+              : -1, // parent indexes are not needed for L1
+          ...item,
+        },
+        isPrioritized,
+      );
+      metrics.bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
+    } else {
+      await db.saveBundle({
+        id: item.id,
+        format: 'ans-104',
+        unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
+        skippedAt: currentUnixTimestamp(),
+      });
+    }
+  } catch (error) {
+    log.error('Error saving or queueing bundle', error);
+  }
+}
+
+eventEmitter.on(
+  events.ANS104_BUNDLE_QUEUED,
+  async (item: NormalizedDataItem | PartialJsonTransaction) => {
+    await queueBundle(item);
+  },
+);
+
 eventEmitter.on(
   events.ANS104_BUNDLE_INDEXED,
   async (item: NormalizedDataItem | PartialJsonTransaction) => {
-    try {
-      await db.saveBundle({
-        id: item.id,
-        rootTransactionId: 'root_tx_id' in item ? item.root_tx_id : item.id,
-        format: 'ans-104',
-      });
-      const prioritized = prioritizedTxIds.has(item.id);
-      prioritizedTxIds.delete(item.id);
-      if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
-        metrics.bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
-        await db.saveBundle({
-          id: item.id,
-          format: 'ans-104',
-          unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
-          indexFilter: config.ANS104_INDEX_FILTER_STRING,
-          queuedAt: currentUnixTimestamp(),
-        });
-        bundleDataImporter.queueItem(
-          {
-            index:
-              'parent_index' in item && item.parent_index !== undefined
-                ? item.parent_index
-                : -1, // parent indexes are not needed for L1
-            ...item,
-          },
-          prioritized,
-        );
-        metrics.bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
-      } else {
-        await db.saveBundle({
-          id: item.id,
-          format: 'ans-104',
-          unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
-          skippedAt: currentUnixTimestamp(),
-        });
-      }
-    } catch (error) {
-      log.error('Error saving or queueing bundle', error);
-    }
+    await queueBundle(item);
   },
 );
 

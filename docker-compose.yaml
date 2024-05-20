@@ -1,6 +1,76 @@
 ---
 version: '3.0'
 
+volumes:
+  sqlite-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${SQLITE_DATA_PATH:-./data/sqlite}
+  chunks-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CHUNKS_DATA_PATH:-./data/chunks}
+  contiguous-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CONTIGUOUS_DATA_PATH:-./data/contiguous}
+  headers-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${HEADERS_DATA_PATH:-./data/headers}
+  temp-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${TEMP_DATA_PATH:-./data/tmp}
+  lmdb-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LMBD_DATA_PATH:-./data/lmdb}
+  redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${REDIS_DATA_PATH:-./data/redis}
+  arns-cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${ARNS_CACHE_PATH:-./data/arns}
+  reports-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${REPORTS_DATA_PATH:-./data/reports}
+  warp-cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${WARP_CACHE_PATH:-./data/warp/cache}
+  wallets-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${WALLETS_PATH:-./wallets}
+  upload-service-data:
+  upload-service-data-items:
+
 services:
   envoy:
     image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
@@ -23,7 +93,6 @@ services:
     depends_on:
       - core
       - observer
-
   core:
     image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
@@ -32,12 +101,12 @@ services:
     ports:
       - 4000:4000
     volumes:
-      - ${CHUNKS_DATA_PATH:-./data/chunks}:/app/data/chunks
-      - ${CONTIGUOUS_DATA_PATH:-./data/contiguous}:/app/data/contiguous
-      - ${HEADERS_DATA_PATH:-./data/headers}:/app/data/headers
-      - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
-      - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
-      - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
+      - sqlite-data:/app/data/sqlite
+      - chunks-data:/app/data/chunks
+      - contiguous-data:/app/data/contiguous
+      - headers-data:/app/data/headers
+      - temp-data:/app/data/tmp
+      - lmdb-data:/app/data/lmdb
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
@@ -85,7 +154,7 @@ services:
     ports:
       - 6379:6379
     volumes:
-      - ${REDIS_DATA_PATH:-./data/redis}:/data
+      - redis-data:/data
 
   observer:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-953883ef8cfbce33dd9fa85b5e58c5e67ed4bfa3}
@@ -93,10 +162,10 @@ services:
     ports:
       - 5000:5000
     volumes:
-      - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
-      - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
-      - ${WARP_CACHE_PATH:-./data/warp/cache}:/app/cache/warp
-      - ${WALLETS_PATH:-./wallets}:/app/wallets
+      - temp-data:/app/data/tmp
+      - reports-data:/app/data/reports
+      - warp-cache:/app/cache/warp
+      - wallets-data:/app/wallets
     environment:
       - PORT=5000
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-info}
@@ -124,7 +193,21 @@ services:
       - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
       - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
     volumes:
-      - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
+      - arns-cache:/app/data/arns
+
+  litestream:
+    build:
+      context: litestream/
+      dockerfile: Dockerfile
+    profiles:
+      - litestream
+    volumes:
+      - sqlite-data:/app/data/sqlite
+    environment:
+      - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME=${AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME:-}
+      - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION=${AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION:-}
+      - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_ACCESS_KEY=${AR_IO_SQLITE_BACKUP_S3_BUCKET_ACCESS_KEY:-}
+      - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY=${AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY:-}
 
   upload-service:
     image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
@@ -233,7 +316,3 @@ services:
       retries: 1
       start_period: 15s
     profiles: ['bundler']
-
-volumes:
-  upload-service-data:
-  upload-service-data-items:
