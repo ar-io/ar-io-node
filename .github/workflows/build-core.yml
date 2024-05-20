@@ -7,8 +7,9 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read
       checks: write
+      contents: read
+      packages: write
       pull-requests: write
 
     steps:
