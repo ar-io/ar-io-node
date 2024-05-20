@@ -28,7 +28,6 @@ import { default as wait } from 'wait';
 import Sqlite, { Database } from 'better-sqlite3';
 import crypto from 'node:crypto';
 import { toB64Url } from '../../src/lib/encoding.js';
-import { getMaxHeight, waitForBlocks } from './utils.js';
 
 const projectRootPath = process.cwd();
 
@@ -50,6 +49,17 @@ const getHashForIdFromChain = async (id: string): Promise<string> => {
 
   return hasher.digest('base64url');
 };
+
+function getMaxHeight(coreDb: Database) {
+  return coreDb.prepare('SELECT MAX(height) FROM new_blocks').get();
+}
+
+async function waitForBlocks(coreDb: Database, stopHeight: number) {
+  while (getMaxHeight(coreDb)['MAX(height)'] !== stopHeight) {
+    console.log('Waiting for blocks to import...');
+    await wait(5000);
+  }
+}
 
 async function fetchGqlHeight(): Promise<number | undefined> {
   try {
