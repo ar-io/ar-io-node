@@ -83,7 +83,7 @@ services:
       - TVAL_AR_IO_HOST=core
       - TVAL_AR_IO_PORT=4000
       - TVAL_OBSERVER_HOST=observer
-      - TVAL_OBSERVER_PORT=5000
+      - TVAL_OBSERVER_PORT=5050
       - TVAL_GATEWAY_HOST=${TRUSTED_GATEWAY_HOST:-arweave.net}
       - TVAL_GRAPHQL_HOST=${GRAPHQL_HOST:-core}
       - TVAL_GRAPHQL_PORT=${GRAPHQL_PORT:-4000}
@@ -158,14 +158,14 @@ services:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-624b6090acd1060c89f7bb1995a86df310388b72}
     restart: on-failure:5
     ports:
-      - 5000:5000
+      - 5050:5050
     volumes:
       - temp-data:/app/data/tmp
       - reports-data:/app/data/reports
       - warp-cache:/app/cache/warp
       - wallets-data:/app/wallets
     environment:
-      - PORT=5000
+      - PORT=5050
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-info}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-<example>}
       - CONTRACT_ID=${CONTRACT_ID:-}
