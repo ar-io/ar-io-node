@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 11] - 2024-05-21
+
+- Added `arweave_tx_fetch_total` Prometheus metric to track counts of
+  transaction headers fetched from the trusted node and Arweave network peers.
+- Revert to using unnamed bind mounts due to cross platform issues with named
+  volumes.
+
 ## [Release 10] - 2024-05-20
 
 - Added experimental support for streaming SQLite backups to S3 (and compatible
