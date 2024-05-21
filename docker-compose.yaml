@@ -130,8 +130,6 @@ services:
     build:
       context: litestream/
       dockerfile: Dockerfile
-    profiles:
-      - litestream
     volumes:
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
     environment:
