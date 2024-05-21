@@ -284,6 +284,7 @@ services:
       DATA_ITEM_BUCKET_REGION: ${DATA_ITEM_BUCKET_REGION:-us-east-1}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
       AWS_REGION: ${AWS_REGION:-us-east-1}
+      OVERDUE_DATA_ITEM_THRESHOLD_MS: ${OVERDUE_DATA_ITEM_THRESHOLD_MS:-0} # plan all into bundles data items immediately
     depends_on:
       localstack:
         condition: service_healthy
