@@ -15,7 +15,7 @@ dbs:
         forcePathStyle: true
         sync-interval: 1s
         snapshot-interval: 24h
-        retention: 168h # 7 days
+        retention: 168h
   - path: /app/data/sqlite/data.db
     replicas:
       - type: s3
@@ -25,7 +25,7 @@ dbs:
         forcePathStyle: true
         sync-interval: 1s
         snapshot-interval: 24h
-        retention: 168h # 7 days
+        retention: 168h
   - path: /app/data/sqlite/moderation.db
     replicas:
       - type: s3
@@ -35,7 +35,7 @@ dbs:
         forcePathStyle: true
         sync-interval: 1s
         snapshot-interval: 24h
-        retention: 168h # 7 days
+        retention: 168h
   - path: /app/data/sqlite/bundles.db
     replicas:
       - type: s3
@@ -45,4 +45,4 @@ dbs:
         forcePathStyle: true
         sync-interval: 1s
         snapshot-interval: 24h
-        retention: 168h # 7 days
+        retention: 168h

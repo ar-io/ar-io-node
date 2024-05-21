@@ -369,14 +369,14 @@ export class ArweaveCompositeClient
     }
   }
 
-  async peerGetTx(txId: string) {
+  async peerGetTx(url: string) {
     const peersToTry = Array.from(this.preferredPeers);
     const randomPeer =
       peersToTry[Math.floor(Math.random() * peersToTry.length)];
 
     return axios({
       method: 'GET',
-      url: `/tx/${txId}`,
+      url,
       baseURL: randomPeer.url,
       timeout: 500,
     }).then(async (response) => {
@@ -405,6 +405,10 @@ export class ArweaveCompositeClient
       >;
     }
 
+    const transactionType = isPendingTx ? 'unconfirmed_tx' : 'tx';
+    const url = `/${transactionType}/${txId}`;
+    let downloadedFromPeer = true;
+
     const responsePromise = this.txStore
       .get(txId)
       .then((tx) => {
@@ -415,24 +419,14 @@ export class ArweaveCompositeClient
           return tx;
         }
 
-        if (isPendingTx) {
-          // Request pending TX from trusted node
-          return this.trustedNodeRequestQueue
-            .push({
-              method: 'GET',
-              url: `/unconfirmed_tx/${txId}`,
-            })
-            .then((response) => {
-              return response.data;
-            });
-        }
-
-        return this.peerGetTx(txId)
+        return this.peerGetTx(url)
           .catch(async () => {
+            downloadedFromPeer = false;
+
             // Request TX from trusted node if peer fetch failed
             return this.trustedNodeRequestQueue.push({
               method: 'GET',
-              url: `/tx/${txId}`,
+              url,
             });
           })
           .then((response) => {
@@ -446,6 +440,9 @@ export class ArweaveCompositeClient
       })
       .then(async (tx) => {
         try {
+          metrics.arweaveTxFetchCounter.inc({
+            node_type: downloadedFromPeer ? 'arweave_peer' : 'trusted',
+          });
           // Sanity check to guard against accidental bad data from both
           // cache and trusted node
           sanityCheckTx(tx);

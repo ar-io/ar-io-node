@@ -18,6 +18,7 @@
 import dotenv from 'dotenv';
 import { canonicalize } from 'json-canonicalize';
 import crypto from 'node:crypto';
+import { isMainThread } from 'node:worker_threads';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
@@ -33,13 +34,18 @@ dotenv.config();
 export const PORT = +env.varOrDefault('PORT', '4000');
 
 // API key for accessing admin HTTP entpoints
-export const ADMIN_API_KEY = env.varOrDefault(
-  'ADMIN_API_KEY',
-  crypto.randomBytes(32).toString('base64url'),
-);
-if (env.varOrUndefined('ADMIN_API_KEY') === undefined) {
-  log.info('Using a random admin key since none was set', { ADMIN_API_KEY });
+// It's set once in the main thread
+let ADMIN_API_KEY;
+if (isMainThread) {
+  ADMIN_API_KEY = env.varOrDefault(
+    'ADMIN_API_KEY',
+    crypto.randomBytes(32).toString('base64url'),
+  );
+  if (env.varOrUndefined('ADMIN_API_KEY') === undefined) {
+    log.info('Using a random admin key since none was set', { ADMIN_API_KEY });
+  }
 }
+export { ADMIN_API_KEY };
 
 //
 // Nodes

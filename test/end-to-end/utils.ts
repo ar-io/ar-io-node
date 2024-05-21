@@ -15,5 +15,16 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { default as wait } from 'wait';
+import { Database } from 'better-sqlite3';
 
-export const release = '10';
+export function getMaxHeight(coreDb: Database) {
+  return coreDb.prepare('SELECT MAX(height) FROM new_blocks').get();
+}
+
+export async function waitForBlocks(coreDb: Database, stopHeight: number) {
+  while (getMaxHeight(coreDb)['MAX(height)'] !== stopHeight) {
+    console.log('Waiting for blocks to import...');
+    await wait(5000);
+  }
+}
