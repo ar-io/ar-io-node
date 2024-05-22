@@ -1,6 +1,4 @@
 ---
-version: '3.0'
-
 services:
   envoy:
     image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
