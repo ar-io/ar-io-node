@@ -65,7 +65,9 @@ before(async () => {
 
 afterEach(async () => {
   [coreDb, dataDb, moderationDb, bundlesDb].forEach((db) => {
-    db.prepare("SELECT name FROM sqlite_schema WHERE type='table'")
+    db.prepare(
+      "SELECT name FROM sqlite_schema WHERE type='table' AND tbl_name != 'bundle_formats'",
+    )
       .all()
       .forEach((row) => {
         db.prepare(`DELETE FROM ${row.name}`).run();

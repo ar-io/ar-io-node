@@ -3,7 +3,20 @@
 sqlite3 data/sqlite/core.db < test/dump-core-schema.sql
 sqlite3 data/sqlite/data.db < test/dump-data-schema.sql
 sqlite3 data/sqlite/moderation.db < test/dump-moderation-schema.sql
+
+# dump bundle schema
 sqlite3 data/sqlite/bundles.db < test/dump-bundles-schema.sql
+
+# delete bundle_formats table from schema dump
+sed '/CREATE TABLE bundle_formats/,/);/d' test/tmp/bundles-schema.sql > test/bundles-schema.sql
+
+# dump bundle_formats
+sqlite3 data/sqlite/bundles.db < test/dump-bundles-bundle_formats.sql
+cat test/tmp/bundles-inserts.sql >> test/bundles-schema.sql
+
+# clean up tmp file
+rm test/tmp/bundles-schema.sql test/tmp/bundles-inserts.sql
+
 
 # remove sqlite_sequence table from schema dumps
 sed -i '/sqlite_sequence/d' test/*-schema.sql

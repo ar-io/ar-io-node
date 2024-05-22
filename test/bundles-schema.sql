@@ -1,7 +1,3 @@
-CREATE TABLE bundle_formats (
-  id INTEGER PRIMARY KEY,
-  format TEXT NOT NULL
-);
 CREATE TABLE wallets (
   address BLOB PRIMARY KEY,
   public_modulus BLOB
@@ -126,7 +122,7 @@ CREATE TABLE bundles (
   last_unbundled_at INTEGER,
   first_fully_indexed_at INTEGER,
   last_fully_indexed_at INTEGER
-, root_transaction_id BLOB);
+, root_transaction_id BLOB, import_attempt_count INTEGER);
 CREATE INDEX bundles_format_id_idx ON bundles (format_id);
 CREATE INDEX bundles_last_queued_at_idx
   ON bundles (last_queued_at);
@@ -142,3 +138,12 @@ CREATE INDEX bundles_index_filter_id_idx
   ON bundles (index_filter_id);
 CREATE INDEX bundle_data_items_parent_id_filter_id_idx
   ON bundle_data_items (parent_id, filter_id);
+PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE bundle_formats (
+  id INTEGER PRIMARY KEY,
+  format TEXT NOT NULL
+);
+INSERT INTO bundle_formats VALUES(0,'ans-102');
+INSERT INTO bundle_formats VALUES(1,'ans-104');
+COMMIT;

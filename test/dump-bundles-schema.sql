@@ -1,3 +1,3 @@
-.output test/bundles-schema.sql
+.output test/tmp/bundles-schema.sql
 .schema
 .exit
