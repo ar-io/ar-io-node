@@ -77,6 +77,25 @@ docker-compose up --build
 
 Once running, requests can be directed to Envoy server at `localhost:3000`.
 
+### Run a Turbo Bundler as a Sidecar
+
+You can run a turbo bundler as a sidecar to the ar.io gateway. This will allow the gateway to accept data items and bundle them into a single transaction before submitting them to the network.
+
+First, supply the necessary environment variables in a `.env` file:
+
+```env
+BUNDLER_ARWEAVE_WALLET='Stringified JWK Wallet'
+BUNDLER_ARWEAVE_ADDRESS='Base64-encoded wallet address for above wallet'
+```
+
+Then, run docker compose with the `bundler` profile.
+
+```shell
+docker-compose --profile bundler up
+```
+
+Now, the bundler service will be running alongside the ar.io gateway. Your gateway will now accept data items at `https://my-gateway.net/bundler/tx` 🚀
+
 ## Configuration
 
 When running via docker-compose, it will read a `.env` file in the project root
@@ -146,18 +165,18 @@ To use this feature, you need to set up two environment variables in your `.env`
 
 2. **WEBHOOK_INDEX_FILTER**: This filter determines which transactions or data items will trigger the webhook emission.
 
-2. **WEBHOOK_BLOCK_FILTER**: This filter determines which blocks will trigger the webhook emission.
+3. **WEBHOOK_BLOCK_FILTER**: This filter determines which blocks will trigger the webhook emission.
 
-  The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types include:
-  - `{ "never": true }` (default)
-  - `{ "always": true }`
-  - `{ "attributes": { "owner": <owner key>, ... }}`
-  - `{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, { "name": <utf8 tag name> }, ...]}`
-  - `{ "and": [ <nested filter>, ... ]}`
-  - `{ "or": [ <nested filter>, ... ]}`
+The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types include:
 
-  Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp" }, { "name": "IPFS-Add" }]}"`
+- `{ "never": true }` (default)
+- `{ "always": true }`
+- `{ "attributes": { "owner": <owner key>, ... }}`
+- `{ "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, { "name": <utf8 tag name> }, ...]}`
+- `{ "and": [ <nested filter>, ... ]}`
+- `{ "or": [ <nested filter>, ... ]}`
 
+Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp" }, { "name": "IPFS-Add" }]}"`
 
 After setting up the environment variables, the ar.io gatway will monitor for transactions or data items that match the `WEBHOOK_INDEX_FILTER`. Once a match is found, a webhook will be emitted to all the servers listed in `WEBHOOK_TARGET_SERVERS`.
 

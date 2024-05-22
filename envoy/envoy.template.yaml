@@ -21,7 +21,7 @@ static_resources:
                     #@ if data.values.ARNS_ROOT_HOST != "":
                     - name: arns_resolution_service
                       domains:
-                        - #@ "*." + data.values.ARNS_ROOT_HOST
+                        -  #@ "*." + data.values.ARNS_ROOT_HOST
                       routes:
                         - match: { prefix: '/' }
                           route:
@@ -50,6 +50,25 @@ static_resources:
                               retry_on: '5xx,reset,retriable-status-codes'
                               retriable_status_codes: 404
                               num_retries: 5
+                        - match:
+                            prefix: '/bundler/'
+                          route:
+                            cluster: upload_service_cluster
+                            timeout: 0s
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
+                            prefix_rewrite: '/'
+                        - match:
+                            prefix: '/bundler'
+                          route:
+                            cluster: upload_service_cluster
+                            timeout: 0s
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
+                            prefix_rewrite: '/'
+
                         - match: { prefix: '/api-docs' }
                           route:
                             cluster: ario_gateways
@@ -202,3 +221,18 @@ static_resources:
             validation_context:
               trusted_ca:
                 filename: /etc/ssl/certs/ca-certificates.crt
+
+    - name: upload_service_cluster
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: upload_service_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: upload-service
+                      port_value: 5100
+                      ipv4_compat: true
