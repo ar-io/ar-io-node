@@ -34,6 +34,7 @@ import {
 } from '../../src/database/standalone-sqlite.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 import {
+  bundlesDb,
   bundlesDbPath,
   coreDb,
   coreDbPath,
@@ -43,6 +44,7 @@ import {
 import { ArweaveChainSourceStub, stubAns104Bundle } from '../../test/stubs.js';
 import { normalizeAns104DataItem } from '../lib/ans-104.js';
 import log from '../log.js';
+import { BundleRecord } from '../types.js';
 
 /* eslint-disable */
 // @ts-ignore
@@ -993,6 +995,61 @@ describe('StandaloneSqliteDatabase', () => {
       `;
 
       assert.equal(coreDb.prepare(sql).get().cnt, 1);
+    });
+  });
+
+  describe('saveBundle', () => {
+    const id0 = '0000000000000000000000000000000000000000000';
+    const id1 = '1111111111111111111111111111111111111111111';
+
+    const bundle: BundleRecord = {
+      id: id0,
+      format: 'ans-104',
+      dataItemCount: 2,
+      matchedDataItemCount: 2,
+    };
+
+    beforeEach(async () => {
+      await db.saveBundle(bundle);
+      await db.saveBundle({ ...bundle, id: id1, queuedAt: 1234567890 });
+    });
+
+    it('should insert into bundles', async () => {
+      const sql = `
+        SELECT COUNT(*) AS cnt
+        FROM bundles
+        WHERE id = @id
+      `;
+
+      assert.equal(bundlesDb.prepare(sql).get({ id: fromB64Url(id0) }).cnt, 1);
+    });
+
+    it('should set import_attempt_count 0 when no queuedAt is provided', async () => {
+      const sql = `
+        SELECT *
+        FROM bundles
+        WHERE id = @id
+      `;
+
+      assert.equal(
+        bundlesDb.prepare(sql).get({ id: fromB64Url(id0) })
+          .import_attempt_count,
+        0,
+      );
+    });
+
+    it('should set import_attempt_count 1 when queuedAt is provided', async () => {
+      const sql = `
+        SELECT *
+        FROM bundles
+        WHERE id = @id
+      `;
+
+      assert.equal(
+        bundlesDb.prepare(sql).get({ id: fromB64Url(id1) })
+          .import_attempt_count,
+        1,
+      );
     });
   });
 });
