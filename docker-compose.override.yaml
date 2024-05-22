@@ -1,8 +1,0 @@
-version: '3'
-
-services:
-  core:
-    environment:
-      ANS104_UNBUNDLE_FILTER: '{ "attributes": { "owner_address": "$BUNDLER_ARWEAVE_ADDRESS" }}'
-      ANS104_INDEX_FILTER: '{ "always": true }'
-    profiles: ['bundler']
