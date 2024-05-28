@@ -18,7 +18,7 @@
 import fse from 'fs-extra';
 import fs from 'node:fs';
 
-import { KVBufferStore } from '../types';
+import { KVBufferStore } from '../types.js';
 
 export class FsKVStore implements KVBufferStore {
   private baseDir: string;
