@@ -28,7 +28,8 @@ import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { BundleDataImporter } from './workers/bundle-data-importer.js';
-import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+// import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+import { StandalonePostgresDatabase } from './database/postgress/StandalonePostgresDatabase.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
@@ -67,6 +68,8 @@ import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repa
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSResolver } from './init/resolvers.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
+import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
+import { DATABASE } from './config.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -93,13 +96,21 @@ export const arweaveClient = new ArweaveCompositeClient({
   }),
 });
 
-export const db = new StandaloneSqliteDatabase({
-  log,
-  coreDbPath: 'data/sqlite/core.db',
-  dataDbPath: 'data/sqlite/data.db',
-  moderationDbPath: 'data/sqlite/moderation.db',
-  bundlesDbPath: 'data/sqlite/bundles.db',
-});
+export let db!: StandaloneSqliteDatabase | StandalonePostgresDatabase;
+
+if (DATABASE === 'sqlite') {
+  db = new StandaloneSqliteDatabase({
+    log,
+    coreDbPath: 'data/sqlite/core.db',
+    dataDbPath: 'data/sqlite/data.db',
+    moderationDbPath: 'data/sqlite/moderation.db',
+    bundlesDbPath: 'data/sqlite/bundles.db',
+  });
+} else if (DATABASE === 'postgres') {
+  db = new StandalonePostgresDatabase({ log });
+} else {
+  throw new Error('No database selected');
+}
 
 export const chainIndex: ChainIndex = db;
 export const chainOffsetIndex: ChainOffsetIndex = db;
@@ -127,9 +138,9 @@ eventEmitter.on(events.BLOCK_TX_INDEXED, (tx) => {
 
 export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
   ? new FsCleanupWorker({
-      log,
-      basePath: 'data/headers',
-    })
+    log,
+    basePath: 'data/headers',
+  })
   : undefined;
 
 const contiguousDataCacheCleanupThresholdInSeconds = parseInt(
@@ -140,28 +151,28 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
   contiguousDataCacheCleanupThresholdInSeconds,
 )
   ? new FsCleanupWorker({
-      log,
-      basePath: 'data/contiguous',
-      shouldDelete: async (path) => {
-        try {
-          const stats = await fs.promises.stat(path);
-          const mostRecentTime =
-            stats.atime > stats.mtime ? stats.atime : stats.mtime;
+    log,
+    basePath: 'data/contiguous',
+    shouldDelete: async (path) => {
+      try {
+        const stats = await fs.promises.stat(path);
+        const mostRecentTime =
+          stats.atime > stats.mtime ? stats.atime : stats.mtime;
 
-          const currentTimestamp = Date.now();
+        const currentTimestamp = Date.now();
 
-          const thresholdDate = new Date(
-            currentTimestamp -
-              contiguousDataCacheCleanupThresholdInSeconds * 1000,
-          );
+        const thresholdDate = new Date(
+          currentTimestamp -
+          contiguousDataCacheCleanupThresholdInSeconds * 1000,
+        );
 
-          return mostRecentTime <= thresholdDate;
-        } catch (err) {
-          log.error(`Error getting file stats for ${path}`, err);
-          return false;
-        }
-      },
-    })
+        return mostRecentTime <= thresholdDate;
+      } catch (err) {
+        log.error(`Error getting file stats for ${path}`, err);
+        return false;
+      }
+    },
+  })
   : undefined;
 
 const ans104TxMatcher = new MatchTags([
@@ -368,7 +379,7 @@ eventEmitter.on(
 eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   try {
     metrics.bundlesUnbundledCounter.inc({ bundle_format: 'ans-104' });
-    db.saveBundle({
+    await db.saveBundle({
       id: bundleEvent.parentId,
       format: 'ans-104',
       dataItemCount: bundleEvent.itemCount,
@@ -422,11 +433,11 @@ const webhookEmitter = new WebhookEmitter({
 
 export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
   ? new MempoolWatcher({
-      log,
-      chainSource: arweaveClient,
-      txFetcher,
-      mempoolPollingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
-    })
+    log,
+    chainSource: arweaveClient,
+    txFetcher,
+    mempoolPollingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
+  })
   : undefined;
 
 let isShuttingDown = false;

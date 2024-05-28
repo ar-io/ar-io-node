@@ -253,3 +253,15 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   'GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS',
   '500',
 );
+
+export const DATABASE = env.varOrDefault('DATABASE', 'sqlite');
+export const DATABASE_HOST = env.varOrDefault('DATABASE_HOST', 'localhost');
+export const DATABASE_USERNAME = env.varOrDefault(
+  'DATABASE_USERNAME',
+  'postgres',
+);
+export const DATABASE_PASSWORD = env.varOrDefault(
+  'DATABASE_PASSWORD',
+  'postgres',
+);
+export const DATABASE_PORT = env.varOrDefault('DATABASE_PORT', '5432');
