@@ -67,6 +67,7 @@ import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repa
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSResolver } from './init/resolvers.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
+import { ArIODataSource } from './data/ar-io-data-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -264,9 +265,17 @@ const gatewayDataSource = new GatewayDataSource({
   trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
 });
 
+const arIODataSource = new ArIODataSource({
+  log,
+  nodeWallet: config.AR_IO_WALLET,
+});
+
 const dataSources: ContiguousDataSource[] = [];
 for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
   switch (sourceName) {
+    case 'ario-peer':
+      dataSources.push(arIODataSource);
+      break;
     case 'trusted-gateway':
       dataSources.push(gatewayDataSource);
       break;
@@ -440,6 +449,7 @@ export const shutdown = async (express: Server) => {
     express.close(async () => {
       log.debug('Web server stopped successfully');
       eventEmitter.removeAllListeners();
+      arIODataSource.stopUpdatingPeers();
       await mempoolWatcher?.stop();
       await blockImporter.stop();
       await dataItemIndexer.stop();
