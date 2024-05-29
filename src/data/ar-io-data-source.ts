@@ -125,28 +125,22 @@ export class ArIODataSource implements ContiguousDataSource {
     id: string;
     headers: { [key: string]: string };
   }): Promise<AxiosResponse> {
-    const log = this.log.child({ method: 'request' });
     const path = `/raw/${id}`;
 
-    try {
-      const response = await axios.get(`${peerAddress}${path}`, {
-        headers: {
-          'Accept-Encoding': 'identity',
-          ...headers,
-        },
-        responseType: 'stream',
-        timeout: this.requestTimeoutMs,
-      });
+    const response = await axios.get(`${peerAddress}${path}`, {
+      headers: {
+        'Accept-Encoding': 'identity',
+        ...headers,
+      },
+      responseType: 'stream',
+      timeout: this.requestTimeoutMs,
+    });
 
-      if (response.status !== 200) {
-        throw new Error(`Unexpected status code from peer: ${response.status}`);
-      }
-
-      return response;
-    } catch (error) {
-      log.error('Request to peer failed', { error });
-      throw new Error('Request to peer failed');
+    if (response.status !== 200) {
+      throw new Error(`Unexpected status code from peer: ${response.status}`);
     }
+
+    return response;
   }
 
   async getData({
