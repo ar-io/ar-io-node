@@ -17,7 +17,7 @@
  */
 import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
-import { ArIO, ArIOReadable } from '@ar.io/sdk';
+import { ArIOReadable } from '@ar.io/sdk';
 import { randomInt } from 'node:crypto';
 
 import {
@@ -44,12 +44,14 @@ export class ArIODataSource implements ContiguousDataSource {
 
   constructor({
     log,
+    arIO,
     nodeWallet,
     maxHopsAllowed = DEFAULT_MAX_HOPS_ALLOWED,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
   }: {
     log: winston.Logger;
+    arIO: ArIOReadable;
     nodeWallet?: string;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
@@ -60,7 +62,7 @@ export class ArIODataSource implements ContiguousDataSource {
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
     this.updatePeersRefreshIntervalMs = updatePeersRefreshIntervalMs;
-    this.arIO = ArIO.init();
+    this.arIO = arIO;
 
     this.updatePeerList();
     this.intervalId = setInterval(
