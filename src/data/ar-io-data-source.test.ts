@@ -57,6 +57,7 @@ beforeEach(async () => {
 
   dataSource = new ArIODataSource({
     log,
+    arIO: ArIO.init(),
     nodeWallet: 'localNode',
   });
 

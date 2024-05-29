@@ -19,6 +19,7 @@ import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import { Server } from 'node:http';
 import fs from 'node:fs';
+import { ArIO } from '@ar.io/sdk';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
@@ -75,6 +76,7 @@ process.on('uncaughtException', (error) => {
 });
 
 const arweave = Arweave.init({});
+const arIO = ArIO.init({ contractTxId: config.CONTRACT_ID });
 
 export const arweaveClient = new ArweaveCompositeClient({
   log,
@@ -267,6 +269,7 @@ const gatewayDataSource = new GatewayDataSource({
 
 const arIODataSource = new ArIODataSource({
   log,
+  arIO,
   nodeWallet: config.AR_IO_WALLET,
 });
 
