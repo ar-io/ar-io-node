@@ -101,7 +101,6 @@ export class ArIODataSource implements ContiguousDataSource {
       log.info('Updated peer list from ArIO contract');
     } catch (error) {
       log.error('Failed to update peer list', { error });
-      throw new Error('Failed to update peer list');
     }
   }
 
