@@ -237,8 +237,10 @@ services:
       - NODE_ENV=${NODE_ENV:-local}
       - ARWEAVE_WALLET=${ARWEAVE_WALLET:-$BUNDLER_ARWEAVE_WALLET}
       - TURBO_OPTICAL_KEY=${TURBO_OPTICAL_KEY:-$BUNDLER_ARWEAVE_WALLET}
+      - PERSIST_DEFAULT=${PERSIST_LOCALSTACK:-1} # set to 0 to disable persistence of resources and s3 objects between restarts
     volumes:
       - '${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack'
+      - '${LOCALSTACK_VOLUME_DIR:-./volume}:/persisted-data'
       - '/var/run/docker.sock:/var/run/docker.sock'
     healthcheck:
       test:
