@@ -542,22 +542,3 @@ export interface QueueDataItemHeaders {
   target: string;
   anchor: string;
 }
-
-/** Type guard for ensuring required fields on data item headers */
-export function isDataItemHeaders(
-  dataItemHeader: unknown,
-): dataItemHeader is DataItemHeaders {
-  return (
-    typeof dataItemHeader === 'object' &&
-    dataItemHeader !== null &&
-    'content_type' in dataItemHeader &&
-    'data_size' in dataItemHeader &&
-    'id' in dataItemHeader &&
-    'owner' in dataItemHeader &&
-    'owner_address' in dataItemHeader &&
-    'signature' in dataItemHeader &&
-    'tags' in dataItemHeader &&
-    'target' in dataItemHeader &&
-    'anchor' in dataItemHeader
-  );
-}
