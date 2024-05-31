@@ -526,6 +526,12 @@ export class StandaloneSqliteDatabaseWorker {
 
         this.stmts.bundles.upsertNewDataItem.run({
           ...rows.newDataItem,
+          root_id: item.root_tx_id,
+          parent_id: item.parent_id,
+          index: item.index,
+          parent_index: item.parent_index,
+          data_hash: item.data_hash,
+          data_offset: item.data_offset,
           height,
         });
       },
