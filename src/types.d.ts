@@ -529,3 +529,35 @@ export type KVBufferStore = {
   del(key: string): Promise<void>;
   has(key: string): Promise<boolean>;
 };
+
+/** Accepted in queue data item route fields as normalized b64 */
+export interface QueueDataItemHeaders {
+  content_type: string;
+  data_size: number;
+  id: string;
+  owner: string; // data item signer's public key
+  owner_address: string; // normalized address
+  signature: string;
+  tags: { name: string; value: string }[];
+  target: string;
+  anchor: string;
+}
+
+/** Type guard for ensuring required fields on data item headers */
+export function isDataItemHeaders(
+  dataItemHeader: unknown,
+): dataItemHeader is DataItemHeaders {
+  return (
+    typeof dataItemHeader === 'object' &&
+    dataItemHeader !== null &&
+    'content_type' in dataItemHeader &&
+    'data_size' in dataItemHeader &&
+    'id' in dataItemHeader &&
+    'owner' in dataItemHeader &&
+    'owner_address' in dataItemHeader &&
+    'signature' in dataItemHeader &&
+    'tags' in dataItemHeader &&
+    'target' in dataItemHeader &&
+    'anchor' in dataItemHeader
+  );
+}

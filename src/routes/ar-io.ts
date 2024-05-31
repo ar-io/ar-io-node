@@ -22,6 +22,7 @@ import * as config from '../config.js';
 import * as system from '../system.js';
 import * as events from '../events.js';
 import { release } from '../version.js';
+import { QueueDataItemHeaders } from '../types.js';
 
 export const arIoRouter = Router();
 
@@ -129,19 +130,24 @@ arIoRouter.post(
   },
 );
 
-// TODO: These come from existing API. We could create new API here and implement that on turbo side as `ar.io optical endpoints`
-export type DataItemHeaders = {
-  content_type?: string | undefined;
-  data_size: number;
-  id: string;
-  owner: string; // data item signer's public key
-  owner_address: string; // normalized address
-  signature: string;
-  tags: { name: string; value: string }[];
-  target?: string | undefined;
-  anchor?: string | undefined;
-  bundlr_signature: string;
-};
+/** Type guard for ensuring required fields on incoming data item headers */
+export function isDataItemHeaders(
+  dataItemHeader: unknown,
+): dataItemHeader is QueueDataItemHeaders {
+  return (
+    typeof dataItemHeader === 'object' &&
+    dataItemHeader !== null &&
+    'content_type' in dataItemHeader &&
+    'data_size' in dataItemHeader &&
+    'id' in dataItemHeader &&
+    'owner' in dataItemHeader &&
+    'owner_address' in dataItemHeader &&
+    'signature' in dataItemHeader &&
+    'tags' in dataItemHeader &&
+    'target' in dataItemHeader &&
+    'anchor' in dataItemHeader
+  );
+}
 
 // Queue a bundle for processing
 arIoRouter.post(
@@ -149,57 +155,30 @@ arIoRouter.post(
   express.json(),
   async (req, res) => {
     try {
-      let dataItemHeaders: DataItemHeaders[];
-      try {
-        dataItemHeaders = JSON.parse(req.body);
-      } catch (error: any) {
-        res
-          .status(400)
-          .send('Unable to parse JSON -- invalid data item headers');
-        return;
-      }
+      const dataItemHeaders: unknown[] = req.body;
+
       if (
         dataItemHeaders === undefined ||
         !Array.isArray(dataItemHeaders) ||
-        dataItemHeaders.length === 0
+        dataItemHeaders.length === 0 ||
+        !dataItemHeaders.every(isDataItemHeaders)
       ) {
         res.status(400).send('Must provide array of data item headers');
         return;
       }
 
       for (const dataItemHeader of dataItemHeaders) {
-        const {
-          id,
-          // bundlr_signature, // not user, we have admin key
-          data_size,
-          owner,
-          owner_address,
-          signature,
-          tags,
-          anchor,
-          content_type,
-          target,
-        } = dataItemHeader;
-
         system.dataItemIndexer.queueDataItem({
-          id,
-          owner,
-          owner_address,
-          signature,
-          tags,
-          anchor: anchor ?? '',
-          target: target ?? '',
-          content_type,
-          data_size,
-          parent_id: 'AA', // not yet known, to be backfilled
-          root_tx_id: 'AA', // not yet known,to be backfilled
-          index: 0, // not yet known, to be backfilled
-          parent_index: 0, // not yet known, to be backfilled
-          data_hash: '', // TODO: data_hash not in existing optical headers
-          data_offset: 0, // TODO: data_offset in bundle not yet known
+          ...dataItemHeader,
+          // These fields are not yet known, to be backfilled
+          parent_id: 'AA',
+          root_tx_id: 'AA',
+          index: 0,
+          parent_index: 0,
+          data_hash: '',
+          data_offset: 0,
+          filter: config.ANS104_INDEX_FILTER_STRING,
         });
-
-        // TODO: Do we emit a DATA_ITEM_QUEUED event?
       }
 
       res.json({ message: 'Data item(s) queued' });
