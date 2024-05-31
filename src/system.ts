@@ -392,7 +392,7 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   }
 });
 
-const dataItemIndexer = new DataItemIndexer({
+export const dataItemIndexer = new DataItemIndexer({
   log,
   eventEmitter,
   indexWriter: dataItemIndexWriter,

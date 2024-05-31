@@ -128,3 +128,83 @@ arIoRouter.post(
     }
   },
 );
+
+// TODO: These come from existing API. We could create new API here and implement that on turbo side as `ar.io optical endpoints`
+export type DataItemHeaders = {
+  content_type?: string | undefined;
+  data_size: number;
+  id: string;
+  owner: string; // data item signer's public key
+  owner_address: string; // normalized address
+  signature: string;
+  tags: { name: string; value: string }[];
+  target?: string | undefined;
+  anchor?: string | undefined;
+  bundlr_signature: string;
+};
+
+// Queue a bundle for processing
+arIoRouter.post(
+  '/ar-io/admin/queue-data-item',
+  express.json(),
+  async (req, res) => {
+    try {
+      let dataItemHeaders: DataItemHeaders[];
+      try {
+        dataItemHeaders = JSON.parse(req.body);
+      } catch (error: any) {
+        res
+          .status(400)
+          .send('Unable to parse JSON -- invalid data item headers');
+        return;
+      }
+      if (
+        dataItemHeaders === undefined ||
+        !Array.isArray(dataItemHeaders) ||
+        dataItemHeaders.length === 0
+      ) {
+        res.status(400).send('Must provide array of data item headers');
+        return;
+      }
+
+      for (const dataItemHeader of dataItemHeaders) {
+        const {
+          id,
+          // bundlr_signature, // not user, we have admin key
+          data_size,
+          owner,
+          owner_address,
+          signature,
+          tags,
+          anchor,
+          content_type,
+          target,
+        } = dataItemHeader;
+
+        system.dataItemIndexer.queueDataItem({
+          id,
+          owner,
+          owner_address,
+          signature,
+          tags,
+          anchor: anchor ?? '',
+          target: target ?? '',
+          content_type,
+          data_size,
+          parent_id: 'AA', // not yet known, to be backfilled
+          root_tx_id: 'AA', // not yet known,to be backfilled
+          index: 0, // not yet known, to be backfilled
+          parent_index: 0, // not yet known, to be backfilled
+          data_hash: '', // TODO: data_hash not in existing optical headers
+          data_offset: 0, // TODO: data_offset in bundle not yet known
+        });
+
+        // TODO: Do we emit a DATA_ITEM_QUEUED event?
+      }
+
+      res.json({ message: 'Data item(s) queued' });
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
