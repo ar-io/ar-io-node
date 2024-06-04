@@ -22,7 +22,6 @@ import * as config from '../config.js';
 import * as system from '../system.js';
 import * as events from '../events.js';
 import { release } from '../version.js';
-import { QueueDataItemHeaders } from '../types.js';
 
 export const arIoRouter = Router();
 
@@ -147,6 +146,19 @@ export function isDataItemHeaders(
     'target' in dataItemHeader &&
     'anchor' in dataItemHeader
   );
+}
+
+/** Accepted in queue data item route fields as normalized b64 */
+export interface QueueDataItemHeaders {
+  content_type: string;
+  data_size: number;
+  id: string;
+  owner: string; // data item signer's public key
+  owner_address: string; // normalized address
+  signature: string;
+  tags: { name: string; value: string }[];
+  target: string;
+  anchor: string;
 }
 
 // Queue a bundle for processing
