@@ -97,4 +97,7 @@ INSERT INTO new_data_items (
 ) ON CONFLICT DO
 UPDATE SET
   height = IFNULL(@height, height),
-  root_transaction_id = @root_transaction_id
+  root_transaction_id = @root_transaction_id,
+  parent_id = @parent_id,
+  data_offset = @data_offset,
+  indexed_at = @indexed_at
