@@ -491,4 +491,83 @@ describe('Indexing', function () {
       });
     });
   });
+
+  describe('Queue data item', function () {
+    let bundlesDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAll = () =>
+        bundlesDb.prepare('SELECT * FROM new_data_items').all();
+
+      while (getAll().length === 0) {
+        console.log('Waiting for data items to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    before(async function () {
+      compose = await composeUp();
+      bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
+
+      const res = await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-data-item',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: [
+          {
+            id: 'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
+            owner: 'b3duZXI=', // `owner` as base64
+            owner_address: 'b3duZXJfYWRkcmVzcw==', // `owner_address` as base64
+            signature: 'c2lnbmF0dXJl', // `signature` as base64
+            anchor: 'YW5jaG9y', // `anchor `as base64
+            target: 'dGFyZ2V0', // `target `as base64
+            content_type: 'application/octet-stream',
+            data_size: 1234,
+            tags: [
+              { name: 'QnVuZGxlLUZvcm1hdA', value: 'YmluYXJ5' },
+              { name: 'QnVuZGxlLVZlcnNpb24', value: 'Mi4wLjA' },
+            ],
+          },
+        ],
+        validateStatus: () => true,
+      });
+      console.log(res.data);
+
+      await waitForIndexing();
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('Verifying if data item headers were indexed', async function () {
+      const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
+      const dataItems = stmt.all();
+
+      dataItems.forEach((dataItem) => {
+        assert.equal(
+          toB64Url(dataItem.id),
+          'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
+        );
+
+        assert.equal(toB64Url(dataItem.parent_id), 'AA');
+        assert.equal(toB64Url(dataItem.root_transaction_id), 'AA');
+        assert.equal(b64UrlToUtf8(toB64Url(dataItem.signature)), 'signature');
+        assert.equal(b64UrlToUtf8(toB64Url(dataItem.anchor)), 'anchor');
+        assert.equal(b64UrlToUtf8(toB64Url(dataItem.target)), 'target');
+        assert.equal(
+          b64UrlToUtf8(toB64Url(dataItem.owner_address)),
+          'owner_address',
+        );
+        assert.equal(dataItem.data_offset, 0);
+        assert.equal(dataItem.data_size, 1234);
+        assert.equal(dataItem.tag_count, 2);
+        assert.equal(dataItem.content_type, 'application/octet-stream');
+      });
+    });
+  });
 });
