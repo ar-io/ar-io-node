@@ -129,6 +129,19 @@ arIoRouter.post(
   },
 );
 
+/** Accepted in queue data item route fields as normalized b64 */
+export interface QueueDataItemHeaders {
+  data_size: number;
+  id: string;
+  owner: string; // data item signer's public key
+  owner_address: string; // normalized address
+  signature: string;
+  tags?: { name: string; value: string }[];
+  content_type?: string;
+  target?: string;
+  anchor?: string;
+}
+
 /** Type guard for ensuring required fields on incoming data item headers */
 export function isDataItemHeaders(
   dataItemHeader: unknown,
@@ -136,29 +149,12 @@ export function isDataItemHeaders(
   return (
     typeof dataItemHeader === 'object' &&
     dataItemHeader !== null &&
-    'content_type' in dataItemHeader &&
     'data_size' in dataItemHeader &&
     'id' in dataItemHeader &&
     'owner' in dataItemHeader &&
     'owner_address' in dataItemHeader &&
-    'signature' in dataItemHeader &&
-    'tags' in dataItemHeader &&
-    'target' in dataItemHeader &&
-    'anchor' in dataItemHeader
+    'signature' in dataItemHeader
   );
-}
-
-/** Accepted in queue data item route fields as normalized b64 */
-export interface QueueDataItemHeaders {
-  content_type: string;
-  data_size: number;
-  id: string;
-  owner: string; // data item signer's public key
-  owner_address: string; // normalized address
-  signature: string;
-  tags: { name: string; value: string }[];
-  target: string;
-  anchor: string;
 }
 
 // Queue a bundle for processing
@@ -182,6 +178,11 @@ arIoRouter.post(
       for (const dataItemHeader of dataItemHeaders) {
         system.dataItemIndexer.queueDataItem({
           ...dataItemHeader,
+          tags: dataItemHeader.tags ?? [],
+          content_type:
+            dataItemHeader.content_type ?? 'application/octet-stream',
+          target: dataItemHeader.target ?? '',
+          anchor: dataItemHeader.anchor ?? '',
           // These fields are not yet known, to be backfilled
           parent_id: 'AA',
           root_tx_id: 'AA',
