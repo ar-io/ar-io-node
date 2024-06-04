@@ -510,7 +510,7 @@ describe('Indexing', function () {
       compose = await composeUp();
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
 
-      const res = await axios({
+      await axios({
         method: 'post',
         url: 'http://localhost:4000/ar-io/admin/queue-data-item',
         headers: {
@@ -533,9 +533,7 @@ describe('Indexing', function () {
             ],
           },
         ],
-        validateStatus: () => true,
       });
-      console.log(res.data);
 
       await waitForIndexing();
     });
