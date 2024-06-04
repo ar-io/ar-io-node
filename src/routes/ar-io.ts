@@ -179,8 +179,6 @@ arIoRouter.post(
         system.dataItemIndexer.queueDataItem({
           ...dataItemHeader,
           tags: dataItemHeader.tags ?? [],
-          content_type:
-            dataItemHeader.content_type ?? 'application/octet-stream',
           target: dataItemHeader.target ?? '',
           anchor: dataItemHeader.anchor ?? '',
           // These fields are not yet known, to be backfilled
