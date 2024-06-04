@@ -309,7 +309,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
       target: fromB64Url(item.target),
       data_offset: item.data_offset,
       data_size: item.data_size,
-      content_type: contentType,
+      content_type: contentType ?? item.content_type,
       tag_count: item.tags.length,
       indexed_at: currentUnixTimestamp(),
     },
