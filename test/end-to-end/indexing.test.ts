@@ -27,10 +27,38 @@ import axios from 'axios';
 import { default as wait } from 'wait';
 import Sqlite, { Database } from 'better-sqlite3';
 import crypto from 'node:crypto';
-import { toB64Url } from '../../src/lib/encoding.js';
+import { b64UrlToUtf8, toB64Url } from '../../src/lib/encoding.js';
 import { getMaxHeight, waitForBlocks } from './utils.js';
+import { Environment } from 'testcontainers/build/types.js';
 
 const projectRootPath = process.cwd();
+
+const cleanDb = () =>
+  rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+const composeUp = async ({
+  START_HEIGHT = '1',
+  STOP_HEIGHT = '1',
+  ARNS_ROOT_HOST = 'ar-io.localhost',
+  ANS104_UNBUNDLE_FILTER = '{"always": true}',
+  ANS104_INDEX_FILTER = '{"always": true}',
+  ADMIN_API_KEY = 'secret',
+  ...ENVIRONMENT
+}: Environment = {}) => {
+  await cleanDb();
+  return new DockerComposeEnvironment(projectRootPath, 'docker-compose.yaml')
+    .withEnvironment({
+      START_HEIGHT,
+      STOP_HEIGHT,
+      ARNS_ROOT_HOST,
+      ANS104_UNBUNDLE_FILTER,
+      ANS104_INDEX_FILTER,
+      ADMIN_API_KEY,
+      ...ENVIRONMENT,
+    })
+    .withBuild()
+    .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+    .up(['core']);
+};
 
 const getHashForIdFromChain = async (id: string): Promise<string> => {
   const res = await axios.get(`https://arweave.net/raw/${id}`, {
@@ -95,20 +123,10 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: START_HEIGHT.toString(),
-          STOP_HEIGHT: STOP_HEIGHT.toString(),
-          ARNS_ROOT_HOST: 'ar-io.localhost',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
+      compose = await composeUp({
+        START_HEIGHT: START_HEIGHT.toString(),
+        STOP_HEIGHT: STOP_HEIGHT.toString(),
+      });
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
       await waitForBlocks(coreDb, STOP_HEIGHT);
@@ -134,20 +152,10 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: START_HEIGHT.toString(),
-          STOP_HEIGHT: STOP_HEIGHT.toString(),
-          ARNS_ROOT_HOST: 'ar-io.localhost',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
+      compose = await composeUp({
+        START_HEIGHT: START_HEIGHT.toString(),
+        STOP_HEIGHT: STOP_HEIGHT.toString(),
+      });
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
       await waitForBlocks(coreDb, STOP_HEIGHT);
@@ -183,23 +191,7 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: '1',
-          STOP_HEIGHT: '1',
-          ANS104_UNBUNDLE_FILTER: '{"always": true}',
-          ANS104_INDEX_FILTER: '{"always": true}',
-          ADMIN_API_KEY: 'secret',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
-
+      compose = await composeUp();
       dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
       // queue bundle kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
@@ -314,22 +306,10 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: '1',
-          STOP_HEIGHT: '1',
-          ENABLE_MEMPOOL_WATCHER: 'true',
-          MEMPOOL_POLLING_INTERVAL_MS: '10000000',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
-
+      compose = await composeUp({
+        ENABLE_MEMPOOL_WATCHER: 'true',
+        MEMPOOL_POLLING_INTERVAL_MS: '10000000',
+      });
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
 
       await waitForIndexing();
@@ -398,23 +378,7 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: '1',
-          STOP_HEIGHT: '1',
-          ANS104_UNBUNDLE_FILTER: '{"always": true}',
-          ANS104_INDEX_FILTER: '{"always": true}',
-          ADMIN_API_KEY: 'secret',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
-
+      compose = await composeUp();
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
 
       // queue bundle C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk
@@ -484,23 +448,7 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: '1',
-          STOP_HEIGHT: '1',
-          ANS104_UNBUNDLE_FILTER: '{"always": true}',
-          ANS104_INDEX_FILTER: '{"always": true}',
-          ADMIN_API_KEY: 'secret',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
-
+      compose = await composeUp();
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
 
       // queue bundle R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA
