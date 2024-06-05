@@ -97,8 +97,8 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       port: Number(DATABASE_PORT),
       database: 'core',
       max: 1000,
-      connectionTimeoutMillis: 300,
-      idleTimeoutMillis: 300,
+      connectionTimeoutMillis: 500,
+      idleTimeoutMillis: 500,
     });
 
     this.dbPool.connect().catch((err: any) => log.error(`Failed to connect to database:`, err));
@@ -1013,28 +1013,32 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
 
     tags.forEach(tag => {
       switch (tag.match) {
-        case tagsMatch.WILDCARD:
+        case tagsMatch.WILDCARD: {
           queryWheres.push(`tn.name = \'${tag.name}\'`);
           const wildcardValue: string = tag.values[0].replace('*', '%');
           queryWheres.push(`tv.value LIKE \'${wildcardValue}\'`);
           break;
-        case tagsMatch.FUZZY_AND:
+        }
+        case tagsMatch.FUZZY_AND: {
           queryWheres.push(`tn.name = '${tag.name}'`);
-          tag.values.forEach(value => {
+          for (const value of tag.values) {
             queryWheres.push(`similarity(convert_from(tv.value,'UTF8'),'${value.replace('*', '')}') > 0.4`);
-          });
+          }
           break;
-        case tagsMatch.FUZZY_OR:
+        }
+        case tagsMatch.FUZZY_OR: {
           queryWheres.push(`tn.name = '${tag.name}'`);
           let queryOr: string[] = [];
-          tag.values.forEach(value => {
+          for (const value of tag.values) {
             queryOr.push(`similarity(convert_from(tv.value,'UTF8'),'${value.replace('*', '')}') > 0.4 `);
-          });
+          }
           queryWheres.push(('(' + queryOr.join(' OR ') + ')'));
           break;
-        default: //EXACT
+        }
+        default: {
           queryWheres.push(`tn.name = \'${tag.name}\'`);
           queryWheres.push(`tv.value IN (\'${tag.values.join(',')}\')`);
+        }
       }
     });
 
@@ -1215,8 +1219,6 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         tags: [...await this.getGqlNewDataItemTags(tx.id), ...await this.getGqlNewTransactionTags(tx.id)],
       })));
     }
-
-    return [];
   }
 
   //@ts-ignore

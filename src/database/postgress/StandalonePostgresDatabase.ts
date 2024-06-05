@@ -179,7 +179,7 @@ export class StandalonePostgresDatabase
         });
     }
 
-    WORKER_POOL_NAMES.forEach((pool) => {
+    for (const pool of WORKER_POOL_NAMES) {
       // Spawn readers
       for (let i = 0; i < WORKER_POOL_SIZES[pool].read; i++) {
         spawn(pool, "read");
@@ -189,7 +189,7 @@ export class StandalonePostgresDatabase
       for (let i = 0; i < WORKER_POOL_SIZES[pool].write; i++) {
         spawn(pool, "write");
       }
-    });
+    }
   }
 
   async stop() {
