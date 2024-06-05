@@ -69,10 +69,7 @@ export const TRUSTED_GATEWAY_URL = env.varOrDefault(
 
 // Data retrieval priority order
 export const ON_DEMAND_RETRIEVAL_ORDER = env
-  .varOrDefault(
-    'ON_DEMAND_RETRIEVAL_ORDER',
-    'ario-peer,trusted-gateway,chunks,tx-data',
-  )
+  .varOrDefault('ON_DEMAND_RETRIEVAL_ORDER', 'trusted-gateway,chunks,tx-data')
   .split(',');
 
 //
