@@ -159,7 +159,7 @@ services:
       SQS_OPTICAL_URL: ${SQS_OPTICAL_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/optical-post-queue}
       SQS_NEW_DATA_ITEM_URL: ${SQS_NEW_DATA_ITEM_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/batch-insert-new-data-items-queue}
       SQS_UNBUNDLE_BDI_URL: ${SQS_UNBUNDLE_BDI_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/bdi-unbundle-queue}
-      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-false}
+      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
       SKIP_BALANCE_CHECKS: ${SKIP_BALANCE_CHECKS:-true}
       DATA_ITEM_BUCKET: ${DATA_ITEM_BUCKET:-raw-data-items}
       DATA_ITEM_BUCKET_REGION: ${DATA_ITEM_BUCKET_REGION:-us-east-1}
@@ -197,7 +197,8 @@ services:
       SQS_UNBUNDLE_BDI_URL: ${SQS_UNBUNDLE_BDI_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/bdi-unbundle-queue}
       PLAN_BUNDLE_ENABLED: ${PLAN_BUNDLE_ENABLED:-true}
       VERIFY_BUNDLE_ENABLED: ${VERIFY_BUNDLE_ENABLED:-true}
-      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-false}
+      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
+      OPTICAL_BRIDGE_URL: ${OPTICAL_BRIDGE_URL:-http://envoy:3000/ar-io/admin/queue-data-item}
       SKIP_BALANCE_CHECKS: ${SKIP_BALANCE_CHECKS:-true}
       DATA_ITEM_BUCKET: ${DATA_ITEM_BUCKET:-raw-data-items}
       DATA_ITEM_BUCKET_REGION: ${DATA_ITEM_BUCKET_REGION:-us-east-1}
@@ -247,8 +248,8 @@ services:
           'CMD-SHELL',
           'curl -f http://localhost:4566/_localstack/health || exit 1',
         ]
-      interval: 90s
+      interval: 10s
       timeout: 30s
-      retries: 1
+      retries: 10
       start_period: 15s
     profiles: ['bundler']
