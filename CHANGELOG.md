@@ -28,7 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Removed `version` from `docker-compose.yaml` to avoid warnings with recent
   versions of `docker-compose`
 - Switched default observer port from 5000 to 5050 to avoid conflict on OS X.
-  Since Envoy is used for to provide external access to the observer API this
+  Since Envoy is used to provide external access to the observer API this
   should have no user visible effect.
 
 ## [Release 11] - 2024-05-21
