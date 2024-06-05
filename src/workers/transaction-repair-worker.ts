@@ -44,11 +44,12 @@ export class TransactionRepairWorker {
     this.txFetcher = txFetcher;
   }
 
+  //todo uitzoeken
   async start(): Promise<void> {
     this.intervalId = setInterval(
-      this.retryMissingTransactions.bind(this),
-      DEFAULT_INTERVAL_MS,
-    );
+      async () =>
+        this.retryMissingTransactions.bind(this),
+      DEFAULT_INTERVAL_MS);
   }
 
   async stop(): Promise<void> {

@@ -20,6 +20,7 @@ import * as winston from 'winston';
 import { BundleIndex } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
+//todo uitzoeken hier dit werkt
 const DEFAULT_RETRY_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
@@ -38,14 +39,14 @@ export class BundleRepairWorker {
   private intervalIds: NodeJS.Timeout[] = [];
 
   constructor({
-    log,
-    bundleIndex,
-    txFetcher,
-    unbundleFilter,
-    indexFilter,
-    shouldBackfillBundles,
-    filtersChanged,
-  }: {
+                log,
+                bundleIndex,
+                txFetcher,
+                unbundleFilter,
+                indexFilter,
+                shouldBackfillBundles,
+                filtersChanged,
+              }: {
     log: winston.Logger;
     bundleIndex: BundleIndex;
     txFetcher: TransactionFetcher;
@@ -65,29 +66,30 @@ export class BundleRepairWorker {
 
   async start(): Promise<void> {
     const defaultInterval = setInterval(
-      this.retryBundles.bind(this),
-      DEFAULT_RETRY_INTERVAL_MS,
-    );
+      async () =>
+        this.retryBundles.bind(this),
+      DEFAULT_RETRY_INTERVAL_MS);
     this.intervalIds.push(defaultInterval);
+
     const defaultUpdateInterval = setInterval(
-      this.updateBundleTimestamps.bind(this),
-      DEFAULT_UPDATE_INTERVAL_MS,
-    );
+      async () =>
+        this.updateBundleTimestamps.bind(this),
+      DEFAULT_UPDATE_INTERVAL_MS);
     this.intervalIds.push(defaultUpdateInterval);
 
     if (this.shouldBackfillBundles) {
       const backFillInterval = setInterval(
-        this.backfillBundles.bind(this),
-        DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS,
-      );
+        async () =>
+          this.updateBundleTimestamps.bind(this),
+        DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS);
       this.intervalIds.push(backFillInterval);
     }
 
     if (this.filtersChanged) {
       const filterInterval = setInterval(
-        this.updateForFilterChange.bind(this),
-        DEFAULT_FILTER_REPOCESS_INTERVAL_MS,
-      );
+        async () =>
+          this.updateForFilterChange.bind(this),
+        DEFAULT_FILTER_REPOCESS_INTERVAL_MS);
       this.intervalIds.push(filterInterval);
     }
   }

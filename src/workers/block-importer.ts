@@ -119,7 +119,7 @@ export class BlockImporter {
             previousDbBlockHash,
           },
         );
-        this.chainIndex.resetToHeight(previousHeight - 1);
+        await this.chainIndex.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       } else if (block.previous_block !== previousDbBlockHash) {
         // Only increment the fork counter once per fork
@@ -138,7 +138,7 @@ export class BlockImporter {
             previousDbBlockHash,
           },
         );
-        this.chainIndex.resetToHeight(previousHeight - 1);
+        await this.chainIndex.resetToHeight(previousHeight - 1);
         return this.getBlockOrForkedBlock(previousHeight, forkDepth + 1);
       }
     }
@@ -207,7 +207,7 @@ export class BlockImporter {
       this.maxChainHeight = await this.chainSource.getHeight();
     }
 
-    return dbHeight + 1;
+    return Number(dbHeight) + 1;
   }
 
   public async start() {

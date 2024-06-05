@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { Readable, Writable } from 'node:stream';
+import { tagsMatch } from './database/postgress/PostgressDatabaseTypes';
 
 export interface B64uTag {
   name: string;
@@ -290,7 +291,7 @@ interface GqlTransaction {
   parentId: string | null;
   blockTransactionIndex: number;
   dataItemId: string | null;
-  tags: { name: any; value: any }[];
+  tags: { name: any; value: any, match?: tagsMatch}[];
   indexedAt: number;
 }
 

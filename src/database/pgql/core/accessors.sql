@@ -6,8 +6,7 @@ FROM (
   UNION
   SELECT MAX(height) AS height
   FROM stable_blocks
-)
-FOR SHAREl
+) as m
 
 -- selectBlockHashByHeight
 SELECT indep_hash
@@ -19,7 +18,7 @@ FROM (
   SELECT indep_hash
   FROM stable_blocks
   WHERE height = @height
-)
+) as nbihsbih
 LIMIT 1
 
 -- selectMissingTransactionIds
@@ -28,5 +27,5 @@ FROM (
   SELECT transaction_id
   FROM missing_transactions
   LIMIT @limit
-)
+) as mtti
 ORDER BY RANDOM()

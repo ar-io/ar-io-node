@@ -22,7 +22,7 @@ import { TransactionOffsetImporter } from './transaction-offset-importer.js';
 
 const DEFAULT_TXS_PER_BATCH = 1000;
 const DEFAULT_INTERVAL_MS = 10 * 1000;
-
+//todo let it work with postgres
 export class TransactionOffsetRepairWorker {
   // Dependencies
   private log: winston.Logger;
@@ -45,7 +45,7 @@ export class TransactionOffsetRepairWorker {
   }
 
   async start(): Promise<void> {
-    this.fetchMissingOffsets();
+    await this.fetchMissingOffsets();
   }
 
   async stop(): Promise<void> {
@@ -58,9 +58,25 @@ export class TransactionOffsetRepairWorker {
 
   async fetchMissingOffsets() {
     try {
+      //todo async adding async chack or change sqlite to async
+      // // eslint-disable-next-line @typescript-eslint/no-empty-function
+      // const isAsync =
+      //   this.chainOffsetIndex.getTxIdsMissingOffsets.constructor.name ===
+      //   'AsyncFunction';
+      // let txIds = [];
+      //
+      // if (isAsync) {
       const txIds = await this.chainOffsetIndex.getTxIdsMissingOffsets(
         DEFAULT_TXS_PER_BATCH,
       );
+      // } else {
+      //   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      //   //@ts-ignore
+      //   txIds = this.chainOffsetIndex.getTxIdsMissingOffsets(
+      //     DEFAULT_TXS_PER_BATCH,
+      //   );
+      // }
+
       for (const txId of txIds) {
         this.log.debug('Queueing missing transaction for offset indexing...');
         await this.txOffsetIndexer.queueTxId(txId);
