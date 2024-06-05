@@ -96,12 +96,10 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       host: DATABASE_HOST,
       port: Number(DATABASE_PORT),
       database: 'core',
-      max: 1000,
-      connectionTimeoutMillis: 500,
-      idleTimeoutMillis: 500,
+      max: 100,
     });
 
-    this.dbPool.connect().catch((err: any) => log.error(`Failed to connect to database:`, err));
+      this.dbPool.connect().catch((err: any) => log.error(`Failed to connect to database:`, err))
 
     this.stmts = { core: {}, data: {}, bundles: {}, moderation: {} };
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
@@ -122,118 +120,121 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     }
 
     this.resetBundlesToHeightFn = async (height: number) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+    //  const client: pkg.PoolClient = await this.dbPool.connect();
 
       try {
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
-        await client.query(this.transformQuery(this.stmts.bundles.clearHeightsOnNewDataItems, { height: height }));
-        await client.query(this.transformQuery(this.stmts.bundles.clearHeightsOnNewDataItemTags, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.clearHeightsOnNewDataItems, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.clearHeightsOnNewDataItemTags, { height: height }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (e: any) {
-        await client.query('ROLLBACK');
+        await this.dbPool.query('ROLLBACK');
+        this.log.info('resetBundlesToHeightFn did a rollback.');
       } finally {
-        client.release();
+        //client.release();
       }
     };
     this.resetCoreToHeightFn = async (height: number) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
-        await client.query(this.transformQuery(this.stmts.core.clearHeightsOnNewTransactions, { height: height }));
-        await client.query(this.transformQuery(this.stmts.core.clearHeightsOnNewTransactionTags, { height: height }));
-        await client.query(this.transformQuery(this.stmts.core.clearHeightsOnNewTransactionTags, { height: height }));
-        await client.query(this.transformQuery(this.stmts.core.truncateNewBlocksAt, { height: height }));
-        await client.query(this.transformQuery(this.stmts.core.truncateNewBlockTransactionsAt, { height: height }));
-        await client.query(this.transformQuery(this.stmts.core.truncateMissingTransactionsAt, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.clearHeightsOnNewTransactions, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.clearHeightsOnNewTransactionTags, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.clearHeightsOnNewTransactionTags, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.truncateNewBlocksAt, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.truncateNewBlockTransactionsAt, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.truncateMissingTransactionsAt, { height: height }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (e) {
-        await client.query('ROLLBACK');
-        this.log.error('resetCoreToHeightFn did a rollback.');
+        await this.dbPool.query('ROLLBACK');
+        this.log.info('resetCoreToHeightFn did a rollback.');
       } finally {
-        client.release();
+       // client.release();
       }
     };
     this.insertTxFn = async (tx: PartialJsonTransaction, height?: number) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         const rows = txToDbRows(tx, height);
 
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
         if (height !== undefined) {
-          await client.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, { height: height, transaction_id: rows.newTx.id }));
-          await client.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, { height: height, transaction_id: rows.newTx.id }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, { height: height, transaction_id: rows.newTx.id }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, { height: height, transaction_id: rows.newTx.id }));
         }
 
         for (const row of rows.tagNames) {
-          await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagName, row));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagName, row));
         }
 
         for (const row of rows.tagValues) {
-          await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagValue, row));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagValue, row));
         }
 
         for (const row of rows.newTxTags) {
-          await client.query(this.transformQuery(this.stmts.core.upsertNewTransactionTag, { ...row, height }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransactionTag, { ...row, height }));
         }
 
         for (const row of rows.wallets) {
-          await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreWallet, row));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreWallet, row));
         }
 
-        await client.query(this.transformQuery(this.stmts.core.upsertNewTransaction, { ...rows.newTx, height: height }));
-        await client.query(this.transformQuery(this.stmts.core.insertAsyncNewBlockTransaction, { transaction_id: rows.newTx.id }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransaction, { ...rows.newTx, height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.insertAsyncNewBlockTransaction, { transaction_id: rows.newTx.id }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (error) {
-        await client.query('ROLLBACK');
+        await this.dbPool.query('ROLLBACK');
+        this.log.info('insertTxFn did a rollback.');
       } finally {
-        client.release();
+       // client.release();
       }
     };
     this.insertDataItemFn = async (item: NormalizedDataItem, height?: number) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         const rows = dataItemToDbRows(item, height);
 
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
         for (const row of rows.tagNames) {
-          await client.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreTagName, row));
+          await this.dbPool.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreTagName, row));
         }
 
         for (const row of rows.tagValues) {
-          await client.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreTagValue, row));
+          await this.dbPool.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreTagValue, row));
         }
 
         for (const row of rows.newDataItemTags) {
-          await client.query(this.transformQuery(this.stmts.bundles.upsertNewDataItemTag, { ...row, height }));
+          await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertNewDataItemTag, { ...row, height }));
         }
 
         for (const row of rows.wallets) {
-          await client.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreWallet, row));
+          await this.dbPool.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreWallet, row));
         }
 
         const filterID = this.getFilterId(rows.bundleDataItem.filter);
-        await client.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, { ...rows.bundleDataItem, filterID }));
-        await client.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, { ...rows.bundleDataItem, filterID }));
-        await client.query(this.transformQuery(this.stmts.bundles.upsertNewDataItem, { height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, { ...rows.bundleDataItem, filterID }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, { ...rows.bundleDataItem, filterID }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertNewDataItem, { height: height }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (error) {
-        await client.query('ROLLBACK');
+        await this.dbPool.query('ROLLBACK');
+        this.log.info('insertDataItemFn did a rollback.');
       } finally {
-        client.release();
+      //  client.release();
       }
     };
     this.insertBlockAndTxsFn = async (block: PartialJsonBlock, txs: PartialJsonTransaction[], missingTxIds: string[]) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
         const indepHash = fromB64Url(block.indep_hash);
         const previousBlock = fromB64Url(block.previous_block ?? '');
@@ -244,7 +245,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         const walletList = fromB64Url(block.wallet_list);
         const txRoot = block.tx_root && fromB64Url(block.tx_root);
 
-        await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreNewBlock,
+        await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreNewBlock,
           {
             indep_hash: indepHash,
             height: block.height,
@@ -274,7 +275,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         let blockTransactionIndex = 0;
         for (const txIdStr of block.txs) {
           const txId = fromB64Url(txIdStr);
-          await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreNewBlockTransaction, {
+          await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreNewBlockTransaction, {
             block_indep_hash: indepHash,
             transaction_id: txId,
             block_transaction_index: blockTransactionIndex,
@@ -287,111 +288,114 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         for (const tx of txs) {
           const rows = txToDbRows(tx, block.height);
 
-          await client.query(this.transformQuery({
+          await this.dbPool.query(this.transformQuery({
             text: `UPDATE new_data_items
                    SET height = @height
                    WHERE root_transaction_id = @transaction_id`,
           }, { height: block.height, transaction_id: rows.newTx.id }));
-          await client.query(this.transformQuery({
+          await this.dbPool.query(this.transformQuery({
             text: `UPDATE new_data_item_tags
                    SET height = @height
                    WHERE root_transaction_id = @transaction_id`,
           }, { height: block.height, transaction_id: rows.newTx.id }));
 
           for (const row of rows.tagNames) {
-            await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagName, row));
+            await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagName, row));
           }
 
           for (const row of rows.tagValues) {
-            await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagValue, row));
+            await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreTagValue, row));
           }
 
           for (const row of rows.newTxTags) {
-            await client.query(this.transformQuery(this.stmts.core.upsertNewTransactionTag, { ...row, height: block.height }));
+            await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransactionTag, { ...row, height: block.height }));
           }
 
           for (const row of rows.wallets) {
-            await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreWallet, row));
+            await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreWallet, row));
           }
-          await client.query(this.transformQuery(this.stmts.core.upsertNewTransaction, rows.newTx));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransaction, rows.newTx));
         }
         for (const txIdStr of missingTxIds) {
           const txId = fromB64Url(txIdStr);
-          await client.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, { height: block.height, transaction_id: txId }));
-          await client.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, { height: block.height, transaction_id: txId }));
-          await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreMissingTransaction, { block_indep_hash: indepHash, transaction_id: txId, height: block.height }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, { height: block.height, transaction_id: txId }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, { height: block.height, transaction_id: txId }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreMissingTransaction, { block_indep_hash: indepHash, transaction_id: txId, height: block.height }));
         }
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (error) {
-        await client.query('ROLLBACK');
+        await this.dbPool.query('ROLLBACK');
+        this.log.info('insertBlockAndTxsFn did a rollback.');
       } finally {
-        client.release();
+       // client.release();
       }
     };
     this.saveCoreStableDataFn = async (endHeight: number) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+     // const client: pkg.PoolClient = await this.dbPool.connect();
       try {
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
-        await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableBlocks, { end_height: endHeight }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableBlocks, { end_height: endHeight }));
 
-        await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableBlockTransactions, { end_height: endHeight }));
-        await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableTransactions, { end_height: endHeight }));
-        await client.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableTransactionTags, { end_height: endHeight }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableBlockTransactions, { end_height: endHeight }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableTransactions, { end_height: endHeight }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreStableTransactionTags, { end_height: endHeight }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (e) {
-        await client.query('ROLLBACK');
-        //   this.log.info('saveCoreStableDataFn did a rollback.');
+        await this.dbPool.query('ROLLBACK');
+        this.log.info('saveCoreStableDataFn did a rollback.');
       }
     };
     this.saveBundlesStableDataFn = async (endHeight: number): Promise<void> => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
       try {
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
-        await client.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreStableDataItems, { end_height: endHeight }));
-        await client.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreStableDataItemTags, { end_height: endHeight }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreStableDataItems, { end_height: endHeight }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.insertOrIgnoreStableDataItemTags, { end_height: endHeight }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (e) {
-        await client.query('ROLLBACK').catch((e: any) => console.error('Rollback failed:', e));
+        await this.dbPool.query('ROLLBACK').catch((e: any) => console.error('Rollback failed:', e));
+        this.log.info('saveBundlesStableDataFn did a rollback.',e);
       } finally {
-        client.release();
+       // client.release();
       }
     };
     this.deleteCoreStaleNewDataFn = async (heightThreshold: number, createdAtThreshold: number) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
-        await client.query(this.transformQuery(this.stmts.core.deleteStaleMissingTransactions, { height_threshold: heightThreshold }));
-        await client.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactionTags, { height_threshold: heightThreshold, indexed_at_threshold: createdAtThreshold }));
-        await client.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactions, { height_threshold: heightThreshold, indexed_at_threshold: createdAtThreshold }));
-        await client.query(this.transformQuery(this.stmts.core.deleteStaleNewBlockTransactions, { height_threshold: heightThreshold }));
-        await client.query(this.transformQuery(this.stmts.core.deleteStaleNewBlocks, { height_threshold: heightThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleMissingTransactions, { height_threshold: heightThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactionTags, { height_threshold: heightThreshold, indexed_at_threshold: createdAtThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactions, { height_threshold: heightThreshold, indexed_at_threshold: createdAtThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewBlockTransactions, { height_threshold: heightThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewBlocks, { height_threshold: heightThreshold }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT;');
       } catch (e) {
-        await client.query('ROLLBACK').catch((rollbackError: any) => console.error('Rollback failed:', rollbackError));
+        await this.dbPool.query('ROLLBACK;').catch((rollbackError: any) => console.error('Rollback failed:', rollbackError));
+        this.log.info('deleteCoreStaleNewDataFn did a rollback.');
       } finally {
-        client.release();
+      //  client.release();
       }
     };
     this.deleteBundlesStaleNewDataFn = async (heightThreshold: number, indexedAtThreshold: number) => {
-      const client: pkg.PoolClient = await this.dbPool.connect();
+     // const client: pkg.PoolClient = await this.dbPool.connect();
       try {
-        await client.query('BEGIN');
+        await this.dbPool.query('BEGIN');
 
-        await client.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItems, { height_threshold: heightThreshold, indexed_at_threshold: indexedAtThreshold }));
-        await client.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItemTags, { height_threshold: heightThreshold, indexed_at_threshold: indexedAtThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItems, { height_threshold: heightThreshold, indexed_at_threshold: indexedAtThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItemTags, { height_threshold: heightThreshold, indexed_at_threshold: indexedAtThreshold }));
 
-        await client.query('COMMIT');
+        await this.dbPool.query('COMMIT');
       } catch (e) {
-        await client.query('ROLLBACK').catch((rollbackError: any) => console.error('Rollback failed:', rollbackError));
+        await this.dbPool.query('ROLLBACK;').catch((rollbackError: any) => console.error('Rollback failed:', rollbackError));
+        this.log.info('deleteBundlesStaleNewDataFn did a rollback.');
       } finally {
-        client.release();
+       // client.release();
       }
     };
   }
@@ -1116,7 +1120,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     // finalQuery += ` ${queryOrderBy}`;
     const queryConfig = { text: finalQuery, values: queryParams };
 
-    this.log.debug('query', finalQuery);
+    this.log.info('query', finalQuery);
 
     return queryConfig;
   }
@@ -1296,7 +1300,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     //const sql = sqlParts.join(' ');
     // const sqliteParams = toSqliteParams(itemsQueryParams);
 
-    this.log.debug('Querying stable transactions...', txsQuery?.text?.trim() ?? '');
+    this.log.info('Querying stable transactions...', txsQuery?.text?.trim() ?? '');
 
     const finalQueryConfig: QueryConfig = this.transformQuery({ text: txsQuery.text }, { ...txsQueryFilters.values });
 
@@ -1530,7 +1534,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     //  this.addGqlBlockFilters({ query, cursor, sortOrder, ids, minHeight, maxHeight });
     const finalQueryConfig = this.transformQuery({ text: `${query} LIMIT ${pageSize + 1}` }, {});
 
-    this.log.debug('Querying new blocks...');
+    this.log.info('Querying new blocks...');
 
     return (await this.runQuery(finalQueryConfig))?.rows.map((block) => ({
       id: toB64Url(block.id),
@@ -1553,7 +1557,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     const query = this.getGqlStableBlocksBaseSql();
     // this.addGqlBlockFilters({ query, cursor, sortOrder, ids, minHeight, maxHeight });
 
-    this.log.debug('Querying stable blocks...');
+    this.log.info('Querying stable blocks...');
 
     const queryConfig = { text: `${query} LIMIT ${pageSize + 1}` };
     const queryResult = await this.runQuery(queryConfig);

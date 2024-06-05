@@ -1,11 +1,11 @@
 -- updateNewDataItemHeights
-UPDATE bundles.new_data_items
+UPDATE new_data_items
 SET height = @height
 WHERE root_transaction_id = @transaction_id
   AND EXISTS (SELECT 1 FROM bundles.new_data_items WHERE root_transaction_id = @transaction_id FOR UPDATE);
 
 -- updateNewDataItemTagHeights
-UPDATE bundles.new_data_item_tags
+UPDATE new_data_item_tags
 SET height = @height
 WHERE root_transaction_id = @transaction_id
   AND EXISTS (SELECT 1 FROM bundles.new_data_item_tags WHERE root_transaction_id = @transaction_id FOR UPDATE);
