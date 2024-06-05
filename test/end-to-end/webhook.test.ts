@@ -31,7 +31,7 @@ import axios from 'axios';
 
 const projectRootPath = process.cwd();
 
-describe('WebhookEmitter', function () {
+describe('WebhookEmitter', () => {
   let webServer: Server;
   let eventsReceived: string[];
   let containerBuilder: GenericContainer;
@@ -50,7 +50,7 @@ describe('WebhookEmitter', function () {
   const countOccurrences = (list: string[], value: string): number =>
     list.filter((item) => item === value).length;
 
-  before(async function () {
+  before(async () => {
     webServer = createServer((req, res) => {
       let body = '';
 
@@ -94,16 +94,16 @@ describe('WebhookEmitter', function () {
     corePort = core.getMappedPort(4000);
   });
 
-  after(async function () {
+  after(async () => {
     webServer.close();
     await core.stop();
   });
 
-  beforeEach(async function () {
+  beforeEach(async () => {
     eventsReceived = [];
   });
 
-  it('Verifying that webServer received block-indexed event', async function () {
+  it('Verifying that webServer received block-indexed event', async () => {
     await waitForEvents(1);
 
     assert.equal(
@@ -113,7 +113,7 @@ describe('WebhookEmitter', function () {
     );
   });
 
-  it('Verifying that webServer received tx-indexed event', async function () {
+  it('Verifying that webServer received tx-indexed event', async () => {
     // queue tx
     await axios({
       method: 'post',
@@ -136,7 +136,7 @@ describe('WebhookEmitter', function () {
     );
   });
 
-  it('Verifying that webServer received tx-indexed and ans104-data-item-indexed event', async function () {
+  it('Verifying that webServer received tx-indexed and ans104-data-item-indexed event', async () => {
     // queue bundle C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk
     // bundle structure:
     // - C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk

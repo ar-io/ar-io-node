@@ -39,8 +39,8 @@ import { toB64Url } from '../../src/lib/encoding.js';
 
 const projectRootPath = process.cwd();
 
-describe('DataSources', function () {
-  describe('S3DataSource', function () {
+describe('DataSources', () => {
+  describe('S3DataSource', () => {
     let bundlesDb: Database;
     let network: StartedNetwork;
     let localStack: StartedLocalStackContainer;
@@ -58,7 +58,7 @@ describe('DataSources', function () {
       }
     };
 
-    before(async function () {
+    before(async () => {
       await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
 
       network = await new Network().start();
@@ -127,14 +127,14 @@ describe('DataSources', function () {
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
     });
 
-    after(async function () {
+    after(async () => {
       bundlesDb.close();
       await core.stop();
       await localStack.stop();
       await network.stop();
     });
 
-    it('Verifying that S3DataSource can fetch data from S3', async function () {
+    it('Verifying that S3DataSource can fetch data from S3', async () => {
       // queue bundle
       await axios({
         method: 'post',
