@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-bd2a6981cf7a12c5643742ef51b4addab40e5aa1}
     build:
       context: envoy/
     restart: on-failure:5
@@ -22,7 +22,7 @@ services:
       - core
       - observer
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-95255b395b334511c62634f4ea9544ebde59b979}
     build:
       context: .
     restart: on-failure:5
@@ -91,7 +91,7 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-624b6090acd1060c89f7bb1995a86df310388b72}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-c966d5d38333af39ae50532e75cda12fa98fe1f3}
     restart: on-failure:5
     ports:
       - 5050:5050
@@ -130,7 +130,7 @@ services:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-07458922bece28b209ed9d3bd9886fa1a4a9434f}
     build:
       context: litestream/
       dockerfile: Dockerfile
@@ -145,7 +145,7 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY=${AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY:-}
 
   upload-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
+    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-adae756f264362e14eef8f11d192a53c287587c6}
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       PORT: ${UPLOAD_SERVICE_PORT:-5100}
@@ -182,7 +182,7 @@ services:
     profiles: ['bundler']
 
   fulfillment-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
+    image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-adae756f264362e14eef8f11d192a53c287587c6}
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       NODE_ENV: ${NODE_ENV:-local}
@@ -232,7 +232,7 @@ services:
     profiles: ['bundler']
 
   localstack:
-    image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
+    image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-adae756f264362e14eef8f11d192a53c287587c6}
     ports:
       - '127.0.0.1:4566:4566'
       #- "127.0.0.1:4510-4559:4510-4559" # external services port range
