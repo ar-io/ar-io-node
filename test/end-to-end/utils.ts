@@ -18,13 +18,13 @@
 import { default as wait } from 'wait';
 import { Database } from 'better-sqlite3';
 
-export function getMaxHeight(coreDb: Database) {
+export const getMaxHeight = (coreDb: Database) => {
   return coreDb.prepare('SELECT MAX(height) FROM new_blocks').get();
-}
+};
 
-export async function waitForBlocks(coreDb: Database, stopHeight: number) {
+export const waitForBlocks = async (coreDb: Database, stopHeight: number) => {
   while (getMaxHeight(coreDb)['MAX(height)'] !== stopHeight) {
     console.log('Waiting for blocks to import...');
     await wait(5000);
   }
-}
+};
