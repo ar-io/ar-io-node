@@ -69,7 +69,10 @@ export const TRUSTED_GATEWAY_URL = env.varOrDefault(
 
 // Data retrieval priority order
 export const ON_DEMAND_RETRIEVAL_ORDER = env
-  .varOrDefault('ON_DEMAND_RETRIEVAL_ORDER', 'trusted-gateway,chunks,tx-data')
+  .varOrDefault(
+    'ON_DEMAND_RETRIEVAL_ORDER',
+    's3,trusted-gateway,chunks,tx-data',
+  )
   .split(',');
 
 //
@@ -234,6 +237,19 @@ export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
   'MEMPOOL_POLLING_INTERVAL_MS',
   '30000', // 30 seconds
 );
+
+//
+// AWS settings
+//
+//
+export const AWS_ACCESS_KEY_ID = env.varOrUndefined('AWS_ACCESS_KEY_ID');
+export const AWS_SECRET_ACCESS_KEY = env.varOrUndefined(
+  'AWS_SECRET_ACCESS_KEY',
+);
+export const AWS_REGION = env.varOrUndefined('AWS_REGION');
+export const AWS_ENDPOINT = env.varOrUndefined('AWS_ENDPOINT');
+export const AWS_S3_BUCKET = env.varOrUndefined('AWS_S3_BUCKET');
+export const AWS_S3_PREFIX = env.varOrUndefined('AWS_S3_PREFIX');
 
 //
 // Development and testing
