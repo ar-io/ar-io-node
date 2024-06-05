@@ -4,16 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 12] - 2024-06-05
+
+### Added
+
+- Added `/ar-io/admin/queue-data-item` endpoint for queuing data item headers
+  for indexing before the bundles containing them are processed. This allows
+  trusted bundlers to make their data items quickly available to be queried via
+  GraphQL without having to wait for bundle data submission or unbundling.
+- Added experimental support for retrieving contiguous data from S3. See
+  `AWS_*` [environment variables documentation](docs/env.md) for configuration
+  details. In conjuction with a local Turbo bundler this allows optimistic
+  bundle (but not yet data item) retrieval.
+- Add experimental support for fetching data from gateway peers. It can be
+  enabled by adding `ario-peer` to `ON_DEMAND_RETRIEVAL_ORDER`. Note: do not
+  expect this work reliably yet! This functionality is in active development
+  and will be improved in future releases.
+- Add `import_attempt_count` to `bundle` records to enable future bundle import
+  retry optimizations.
+
+### Changed
+
+- Removed `version` from `docker-compose.yaml` to avoid warnings with recent
+  versions of `docker-compose`
+- Switched default observer port from 5000 to 5050 to avoid conflict on OS X.
+  Since Envoy is used for to provide external access to the observer API this
+  should have no user visible effect.
 
 ## [Release 11] - 2024-05-21
 
+### Added
+
 - Added `arweave_tx_fetch_total` Prometheus metric to track counts of
   transaction headers fetched from the trusted node and Arweave network peers.
+
+### Fixed
+
 - Revert to using unnamed bind mounts due to cross platform issues with named
   volumes.
 
 ## [Release 10] - 2024-05-20
+
+### Added
 
 - Added experimental support for streaming SQLite backups to S3 (and compatible
   services) using [Litestream](https://litestream.io/). Start the service using
@@ -32,10 +64,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS` environment variable. This allows gateway
   operators to decide how much latency they will tolerate when serving data in
   exchange for more complete data indexing and caching.
-- Renamed cache header from `X-Cached` to `X-Cache` to mimic typical CDN
-  practices.
 - Added `X-AR-IO-Hops` and `X-AR-IO-Origin` headers in preparation for future
   peer-to-peer data functionality.
+
+### Changed
+
+- Renamed cache header from `X-Cached` to `X-Cache` to mimic typical CDN
+  practices.
 - Upgrade to Node.js v20 and switch to the native test runner.
 
 ## [Release 9] - 2024-04-10
