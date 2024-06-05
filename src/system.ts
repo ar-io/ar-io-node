@@ -20,6 +20,8 @@ import EventEmitter from 'node:events';
 import { Server } from 'node:http';
 import fs from 'node:fs';
 import { ArIO } from '@ar.io/sdk';
+import awsLite from '@aws-lite/client';
+import awsLiteS3 from '@aws-lite/s3';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
@@ -69,6 +71,7 @@ import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSResolver } from './init/resolvers.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
+import { S3DataSource } from './data/s3-data-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -77,6 +80,18 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 const arIO = ArIO.init({ contractTxId: config.CONTRACT_ID });
+const awsClient =
+  config.AWS_ACCESS_KEY_ID !== undefined &&
+  config.AWS_SECRET_ACCESS_KEY !== undefined &&
+  config.AWS_REGION !== undefined
+    ? await awsLite({
+        accessKeyId: config.AWS_ACCESS_KEY_ID,
+        secretAccessKey: config.AWS_SECRET_ACCESS_KEY,
+        endpoint: config.AWS_ENDPOINT,
+        region: config.AWS_REGION,
+        plugins: [awsLiteS3],
+      })
+    : undefined;
 
 export const arweaveClient = new ArweaveCompositeClient({
   log,
@@ -273,9 +288,24 @@ const arIODataSource = new ArIODataSource({
   nodeWallet: config.AR_IO_WALLET,
 });
 
+const s3DataSource =
+  awsClient !== undefined && config.AWS_S3_BUCKET !== undefined
+    ? new S3DataSource({
+        log,
+        s3Client: awsClient.S3,
+        s3Bucket: config.AWS_S3_BUCKET,
+        s3Prefix: config.AWS_S3_PREFIX,
+      })
+    : undefined;
+
 const dataSources: ContiguousDataSource[] = [];
 for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
   switch (sourceName) {
+    case 's3':
+      if (s3DataSource !== undefined) {
+        dataSources.push(s3DataSource);
+      }
+      break;
     case 'ario-peer':
       dataSources.push(arIODataSource);
       break;
