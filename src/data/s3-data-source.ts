@@ -64,9 +64,21 @@ export class S3DataSource implements ContiguousDataSource {
     });
 
     try {
+      const head = await this.s3Client.HeadObject({
+        Bucket: this.s3Bucket,
+        Key: `${this.s3Prefix}/${id}`,
+      });
+
+      const payloadDataStartS3MetaDataTag = 'payload-data-start';
+      const range =
+        head.Metadata?.[payloadDataStartS3MetaDataTag] !== undefined
+          ? `bytes=${head.Metadata[payloadDataStartS3MetaDataTag]}-`
+          : undefined;
+
       const response = await this.s3Client.GetObject({
         Bucket: this.s3Bucket,
         Key: `${this.s3Prefix}/${id}`,
+        Range: range,
         streamResponsePayload: true,
       });
 
@@ -92,12 +104,16 @@ export class S3DataSource implements ContiguousDataSource {
       if (response.Body === undefined) {
         throw new Error('Body missing from S3 response');
       }
+      const payloadContentTypeS3MetaDataTag = 'payload-content-type';
+      const sourceContentType =
+        head.Metadata?.[payloadContentTypeS3MetaDataTag] ??
+        response.ContentType;
 
       return {
         stream: response.Body as Readable,
         size: response.ContentLength,
         verified: false,
-        sourceContentType: response.ContentType,
+        sourceContentType,
         cached: false,
         requestAttributes: {
           hops,
