@@ -19,6 +19,7 @@ import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import { Server } from 'node:http';
 import fs from 'node:fs';
+import { ArIO } from '@ar.io/sdk';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
@@ -70,6 +71,7 @@ import { createArNSResolver } from './init/resolvers.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import { DATABASE } from './config.js';
+import { ArIODataSource } from './data/ar-io-data-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -77,6 +79,7 @@ process.on('uncaughtException', (error) => {
 });
 
 const arweave = Arweave.init({});
+const arIO = ArIO.init({ contractTxId: config.CONTRACT_ID });
 
 export const arweaveClient = new ArweaveCompositeClient({
   log,
@@ -275,9 +278,18 @@ const gatewayDataSource = new GatewayDataSource({
   trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
 });
 
+const arIODataSource = new ArIODataSource({
+  log,
+  arIO,
+  nodeWallet: config.AR_IO_WALLET,
+});
+
 const dataSources: ContiguousDataSource[] = [];
 for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
   switch (sourceName) {
+    case 'ario-peer':
+      dataSources.push(arIODataSource);
+      break;
     case 'trusted-gateway':
       dataSources.push(gatewayDataSource);
       break;
@@ -451,6 +463,7 @@ export const shutdown = async (express: Server) => {
     express.close(async () => {
       log.debug('Web server stopped successfully');
       eventEmitter.removeAllListeners();
+      arIODataSource.stopUpdatingPeers();
       await mempoolWatcher?.stop();
       await blockImporter.stop();
       await dataItemIndexer.stop();

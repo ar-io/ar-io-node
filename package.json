@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@types/pg": "^8.11.6",
+    "@ar.io/sdk": "^1.0.7",
     "apollo-server-express": "^3.13.0",
     "arbundles": "^0.6.19",
     "arweave": "^1.14.4",

@@ -1,11 +1,13 @@
 name: Build core
 
-on: [ push, workflow_dispatch ]
+on: [push, workflow_dispatch]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       checks: write
       contents: read
@@ -20,12 +22,15 @@ jobs:
           node-version-file: .nvmrc
           cache: 'yarn'
 
+      # macOS specific setup
+      - run: brew install python-setuptools
+        if: matrix.os == 'macos-latest'
+
       # Build and test TypeScript
       - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn lint:check
       - run: yarn test:ci
-
       # Run E2E tests if pushing to develop branch
       - run: yarn test:e2e
         if: github.ref == 'refs/heads/develop'
@@ -38,7 +43,7 @@ jobs:
 
       # Success notification
       - name: Send Slack success notification
-        if: success() && github.event_name != 'pull_request'
+        if: success() && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
           SLACK_TITLE: Build succeeded!
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
@@ -46,7 +51,7 @@ jobs:
 
       # Failure notification
       - name: Send Slack failure notification
-        if: failure() && github.event_name != 'pull_request'
+        if: failure() && github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
           SLACK_TITLE: Build failed!
           SLACK_COLOR: danger
@@ -143,4 +148,3 @@ jobs:
           tags: |
             ghcr.io/ar-io/ar-io-core:latest
             ghcr.io/ar-io/ar-io-core:${{ github.sha }}
-
