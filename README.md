@@ -86,6 +86,10 @@ First, supply the necessary environment variables in a `.env` file:
 ```env
 BUNDLER_ARWEAVE_WALLET='Stringified JWK Wallet'
 BUNDLER_ARWEAVE_ADDRESS='Base64-encoded wallet address for above wallet'
+
+# Index data items from bundles created by this wallet
+ANS104_UNBUNDLE_FILTER='{ "attributes": { "owner_address": "$BUNDLER_ARWEAVE_ADDRESS" }}'
+ANS104_INDEX_FILTER='{ "always": true }'
 ```
 
 Then, run docker compose with the `bundler` profile.

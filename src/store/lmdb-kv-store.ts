@@ -17,7 +17,7 @@
  */
 import { RootDatabase, open } from 'lmdb';
 
-import { KVBufferStore } from '../types';
+import { KVBufferStore } from '../types.js';
 
 export class LmdbKVStore implements KVBufferStore {
   private db: RootDatabase<Buffer, string>;

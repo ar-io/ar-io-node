@@ -25,6 +25,3 @@ test-results.xml
 
 # Exceptions
 !/data/.gitkeep
-
-# Localstack
-volume/
