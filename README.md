@@ -81,16 +81,7 @@ Once running, requests can be directed to Envoy server at `localhost:3000`.
 
 You can run a turbo bundler as a sidecar to the ar.io gateway. This will allow the gateway to accept data items and bundle them into a single transaction before submitting them to the network.
 
-First, supply the necessary environment variables in a `.env` file:
-
-```env
-BUNDLER_ARWEAVE_WALLET='Stringified JWK Wallet'
-BUNDLER_ARWEAVE_ADDRESS='Base64-encoded wallet address for above wallet'
-
-# Index data items from bundles created by this wallet
-ANS104_UNBUNDLE_FILTER='{ "attributes": { "owner_address": "$BUNDLER_ARWEAVE_ADDRESS" }}'
-ANS104_INDEX_FILTER='{ "always": true }'
-```
+First, supply the required environment variables in `.env` for the integration including a stringified JWK wallet to `BUNDLER_ARWEAVE_WALLET`. See a `.env.bundler.example` file for a template.
 
 Then, run docker compose with the `bundler` profile.
 
