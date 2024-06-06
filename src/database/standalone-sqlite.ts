@@ -72,7 +72,7 @@ const MAX_WORKER_ERRORS = 100;
 const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const NEW_DATA_ITEM_CLEANUP_WAIT_SECS = 60 * 60 * 2;
-const BUNDLE_REPROCESS_WAIT_SECS = 60 * 60 * 4;
+const BUNDLE_REPROCESS_WAIT_SECS = 60 * 1;
 const LOW_SELECTIVITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
 
 function tagJoinSortPriority(tag: { name: string; values: string[] }) {

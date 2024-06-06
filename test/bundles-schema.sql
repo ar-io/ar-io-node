@@ -138,6 +138,7 @@ CREATE INDEX bundles_index_filter_id_idx
   ON bundles (index_filter_id);
 CREATE INDEX bundle_data_items_parent_id_filter_id_idx
   ON bundle_data_items (parent_id, filter_id);
+CREATE INDEX import_attempt_last_queued_idx ON bundles (import_attempt_count, last_queued_at);
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bundle_formats (
