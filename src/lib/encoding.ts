@@ -231,6 +231,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   let currentKey: string | undefined;
   const keyPath: Array<string | number> = [];
   let indexPath: string | undefined;
+  let wildcardPath: string | undefined;
   let paths: { [k: string]: string } = {};
   let hasValidManifestKey = false; // { "manifest": "arweave/paths" }
   let hasValidManifestVersion = false; // { "version": "0.1.0" }
@@ -277,8 +278,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       hasValidManifestKey = true;
     }
 
-    // Manifest version - { "version": "0.1.0" }
-    if (keyPath.length === 0 && currentKey === 'version' && data === '0.1.0') {
+    // Manifest version - { "version": "0.2.0" } or { "version": "0.1.0" }
+    if (keyPath.length === 0 && currentKey === 'version' && ["0.1.0", "0.2.0"].includes(data)) {
       hasValidManifestVersion = true;
     }
 
@@ -294,6 +295,30 @@ export function parseManifestStream(stream: Readable): EventEmitter {
         emitter.emit('index', { path: indexPath, id: paths[indexPath] });
         paths = {};
       }
+    }
+    
+    // Wildcard - { "*": { "path": "404.html" } }
+    if (
+      keyPath.length === 1 &&
+      keyPath[0] === '*' &&
+      currentKey === 'path'
+    ) {
+      wildcardPath = data;
+      // Resolve if the path id is already known
+      if (wildcardPath !== undefined && paths[wildcardPath] !== undefined) {
+        emitter.emit('wildcard', { path: wildcardPath, id: paths[wildcardPath] });
+        paths = {};
+      }
+    }
+
+    // Wildcard - { "*": { "id": "wildcard-id" } }
+    if (
+      keyPath.length === 1 &&
+      keyPath[0] === '*' &&
+      currentKey === 'id'
+    ) {
+        emitter.emit('wildcard', { path: null, id: data });
+        paths = {};
     }
 
     // Paths - { "paths": { "some/path/file.html": { "id": "<data-id>" } }
@@ -311,6 +336,9 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       } else if (p === indexPath) {
         emitter.emit('index', { path: p, id: data });
         paths = {};
+      } else if (p === wildcardPath){
+        emitter.emit('wildcard', { path: p, id: data });
+        paths = {};
       }
     }
   });
@@ -324,20 +352,26 @@ export function resolveManifestStreamPath(
 ): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const emitter = parseManifestStream(stream);
-
+    let resolved=false
     // Remove trailing slashes from path - treat /path and /path/ the same
+    let wildcard;
     const sanitizedPath = path !== undefined ? path.replace(/\/+$/g, '') : '';
 
     emitter.on('error', (err) => {
+      resolved=true
       reject(err);
     });
 
     emitter.on('end', () => {
-      resolve(undefined);
+      if(!resolved){
+      resolved=true
+      resolve(wildcard);
+      }
     });
 
     emitter.on('index', (data) => {
       if (sanitizedPath === '') {
+        resolved=true
         resolve(data.id);
       }
     });
@@ -345,8 +379,14 @@ export function resolveManifestStreamPath(
     emitter.on('path', (data) => {
       const trimmedDataPath = data.path.replace(/\/+$/g, '');
       if (sanitizedPath !== '' && trimmedDataPath === sanitizedPath) {
+        resolved=true
         resolve(data.id);
       }
     });
+
+    emitter.on('wildcard',(data) => {
+     wildcard=data
+    })
+    
   });
 }
