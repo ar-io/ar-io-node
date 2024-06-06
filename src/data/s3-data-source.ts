@@ -25,6 +25,8 @@ import {
 } from '../types.js';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
+import axios from 'axios';
+import { AWS_ENDPOINT } from '../config.js';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -64,16 +66,24 @@ export class S3DataSource implements ContiguousDataSource {
     });
 
     try {
-      const head = await this.s3Client.HeadObject({
-        Bucket: this.s3Bucket,
-        Key: `${this.s3Prefix}/${id}`,
-      });
+      // TODO: Use S3 client instead of axios when aws-lite supports Metadata on head-requests
+      // const head = this.s3Client.HeadObject({
+      //   Bucket: this.s3Bucket,
+      //   Key: `${this.s3Prefix}/${id}`,
+      // });
+      const head = await axios.head(
+        `${AWS_ENDPOINT}/${this.s3Bucket}/${this.s3Prefix}/${id}`,
+        { validateStatus: () => true },
+      );
+      if (head.status !== 200) {
+        throw new Error('Failed to head data from S3');
+      }
 
-      const payloadDataStartS3MetaDataTag = 'payload-data-start';
+      const payloadDataStartS3MetaDataTag = 'x-amz-meta-payload-data-start';
       const range =
-        head.Metadata?.[payloadDataStartS3MetaDataTag] !== undefined
-          ? `bytes=${head.Metadata[payloadDataStartS3MetaDataTag]}-`
-          : undefined;
+        head.headers?.[payloadDataStartS3MetaDataTag] !== undefined
+          ? `bytes=${head.headers[payloadDataStartS3MetaDataTag]}-`
+          : `bytes=0-`;
 
       const response = await this.s3Client.GetObject({
         Bucket: this.s3Bucket,
@@ -104,10 +114,9 @@ export class S3DataSource implements ContiguousDataSource {
       if (response.Body === undefined) {
         throw new Error('Body missing from S3 response');
       }
-      const payloadContentTypeS3MetaDataTag = 'payload-content-type';
+      const payloadContentTypeS3MetaDataTag = 'x-amz-meta-payload-content-type';
       const sourceContentType =
-        head.Metadata?.[payloadContentTypeS3MetaDataTag] ??
-        response.ContentType;
+        head.headers?.[payloadContentTypeS3MetaDataTag] ?? response.ContentType;
 
       return {
         stream: response.Body as Readable,
