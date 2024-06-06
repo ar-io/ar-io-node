@@ -198,7 +198,8 @@ export class BlockImporter {
       this.maxChainHeight = await this.chainSource.getHeight();
     }
 
-    const dbHeight = await this.chainIndex.getMaxHeight();
+    let dbHeight = await this.chainIndex.getMaxHeight();
+    dbHeight = (dbHeight > 0 ? dbHeight : this.startHeight)
 
     // Wait for the next block if the DB is in sync with the chain
     while (dbHeight >= this.maxChainHeight) {

@@ -99,7 +99,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       max: 100,
     });
 
-      this.dbPool.connect().catch((err: any) => log.error(`Failed to connect to database:`, err))
+    this.dbPool.connect().catch((err: any) => log.error(`Failed to connect to database:`, err));
 
     this.stmts = { core: {}, data: {}, bundles: {}, moderation: {} };
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
@@ -120,8 +120,6 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     }
 
     this.resetBundlesToHeightFn = async (height: number) => {
-    //  const client: pkg.PoolClient = await this.dbPool.connect();
-
       try {
         await this.dbPool.query('BEGIN');
 
@@ -132,12 +130,9 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       } catch (e: any) {
         await this.dbPool.query('ROLLBACK');
         this.log.info('resetBundlesToHeightFn did a rollback.');
-      } finally {
-        //client.release();
       }
     };
     this.resetCoreToHeightFn = async (height: number) => {
-    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         await this.dbPool.query('BEGIN');
 
@@ -152,20 +147,23 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       } catch (e) {
         await this.dbPool.query('ROLLBACK');
         this.log.info('resetCoreToHeightFn did a rollback.');
-      } finally {
-       // client.release();
       }
     };
     this.insertTxFn = async (tx: PartialJsonTransaction, height?: number) => {
-    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         const rows = txToDbRows(tx, height);
 
         await this.dbPool.query('BEGIN');
 
         if (height !== undefined) {
-          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, { height: height, transaction_id: rows.newTx.id }));
-          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, { height: height, transaction_id: rows.newTx.id }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, {
+            height: height,
+            transaction_id: rows.newTx.id,
+          }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, {
+            height: height,
+            transaction_id: rows.newTx.id,
+          }));
         }
 
         for (const row of rows.tagNames) {
@@ -184,19 +182,19 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
           await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreWallet, row));
         }
 
-        await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransaction, { ...rows.newTx, height: height }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransaction, {
+          ...rows.newTx,
+          height: height,
+        }));
         await this.dbPool.query(this.transformQuery(this.stmts.core.insertAsyncNewBlockTransaction, { transaction_id: rows.newTx.id }));
 
         await this.dbPool.query('COMMIT');
       } catch (error) {
         await this.dbPool.query('ROLLBACK');
         this.log.info('insertTxFn did a rollback.');
-      } finally {
-       // client.release();
       }
     };
     this.insertDataItemFn = async (item: NormalizedDataItem, height?: number) => {
-    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         const rows = dataItemToDbRows(item, height);
 
@@ -219,20 +217,23 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         }
 
         const filterID = this.getFilterId(rows.bundleDataItem.filter);
-        await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, { ...rows.bundleDataItem, filterID }));
-        await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, { ...rows.bundleDataItem, filterID }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, {
+          ...rows.bundleDataItem,
+          filterID,
+        }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertBundleDataItem, {
+          ...rows.bundleDataItem,
+          filterID,
+        }));
         await this.dbPool.query(this.transformQuery(this.stmts.bundles.upsertNewDataItem, { height: height }));
 
         await this.dbPool.query('COMMIT');
       } catch (error) {
         await this.dbPool.query('ROLLBACK');
         this.log.info('insertDataItemFn did a rollback.');
-      } finally {
-      //  client.release();
       }
     };
     this.insertBlockAndTxsFn = async (block: PartialJsonBlock, txs: PartialJsonTransaction[], missingTxIds: string[]) => {
-    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         await this.dbPool.query('BEGIN');
 
@@ -308,7 +309,10 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
           }
 
           for (const row of rows.newTxTags) {
-            await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransactionTag, { ...row, height: block.height }));
+            await this.dbPool.query(this.transformQuery(this.stmts.core.upsertNewTransactionTag, {
+              ...row,
+              height: block.height,
+            }));
           }
 
           for (const row of rows.wallets) {
@@ -318,21 +322,28 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         }
         for (const txIdStr of missingTxIds) {
           const txId = fromB64Url(txIdStr);
-          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, { height: block.height, transaction_id: txId }));
-          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, { height: block.height, transaction_id: txId }));
-          await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreMissingTransaction, { block_indep_hash: indepHash, transaction_id: txId, height: block.height }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemHeights, {
+            height: block.height,
+            transaction_id: txId,
+          }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.updateNewDataItemTagHeights, {
+            height: block.height,
+            transaction_id: txId,
+          }));
+          await this.dbPool.query(this.transformQuery(this.stmts.core.insertOrIgnoreMissingTransaction, {
+            block_indep_hash: indepHash,
+            transaction_id: txId,
+            height: block.height,
+          }));
         }
 
         await this.dbPool.query('COMMIT');
       } catch (error) {
         await this.dbPool.query('ROLLBACK');
         this.log.info('insertBlockAndTxsFn did a rollback.');
-      } finally {
-       // client.release();
       }
     };
     this.saveCoreStableDataFn = async (endHeight: number) => {
-     // const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         await this.dbPool.query('BEGIN');
 
@@ -358,19 +369,22 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         await this.dbPool.query('COMMIT');
       } catch (e) {
         await this.dbPool.query('ROLLBACK').catch((e: any) => console.error('Rollback failed:', e));
-        this.log.info('saveBundlesStableDataFn did a rollback.',e);
-      } finally {
-       // client.release();
+        this.log.info('saveBundlesStableDataFn did a rollback.', e);
       }
     };
     this.deleteCoreStaleNewDataFn = async (heightThreshold: number, createdAtThreshold: number) => {
-    //  const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         await this.dbPool.query('BEGIN');
 
         await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleMissingTransactions, { height_threshold: heightThreshold }));
-        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactionTags, { height_threshold: heightThreshold, indexed_at_threshold: createdAtThreshold }));
-        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactions, { height_threshold: heightThreshold, indexed_at_threshold: createdAtThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactionTags, {
+          height_threshold: heightThreshold,
+          indexed_at_threshold: createdAtThreshold,
+        }));
+        await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewTransactions, {
+          height_threshold: heightThreshold,
+          indexed_at_threshold: createdAtThreshold,
+        }));
         await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewBlockTransactions, { height_threshold: heightThreshold }));
         await this.dbPool.query(this.transformQuery(this.stmts.core.deleteStaleNewBlocks, { height_threshold: heightThreshold }));
 
@@ -378,24 +392,25 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       } catch (e) {
         await this.dbPool.query('ROLLBACK;').catch((rollbackError: any) => console.error('Rollback failed:', rollbackError));
         this.log.info('deleteCoreStaleNewDataFn did a rollback.');
-      } finally {
-      //  client.release();
       }
     };
     this.deleteBundlesStaleNewDataFn = async (heightThreshold: number, indexedAtThreshold: number) => {
-     // const client: pkg.PoolClient = await this.dbPool.connect();
       try {
         await this.dbPool.query('BEGIN');
 
-        await this.dbPool.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItems, { height_threshold: heightThreshold, indexed_at_threshold: indexedAtThreshold }));
-        await this.dbPool.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItemTags, { height_threshold: heightThreshold, indexed_at_threshold: indexedAtThreshold }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItems, {
+          height_threshold: heightThreshold,
+          indexed_at_threshold: indexedAtThreshold,
+        }));
+        await this.dbPool.query(this.transformQuery(this.stmts.bundles.deleteStaleNewDataItemTags, {
+          height_threshold: heightThreshold,
+          indexed_at_threshold: indexedAtThreshold,
+        }));
 
         await this.dbPool.query('COMMIT');
       } catch (e) {
         await this.dbPool.query('ROLLBACK;').catch((rollbackError: any) => console.error('Rollback failed:', rollbackError));
         this.log.info('deleteBundlesStaleNewDataFn did a rollback.');
-      } finally {
-       // client.release();
       }
     };
   }
@@ -404,7 +419,8 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     try {
       return await this.dbPool.query(query);
     } catch (error) {
-      this.log.error('Query error', { query: query });
+      this.log.error('error', { error: error.message });
+      this.log.error('Query', { error: query });
     }
 
     return undefined;
@@ -438,7 +454,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       const height = result?.rows[0]?.height;
       return height !== undefined ? Number(height) : -1;
     } catch (error) {
-      return 0;
+      return -1;
     }
   }
 
@@ -448,7 +464,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       throw new Error(`Invalid height ${height}, must be >= 0.`);
     }
 
-    const queryResult = await this.runQuery({ ...this.stmts.core.selectMaxHeight, values: [height] });
+    const queryResult = await this.dbPool.query(this.transformQuery(this.stmts.core.selectBlockHashByHeight, { height: height }));
 
     if (queryResult !== undefined && queryResult.rows.length > 0) {
       return toB64Url(queryResult.rows[0].indep_hash);
@@ -525,48 +541,49 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
   }
 
   async saveTxOffset(id: string, offset: number): Promise<void> {
-    await this.runQuery({
-      ...this.stmts.core.updateStableTransactionOffset,
-      values: [fromB64Url(id), offset],
-    });
+    await this.runQuery(this.transformQuery(this.stmts.core.updateStableTransactionOffset, {
+      id: fromB64Url(id),
+      offset: Number(offset),
+    }));
   }
 
-  async getBundleFormatId(format: string | undefined): Promise<number | undefined> {
-    let id: number | undefined;
-    if (format != undefined) {
-      id = this.bundleFormatIds[format];
-      if (id == undefined) {
-        const queryResult = await this.runQuery({ ...this.stmts.core.selectFormatId, values: [format] });
-        if (queryResult !== undefined && queryResult.rows.length > 0) {
-          id = queryResult.rows[0]?.id;
-        }
-        if (id != undefined) {
-          this.bundleFormatIds[format] = id;
-        }
-      }
-    }
-    return id;
-  }
-
-  async getFilterId(filter: string | undefined): Promise<number | undefined> {
+  async getBundleFormatId(format: string) {
     let id: number | undefined;
 
-    if (filter != undefined) {
-      id = this.filterIds[filter];
+    try {
+      if (format !== undefined) {
 
-      if (id == undefined) {
-        const db = this.dbPool;
-
-        if (db && typeof db.query === 'function') {
-          const queryResult = await db.query(this.transformQuery(this.stmts.bundles.selectFilterId, { filter: filter }));
+        if (id === undefined) {
+          const queryResult = await this.runQuery(this.transformQuery(this.stmts.bundles.selectFormatId, { format: format }));
 
           if (queryResult !== undefined && queryResult.rows.length > 0) {
             id = queryResult.rows[0]?.id;
           }
+        }
+      }
+    } catch (error) {
+      console.error('Error occurred while fetching format ID:', error);
+      return undefined;
+    }
 
-          if (id != undefined) {
-            this.filterIds[filter] = id;
-          }
+    return id;
+  }
+
+
+  async getFilterId(filter: string | undefined) {
+    let id: number | undefined;
+    if (filter != undefined) {
+      id = this.filterIds[filter];
+      if (id == undefined) {
+        await this.runQuery(this.transformQuery(this.stmts.bundles.insertOrIgnoreFilter, { filter: filter }));
+
+        const queryResult = await this.runQuery(this.transformQuery(this.stmts.bundles.selectFilterId, { filter: filter }));
+
+        if (queryResult !== undefined && queryResult.rows.length > 0) {
+          id = queryResult.rows[0]?.id;
+        }
+        if (id != undefined) {
+          this.filterIds[filter] = id;
         }
       }
     }
@@ -600,22 +617,19 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
       rootTxId = fromB64Url(rootTransactionId);
     }
 
-    await this.runQuery({
-      ...this.stmts.bundles.upsertBundle,
-      values: [
-        idBuffer,
-        rootTxId,
-        await this.getBundleFormatId(format),
-        await this.getFilterId(unbundleFilter),
-        await this.getFilterId(indexFilter),
-        dataItemCount,
-        matchedDataItemCount,
-        queuedAt,
-        skippedAt,
-        unbundledAt,
-        fullyIndexedAt,
-      ],
-    });
+    await this.runQuery(this.transformQuery(this.stmts.bundles.upsertBundle, {
+      id: idBuffer,
+      root_transaction_id: rootTxId ?? null,
+      format_id: Number(await this.getBundleFormatId(format) ?? 0),
+      unbundle_filter_id: Number(await this.getFilterId(unbundleFilter) ?? 0),
+      index_filter_id: Number(await this.getFilterId(indexFilter) ?? 0),
+      data_item_count: Number(dataItemCount ?? 0),
+      matched_data_item_count: Number(matchedDataItemCount ?? 0),
+      queued_at: Number(queuedAt ?? 0),
+      skipped_at: Number(skippedAt ?? 0),
+      unbundled_at: Number(unbundledAt ?? 0),
+      fully_indexed_at: Number(fullyIndexedAt ?? 0),
+    }));
   }
 
   async saveBlockAndTxs(block: PartialJsonBlock, txs: PartialJsonTransaction[], missingTxIds: string[]) {
@@ -643,7 +657,10 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     const queryResultCore = await this.runQuery({ ...this.stmts.core.selectDataAttributes, values: [fromB64Url(id)] });
     const coreRow = queryResultCore?.rows[0];
 
-    const queryResultData = await this.runQuery({ ...this.stmts.data.selectDataAttributes, values: [fromB64Url(id), coreRow?.data_root] });
+    const queryResultData = await this.runQuery({
+      ...this.stmts.data.selectDataAttributes,
+      values: [fromB64Url(id), coreRow?.data_root],
+    });
     const dataRow = queryResultData?.rows[0];
 
 
@@ -775,11 +792,20 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     cachedAt?: number;
   }) {
     const hashBuffer = fromB64Url(hash);
-    await this.runQuery({ ...this.stmts.data.insertDataHash, values: [hashBuffer, dataSize, contentType, currentUnixTimestamp(), cachedAt] });
-    await this.runQuery({ ...this.stmts.data.insertDataId, values: [fromB64Url(id), hashBuffer, currentUnixTimestamp()] });
+    await this.runQuery({
+      ...this.stmts.data.insertDataHash,
+      values: [hashBuffer, dataSize, contentType, currentUnixTimestamp(), cachedAt],
+    });
+    await this.runQuery({
+      ...this.stmts.data.insertDataId,
+      values: [fromB64Url(id), hashBuffer, currentUnixTimestamp()],
+    });
 
     if (dataRoot !== undefined) {
-      await this.runQuery({ ...this.stmts.data.insertDataRoot, values: [fromB64Url(dataRoot), hashBuffer, currentUnixTimestamp()] });
+      await this.runQuery({
+        ...this.stmts.data.insertDataRoot,
+        values: [fromB64Url(dataRoot), hashBuffer, currentUnixTimestamp()],
+      });
     }
   }
 
@@ -1114,7 +1140,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
     }
     const wheres = queryWheres.join(' AND ');
     let finalQuery = query.text;
-    if (wheres.length > 0) {
+    if (wheres?.length > 0) {
       finalQuery += ' WHERE ' + wheres + ' ';
     }
     // finalQuery += ` ${queryOrderBy}`;
@@ -1223,10 +1249,22 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         tags: [...await this.getGqlNewDataItemTags(tx.id), ...await this.getGqlNewTransactionTags(tx.id)],
       })));
     }
+    return [];
   }
 
   //@ts-ignore
-  async getGqlStableTransactions({ pageSize, cursor, sortOrder = 'HEIGHT_DESC', ids = [], recipients = [], owners = [], minHeight = -1, maxHeight = -1, bundledIn, tags = [] }
+  async getGqlStableTransactions({
+                                   pageSize,
+                                   cursor,
+                                   sortOrder = 'HEIGHT_DESC',
+                                   ids = [],
+                                   recipients = [],
+                                   owners = [],
+                                   minHeight = -1,
+                                   maxHeight = -1,
+                                   bundledIn,
+                                   tags = [],
+                                 }
                                    :
                                    {
                                      pageSize: number;
@@ -1378,8 +1416,8 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
         tags,
       });
 
-      if (txs.length < pageSize) {
-        const lastTxHeight = txs[txs.length - 1]?.height;
+      if (txs?.length < pageSize) {
+        const lastTxHeight = txs[txs?.length - 1]?.height;
 
         txs = txs.concat(
           await this.getGqlStableTransactions({
@@ -1391,7 +1429,7 @@ export class PostgressDatabaseWorker implements databaseWorkerInterface, ChainIn
             owners,
             minHeight,
             maxHeight:
-              txs.length > 0 && lastTxHeight ? lastTxHeight - 1 : maxHeight,
+              txs?.length > 0 && lastTxHeight ? lastTxHeight - 1 : maxHeight,
             bundledIn,
             //@ts-ignore
             tags,
