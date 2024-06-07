@@ -19,7 +19,7 @@ import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import { Server } from 'node:http';
 import fs from 'node:fs';
-import { ArIO } from '@ar.io/sdk';
+import { IO } from '@ar.io/sdk';
 import awsLite from '@aws-lite/client';
 import awsLiteS3 from '@aws-lite/s3';
 
@@ -79,9 +79,9 @@ process.on('uncaughtException', (error) => {
 });
 
 const arweave = Arweave.init({});
-const arIO = ArIO.init({ contractTxId: config.CONTRACT_ID });
 
-export const awsClient =
+const arIO = IO.init({ processId: config.IO_PROCESS_ID });
+const awsClient =
   config.AWS_ACCESS_KEY_ID !== undefined &&
   config.AWS_SECRET_ACCESS_KEY !== undefined &&
   config.AWS_REGION !== undefined

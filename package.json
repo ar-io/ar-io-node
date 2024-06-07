@@ -8,7 +8,7 @@
     "url": "https://github.com/ar-io/ar-io-node"
   },
   "dependencies": {
-    "@ar.io/sdk": "^1.0.7",
+    "@ar.io/sdk": "1.2.0-alpha.1",
     "@aws-lite/client": "^0.21.7",
     "@aws-lite/s3": "^0.1.21",
     "apollo-server-express": "^3.13.0",
