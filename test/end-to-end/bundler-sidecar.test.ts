@@ -31,6 +31,7 @@ import { Environment } from 'testcontainers/build/types.js';
 import { createData } from 'arbundles';
 import Arweave from 'arweave';
 import { ArweaveSigner } from 'arbundles/src/signing/index.js';
+import { JWKInterface } from 'arweave/node/lib/wallet.js';
 
 const projectRootPath = process.cwd();
 
@@ -43,6 +44,14 @@ const composeUp = async ({
   ANS104_UNBUNDLE_FILTER = '{"always": true}',
   ANS104_INDEX_FILTER = '{"always": true}',
   ADMIN_API_KEY = 'secret',
+  BUNDLER_ARWEAVE_WALLET,
+  BUNDLER_ARWEAVE_ADDRESS,
+  AWS_S3_BUCKET = 'ar.io',
+  AWS_S3_PREFIX = 'data',
+  AWS_ACCESS_KEY_ID = 'test',
+  AWS_SECRET_ACCESS_KEY = 'test',
+  AWS_REGION = 'us-east-1',
+  AWS_ENDPOINT = 'http://localstack:4566',
   ...ENVIRONMENT
 }: Environment = {}) => {
   await cleanDb();
@@ -54,6 +63,14 @@ const composeUp = async ({
       ANS104_UNBUNDLE_FILTER,
       ANS104_INDEX_FILTER,
       ADMIN_API_KEY,
+      BUNDLER_ARWEAVE_WALLET,
+      BUNDLER_ARWEAVE_ADDRESS,
+      AWS_S3_BUCKET,
+      AWS_S3_PREFIX,
+      AWS_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY,
+      AWS_REGION,
+      AWS_ENDPOINT,
       DEBUG: 'testcontainers*',
       ...ENVIRONMENT,
     })
@@ -78,8 +95,13 @@ describe('Bundler Sidecar', () => {
     }
   };
 
+  let jwk: JWKInterface;
   before(async () => {
-    compose = await composeUp();
+    jwk = await Arweave.crypto.generateJWK();
+    compose = await composeUp({
+      BUNDLER_ARWEAVE_WALLET: JSON.stringify(jwk),
+      BUNDLER_ARWEAVE_ADDRESS: sha256B64Url(fromB64Url(jwk.n)),
+    });
     bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
   });
 
@@ -89,7 +111,6 @@ describe('Bundler Sidecar', () => {
   });
 
   it('Verifying that S3DataSource can fetch data from S3', async () => {
-    const jwk = await Arweave.crypto.generateJWK();
     const signer = new ArweaveSigner(jwk);
     const dataItem = createData('test data', signer, {
       tags: [{ name: 'Content-Type', value: 'text/plain' }],
