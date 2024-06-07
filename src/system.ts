@@ -296,6 +296,7 @@ const s3DataSource =
         s3Client: awsClient.S3,
         s3Bucket: config.AWS_S3_BUCKET,
         s3Prefix: config.AWS_S3_PREFIX,
+        awsClient,
       })
     : undefined;
 

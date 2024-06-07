@@ -25,7 +25,7 @@ import {
 } from '../types.js';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
-import { awsClient } from '../system.js';
+import { AwsLiteClient } from '@aws-lite/client';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -33,21 +33,27 @@ export class S3DataSource implements ContiguousDataSource {
   private s3Bucket: string;
   private s3Prefix: string;
 
+  // TODO: Remove this when aws-lite s3 supports Metadata on head-requests
+  private awsClient: AwsLiteClient;
+
   constructor({
     log,
     s3Client,
     s3Bucket,
     s3Prefix = '',
+    awsClient,
   }: {
     log: winston.Logger;
     s3Client: AwsLiteS3;
     s3Bucket: string;
     s3Prefix?: string;
+    awsClient: AwsLiteClient;
   }) {
     this.log = log.child({ class: 'S3DataSource' });
     this.s3Client = s3Client;
     this.s3Bucket = s3Bucket;
     this.s3Prefix = s3Prefix;
+    this.awsClient = awsClient;
   }
 
   async getData({
@@ -77,8 +83,7 @@ export class S3DataSource implements ContiguousDataSource {
         prefix: this.s3Prefix,
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      const head = await awsClient!({
+      const head = await this.awsClient({
         service: 's3',
         path: `${this.s3Bucket}/${this.s3Prefix}/${id}`,
       });
