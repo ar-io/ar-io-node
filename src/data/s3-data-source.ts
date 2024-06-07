@@ -71,6 +71,12 @@ export class S3DataSource implements ContiguousDataSource {
       //   Bucket: this.s3Bucket,
       //   Key: `${this.s3Prefix}/${id}`,
       // });
+
+      log.debug('Fetching S3 metadata', {
+        id,
+        bucket: this.s3Bucket,
+        prefix: this.s3Prefix,
+      });
       const head = await axios.head(
         `${AWS_ENDPOINT}/${this.s3Bucket}/${this.s3Prefix}/${id}`,
         { validateStatus: () => true },
@@ -90,6 +96,22 @@ export class S3DataSource implements ContiguousDataSource {
         Key: `${this.s3Prefix}/${id}`,
         Range: range,
         streamResponsePayload: true,
+      });
+
+      const payloadContentTypeS3MetaDataTag = 'x-amz-meta-payload-content-type';
+      const sourceContentType =
+        head.headers?.[payloadContentTypeS3MetaDataTag] ?? response.ContentType;
+
+      log.debug('S3 response', {
+        id,
+        response: {
+          ContentLength: response.ContentLength,
+          ContentType: response.ContentType,
+        },
+        payload: {
+          range,
+          sourceContentType,
+        },
       });
 
       const requestOriginAndHopsHeaders: { [key: string]: string } = {};
@@ -114,9 +136,6 @@ export class S3DataSource implements ContiguousDataSource {
       if (response.Body === undefined) {
         throw new Error('Body missing from S3 response');
       }
-      const payloadContentTypeS3MetaDataTag = 'x-amz-meta-payload-content-type';
-      const sourceContentType =
-        head.headers?.[payloadContentTypeS3MetaDataTag] ?? response.ContentType;
 
       return {
         stream: response.Body as Readable,
