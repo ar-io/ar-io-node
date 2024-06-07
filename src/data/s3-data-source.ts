@@ -25,8 +25,7 @@ import {
 } from '../types.js';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
-import axios from 'axios';
-import { AWS_ENDPOINT } from '../config.js';
+import { awsClient } from '../system.js';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -66,7 +65,7 @@ export class S3DataSource implements ContiguousDataSource {
     });
 
     try {
-      // TODO: Use S3 client instead of axios when aws-lite supports Metadata on head-requests
+      // TODO: Use S3 client instead of accessing  aws client directly when aws-lite s3 supports Metadata on head-requests
       // const head = this.s3Client.HeadObject({
       //   Bucket: this.s3Bucket,
       //   Key: `${this.s3Prefix}/${id}`,
@@ -77,11 +76,14 @@ export class S3DataSource implements ContiguousDataSource {
         bucket: this.s3Bucket,
         prefix: this.s3Prefix,
       });
-      const head = await axios.head(
-        `${AWS_ENDPOINT}/${this.s3Bucket}/${this.s3Prefix}/${id}`,
-        { validateStatus: () => true },
-      );
-      if (head.status !== 200) {
+
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const head = await awsClient!({
+        service: 's3',
+        path: `${this.s3Bucket}/${this.s3Prefix}/${id}`,
+      });
+
+      if (head.statusCode !== 200) {
         throw new Error('Failed to head data from S3');
       }
 

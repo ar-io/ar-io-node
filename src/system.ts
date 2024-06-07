@@ -80,7 +80,7 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 const arIO = IO.init({ processId: config.IO_PROCESS_ID });
-const awsClient =
+export const awsClient =
   config.AWS_ACCESS_KEY_ID !== undefined &&
   config.AWS_SECRET_ACCESS_KEY !== undefined &&
   config.AWS_REGION !== undefined
