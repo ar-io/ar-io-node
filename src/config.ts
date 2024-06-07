@@ -149,6 +149,11 @@ export const CONTRACT_ID = env.varOrDefault(
   'bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U',
 );
 
+export const IO_PROCESS_ID = env.varOrDefault(
+  'IO_PROCESS_ID',
+  'GaQrvEMKBpkjofgnBi_B3IgIDmY_XYelVLB6GcRGrHc',
+);
+
 //
 // Header caching
 //
