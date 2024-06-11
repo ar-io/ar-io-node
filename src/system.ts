@@ -419,8 +419,12 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
       matchedDataItemCount: bundleEvent.matchedItemCount,
       unbundledAt: currentUnixTimestamp(),
     });
-  } catch (error) {
-    log.error('Error saving unbundle completion', error);
+  } catch (error: any) {
+    log.error('Error saving unbundle completion', {
+      parentId: bundleEvent.parentId,
+      message: error.message,
+      stack: error.stack,
+    });
   }
 });
 

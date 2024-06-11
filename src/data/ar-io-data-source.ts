@@ -99,8 +99,11 @@ export class ArIODataSource implements ContiguousDataSource {
 
       this.peers = peers;
       log.info('Updated peer list from ArIO contract');
-    } catch (error) {
-      log.error('Failed to update peer list', { error });
+    } catch (error: any) {
+      log.error('Failed to update peer list', {
+        message: error.message,
+        stack: error.stack,
+      });
     }
   }
 
@@ -187,9 +190,10 @@ export class ArIODataSource implements ContiguousDataSource {
       });
 
       return this.parseResponse(response, hops, origin);
-    } catch (error) {
+    } catch (error: any) {
       log.error('Failed to fetch contiguous data from first random ArIO peer', {
-        error,
+        message: error.message,
+        stack: error.stack,
       });
 
       try {
@@ -201,10 +205,13 @@ export class ArIODataSource implements ContiguousDataSource {
         });
 
         return this.parseResponse(response, hops, origin);
-      } catch (error) {
+      } catch (error: any) {
         log.error(
           'Failed to fetch contiguous data from second random ArIO peer',
-          { error },
+          {
+            message: error.message,
+            stack: error.stack,
+          },
         );
         throw new Error('Failed to fetch contiguous data from ArIO peers');
       }

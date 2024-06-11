@@ -114,8 +114,12 @@ export class Ans104DataIndexer {
       } else {
         this.log.warn('Data item data is missing data offset or size.');
       }
-    } catch (error) {
-      log.error('Failed to index data item data:', error);
+    } catch (error: any) {
+      log.error('Failed to index data item data:', {
+        message: error.message,
+        stack: error.stack,
+        id: item.id,
+      });
     }
   }
 
