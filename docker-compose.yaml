@@ -98,20 +98,18 @@ services:
     volumes:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
-      - ${WARP_CACHE_PATH:-./data/warp/cache}:/app/cache/warp
       - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
       - PORT=5050
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-info}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-<example>}
-      - CONTRACT_ID=${CONTRACT_ID:-}
+      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}
       - NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP=${NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP:-5}
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-13-pre}
-      - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
 
   resolver:
     image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-fe035b80cc9e6038b4d4bec671ec9b33ac184e18}
