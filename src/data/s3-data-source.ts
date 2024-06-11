@@ -158,7 +158,8 @@ export class S3DataSource implements ContiguousDataSource {
     } catch (error: any) {
       log.error('Failed to fetch contiguous data from S3', {
         id,
-        error,
+        message: error.message,
+        stack: error.stack,
       });
       throw error;
     }
