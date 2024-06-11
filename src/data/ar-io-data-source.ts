@@ -25,7 +25,10 @@ import {
   ContiguousDataSource,
   RequestAttributes,
 } from '../types.js';
-import { headerNames } from '../constants.js';
+import {
+  generateRequestAttributes,
+  parseRequestAttributesHeaders,
+} from '../lib/request-attributes.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
@@ -166,27 +169,22 @@ export class ArIODataSource implements ContiguousDataSource {
 
     let selectedPeer = this.selectPeer();
 
-    const requestOriginAndHopsHeaders: { [key: string]: string } = {};
-    let hops = 1;
-    let origin: string | undefined;
-
-    if (requestAttributes !== undefined) {
-      hops = requestAttributes.hops + 1;
-      requestOriginAndHopsHeaders[headerNames.hops] = hops.toString();
-      if (requestAttributes.origin !== undefined) {
-        origin = requestAttributes.origin;
-        requestOriginAndHopsHeaders[headerNames.origin] = origin;
-      }
-    }
+    const requestAttributesHeaders =
+      generateRequestAttributes(requestAttributes);
 
     try {
       const response = await this.request({
         peerAddress: selectedPeer,
         id,
-        headers: requestOriginAndHopsHeaders,
+        headers: requestAttributesHeaders?.headers || {},
       });
 
-      return this.parseResponse(response, hops, origin);
+      const paresedRequestAttributes = parseRequestAttributesHeaders({
+        headers: response.headers as { [key: string]: string },
+        currentHops: requestAttributesHeaders?.attributes.hops,
+      });
+
+      return this.parseResponse(response, paresedRequestAttributes);
     } catch (error) {
       log.error('Failed to fetch contiguous data from first random ArIO peer', {
         error,
@@ -197,10 +195,15 @@ export class ArIODataSource implements ContiguousDataSource {
         const response = await this.request({
           peerAddress: selectedPeer,
           id,
-          headers: requestOriginAndHopsHeaders,
+          headers: requestAttributesHeaders?.headers || {},
         });
 
-        return this.parseResponse(response, hops, origin);
+        const paresedRequestAttributes = parseRequestAttributesHeaders({
+          headers: response.headers as { [key: string]: string },
+          currentHops: requestAttributesHeaders?.attributes.hops,
+        });
+
+        return this.parseResponse(response, paresedRequestAttributes);
       } catch (error) {
         log.error(
           'Failed to fetch contiguous data from second random ArIO peer',
@@ -213,8 +216,7 @@ export class ArIODataSource implements ContiguousDataSource {
 
   private parseResponse(
     response: AxiosResponse,
-    hops: number,
-    origin?: string,
+    requestAttributes: RequestAttributes,
   ): ContiguousData {
     return {
       stream: response.data,
@@ -222,13 +224,7 @@ export class ArIODataSource implements ContiguousDataSource {
       verified: false,
       sourceContentType: response.headers['content-type'],
       cached: false,
-      requestAttributes: {
-        hops:
-          response.headers[headerNames.hops.toLowerCase()] !== undefined
-            ? parseInt(response.headers[headerNames.hops.toLowerCase()])
-            : hops,
-        origin,
-      },
+      requestAttributes,
     };
   }
 }

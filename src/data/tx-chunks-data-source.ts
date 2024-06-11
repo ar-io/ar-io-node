@@ -17,6 +17,7 @@
  */
 import { Readable } from 'node:stream';
 import winston from 'winston';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
 
 import {
   ChainSource,
@@ -115,13 +116,8 @@ export class TxChunksDataSource implements ContiguousDataSource {
       size,
       verified: true,
       cached: false,
-      requestAttributes: {
-        hops:
-          requestAttributes?.hops !== undefined
-            ? requestAttributes.hops + 1
-            : 1,
-        origin: requestAttributes?.origin,
-      },
+      requestAttributes:
+        generateRequestAttributes(requestAttributes)?.attributes,
     };
   }
 }

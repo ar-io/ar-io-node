@@ -23,6 +23,7 @@ import { isMainThread } from 'node:worker_threads';
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
 import log from './log.js';
+import { release } from './version.js';
 
 dotenv.config();
 
@@ -152,6 +153,11 @@ export const CONTRACT_ID = env.varOrDefault(
 export const IO_PROCESS_ID = env.varOrDefault(
   'IO_PROCESS_ID',
   'GaQrvEMKBpkjofgnBi_B3IgIDmY_XYelVLB6GcRGrHc',
+);
+
+export const AR_IO_NODE_RELEASE = env.varOrDefault(
+  'AR_IO_NODE_RELEASE',
+  release,
 );
 
 //

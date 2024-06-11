@@ -78,6 +78,7 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
       - AWS_S3_PREFIX=${AWS_S3_PREFIX:-}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-}
     depends_on:
       - redis
 

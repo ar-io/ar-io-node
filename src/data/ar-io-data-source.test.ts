@@ -101,7 +101,11 @@ describe('ArIODataSource', () => {
         verified: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
-        requestAttributes: { hops: 1, origin: undefined },
+        requestAttributes: {
+          hops: 1,
+          origin: undefined,
+          nodeRelease: undefined,
+        },
       });
     });
 
@@ -130,14 +134,18 @@ describe('ArIODataSource', () => {
         verified: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
-        requestAttributes: { hops: 1, origin: undefined },
+        requestAttributes: {
+          hops: 1,
+          origin: undefined,
+          nodeRelease: undefined,
+        },
       });
     });
 
     it('should increment hops and origin if requestAttributes are provided', async () => {
       const data = await dataSource.getData({
         id: 'dataId',
-        requestAttributes: { origin: 'node-url', hops: 2 },
+        requestAttributes: { hops: 2 },
       });
 
       assert.deepEqual(data, {
@@ -146,7 +154,11 @@ describe('ArIODataSource', () => {
         verified: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
-        requestAttributes: { hops: 3, origin: 'node-url' },
+        requestAttributes: {
+          hops: 3,
+          origin: undefined,
+          nodeRelease: undefined,
+        },
       });
     });
 

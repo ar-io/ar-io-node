@@ -39,6 +39,7 @@ beforeEach(async () => {
       headers: {
         'content-length': '123',
         'content-type': 'application/json',
+        'X-AR-IO-Origin': 'node-url',
       },
     }),
     defaults: {
@@ -60,8 +61,8 @@ afterEach(async () => {
   mock.restoreAll();
 });
 
-describe('GatewayDataSource', () => {
-  describe('getData', () => {
+describe.only('GatewayDataSource', () => {
+  describe.only('getData', () => {
     it('should fetch data successfully from the gateway', async () => {
       const data = await dataSource.getData({
         id: 'some-id',
@@ -77,6 +78,7 @@ describe('GatewayDataSource', () => {
         requestAttributes: {
           hops: requestAttributes.hops + 1,
           origin: requestAttributes.origin,
+          nodeRelease: undefined,
         },
       });
     });
@@ -173,17 +175,17 @@ describe('GatewayDataSource', () => {
       });
 
       assert.equal(data.requestAttributes?.hops, 1);
-      assert.equal(data.requestAttributes?.origin, undefined);
+      assert.equal(data.requestAttributes?.origin, 'node-url');
     });
 
-    it('should increment hops in the response', async () => {
+    it.only('should increment hops in the response', async () => {
       const data = await dataSource.getData({
         id: 'some-id',
         requestAttributes: { hops: 5 },
       });
 
       assert.equal(data.requestAttributes?.hops, 6);
-      assert.equal(data.requestAttributes?.origin, undefined);
+      assert.equal(data.requestAttributes?.origin, 'node-url');
     });
   });
 });

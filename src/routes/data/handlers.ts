@@ -82,6 +82,9 @@ const setDataHeaders = ({
     if (data.requestAttributes.origin !== undefined) {
       res.header(headerNames.origin, data.requestAttributes.origin);
     }
+    if (data.requestAttributes.nodeRelease !== undefined) {
+      res.header(headerNames.nodeRelease, data.requestAttributes.nodeRelease);
+    }
   }
 
   // Use the content type from the L1 or data item index if available
@@ -92,20 +95,16 @@ const setDataHeaders = ({
   );
 };
 
-const getRequestAttributes = (
-  req: Request,
-  arnsRootHost?: string,
-): RequestAttributes => {
-  let origin: string | undefined;
-  const originHeader = req.headers[headerNames.origin.toLowerCase()] as string;
+const getRequestAttributes = (req: Request): RequestAttributes => {
   const hopsHeader = req.headers[headerNames.hops.toLowerCase()] as string;
-  if (originHeader !== undefined) {
-    origin = originHeader;
-  } else if (arnsRootHost !== undefined) {
-    origin = arnsRootHost;
-  }
   const hops = parseInt(hopsHeader) || 0;
-  return { origin, hops };
+  return {
+    hops,
+    origin: req.headers[headerNames.origin.toLowerCase()] as string | undefined,
+    nodeRelease: req.headers[headerNames.nodeRelease.toLowerCase()] as
+      | string
+      | undefined,
+  };
 };
 
 const handleRangeRequest = (
@@ -226,16 +225,17 @@ export const createRawDataHandler = ({
   dataIndex,
   dataSource,
   blockListValidator,
-  arnsRootHost,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
   blockListValidator: BlockListValidator;
-  arnsRootHost?: string;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
-    const requestAttributes = getRequestAttributes(req, arnsRootHost);
+    const requestAttributes = getRequestAttributes(req);
+    console.log('------------------------------- createDataHandler');
+    console.log({ requestAttributes });
+    console.log('------------------------------- createDataHandler');
     const id = req.params[0];
 
     // Return 404 if the data is blocked by ID
@@ -289,6 +289,10 @@ export const createRawDataHandler = ({
         dataAttributes,
         requestAttributes,
       });
+
+      console.log('------------------------------- createDataHandler');
+      console.log(data.requestAttributes);
+      console.log('------------------------------- createDataHandler');
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
@@ -445,17 +449,15 @@ export const createDataHandler = ({
   dataSource,
   blockListValidator,
   manifestPathResolver,
-  arnsRootHost,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
   blockListValidator: BlockListValidator;
   manifestPathResolver: ManifestPathResolver;
-  arnsRootHost?: string;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
-    const requestAttributes = getRequestAttributes(req, arnsRootHost);
+    const requestAttributes = getRequestAttributes(req);
     const arnsResolvedId = res.getHeader(headerNames.arnsResolvedId);
     let id: string | undefined;
     let manifestPath: string | undefined;
