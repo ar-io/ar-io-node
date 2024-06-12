@@ -18,6 +18,7 @@
 import crypto from 'node:crypto';
 import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
 
 import { currentUnixTimestamp } from '../lib/time.js';
 import {
@@ -140,6 +141,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       attributes?.size,
     );
 
+    const processedRequestAttributes =
+      generateRequestAttributes(requestAttributes);
+
     if (cacheData !== undefined) {
       return {
         hash: attributes?.hash,
@@ -148,13 +152,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         sourceContentType: attributes?.contentType,
         verified: attributes?.verified ?? false,
         cached: true,
-        requestAttributes: {
-          hops:
-            requestAttributes?.hops !== undefined
-              ? requestAttributes.hops + 1
-              : 1,
-          origin: requestAttributes?.origin,
-        },
+        requestAttributes: processedRequestAttributes?.attributes,
       };
     }
 
