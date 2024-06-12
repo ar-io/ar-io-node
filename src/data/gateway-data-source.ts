@@ -78,7 +78,8 @@ export class GatewayDataSource implements ContiguousDataSource {
       params: {
         'ar-io-hops': requestAttributesHeaders?.attributes.hops,
         'ar-io-origin': requestAttributesHeaders?.attributes.origin,
-        'ar-io-version': requestAttributesHeaders?.attributes.nodeRelease,
+        'ar-io-origin-release':
+          requestAttributesHeaders?.attributes.originNodeRelease,
       },
     });
 

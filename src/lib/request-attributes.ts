@@ -21,7 +21,9 @@ import { RequestAttributes } from '../types.js';
 
 export const generateRequestAttributes = (
   requestAttributes: RequestAttributes | undefined,
-) => {
+):
+  | { headers: Record<string, string>; attributes: RequestAttributes }
+  | undefined => {
   if (requestAttributes === undefined) {
     return undefined;
   }
@@ -43,9 +45,10 @@ export const generateRequestAttributes = (
     attributes.origin = requestAttributes.origin;
   }
 
-  if (requestAttributes.nodeRelease !== undefined) {
-    headers[headerNames.nodeRelease] = requestAttributes.nodeRelease;
-    attributes.nodeRelease = requestAttributes.nodeRelease;
+  if (requestAttributes.originNodeRelease !== undefined) {
+    headers[headerNames.originNodeRelease] =
+      requestAttributes.originNodeRelease;
+    attributes.originNodeRelease = requestAttributes.originNodeRelease;
   }
 
   return { headers, attributes };
@@ -78,6 +81,7 @@ export const parseRequestAttributesHeaders = ({
   return {
     hops,
     origin: headersLowercaseKeys[headerNames.origin.toLowerCase()],
-    nodeRelease: headersLowercaseKeys[headerNames.nodeRelease.toLowerCase()],
+    originNodeRelease:
+      headersLowercaseKeys[headerNames.originNodeRelease.toLowerCase()],
   };
 };

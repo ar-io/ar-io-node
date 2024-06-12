@@ -35,18 +35,18 @@ describe('Request attributes functions', () => {
       const input: RequestAttributes = {
         hops: 2,
         origin: 'test-origin',
-        nodeRelease: 'v1.0.0',
+        originNodeRelease: 'v1.0.0',
       };
       const expected = {
         headers: {
           [headerNames.hops]: '3',
           [headerNames.origin]: 'test-origin',
-          [headerNames.nodeRelease]: 'v1.0.0',
+          [headerNames.originNodeRelease]: 'v1.0.0',
         },
         attributes: {
           hops: 3,
           origin: 'test-origin',
-          nodeRelease: 'v1.0.0',
+          originNodeRelease: 'v1.0.0',
         },
       };
 
@@ -57,18 +57,18 @@ describe('Request attributes functions', () => {
     it('should handles missing hops correctly', () => {
       const input = {
         origin: 'test-origin',
-        nodeRelease: 'v1.0.0',
+        originNodeRelease: 'v1.0.0',
       } as RequestAttributes;
       const expected = {
         headers: {
           [headerNames.hops]: '1',
           [headerNames.origin]: 'test-origin',
-          [headerNames.nodeRelease]: 'v1.0.0',
+          [headerNames.originNodeRelease]: 'v1.0.0',
         },
         attributes: {
           hops: 1,
           origin: 'test-origin',
-          nodeRelease: 'v1.0.0',
+          originNodeRelease: 'v1.0.0',
         },
       };
 
@@ -99,12 +99,12 @@ describe('Request attributes functions', () => {
       const headers = {
         [headerNames.hops]: '3',
         [headerNames.origin]: 'test-origin',
-        [headerNames.nodeRelease]: 'v1.0.0',
+        [headerNames.originNodeRelease]: 'v1.0.0',
       };
       const expected: RequestAttributes = {
         hops: 3,
         origin: headers[headerNames.origin],
-        nodeRelease: headers[headerNames.nodeRelease],
+        originNodeRelease: headers[headerNames.originNodeRelease],
       };
 
       const result = parseRequestAttributesHeaders({ headers });
@@ -114,12 +114,12 @@ describe('Request attributes functions', () => {
     it('should handles missing hops and currentHops', () => {
       const headers = {
         [headerNames.origin]: 'test-origin',
-        [headerNames.nodeRelease]: 'v1.0.0',
+        [headerNames.originNodeRelease]: 'v1.0.0',
       };
       const expected: RequestAttributes = {
         hops: 1,
         origin: headers[headerNames.origin],
-        nodeRelease: headers[headerNames.nodeRelease],
+        originNodeRelease: headers[headerNames.originNodeRelease],
       };
 
       const result = parseRequestAttributesHeaders({ headers });
@@ -129,13 +129,13 @@ describe('Request attributes functions', () => {
     it('should use currentHops when hops header is missing', () => {
       const headers = {
         [headerNames.origin]: 'test-origin',
-        [headerNames.nodeRelease]: 'v1.0.0',
+        [headerNames.originNodeRelease]: 'v1.0.0',
       };
       const currentHops = 2;
       const expected: RequestAttributes = {
         hops: currentHops,
         origin: headers[headerNames.origin],
-        nodeRelease: headers[headerNames.nodeRelease],
+        originNodeRelease: headers[headerNames.originNodeRelease],
       };
 
       const result = parseRequestAttributesHeaders({ headers, currentHops });

@@ -61,8 +61,8 @@ afterEach(async () => {
   mock.restoreAll();
 });
 
-describe.only('GatewayDataSource', () => {
-  describe.only('getData', () => {
+describe('GatewayDataSource', () => {
+  describe('getData', () => {
     it('should fetch data successfully from the gateway', async () => {
       const data = await dataSource.getData({
         id: 'some-id',
@@ -78,7 +78,7 @@ describe.only('GatewayDataSource', () => {
         requestAttributes: {
           hops: requestAttributes.hops + 1,
           origin: requestAttributes.origin,
-          nodeRelease: undefined,
+          originNodeRelease: undefined,
         },
       });
     });
@@ -178,7 +178,7 @@ describe.only('GatewayDataSource', () => {
       assert.equal(data.requestAttributes?.origin, 'node-url');
     });
 
-    it.only('should increment hops in the response', async () => {
+    it('should increment hops in the response', async () => {
       const data = await dataSource.getData({
         id: 'some-id',
         requestAttributes: { hops: 5 },

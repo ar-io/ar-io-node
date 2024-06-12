@@ -82,8 +82,11 @@ const setDataHeaders = ({
     if (data.requestAttributes.origin !== undefined) {
       res.header(headerNames.origin, data.requestAttributes.origin);
     }
-    if (data.requestAttributes.nodeRelease !== undefined) {
-      res.header(headerNames.nodeRelease, data.requestAttributes.nodeRelease);
+    if (data.requestAttributes.originNodeRelease !== undefined) {
+      res.header(
+        headerNames.originNodeRelease,
+        data.requestAttributes.originNodeRelease,
+      );
     }
   }
 
@@ -101,9 +104,9 @@ const getRequestAttributes = (req: Request): RequestAttributes => {
   return {
     hops,
     origin: req.headers[headerNames.origin.toLowerCase()] as string | undefined,
-    nodeRelease: req.headers[headerNames.nodeRelease.toLowerCase()] as
-      | string
-      | undefined,
+    originNodeRelease: req.headers[
+      headerNames.originNodeRelease.toLowerCase()
+    ] as string | undefined,
   };
 };
 
