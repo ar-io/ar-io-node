@@ -182,12 +182,12 @@ export class ArIODataSource implements ContiguousDataSource {
         headers: requestAttributesHeaders?.headers || {},
       });
 
-      const paresedRequestAttributes = parseRequestAttributesHeaders({
+      const parsedRequestAttributes = parseRequestAttributesHeaders({
         headers: response.headers as { [key: string]: string },
         currentHops: requestAttributesHeaders?.attributes.hops,
       });
 
-      return this.parseResponse(response, paresedRequestAttributes);
+      return this.parseResponse(response, parsedRequestAttributes);
     } catch (error: any) {
       log.error('Failed to fetch contiguous data from first random ArIO peer', {
         message: error.message,
@@ -202,12 +202,12 @@ export class ArIODataSource implements ContiguousDataSource {
           headers: requestAttributesHeaders?.headers || {},
         });
 
-        const paresedRequestAttributes = parseRequestAttributesHeaders({
+        const parsedRequestAttributes = parseRequestAttributesHeaders({
           headers: response.headers as { [key: string]: string },
           currentHops: requestAttributesHeaders?.attributes.hops,
         });
 
-        return this.parseResponse(response, paresedRequestAttributes);
+        return this.parseResponse(response, parsedRequestAttributes);
       } catch (error: any) {
         log.error(
           'Failed to fetch contiguous data from second random ArIO peer',
