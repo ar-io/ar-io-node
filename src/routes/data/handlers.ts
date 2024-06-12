@@ -233,9 +233,6 @@ export const createRawDataHandler = ({
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req);
-    console.log('------------------------------- createDataHandler');
-    console.log({ requestAttributes });
-    console.log('------------------------------- createDataHandler');
     const id = req.params[0];
 
     // Return 404 if the data is blocked by ID
@@ -290,9 +287,6 @@ export const createRawDataHandler = ({
         requestAttributes,
       });
 
-      console.log('------------------------------- createDataHandler');
-      console.log(data.requestAttributes);
-      console.log('------------------------------- createDataHandler');
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
