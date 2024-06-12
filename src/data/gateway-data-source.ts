@@ -27,6 +27,7 @@ import {
   ContiguousDataSource,
   RequestAttributes,
 } from '../types.js';
+import * as metrics from '../metrics.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 
@@ -66,39 +67,60 @@ export class GatewayDataSource implements ContiguousDataSource {
 
     const requestAttributesHeaders =
       generateRequestAttributes(requestAttributes);
+    try {
+      const response = await this.trustedGatewayAxios.request({
+        method: 'GET',
+        headers: {
+          'Accept-Encoding': 'identity',
+          ...requestAttributesHeaders?.headers,
+        },
+        url: path,
+        responseType: 'stream',
+        params: {
+          'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+          'ar-io-origin': requestAttributesHeaders?.attributes.origin,
+          'ar-io-origin-release':
+            requestAttributesHeaders?.attributes.originNodeRelease,
+        },
+      });
 
-    const response = await this.trustedGatewayAxios.request({
-      method: 'GET',
-      headers: {
-        'Accept-Encoding': 'identity',
-        ...requestAttributesHeaders?.headers,
-      },
-      url: path,
-      responseType: 'stream',
-      params: {
-        'ar-io-hops': requestAttributesHeaders?.attributes.hops,
-        'ar-io-origin': requestAttributesHeaders?.attributes.origin,
-        'ar-io-origin-release':
-          requestAttributesHeaders?.attributes.originNodeRelease,
-      },
-    });
+      if (response.status !== 200) {
+        throw new Error(
+          `Unexpected status code from gateway: ${response.status}`,
+        );
+      }
 
-    if (response.status !== 200) {
-      throw new Error(
-        `Unexpected status code from gateway: ${response.status}`,
-      );
+      const stream = response.data;
+
+      stream.on('error', () => {
+        metrics.getDataStreamErrorsTotal.inc({
+          class: 'GatewayDataSource',
+        });
+      });
+
+      stream.on('end', () => {
+        metrics.getDataStreamSuccesssTotal.inc({
+          class: 'GatewayDataSource',
+        });
+      });
+
+      return {
+        stream,
+        size: parseInt(response.headers['content-length']),
+        verified: false,
+        sourceContentType: response.headers['content-type'],
+        cached: false,
+        requestAttributes: parseRequestAttributesHeaders({
+          headers: response.headers as { [key: string]: string },
+          currentHops: requestAttributesHeaders?.attributes.hops,
+        }),
+      };
+    } catch (error) {
+      metrics.getDataErrorsTotal.inc({
+        class: 'GatewayDataSource',
+      });
+
+      throw error;
     }
-
-    return {
-      stream: response.data,
-      size: parseInt(response.headers['content-length']),
-      verified: false,
-      sourceContentType: response.headers['content-type'],
-      cached: false,
-      requestAttributes: parseRequestAttributesHeaders({
-        headers: response.headers as { [key: string]: string },
-        currentHops: requestAttributesHeaders?.attributes.hops,
-      }),
-    };
   }
 }

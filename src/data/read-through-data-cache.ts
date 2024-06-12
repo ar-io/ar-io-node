@@ -28,6 +28,7 @@ import {
   ContiguousDataStore,
   RequestAttributes,
 } from '../types.js';
+import * as metrics from '../metrics.js';
 
 export class ReadThroughDataCache implements ContiguousDataSource {
   private log: winston.Logger;
@@ -131,89 +132,111 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.log.info('Checking for cached data...', {
       id,
     });
-    const attributes =
-      dataAttributes ?? (await this.contiguousDataIndex.getDataAttributes(id));
 
-    const cacheData = await this.getCacheData(
-      id,
-      attributes?.hash,
-      attributes?.size,
-    );
+    try {
+      const attributes =
+        dataAttributes ??
+        (await this.contiguousDataIndex.getDataAttributes(id));
 
-    if (cacheData !== undefined) {
-      return {
-        hash: attributes?.hash,
-        stream: cacheData.stream,
-        size: cacheData.size,
-        sourceContentType: attributes?.contentType,
-        verified: attributes?.verified ?? false,
-        cached: true,
-        requestAttributes: {
-          hops:
-            requestAttributes?.hops !== undefined
-              ? requestAttributes.hops + 1
-              : 1,
-          origin: requestAttributes?.origin,
-        },
-      };
-    }
+      const cacheData = await this.getCacheData(
+        id,
+        attributes?.hash,
+        attributes?.size,
+      );
 
-    const data = await this.dataSource.getData({
-      id,
-      dataAttributes,
-      requestAttributes,
-    });
-    const hasher = crypto.createHash('sha256');
-    const cacheStream = await this.dataStore.createWriteStream();
-    pipeline(data.stream, cacheStream, async (error: any) => {
-      if (error !== undefined) {
-        this.log.error('Error streaming or caching data:', {
-          id,
-          message: error.message,
-          stack: error.stack,
-        });
-        // TODO unlink temp file?
-      } else {
-        if (cacheStream !== undefined) {
-          const hash = hasher.digest('base64url');
+      if (cacheData !== undefined) {
+        return {
+          hash: attributes?.hash,
+          stream: cacheData.stream,
+          size: cacheData.size,
+          sourceContentType: attributes?.contentType,
+          verified: attributes?.verified ?? false,
+          cached: true,
+          requestAttributes: {
+            hops:
+              requestAttributes?.hops !== undefined
+                ? requestAttributes.hops + 1
+                : 1,
+            origin: requestAttributes?.origin,
+          },
+        };
+      }
 
-          this.log.info('Successfully cached data', { id, hash });
-          try {
-            await this.contiguousDataIndex.saveDataContentAttributes({
-              id,
-              dataRoot: attributes?.dataRoot,
-              hash,
-              dataSize: data.size,
-              contentType: data.sourceContentType,
-              cachedAt: currentUnixTimestamp(),
-            });
-          } catch (error: any) {
-            this.log.error('Error saving data content attributes:', {
-              id,
-              message: error.message,
-              stack: error.stack,
-            });
-          }
+      const data = await this.dataSource.getData({
+        id,
+        dataAttributes,
+        requestAttributes,
+      });
+      const hasher = crypto.createHash('sha256');
+      const cacheStream = await this.dataStore.createWriteStream();
+      pipeline(data.stream, cacheStream, async (error: any) => {
+        if (error !== undefined) {
+          this.log.error('Error streaming or caching data:', {
+            id,
+            message: error.message,
+            stack: error.stack,
+          });
+          // TODO unlink temp file?
+        } else {
+          if (cacheStream !== undefined) {
+            const hash = hasher.digest('base64url');
 
-          try {
-            await this.dataStore.finalize(cacheStream, hash);
-          } catch (error: any) {
-            this.log.error('Error finalizing data in cache:', {
-              id,
-              message: error.message,
-              stack: error.stack,
-            });
+            this.log.info('Successfully cached data', { id, hash });
+            try {
+              await this.contiguousDataIndex.saveDataContentAttributes({
+                id,
+                dataRoot: attributes?.dataRoot,
+                hash,
+                dataSize: data.size,
+                contentType: data.sourceContentType,
+                cachedAt: currentUnixTimestamp(),
+              });
+            } catch (error: any) {
+              this.log.error('Error saving data content attributes:', {
+                id,
+                message: error.message,
+                stack: error.stack,
+              });
+            }
+
+            try {
+              await this.dataStore.finalize(cacheStream, hash);
+            } catch (error: any) {
+              this.log.error('Error finalizing data in cache:', {
+                id,
+                message: error.message,
+                stack: error.stack,
+              });
+            }
           }
         }
-      }
-    });
+      });
 
-    data.stream.on('data', (chunk) => {
-      hasher.update(chunk);
-    });
+      data.stream.on('data', (chunk) => {
+        hasher.update(chunk);
+      });
 
-    data.stream.pause();
+      data.stream.on('error', () => {
+        metrics.getDataStreamSuccesssTotal.inc({
+          class: 'ReadThroughDataCache',
+        });
+      });
 
-    return data;
+      data.stream.on('end', () => {
+        metrics.getDataStreamSuccesssTotal.inc({
+          class: 'ReadThroughDataCache',
+        });
+      });
+
+      data.stream.pause();
+
+      return data;
+    } catch (error) {
+      metrics.getDataErrorsTotal.inc({
+        class: 'ReadThroughDataCache',
+      });
+
+      throw error;
+    }
   }
 }
