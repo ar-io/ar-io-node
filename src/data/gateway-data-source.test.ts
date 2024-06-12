@@ -39,6 +39,7 @@ beforeEach(async () => {
       headers: {
         'content-length': '123',
         'content-type': 'application/json',
+        'X-AR-IO-Origin': 'node-url',
       },
     }),
     defaults: {
@@ -77,6 +78,7 @@ describe('GatewayDataSource', () => {
         requestAttributes: {
           hops: requestAttributes.hops + 1,
           origin: requestAttributes.origin,
+          originNodeRelease: undefined,
         },
       });
     });
@@ -173,7 +175,7 @@ describe('GatewayDataSource', () => {
       });
 
       assert.equal(data.requestAttributes?.hops, 1);
-      assert.equal(data.requestAttributes?.origin, undefined);
+      assert.equal(data.requestAttributes?.origin, 'node-url');
     });
 
     it('should increment hops in the response', async () => {
@@ -183,7 +185,7 @@ describe('GatewayDataSource', () => {
       });
 
       assert.equal(data.requestAttributes?.hops, 6);
-      assert.equal(data.requestAttributes?.origin, undefined);
+      assert.equal(data.requestAttributes?.origin, 'node-url');
     });
   });
 });

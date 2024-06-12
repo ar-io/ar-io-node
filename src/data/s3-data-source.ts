@@ -16,7 +16,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import winston from 'winston';
-import { headerNames } from '../constants.js';
 
 import {
   ContiguousData,
@@ -26,6 +25,7 @@ import {
 import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
 import { AwsLiteClient } from '@aws-lite/client';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -121,20 +121,8 @@ export class S3DataSource implements ContiguousDataSource {
         },
       });
 
-      const requestOriginAndHopsHeaders: { [key: string]: string } = {};
-      let hops;
-      let origin;
-      if (requestAttributes !== undefined) {
-        hops = requestAttributes.hops + 1;
-        requestOriginAndHopsHeaders[headerNames.hops] = hops.toString();
-
-        if (requestAttributes.origin !== undefined) {
-          origin = requestAttributes.origin;
-          requestOriginAndHopsHeaders[headerNames.origin] = origin;
-        }
-      } else {
-        hops = 1;
-      }
+      const requestAttributesHeaders =
+        generateRequestAttributes(requestAttributes);
 
       if (response.ContentLength === undefined) {
         throw new Error('Content-Length header missing from S3 response');
@@ -150,10 +138,7 @@ export class S3DataSource implements ContiguousDataSource {
         verified: false,
         sourceContentType,
         cached: false,
-        requestAttributes: {
-          hops,
-          origin,
-        },
+        requestAttributes: requestAttributesHeaders?.attributes,
       };
     } catch (error: any) {
       log.error('Failed to fetch contiguous data from S3', {

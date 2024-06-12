@@ -324,6 +324,7 @@ interface GqlBlocksResult {
 interface RequestAttributes {
   hops: number;
   origin?: string;
+  originNodeRelease?: string;
 }
 
 export interface GqlQueryable {

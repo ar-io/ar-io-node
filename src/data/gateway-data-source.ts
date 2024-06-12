@@ -17,7 +17,10 @@
  */
 import { default as axios } from 'axios';
 import winston from 'winston';
-import { headerNames } from '../constants.js';
+import {
+  generateRequestAttributes,
+  parseRequestAttributesHeaders,
+} from '../lib/request-attributes.js';
 
 import {
   ContiguousData,
@@ -61,29 +64,23 @@ export class GatewayDataSource implements ContiguousDataSource {
       path,
     });
 
-    const requestOriginAndHopsHeaders: { [key: string]: string } = {};
-    let hops;
-    let origin;
-    if (requestAttributes !== undefined) {
-      hops = requestAttributes.hops + 1;
-      requestOriginAndHopsHeaders[headerNames.hops] = hops.toString();
-
-      if (requestAttributes.origin !== undefined) {
-        origin = requestAttributes.origin;
-        requestOriginAndHopsHeaders[headerNames.origin] = origin;
-      }
-    } else {
-      hops = 1;
-    }
+    const requestAttributesHeaders =
+      generateRequestAttributes(requestAttributes);
 
     const response = await this.trustedGatewayAxios.request({
       method: 'GET',
       headers: {
         'Accept-Encoding': 'identity',
-        ...requestOriginAndHopsHeaders,
+        ...requestAttributesHeaders?.headers,
       },
       url: path,
       responseType: 'stream',
+      params: {
+        'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+        'ar-io-origin': requestAttributesHeaders?.attributes.origin,
+        'ar-io-origin-release':
+          requestAttributesHeaders?.attributes.originNodeRelease,
+      },
     });
 
     if (response.status !== 200) {
@@ -98,13 +95,10 @@ export class GatewayDataSource implements ContiguousDataSource {
       verified: false,
       sourceContentType: response.headers['content-type'],
       cached: false,
-      requestAttributes: {
-        hops:
-          response.headers[headerNames.hops.toLowerCase()] !== undefined
-            ? parseInt(response.headers[headerNames.hops.toLowerCase()])
-            : hops,
-        origin,
-      },
+      requestAttributes: parseRequestAttributesHeaders({
+        headers: response.headers as { [key: string]: string },
+        currentHops: requestAttributesHeaders?.attributes.hops,
+      }),
     };
   }
 }
