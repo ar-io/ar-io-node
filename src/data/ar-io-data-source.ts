@@ -29,6 +29,7 @@ import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
 } from '../lib/request-attributes.js';
+import * as metrics from '../metrics.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
@@ -60,7 +61,7 @@ export class ArIODataSource implements ContiguousDataSource {
     requestTimeoutMs?: number;
     updatePeersRefreshIntervalMs?: number;
   }) {
-    this.log = log.child({ class: 'ArIODataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.nodeWallet = nodeWallet;
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
@@ -189,6 +190,9 @@ export class ArIODataSource implements ContiguousDataSource {
 
       return this.parseResponse(response, parsedRequestAttributes);
     } catch (error: any) {
+      metrics.getDataErrorsTotal.inc({
+        class: 'ArIODataSource',
+      });
       log.error('Failed to fetch contiguous data from first random ArIO peer', {
         message: error.message,
         stack: error.stack,
@@ -209,6 +213,9 @@ export class ArIODataSource implements ContiguousDataSource {
 
         return this.parseResponse(response, parsedRequestAttributes);
       } catch (error: any) {
+        metrics.getDataErrorsTotal.inc({
+          class: this.constructor.name,
+        });
         log.error(
           'Failed to fetch contiguous data from second random ArIO peer',
           {
@@ -225,8 +232,22 @@ export class ArIODataSource implements ContiguousDataSource {
     response: AxiosResponse,
     requestAttributes: RequestAttributes,
   ): ContiguousData {
+    const stream = response.data;
+
+    stream.on('error', () => {
+      metrics.getDataStreamErrorsTotal.inc({
+        class: this.constructor.name,
+      });
+    });
+
+    stream.on('end', () => {
+      metrics.getDataStreamSuccessesTotal.inc({
+        class: this.constructor.name,
+      });
+    });
+
     return {
-      stream: response.data,
+      stream,
       size: parseInt(response.headers['content-length']),
       verified: false,
       sourceContentType: response.headers['content-type'],

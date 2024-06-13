@@ -21,6 +21,8 @@ import axios from 'axios';
 import * as winston from 'winston';
 import { GatewayDataSource } from './gateway-data-source.js';
 import { RequestAttributes } from '../types.js';
+import * as metrics from '../metrics.js';
+import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 
 let log: winston.Logger;
 let dataSource: GatewayDataSource;
@@ -35,7 +37,7 @@ beforeEach(async () => {
   mockedAxiosInstance = {
     request: async () => ({
       status: 200,
-      data: 'mocked stream',
+      data: axiosStreamData,
       headers: {
         'content-length': '123',
         'content-type': 'application/json',
@@ -48,6 +50,10 @@ beforeEach(async () => {
   };
 
   mock.method(axios, 'create', () => mockedAxiosInstance);
+
+  mock.method(metrics.getDataErrorsTotal, 'inc');
+  mock.method(metrics.getDataStreamErrorsTotal, 'inc');
+  mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
 
   dataSource = new GatewayDataSource({
     log,
@@ -70,7 +76,7 @@ describe('GatewayDataSource', () => {
       });
 
       assert.deepEqual(data, {
-        stream: 'mocked stream',
+        stream: axiosStreamData,
         size: 123,
         sourceContentType: 'application/json',
         verified: false,
@@ -81,6 +87,23 @@ describe('GatewayDataSource', () => {
           originNodeRelease: undefined,
         },
       });
+
+      let receivedData = '';
+
+      for await (const chunk of data.stream) {
+        receivedData += chunk;
+      }
+
+      assert.equal(receivedData, 'mocked stream');
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+          .arguments[0].class,
+        'GatewayDataSource',
+      );
     });
 
     it('should throw an error for unexpected status code', async () => {
@@ -90,6 +113,15 @@ describe('GatewayDataSource', () => {
         await dataSource.getData({ id: 'bad-id', requestAttributes });
         assert.fail('Expected an error to be thrown');
       } catch (error: any) {
+        assert.equal(
+          (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
+            .class,
+          'GatewayDataSource',
+        );
         assert.equal(error.message, 'Unexpected status code from gateway: 404');
       }
     });
@@ -103,7 +135,47 @@ describe('GatewayDataSource', () => {
         await dataSource.getData({ id: 'bad-id', requestAttributes });
         assert.fail('Expected an error to be thrown');
       } catch (error: any) {
+        assert.equal(
+          (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
+            .class,
+          'GatewayDataSource',
+        );
         assert.equal(error.message, 'Network Error');
+      }
+    });
+
+    it('should increment getDataStreamErrorsTotal', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 200,
+        data: new TestDestroyedReadable(),
+        headers: {
+          'content-length': '123',
+          'content-type': 'application/json',
+        },
+      });
+
+      try {
+        const data = await dataSource.getData({ id: 'id', requestAttributes });
+        let receivedData = '';
+
+        for await (const chunk of data.stream) {
+          receivedData += chunk;
+        }
+      } catch (error: any) {
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
+            .arguments[0].class,
+          'GatewayDataSource',
+        );
+        assert.equal(error.message, 'Stream destroyed intentionally');
       }
     });
 
@@ -114,6 +186,7 @@ describe('GatewayDataSource', () => {
         return {
           status: 200,
           headers: { 'content-length': '123' },
+          data: axiosStreamData,
         };
       };
 
@@ -139,6 +212,7 @@ describe('GatewayDataSource', () => {
         return {
           status: 200,
           headers: { 'content-length': '123' },
+          data: axiosStreamData,
         };
       };
 
@@ -158,6 +232,7 @@ describe('GatewayDataSource', () => {
         return {
           status: 200,
           headers: { 'content-length': '123' },
+          data: axiosStreamData,
         };
       };
 

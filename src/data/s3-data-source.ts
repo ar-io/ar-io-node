@@ -26,6 +26,7 @@ import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
 import { AwsLiteClient } from '@aws-lite/client';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import * as metrics from '../metrics.js';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -49,7 +50,7 @@ export class S3DataSource implements ContiguousDataSource {
     s3Prefix?: string;
     awsClient: AwsLiteClient;
   }) {
-    this.log = log.child({ class: 'S3DataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.s3Client = s3Client;
     this.s3Bucket = s3Bucket;
     this.s3Prefix = s3Prefix;
@@ -132,8 +133,22 @@ export class S3DataSource implements ContiguousDataSource {
         throw new Error('Body missing from S3 response');
       }
 
+      const stream = response.Body as Readable;
+
+      stream.on('error', () => {
+        metrics.getDataStreamErrorsTotal.inc({
+          class: this.constructor.name,
+        });
+      });
+
+      stream.on('end', () => {
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
+        });
+      });
+
       return {
-        stream: response.Body as Readable,
+        stream,
         size: response.ContentLength,
         verified: false,
         sourceContentType,
@@ -141,6 +156,9 @@ export class S3DataSource implements ContiguousDataSource {
         requestAttributes: requestAttributesHeaders?.attributes,
       };
     } catch (error: any) {
+      metrics.getDataErrorsTotal.inc({
+        class: this.constructor.name,
+      });
       log.error('Failed to fetch contiguous data from S3', {
         id,
         message: error.message,
