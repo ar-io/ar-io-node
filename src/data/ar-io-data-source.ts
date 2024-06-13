@@ -61,7 +61,7 @@ export class ArIODataSource implements ContiguousDataSource {
     requestTimeoutMs?: number;
     updatePeersRefreshIntervalMs?: number;
   }) {
-    this.log = log.child({ class: 'ArIODataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.nodeWallet = nodeWallet;
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
@@ -214,7 +214,7 @@ export class ArIODataSource implements ContiguousDataSource {
         return this.parseResponse(response, parsedRequestAttributes);
       } catch (error: any) {
         metrics.getDataErrorsTotal.inc({
-          class: 'ArIODataSource',
+          class: this.constructor.name,
         });
         log.error(
           'Failed to fetch contiguous data from second random ArIO peer',
@@ -236,13 +236,13 @@ export class ArIODataSource implements ContiguousDataSource {
 
     stream.on('error', () => {
       metrics.getDataStreamErrorsTotal.inc({
-        class: 'ArIODataSource',
+        class: this.constructor.name,
       });
     });
 
     stream.on('end', () => {
-      metrics.getDataStreamSuccesssTotal.inc({
-        class: 'ArIODataSource',
+      metrics.getDataStreamSuccessesTotal.inc({
+        class: this.constructor.name,
       });
     });
 

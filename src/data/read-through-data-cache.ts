@@ -48,7 +48,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
   }) {
-    this.log = log.child({ class: 'ReadThroughDataCache' });
+    this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
@@ -148,6 +148,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         generateRequestAttributes(requestAttributes);
 
       if (cacheData !== undefined) {
+        cacheData.stream.on('error', () => {
+          metrics.getDataStreamErrorsTotal.inc({
+            class: this.constructor.name,
+          });
+        });
+
+        cacheData.stream.on('end', () => {
+          metrics.getDataStreamSuccessesTotal.inc({
+            class: this.constructor.name,
+          });
+        });
+
         return {
           hash: attributes?.hash,
           stream: cacheData.stream,
@@ -214,14 +226,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       });
 
       data.stream.on('error', () => {
-        metrics.getDataStreamSuccesssTotal.inc({
-          class: 'ReadThroughDataCache',
+        metrics.getDataStreamErrorsTotal.inc({
+          class: this.constructor.name,
         });
       });
 
       data.stream.on('end', () => {
-        metrics.getDataStreamSuccesssTotal.inc({
-          class: 'ReadThroughDataCache',
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
         });
       });
 
@@ -230,7 +242,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       return data;
     } catch (error) {
       metrics.getDataErrorsTotal.inc({
-        class: 'ReadThroughDataCache',
+        class: this.constructor.name,
       });
 
       throw error;

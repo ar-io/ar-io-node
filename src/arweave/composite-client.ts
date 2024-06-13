@@ -152,7 +152,7 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
   }) {
-    this.log = log.child({ class: 'ArweaveCompositeClient' });
+    this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.failureSimulator = failureSimulator;
@@ -658,13 +658,13 @@ export class ArweaveCompositeClient
 
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
-          class: 'ArweaveCompositeClient',
+          class: this.constructor.name,
         });
       });
 
       stream.on('end', () => {
-        metrics.getDataStreamSuccesssTotal.inc({
-          class: 'ArweaveCompositeClient',
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
         });
       });
 
@@ -676,7 +676,7 @@ export class ArweaveCompositeClient
       };
     } catch (error) {
       metrics.getDataErrorsTotal.inc({
-        class: 'ArweaveCompositeClient',
+        class: this.constructor.name,
       });
       throw error;
     }

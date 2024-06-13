@@ -50,7 +50,7 @@ export class S3DataSource implements ContiguousDataSource {
     s3Prefix?: string;
     awsClient: AwsLiteClient;
   }) {
-    this.log = log.child({ class: 'S3DataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.s3Client = s3Client;
     this.s3Bucket = s3Bucket;
     this.s3Prefix = s3Prefix;
@@ -137,13 +137,13 @@ export class S3DataSource implements ContiguousDataSource {
 
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
-          class: 'S3DataSource',
+          class: this.constructor.name,
         });
       });
 
       stream.on('end', () => {
-        metrics.getDataStreamSuccesssTotal.inc({
-          class: 'S3DataSource',
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
         });
       });
 
@@ -157,7 +157,7 @@ export class S3DataSource implements ContiguousDataSource {
       };
     } catch (error: any) {
       metrics.getDataErrorsTotal.inc({
-        class: 'S3DataSource',
+        class: this.constructor.name,
       });
       log.error('Failed to fetch contiguous data from S3', {
         id,

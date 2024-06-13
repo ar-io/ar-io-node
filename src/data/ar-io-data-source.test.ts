@@ -60,7 +60,7 @@ beforeEach(async () => {
 
   mock.method(metrics.getDataErrorsTotal, 'inc');
   mock.method(metrics.getDataStreamErrorsTotal, 'inc');
-  mock.method(metrics.getDataStreamSuccesssTotal, 'inc');
+  mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
 
   dataSource = new ArIODataSource({
     log,
@@ -122,9 +122,14 @@ describe('ArIODataSource', () => {
       }
 
       assert.equal(receivedData, 'mocked stream');
-      assert.deepEqual(
-        (metrics.getDataStreamSuccesssTotal.inc as any).mock.callCount(),
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
         1,
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+          .arguments[0].class,
+        'ArIODataSource',
       );
     });
 
@@ -167,13 +172,22 @@ describe('ArIODataSource', () => {
         receivedData += chunk;
       }
 
-      assert.deepEqual(
-        (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
+      assert.equal(receivedData, 'secondPeerData');
+
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
+      assert.equal(
+        (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
+          .class,
+        'ArIODataSource',
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
         1,
       );
-      assert.deepEqual(
-        (metrics.getDataStreamSuccesssTotal.inc as any).mock.callCount(),
-        1,
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+          .arguments[0].class,
+        'ArIODataSource',
       );
     });
 
@@ -195,9 +209,14 @@ describe('ArIODataSource', () => {
           receivedData += chunk;
         }
       } catch (error: any) {
-        assert.deepEqual(
+        assert.equal(
           (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
           1,
+        );
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
+            .arguments[0].class,
+          'ArIODataSource',
         );
         assert.equal(error.message, 'Stream destroyed intentionally');
       }

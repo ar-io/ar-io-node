@@ -187,7 +187,7 @@ export const getDataStreamErrorsTotal = new promClient.Counter({
   labelNames: ['class'],
 });
 
-export const getDataStreamSuccesssTotal = new promClient.Counter({
+export const getDataStreamSuccessesTotal = new promClient.Counter({
   name: 'get_data_stream_successes_total',
   help: 'Count of data stream successes',
   labelNames: ['class'],

@@ -28,6 +28,8 @@ import {
   RequestAttributes,
 } from '../types.js';
 import { ReadThroughDataCache } from './read-through-data-cache.js';
+import * as metrics from '../metrics.js';
+import { TestDestroyedReadable } from './test-utils.js';
 
 describe('ReadThroughDataCache', function () {
   let log: winston.Logger;
@@ -118,6 +120,10 @@ describe('ReadThroughDataCache', function () {
         return Promise.resolve();
       },
     };
+
+    mock.method(metrics.getDataErrorsTotal, 'inc');
+    mock.method(metrics.getDataStreamErrorsTotal, 'inc');
+    mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
 
     readThroughDataCache = new ReadThroughDataCache({
       log,
@@ -258,7 +264,66 @@ describe('ReadThroughDataCache', function () {
           origin: 'node-url',
         },
       });
-      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+
+      let receivedData = '';
+
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+
+      assert.equal(receivedData, 'test data');
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+          .arguments[0].class,
+        'ReadThroughDataCache',
+      );
+    });
+
+    it('should increment getDataStreamErrorsTotal for broken cached data stream', async function () {
+      let calledWithArgument: string;
+      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          size: 100,
+          contentType: 'plain/text',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+      mock.method(mockContiguousDataStore, 'get', (hash: string) => {
+        calledWithArgument = hash;
+        return new TestDestroyedReadable();
+      });
+
+      try {
+        const result = await readThroughDataCache.getData({
+          id: 'test-id',
+          requestAttributes,
+        });
+
+        let receivedData = '';
+
+        for await (const chunk of result.stream) {
+          receivedData += chunk;
+        }
+      } catch (error: any) {
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
+            .arguments[0].class,
+          'ReadThroughDataCache',
+        );
+        assert.equal(error.message, 'Stream destroyed intentionally');
+      }
     });
 
     it('should fetch data from the source and cache it when not available in cache', async function () {
@@ -307,11 +372,76 @@ describe('ReadThroughDataCache', function () {
         1,
       );
 
+      let receivedData = '';
+
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+
+      assert.equal(receivedData, 'test data');
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+          .arguments[0].class,
+        'ReadThroughDataCache',
+      );
+
       assert.ok(result.stream instanceof Readable);
       assert.equal(result.size, 99);
       assert.equal(result.sourceContentType, 'plain/text');
       assert.equal(result.verified, true);
       assert.equal(result.cached, false);
+    });
+
+    it('should increment getDataStreamErrorsTotal for broken non cached data stream', async function () {
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          stream: new TestDestroyedReadable(),
+          size: 99,
+          sourceContentType: 'plain/text',
+          verified: true,
+          cached: false,
+        });
+      });
+
+      try {
+        const result = await readThroughDataCache.getData({
+          id: 'test-id',
+          requestAttributes,
+        });
+
+        let receivedData = '';
+
+        for await (const chunk of result.stream) {
+          receivedData += chunk;
+        }
+      } catch (error: any) {
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
+            .arguments[0].class,
+          'ReadThroughDataCache',
+        );
+        assert.equal(error.message, 'Stream destroyed intentionally');
+      }
     });
   });
 });

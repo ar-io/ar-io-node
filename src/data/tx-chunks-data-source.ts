@@ -43,7 +43,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
     chainSource: ChainSource;
     chunkSource: ChunkDataByAnySource;
   }) {
-    this.log = log.child({ class: 'TxChunksDataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.chainSource = chainSource;
     this.chunkSource = chunkSource;
   }
@@ -114,11 +114,13 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
 
       stream.on('error', () => {
-        metrics.getDataStreamErrorsTotal.inc({ class: 'TxChunksDataSource' });
+        metrics.getDataStreamErrorsTotal.inc({ class: this.constructor.name });
       });
 
       stream.on('end', () => {
-        metrics.getDataStreamErrorsTotal.inc({ class: 'TxChunksDataSource' });
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
+        });
       });
 
       return {
@@ -130,7 +132,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
           generateRequestAttributes(requestAttributes)?.attributes,
       };
     } catch (error) {
-      metrics.getDataErrorsTotal.inc({ class: 'TxChunksDataSource' });
+      metrics.getDataErrorsTotal.inc({ class: this.constructor.name });
       throw error;
     }
   }

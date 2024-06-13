@@ -44,7 +44,7 @@ export class GatewayDataSource implements ContiguousDataSource {
     trustedGatewayUrl: string;
     requestTimeoutMs?: number;
   }) {
-    this.log = log.child({ class: 'GatewayDataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.trustedGatewayAxios = axios.create({
       baseURL: trustedGatewayUrl,
       timeout: requestTimeoutMs,
@@ -94,13 +94,13 @@ export class GatewayDataSource implements ContiguousDataSource {
 
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
-          class: 'GatewayDataSource',
+          class: this.constructor.name,
         });
       });
 
       stream.on('end', () => {
-        metrics.getDataStreamSuccesssTotal.inc({
-          class: 'GatewayDataSource',
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
         });
       });
 
@@ -117,7 +117,7 @@ export class GatewayDataSource implements ContiguousDataSource {
       };
     } catch (error) {
       metrics.getDataErrorsTotal.inc({
-        class: 'GatewayDataSource',
+        class: this.constructor.name,
       });
 
       throw error;

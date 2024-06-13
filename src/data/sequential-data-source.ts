@@ -35,7 +35,7 @@ export class SequentialDataSource implements ContiguousDataSource {
     log: winston.Logger;
     dataSources: ContiguousDataSource[];
   }) {
-    this.log = log.child({ class: 'SequentialDataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.dataSources = dataSources;
   }
 
