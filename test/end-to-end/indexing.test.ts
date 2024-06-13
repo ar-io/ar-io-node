@@ -552,8 +552,8 @@ describe('Indexing', function () {
           'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
         );
 
-        assert.equal(toB64Url(dataItem.parent_id), 'AA');
-        assert.equal(toB64Url(dataItem.root_transaction_id), 'AA');
+        assert.equal(dataItem.parent_id, null);
+        assert.equal(dataItem.root_transaction_id, null);
         assert.equal(b64UrlToUtf8(toB64Url(dataItem.signature)), 'signature');
         assert.equal(b64UrlToUtf8(toB64Url(dataItem.anchor)), 'anchor');
         assert.equal(b64UrlToUtf8(toB64Url(dataItem.target)), 'target');
@@ -561,7 +561,7 @@ describe('Indexing', function () {
           b64UrlToUtf8(toB64Url(dataItem.owner_address)),
           'owner_address',
         );
-        assert.equal(dataItem.data_offset, 0);
+        assert.equal(dataItem.data_offset, null);
         assert.equal(dataItem.data_size, 1234);
         assert.equal(dataItem.tag_count, 2);
         assert.equal(dataItem.content_type, 'application/octet-stream');

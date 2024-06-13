@@ -241,7 +241,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
   const newDataItemTags = [] as {
     tag_name_hash: Buffer;
     tag_value_hash: Buffer;
-    root_transaction_id: Buffer;
+    root_transaction_id: Buffer | null;
     data_item_id: Buffer;
     data_item_tag_index: number;
     indexed_at: number;
@@ -268,7 +268,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
     newDataItemTags.push({
       tag_name_hash: tagNameHash,
       tag_value_hash: tagValueHash,
-      root_transaction_id: fromB64Url(item.root_tx_id),
+      root_transaction_id: item.root_tx_id ? fromB64Url(item.root_tx_id) : null,
       data_item_id: id,
       data_item_tag_index: dataItemTagIndex,
       indexed_at: currentUnixTimestamp(),
@@ -282,22 +282,29 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
 
   wallets.push({ address: ownerAddressBuffer, public_modulus: ownerBuffer });
 
-  const parentId = fromB64Url(item.parent_id);
-  const rootTxId = fromB64Url(item.root_tx_id);
+  const parentId = item.parent_id ? fromB64Url(item.parent_id) : null;
+  const rootTxId = item.root_tx_id ? fromB64Url(item.root_tx_id) : null;
 
-  return {
-    tagNames,
-    tagValues,
-    newDataItemTags,
-    wallets,
-    bundleDataItem: {
+  // We do not insert bundle data item rows for opimistically indexed data
+  // items
+  let bundleDataItem;
+  if (rootTxId) {
+    bundleDataItem = {
       id,
       parent_id: parentId,
       parent_index: item.parent_index,
       root_transaction_id: rootTxId,
       indexed_at: currentUnixTimestamp(),
       filter: item.filter,
-    },
+    };
+  }
+
+  return {
+    tagNames,
+    tagValues,
+    newDataItemTags,
+    wallets,
+    bundleDataItem,
     newDataItem: {
       id,
       parent_id: parentId,
@@ -519,10 +526,14 @@ export class StandaloneSqliteDatabaseWorker {
           this.stmts.bundles.insertOrIgnoreWallet.run(row);
         }
 
-        this.stmts.bundles.upsertBundleDataItem.run({
-          ...rows.bundleDataItem,
-          filter_id: this.getFilterId(rows.bundleDataItem.filter),
-        });
+        // We do not insert bundle data item rows for opimistically indexed
+        // data items
+        if (rows.bundleDataItem) {
+          this.stmts.bundles.upsertBundleDataItem.run({
+            ...rows.bundleDataItem,
+            filter_id: this.getFilterId(rows.bundleDataItem.filter),
+          });
+        }
 
         this.stmts.bundles.upsertNewDataItem.run({
           ...rows.newDataItem,
@@ -828,7 +839,7 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   saveDataItem(item: NormalizedDataItem) {
-    const rootTxId = fromB64Url(item.root_tx_id);
+    const rootTxId = item.root_tx_id ? fromB64Url(item.root_tx_id) : null;
     const maybeTxHeight = this.stmts.bundles.selectTransactionHeight.get({
       transaction_id: rootTxId,
     })?.height;

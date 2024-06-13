@@ -353,6 +353,15 @@ const bundleDataImporter = new BundleDataImporter({
 
 async function queueBundle(item: NormalizedDataItem | PartialJsonTransaction) {
   try {
+    if ('root_tx_id' in item && item.root_tx_id === null) {
+      log.debug('Skipping download of optimistically indexed data item', {
+        id: item.id,
+        rootTxId: item.root_tx_id,
+        parentId: item.parent_id,
+      });
+      return;
+    }
+
     await db.saveBundle({
       id: item.id,
       rootTransactionId: 'root_tx_id' in item ? item.root_tx_id : item.id,
@@ -373,11 +382,11 @@ async function queueBundle(item: NormalizedDataItem | PartialJsonTransaction) {
       });
       bundleDataImporter.queueItem(
         {
+          ...item,
           index:
             'parent_index' in item && item.parent_index !== undefined
               ? item.parent_index
               : -1, // parent indexes are not needed for L1
-          ...item,
         },
         isPrioritized,
       );
@@ -390,8 +399,11 @@ async function queueBundle(item: NormalizedDataItem | PartialJsonTransaction) {
         skippedAt: currentUnixTimestamp(),
       });
     }
-  } catch (error) {
-    log.error('Error saving or queueing bundle', error);
+  } catch (error: any) {
+    log.error('Error saving or queueing bundle', {
+      message: error.message,
+      stack: error.stack,
+    });
   }
 }
 
