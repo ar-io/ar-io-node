@@ -249,7 +249,7 @@ export interface NestedDataIndexWriter {
   }): Promise<void>;
 }
 
-export interface NormalizedDataItem {
+export interface NormalizedBundleDataItem {
   id: string;
   index: number;
   parent_id: string;
@@ -267,6 +267,29 @@ export interface NormalizedDataItem {
   filter?: string;
   content_type?: string;
 }
+
+export interface NormalizedOptimisticDataItem {
+  id: string;
+  index: null;
+  parent_id: null;
+  parent_index: null;
+  root_tx_id: null;
+  signature: string;
+  owner: string;
+  owner_address: string;
+  target: string;
+  anchor: string;
+  tags: B64uTag[];
+  data_offset: null;
+  data_size: number;
+  data_hash: null;
+  filter?: string;
+  content_type?: string;
+}
+
+type NormalizedDataItem =
+  | NormalizedBundleDataItem
+  | NormalizedOptimisticDataItem;
 
 interface GqlPageInfo {
   hasNextPage: boolean;

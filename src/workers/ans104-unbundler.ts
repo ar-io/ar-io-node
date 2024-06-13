@@ -110,7 +110,7 @@ export class Ans104Unbundler {
     const log = this.log.child({ method: 'unbundle', id: item.id });
     try {
       let rootTxId: string | undefined;
-      if ('root_tx_id' in item) {
+      if ('root_tx_id' in item && item.root_tx_id !== null) {
         // Data item with root_tx_id
         rootTxId = item.root_tx_id;
       } else if ('last_tx' in item) {
