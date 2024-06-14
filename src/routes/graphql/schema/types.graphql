@@ -65,7 +65,7 @@ type Query {
     parent: [ID!] @deprecated(reason: "Use `bundledIn`")
   ): TransactionConnection!
 
-  block(id: String): Block
+  block(id: String!): Block
 
   blocks(
     """
