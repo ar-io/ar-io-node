@@ -7,7 +7,7 @@ services:
     restart: on-failure:5
     ports:
       - '3000:3000'
-      #- '9901:9901' # don't expose admin port externally by default
+      #- '9901:9901' # don't expose admin port by default
     environment:
       - LOG_LEVEL=${ENVOY_LOG_LEVEL:-info}
       - TVAL_AR_IO_HOST=core
@@ -87,8 +87,8 @@ services:
     image: redis:${REDIS_IMAGE_TAG:-7}
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: on-failure:5
-    #ports:
-      #- 6379:6379 # don't expose redis externally by default
+    ports:
+      - '6379' # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
@@ -229,16 +229,16 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
-    #ports:
-      #- '5432:5432' # don't expose postgres externally by default
+    ports:
+      - '5432' # don't expose postgres externally by default
     volumes:
       - ${UPLOAD_SERVICE_PG_DATA_PATH:-./data/upload-service-pg}:/var/lib/postgresql/data
     profiles: ['bundler']
 
   localstack:
     image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-adae756f264362e14eef8f11d192a53c287587c6}
-    #ports:
-      #- '127.0.0.1:4566:4566' # don't expose localstack externally by default
+    ports:
+      - '4566' # don't expose localstack externally by default
       #- "127.0.0.1:4510-4559:4510-4559" # external services port range
     environment:
       # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
