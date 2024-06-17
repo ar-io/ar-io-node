@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Modified optimistic indexing of data items to use a null `parent_id` when
+  inserting into the DB instead of a placeholder value. This prevents
+  unexpected non-null `bundledIn` values in GraphQL results for optimistically
+  indexed data items.
 - Modified GraphQL query logic to require an ID for single block GraphQL
   queries. Previously queries missing an ID were returning an internal SQLite
   error. This represents a small departure from arweave.net's query logic which
