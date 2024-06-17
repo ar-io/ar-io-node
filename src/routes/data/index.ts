@@ -20,7 +20,6 @@ import { Router } from 'express';
 import log from '../../log.js';
 import * as system from '../../system.js';
 import { createDataHandler, createRawDataHandler } from './handlers.js';
-import * as config from '../../config.js';
 
 const DATA_PATH_REGEX =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
@@ -35,7 +34,6 @@ export const dataHandler = createDataHandler({
   dataSource: system.contiguousDataSource,
   blockListValidator: system.blockListValidator,
   manifestPathResolver: system.manifestPathResolver,
-  arnsRootHost: config.ARNS_ROOT_HOST,
 });
 
 export const dataRouter = Router();
@@ -47,7 +45,6 @@ dataRouter.get(
     dataIndex: system.contiguousDataIndex,
     dataSource: system.contiguousDataSource,
     blockListValidator: system.blockListValidator,
-    arnsRootHost: config.ARNS_ROOT_HOST,
   }),
 );
 dataRouter.get(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);

@@ -40,12 +40,18 @@ export class RedisKvStore implements KVBufferStore {
     this.client = createClient({
       url: redisUrl,
     });
-    this.client.on('error', (err) => {
-      this.log.error(`Redis error: ${err}`);
+    this.client.on('error', (error: any) => {
+      this.log.error(`Redis error`, {
+        message: error.message,
+        stack: error.stack,
+      });
       metrics.redisErrorCounter.inc();
     });
-    this.client.connect().catch((err) => {
-      this.log.error(`Redis connection error: ${err}`);
+    this.client.connect().catch((error: any) => {
+      this.log.error(`Redis connection error`, {
+        message: error.message,
+        stack: error.stack,
+      });
       metrics.redisConnectionErrorsCounter.inc();
     });
   }

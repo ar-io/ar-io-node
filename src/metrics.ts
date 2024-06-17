@@ -172,3 +172,23 @@ export const redisErrorCounter = new promClient.Counter({
   name: 'redis_errors_total',
   help: 'Number of errors redis cache has received',
 });
+
+// Data source metrics
+
+export const getDataErrorsTotal = new promClient.Counter({
+  name: 'get_data_errors_total',
+  help: 'Count of requests errors',
+  labelNames: ['class'],
+});
+
+export const getDataStreamErrorsTotal = new promClient.Counter({
+  name: 'get_data_stream_errors_total',
+  help: 'Count of data stream errors',
+  labelNames: ['class'],
+});
+
+export const getDataStreamSuccessesTotal = new promClient.Counter({
+  name: 'get_data_stream_successes_total',
+  help: 'Count of data stream successes',
+  labelNames: ['class'],
+});

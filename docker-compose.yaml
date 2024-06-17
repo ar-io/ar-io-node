@@ -7,7 +7,7 @@ services:
     restart: on-failure:5
     ports:
       - '3000:3000'
-      - '9901:9901'
+      #- '9901:9901' # don't expose admin port by default
     environment:
       - LOG_LEVEL=${ENVOY_LOG_LEVEL:-info}
       - TVAL_AR_IO_HOST=core
@@ -58,6 +58,7 @@ services:
       - SANDBOX_PROTOCOL=${SANDBOX_PROTOCOL:-}
       - START_WRITERS=${START_WRITERS:-}
       - CONTRACT_ID=${CONTRACT_ID:-}
+      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-redis}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
       - REDIS_CACHE_TTL_SECONDS=${REDIS_CACHE_TTL_SECONDS:-}
@@ -78,6 +79,7 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
       - AWS_S3_PREFIX=${AWS_S3_PREFIX:-}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-}
     depends_on:
       - redis
 
@@ -86,32 +88,30 @@ services:
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: on-failure:5
     ports:
-      - 6379:6379
+      - '6379' # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-624b6090acd1060c89f7bb1995a86df310388b72}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-f4b2b2b1d4e6016d7392fdcab2c084e4de126376}
     restart: on-failure:5
     ports:
       - 5050:5050
     volumes:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
-      - ${WARP_CACHE_PATH:-./data/warp/cache}:/app/cache/warp
       - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
       - PORT=5050
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-info}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-<example>}
-      - CONTRACT_ID=${CONTRACT_ID:-}
+      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - SUBMIT_CONTRACT_INTERACTIONS=${SUBMIT_CONTRACT_INTERACTIONS:-true}
       - NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP=${NUM_ARNS_NAMES_TO_OBSERVE_PER_GROUP:-5}
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-12}
-      - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-13-pre}
 
   resolver:
     image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-fe035b80cc9e6038b4d4bec671ec9b33ac184e18}
@@ -145,7 +145,7 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY=${AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY:-}
 
   upload-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
+    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-adae756f264362e14eef8f11d192a53c287587c6}
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       PORT: ${UPLOAD_SERVICE_PORT:-5100}
@@ -184,7 +184,7 @@ services:
     profiles: ['bundler']
 
   fulfillment-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
+    image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-adae756f264362e14eef8f11d192a53c287587c6}
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       NODE_ENV: ${NODE_ENV:-local}
@@ -230,15 +230,15 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     ports:
-      - '5432:5432'
+      - '5432' # don't expose postgres externally by default
     volumes:
       - ${UPLOAD_SERVICE_PG_DATA_PATH:-./data/upload-service-pg}:/var/lib/postgresql/data
     profiles: ['bundler']
 
   localstack:
-    image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-latest}
+    image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-adae756f264362e14eef8f11d192a53c287587c6}
     ports:
-      - '4566:4566'
+      - '4566' # don't expose localstack externally by default
       #- "127.0.0.1:4510-4559:4510-4559" # external services port range
     environment:
       # LocalStack configuration: https://docs.localstack.cloud/references/configuration/

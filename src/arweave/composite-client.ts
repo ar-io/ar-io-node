@@ -152,7 +152,7 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
   }) {
-    this.log = log.child({ class: 'ArweaveCompositeClient' });
+    this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.failureSimulator = failureSimulator;
@@ -635,29 +635,51 @@ export class ArweaveCompositeClient
   async getData({ id }: { id: string }): Promise<ContiguousData> {
     this.failureSimulator.maybeFail();
 
-    const [dataResponse, dataSizeResponse] = await Promise.all([
-      this.trustedNodeRequestQueue.push({
-        method: 'GET',
-        url: `/tx/${id}/data`,
-      }),
-      this.trustedNodeRequestQueue.push({
-        method: 'GET',
-        url: `/tx/${id}/data_size`,
-      }),
-    ]);
+    try {
+      const [dataResponse, dataSizeResponse] = await Promise.all([
+        this.trustedNodeRequestQueue.push({
+          method: 'GET',
+          url: `/tx/${id}/data`,
+        }),
+        this.trustedNodeRequestQueue.push({
+          method: 'GET',
+          url: `/tx/${id}/data_size`,
+        }),
+      ]);
 
-    if (!dataResponse.data) {
-      throw Error('No transaction data');
+      if (!dataResponse.data) {
+        throw Error('No transaction data');
+      }
+
+      const size = +dataSizeResponse.data;
+      const txData = fromB64Url(dataResponse.data);
+
+      const stream = Readable.from(txData);
+
+      stream.on('error', () => {
+        metrics.getDataStreamErrorsTotal.inc({
+          class: this.constructor.name,
+        });
+      });
+
+      stream.on('end', () => {
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
+        });
+      });
+
+      return {
+        stream,
+        size,
+        verified: false,
+        cached: false,
+      };
+    } catch (error) {
+      metrics.getDataErrorsTotal.inc({
+        class: this.constructor.name,
+      });
+      throw error;
     }
-
-    const size = +dataSizeResponse.data;
-    const txData = fromB64Url(dataResponse.data);
-    return {
-      stream: Readable.from(txData),
-      size,
-      verified: false,
-      cached: false,
-    };
   }
 
   async getPendingTxIds(): Promise<string[]> {

@@ -18,10 +18,13 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import * as winston from 'winston';
+import axios from 'axios';
+import { ArIO, ArIOReadable } from '@ar.io/sdk';
+import { Readable } from 'node:stream';
 import { RequestAttributes } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
-import { ArIO, ArIOReadable } from '@ar.io/sdk';
-import axios from 'axios';
+import * as metrics from '../metrics.js';
+import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 
 let log: winston.Logger;
 let dataSource: ArIODataSource;
@@ -44,7 +47,7 @@ beforeEach(async () => {
 
   mockedAxiosGet = async () => ({
     status: 200,
-    data: 'streamData',
+    data: axiosStreamData,
     headers: {
       'content-length': '123',
       'content-type': 'application/octet-stream',
@@ -54,6 +57,10 @@ beforeEach(async () => {
   mock.method(ArIO, 'init', () => mockedArIOInstance);
 
   mock.method(axios, 'get', mockedAxiosGet);
+
+  mock.method(metrics.getDataErrorsTotal, 'inc');
+  mock.method(metrics.getDataStreamErrorsTotal, 'inc');
+  mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
 
   dataSource = new ArIODataSource({
     log,
@@ -96,17 +103,39 @@ describe('ArIODataSource', () => {
       const data = await dataSource.getData({ id: 'dataId' });
 
       assert.deepEqual(data, {
-        stream: 'streamData',
+        stream: axiosStreamData,
         size: 123,
         verified: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
-        requestAttributes: { hops: 1, origin: undefined },
+        requestAttributes: {
+          hops: 1,
+          origin: undefined,
+          originNodeRelease: undefined,
+        },
       });
+
+      let receivedData = '';
+
+      for await (const chunk of data.stream) {
+        receivedData += chunk;
+      }
+
+      assert.equal(receivedData, 'mocked stream');
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+          .arguments[0].class,
+        'ArIODataSource',
+      );
     });
 
     it('should retry with a different peer if the first one fails', async () => {
       let firstPeer = true;
+      const secondPeerStreamData = Readable.from(['secondPeerData']);
       mock.method(axios, 'get', async () => {
         if (firstPeer) {
           firstPeer = false;
@@ -114,7 +143,7 @@ describe('ArIODataSource', () => {
         }
         return {
           status: 200,
-          data: 'secondPeerData',
+          data: secondPeerStreamData,
           headers: {
             'content-length': '10',
             'content-type': 'application/octet-stream',
@@ -125,28 +154,91 @@ describe('ArIODataSource', () => {
       const data = await dataSource.getData({ id: 'dataId' });
 
       assert.deepEqual(data, {
-        stream: 'secondPeerData',
+        stream: secondPeerStreamData,
         size: 10,
         verified: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
-        requestAttributes: { hops: 1, origin: undefined },
+        requestAttributes: {
+          hops: 1,
+          origin: undefined,
+          originNodeRelease: undefined,
+        },
       });
+
+      let receivedData = '';
+
+      for await (const chunk of data.stream) {
+        receivedData += chunk;
+      }
+
+      assert.equal(receivedData, 'secondPeerData');
+
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
+      assert.equal(
+        (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
+          .class,
+        'ArIODataSource',
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
+        1,
+      );
+      assert.equal(
+        (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+          .arguments[0].class,
+        'ArIODataSource',
+      );
+    });
+
+    it('should increment getDataStreamErrorsTotal', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: new TestDestroyedReadable(),
+        headers: {
+          'content-length': '10',
+          'content-type': 'application/octet-stream',
+        },
+      }));
+
+      try {
+        const data = await dataSource.getData({ id: 'id' });
+        let receivedData = '';
+
+        for await (const chunk of data.stream) {
+          receivedData += chunk;
+        }
+      } catch (error: any) {
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
+            .arguments[0].class,
+          'ArIODataSource',
+        );
+        assert.equal(error.message, 'Stream destroyed intentionally');
+      }
     });
 
     it('should increment hops and origin if requestAttributes are provided', async () => {
       const data = await dataSource.getData({
         id: 'dataId',
-        requestAttributes: { origin: 'node-url', hops: 2 },
+        requestAttributes: { hops: 2 },
       });
 
       assert.deepEqual(data, {
-        stream: 'streamData',
+        stream: axiosStreamData,
         size: 123,
         verified: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
-        requestAttributes: { hops: 3, origin: 'node-url' },
+        requestAttributes: {
+          hops: 3,
+          origin: undefined,
+          originNodeRelease: undefined,
+        },
       });
     });
 

@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { strict as assert } from 'node:assert';
-import { afterEach, before, describe, it, mock } from 'node:test';
+import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable } from 'node:stream';
 import * as winston from 'winston';
 
@@ -26,6 +26,7 @@ import {
 } from '../../test/stubs.js';
 import { TxChunksDataSource } from './tx-chunks-data-source.js';
 import { RequestAttributes } from '../types.js';
+import * as metrics from '../metrics.js';
 
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 
@@ -38,6 +39,7 @@ describe('TxChunksDataSource', () => {
 
   before(() => {
     log = winston.createLogger({ silent: true });
+
     chainSource = new ArweaveChainSourceStub();
     chunkSource = new ArweaveChunkSourceStub();
     txChunkRetriever = new TxChunksDataSource({
@@ -46,6 +48,12 @@ describe('TxChunksDataSource', () => {
       chunkSource,
     });
     requestAttributes = { origin: 'node-url', hops: 0 };
+  });
+
+  beforeEach(() => {
+    mock.method(metrics.getDataErrorsTotal, 'inc');
+    mock.method(metrics.getDataStreamErrorsTotal, 'inc');
+    mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
   });
 
   afterEach(() => {
@@ -67,26 +75,41 @@ describe('TxChunksDataSource', () => {
             message: 'Offset for bad-tx-id not found',
           },
         );
+
+        assert.equal(
+          (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
+            .class,
+          'TxChunksDataSource',
+        );
       });
     });
 
     describe('a valid transaction id', () => {
-      it('should return chunk data of the correct size for a known chunk', () => {
-        txChunkRetriever
-          .getData({
-            id: TX_ID,
-            requestAttributes,
-          })
-          .then((res: { stream: Readable; size: number }) => {
-            const { stream, size } = res;
-            let bytes = 0;
-            stream.on('data', (c) => {
-              bytes += c.length;
-            });
-            stream.on('end', () => {
-              assert.strictEqual(bytes, size);
-            });
-          });
+      it('should return chunk data of the correct size for a known chunk', async () => {
+        const data = await txChunkRetriever.getData({
+          id: TX_ID,
+          requestAttributes,
+        });
+
+        let bytes = 0;
+        for await (const chunk of data.stream) {
+          bytes += chunk.length;
+        }
+
+        assert.strictEqual(bytes, data.size);
+        assert.equal(
+          (metrics.getDataStreamSuccessesTotal.inc as any).mock.callCount(),
+          1,
+        );
+        assert.equal(
+          (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
+            .arguments[0].class,
+          'TxChunksDataSource',
+        );
       });
 
       it('should return cached property as false', async () => {
@@ -100,43 +123,63 @@ describe('TxChunksDataSource', () => {
     });
 
     describe('a bad piece of chunk data', () => {
-      it('should throw an error', () => {
+      it('should throw an error', async () => {
         const error = new Error('missing chunk');
         mock.method(chunkSource, 'getChunkDataByAny', () =>
           Promise.reject(error),
         );
-        txChunkRetriever
-          .getData({ id: TX_ID, requestAttributes })
-          .then((res: { stream: Readable; size: number }) => {
-            const { stream } = res;
-            stream.on('error', (e: any) => {
-              assert.strictEqual(e, error);
-            });
-            // do nothing
-            stream.on('data', () => {
-              return;
-            });
+
+        try {
+          const data = await txChunkRetriever.getData({
+            id: TX_ID,
+            requestAttributes,
           });
+
+          for await (const chunk of data.stream) {
+            // do nothing
+          }
+        } catch (e) {
+          assert.strictEqual(e, error);
+          assert.equal(
+            (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
+            1,
+          );
+          assert.equal(
+            (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
+              .arguments[0].class,
+            'TxChunksDataSource',
+          );
+        }
       });
 
       describe('an invalid chunk', () => {
-        it('should throw an error', () => {
+        it('should throw an error', async () => {
           const error = new Error('Invalid chunk');
           mock.method(chunkSource, 'getChunkByAny', () =>
             Promise.reject(error),
           );
-          txChunkRetriever
-            .getData({ id: TX_ID, requestAttributes })
-            .then((res: { stream: Readable; size: number }) => {
-              const { stream } = res;
-              stream.on('error', (error: any) => {
-                assert.strictEqual(error, error);
-              });
-              // do nothing
-              stream.on('data', () => {
-                return;
-              });
+
+          try {
+            const data = await txChunkRetriever.getData({
+              id: TX_ID,
+              requestAttributes,
             });
+
+            for await (const chunk of data.stream) {
+              // do nothing
+            }
+          } catch (e) {
+            assert.strictEqual(e, error);
+            assert.equal(
+              (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
+              1,
+            );
+            assert.equal(
+              (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
+                .arguments[0].class,
+              'TxChunksDataSource',
+            );
+          }
         });
       });
     });

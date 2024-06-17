@@ -17,6 +17,7 @@
  */
 import { Readable } from 'node:stream';
 import winston from 'winston';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
 
 import {
   ChainSource,
@@ -26,6 +27,7 @@ import {
   ContiguousDataSource,
   RequestAttributes,
 } from '../types.js';
+import * as metrics from '../metrics.js';
 
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -41,7 +43,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
     chainSource: ChainSource;
     chunkSource: ChunkDataByAnySource;
   }) {
-    this.log = log.child({ class: 'TxChunksDataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.chainSource = chainSource;
     this.chunkSource = chunkSource;
   }
@@ -55,73 +57,83 @@ export class TxChunksDataSource implements ContiguousDataSource {
   }): Promise<ContiguousData> {
     this.log.info('Fetching chunk data for TX', { id });
 
-    const [txDataRoot, txOffset] = await Promise.all([
-      this.chainSource.getTxField(id, 'data_root'),
-      this.chainSource.getTxOffset(id),
-    ]);
-    const size = +txOffset.size;
-    const offset = +txOffset.offset;
-    const startOffset = offset - size + 1;
-    let bytes = 0;
+    try {
+      const [txDataRoot, txOffset] = await Promise.all([
+        this.chainSource.getTxField(id, 'data_root'),
+        this.chainSource.getTxOffset(id),
+      ]);
+      const size = +txOffset.size;
+      const offset = +txOffset.offset;
+      const startOffset = offset - size + 1;
+      let bytes = 0;
 
-    // we lose scope in the readable, so set to internal function
-    const getChunkDataByAny = (
-      absoluteOffset: number,
-      dataRoot: string,
-      relativeOffset: number,
-    ) =>
-      this.chunkSource.getChunkDataByAny(
-        size,
-        absoluteOffset,
-        dataRoot,
-        relativeOffset,
+      // we lose scope in the readable, so set to internal function
+      const getChunkDataByAny = (
+        absoluteOffset: number,
+        dataRoot: string,
+        relativeOffset: number,
+      ) =>
+        this.chunkSource.getChunkDataByAny(
+          size,
+          absoluteOffset,
+          dataRoot,
+          relativeOffset,
+        );
+      let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
+        startOffset,
+        txDataRoot,
+        bytes,
       );
-    let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
-      startOffset,
-      txDataRoot,
-      bytes,
-    );
 
-    const stream = new Readable({
-      autoDestroy: true,
-      read: async function () {
-        try {
-          if (!chunkDataPromise) {
-            this.push(null);
-            return;
+      const stream = new Readable({
+        autoDestroy: true,
+        read: async function () {
+          try {
+            if (!chunkDataPromise) {
+              this.push(null);
+              return;
+            }
+
+            const chunkData = await chunkDataPromise;
+            this.push(chunkData.chunk);
+            bytes += chunkData.chunk.length;
+
+            if (bytes < size) {
+              chunkDataPromise = getChunkDataByAny(
+                startOffset + bytes,
+                txDataRoot,
+                bytes,
+              );
+            } else {
+              chunkDataPromise = undefined;
+            }
+          } catch (error: any) {
+            this.destroy(error);
           }
+        },
+      });
 
-          const chunkData = await chunkDataPromise;
-          this.push(chunkData.chunk);
-          bytes += chunkData.chunk.length;
+      stream.on('error', () => {
+        metrics.getDataStreamErrorsTotal.inc({ class: this.constructor.name });
+      });
 
-          if (bytes < size) {
-            chunkDataPromise = getChunkDataByAny(
-              startOffset + bytes,
-              txDataRoot,
-              bytes,
-            );
-          } else {
-            chunkDataPromise = undefined;
-          }
-        } catch (error: any) {
-          this.destroy(error);
-        }
-      },
-    });
+      stream.on('end', () => {
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
+        });
+      });
 
-    return {
-      stream,
-      size,
-      verified: true,
-      cached: false,
-      requestAttributes: {
-        hops:
-          requestAttributes?.hops !== undefined
-            ? requestAttributes.hops + 1
-            : 1,
-        origin: requestAttributes?.origin,
-      },
-    };
+      return {
+        stream,
+        size,
+        verified: true,
+        cached: false,
+        requestAttributes:
+          generateRequestAttributes(requestAttributes)?.attributes,
+      };
+    } catch (error) {
+      metrics.getDataErrorsTotal.inc({ class: this.constructor.name });
+      throw error;
+    }
   }
 }

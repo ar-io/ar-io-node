@@ -81,8 +81,8 @@ export class Ans104DataIndexer {
       id: item.id,
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
-      dataOffset: item?.data_offset,
-      dataSize: item?.data_size,
+      dataOffset: item.data_offset,
+      dataSize: item.data_size,
     });
 
     try {
@@ -91,31 +91,65 @@ export class Ans104DataIndexer {
         typeof item.data_size === 'number'
       ) {
         log.debug('Indexing data item data...');
-        await this.contiguousDataIndex.saveDataContentAttributes({
-          id: item.id,
-          hash: item.data_hash,
-          dataSize: item.data_size,
-          contentType: item.content_type,
-        });
-        await this.indexWriter.saveNestedDataId({
-          id: item.id,
-          parentId: item.parent_id,
-          dataOffset: item.data_offset,
-          dataSize: item.data_size,
-        });
-        await this.indexWriter.saveNestedDataHash({
-          hash: item.data_hash,
-          parentId: item.parent_id,
-          dataOffset: item.data_offset,
-        });
+        if (item.data_hash != null) {
+          if (item.data_size != null) {
+            await this.contiguousDataIndex.saveDataContentAttributes({
+              id: item.id,
+              hash: item.data_hash,
+              dataSize: item.data_size,
+              contentType: item.content_type,
+            });
+          } else {
+            log.warn(
+              'Skipping data item data content attributes indexing due to missing data size.',
+            );
+          }
+
+          // Index data hash to parent ID relationship
+          if (item.parent_id != null && item.data_offset != null) {
+            await this.indexWriter.saveNestedDataHash({
+              hash: item.data_hash,
+              parentId: item.parent_id,
+              dataOffset: item.data_offset,
+            });
+          } else {
+            log.warn(
+              'Skipping data item nested data indexing due to missing parent ID or data offset.',
+            );
+          }
+        } else {
+          log.warn('Skipping data item data indexing due to missing hash.');
+        }
+
+        // Index data offset and size for ID to parent ID relationship
+        if (
+          item.parent_id != null &&
+          item.data_offset != null &&
+          item.data_size != null
+        ) {
+          await this.indexWriter.saveNestedDataId({
+            id: item.id,
+            parentId: item.parent_id,
+            dataOffset: item.data_offset,
+            dataSize: item.data_size,
+          });
+        } else {
+          log.warn(
+            'Skipping data item parent ID indexing due to missing parent ID, data offset, or data size.',
+          );
+        }
         metrics.dataItemsIndexedCounter.inc();
         this.eventEmitter.emit(events.ANS104_DATA_ITEM_DATA_INDEXED, item);
         log.debug('Data item data indexed.');
       } else {
         this.log.warn('Data item data is missing data offset or size.');
       }
-    } catch (error) {
-      log.error('Failed to index data item data:', error);
+    } catch (error: any) {
+      log.error('Failed to index data item data:', {
+        message: error.message,
+        stack: error.stack,
+        id: item.id,
+      });
     }
   }
 

@@ -15,14 +15,28 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { Readable } from 'node:stream';
 
-const headerNames = {
-  hops: 'X-AR-IO-Hops',
-  origin: 'X-AR-IO-Origin',
-  originNodeRelease: 'X-AR-IO-Origin-Node-Release',
-  cache: 'X-Cache',
-  arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
-  arnsResolvedId: 'X-ArNS-Resolved-Id',
-};
+export class TestDestroyedReadable extends Readable {
+  private counter: number;
 
-export { headerNames };
+  constructor() {
+    super();
+    this.counter = 0;
+  }
+
+  _read() {
+    this.counter += 1;
+
+    // Simulate reading data
+    const chunk = Buffer.from(`Chunk ${this.counter}\n`);
+    this.push(chunk);
+
+    // Destroy the stream after reading 5 chunks
+    if (this.counter === 5) {
+      this.destroy(new Error('Stream destroyed intentionally'));
+    }
+  }
+}
+
+export const axiosStreamData = Readable.from(['mocked stream']);

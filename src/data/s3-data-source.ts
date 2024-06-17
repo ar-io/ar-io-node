@@ -16,7 +16,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import winston from 'winston';
-import { headerNames } from '../constants.js';
 
 import {
   ContiguousData,
@@ -25,8 +24,9 @@ import {
 } from '../types.js';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
-import axios from 'axios';
-import { AWS_ENDPOINT } from '../config.js';
+import { AwsLiteClient } from '@aws-lite/client';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
+import * as metrics from '../metrics.js';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -34,21 +34,27 @@ export class S3DataSource implements ContiguousDataSource {
   private s3Bucket: string;
   private s3Prefix: string;
 
+  // TODO: Remove this when aws-lite s3 supports Metadata on head-requests
+  private awsClient: AwsLiteClient;
+
   constructor({
     log,
     s3Client,
     s3Bucket,
     s3Prefix = '',
+    awsClient,
   }: {
     log: winston.Logger;
     s3Client: AwsLiteS3;
     s3Bucket: string;
     s3Prefix?: string;
+    awsClient: AwsLiteClient;
   }) {
-    this.log = log.child({ class: 'S3DataSource' });
+    this.log = log.child({ class: this.constructor.name });
     this.s3Client = s3Client;
     this.s3Bucket = s3Bucket;
     this.s3Prefix = s3Prefix;
+    this.awsClient = awsClient;
   }
 
   async getData({
@@ -66,16 +72,24 @@ export class S3DataSource implements ContiguousDataSource {
     });
 
     try {
-      // TODO: Use S3 client instead of axios when aws-lite supports Metadata on head-requests
+      // TODO: Use S3 client instead of accessing  aws client directly when aws-lite s3 supports Metadata on head-requests
       // const head = this.s3Client.HeadObject({
       //   Bucket: this.s3Bucket,
       //   Key: `${this.s3Prefix}/${id}`,
       // });
-      const head = await axios.head(
-        `${AWS_ENDPOINT}/${this.s3Bucket}/${this.s3Prefix}/${id}`,
-        { validateStatus: () => true },
-      );
-      if (head.status !== 200) {
+
+      log.debug('Fetching S3 metadata', {
+        id,
+        bucket: this.s3Bucket,
+        prefix: this.s3Prefix,
+      });
+
+      const head = await this.awsClient({
+        service: 's3',
+        path: `${this.s3Bucket}/${this.s3Prefix}/${id}`,
+      });
+
+      if (head.statusCode !== 200) {
         throw new Error('Failed to head data from S3');
       }
 
@@ -92,20 +106,24 @@ export class S3DataSource implements ContiguousDataSource {
         streamResponsePayload: true,
       });
 
-      const requestOriginAndHopsHeaders: { [key: string]: string } = {};
-      let hops;
-      let origin;
-      if (requestAttributes !== undefined) {
-        hops = requestAttributes.hops + 1;
-        requestOriginAndHopsHeaders[headerNames.hops] = hops.toString();
+      const payloadContentTypeS3MetaDataTag = 'x-amz-meta-payload-content-type';
+      const sourceContentType =
+        head.headers?.[payloadContentTypeS3MetaDataTag] ?? response.ContentType;
 
-        if (requestAttributes.origin !== undefined) {
-          origin = requestAttributes.origin;
-          requestOriginAndHopsHeaders[headerNames.origin] = origin;
-        }
-      } else {
-        hops = 1;
-      }
+      log.debug('S3 response', {
+        id,
+        response: {
+          ContentLength: response.ContentLength,
+          ContentType: response.ContentType,
+        },
+        payload: {
+          range,
+          sourceContentType,
+        },
+      });
+
+      const requestAttributesHeaders =
+        generateRequestAttributes(requestAttributes);
 
       if (response.ContentLength === undefined) {
         throw new Error('Content-Length header missing from S3 response');
@@ -114,25 +132,37 @@ export class S3DataSource implements ContiguousDataSource {
       if (response.Body === undefined) {
         throw new Error('Body missing from S3 response');
       }
-      const payloadContentTypeS3MetaDataTag = 'x-amz-meta-payload-content-type';
-      const sourceContentType =
-        head.headers?.[payloadContentTypeS3MetaDataTag] ?? response.ContentType;
+
+      const stream = response.Body as Readable;
+
+      stream.on('error', () => {
+        metrics.getDataStreamErrorsTotal.inc({
+          class: this.constructor.name,
+        });
+      });
+
+      stream.on('end', () => {
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
+        });
+      });
 
       return {
-        stream: response.Body as Readable,
+        stream,
         size: response.ContentLength,
         verified: false,
         sourceContentType,
         cached: false,
-        requestAttributes: {
-          hops,
-          origin,
-        },
+        requestAttributes: requestAttributesHeaders?.attributes,
       };
     } catch (error: any) {
+      metrics.getDataErrorsTotal.inc({
+        class: this.constructor.name,
+      });
       log.error('Failed to fetch contiguous data from S3', {
         id,
-        error,
+        message: error.message,
+        stack: error.stack,
       });
       throw error;
     }
