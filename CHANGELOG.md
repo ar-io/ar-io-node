@@ -6,14 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added support for optimistically reading data items uploaded using the
+  integrated Turbo bundler via the LocalStack S3 interface.
+- Added `X-AR-IO-Origin-Node-Release` header to outbound data requests.
+- Addded `hops`, `origin`, and `originNodeRelease` query params to
+  outbound data requests.
+
+### Changed
+
+- Updated Observer to read prescribed names from and write observations to the
+  ar.io AO network process.
+
+### Fixed
+
+- Modified GraphQL query logic to require an ID for single block GraphQL
+  queries. Previously queries missing an ID were returning an internal SQLite
+  error. This represents a small departure from arweave.net's query logic which
+  returns the latest block for these queries. We recommend querying `blocks`
+  instead of `block` in cases where the latest block is desired.
+- Adjusted Observer health check to reflect port change to 5050.
+
+### Security
+
+- Modified docker-compose.yaml to only expose Redis, PostgreSQL, and
+  LocalStack ports internally. This protects gateways that neglect to deploy
+  behind a firewall, reverse proxy, or load balancer.
+
 ## [Release 12] - 2024-06-05
 
 ### Added
 
-- Added `/ar-io/admin/queue-data-item` endpoint for queuing data item headers
-  for indexing before the bundles containing them are processed. This allows
-  trusted bundlers to make their data items quickly available to be queried via
-  GraphQL without having to wait for bundle data submission or unbundling.
+- Added `/ar-io/admin/queue-data-item` endpoint for queuing data item
+  headers for indexing before the bundles containing them are
+  processed. This allows trusted bundlers to make their data items
+  quickly available to be queried via GraphQL without having to wait for bundle
+  data submission or unbundling.
 - Added experimental support for retrieving contiguous data from S3. See
   `AWS_*` [environment variables documentation](docs/env.md) for configuration
   details. In conjuction with a local Turbo bundler this allows optimistic
