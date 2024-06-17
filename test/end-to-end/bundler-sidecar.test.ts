@@ -40,7 +40,6 @@ const cleanDb = () =>
 const composeUp = async ({
   START_HEIGHT = '1',
   STOP_HEIGHT = '1',
-  ARNS_ROOT_HOST = 'ar-io.localhost',
   ANS104_UNBUNDLE_FILTER = '{"always": true}',
   ANS104_INDEX_FILTER = '{"always": true}',
   ADMIN_API_KEY = 'secret',
@@ -55,11 +54,11 @@ const composeUp = async ({
   ...ENVIRONMENT
 }: Environment = {}) => {
   await cleanDb();
+
   return new DockerComposeEnvironment(projectRootPath, 'docker-compose.yaml')
     .withEnvironment({
       START_HEIGHT,
       STOP_HEIGHT,
-      ARNS_ROOT_HOST,
       ANS104_UNBUNDLE_FILTER,
       ANS104_INDEX_FILTER,
       ADMIN_API_KEY,
@@ -71,13 +70,16 @@ const composeUp = async ({
       AWS_SECRET_ACCESS_KEY,
       AWS_REGION,
       AWS_ENDPOINT,
-      DEBUG: 'testcontainers*',
+      TESTCONTAINERS_HOST_OVERRIDE: 'localhost',
       ...ENVIRONMENT,
     })
     .withBuild()
-    .withWaitStrategy('upload-service-1', Wait.forHealthCheck())
-    .withWaitStrategy('core-1', Wait.forHealthCheck())
     .withProfiles('bundler')
+    .withWaitStrategy(
+      'upload-service-1',
+      Wait.forLogMessage('Listening on port 5100'),
+    )
+    .withWaitStrategy('core-1', Wait.forLogMessage('Listening on port 4000'))
     .up();
 };
 
@@ -102,6 +104,7 @@ describe('Bundler Sidecar', () => {
       BUNDLER_ARWEAVE_WALLET: JSON.stringify(jwk),
       BUNDLER_ARWEAVE_ADDRESS: sha256B64Url(fromB64Url(jwk.n)),
     });
+
     bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
   });
 
@@ -110,7 +113,7 @@ describe('Bundler Sidecar', () => {
     bundlesDb.close();
   });
 
-  it('Verifying that S3DataSource can fetch data from S3', async () => {
+  it('optimistically posts data item headers and uses a shared data source exposing data item payloads posted to the upload service', async () => {
     const signer = new ArweaveSigner(jwk);
     const dataItem = createData('test data', signer, {
       tags: [{ name: 'Content-Type', value: 'text/plain' }],
@@ -120,7 +123,7 @@ describe('Bundler Sidecar', () => {
     // post data to bundler
     await axios({
       method: 'post',
-      url: `http://envoy:${3000}/bundler/tx`,
+      url: `http://localhost:${3000}/bundler/tx`,
       headers: { 'Content-Type': 'application/octet-stream' },
       data: dataItem.getRaw(),
     });
@@ -128,13 +131,13 @@ describe('Bundler Sidecar', () => {
     // get data from gateway, should be instantly available
     const res = await axios({
       method: 'get',
-      url: `http://envoy:${3000}/${dataItem.id}`,
+      url: `http://localhost:${3000}/${dataItem.id}`,
     });
-
     assert.equal(res.data, 'test data');
 
     await waitForIndexing();
 
+    // Data item headers should be optimistically indexed by core service
     const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
     const dataItems = stmt.all();
 
