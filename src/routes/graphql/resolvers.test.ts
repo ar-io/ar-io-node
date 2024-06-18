@@ -28,6 +28,7 @@ import {
   resolveTxQuantity,
   resolveTxRecipient,
 } from '../../../src/routes/graphql/resolvers.js';
+import { GqlTransaction } from '../../types.js';
 
 const GQL_TX = {
   id: 'LXCrfCRLHB7YyLGAeQoio00qb7LwT3UO3a-2TSDli8Q',
@@ -69,14 +70,14 @@ describe('getPageSize', () => {
 
 describe('resolveTxRecipient', () => {
   it('should return the recipient', () => {
-    const recipient = resolveTxRecipient(GQL_TX);
+    const recipient = resolveTxRecipient(GQL_TX as unknown as GqlTransaction);
     assert.equal(recipient, '6p817XK-yIX-hBCQ0qD5wbcP05WPQgPKFmwNYC2xtwM');
   });
 
   // arweave.net compatibility
   it('should return empty string if recipient is undefined', () => {
     const tx = { ...GQL_TX, recipient: undefined };
-    const recipient = resolveTxRecipient(tx);
+    const recipient = resolveTxRecipient(tx as unknown as GqlTransaction);
     assert.equal(recipient, '');
   });
 });
@@ -85,28 +86,28 @@ describe('resolveTxData', () => {
   it('should return dataSize and contentType', () => {
     // TODO find a tx with content type set
     const tx = { ...GQL_TX, contentType: 'text/plain' };
-    const dataResult = resolveTxData(tx);
+    const dataResult = resolveTxData(tx as unknown as GqlTransaction);
     assert.deepEqual(dataResult, { size: '0', type: 'text/plain' });
   });
 });
 
 describe('resolveTxQuantity', () => {
   it('should return quantity in AR and winstons', () => {
-    const quantity = resolveTxQuantity(GQL_TX);
+    const quantity = resolveTxQuantity(GQL_TX as unknown as GqlTransaction);
     assert.deepEqual(quantity, { ar: '0.000007896935', winston: '7896935' });
   });
 });
 
 describe('resolveTxFee', () => {
   it('should return quantity in AR and winstons', () => {
-    const fee = resolveTxFee(GQL_TX);
+    const fee = resolveTxFee(GQL_TX as unknown as GqlTransaction);
     assert.deepEqual(fee, { ar: '0.000000477648', winston: '477648' });
   });
 });
 
 describe('resolveTxOwner', () => {
   it('should return owner address and key', () => {
-    const owner = resolveTxOwner(GQL_TX);
+    const owner = resolveTxOwner(GQL_TX as unknown as GqlTransaction);
     assert.equal(owner.address, 'k3hNqeW_8_WDBz6hwUAsu6DQ47sGXZUP5Q8MJP8BdsE');
     assert.equal(
       owner.key,

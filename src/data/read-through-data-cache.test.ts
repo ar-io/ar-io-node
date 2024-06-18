@@ -285,6 +285,8 @@ describe('ReadThroughDataCache', function () {
     });
 
     it('should increment getDataStreamErrorsTotal for broken cached data stream', async function () {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
       let calledWithArgument: string;
       mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
         return Promise.resolve({
@@ -297,6 +299,8 @@ describe('ReadThroughDataCache', function () {
         });
       });
       mock.method(mockContiguousDataStore, 'get', (hash: string) => {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         calledWithArgument = hash;
         return new TestDestroyedReadable();
       });
@@ -307,6 +311,8 @@ describe('ReadThroughDataCache', function () {
           requestAttributes,
         });
 
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         let receivedData = '';
 
         for await (const chunk of result.stream) {
@@ -425,6 +431,8 @@ describe('ReadThroughDataCache', function () {
           requestAttributes,
         });
 
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         let receivedData = '';
 
         for await (const chunk of result.stream) {

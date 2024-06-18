@@ -64,7 +64,7 @@ beforeEach(async () => {
 
   dataSource = new ArIODataSource({
     log,
-    arIO: ArIO.init(),
+    arIO: ArIO.init() as any,
     nodeWallet: 'localNode',
   });
 
@@ -115,6 +115,8 @@ describe('ArIODataSource', () => {
         },
       });
 
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
       let receivedData = '';
 
       for await (const chunk of data.stream) {
@@ -203,6 +205,8 @@ describe('ArIODataSource', () => {
 
       try {
         const data = await dataSource.getData({ id: 'id' });
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         let receivedData = '';
 
         for await (const chunk of data.stream) {

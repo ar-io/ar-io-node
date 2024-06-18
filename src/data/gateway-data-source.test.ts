@@ -160,6 +160,8 @@ describe('GatewayDataSource', () => {
 
       try {
         const data = await dataSource.getData({ id: 'id', requestAttributes });
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         let receivedData = '';
 
         for await (const chunk of data.stream) {

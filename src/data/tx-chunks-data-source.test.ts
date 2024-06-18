@@ -17,7 +17,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import { Readable } from 'node:stream';
 import * as winston from 'winston';
 
 import {
@@ -135,7 +134,7 @@ describe('TxChunksDataSource', () => {
             requestAttributes,
           });
 
-          for await (const chunk of data.stream) {
+          for await (const _chunk of data.stream) {
             // do nothing
           }
         } catch (e) {
@@ -165,7 +164,7 @@ describe('TxChunksDataSource', () => {
               requestAttributes,
             });
 
-            for await (const chunk of data.stream) {
+            for await (const _chunk of data.stream) {
               // do nothing
             }
           } catch (e) {
