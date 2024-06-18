@@ -81,6 +81,10 @@ const composeUp = async ({
       'upload-service-1',
       Wait.forLogMessage('Listening on port 5100'),
     )
+    .withWaitStrategy(
+      'observer-1',
+      Wait.forLogMessage('Listening on port 5050'),
+    )
     .withWaitStrategy('core-1', Wait.forLogMessage('Listening on port 4000'))
     .up();
 };
