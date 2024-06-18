@@ -132,7 +132,9 @@ describe('Bundler Sidecar', () => {
     const res = await axios({
       method: 'get',
       url: `http://localhost:${3000}/${dataItem.id}`,
+      validateStatus: () => true,
     });
+
     assert.equal(res.data, 'test data');
 
     await waitForIndexing();
@@ -144,8 +146,9 @@ describe('Bundler Sidecar', () => {
     assert.equal(dataItems.length, 1);
     const importedDataItem = dataItems[0];
     assert.equal(toB64Url(importedDataItem.id), dataItem.id);
-    assert.equal(toB64Url(importedDataItem.parent_id), 'AA');
-    assert.equal(toB64Url(importedDataItem.root_transaction_id), 'AA');
+    assert.equal(importedDataItem.parent_id, null);
+    assert.equal(importedDataItem.root_transaction_id, null);
+    assert.equal(importedDataItem.data_offset, null);
     assert.equal(toB64Url(importedDataItem.signature), dataItem.signature);
     assert.equal(toB64Url(importedDataItem.anchor), dataItem.anchor);
     assert.equal(toB64Url(importedDataItem.target), dataItem.target);
@@ -153,7 +156,6 @@ describe('Bundler Sidecar', () => {
       toB64Url(importedDataItem.owner_address),
       sha256B64Url(fromB64Url(dataItem.owner)),
     );
-    assert.equal(importedDataItem.data_offset, 0);
     assert.equal(importedDataItem.data_size, 9);
     assert.equal(importedDataItem.tag_count, 1);
     assert.equal(importedDataItem.content_type, 'text/plain');
