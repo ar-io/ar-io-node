@@ -19,7 +19,7 @@ import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import * as winston from 'winston';
 import axios from 'axios';
-import { ArIO, ArIOReadable } from '@ar.io/sdk';
+import { AoIORead, IO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
@@ -29,7 +29,7 @@ import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 let log: winston.Logger;
 let dataSource: ArIODataSource;
 let requestAttributes: RequestAttributes;
-let mockedArIOInstance: ArIOReadable;
+let mockedArIOInstance: AoIORead;
 let mockedAxiosGet: any;
 
 before(async () => {
@@ -54,7 +54,7 @@ beforeEach(async () => {
     },
   });
 
-  mock.method(ArIO, 'init', () => mockedArIOInstance);
+  mock.method(IO, 'init', () => mockedArIOInstance);
 
   mock.method(axios, 'get', mockedAxiosGet);
 
@@ -64,7 +64,7 @@ beforeEach(async () => {
 
   dataSource = new ArIODataSource({
     log,
-    arIO: ArIO.init(),
+    arIO: IO.init(),
     nodeWallet: 'localNode',
   });
 
@@ -78,7 +78,7 @@ afterEach(async () => {
 
 describe('ArIODataSource', () => {
   describe('constructor', () => {
-    it('should fetch peers and upodate peer list ignoring the running node as a peer', async () => {
+    it('should fetch peers and update peer list ignoring the running node as a peer', async () => {
       assert.deepEqual(dataSource.peers, {
         peer1: 'http://peer1.com',
         peer2: 'https://peer2.com',
@@ -115,6 +115,8 @@ describe('ArIODataSource', () => {
         },
       });
 
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
       let receivedData = '';
 
       for await (const chunk of data.stream) {
@@ -203,6 +205,8 @@ describe('ArIODataSource', () => {
 
       try {
         const data = await dataSource.getData({ id: 'id' });
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         let receivedData = '';
 
         for await (const chunk of data.stream) {
