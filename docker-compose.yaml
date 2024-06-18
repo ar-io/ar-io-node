@@ -93,7 +93,7 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-f4b2b2b1d4e6016d7392fdcab2c084e4de126376}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-1a99076d834418084f8d191d165d23b787f88476}
     restart: on-failure:5
     ports:
       - 5050:5050
@@ -114,7 +114,7 @@ services:
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-13-pre}
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-fe035b80cc9e6038b4d4bec671ec9b33ac184e18}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-7cd39cf8fd65666aa34bc70bda1c5aebfaec9ed1}
     restart: on-failure:5
     ports:
       - 6000:6000
