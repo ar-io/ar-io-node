@@ -20,6 +20,7 @@ import { after, before, describe, it } from 'node:test';
 import { rimraf } from 'rimraf';
 import {
   DockerComposeEnvironment,
+  PullPolicy,
   StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
@@ -75,6 +76,7 @@ const composeUp = async ({
     })
     .withBuild()
     .withProfiles('bundler')
+    .withPullPolicy(PullPolicy.alwaysPull())
     .withWaitStrategy(
       'upload-service-1',
       Wait.forLogMessage('Listening on port 5100'),
