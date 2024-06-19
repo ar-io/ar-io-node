@@ -18,7 +18,6 @@
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
 import { Transform } from 'node:stream';
-import url from 'node:url';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
@@ -348,7 +347,8 @@ const sendManifestResponse = async ({
     // Add a trailing slash if needed
     if (req.path === `/${id}`) {
       // Extract query string using the url module
-      const queryString = url.parse(req.url).search ?? '';
+      const queryString =
+        new URL(req.url, `http://${req.headers.host}`).search ?? '';
 
       // Add a trailing slash and replace any number of repeated slashes
       res.redirect(301, `/${id}/${queryString}`);

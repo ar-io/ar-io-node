@@ -36,9 +36,19 @@ export const stubTxID = '0000000000000000000000000000000000000000000';
 export const stubAns104Bundle = async (): Promise<Readable> => {
   return fs.createReadStream(`./test/mock_files/ans104_bundle`);
 };
-export const exampleManifestStream = (): Readable => {
+export const exampleManifestStreamV010 = (): Readable => {
   return fs.createReadStream(
-    './test/mock_files/manifests/example_manifest.json',
+    './test/mock_files/manifests/example_manifest_v0.1.0.json',
+  );
+};
+export const exampleManifestStreamV020FallbackId = (): Readable => {
+  return fs.createReadStream(
+    './test/mock_files/manifests/example_manifest_v0.2.0_fallback_id.json',
+  );
+};
+export const exampleManifestStreamV020FallbackPath = (): Readable => {
+  return fs.createReadStream(
+    './test/mock_files/manifests/example_manifest_v0.2.0_fallback_path.json',
   );
 };
 
