@@ -231,10 +231,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   let currentKey: string | undefined;
   const keyPath: Array<string | number> = [];
   let indexPath: string | undefined;
-  let fallbackData: {
-    id?: string;
-    path?: string;
-  } = {};
+  let fallbackId: string;
   let paths: { [k: string]: string } = {};
   let hasValidManifestKey = false; // { "manifest": "arweave/paths" }
   let hasValidManifestVersion = false; // { "version": "0.1.0" } OR { "version": "0.2.0" }}
@@ -249,14 +246,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   });
 
   pipeline.on('end', () => {
-    if (fallbackData !== undefined) {
-      const { id, path } = fallbackData;
-      if (path !== undefined && paths[path] !== undefined) {
-        emitter.emit('fallback', { id: paths[path], path });
-      }
-      if (id !== undefined) {
-        emitter.emit('fallback', { id });
-      }
+    if (fallbackId !== undefined) {
+      emitter.emit('fallback', { id: fallbackId });
     }
 
     emitter.emit('end', {
@@ -314,22 +305,18 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       // Resolve if the path id is already known
       if (indexPath !== undefined && paths[indexPath] !== undefined) {
         emitter.emit('index', { path: indexPath, id: paths[indexPath] });
+        paths = {};
       }
     }
 
-    // Fallback - { "fallback": { "path": "some/asset.html" } } OR { "fallback": { "id": "fallback-id" } }
+    // Fallback - { "fallback": { "fallback": { "id": "<data-id>" } }
     if (
       keyPath.length === 1 &&
       keyPath[0] === 'fallback' &&
       isManifestV2 &&
-      (currentKey === 'id' || currentKey === 'path')
+      currentKey === 'id'
     ) {
-      if (currentKey === 'id') {
-        fallbackData.id = data;
-      }
-      if (currentKey === 'path') {
-        fallbackData.path = data;
-      }
+      fallbackId = data;
     }
 
     // Paths - { "paths": { "some/path/file.html": { "id": "<data-id>" } }
@@ -341,10 +328,12 @@ export function parseManifestStream(stream: Readable): EventEmitter {
     ) {
       pathCount++;
       const p = keyPath[1];
-      paths[p] = data;
       emitter.emit('path', { path: p, id: data });
-      if (p === indexPath) {
+      if (indexPath === undefined) {
+        paths[p] = data; // Maintain map of paths for use later
+      } else if (p === indexPath) {
         emitter.emit('index', { path: p, id: data });
+        paths = {};
       }
     }
   });
