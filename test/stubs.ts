@@ -41,14 +41,9 @@ export const exampleManifestStreamV010 = (): Readable => {
     './test/mock_files/manifests/example_manifest_v0.1.0.json',
   );
 };
-export const exampleManifestStreamV020FallbackId = (): Readable => {
+export const exampleManifestStreamV020 = (): Readable => {
   return fs.createReadStream(
-    './test/mock_files/manifests/example_manifest_v0.2.0_fallback_id.json',
-  );
-};
-export const exampleManifestStreamV020FallbackPath = (): Readable => {
-  return fs.createReadStream(
-    './test/mock_files/manifests/example_manifest_v0.2.0_fallback_path.json',
+    './test/mock_files/manifests/example_manifest_v0.2.0.json',
   );
 };
 

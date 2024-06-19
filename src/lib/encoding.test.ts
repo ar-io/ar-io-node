@@ -40,8 +40,7 @@ import {
 import {
   ArweaveChainSourceStub,
   exampleManifestStreamV010,
-  exampleManifestStreamV020FallbackId,
-  exampleManifestStreamV020FallbackPath,
+  exampleManifestStreamV020,
 } from '../../test/stubs.js';
 
 const TEST_STRING = 'http://test.com';
@@ -284,31 +283,29 @@ describe('Manifest parsing', () => {
       });
     });
 
-    describe('manifest v0.2.0 - fallback id', () => {
+    describe('manifest v0.2.0', () => {
       it('should return the ID for the index path', async () => {
-        const id = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackId(),
-        );
+        const id = await resolveManifestStreamPath(exampleManifestStreamV020());
         assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
       });
 
       it('should return the ID for non-index paths', async () => {
         // TODO use an array here
         const id1 = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackId(),
+          exampleManifestStreamV020(),
           'css/mobile.css',
         );
         assert.equal(id1, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
 
         const id2 = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackId(),
+          exampleManifestStreamV020(),
           'assets/img/icon.png',
         );
         assert.equal(id2, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
 
         // somewhat contrived, but this tests a trailing slashes is ignored
         const id3 = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackId(),
+          exampleManifestStreamV020(),
           'assets/img/icon.png/',
         );
         assert.equal(id3, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
@@ -316,49 +313,10 @@ describe('Manifest parsing', () => {
 
       it('should return fallback if the path is not found', async () => {
         const id = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackId(),
+          exampleManifestStreamV020(),
           'missing',
         );
         assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
-      });
-    });
-
-    describe('manifest v0.2.0 - fallback path', () => {
-      it('should return the ID for the index path', async () => {
-        const id = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackPath(),
-        );
-        assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
-      });
-
-      it('should return the ID for non-index paths', async () => {
-        // TODO use an array here
-        const id1 = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackPath(),
-          'css/mobile.css',
-        );
-        assert.equal(id1, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
-
-        const id2 = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackPath(),
-          'assets/img/icon.png',
-        );
-        assert.equal(id2, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
-
-        // somewhat contrived, but this tests a trailing slashes is ignored
-        const id3 = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackPath(),
-          'assets/img/icon.png/',
-        );
-        assert.equal(id3, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
-      });
-
-      it('should return fallback if the path is not found', async () => {
-        const id = await resolveManifestStreamPath(
-          exampleManifestStreamV020FallbackPath(),
-          'missing',
-        );
-        assert.equal(id, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
       });
     });
   });
