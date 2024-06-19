@@ -77,6 +77,7 @@ const composeUp = async ({
     .withBuild()
     .withProfiles('bundler')
     .withPullPolicy(PullPolicy.alwaysPull())
+    .withWaitStrategy('localstack-1', Wait.forLogMessage('Ready'))
     .withWaitStrategy(
       'upload-service-1',
       Wait.forLogMessage('Listening on port 5100'),
