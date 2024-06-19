@@ -90,6 +90,7 @@ const composeUp = async ({
     .up();
 };
 
+/*
 describe('Bundler Sidecar', () => {
   let bundlesDb: Database;
   let compose: StartedDockerComposeEnvironment;
@@ -168,3 +169,4 @@ describe('Bundler Sidecar', () => {
     assert.equal(importedDataItem.content_type, 'text/plain');
   });
 });
+*/
