@@ -253,25 +253,28 @@ describe('Manifest parsing', () => {
       });
 
       it('should return the ID for non-index paths', async () => {
-        // TODO use an array here
-        const id1 = await resolveManifestStreamPath(
-          exampleManifestStreamV010(),
-          'css/mobile.css',
-        );
-        assert.equal(id1, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
+        const paths = [
+          {
+            path: 'css/mobile.css',
+            id: 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ',
+          },
+          {
+            path: 'assets/img/icon.png',
+            id: '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo',
+          },
+          {
+            path: 'assets/img/icon.png/',
+            id: '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo',
+          },
+        ];
 
-        const id2 = await resolveManifestStreamPath(
-          exampleManifestStreamV010(),
-          'assets/img/icon.png',
-        );
-        assert.equal(id2, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
-
-        // somewhat contrived, but this tests a trailing slashes is ignored
-        const id3 = await resolveManifestStreamPath(
-          exampleManifestStreamV010(),
-          'assets/img/icon.png/',
-        );
-        assert.equal(id3, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
+        for (const { path, id } of paths) {
+          const resolvedId = await resolveManifestStreamPath(
+            exampleManifestStreamV020(),
+            path,
+          );
+          assert.equal(resolvedId, id);
+        }
       });
 
       it('should return undefined if the path is not found', async () => {
@@ -290,25 +293,28 @@ describe('Manifest parsing', () => {
       });
 
       it('should return the ID for non-index paths', async () => {
-        // TODO use an array here
-        const id1 = await resolveManifestStreamPath(
-          exampleManifestStreamV020(),
-          'css/mobile.css',
-        );
-        assert.equal(id1, 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ');
+        const paths = [
+          {
+            path: 'css/mobile.css',
+            id: 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ',
+          },
+          {
+            path: 'assets/img/icon.png',
+            id: '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo',
+          },
+          {
+            path: 'assets/img/icon.png/',
+            id: '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo',
+          },
+        ];
 
-        const id2 = await resolveManifestStreamPath(
-          exampleManifestStreamV020(),
-          'assets/img/icon.png',
-        );
-        assert.equal(id2, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
-
-        // somewhat contrived, but this tests a trailing slashes is ignored
-        const id3 = await resolveManifestStreamPath(
-          exampleManifestStreamV020(),
-          'assets/img/icon.png/',
-        );
-        assert.equal(id3, '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo');
+        for (const { path, id } of paths) {
+          const resolvedId = await resolveManifestStreamPath(
+            exampleManifestStreamV020(),
+            path,
+          );
+          assert.equal(resolvedId, id);
+        }
       });
 
       it('should return fallback if the path is not found', async () => {
