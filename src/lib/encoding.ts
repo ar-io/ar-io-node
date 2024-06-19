@@ -231,9 +231,14 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   let currentKey: string | undefined;
   const keyPath: Array<string | number> = [];
   let indexPath: string | undefined;
+  let fallbackData: {
+    id?: string;
+    path?: string;
+  } = {};
   let paths: { [k: string]: string } = {};
   let hasValidManifestKey = false; // { "manifest": "arweave/paths" }
-  let hasValidManifestVersion = false; // { "version": "0.1.0" }
+  let hasValidManifestVersion = false; // { "version": "0.1.0" } OR { "version": "0.2.0" }}
+  let isManifestV2 = false;
   let pathCount = 0;
 
   const pipeline = new Chain([stream, parser()]);
@@ -244,6 +249,16 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   });
 
   pipeline.on('end', () => {
+    if (fallbackData !== undefined) {
+      const { id, path } = fallbackData;
+      if (path !== undefined && paths[path] !== undefined) {
+        emitter.emit('fallback', { id: paths[path], path });
+      }
+      if (id !== undefined) {
+        emitter.emit('fallback', { id });
+      }
+    }
+
     emitter.emit('end', {
       pathCount,
       indexPath,
@@ -277,8 +292,15 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       hasValidManifestKey = true;
     }
 
-    // Manifest version - { "version": "0.1.0" }
-    if (keyPath.length === 0 && currentKey === 'version' && data === '0.1.0') {
+    // Manifest version - { "version": "0.1.0" } OR { "version": "0.2.0" }
+    if (
+      keyPath.length === 0 &&
+      currentKey === 'version' &&
+      (data === '0.1.0' || data === '0.2.0')
+    ) {
+      if (data === '0.2.0') {
+        isManifestV2 = true;
+      }
       hasValidManifestVersion = true;
     }
 
@@ -292,7 +314,21 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       // Resolve if the path id is already known
       if (indexPath !== undefined && paths[indexPath] !== undefined) {
         emitter.emit('index', { path: indexPath, id: paths[indexPath] });
-        paths = {};
+      }
+    }
+
+    // Fallback - { "fallback": { "path": "some/asset.html" } } OR { "fallback": { "id": "fallback-id" } }
+    if (
+      keyPath.length === 1 &&
+      keyPath[0] === 'fallback' &&
+      isManifestV2 &&
+      (currentKey === 'id' || currentKey === 'path')
+    ) {
+      if (currentKey === 'id') {
+        fallbackData.id = data;
+      }
+      if (currentKey === 'path') {
+        fallbackData.path = data;
       }
     }
 
@@ -305,12 +341,10 @@ export function parseManifestStream(stream: Readable): EventEmitter {
     ) {
       pathCount++;
       const p = keyPath[1];
+      paths[p] = data;
       emitter.emit('path', { path: p, id: data });
-      if (indexPath === undefined) {
-        paths[p] = data; // Maintain map of paths for use later
-      } else if (p === indexPath) {
+      if (p === indexPath) {
         emitter.emit('index', { path: p, id: data });
-        paths = {};
       }
     }
   });
@@ -338,6 +372,12 @@ export function resolveManifestStreamPath(
 
     emitter.on('index', (data) => {
       if (sanitizedPath === '') {
+        resolve(data.id);
+      }
+    });
+
+    emitter.on('fallback', (data) => {
+      if (data.id !== undefined) {
         resolve(data.id);
       }
     });
