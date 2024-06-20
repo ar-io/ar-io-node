@@ -271,7 +271,7 @@ describe('Manifest parsing', () => {
 
         for (const { path, id } of paths) {
           const resolvedId = await resolveManifestStreamPath(
-            exampleManifestStreamV020IndexPath(),
+            exampleManifestStreamV010(),
             path,
           );
           assert.equal(resolvedId, id);
