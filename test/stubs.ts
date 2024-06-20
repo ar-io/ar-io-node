@@ -41,9 +41,14 @@ export const exampleManifestStreamV010 = (): Readable => {
     './test/mock_files/manifests/example_manifest_v0.1.0.json',
   );
 };
-export const exampleManifestStreamV020 = (): Readable => {
+export const exampleManifestStreamV020IndexPath = (): Readable => {
   return fs.createReadStream(
-    './test/mock_files/manifests/example_manifest_v0.2.0.json',
+    './test/mock_files/manifests/example_manifest_v0.2.0_index_path.json',
+  );
+};
+export const exampleManifestStreamV020IndexId = (): Readable => {
+  return fs.createReadStream(
+    './test/mock_files/manifests/example_manifest_v0.2.0_index_id.json',
   );
 };
 

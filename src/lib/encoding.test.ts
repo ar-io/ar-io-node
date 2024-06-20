@@ -40,7 +40,8 @@ import {
 import {
   ArweaveChainSourceStub,
   exampleManifestStreamV010,
-  exampleManifestStreamV020,
+  exampleManifestStreamV020IndexId,
+  exampleManifestStreamV020IndexPath,
 } from '../../test/stubs.js';
 
 const TEST_STRING = 'http://test.com';
@@ -270,7 +271,7 @@ describe('Manifest parsing', () => {
 
         for (const { path, id } of paths) {
           const resolvedId = await resolveManifestStreamPath(
-            exampleManifestStreamV020(),
+            exampleManifestStreamV020IndexPath(),
             path,
           );
           assert.equal(resolvedId, id);
@@ -286,9 +287,53 @@ describe('Manifest parsing', () => {
       });
     });
 
-    describe('manifest v0.2.0', () => {
+    describe('manifest v0.2.0 - index id', () => {
       it('should return the ID for the index path', async () => {
-        const id = await resolveManifestStreamPath(exampleManifestStreamV020());
+        const id = await resolveManifestStreamPath(
+          exampleManifestStreamV020IndexId(),
+        );
+        assert.equal(id, 'QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU');
+      });
+
+      it('should return the ID for non-index paths', async () => {
+        const paths = [
+          {
+            path: 'css/mobile.css',
+            id: 'fZ4d7bkCAUiXSfo3zFsPiQvpLVKVtXUKB6kiLNt2XVQ',
+          },
+          {
+            path: 'assets/img/icon.png',
+            id: '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo',
+          },
+          {
+            path: 'assets/img/icon.png/',
+            id: '0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo',
+          },
+        ];
+
+        for (const { path, id } of paths) {
+          const resolvedId = await resolveManifestStreamPath(
+            exampleManifestStreamV020IndexId(),
+            path,
+          );
+          assert.equal(resolvedId, id);
+        }
+      });
+
+      it('should return fallback if the path is not found', async () => {
+        const id = await resolveManifestStreamPath(
+          exampleManifestStreamV020IndexId(),
+          'missing',
+        );
+        assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
+      });
+    });
+
+    describe('manifest v0.2.0 - index path', () => {
+      it('should return the ID for the index path', async () => {
+        const id = await resolveManifestStreamPath(
+          exampleManifestStreamV020IndexPath(),
+        );
         assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
       });
 
@@ -310,7 +355,7 @@ describe('Manifest parsing', () => {
 
         for (const { path, id } of paths) {
           const resolvedId = await resolveManifestStreamPath(
-            exampleManifestStreamV020(),
+            exampleManifestStreamV020IndexPath(),
             path,
           );
           assert.equal(resolvedId, id);
@@ -319,7 +364,7 @@ describe('Manifest parsing', () => {
 
       it('should return fallback if the path is not found', async () => {
         const id = await resolveManifestStreamPath(
-          exampleManifestStreamV020(),
+          exampleManifestStreamV020IndexPath(),
           'missing',
         );
         assert.equal(id, 'cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI');
