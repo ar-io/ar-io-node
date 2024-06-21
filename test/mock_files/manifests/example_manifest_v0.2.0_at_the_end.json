@@ -1,12 +1,6 @@
 {
   "manifest": "arweave/paths",
   "version": "0.2.0",
-  "index": {
-    "path": "index.html"
-  },
-  "fallback": {
-    "id": "cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI"
-  },
   "paths": {
     "index.html": {
       "id": "cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI"
@@ -26,5 +20,11 @@
     "assets/img/icon.png": {
       "id": "0543SMRGYuGKTaqLzmpOyK4AxAB96Fra2guHzYxjRGo"
     }
+  },
+  "index": {
+    "id": "QYWh-QsozsYu2wor0ZygI5Zoa_fRYFc8_X1RkYmw_fU"
+  },
+  "fallback": {
+    "id": "cG7Hdi_iTQPoEYgQJFqJ8NMpN4KoZ-vH_j7pG4iP7NI"
   }
 }

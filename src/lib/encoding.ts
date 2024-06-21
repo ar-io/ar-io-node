@@ -306,6 +306,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       indexProps.path = data;
       // Resolve if the path id is already known
       if (
+        indexProps.id === undefined &&
         indexProps.path !== undefined &&
         paths[indexProps.path] !== undefined
       ) {
@@ -330,7 +331,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       paths = {};
     }
 
-    // Fallback - { "fallback": { "fallback": { "id": "<data-id>" } }
+    // Fallback - { "fallback": { "id": "<data-id>" } }
     if (
       keyPath.length === 1 &&
       keyPath[0] === 'fallback' &&
@@ -340,7 +341,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       fallbackId = data;
     }
 
-    // Fallback - { "fallback": { "fallback": { "id": "<data-id>" } }
+    // Fallback - { "fallback": { "id": "<data-id>" } }
     if (
       keyPath.length === 1 &&
       keyPath[0] === 'fallback' &&
@@ -360,8 +361,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       pathCount++;
       const p = keyPath[1];
       emitter.emit('path', { path: p, id: data });
-      if (indexProps.path === undefined) {
-        if (indexProps.id !== undefined) {
+      if (indexProps.id !== undefined) {
+        if (indexProps.path === undefined) {
           paths[p] = data; // Maintain map of paths for use later
         }
       } else if (p === indexProps.path) {
