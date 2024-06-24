@@ -119,10 +119,10 @@
   dependencies:
     xss "^1.0.8"
 
-"@ar.io/sdk@1.2.0-alpha.1":
-  version "1.2.0-alpha.1"
-  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-1.2.0-alpha.1.tgz#16891e85feab3b4197191c4100272225bf866f34"
-  integrity sha512-4C4JBo6GuaqEm4FnRvJ6n9z4dYA2g++duDRiErsRnOeqmt0ZpuHA4p3vucMBT5d6Bp3nrgckPx+estxRGUqDzg==
+"@ar.io/sdk@1.2.0-alpha.12":
+  version "1.2.0-alpha.12"
+  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-1.2.0-alpha.12.tgz#0db304ea9c2a8e11ce990ba7559ced7473874647"
+  integrity sha512-0W01xGr3yspo+B+Odw5P6edBmxwaonxDdxSYwOrZOnHmkbO/yDm9gpFXtqfOz2T8qqmEr0PqO4nGYx85SyF/pQ==
   dependencies:
     "@permaweb/aoconnect" "^0.0.55"
     arbundles "0.11.0"
@@ -130,6 +130,7 @@
     axios "1.7.2"
     axios-retry "^4.3.0"
     bunyan "^1.8.15"
+    plimit-lit "^3.0.1"
     warp-contracts "1.4.45"
 
 "@aws-crypto/crc32@3.0.0":
@@ -7979,6 +7980,13 @@ picomatch@^2.0.4, picomatch@^2.2.1, picomatch@^2.3.1:
   resolved "https://registry.npmjs.org/picomatch/-/picomatch-2.3.1.tgz"
   integrity sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA==
 
+plimit-lit@^3.0.1:
+  version "3.0.1"
+  resolved "https://registry.yarnpkg.com/plimit-lit/-/plimit-lit-3.0.1.tgz#45a2aee1a7249aa9c2eafc67b6a27bc927e3aa39"
+  integrity sha512-EyTTdP5LMX6WbHihG8R9w6DS+c3pyMpeKooOFuGDCyuVBogQjYNtoYwKLRD6hM1+VkHzGcfIuyLoWi6l5JA3iA==
+  dependencies:
+    queue-lit "^3.0.0"
+
 pluralize@^8.0.0:
   version "8.0.0"
   resolved "https://registry.yarnpkg.com/pluralize/-/pluralize-8.0.0.tgz#1a6fa16a38d12a1901e0320fa017051c539ce3b1"
@@ -8184,6 +8192,11 @@ querystringify@^2.1.1:
   version "2.2.0"
   resolved "https://registry.npmjs.org/querystringify/-/querystringify-2.2.0.tgz"
   integrity sha512-FIqgj2EUvTa7R50u0rGsyTftzjYmv/a3hO345bZNrqabNqjtgiDMgmo4mkUjd+nzU5oF3dClKqFIPUKybUyqoQ==
+
+queue-lit@^3.0.0:
+  version "3.0.0"
+  resolved "https://registry.yarnpkg.com/queue-lit/-/queue-lit-3.0.0.tgz#5062f815e49c28759a2dc12124ab1723d563b932"
+  integrity sha512-iyVL2X5G58kICVGLW/nseYmdHxBoAp2Gav16H23NPtIllyEJ+UheHlYZqBjO+lJHRYoZRSrX7chH8tMrH9MB/A==
 
 queue-microtask@^1.2.2, queue-microtask@^1.2.3:
   version "1.2.3"
