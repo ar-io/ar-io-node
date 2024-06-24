@@ -152,7 +152,7 @@ export const CONTRACT_ID = env.varOrDefault(
 
 export const IO_PROCESS_ID = env.varOrDefault(
   'IO_PROCESS_ID',
-  'GaQrvEMKBpkjofgnBi_B3IgIDmY_XYelVLB6GcRGrHc',
+  'agYcCFJtrMG6cqMuZfskIkFTGvUPddICmtQSBIoPdiA',
 );
 
 export const AR_IO_NODE_RELEASE = env.varOrDefault(
