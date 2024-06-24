@@ -57,7 +57,6 @@ services:
       - ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
       - SANDBOX_PROTOCOL=${SANDBOX_PROTOCOL:-}
       - START_WRITERS=${START_WRITERS:-}
-      - CONTRACT_ID=${CONTRACT_ID:-}
       - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-redis}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
@@ -121,10 +120,9 @@ services:
     environment:
       - PORT=6000
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - CONTRACT_ID=${CONTRACT_ID:-}
+      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - RUN_RESOLVER=${RUN_RESOLVER:-false}
       - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
-      - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
       - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
     volumes:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
