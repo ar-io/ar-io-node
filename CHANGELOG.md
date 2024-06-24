@@ -11,8 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added support for optimistically reading data items uploaded using the
   integrated Turbo bundler via the LocalStack S3 interface.
 - Added `X-AR-IO-Origin-Node-Release` header to outbound data requests.
-- Addded `hops`, `origin`, and `originNodeRelease` query params to
+- Added `hops`, `origin`, and `originNodeRelease` query params to
   outbound data requests.
+- Added support for `fallback` in v0.2 manifests that is used if no path in
+  the the manifest is matched.
+
 
 ### Changed
 
