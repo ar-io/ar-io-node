@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Updated Observer to read prescribed names from and write observations to the
   ar.io AO network process.
+- Updated Resolver to read from the ar.io AO network process.
 
 ### Fixed
 
