@@ -319,6 +319,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
       content_type: contentType ?? item.content_type,
       tag_count: item.tags.length,
       indexed_at: currentUnixTimestamp(),
+      signature_type: item.signature_type,
     },
   };
 }

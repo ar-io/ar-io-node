@@ -266,6 +266,7 @@ export interface NormalizedBundleDataItem {
   data_hash: string;
   filter?: string;
   content_type?: string;
+  signature_type?: number;
 }
 
 export interface NormalizedOptimisticDataItem {
@@ -285,6 +286,7 @@ export interface NormalizedOptimisticDataItem {
   data_hash: null;
   filter?: string;
   content_type?: string;
+  signature_type?: number;
 }
 
 type NormalizedDataItem =
