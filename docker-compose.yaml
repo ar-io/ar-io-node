@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-bd2a6981cf7a12c5643742ef51b4addab40e5aa1}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: on-failure:5
@@ -22,7 +22,7 @@ services:
       - core
       - observer
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-792b0c54b44c7e4544d4a16fa25cbaa38c722458}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: on-failure:5
@@ -110,7 +110,7 @@ services:
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-13}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-14-pre}
 
   resolver:
     image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-9b1609b4036870f1656d476172f27cd6ea3cd682}
@@ -128,7 +128,7 @@ services:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-07458922bece28b209ed9d3bd9886fa1a4a9434f}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
     build:
       context: litestream/
       dockerfile: Dockerfile
