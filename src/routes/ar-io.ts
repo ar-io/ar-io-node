@@ -53,6 +53,9 @@ arIoRouter.get('/ar-io/info', (_req, res) => {
   res.status(200).send({
     wallet: config.AR_IO_WALLET,
     processId: config.IO_PROCESS_ID,
+    ans104UnbundleFilter: config.ANS104_UNBUNDLE_FILTER_PARSED,
+    ans104IndexFilter: config.ANS104_INDEX_FILTER_PARSED,
+    supportedManifestVersions: ['0.1.0', '0.2.0'],
     release,
   });
 });

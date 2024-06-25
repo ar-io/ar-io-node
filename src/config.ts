@@ -90,16 +90,22 @@ export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
 
 // Filter determining which ANS-104 bundles to unbundle
+export const ANS104_UNBUNDLE_FILTER_PARSED = JSON.parse(
+  env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}'),
+);
 export const ANS104_UNBUNDLE_FILTER_STRING = canonicalize(
-  JSON.parse(env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}')),
+  ANS104_UNBUNDLE_FILTER_PARSED,
 );
 export const ANS104_UNBUNDLE_FILTER = createFilter(
   JSON.parse(ANS104_UNBUNDLE_FILTER_STRING),
 );
 
 // Filter determining which ANS-104 data items to index
+export const ANS104_INDEX_FILTER_PARSED = JSON.parse(
+  env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}'),
+);
 export const ANS104_INDEX_FILTER_STRING = canonicalize(
-  JSON.parse(env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}')),
+  ANS104_INDEX_FILTER_PARSED,
 );
 export const ANS104_INDEX_FILTER = createFilter(
   JSON.parse(ANS104_INDEX_FILTER_STRING),
