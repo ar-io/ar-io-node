@@ -4,13 +4,13 @@ INSERT INTO stable_data_items (
   height, block_transaction_index,
   signature, anchor, owner_address, target,
   data_offset, data_size, content_type,
-  tag_count, indexed_at
+  tag_count, indexed_at, signature_type
 ) SELECT
   ndi.id, ndi.parent_id, ndi.root_transaction_id,
   ndi.height, sbt.block_transaction_index,
   ndi.signature, ndi.anchor, ndi.owner_address, ndi.target,
   ndi.data_offset, ndi.data_size, ndi.content_type,
-  ndi.tag_count, ndi.indexed_at
+  ndi.tag_count, ndi.indexed_at, ndi.signature_type
 FROM new_data_items ndi
 JOIN core.stable_block_transactions sbt
   ON ndi.root_transaction_id = sbt.transaction_id

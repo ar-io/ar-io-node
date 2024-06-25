@@ -451,11 +451,12 @@ describe('Indexing', function () {
       compose = await composeUp();
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
 
-      // queue bundle R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA
+      // queue bundle FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY
       // bundle structure:
-      // - R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA
-      //   - hSO-1WQWf4QSeGQLrCsVG_aVT8UZ0yjsgPvIJgil_CE
-      //   - py4Z2DwWy-HMTvak7H7D14t107NpwI4Vj7KzqfCdJVw
+      // - FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY
+      //  - cMDqJJ4G0DDN-7mduMYyFWL1kHh9_xQuQtH8sChg5Sw
+      //  - P1ftTNGa7XT7_xZjX7Zz03fjRg5QjUk7Vs7oIF44MSU
+      //  - b8fu8hGUgGyYhpPlBKGJ0X-o3SyDGMfGV24KmN_cL5c
       await axios({
         method: 'post',
         url: 'http://localhost:4000/ar-io/admin/queue-bundle',
@@ -464,7 +465,7 @@ describe('Indexing', function () {
           'Content-Type': 'application/json',
         },
         data: {
-          id: 'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+          id: 'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY',
         },
       });
 
@@ -482,12 +483,28 @@ describe('Indexing', function () {
       dataItems.forEach((dataItem) => {
         assert.equal(
           toB64Url(dataItem.parent_id),
-          'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+          'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY',
         );
         assert.equal(
           toB64Url(dataItem.root_transaction_id),
-          'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+          'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY',
         );
+      });
+    });
+
+    it('Verifying if data items signature type were correctly indexed', async function () {
+      const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
+      const dataItems = stmt.all();
+
+      const idAndSignatureType = {
+        'cMDqJJ4G0DDN-7mduMYyFWL1kHh9_xQuQtH8sChg5Sw': 1,
+        P1ftTNGa7XT7_xZjX7Zz03fjRg5QjUk7Vs7oIF44MSU: 3,
+        'b8fu8hGUgGyYhpPlBKGJ0X-o3SyDGMfGV24KmN_cL5c': 4,
+      } as const;
+
+      dataItems.forEach((dataItem) => {
+        const id = toB64Url(dataItem.id) as keyof typeof idAndSignatureType;
+        assert.equal(dataItem.signature_type, idAndSignatureType[id]);
       });
     });
   });

@@ -75,6 +75,17 @@ interface DataItemInfo {
   dataSize: number;
 }
 
+const signatureType = {
+  arweave: 1,
+  ed25519: 2,
+  ethereum: 3,
+  solana: 4,
+  injectedAptos: 5,
+  multiAptos: 6,
+  typedEthereum: 7,
+} as const;
+type SignatureTypeKey = keyof typeof signatureType;
+
 export function normalizeAns104DataItem({
   rootTxId,
   parentId,
@@ -128,6 +139,7 @@ export function normalizeAns104DataItem({
     data_hash: dataHash,
     filter,
     content_type: contentType,
+    signature_type: signatureType[ans104DataItem.sigName as SignatureTypeKey],
   } as NormalizedDataItem;
 }
 

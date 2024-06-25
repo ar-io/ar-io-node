@@ -1,0 +1,3 @@
+ALTER TABLE new_data_items ADD COLUMN signature_type INTEGER;
+ALTER TABLE stable_data_items ADD COLUMN signature_type INTEGER;
+
