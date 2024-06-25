@@ -145,14 +145,9 @@ export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
 // The wallet for this gateway
 export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
-export const CONTRACT_ID = env.varOrDefault(
-  'CONTRACT_ID',
-  'bLAgYxAdX2Ry-nt6aH2ixgvJXbpsEYm28NgJgyqfs-U',
-);
-
 export const IO_PROCESS_ID = env.varOrDefault(
   'IO_PROCESS_ID',
-  'GaQrvEMKBpkjofgnBi_B3IgIDmY_XYelVLB6GcRGrHc',
+  'agYcCFJtrMG6cqMuZfskIkFTGvUPddICmtQSBIoPdiA',
 );
 
 export const AR_IO_NODE_RELEASE = env.varOrDefault(

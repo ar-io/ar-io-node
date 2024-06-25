@@ -57,7 +57,6 @@ services:
       - ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
       - SANDBOX_PROTOCOL=${SANDBOX_PROTOCOL:-}
       - START_WRITERS=${START_WRITERS:-}
-      - CONTRACT_ID=${CONTRACT_ID:-}
       - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - CHAIN_CACHE_TYPE=${CHAIN_CACHE_TYPE:-redis}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis:6379}
@@ -93,7 +92,7 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-1a99076d834418084f8d191d165d23b787f88476}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-60809d95aa162117867ab300634ceec2d2a49337}
     restart: on-failure:5
     ports:
       - 5050:5050
@@ -114,17 +113,16 @@ services:
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-13-pre}
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-7cd39cf8fd65666aa34bc70bda1c5aebfaec9ed1}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-9b1609b4036870f1656d476172f27cd6ea3cd682}
     restart: on-failure:5
     ports:
       - 6000:6000
     environment:
       - PORT=6000
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - CONTRACT_ID=${CONTRACT_ID:-}
+      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - RUN_RESOLVER=${RUN_RESOLVER:-false}
       - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
-      - CONTRACT_CACHE_URL=${CONTRACT_CACHE_URL:-}
       - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
     volumes:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
