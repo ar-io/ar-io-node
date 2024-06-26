@@ -143,7 +143,7 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY=${AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY:-}
 
   upload-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-6299f5497f5de479a1fb17ec86b764a4bf018f7b}
+    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-fd1032e3012c0179577b08bbfe932f4ad7d805cd}
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       PORT: ${UPLOAD_SERVICE_PORT:-5100}
