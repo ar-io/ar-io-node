@@ -51,6 +51,8 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       });
       const resolvedId =
         response.headers[headerNames.arnsResolvedId.toLowerCase()];
+      const processId =
+        response.headers[headerNames.arnsProcessId.toLowerCase()];
       const ttl =
         parseInt(response.headers[headerNames.arnsTtlSeconds.toLowerCase()]) ||
         DEFAULT_ARNS_TTL_SECONDS;
@@ -60,6 +62,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
           name,
           resolvedId,
           resolvedAt: Date.now(),
+          processId,
           ttl,
         };
       } else {
@@ -83,6 +86,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
+      processId: undefined,
     };
   }
 }
