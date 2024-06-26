@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 14] - 2024-06-26
+
+### Fixed
+
+- Correctly handle manifest `index` after `paths`.
 
 ## [Release 13] - 2024-06-24
 
@@ -17,7 +21,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   outbound data requests.
 - Added support for `fallback` in v0.2 manifests that is used if no path in
   the the manifest is matched.
-
 
 ### Changed
 
