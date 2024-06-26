@@ -82,4 +82,12 @@ describe('ArNS', function () {
 
     assert.strictEqual(typeof res.headers['x-arns-ttl-seconds'], 'string');
   });
+
+  it('Verifying "ardrive.ar-io.localhost" X-ArNS-Process-ID header', async function () {
+    const res = await axios.get('http://localhost:4000', {
+      headers: { Host: 'ardrive.ar-io.localhost' },
+    });
+
+    assert.strictEqual(typeof res.headers['x-arns-process-id'], 'string');
+  });
 });
