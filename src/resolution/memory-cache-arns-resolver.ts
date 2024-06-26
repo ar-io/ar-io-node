@@ -89,6 +89,7 @@ export class MemoryCacheArNSResolver implements NameResolver {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
+      processId: undefined,
     };
   }
 }
