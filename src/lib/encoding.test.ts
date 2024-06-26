@@ -40,6 +40,7 @@ import {
 import {
   ArweaveChainSourceStub,
   exampleManifestStreamV010,
+  exampleManifestStreamV010IndexPathAtEnd,
   exampleManifestStreamV020IndexAndPathAtTheEnd,
   exampleManifestStreamV020IndexId,
   exampleManifestStreamV020IndexIdAndPath,
@@ -285,6 +286,15 @@ describe('Manifest parsing', () => {
           'missing',
         );
         assert.equal(id, undefined);
+      });
+    });
+
+    describe('manifest v0.1.0 with index path at end', () => {
+      it('should return the ID for the index path', async () => {
+        const id = await resolveManifestStreamPath(
+          exampleManifestStreamV010IndexPathAtEnd(),
+        );
+        assert.equal(id, 'hoI_WQI9_5Mf1vASBwLdqE01goxRCgC53yuCrSaUOcs');
       });
     });
 

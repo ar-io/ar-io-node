@@ -361,10 +361,8 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       pathCount++;
       const p = keyPath[1];
       emitter.emit('path', { path: p, id: data });
-      if (indexProps.id !== undefined) {
-        if (indexProps.path === undefined) {
-          paths[p] = data; // Maintain map of paths for use later
-        }
+      if (indexProps.path === undefined && indexProps.id === undefined) {
+        paths[p] = data; // Maintain map of paths for use later
       } else if (p === indexProps.path) {
         emitter.emit('index', { path: p, id: data });
         paths = {};
