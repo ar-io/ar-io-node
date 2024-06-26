@@ -43,7 +43,11 @@ export class StandaloneArNSResolver implements NameResolver {
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
-      const { data } = await axios<{ txId: string; ttlSeconds: number }>({
+      const { data } = await axios<{
+        txId: string;
+        ttlSeconds: number;
+        processId: string;
+      }>({
         method: 'GET',
         url: `/ar-io/resolver/records/${name}`,
         baseURL: this.resolverUrl,
@@ -52,6 +56,7 @@ export class StandaloneArNSResolver implements NameResolver {
 
       const resolvedId = data.txId;
       const ttl = data.ttlSeconds || DEFAULT_ARNS_TTL_SECONDS;
+      const processId = data.processId;
       if (isValidDataId(resolvedId)) {
         this.log.info('Resolved name', {
           name,
@@ -62,12 +67,14 @@ export class StandaloneArNSResolver implements NameResolver {
           name,
           resolvedId,
           resolvedAt: Date.now(),
+          processId: processId,
           ttl,
         };
       } else {
         this.log.warn('Invalid resolved data ID', {
           name,
           resolvedId,
+          processId,
           ttl,
         });
       }
@@ -84,6 +91,7 @@ export class StandaloneArNSResolver implements NameResolver {
       resolvedId: undefined,
       resolvedAt: undefined,
       ttl: undefined,
+      processId: undefined,
     };
   }
 }
