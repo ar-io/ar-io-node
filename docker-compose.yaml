@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-bd2a6981cf7a12c5643742ef51b4addab40e5aa1}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: on-failure:5
@@ -22,7 +22,7 @@ services:
       - core
       - observer
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-ccc40692ee9785aaa48e070a2a4645ee8d915654}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: on-failure:5
