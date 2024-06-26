@@ -84,7 +84,7 @@ You can run a [Turbo] [ANS-104] data item bundler as a sidecar to the ar.io gate
 To get started, supply the required environment variables in `.env` for the integration, most notably:
 
 - `BUNDLER_ARWEAVE_WALLET`: a stringified JWK wallet used for uploading bundles to Arweave.
-- `ALLOW_LISTED_WALLETS`: a comma-separated list of allowed uploader wallet addresses (normalized). See [Managing Bundler Access](#managing-bundler-access) for more permissioning options.
+- `ALLOW_LISTED_ADDRESSES`: a comma-separated list of allowed uploader wallet addresses (normalized). See [Managing Bundler Access](#managing-bundler-access) for more permissioning options.
 
 See the `.env.bundler.example` file for other configuration options, including settings for serving bundler-uploaded data items instantly from your gateway.
 
@@ -98,9 +98,9 @@ Now, the bundler service will be running alongside the ar.io gateway. Your gatew
 
 #### Managing Bundler Access
 
-By default, the bundler will only accept data items uploaded by data item signers whose normalized wallet addresses are in the `ALLOW_LISTED_WALLETS` list. But the following other permissioning configuration schemes are possible:
+By default, the bundler will only accept data items uploaded by data item signers whose normalized wallet addresses are in the `ALLOW_LISTED_ADDRESSES` list. But the following other permissioning configuration schemes are possible:
 
-| Scheme                 | ALLOW_LISTED_WALLETS                        | SKIP_BALANCE_CHECKS | ALLOW_LISTED_SIGNATURE_TYPES | PAYMENT_SERVICE_BASE_URL |
+| Scheme                 | ALLOW_LISTED_ADDRESSES                      | SKIP_BALANCE_CHECKS | ALLOW_LISTED_SIGNATURE_TYPES | PAYMENT_SERVICE_BASE_URL |
 | ---------------------- | ------------------------------------------- | ------------------- | ---------------------------- | ------------------------ |
 | Allow specific wallets | comma-separated normalized wallet addresses | false               | EMPTY or supplied            | EMPTY                    |
 | Allow specific chains  | EMPTY or supplied                           | false               | arbundles sigtype int        | EMPTY                    |
