@@ -23,6 +23,7 @@ const headerNames = {
   cache: 'X-Cache',
   arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
+  arnsProcessId: 'X-ArNS-Process-Id',
 };
 
 export { headerNames };

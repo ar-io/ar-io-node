@@ -515,6 +515,7 @@ export interface ValidNameResolution {
   resolvedId: string;
   resolvedAt: number;
   ttl: number;
+  processId: string;
 }
 
 export interface MissingNameResolution {
@@ -522,6 +523,7 @@ export interface MissingNameResolution {
   resolvedId: undefined;
   resolvedAt: undefined;
   ttl: undefined;
+  processId: undefined;
 }
 
 type NameResolution = ValidNameResolution | MissingNameResolution;

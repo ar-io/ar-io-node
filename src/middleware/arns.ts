@@ -54,13 +54,15 @@ export const createArnsMiddleware = ({
       next();
       return;
     }
-    const { resolvedId, ttl } = await nameResolver.resolve(arnsSubdomain);
+    const { resolvedId, ttl, processId } =
+      await nameResolver.resolve(arnsSubdomain);
     if (resolvedId === undefined) {
       sendNotFound(res);
       return;
     }
     res.header(headerNames.arnsResolvedId, resolvedId);
     res.header(headerNames.arnsTtlSeconds, ttl.toString());
+    res.header(headerNames.arnsProcessId, processId);
     res.header('Cache-Control', `public, max-age=${ttl}`);
     dataHandler(req, res, next);
   });
