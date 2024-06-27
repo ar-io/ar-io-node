@@ -69,12 +69,6 @@ will proxy routes to `arweave.net` not yet implemented in the ar.io node.
 docker compose up --build
 ```
 
-or:
-
-```shell
-docker-compose up --build
-```
-
 Once running, requests can be directed to Envoy server at `localhost:3000`.
 
 ### Run a Turbo Bundler as a Sidecar
@@ -91,7 +85,7 @@ See the `.env.bundler.example` file for other configuration options, including s
 Once environment variables are set, run docker compose with the `bundler` profile.
 
 ```shell
-docker-compose --profile bundler up
+docker compose --profile bundler up
 ```
 
 Now, the bundler service will be running alongside the ar.io gateway. Your gateway will now accept data items at `https://my-gateway.net/bundler/tx` 🚀
@@ -110,7 +104,7 @@ By default, the bundler will only accept data items uploaded by data item signer
 
 ## Configuration
 
-When running via docker-compose, it will read a `.env` file in the project root
+When running via `docker compose`, it will read a `.env` file in the project root
 directory and use the environment variables set there.
 
 ### GraphQL Pass-Through
