@@ -113,7 +113,7 @@ services:
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-14}
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-62b15e75c6524ff344a62d4fb890a619925937a9}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-3b7ee23d111d19f58601df0d79bfea83689e3a34}
     restart: on-failure:5
     ports:
       - 6000:6000
