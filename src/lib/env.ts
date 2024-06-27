@@ -15,6 +15,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import crypto from 'node:crypto';
+
+import log from '../log.js';
 
 export function varOrDefault(envVarName: string, defaultValue: string): string {
   const value = process.env[envVarName];
@@ -24,4 +27,14 @@ export function varOrDefault(envVarName: string, defaultValue: string): string {
 export function varOrUndefined(envVarName: string): string | undefined {
   const value = process.env[envVarName];
   return value !== undefined && value.trim() !== '' ? value : undefined;
+}
+
+export function varOrRandom(envVarName: string): string {
+  const value = process.env[envVarName];
+  if (value === undefined) {
+    const value = crypto.randomBytes(32).toString('base64url');
+    log.info(`${envVarName} not provided, generated random value: ${value}`);
+    return value;
+  }
+  return value;
 }
