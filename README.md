@@ -69,31 +69,42 @@ will proxy routes to `arweave.net` not yet implemented in the ar.io node.
 docker compose up --build
 ```
 
-or:
-
-```shell
-docker-compose up --build
-```
-
 Once running, requests can be directed to Envoy server at `localhost:3000`.
 
 ### Run a Turbo Bundler as a Sidecar
 
-You can run a turbo bundler as a sidecar to the ar.io gateway. This will allow the gateway to accept data items and bundle them into a single transaction before submitting them to the network.
+You can run a [Turbo] [ANS-104] data item bundler as a sidecar to the ar.io gateway service. This will allow the deployed system to accept data items and bundle them into a single transaction before submitting them to the network. The bundler's APIs will be reachable at the `/bundler/` path. For more information on its APIs, you can access docs at `/bundler/api-docs/`.
 
-First, supply the required environment variables in `.env` for the integration including a stringified JWK wallet to `BUNDLER_ARWEAVE_WALLET`. See a `.env.bundler.example` file for a template.
+To get started, supply the required environment variables in `.env` for the integration, most notably:
 
-Then, run docker compose with the `bundler` profile.
+- `BUNDLER_ARWEAVE_WALLET`: a stringified JWK wallet used for uploading bundles to Arweave.
+- `ALLOW_LISTED_ADDRESSES`: a comma-separated list of allowed uploader wallet addresses (normalized). See [Managing Bundler Access](#managing-bundler-access) for more permissioning options.
+
+See the `.env.bundler.example` file for other configuration options, including settings for serving bundler-uploaded data items instantly from your gateway.
+
+Once environment variables are set, run docker compose with the `bundler` profile.
 
 ```shell
-docker-compose --profile bundler up
+docker compose --profile bundler up
 ```
 
 Now, the bundler service will be running alongside the ar.io gateway. Your gateway will now accept data items at `https://my-gateway.net/bundler/tx` 🚀
 
+#### Managing Bundler Access
+
+By default, the bundler will only accept data items uploaded by data item signers whose normalized wallet addresses are in the `ALLOW_LISTED_ADDRESSES` list. But the following other permissioning configuration schemes are possible:
+
+| Scheme                 | ALLOW_LISTED_ADDRESSES                      | SKIP_BALANCE_CHECKS | ALLOW_LISTED_SIGNATURE_TYPES | PAYMENT_SERVICE_BASE_URL |
+| ---------------------- | ------------------------------------------- | ------------------- | ---------------------------- | ------------------------ |
+| Allow specific wallets | comma-separated normalized wallet addresses | false               | EMPTY or supplied            | EMPTY                    |
+| Allow specific chains  | EMPTY or supplied                           | false               | arbundles sigtype int        | EMPTY                    |
+| Allow all              | n/a                                         | true                | n/a                          | n/a                      |
+| Allow none             | EMPTY                                       | false               | EMPTY                        | EMPTY                    |
+| Allow payers           | EMPTY or supplied                           | false               | EMPTY or supplied            | your payment svc url     |
+
 ## Configuration
 
-When running via docker-compose, it will read a `.env` file in the project root
+When running via `docker compose`, it will read a `.env` file in the project root
 directory and use the environment variables set there.
 
 ### GraphQL Pass-Through
@@ -272,3 +283,4 @@ particular ID is blocked.
 [sociable over solitary tests]: https://martinfowler.com/bliki/UnitTest.html
 [prometheus metrics]: https://github.com/siimon/prom-client
 [metrics naming recommendations]: https://prometheus.io/docs/practices/naming/
+[turbo]: https://github.com/ardriveapp/turbo-upload-service/
