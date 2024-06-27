@@ -113,7 +113,7 @@ services:
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-14}
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-9b1609b4036870f1656d476172f27cd6ea3cd682}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-62b15e75c6524ff344a62d4fb890a619925937a9}
     restart: on-failure:5
     ports:
       - 6000:6000
@@ -123,6 +123,7 @@ services:
       - IO_PROCESS_ID=${IO_PROCESS_ID:-}
       - RUN_RESOLVER=${RUN_RESOLVER:-false}
       - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
+      - ARNS_CACHE_TTL_MS=${RESOLVER_CACHE_TTL_MS:-}
       - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
     volumes:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
