@@ -17,7 +17,7 @@
  */
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
-import { Transform } from 'node:stream';
+import { PassThrough, Transform } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
@@ -140,6 +140,11 @@ const handleRangeRequest = (
   }
 
   const isSingleRange = ranges.length === 1;
+  const contentType =
+    dataAttributes?.contentType ??
+    data.sourceContentType ??
+    'application/octet-stream';
+
   if (isSingleRange) {
     const totalSize = data.size;
     const start = ranges[0].start;
@@ -148,12 +153,7 @@ const handleRangeRequest = (
     res.status(206); // Partial Content
     res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
     res.setHeader('Accept-Ranges', 'bytes');
-
-    res.contentType(
-      dataAttributes?.contentType ??
-        data.sourceContentType ??
-        DEFAULT_CONTENT_TYPE,
-    );
+    res.contentType(contentType);
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
@@ -192,8 +192,93 @@ const handleRangeRequest = (
 
     data.stream.pipe(rangeStream).pipe(res);
   } else {
-    log.warn('Multiple ranges are not yet supported');
-    res.status(416).type('text').send('Multiple ranges are not yet supported');
+    const generateBoundary = () => {
+      // This generates a 50 character boundary similar to those used by Firefox.
+      // They are optimized for boyer-moore parsing.
+      // https://github.com/rexxars/byte-range-stream/blob/98a8e06e46193afc45219b63bc2dc5d9c7f77459/src/index.js#L115-L124
+      let boundary = '--------------------------';
+      for (let i = 0; i < 24; i++) {
+        boundary += Math.floor(Math.random() * 10).toString(16);
+      }
+
+      return boundary;
+    };
+    const boundary = generateBoundary();
+    res.status(206); // Partial Content
+    res.setHeader('Content-Type', `multipart/byteranges; boundary=${boundary}`);
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    if (req.method === REQUEST_METHOD_HEAD) {
+      res.end();
+      data.stream.destroy();
+      return;
+    }
+
+    const rangeStreams: { range: any; stream: PassThrough }[] = [];
+
+    ranges.forEach((range) => {
+      const start = range.start;
+      const end = range.end;
+
+      const rangeStream = new PassThrough();
+
+      rangeStreams.push({ range, stream: rangeStream });
+
+      const transformStream = new Transform({
+        transform(chunk, _, callback) {
+          let position = 0; // Position tracking for each Transform stream
+
+          // Calculate the byte range for this chunk relative to the global start
+          // position
+          const chunkStart = position;
+          const chunkEnd = chunkStart + chunk.length - 1;
+
+          // Determine the intersection between the global range and the chunk's
+          // range
+          const intersectionStart = Math.max(start, chunkStart);
+          const intersectionEnd = Math.min(end, chunkEnd);
+
+          if (intersectionStart <= intersectionEnd) {
+            // There is an intersection, so slice and push the relevant part of
+            // the chunk
+            const slicedData = chunk.slice(
+              intersectionStart - chunkStart,
+              intersectionEnd - chunkStart + 1,
+            );
+            rangeStream.write(slicedData);
+          }
+
+          position += chunk.length;
+          callback();
+        },
+      });
+
+      data.stream.pipe(transformStream).pipe(rangeStream);
+    });
+
+    data.stream.on('end', () => {
+      rangeStreams.forEach(({ range, stream }) => {
+        res.write(`--${boundary}\r\n`);
+        res.write(`Content-Type: ${contentType}\r\n`);
+        res.write(
+          `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
+        );
+        res.write('\r\n');
+        const streamData = stream.read();
+        if (streamData) {
+          res.write(streamData);
+        }
+        res.write('\r\n');
+        stream.end();
+      });
+      res.write(`--${boundary}--\r\n`);
+      res.end();
+    });
+
+    data.stream.on('error', (err) => {
+      log.error(`Data stream error: ${err.message}`);
+      res.status(500).end();
+    });
   }
 };
 
