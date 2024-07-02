@@ -18,13 +18,8 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import express from 'express';
-import { Readable, Transform } from 'node:stream';
+import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
-import {
-  MultipartByteRangeDecoder,
-  getBoundary,
-  decodePartHeader,
-} from 'multipart-byte-range';
 
 import log from '../../log.js';
 import {
@@ -225,23 +220,37 @@ describe('Data routes', () => {
           // binary response data is in res.body as a buffer
           assert.ok(Buffer.isBuffer(res.body));
 
-          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, explicit \r\n is needed in the expected response
-          const expectedResponse =
-            `--${boundary}\r\n` +
-            `Content-Type: application/octet-stream\r\n` +
-            `Content-Range: bytes 1-2/10\r\n` +
-            `\r\n` +
-            'es\r\n' + // first range string
-            `--${boundary}\r\n` +
-            `Content-Type: application/octet-stream\r\n` +
-            `Content-Range: bytes 4-5/10\r\n` +
-            `\r\n` +
-            'in\r\n' + // second range string
-            `--${boundary}--\r\n`;
+          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, \n is replaced by \r\n in the expected response
+          const expectedResponse = `--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 1-2/10
+
+es
+--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 4-5/10
+
+in
+--${boundary}--
+`.replace(/\n/g, '\r\n');
           assert.equal(res.body.toString(), expectedResponse);
         });
 
-      const getInvertedRange = request(app)
+      await get;
+    });
+
+    it('should return 206 status code and partial data for a range request with multiple ranges in inverted order', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      const get = request(app)
         .get('/not-a-real-id')
         .set('Range', 'bytes=4-5,1-2')
         .expect(206)
@@ -266,23 +275,92 @@ describe('Data routes', () => {
           // binary response data is in res.body as a buffer
           assert.ok(Buffer.isBuffer(res.body));
 
-          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, explicit \r\n is needed in the expected response
-          const expectedResponse =
-            `--${boundary}\r\n` +
-            `Content-Type: application/octet-stream\r\n` +
-            `Content-Range: bytes 4-5/10\r\n` +
-            `\r\n` +
-            'in\r\n' + // first range string
-            `--${boundary}\r\n` +
-            `Content-Type: application/octet-stream\r\n` +
-            `Content-Range: bytes 1-2/10\r\n` +
-            `\r\n` +
-            'es\r\n' + // second range string
-            `--${boundary}--\r\n`;
+          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, \n is replaced by \r\n in the expected response
+          const expectedResponse = `--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 4-5/10
+
+in
+--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 1-2/10
+
+es
+--${boundary}--
+`.replace(/\n/g, '\r\n');
           assert.equal(res.body.toString(), expectedResponse);
         });
 
-      const getRangeAboveLimit = request(app)
+      await get;
+    });
+
+    it('should return 206 status code and partial data for a range request with multiple ranges without combining ranges', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      const get = request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'bytes=1-2,2-3')
+        .expect(206)
+        .buffer()
+        .parse((res: any, callback: any) => {
+          res.setEncoding('binary');
+          res.data = '';
+          res.on('data', function (chunk: any) {
+            res.data += chunk;
+          });
+          res.on('end', function () {
+            callback(null, Buffer.from(res.data));
+          });
+        })
+        .then((res: any) => {
+          const boundary = res.boundary;
+          assert.equal(
+            res.get('Content-Type'),
+            `multipart/byteranges; boundary=${boundary}`,
+          );
+
+          // binary response data is in res.body as a buffer
+          assert.ok(Buffer.isBuffer(res.body));
+
+          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, \n is replaced by \r\n in the expected response
+          const expectedResponse = `--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 1-2/10
+
+es
+--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 2-3/10
+
+st
+--${boundary}--
+`.replace(/\n/g, '\r\n');
+          assert.equal(res.body.toString(), expectedResponse);
+        });
+
+      await get;
+    });
+
+    it('should return 206 status code and partial data for a range within size but bigger than size', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      const get = request(app)
         .get('/not-a-real-id')
         .set('Range', 'bytes=5-20')
         .expect(206)
@@ -292,6 +370,20 @@ describe('Data routes', () => {
           assert.equal(res.body.toString(), 'ng...');
         });
 
+      await get;
+    });
+
+    it('should return 206 status code and empty data and boundary header for a HEAD range request', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
       const head = request(app)
         .head('/not-a-real-id')
         .set('Range', 'bytes=1-2,4-5')
@@ -305,7 +397,7 @@ describe('Data routes', () => {
           assert.deepEqual(res.body, {});
         });
 
-      await Promise.all([get, getInvertedRange, getRangeAboveLimit, head]);
+      await head;
     });
 
     it('should return 404 given a blocked ID', async () => {
