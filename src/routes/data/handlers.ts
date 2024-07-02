@@ -214,7 +214,8 @@ const handleRangeRequest = (
       return;
     }
 
-    const rangeStreams: { range: any; stream: PassThrough }[] = [];
+    const rangeStreams: { range: rangeParser.Range; stream: PassThrough }[] =
+      [];
 
     ranges.forEach((range) => {
       const start = range.start;
