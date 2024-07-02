@@ -117,9 +117,7 @@ const handleRangeRequest = (
   data: ContiguousData,
   dataAttributes: ContiguousDataAttributes | undefined,
 ) => {
-  const ranges = rangeParser(data.size, rangeHeader, {
-    combine: true,
-  });
+  const ranges = rangeParser(data.size, rangeHeader);
 
   // Malformed range header
   if (ranges === -2) {
