@@ -163,8 +163,28 @@ describe('Data routes', () => {
         });
     });
 
-    // Multiple ranges are not yet supported
-    it('should return 416 status code for a range request with multiple ranges', async () => {
+    it('should return 416 status code for a unsatisfiable range request', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+
+      return request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'bytes=12-30')
+        .expect(416)
+        .then((res: any) => {
+          assert.equal(res.text, 'Range not satisfiable');
+        });
+    });
+
+    it('should return 206 status code and partial data for a range request with multiple ranges', async () => {
       app.get(
         '/:id',
         createDataHandler({
@@ -178,13 +198,206 @@ describe('Data routes', () => {
       const get = request(app)
         .get('/not-a-real-id')
         .set('Range', 'bytes=1-2,4-5')
-        .expect(416);
+        .expect(206)
+        .buffer()
+        .parse((res: any, callback: any) => {
+          res.setEncoding('binary');
+          res.data = '';
+          res.on('data', function (chunk: any) {
+            res.data += chunk;
+          });
+          res.on('end', function () {
+            callback(null, Buffer.from(res.data));
+          });
+        })
+        .then((res: any) => {
+          const boundary = res.boundary;
+          assert.equal(
+            res.get('Content-Type'),
+            `multipart/byteranges; boundary=${boundary}`,
+          );
+
+          // binary response data is in res.body as a buffer
+          assert.ok(Buffer.isBuffer(res.body));
+
+          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, \n is replaced by \r\n in the expected response
+          const expectedResponse = `--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 1-2/10
+
+es
+--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 4-5/10
+
+in
+--${boundary}--
+`.replace(/\n/g, '\r\n');
+          assert.equal(res.body.toString(), expectedResponse);
+        });
+
+      await get;
+    });
+
+    it('should return 206 status code and partial data for a range request with multiple ranges in inverted order', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      const get = request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'bytes=4-5,1-2')
+        .expect(206)
+        .buffer()
+        .parse((res: any, callback: any) => {
+          res.setEncoding('binary');
+          res.data = '';
+          res.on('data', function (chunk: any) {
+            res.data += chunk;
+          });
+          res.on('end', function () {
+            callback(null, Buffer.from(res.data));
+          });
+        })
+        .then((res: any) => {
+          const boundary = res.boundary;
+          assert.equal(
+            res.get('Content-Type'),
+            `multipart/byteranges; boundary=${boundary}`,
+          );
+
+          // binary response data is in res.body as a buffer
+          assert.ok(Buffer.isBuffer(res.body));
+
+          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, \n is replaced by \r\n in the expected response
+          const expectedResponse = `--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 4-5/10
+
+in
+--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 1-2/10
+
+es
+--${boundary}--
+`.replace(/\n/g, '\r\n');
+          assert.equal(res.body.toString(), expectedResponse);
+        });
+
+      await get;
+    });
+
+    it('should return 206 status code and partial data for a range request with multiple ranges without combining ranges', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      const get = request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'bytes=1-2,2-3')
+        .expect(206)
+        .buffer()
+        .parse((res: any, callback: any) => {
+          res.setEncoding('binary');
+          res.data = '';
+          res.on('data', function (chunk: any) {
+            res.data += chunk;
+          });
+          res.on('end', function () {
+            callback(null, Buffer.from(res.data));
+          });
+        })
+        .then((res: any) => {
+          const boundary = res.boundary;
+          assert.equal(
+            res.get('Content-Type'),
+            `multipart/byteranges; boundary=${boundary}`,
+          );
+
+          // binary response data is in res.body as a buffer
+          assert.ok(Buffer.isBuffer(res.body));
+
+          // As  the server respond with a \r\n linebreak and JS template literals use \n linebreaks, \n is replaced by \r\n in the expected response
+          const expectedResponse = `--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 1-2/10
+
+es
+--${boundary}
+Content-Type: application/octet-stream
+Content-Range: bytes 2-3/10
+
+st
+--${boundary}--
+`.replace(/\n/g, '\r\n');
+          assert.equal(res.body.toString(), expectedResponse);
+        });
+
+      await get;
+    });
+
+    it('should return 206 status code and partial data for a range within size but bigger than size', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
+      const get = request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'bytes=5-20')
+        .expect(206)
+        .then((res: any) => {
+          assert.equal(res.get('Content-Type'), 'application/octet-stream');
+
+          assert.equal(res.body.toString(), 'ng...');
+        });
+
+      await get;
+    });
+
+    it('should return 206 status code and empty data and boundary header for a HEAD range request', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          blockListValidator,
+          manifestPathResolver,
+        }),
+      );
       const head = request(app)
         .head('/not-a-real-id')
         .set('Range', 'bytes=1-2,4-5')
-        .expect(416);
+        .expect(206)
+        .expect('Accept-Ranges', 'bytes')
+        .then((res: any) => {
+          assert.equal(
+            res.get('Content-Type'),
+            `multipart/byteranges; boundary=${res.boundary}`,
+          );
+          assert.deepEqual(res.body, {});
+        });
 
-      await Promise.all([get, head]);
+      await head;
     });
 
     it('should return 404 given a blocked ID', async () => {
