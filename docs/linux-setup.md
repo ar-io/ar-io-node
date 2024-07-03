@@ -179,7 +179,7 @@ These packages are not required to run a node in its basic form. However, they w
         - `up`: Start the Docker containers.
         - `-d`: Run the containers as background processes (detached mode).
 
-    **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-commpose.yaml` file. 
+    **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-compose.yaml` file. 
 
 To ensure your node is running correctly, follow the next two steps.
 

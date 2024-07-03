@@ -127,7 +127,7 @@ The hardware specifications listed below represent the minimum system requiremen
         - `up`: Start the Docker containers.
         - `-d`: Run the containers as background processes (detached mode).
         
-      **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-commpose.yaml` file. 
+      **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-compose.yaml` file. 
 
    - If prompted by the firewall, allow access for Docker when requested.
 

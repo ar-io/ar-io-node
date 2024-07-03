@@ -62,7 +62,7 @@ docker run -e START_HEIGHT=800000 -v $PWD/data/:/app/data ar-io-core:latest
 
 ### Envoy & AR.IO Node
 
-You can also run [Envoy] along side an `ar.io` node via [Docker Compose]. Envoy
+You can also run [Envoy] alongside an `ar.io` node via [Docker Compose]. Envoy
 will proxy routes to `arweave.net` not yet implemented in the ar.io node.
 
 ```shell
@@ -184,7 +184,7 @@ The filter syntax is identical to `ANS104_INDEX_FILTER`. Supported filter types 
 
 Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp" }, { "name": "IPFS-Add" }]}"`
 
-After setting up the environment variables, the ar.io gatway will monitor for transactions or data items that match the `WEBHOOK_INDEX_FILTER`. Once a match is found, a webhook will be emitted to all the servers listed in `WEBHOOK_TARGET_SERVERS`.
+After setting up the environment variables, the ar.io gateway will monitor for transactions or data items that match the `WEBHOOK_INDEX_FILTER`. Once a match is found, a webhook will be emitted to all the servers listed in `WEBHOOK_TARGET_SERVERS`.
 
 Ensure that the target servers are configured to receive and process these webhooks appropriately.
 
