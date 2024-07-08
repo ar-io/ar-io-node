@@ -191,9 +191,7 @@ To ensure your node is running correctly, follow the next two steps.
         - `-f`: Follow the logs in real time.
         - `--tail=0`: Ignore all logs from before running the command.
 
-- Make a request to your node using localhost:
-    Open your browser or use the `wget` command in the terminal to navigate to http://localhost:3000/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ.
-    If you can see the image, your node is operating correctly.
+**NOTE**:  Previous versions of these instructions advised checking a gateway's ability to fetch content using `localhost`. Subsequent security updates prevent this without first unsetting `ARNS_ROOT_HOST` in your `.env`.
 
 ## Set up Networking
 

@@ -131,13 +131,6 @@ The hardware specifications listed below represent the minimum system requiremen
 
    - If prompted by the firewall, allow access for Docker when requested.
 
-
-## Test Localhost
-
-- Open your web browser.
-- Enter `http://localhost:3000/3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ` in the address bar.
-- If you can see the image, your node is operating correctly.
-
 ## Set Up Router Port Forwarding
 
 To expose your node to the internet and use a custom domain, follow these steps:
