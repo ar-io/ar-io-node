@@ -27,6 +27,8 @@ arweaveRouter.use(express.json());
 arweaveRouter.post('/chunk', async (req, res) => {
   try {
     const result = await system.arweaveClient.broadcastChunk(req.body);
+    // TODO compute success here based on successCount and a configurable
+    // success threshold instead of in broadcastChunk
     if (result.success) {
       res.status(200).send(result);
     } else {

@@ -698,8 +698,10 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
+  // TODO pass in optional chunk POST timeout with a reasonable default
+  // TODO add a proper return type
   async broadcastChunk(chunk: JsonChunkPost): Promise<any> {
-    // TODO determine if/how to handle failure simulation
+    // TODO move this into Promise.all to simulate failure per POST instead of at the top level
     //this.failureSimulator.maybeFail();
 
     let successCount = 0;
@@ -708,13 +710,14 @@ export class ArweaveCompositeClient
     const results = await Promise.all(
       this.chunkPostUrls.map(async (url) => {
         try {
-          // TODO relay chunk origin header to avoid cycles
+          // TODO relay and honor chunk hops and origin header to avoid cycles
+          // in case we're posting to another gateway
           const resp = await axios({
             url,
             method: 'POST',
             data: chunk,
-            // TODO pass in timeout
             // TODO fix types
+            // TODO use timeout passed in to method
             /* eslint-disable */
             // @ts-ignore - our types don't have timeout
             signal: AbortSignal.timeout(2000),
@@ -723,7 +726,7 @@ export class ArweaveCompositeClient
           successCount++;
 
           return {
-            // TODO is the conditional necessary? can it be simplified?
+            // TODO is this conditional necessary? can it be simplified by making everything else an exception?
             success: resp.status >= 200 && resp.status < 300,
             statusCode: resp.status,
           };
@@ -735,7 +738,7 @@ export class ArweaveCompositeClient
 
           failureCount++;
 
-          // TODO timeout failure indicator
+          // TODO include some sparate indication of failures due to timeouts
           return {
             success: false,
             statusCode: error.response?.status,
@@ -745,6 +748,7 @@ export class ArweaveCompositeClient
     );
 
     return  {
+      // TODO skip returning a boolean here and let the caller decide what to consider success/failure
       success: successCount > 0,
       successCount,
       failureCount,
