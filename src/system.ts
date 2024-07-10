@@ -31,6 +31,7 @@ import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { BundleDataImporter } from './workers/bundle-data-importer.js';
+import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
@@ -52,9 +53,10 @@ import {
   BundleIndex,
   ChainIndex,
   ChainOffsetIndex,
-  ContiguousDataSource,
   ContiguousDataIndex,
+  ContiguousDataSource,
   DataItemIndexWriter,
+  GqlQueryable,
   MatchableItem,
   NestedDataIndexWriter,
   NormalizedDataItem,
@@ -150,6 +152,17 @@ export const contiguousDataIndex: ContiguousDataIndex = db;
 export const blockListValidator: BlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
+export const gqlQueryable: GqlQueryable = (() => {
+  if (config.CLICKHOUSE_URL !== undefined) {
+    return new CompositeClickHouseDatabase({
+      log,
+      gqlQueryable: db,
+      url: config.CLICKHOUSE_URL,
+    });
+  }
+
+  return db;
+})();
 
 // Workers
 export const eventEmitter = new EventEmitter();
