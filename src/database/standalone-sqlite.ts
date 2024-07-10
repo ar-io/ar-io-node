@@ -1758,6 +1758,7 @@ export class StandaloneSqliteDatabaseWorker {
           ? toB64Url(tx.block_previous_block)
           : null,
         parentId: tx.parent_id ? toB64Url(tx.parent_id) : null,
+        isDataItem: tx.data_item_id.length > 1,
       }));
   }
 
@@ -1870,6 +1871,7 @@ export class StandaloneSqliteDatabaseWorker {
         blockTimestamp: tx.block_timestamp,
         blockPreviousBlock: toB64Url(tx.block_previous_block),
         parentId: tx.parent_id ? toB64Url(tx.parent_id) : null,
+        isDataItem: tx.data_item_id.length > 1,
       }));
   }
 

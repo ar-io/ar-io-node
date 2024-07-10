@@ -313,11 +313,11 @@ interface GqlPageInfo {
 
 interface GqlTransaction {
   id: string;
-  anchor: string;
+  anchor: string | null;
   signature: string | null;
   recipient: string | null;
   ownerAddress: string;
-  ownerKey: string;
+  ownerKey: string | null;
   fee: string;
   quantity: string;
   dataSize: string;
@@ -331,6 +331,7 @@ interface GqlTransaction {
   dataItemId: string | null;
   tags: { name: any; value: any }[];
   indexedAt: number;
+  isDataItem: boolean;
 }
 
 interface GqlTransactionEdge {

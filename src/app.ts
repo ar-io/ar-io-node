@@ -61,7 +61,7 @@ app.use(dataRouter);
 app.use(arweaveRouter);
 
 // GraphQL
-const apolloServerInstanceGql = apolloServer(system.db, {
+const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {
   introspection: true,
   persistedQueries: false,
 });

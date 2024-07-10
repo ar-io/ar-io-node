@@ -164,6 +164,9 @@ export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
   '100000',
 );
 
+// ClickHouse URL
+export const CLICKHOUSE_URL = env.varOrUndefined('CLICKHOUSE_URL');
+
 //
 // ArNS and sandboxing
 //

@@ -107,7 +107,7 @@ export const resolvers: IResolvers = {
         id: queryParams.id,
       });
     },
-    transactions: (_, queryParams, { db }) => {
+    transactions: async (_, queryParams, { db }) => {
       log.info('GraphQL transactions query', {
         resolver: 'transactions',
         queryParams,
@@ -148,7 +148,8 @@ export const resolvers: IResolvers = {
   },
   Transaction: {
     block: (parent: GqlTransaction) => {
-      return parent.blockIndepHash !== null
+      // TODO remove ClickHouse height !== null hack once blocks are in ClickHouse
+      return parent.height !== null || parent.blockIndepHash !== null
         ? {
             id: parent.blockIndepHash,
             timestamp: parent.blockTimestamp,
