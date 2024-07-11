@@ -16,7 +16,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import crypto from 'node:crypto';
-import arbundles from 'arbundles/stream/index.js';
 import * as EventEmitter from 'node:events';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
@@ -39,10 +38,7 @@ import {
   NormalizedDataItem,
 } from '../types.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
-
-/* eslint-disable */
-// @ts-ignore
-const { default: processStream } = arbundles;
+import { processBundleStream, DataItemInfo } from './bundles/bundles.js';
 
 type ParseEventName =
   | 'data-item-matched'
@@ -63,29 +59,6 @@ interface ParserMessage {
   matchedItemCount?: number;
 }
 
-interface DataItemInfo {
-  id: string;
-  sigName: string;
-  signature: string;
-  target: string;
-  anchor: string;
-  owner: string;
-  tags: { name: string; value: string }[];
-  dataOffset: number;
-  dataSize: number;
-}
-
-const signatureType = {
-  arweave: 1,
-  ed25519: 2,
-  ethereum: 3,
-  solana: 4,
-  injectedAptos: 5,
-  multiAptos: 6,
-  typedEthereum: 7,
-} as const;
-type SignatureTypeKey = keyof typeof signatureType;
-
 export function normalizeAns104DataItem({
   rootTxId,
   parentId,
@@ -100,12 +73,12 @@ export function normalizeAns104DataItem({
   parentIndex: number;
   index: number;
   filter: string;
-  ans104DataItem: Record<string, any>;
+  ans104DataItem: DataItemInfo;
   dataHash: string;
 }): NormalizedDataItem {
   let contentType: string | undefined;
 
-  const tags = (ans104DataItem.tags || []).map(
+  const tags = ans104DataItem.tags.map(
     (tag: { name: string; value: string }) => {
       // get content type from the first content-type tag
       if (
@@ -123,24 +96,30 @@ export function normalizeAns104DataItem({
   );
 
   return {
+    anchor: ans104DataItem.anchor,
+    content_type: contentType,
+    data_hash: dataHash,
+    data_offset: ans104DataItem.dataOffset,
+    data_size: ans104DataItem.dataSize,
+    filter,
     id: ans104DataItem.id,
     index: index,
+    offset: ans104DataItem.offset,
+    owner: ans104DataItem.owner,
+    owner_address: sha256B64Url(fromB64Url(ans104DataItem.owner)),
+    owner_offset: ans104DataItem.ownerOffset,
+    owner_size: ans104DataItem.ownerSize,
     parent_id: parentId,
     parent_index: parentIndex,
     root_tx_id: rootTxId,
     signature: ans104DataItem.signature,
-    owner: ans104DataItem.owner,
-    owner_address: sha256B64Url(fromB64Url(ans104DataItem.owner)),
-    target: ans104DataItem.target,
-    anchor: ans104DataItem.anchor,
+    signature_offset: ans104DataItem.signatureOffset,
+    signature_size: ans104DataItem.signatureSize,
+    signature_type: ans104DataItem.signatureType,
+    size: ans104DataItem.size,
     tags,
-    data_offset: ans104DataItem.dataOffset,
-    data_size: ans104DataItem.dataSize,
-    data_hash: dataHash,
-    filter,
-    content_type: contentType,
-    signature_type: signatureType[ans104DataItem.sigName as SignatureTypeKey],
-  } as NormalizedDataItem;
+    target: ans104DataItem.target,
+  };
 }
 
 export class Ans104Parser {
@@ -169,7 +148,7 @@ export class Ans104Parser {
     this.contiguousDataSource = contiguousDataSource;
     this.streamTimeout = streamTimeout;
 
-    const self = this;
+    const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
 
     function spawn() {
       const workerUrl = new URL('./ans-104.js', import.meta.url);
@@ -206,7 +185,7 @@ export class Ans104Parser {
                 );
                 break;
               case UNBUNDLE_COMPLETE:
-                const { eventName, ...eventBody } = message;
+                const { eventName, ...eventBody } = message; // eslint-disable-line no-case-declarations
                 eventEmitter.emit(events.ANS104_UNBUNDLE_COMPLETE, {
                   dataItemIndexFilterString,
                   ...eventBody,
@@ -293,6 +272,7 @@ export class Ans104Parser {
     parentId: string;
     parentIndex: number;
   }): Promise<void> {
+    // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve, reject) => {
       let bundlePath: string | undefined;
       let data: ContiguousData | undefined;
@@ -417,7 +397,7 @@ if (!isMainThread) {
   const filter = createFilter(JSON.parse(workerData.dataItemIndexFilterString));
 
   parentPort?.on('message', async (message: any) => {
-    if (message == 'terminate') {
+    if (message === 'terminate') {
       parentPort?.postMessage(null);
       process.exit(0);
     }
@@ -426,7 +406,7 @@ if (!isMainThread) {
     let stream: fs.ReadStream | undefined = undefined;
     try {
       stream = fs.createReadStream(bundlePath);
-      const iterable: DataItemInfo[] = await processStream(stream);
+      const iterable = await processBundleStream(stream);
       const bundleLength = iterable.length;
       let matchedItemCount = 0;
 

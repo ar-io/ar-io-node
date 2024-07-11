@@ -30,6 +30,7 @@ import sql from 'sql-bricks';
 import * as winston from 'winston';
 import CircuitBreaker from 'opossum';
 
+// TODO enable eslint
 /* eslint-disable */
 // @ts-ignore
 // TODO sort out types
@@ -306,20 +307,26 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
     wallets,
     bundleDataItem,
     newDataItem: {
-      id,
-      parent_id: parentId,
-      root_transaction_id: rootTxId,
-      height: height,
-      signature: fromB64Url(item.signature),
       anchor: fromB64Url(item.anchor),
-      owner_address: ownerAddressBuffer,
-      target: fromB64Url(item.target),
+      content_type: contentType ?? item.content_type,
       data_offset: item.data_offset,
       data_size: item.data_size,
-      content_type: contentType ?? item.content_type,
-      tag_count: item.tags.length,
+      height: height,
+      id,
       indexed_at: currentUnixTimestamp(),
+      offset: item.offset,
+      owner_address: ownerAddressBuffer,
+      owner_offset: item.owner_offset,
+      owner_size: item.owner_size,
+      parent_id: parentId,
+      root_transaction_id: rootTxId,
+      signature: fromB64Url(item.signature),
+      signature_offset: item.signature_offset,
+      signature_size: item.signature_size,
       signature_type: item.signature_type,
+      size: item.size,
+      tag_count: item.tags.length,
+      target: fromB64Url(item.target),
     },
   };
 }

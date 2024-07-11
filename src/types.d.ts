@@ -250,43 +250,55 @@ export interface NestedDataIndexWriter {
 }
 
 export interface NormalizedBundleDataItem {
+  anchor: string;
+  content_type?: string;
+  data_hash: string;
+  data_offset: number;
+  data_size: number;
+  filter?: string;
   id: string;
   index: number;
+  offset: number;
+  owner: string;
+  owner_address: string;
+  owner_offset: number;
+  owner_size: number;
   parent_id: string;
   parent_index: number;
   root_tx_id: string;
   signature: string;
-  owner: string;
-  owner_address: string;
-  target: string;
-  anchor: string;
+  signature_offset: number;
+  signature_size: number;
+  signature_type: number;
+  size: number;
   tags: B64uTag[];
-  data_offset: number;
-  data_size: number;
-  data_hash: string;
-  filter?: string;
-  content_type?: string;
-  signature_type?: number;
+  target: string;
 }
 
 export interface NormalizedOptimisticDataItem {
+  anchor: string;
+  content_type?: string;
+  data_hash: null;
+  data_offset: null;
+  data_size: number;
+  filter?: string;
   id: string;
   index: null;
+  offset: null;
+  owner: string;
+  owner_address: string;
+  owner_offset: null;
+  owner_size: null;
   parent_id: null;
   parent_index: null;
   root_tx_id: null;
   signature: string;
-  owner: string;
-  owner_address: string;
-  target: string;
-  anchor: string;
+  signature_offset: null;
+  signature_size: null;
+  signature_type: null;
+  size: null;
   tags: B64uTag[];
-  data_offset: null;
-  data_size: number;
-  data_hash: null;
-  filter?: string;
-  content_type?: string;
-  signature_type?: number;
+  target: string;
 }
 
 type NormalizedDataItem =

@@ -12,7 +12,7 @@
     "@aws-lite/client": "^0.21.7",
     "@aws-lite/s3": "^0.1.21",
     "apollo-server-express": "^3.13.0",
-    "arbundles": "^0.6.19",
+    "arbundles": "^0.11.1",
     "arweave": "^1.14.4",
     "axios": "^1.6.2",
     "better-sqlite3": "^9.4.5",
