@@ -8,4 +8,4 @@ if [ "$(docker ps -q)" ]; then
 fi
 
 # TODO use a pre-built image
-docker-compose up -d
+docker-compose --profile litestream up -d
