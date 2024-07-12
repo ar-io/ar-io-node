@@ -21,6 +21,7 @@ import crypto from 'node:crypto';
 import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
+import { ClickHouseClient, createClient } from '@clickhouse/client';
 
 import {
   b64UrlToUtf8,
@@ -32,7 +33,7 @@ import { currentUnixTimestamp } from '../lib/time.js';
 //import log from '../log.js';
 //import * as metrics from '../metrics.js';
 import {
-  GqlTransaction,
+  GqlTransactionsResult
 } from '../types.js';
 //import * as config from '../config.js';
 
@@ -107,34 +108,21 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
   }
 }
 
-export function toSqliteParams(sqlBricksParams: { values: any[] }) {
-  return sqlBricksParams.values
-    .map((v, i) => [i + 1, v])
-    .reduce(
-      (acc, [i, v]) => {
-        acc[i] = v;
-        return acc;
-      },
-      {} as { [key: string]: any },
-    );
-}
-
 export class ClickHouseGQL
 {
   private log: winston.Logger;
+  private client: ClickHouseClient;
 
   constructor({
     log,
-    host,
-    port,
   }: {
     log: winston.Logger;
-    host: string;
-    port: number;
   }) {
     this.log = log;
 
-    //const timeout = 30000;
+    this.client = createClient({
+      host: 'http://localhost:8123',
+    });
   }
 
   getGqlTransactionsBaseSql() {
@@ -145,15 +133,15 @@ export class ClickHouseGQL
         'block_transaction_index AS block_transaction_index',
         "x'00' AS data_item_id",
         '0 AS indexed_at',
-        'id',
-        'last_tx AS anchor',
-        'target',
-        'CAST(reward AS TEXT) AS reward',
-        'CAST(quantity AS TEXT) AS quantity',
-        'CAST(data_size AS TEXT) AS data_size',
-        'content_type',
-        'owner_address',
-        "'' AS parent_id",
+        'hex(id) AS id',
+        "'' AS anchor",
+        'hex(target) AS target',
+        "'0' AS reward",
+        "'0' AS quantity",
+        "'0' AS data_size",
+        "'' AS content_type",
+        'hex(owner_address) AS owner_address',
+        "hex(parent) AS parent_id",
       )
       .from('transactions t')
   }
@@ -183,50 +171,45 @@ export class ClickHouseGQL
   }) {
     let maxDbHeight = Infinity;
 
-    // TODO use a combo of sqlbricks 'sql' + ClickHouse unhex function for each value
     if (ids?.length > 0) {
-      query.where(sql.in('t.id', ids.map(fromB64Url)));
+      query.where(sql.in('t.id', sql(ids.map((id) => `unhex('${fromB64Url(id).toString('hex')}')`).join(', '))));
     }
 
-    // TODO use a combo of sqlbricks 'sql' + ClickHouse unhex function for each value
     if (recipients?.length > 0) {
-      query.where(sql.in('t.target', recipients.map(fromB64Url)));
+      query.where(sql.in('t.target', sql(recipients.map((recipient) => `unhex('${fromB64Url(recipient).toString('hex')}')`).join(', '))));
     }
 
-    // TODO use a combo of sqlbricks 'sql' + ClickHouse unhex function for each value
     if (owners?.length > 0) {
-      query.where(
-        sql.in('t.owner_address', owners.map(fromB64Url)),
-      );
+      query.where(sql.in('t.owner_address', sql(owners.map((owner) => `unhex('${fromB64Url(owner).toString('hex')}')`).join(', '))));
     }
 
-    if (tags) {
-      // To improve performance, force tags with large result sets to be last
-      const sortByTagJoinPriority = R.sortBy(tagJoinSortPriority);
-      sortByTagJoinPriority(tags).forEach((tag, index) => {
-        // TODO replace with has(tags, ('Content-Type', 'application/json'))
+    //if (tags) {
+    //  // To improve performance, force tags with large result sets to be last
+    //  const sortByTagJoinPriority = R.sortBy(tagJoinSortPriority);
+    //  sortByTagJoinPriority(tags).forEach((tag, index) => {
+    //    // TODO replace with has(tags, ('Content-Type', 'application/json'))
 
-        //const nameHash = crypto
-        //  .createHash('sha1')
-        //  .update(Buffer.from(tag.name, 'utf8'))
-        //  .digest();
-        //query.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
+    //    //const nameHash = crypto
+    //    //  .createHash('sha1')
+    //    //  .update(Buffer.from(tag.name, 'utf8'))
+    //    //  .digest();
+    //    //query.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
 
 
-        // TODO use query.where(or(...))
-        //query.where(
-        //  sql.in(
-        //    `${tagAlias}.tag_value_hash`,
-        //    tag.values.map((value) => {
-        //      return crypto
-        //        .createHash('sha1')
-        //        .update(Buffer.from(value, 'utf8'))
-        //        .digest();
-        //    }),
-        //  ),
-        //);
-      });
-    }
+    //    // TODO use query.where(or(...))
+    //    //query.where(
+    //    //  sql.in(
+    //    //    `${tagAlias}.tag_value_hash`,
+    //    //    tag.values.map((value) => {
+    //    //      return crypto
+    //    //        .createHash('sha1')
+    //    //        .update(Buffer.from(value, 'utf8'))
+    //    //        .digest();
+    //    //    }),
+    //    //  ),
+    //    //);
+    //  });
+    //}
 
     if (minHeight != null && minHeight > 0) {
       query.where(sql.gte('t.height', minHeight));
@@ -236,6 +219,7 @@ export class ClickHouseGQL
       query.where(sql.lte('t.height', maxHeight));
     }
 
+    // TODO unhex this
     if (
       Array.isArray(bundledIn)
     ) {
@@ -389,7 +373,7 @@ export class ClickHouseGQL
     //}
   }
 
-  getGqlStableTransactions({
+  async getGqlTransactions ({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -411,7 +395,7 @@ export class ClickHouseGQL
     maxHeight?: number;
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
-  }): GqlTransaction[] {
+  }): Promise<GqlTransactionsResult> {
     const txsQuery = this.getGqlTransactionsBaseSql();
 
     this.addGqlTransactionFilters({
@@ -428,40 +412,39 @@ export class ClickHouseGQL
     });
 
     const txsSql = txsQuery.toString();
-    const txsFinalSql = `${txsSql} LIMIT ${pageSize + 1}`;
+    const txsFinalSql = `${txsSql} LIMIT 10`;
+    console.log(txsFinalSql);
 
     this.log.debug('Querying ClickHouse transactions...', { sql });
 
-    // TODO execute query against ClickHouse
-    //return this.dbs.core
-    //  .prepare(sql)
-    //  .all(sqliteParams)
-    //  .map((tx) => ({
-    //    height: tx.height,
-    //    blockTransactionIndex: tx.block_transaction_index,
-    //    dataItemId: tx.data_item_id ? toB64Url(tx.data_item_id) : null,
-    //    indexedAt: tx.indexed_at,
-    //    id: toB64Url(tx.id),
-    //    anchor: toB64Url(tx.anchor),
-    //    //signature: toB64Url(tx.signature),
-    //    recipient: tx.target ? toB64Url(tx.target) : null,
-    //    ownerAddress: toB64Url(tx.owner_address),
-    //    //ownerKey: toB64Url(tx.public_modulus),
-    //    fee: tx.reward,
-    //    quantity: tx.quantity,
-    //    dataSize: tx.data_size,
-    //    //tags:
-    //    //  tx.data_item_id.length > 1
-    //    //    ? this.getGqlStableDataItemTags(tx.id)
-    //    //    : this.getGqlStableTransactionTags(tx.id),
-    //    contentType: tx.content_type,
-    //    blockIndepHash: toB64Url(tx.block_indep_hash),
-    //    blockTimestamp: tx.block_timestamp,
-    //    blockPreviousBlock: toB64Url(tx.block_previous_block),
-    //    parentId: tx.parent_id ? toB64Url(tx.parent_id) : null,
-    //  }));
+    const row = await this.client.query({ query: txsFinalSql });
+    const jsonRow = await row.json();
+    const txs = jsonRow.data.map((tx: any) => ({
+      height: tx.height,
+      blockTransactionIndex: tx.block_transaction_index,
+      dataItemId: '',
+      //dataItemId: tx.data_item_id ? toB64Url(Buffer.from('hex', tx.data_item_id)) : null,
+      indexedAt: tx.indexed_at,
+      id: toB64Url(Buffer.from(tx.id, 'hex')),
+      anchor: tx.anchor,
+      signature: '',
+      recipient: tx.target ? toB64Url(Buffer.from(tx.target, 'hex')) : null,
+      ownerAddress: toB64Url(Buffer.from(tx.owner_address, 'hex')),
+      ownerKey: '',
+      fee: tx.reward,
+      quantity: tx.quantity,
+      dataSize: tx.data_size,
+      tags: [], // TODO implement tags
+      contentType: tx.content_type,
+      blockIndepHash: '',
+      blockTimestamp: '0',
+      blockPreviousBlock: '',
+      parentId: tx.parent_id ? toB64Url(Buffer.from(tx.parent_id, 'hex')) : null,
+    }));
 
-    const txs: any = [];
+    console.log(jsonRow);
+
+    //const txs: any = [];
 
     return {
       pageInfo: {
