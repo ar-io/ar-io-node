@@ -14,19 +14,3 @@ fi
 shopt -s extglob
 rm -rf .!(env) || true
 rm -rf * || true # okay since data is stored in /data and /efs
-
-instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-
-# create backup dirs
-mkdir -p /efs/backups/$instance_id/sqlite/previous-before-install
-mkdir -p /efs/backups/$instance_id/sqlite/before-install
-
-# keep an archive of the previous backup in case the copy fails
-if [ "$(ls /efs/backups/$instance_id/before-install/*.db)" ]; then
-  mv /efs/backups/$instance_id/before-install/* /efs/backups/$instance_id/previous-before-install/
-fi
-
-# copy the live DBs to the backup directory
-if [ "$(ls /data/sqlite/*.db)" ]; then
-  cp /data/sqlite/*.db /efs/backups/$instance_id/sqlite/before-install/
-fi
