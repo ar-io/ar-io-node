@@ -371,6 +371,20 @@ export class ClickHouseGQL
     //  orderBy += `, 5 ASC`;
     //  query.orderBy(orderBy);
     //}
+
+    let orderBy = '';
+    if (sortOrder === 'HEIGHT_DESC') {
+      orderBy = 'height DESC, ';
+      orderBy += 'block_transaction_index DESC, ';
+      orderBy += 'is_data_item DESC, ';
+      orderBy += 'id DESC';
+    } else {
+      orderBy = 'height ASC, ';
+      orderBy += 'block_transaction_index ASC, ';
+      orderBy += 'is_data_item ASC, ';
+      orderBy += 'id ASC';
+    }
+    query.orderBy(orderBy);
   }
 
   async getGqlTransactions ({
