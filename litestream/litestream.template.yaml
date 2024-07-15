@@ -6,21 +6,24 @@ secret-access-key: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY
 #@ end
 
 dbs:
-  - path: /app/data/sqlite/core.db
-    replicas:
-      - type: s3
-        #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX != "":
-        path: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX + "/ar_io_node_core.backup.db"
-        #@ end
-        #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX == "":
-        path: ar_io_node_core.backup.db
-        #@ end
-        bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
-        region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
-        forcePathStyle: true
-        sync-interval: 1s
-        snapshot-interval: 24h
-        retention: 168h
+  # Hlöðver: currently we are dealing with a bug uploading core.db
+  #          due to its size. A fix is underway, this is temporary.
+  #
+  # - path: /app/data/sqlite/core.db
+  #   replicas:
+  #     - type: s3
+  #       #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX != "":
+  #       path: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX + "/ar_io_node_core.backup.db"
+  #       #@ end
+  #       #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX == "":
+  #       path: ar_io_node_core.backup.db
+  #       #@ end
+  #       bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
+  #       region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
+  #       forcePathStyle: true
+  #       sync-interval: 1s
+  #       snapshot-interval: 24h
+  #       retention: 168h
   - path: /app/data/sqlite/data.db
     replicas:
       - type: s3

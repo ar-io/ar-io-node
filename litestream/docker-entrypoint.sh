@@ -7,9 +7,10 @@ ytt -f /etc/litestream.template.yaml --data-values-env TVAL >  /etc/litestream.y
 
 chmod go+r /etc/litestream.yml
 
-if [ -n $AR_IO_SQLITE_RESTORE_FROM_BACKUP ]; then
+if [ -n "$AR_IO_SQLITE_RESTORE_FROM_BACKUP" ]; then
   echo "Attempting to restore from backup if exists..."
-  /usr/local/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /app/data/sqlite/core.db
+  # TODO: uncomment this once core.db upload issue is resolved
+  # /usr/local/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /app/data/sqlite/core.db
   /usr/local/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /app/data/sqlite/data.db
   /usr/local/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /app/data/sqlite/moderation.db
   /usr/local/bin/litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /app/data/sqlite/bundles.db
