@@ -38,7 +38,7 @@ import {
   NormalizedDataItem,
 } from '../types.js';
 import { fromB64Url, sha256B64Url, utf8ToB64Url } from './encoding.js';
-import { processBundleStream, DataItemInfo } from './bundles/bundles.js';
+import { processBundleStream, DataItemInfo } from './bundles.js';
 
 type ParseEventName =
   | 'data-item-matched'

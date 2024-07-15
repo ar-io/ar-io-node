@@ -1,19 +1,19 @@
+/* eslint header/header: 0 */
 /**
  * AR.IO Gateway
- * Copyright (C) 2022-2023 Permanent Data Solutions, Inc. All Rights Reserved.
+ * Copyright (C) 2022-2024 Permanent Data Solutions, Inc. All Rights Reserved.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 import { Transform } from 'node:stream';
@@ -21,71 +21,22 @@ import type { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import {
   MIN_BINARY_SIZE,
+  SIG_CONFIG,
+  SignatureConfig,
+  SignatureMeta,
   byteArrayToLong,
   deepHash,
+  deserializeTags,
   indexToType,
 } from 'arbundles';
-import { deserializeTags } from './tags.js';
 
-export interface SignatureMeta {
-  sigLength: number;
-  pubLength: number;
-  sigName: string;
-}
-
-export enum SignatureConfig {
-  ARWEAVE = 1,
-  ED25519,
-  ETHEREUM,
-  SOLANA,
-  INJECTEDAPTOS = 5,
-  MULTIAPTOS = 6,
-  TYPEDETHEREUM = 7,
-}
-
-export const SIG_CONFIG: Record<SignatureConfig, SignatureMeta> = {
-  [SignatureConfig.ARWEAVE]: {
-    sigLength: 512,
-    pubLength: 512,
-    sigName: 'arweave',
-  },
-  [SignatureConfig.ED25519]: {
-    sigLength: 64,
-    pubLength: 32,
-    sigName: 'ed25519',
-  },
-  [SignatureConfig.ETHEREUM]: {
-    sigLength: 65,
-    pubLength: 65,
-    sigName: 'ethereum',
-  },
-  [SignatureConfig.SOLANA]: {
-    sigLength: 64,
-    pubLength: 32,
-    sigName: 'solana',
-  },
-  [SignatureConfig.INJECTEDAPTOS]: {
-    sigLength: 64,
-    pubLength: 32,
-    sigName: 'injectedAptos',
-  },
-  [SignatureConfig.MULTIAPTOS]: {
-    sigLength: 64 * 32 + 4, // max 32 64 byte signatures, +4 for 32-bit bitmap
-    pubLength: 32 * 32 + 1, // max 64 32 byte keys, +1 for 8-bit threshold value
-    sigName: 'multiAptos',
-  },
-  [SignatureConfig.TYPEDETHEREUM]: {
-    sigLength: 65,
-    pubLength: 42,
-    sigName: 'typedEthereum',
-  },
-};
-
-const isValidSignatureConfig = (value: number): value is SignatureConfig => {
+export const isValidSignatureConfig = (
+  value: number,
+): value is SignatureConfig => {
   return Object.values(SignatureConfig).includes(value);
 };
 
-const getSignatureMeta = (signatureType: number): SignatureMeta => {
+export const getSignatureMeta = (signatureType: number): SignatureMeta => {
   if (isValidSignatureConfig(signatureType)) {
     return SIG_CONFIG[signatureType];
   } else {
@@ -285,7 +236,7 @@ export const processBundleStream = async (
   return items;
 };
 
-const readBytes = async (
+export const readBytes = async (
   reader: AsyncGenerator<Buffer>,
   buffer: Uint8Array,
   length: number,
