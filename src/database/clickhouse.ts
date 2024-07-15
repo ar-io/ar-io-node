@@ -36,48 +36,48 @@ import {
   GqlTransactionsResult
 } from '../types.js';
 
+// TODO reconcile this cursor fromat with what's in StandaloneSqlite
 export function encodeTransactionGqlCursor({
   height,
   blockTransactionIndex,
-  dataItemId,
-  indexedAt,
+  isDataItem,
   id,
+  indexedAt,
 }: {
   height: number | null;
   blockTransactionIndex: number | null;
-  // TODO add isDataItem here
-  dataItemId: string | null;
-  indexedAt: number | null;
+  isDataItem: boolean | null;
   id: string | null;
+  indexedAt: number | null;
 }) {
   return utf8ToB64Url(
-    JSON.stringify([height, blockTransactionIndex, dataItemId, indexedAt, id]),
+    JSON.stringify([height, blockTransactionIndex, isDataItem, id, indexedAt]),
   );
 }
 
+// TODO reconcile this cursor fromat with what's in StandaloneSqlite
 export function decodeTransactionGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
       return {
         height: null,
         blockTransactionIndex: null,
-        // TODO add isDataItem here
-        dataItemId: null,
-        indexedAt: null,
+        isDataItem: null,
         id: null,
+        indexedAt: null
       };
     }
 
-    const [height, blockTransactionIndex, dataItemId, indexedAt, id] =
+    const [height, blockTransactionIndex, id, indexedAt] =
       JSON.parse(b64UrlToUtf8(cursor)) as [
         number | null,
         number | null,
+        boolean | null,
         string | null,
         number | null,
-        string | null,
       ];
 
-    return { height, blockTransactionIndex, dataItemId, indexedAt, id };
+    return { height, blockTransactionIndex, id, indexedAt };
   } catch (error) {
     throw new ValidationError('Invalid transaction cursor');
   }
