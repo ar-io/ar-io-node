@@ -139,6 +139,7 @@ export class ClickHouseGQL
         "'' AS content_type",
         'hex(owner_address) AS owner_address',
         "hex(parent) AS parent_id",
+        "tags",
       )
       .from('transactions t')
   }
@@ -440,7 +441,11 @@ export class ClickHouseGQL
       fee: tx.reward,
       quantity: tx.quantity,
       dataSize: tx.data_size,
-      tags: [], // TODO implement tags
+      // TODO filter out empty tags arrays based on count instead of tag content
+      tags: tx.tags.map((tag) => ({
+        name: tag[0],
+        value: tag[1]
+      })).filter((tag) => tag.name !== '' || tag.value !== ''),
       contentType: tx.content_type,
       blockIndepHash: '',
       blockTimestamp: '0',
