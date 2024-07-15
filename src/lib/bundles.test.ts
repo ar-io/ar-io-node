@@ -114,12 +114,17 @@ describe('Bundles utilities', () => {
         const initialBuffer = Buffer.from('abc');
         const additionalBuffers = [Buffer.from('d')];
         const reader = generateBuffers(additionalBuffers);
-        try {
-          await readBytes(reader, initialBuffer, 6);
-          assert.fail('Expected an error to be thrown');
-        } catch (error: any) {
-          assert.equal(error.message, 'Invalid buffer');
-        }
+
+        await assert.rejects(
+          async () => {
+            await readBytes(reader, initialBuffer, 6);
+          },
+          {
+            name: 'Error',
+            message: 'Invalid buffer',
+          },
+          'Invalid buffer error.',
+        );
       });
 
       it('when the reader provides exactly enough data', async () => {
@@ -218,6 +223,35 @@ describe('Bundles utilities', () => {
 
         assert.deepEqual(dataItem, expectedDataItemInfo[i]);
       }
+    });
+
+    it('should throw an error for malformed data in the stream', async () => {
+      const malformedData = Readable.from([Buffer.from('malformed data')]);
+      await assert.rejects(
+        async () => {
+          await processBundleStream(malformedData);
+        },
+        {
+          name: 'Error',
+          message: 'Invalid buffer',
+        },
+        'Expected processBundleStream to throw an error for malformed data',
+      );
+    });
+
+    it('should handle incomplete data stream gracefully', async () => {
+      const incompleteData = Readable.from([Buffer.from('incomplete')]);
+      incompleteData.destroy(new Error('Stream interrupted'));
+      await assert.rejects(
+        async () => {
+          await processBundleStream(incompleteData);
+        },
+        {
+          name: 'Error',
+          message: 'Stream interrupted',
+        },
+        'Expected processBundleStream to handle incomplete stream',
+      );
     });
   });
 });
