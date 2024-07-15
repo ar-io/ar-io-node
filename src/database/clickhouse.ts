@@ -35,13 +35,6 @@ import { currentUnixTimestamp } from '../lib/time.js';
 import {
   GqlTransactionsResult
 } from '../types.js';
-//import * as config from '../config.js';
-
-const LOW_SELECTIVITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
-
-function tagJoinSortPriority(tag: { name: string; values: string[] }) {
-  return LOW_SELECTIVITY_TAG_NAMES.has(tag.name) ? 1 : 0;
-}
 
 export function encodeTransactionGqlCursor({
   height,
