@@ -23,7 +23,7 @@ CREATE TABLE stable_data_items (
 
   -- Metadata
   tag_count INTEGER NOT NULL,
-  indexed_at INTEGER NOT NULL, signature_type INTEGER,
+  indexed_at INTEGER NOT NULL, signature_type INTEGER, offset INTEGER, size INTEGER, owner_offset INTEGER, owner_size INTEGER, signature_offset INTEGER, signature_size INTEGER,
   PRIMARY KEY (id)
 );
 CREATE INDEX stable_data_items_height_block_transaction_index_id_idx ON stable_data_items (height, block_transaction_index, id);
@@ -119,7 +119,7 @@ CREATE TABLE new_data_items (
 
   -- Metadata
   tag_count INTEGER NOT NULL,
-  indexed_at INTEGER NOT NULL, signature_type INTEGER,
+  indexed_at INTEGER NOT NULL, signature_type INTEGER, offset INTEGER, size INTEGER, owner_offset INTEGER, owner_size INTEGER, signature_offset INTEGER, signature_size INTEGER,
   PRIMARY KEY (id)
 );
 CREATE INDEX new_data_items_parent_id_id_idx ON new_data_items (parent_id, id);

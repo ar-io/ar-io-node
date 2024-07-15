@@ -185,13 +185,20 @@ arIoRouter.post(
           target: dataItemHeader.target ?? '',
           anchor: dataItemHeader.anchor ?? '',
           // These fields are not yet known, to be backfilled
-          parent_id: null,
-          root_tx_id: null,
-          index: null,
-          parent_index: null,
           data_hash: null,
           data_offset: null,
           filter: config.ANS104_INDEX_FILTER_STRING,
+          index: null,
+          offset: null,
+          owner_offset: null,
+          owner_size: null,
+          parent_id: null,
+          parent_index: null,
+          root_tx_id: null,
+          signature_offset: null,
+          signature_size: null,
+          signature_type: null,
+          size: null,
         });
       }
 

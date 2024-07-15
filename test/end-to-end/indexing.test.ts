@@ -497,14 +497,60 @@ describe('Indexing', function () {
       const dataItems = stmt.all();
 
       const idAndSignatureType = {
-        'cMDqJJ4G0DDN-7mduMYyFWL1kHh9_xQuQtH8sChg5Sw': 1,
-        P1ftTNGa7XT7_xZjX7Zz03fjRg5QjUk7Vs7oIF44MSU: 3,
-        'b8fu8hGUgGyYhpPlBKGJ0X-o3SyDGMfGV24KmN_cL5c': 4,
+        'cMDqJJ4G0DDN-7mduMYyFWL1kHh9_xQuQtH8sChg5Sw': {
+          signature_type: 1, // arweave
+          offset: 224,
+          signature_offset: 226, // offset + 2
+          signature_size: 512,
+          owner_offset: 738, // signature_offset + signature_size
+          owner_size: 512,
+          data_size: 1,
+          size: 1111,
+        },
+        P1ftTNGa7XT7_xZjX7Zz03fjRg5QjUk7Vs7oIF44MSU: {
+          signature_type: 3, // ethereum
+          offset: 1335,
+          signature_offset: 1337, // offset + 2
+          signature_size: 65,
+          owner_offset: 1402, // signature_offset + signature_size
+          owner_size: 65,
+          data_size: 1,
+          size: 217,
+        },
+        'b8fu8hGUgGyYhpPlBKGJ0X-o3SyDGMfGV24KmN_cL5c': {
+          signature_type: 4, // solana
+          offset: 1552,
+          signature_offset: 1554, // offset + 2
+          signature_size: 64,
+          owner_offset: 1618, // signature_offset + signature_size
+          owner_size: 32,
+          data_size: 1,
+          size: 183,
+        },
       } as const;
 
       dataItems.forEach((dataItem) => {
         const id = toB64Url(dataItem.id) as keyof typeof idAndSignatureType;
-        assert.equal(dataItem.signature_type, idAndSignatureType[id]);
+        assert.equal(
+          dataItem.signature_type,
+          idAndSignatureType[id].signature_type,
+        );
+        assert.equal(dataItem.offset, idAndSignatureType[id].offset);
+        assert.equal(
+          dataItem.signature_offset,
+          idAndSignatureType[id].signature_offset,
+        );
+        assert.equal(
+          dataItem.signature_size,
+          idAndSignatureType[id].signature_size,
+        );
+        assert.equal(
+          dataItem.owner_offset,
+          idAndSignatureType[id].owner_offset,
+        );
+        assert.equal(dataItem.owner_size, idAndSignatureType[id].owner_size);
+        assert.equal(dataItem.data_size, idAndSignatureType[id].data_size);
+        assert.equal(dataItem.size, idAndSignatureType[id].size);
       });
     });
   });
