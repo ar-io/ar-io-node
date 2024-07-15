@@ -101,6 +101,10 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
   }
 }
 
+function inB64UrlStrings(xs: string[]) {
+  return sql(xs.map((x) => `unhex('${fromB64Url(x).toString('hex')}')`).join(', '));
+}
+
 export class ClickHouseGQL
 {
   private log: winston.Logger;
@@ -165,15 +169,15 @@ export class ClickHouseGQL
     let maxDbHeight = Infinity;
 
     if (ids?.length > 0) {
-      query.where(sql.in('t.id', sql(ids.map((id) => `unhex('${fromB64Url(id).toString('hex')}')`).join(', '))));
+      query.where(sql.in('t.id', inB64UrlStrings(ids)));
     }
 
     if (recipients?.length > 0) {
-      query.where(sql.in('t.target', sql(recipients.map((recipient) => `unhex('${fromB64Url(recipient).toString('hex')}')`).join(', '))));
+      query.where(sql.in('t.target', inB64UrlStrings(recipients)));
     }
 
     if (owners?.length > 0) {
-      query.where(sql.in('t.owner_address', sql(owners.map((owner) => `unhex('${fromB64Url(owner).toString('hex')}')`).join(', '))));
+      query.where(sql.in('t.owner_address', inB64UrlStrings(owners)));
     }
 
     //if (tags) {
@@ -212,13 +216,8 @@ export class ClickHouseGQL
       query.where(sql.lte('t.height', maxHeight));
     }
 
-    // TODO unhex this
-    if (
-      Array.isArray(bundledIn)
-    ) {
-      query.where(
-        sql.in('t.parent_id', bundledIn.map(fromB64Url)),
-      );
+    if (Array.isArray(bundledIn)) {
+      query.where(sql.in('t.parent_id', inB64UrlStrings(bundledIn)));
     }
 
     // TODO need to review, but cursor handling should be fairly similar
