@@ -128,8 +128,7 @@ export class ClickHouseGQL
       .distinct(
         'height AS height',
         'block_transaction_index AS block_transaction_index',
-        "x'00' AS data_item_id",
-        '0 AS indexed_at',
+        'is_data_item',
         'hex(id) AS id',
         "'' AS anchor",
         'hex(target) AS target',
@@ -429,15 +428,15 @@ export class ClickHouseGQL
     const txs = jsonRow.data.map((tx: any) => ({
       height: tx.height,
       blockTransactionIndex: tx.block_transaction_index,
-      dataItemId: '',
-      //dataItemId: tx.data_item_id ? toB64Url(Buffer.from('hex', tx.data_item_id)) : null,
-      indexedAt: tx.indexed_at,
+      isDataItem: tx.is_data_item,
+      // TODO extract hex to b64url conversion
       id: toB64Url(Buffer.from(tx.id, 'hex')),
+      indexedAt: tx.indexed_at,
       anchor: tx.anchor,
-      signature: '',
+      signature: null,
       recipient: tx.target ? toB64Url(Buffer.from(tx.target, 'hex')) : null,
       ownerAddress: toB64Url(Buffer.from(tx.owner_address, 'hex')),
-      ownerKey: '',
+      ownerKey: null,
       fee: tx.reward,
       quantity: tx.quantity,
       dataSize: tx.data_size,
@@ -447,9 +446,9 @@ export class ClickHouseGQL
         value: tag[1]
       })).filter((tag) => tag.name !== '' || tag.value !== ''),
       contentType: tx.content_type,
-      blockIndepHash: '',
-      blockTimestamp: '0',
-      blockPreviousBlock: '',
+      blockIndepHash: tx.block_indep_hash ? toB64Url(Buffer.from(tx.block_indep_hash, 'hex')) : null,
+      blockTimestamp: tx.block_timestamp,
+      blockPreviousBlock: tx.block_previous_block ? toB64Url(Buffer.from(tx.block_previous_block, 'hex')) : null,
       parentId: tx.parent_id ? toB64Url(Buffer.from(tx.parent_id, 'hex')) : null,
     }));
 
