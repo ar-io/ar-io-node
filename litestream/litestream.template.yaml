@@ -13,7 +13,7 @@ dbs:
         path: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX + "/ar_io_node_core.backup.db"
         #@ end
         #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX == "":
-        name: ar_io_node_core.backup.db
+        path: ar_io_node_core.backup.db
         #@ end
         bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
         region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
@@ -28,7 +28,7 @@ dbs:
         path: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX + "/ar_io_node_data.backup.db"
         #@ end
         #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX == "":
-        name: ar_io_node_data.backup.db
+        path: ar_io_node_data.backup.db
         #@ end
         bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
         region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
@@ -43,7 +43,7 @@ dbs:
         path: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX + "/ar_io_node_moderation.backup.db"
         #@ end
         #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX == "":
-        name: ar_io_node_moderation.backup.db
+        path: ar_io_node_moderation.backup.db
         #@ end
         bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
         region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
@@ -58,7 +58,7 @@ dbs:
         path: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX + "/ar_io_node_bundles.backup.db"
         #@ end
         #@ if data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX == "":
-        name: ar_io_node_bundles.backup.db
+        path: ar_io_node_bundles.backup.db
         #@ end
         bucket: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME
         region: #@ data.values.AR_IO_SQLITE_BACKUP_S3_BUCKET_REGION
