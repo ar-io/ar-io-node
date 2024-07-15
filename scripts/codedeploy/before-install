@@ -14,3 +14,15 @@ fi
 shopt -s extglob
 rm -rf .!(env) || true
 rm -rf * || true # okay since data is stored in /data and /efs
+
+# load environment variables from .env
+set -a
+source .env
+set +a
+
+# upload just the core.db file to S3
+instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+
+if [ -e /data/sqlite/core.db ]; then
+  aws s3 cp /data/sqlite/core.db s3://$AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME/$instance_id/core.db  || true
+fi
