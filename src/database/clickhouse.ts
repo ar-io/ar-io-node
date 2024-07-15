@@ -419,7 +419,7 @@ export class ClickHouseGQL
     });
 
     const txsSql = txsQuery.toString();
-    const txsFinalSql = `${txsSql} LIMIT 10`;
+    const txsFinalSql = `${txsSql} LIMIT ${pageSize + 1}`;
     console.log(txsFinalSql);
 
     this.log.debug('Querying ClickHouse transactions...', { sql });
