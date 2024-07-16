@@ -16,16 +16,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { ValidationError } from 'apollo-server-express';
-import crypto from 'node:crypto';
-//import os from 'node:os';
-import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
 import { ClickHouseClient, createClient } from '@clickhouse/client';
 
 import {
+  b64UrlToHex,
   b64UrlToUtf8,
-  fromB64Url,
+  hexToB64Url,
   toB64Url,
   utf8ToB64Url,
 } from '../lib/encoding.js';
@@ -102,7 +100,7 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 }
 
 function inB64UrlStrings(xs: string[]) {
-  return sql(xs.map((x) => `unhex('${fromB64Url(x).toString('hex')}')`).join(', '));
+  return sql(xs.map((x) => `unhex('${b64UrlToHex(x)}')`).join(', '));
 }
 
 export class ClickHouseGQL
@@ -412,13 +410,12 @@ export class ClickHouseGQL
       height: tx.height,
       blockTransactionIndex: tx.block_transaction_index,
       isDataItem: tx.is_data_item,
-      // TODO extract hex to b64url conversion
-      id: toB64Url(Buffer.from(tx.id, 'hex')),
+      id: hexToB64Url(tx.id),
       indexedAt: tx.indexed_at,
       anchor: tx.anchor,
       signature: null,
-      recipient: tx.target ? toB64Url(Buffer.from(tx.target, 'hex')) : null,
-      ownerAddress: toB64Url(Buffer.from(tx.owner_address, 'hex')),
+      recipient: tx.target ? hexToB64Url(tx.target) : null,
+      ownerAddress: hexToB64Url(tx.owner_address),
       ownerKey: null,
       fee: tx.reward,
       quantity: tx.quantity,
@@ -429,10 +426,10 @@ export class ClickHouseGQL
         value: tag[1]
       })).filter((tag) => tag.name !== '' || tag.value !== ''),
       contentType: tx.content_type,
-      blockIndepHash: tx.block_indep_hash ? toB64Url(Buffer.from(tx.block_indep_hash, 'hex')) : null,
+      blockIndepHash: tx.block_indep_hash ? hexToB64Url(tx.block_indep_hash) : null,
       blockTimestamp: tx.block_timestamp,
-      blockPreviousBlock: tx.block_previous_block ? toB64Url(Buffer.from(tx.block_previous_block, 'hex')) : null,
-      parentId: tx.parent_id ? toB64Url(Buffer.from(tx.parent_id, 'hex')) : null,
+      blockPreviousBlock: tx.block_previous_block ? hexToB64Url(tx.block_previous_block) : null,
+      parentId: tx.parent_id ? hexToB64Url(tx.parent_id) : null,
     }));
 
     console.log(jsonRow);

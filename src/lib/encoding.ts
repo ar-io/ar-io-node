@@ -49,6 +49,14 @@ export function utf8ToB64Url(input: string): string {
   return toB64Url(Buffer.from(input, 'utf8'));
 }
 
+export function b64UrlToHex(input: string): string {
+  return fromB64Url(input).toString('hex');
+}
+
+export function hexToB64Url(input: string): string {
+  return toB64Url(Buffer.from(input, 'hex'));
+}
+
 export function sha256B64Url(input: Buffer): string {
   return toB64Url(createHash('sha256').update(input).digest());
 }
