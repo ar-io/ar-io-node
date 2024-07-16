@@ -19,7 +19,7 @@ import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import { Server } from 'node:http';
 import fs from 'node:fs';
-import { IO } from '@ar.io/sdk';
+import { AOProcess, IO } from '@ar.io/sdk';
 import awsLite from '@aws-lite/client';
 import awsLiteS3 from '@aws-lite/s3';
 
@@ -72,6 +72,7 @@ import { createArNSResolver } from './init/resolvers.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
+import { connect } from '@permaweb/aoconnect';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -80,7 +81,21 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 
-const arIO = IO.init({ processId: config.IO_PROCESS_ID });
+// IO/AO SDK
+
+const arIO = IO.init({
+  process: new AOProcess({
+    processId: config.IO_PROCESS_ID,
+    ao: connect({
+      // @permaweb/aoconnect defaults will be used if these are not provided
+      MU_URL: config.AO_MU_URL,
+      CU_URL: config.AO_CU_URL,
+      GRAPHQL_URL: config.AO_GATEWAY_URL,
+      GATEWAY_URL: config.AO_GATEWAY_URL,
+    }),
+  }),
+});
+
 export const awsClient =
   config.AWS_ACCESS_KEY_ID !== undefined &&
   config.AWS_SECRET_ACCESS_KEY !== undefined &&

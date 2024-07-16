@@ -1575,6 +1575,20 @@
     warp-arbundles "^1.0.4"
     zod "^3.22.4"
 
+"@permaweb/aoconnect@^0.0.56":
+  version "0.0.56"
+  resolved "https://registry.yarnpkg.com/@permaweb/aoconnect/-/aoconnect-0.0.56.tgz#28dcf1a094a2b1c1cbaa246d63eeb08a5a0c7269"
+  integrity sha512-Eu4AC1KeX2EOIS9ihWkwPJs7rK+/+XV43QwOJ9DCQAu6EhjanlT3UfV2wSpGiFK/dT/B1YsQyTcxNrmQaXn81g==
+  dependencies:
+    "@permaweb/ao-scheduler-utils" "~0.0.16"
+    buffer "^6.0.3"
+    debug "^4.3.4"
+    hyper-async "^1.1.2"
+    mnemonist "^0.39.8"
+    ramda "^0.29.1"
+    warp-arbundles "^1.0.4"
+    zod "^3.22.4"
+
 "@pkgjs/parseargs@^0.11.0":
   version "0.11.0"
   resolved "https://registry.yarnpkg.com/@pkgjs/parseargs/-/parseargs-0.11.0.tgz#a77ea742fab25775145434eb1d2328cf5013ac33"
@@ -6049,12 +6063,12 @@ multistream@^4.1.0:
     once "^1.4.0"
     readable-stream "^3.6.0"
 
-nan@2.18.0:
+nan@2.18.0, nan@^2.18.0:
   version "2.18.0"
   resolved "https://registry.yarnpkg.com/nan/-/nan-2.18.0.tgz#26a6faae7ffbeb293a39660e88a76b82e30b7554"
   integrity sha512-W7tfG7vMOGtD30sHoZSSc/JVYiyDPEyQVso/Zz+/uQd0B0L46gtC+pHha5FFMRpil6fm/AoEcRWyOVi4+E/f8w==
 
-nan@^2.18.0, nan@^2.19.0:
+nan@^2.19.0:
   version "2.20.0"
   resolved "https://registry.yarnpkg.com/nan/-/nan-2.20.0.tgz#08c5ea813dd54ed16e5bd6505bf42af4f7838ca3"
   integrity sha512-bk3gXBZDGILuuo/6sKtr0DQmSThYHLtNCdSdXk9YkxD/jK6X2vmCyyXBBxyqZ4XcnzTyYEAThfX3DCEnLf6igw==
