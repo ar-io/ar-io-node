@@ -180,33 +180,16 @@ export class ClickHouseGQL
       query.where(sql.in('t.owner_address', inB64UrlStrings(owners)));
     }
 
-    //if (tags) {
-    //  // To improve performance, force tags with large result sets to be last
-    //  const sortByTagJoinPriority = R.sortBy(tagJoinSortPriority);
-    //  sortByTagJoinPriority(tags).forEach((tag, index) => {
-    //    // TODO replace with has(tags, ('Content-Type', 'application/json'))
-
-    //    //const nameHash = crypto
-    //    //  .createHash('sha1')
-    //    //  .update(Buffer.from(tag.name, 'utf8'))
-    //    //  .digest();
-    //    //query.where({ [`${tagAlias}.tag_name_hash`]: nameHash });
-
-
-    //    // TODO use query.where(or(...))
-    //    //query.where(
-    //    //  sql.in(
-    //    //    `${tagAlias}.tag_value_hash`,
-    //    //    tag.values.map((value) => {
-    //    //      return crypto
-    //    //        .createHash('sha1')
-    //    //        .update(Buffer.from(value, 'utf8'))
-    //    //        .digest();
-    //    //    }),
-    //    //  ),
-    //    //);
-    //  });
-    //}
+    if (tags) {
+      tags.forEach(tag => {
+        const hexName = Buffer.from(tag.name).toString('hex');
+        const hexValues = tag.values.map((value) => Buffer.from(value).toString('hex'));
+        const wheres = hexValues.map((hexValue) =>
+          sql(`has(tags, (unhex('${hexName}'), unhex('${hexValue}')))`)
+        );
+        query.where(sql.or.apply(null, wheres));
+      });
+    }
 
     if (minHeight != null && minHeight > 0) {
       query.where(sql.gte('t.height', minHeight));
