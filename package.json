@@ -11,6 +11,7 @@
     "@ar.io/sdk": "^2.0.0",
     "@aws-lite/client": "^0.21.7",
     "@aws-lite/s3": "^0.1.21",
+    "@permaweb/aoconnect": "^0.0.56",
     "apollo-server-express": "^3.13.0",
     "arweave": "^1.14.4",
     "axios": "^1.6.2",

@@ -271,3 +271,10 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   'GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS',
   '500',
 );
+
+// AO
+
+export const AO_MU_URL = env.varOrUndefined('AO_MU_URL');
+export const AO_CU_URL = env.varOrUndefined('AO_CU_URL');
+export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
+export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
