@@ -11,7 +11,7 @@ COPY . .
 RUN yarn install --ignore-engines \
     && yarn build \
     && rm -rf node_modules \
-    && yarn install --production
+    && yarn install --production --ignore-engines
 
 # Runtime
 FROM gcr.io/distroless/nodejs${NODE_VERSION_SHORT}-debian12
