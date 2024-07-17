@@ -15,18 +15,14 @@ shopt -s extglob
 rm -rf .!(env) || true
 rm -rf * || true # okay since data is stored in /data and /efs
 
+# load environment variables from .env
+set -a
+source .env
+set +a
+
+# upload just the core.db file to S3
 instance_id=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
 
-# create backup dirs
-mkdir -p /efs/backups/$instance_id/sqlite/previous-before-install
-mkdir -p /efs/backups/$instance_id/sqlite/before-install
-
-# keep an archive of the previous backup in case the copy fails
-if [ "$(ls /efs/backups/$instance_id/before-install/*.db)" ]; then
-  mv /efs/backups/$instance_id/before-install/* /efs/backups/$instance_id/previous-before-install/
-fi
-
-# copy the live DBs to the backup directory
-if [ "$(ls /data/sqlite/*.db)" ]; then
-  cp /data/sqlite/*.db /efs/backups/$instance_id/sqlite/before-install/
+if [ -e /data/sqlite/core.db ]; then
+  aws s3 cp /data/sqlite/core.db s3://$AR_IO_SQLITE_BACKUP_S3_BUCKET_NAME/$instance_id/core.db  || true
 fi

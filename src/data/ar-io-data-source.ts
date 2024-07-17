@@ -84,22 +84,27 @@ export class ArIODataSource implements ContiguousDataSource {
     log.info('Updating peers from ArIO contract');
 
     try {
-      const response = await this.arIO.getGateways();
+      const peers: Record<string, string> = {};
+      let cursor: string | undefined;
+      do {
+        const { nextCursor, items } = await this.arIO.getGateways({
+          cursor,
+        }); // TODO: better error handling if one paged request fails we may want to still update the rest
 
-      // Convert response to <peerWallet>: <peerUrl> format
-      const peers: Record<string, string> = Object.keys(response).reduce(
-        (acc, key) => {
-          const { protocol, fqdn } = response[key].settings;
-          acc[key] = `${protocol}://${fqdn}`;
-          return acc;
-        },
-        {} as Record<string, string>,
-      );
+        for (const gateway of items) {
+          // skip our own node wallet
+          if (
+            this.nodeWallet !== undefined &&
+            this.nodeWallet === gateway.gatewayAddress
+          ) {
+            continue;
+          }
 
-      // Remove node wallet from peers list if it exists
-      if (this.nodeWallet !== undefined && peers[this.nodeWallet]) {
-        delete peers[this.nodeWallet];
-      }
+          peers[gateway.gatewayAddress] =
+            `${gateway.settings.protocol}://${gateway.settings.fqdn}`;
+        }
+        cursor = nextCursor;
+      } while (cursor !== undefined);
 
       this.peers = peers;
       log.info('Updated peer list from ArIO contract');

@@ -8,10 +8,10 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y build-essential curl git python3
 COPY . .
-RUN yarn install \
+RUN yarn install --ignore-engines \
     && yarn build \
     && rm -rf node_modules \
-    && yarn install --production
+    && yarn install --production --ignore-engines
 
 # Runtime
 FROM gcr.io/distroless/nodejs${NODE_VERSION_SHORT}-debian12

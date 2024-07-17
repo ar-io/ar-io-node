@@ -18,7 +18,6 @@
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { ValidationError } from 'apollo-server-express';
-import arbundles from 'arbundles/stream/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -45,10 +44,7 @@ import { ArweaveChainSourceStub, stubAns104Bundle } from '../../test/stubs.js';
 import { normalizeAns104DataItem } from '../lib/ans-104.js';
 import log from '../log.js';
 import { BundleRecord } from '../types.js';
-
-/* eslint-disable */
-// @ts-ignore
-const { default: processStream } = arbundles;
+import { processBundleStream } from '../lib/bundles.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -155,7 +151,7 @@ describe('SQLite data conversion functions', () => {
   describe('dataItemToDbRows', () => {
     it('should return DB rows to insert', async () => {
       const bundleStream = await stubAns104Bundle();
-      const iterable = await processStream(bundleStream);
+      const iterable = await processBundleStream(bundleStream);
       for await (const [_index, dataItem] of iterable.entries()) {
         const normalizedDataItem = normalizeAns104DataItem({
           rootTxId: '0000000000000000000000000000000000000000000',

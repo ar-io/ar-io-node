@@ -89,11 +89,13 @@ UPDATE SET
 INSERT INTO new_data_items (
   id, parent_id, root_transaction_id, height, signature, anchor,
   owner_address, target, data_offset, data_size, content_type,
-  tag_count, indexed_at, signature_type
+  tag_count, indexed_at, signature_type, offset, size, owner_offset,
+  owner_size, signature_offset, signature_size
 ) VALUES (
   @id, @parent_id, @root_transaction_id, @height, @signature, @anchor,
   @owner_address, @target, @data_offset, @data_size, @content_type,
-  @tag_count, @indexed_at, @signature_type
+  @tag_count, @indexed_at, @signature_type, @offset, @size, @owner_offset,
+  @owner_size, @signature_offset, @signature_size
 ) ON CONFLICT DO
 UPDATE SET
   height = IFNULL(@height, height),

@@ -39,9 +39,25 @@ before(async () => {
 beforeEach(async () => {
   mockedArIOInstance = {
     getGateways: async () => ({
-      peer1: { settings: { protocol: 'http', fqdn: 'peer1.com' } },
-      peer2: { settings: { protocol: 'https', fqdn: 'peer2.com' } },
-      localNode: { settings: { protocol: 'https', fqdn: 'localNode.com' } },
+      items: [
+        {
+          gatewayAddress: 'peer1',
+          settings: { protocol: 'http', fqdn: 'peer1.com' },
+        },
+        {
+          gatewayAddress: 'peer2',
+          settings: { protocol: 'https', fqdn: 'peer2.com' },
+        },
+        {
+          gatewayAddress: 'localNode',
+          settings: { protocol: 'https', fqdn: 'localNode.com' },
+        },
+      ],
+      hasMore: false,
+      nextCursor: undefined,
+      sortBy: 'startTimestamp',
+      sortOrder: 'desc',
+      totalItems: 3,
     }),
   } as any;
 
