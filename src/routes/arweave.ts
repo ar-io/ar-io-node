@@ -27,12 +27,11 @@ import {
 import { headerNames } from '../constants.js';
 
 const MIN_SUCCESS_COUNT = 3;
+const MAX_CHUNK_SIZE = 1024 * 256 * 1.4; // 256KiB + 40% overhead;
 
 export const arweaveRouter = Router();
 
-const maxChunkSize = 1024 * 256 * 1.4; // 256KiB + 40% overhead;
-
-arweaveRouter.use(express.json({ limit: maxChunkSize }));
+arweaveRouter.use(express.json({ limit: MAX_CHUNK_SIZE }));
 
 arweaveRouter.post('/chunk', async (req, res) => {
   try {

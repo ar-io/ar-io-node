@@ -76,8 +76,7 @@ export class ArweaveCompositeClient
     ChunkBroadcaster,
     ChunkByAnySource,
     ChunkDataByAnySource,
-    ContiguousDataSource,
-    ChunkBroadcaster
+    ContiguousDataSource
 {
   private arweave: Arweave;
   private log: winston.Logger;
