@@ -109,10 +109,10 @@ jobs:
             ${{ env.ECR_REGISTRY }}/ar-io-envoy:${{ github.sha }}
 
       # Start CodePipeline to test and deploy images
-      - name: Start CodePipeline
-        run: |
-          aws codepipeline start-pipeline-execution \
-            --name ${{ secrets.AWS_CODEPIPELINE_NAME }}
+      #- name: Start CodePipeline
+      #  run: |
+      #    aws codepipeline start-pipeline-execution \
+      #      --name ${{ secrets.AWS_CODEPIPELINE_NAME }}
 
   images:
     runs-on: ubuntu-latest
