@@ -455,10 +455,32 @@ export interface ChunkDataByAnySource {
   ): Promise<ChunkData>;
 }
 
+type BroadcastChunkResponses = {
+  success: boolean;
+  statusCode: number;
+  canceled: boolean;
+  timedOut: boolean;
+};
+
+interface BroadcastChunkResult {
+  successCount: number;
+  failureCount: number;
+  results: BroadcastChunkResponses[];
+}
+
 // TODO better name?
 export interface ChunkBroadcaster {
-  // TODO better return type
-  broadcastChunk(chunk: JsonChunkPost): Promise<any>;
+  broadcastChunk({
+    chunk,
+    abortTimeout,
+    responseTimeout,
+    originAndHopsHeaders,
+  }: {
+    chunk: JsonChunkPost;
+    abortTimeout?: number;
+    responseTimeout?: number;
+    originAndHopsHeaders: Record<string, string | undefined>;
+  }): Promise<BroadcastChunkResult>;
 }
 
 export interface ContiguousData {

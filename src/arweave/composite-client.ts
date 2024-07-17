@@ -35,6 +35,7 @@ import {
 } from '../lib/validation.js';
 import * as metrics from '../metrics.js';
 import {
+  BroadcastChunkResult,
   ChainSource,
   Chunk,
   ChunkBroadcaster,
@@ -59,6 +60,8 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
 const CHUNK_CACHE_TTL_SECONDS = 5;
+const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
+const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 
 interface Peer {
   url: string;
@@ -73,7 +76,8 @@ export class ArweaveCompositeClient
     ChunkBroadcaster,
     ChunkByAnySource,
     ChunkDataByAnySource,
-    ContiguousDataSource
+    ContiguousDataSource,
+    ChunkBroadcaster
 {
   private arweave: Arweave;
   private log: winston.Logger;
@@ -698,39 +702,52 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
-  // TODO pass in optional chunk POST timeout with a reasonable default
-  // TODO add a proper return type
-  async broadcastChunk(chunk: JsonChunkPost): Promise<any> {
-    // TODO move this into Promise.all to simulate failure per POST instead of at the top level
-    //this.failureSimulator.maybeFail();
-
+  async broadcastChunk({
+    chunk,
+    abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
+    responseTimeout = DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
+    originAndHopsHeaders,
+  }: {
+    chunk: JsonChunkPost;
+    abortTimeout?: number;
+    responseTimeout?: number;
+    originAndHopsHeaders: Record<string, string | undefined>;
+  }): Promise<BroadcastChunkResult> {
     let successCount = 0;
     let failureCount = 0;
 
     const results = await Promise.all(
       this.chunkPostUrls.map(async (url) => {
         try {
-          // TODO relay and honor chunk hops and origin header to avoid cycles
-          // in case we're posting to another gateway
+          this.failureSimulator.maybeFail();
+
           const resp = await axios({
             url,
             method: 'POST',
             data: chunk,
-            // TODO fix types
-            // TODO use timeout passed in to method
-            /* eslint-disable */
-            // @ts-ignore - our types don't have timeout
-            signal: AbortSignal.timeout(2000),
+            signal: AbortSignal.timeout(abortTimeout),
+            timeout: responseTimeout,
+            validateStatus: (status) => status >= 200 && status < 300,
+            headers: originAndHopsHeaders,
           });
 
           successCount++;
 
           return {
-            // TODO is this conditional necessary? can it be simplified by making everything else an exception?
-            success: resp.status >= 200 && resp.status < 300,
+            success: true,
             statusCode: resp.status,
+            canceled: false,
+            timedOut: false,
           };
         } catch (error: any) {
+          let canceled = false;
+          let timedOut = false;
+
+          if (axios.isAxiosError(error)) {
+            timedOut = error.code === 'ECONNABORTED';
+            canceled = error.code === 'ERR_CANCELED';
+          }
+
           this.log.warn('Failed to broadcast chunk:', {
             message: error.message,
             stack: error.stack,
@@ -738,21 +755,20 @@ export class ArweaveCompositeClient
 
           failureCount++;
 
-          // TODO include some sparate indication of failures due to timeouts
           return {
             success: false,
             statusCode: error.response?.status,
+            canceled,
+            timedOut,
           };
         }
       }),
     );
 
-    return  {
-      // TODO skip returning a boolean here and let the caller decide what to consider success/failure
-      success: successCount > 0,
+    return {
       successCount,
       failureCount,
-      results
-    }
+      results,
+    };
   }
 }

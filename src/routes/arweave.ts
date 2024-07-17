@@ -19,23 +19,63 @@ import { Router, default as express } from 'express';
 
 import log from '../log.js';
 import * as system from '../system.js';
+import {
+  CHUNK_POST_URLS,
+  CHUNK_POST_ABORT_TIMEOUT_MS,
+  CHUNK_POST_RESPONSE_TIMEOUT_MS,
+} from '../config.js';
+import { headerNames } from '../constants.js';
+import { JsonChunkPost } from '../types.js';
+
+const MIN_SUCCESS_COUNT = 3;
 
 export const arweaveRouter = Router();
 
 arweaveRouter.use(express.json());
 
+const isJsonChunkPost = (obj: any): obj is JsonChunkPost => {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    typeof obj.data_root === 'string' &&
+    typeof obj.chunk === 'string' &&
+    typeof obj.data_size === 'string' &&
+    typeof obj.data_path === 'string' &&
+    typeof obj.offset === 'string'
+  );
+};
+
 arweaveRouter.post('/chunk', async (req, res) => {
+  if (!isJsonChunkPost(req.body)) {
+    res.status(400).send('Invalid chunk format');
+    return;
+  }
+
   try {
-    const result = await system.arweaveClient.broadcastChunk(req.body);
-    // TODO compute success here based on successCount and a configurable
-    // success threshold instead of in broadcastChunk
-    if (result.success) {
+    const headers = {
+      [headerNames.hops]: req.headers[headerNames.hops.toLowerCase()] as
+        | string
+        | undefined,
+      [headerNames.origin]: req.headers[headerNames.origin.toLowerCase()] as
+        | string
+        | undefined,
+    };
+
+    const result = await system.arweaveClient.broadcastChunk({
+      chunk: req.body,
+      abortTimeout: CHUNK_POST_ABORT_TIMEOUT_MS,
+      responseTimeout: CHUNK_POST_RESPONSE_TIMEOUT_MS,
+      originAndHopsHeaders: headers,
+    });
+
+    if (
+      result.successCount >= Math.min(MIN_SUCCESS_COUNT, CHUNK_POST_URLS.length)
+    ) {
       res.status(200).send(result);
     } else {
       res.status(500).send(result);
     }
   } catch (error: any) {
-    console.log(error.response);
     log.error('Failed to broadcast chunk', {
       message: error?.message,
       stack: error?.stack,
