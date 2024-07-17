@@ -79,6 +79,10 @@ services:
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
       - AWS_S3_PREFIX=${AWS_S3_PREFIX:-}
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-}
+      - AO_CU_URL=${AO_CU_URL:-}
+      - AO_MU_URL=${AO_MU_URL:-}
+      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
+      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
     depends_on:
       - redis
 
@@ -92,7 +96,7 @@ services:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-60809d95aa162117867ab300634ceec2d2a49337}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-917b8d5d53a901f133a49e40ae74e90e865ccbf2}
     restart: on-failure:5
     ports:
       - 5050:5050
@@ -111,9 +115,13 @@ services:
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-14}
+      - AO_CU_URL=${AO_CU_URL:-}
+      - AO_MU_URL=${AO_MU_URL:-}
+      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
+      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-3b7ee23d111d19f58601df0d79bfea83689e3a34}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-e35776ceb4324494d403b1fb900bfd06eb97a652}
     restart: on-failure:5
     ports:
       - 6000:6000
@@ -125,6 +133,10 @@ services:
       - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
       - ARNS_CACHE_TTL_MS=${RESOLVER_CACHE_TTL_MS:-}
       - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
+      - AO_CU_URL=${AO_CU_URL:-}
+      - AO_MU_URL=${AO_MU_URL:-}
+      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
+      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
     volumes:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
 
