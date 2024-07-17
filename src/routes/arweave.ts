@@ -25,32 +25,16 @@ import {
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
 } from '../config.js';
 import { headerNames } from '../constants.js';
-import { JsonChunkPost } from '../types.js';
 
 const MIN_SUCCESS_COUNT = 3;
 
 export const arweaveRouter = Router();
 
-arweaveRouter.use(express.json());
+const maxChunkSize = 1024 * 256 * 1.4; // 256KiB + 40% overhead;
 
-const isJsonChunkPost = (obj: any): obj is JsonChunkPost => {
-  return (
-    typeof obj === 'object' &&
-    obj !== null &&
-    typeof obj.data_root === 'string' &&
-    typeof obj.chunk === 'string' &&
-    typeof obj.data_size === 'string' &&
-    typeof obj.data_path === 'string' &&
-    typeof obj.offset === 'string'
-  );
-};
+arweaveRouter.use(express.json({ limit: maxChunkSize }));
 
 arweaveRouter.post('/chunk', async (req, res) => {
-  if (!isJsonChunkPost(req.body)) {
-    res.status(400).send('Invalid chunk format');
-    return;
-  }
-
   try {
     const headers = {
       [headerNames.hops]: req.headers[headerNames.hops.toLowerCase()] as

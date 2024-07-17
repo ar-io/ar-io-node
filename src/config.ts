@@ -61,7 +61,7 @@ export const CHUNK_POST_URLS = env
 
 // Chunk POST response timeout in milliseconds
 const CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING = env.varOrUndefined(
-  'CHUNK_POST_ABORT_TIMEOUT_MS',
+  'CHUNK_POST_RESPONSE_TIMEOUT_MS',
 );
 export const CHUNK_POST_RESPONSE_TIMEOUT_MS =
   CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING !== undefined
