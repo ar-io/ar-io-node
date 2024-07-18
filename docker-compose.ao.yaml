@@ -1,6 +1,7 @@
 services:
   ao-cu:
     image: ghcr.io/permaweb/ao-cu:latest
+    restart: on-failure:5
     environment:
       NODE_CONFIG_ENV: ${NODE_CONFIG_ENV:-development}
       NODE_HEAPDUMP_OPTIONS: ${NODE_HEAPDUMP_OPTIONS:-nosignal}

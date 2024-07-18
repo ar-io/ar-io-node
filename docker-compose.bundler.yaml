@@ -1,6 +1,7 @@
 services:
   upload-service:
     image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-fd1032e3012c0179577b08bbfe932f4ad7d805cd}
+    restart: on-failure:5
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       PORT: ${UPLOAD_SERVICE_PORT:-5100}
@@ -41,6 +42,7 @@ services:
 
   fulfillment-service:
     image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-6299f5497f5de479a1fb17ec86b764a4bf018f7b}
+    restart: on-failure:5
     environment:
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
       NODE_ENV: ${NODE_ENV:-local}
@@ -82,6 +84,7 @@ services:
 
   upload-service-pg:
     image: postgres:13.8
+    restart: on-failure:5
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -95,6 +98,7 @@ services:
 
   localstack:
     image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-6299f5497f5de479a1fb17ec86b764a4bf018f7b}
+    restart: on-failure:5
     ports:
       - '4566' # don't expose localstack externally by default
       #- "127.0.0.1:4510-4559:4510-4559" # external services port range
