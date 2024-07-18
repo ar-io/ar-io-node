@@ -527,7 +527,7 @@ describe('StandaloneSqliteDatabase', () => {
 
       // TODO replace with queries to make more focused
       const stats = await db.getDebugInfo();
-      assert.equal(stats.counts.stableBlocks, 149);
+      assert.equal(stats.counts.stableBlocks, 181);
     });
 
     it('should save stable transaction IDs to stable_block_transactions', async () => {
@@ -560,6 +560,12 @@ describe('StandaloneSqliteDatabase', () => {
         },
         {
           block_indep_hash:
+            'JN89gO6Ny0DRoVrw6iaJcTUo744fDXKjDj4DBtf76oFI5moQ56nRiP1cd12BrtvJ',
+          transaction_id: '91LHDJSNjVFhamHNwt660yVNdZfMRNDMb8oPwZ__xW4',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
             'KEmoiNais6dwdWGRKuVvoqBzx9GaQvbLoQz4Gf54lzMmgGBk9okX0dHIneeFGwRD',
           transaction_id: '4yuBbZkGVOsf_QkLhC4pzVGv4XrueZZXu9x3CbnCmUc',
           block_transaction_index: 0,
@@ -568,6 +574,12 @@ describe('StandaloneSqliteDatabase', () => {
           block_indep_hash:
             'NygsmnbJN9N5GfIDuuNWcD3eQoMNLmzmvAzPVEcRYHhkoVlpQAAAwoeOVZd7eYAM',
           transaction_id: 'o1UWZD7Q81SVIXj9f4ixk-9q7Ph8-Jwq0k4mQLQlGO4',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'PHP1MrQBdNm5pYo1rWC057WGwYZ7RicAu0vV2Gwri-2E827z2E6bQ7YGAXZ54rs5',
+          transaction_id: 'KZj5A-tQxQUBucTnNRZMYdSkSXztW00P9hnVqIv_4AM',
           block_transaction_index: 0,
         },
         {
@@ -590,8 +602,20 @@ describe('StandaloneSqliteDatabase', () => {
         },
         {
           block_indep_hash:
+            'YlSZJEmac4BF0mzPbXc5F_evGBqDdPpw5JiKD-F0CPQDWR_KN3jtwa9FX-g4auX5',
+          transaction_id: 'UjDaRcYs1zoEleKrl9B3miG1lwRyD_5AdM6oeEe-k2s',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
             'fxxFMvVrp8oOgBEjDr0WuI2PpVny1mJiq9S551y0Y5T-H7B4JKhc-gNkKz8zJ7oR',
           transaction_id: 'glHacTmLlPSw55wUOU-MMaknJjWWHBLN16U8f3YuOd4',
+          block_transaction_index: 0,
+        },
+        {
+          block_indep_hash:
+            'gYZpHCm6YdhiPOG6dGWGeh7zqLsQqOMJZaAkIPfr7CqYL7WktA-0tVsQUQL5en-6',
+          transaction_id: '1pHqMoNBJthy3JXYJr1GmItt2_QRNBHOZBSTOQDk-r8',
           block_transaction_index: 0,
         },
         {

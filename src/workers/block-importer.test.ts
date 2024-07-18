@@ -193,7 +193,7 @@ describe('BlockImporter', () => {
       it('should throw an exception', async () => {
         await assert.rejects(
           async () => {
-            await blockImporter.importBlock(51);
+            await blockImporter.importBlock(19);
           },
           {
             name: 'Error',

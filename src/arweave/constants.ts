@@ -16,4 +16,4 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-export const MAX_FORK_DEPTH = 50;
+export const MAX_FORK_DEPTH = 18;
