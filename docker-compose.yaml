@@ -18,6 +18,8 @@ services:
       - TVAL_GRAPHQL_HOST=${GRAPHQL_HOST:-core}
       - TVAL_GRAPHQL_PORT=${GRAPHQL_PORT:-4000}
       - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
+    networks:
+      - ar-io-network
     depends_on:
       - core
       - observer
@@ -86,6 +88,8 @@ services:
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
       - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
+    networks:
+      - ar-io-network
     depends_on:
       - redis
 
@@ -97,6 +101,8 @@ services:
       - '6379' # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
+    networks:
+      - ar-io-network
 
   observer:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-917b8d5d53a901f133a49e40ae74e90e865ccbf2}
@@ -122,6 +128,8 @@ services:
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
       - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
+    networks:
+      - ar-io-network
 
   resolver:
     image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-e35776ceb4324494d403b1fb900bfd06eb97a652}
@@ -142,6 +150,8 @@ services:
       - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
     volumes:
       - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
+    networks:
+      - ar-io-network
 
   litestream:
     image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
@@ -158,124 +168,9 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_ACCESS_KEY=${AR_IO_SQLITE_BACKUP_S3_BUCKET_ACCESS_KEY:-}
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY=${AR_IO_SQLITE_BACKUP_S3_BUCKET_SECRET_KEY:-}
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX=${AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX:-}
+    networks:
+      - ar-io-network
 
-  upload-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service:${UPLOAD_SERVICE_IMAGE_TAG:-fd1032e3012c0179577b08bbfe932f4ad7d805cd}
-    environment:
-      ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
-      PORT: ${UPLOAD_SERVICE_PORT:-5100}
-      NODE_ENV: ${NODE_ENV:-local}
-      DB_HOST: ${UPLOAD_SERVICE_DB_HOST:-upload-service-pg}
-      DB_PORT: ${UPLOAD_SERVICE_DB_PORT:-5432}
-      DB_PASSWORD: ${UPLOAD_SERVICE_DB_PASSWORD:-postgres}
-      PAYMENT_SERVICE_BASE_URL: ${PAYMENT_SERVICE_BASE_URL:-}
-      SKIP_BALANCE_CHECKS: ${SKIP_BALANCE_CHECKS:-false}
-      ALLOW_LISTED_ADDRESSES: ${ALLOW_LISTED_ADDRESSES:-}
-      MAX_DATA_ITEM_SIZE: ${MAX_DATA_ITEM_SIZE:-10737418240}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_ENDPOINT: ${AWS_ENDPOINT:-http://localstack:4566}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
-      SQS_PREPARE_BUNDLE_URL: ${SQS_PREPARE_BUNDLE_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/prepare-bundle-queue}
-      SQS_FINALIZE_UPLOAD_URL: ${SQS_FINALIZE_UPLOAD_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/finalize-multipart-queue}
-      SQS_OPTICAL_URL: ${SQS_OPTICAL_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/optical-post-queue}
-      SQS_NEW_DATA_ITEM_URL: ${SQS_NEW_DATA_ITEM_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/batch-insert-new-data-items-queue}
-      SQS_UNBUNDLE_BDI_URL: ${SQS_UNBUNDLE_BDI_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/bdi-unbundle-queue}
-      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
-      DATA_ITEM_BUCKET: ${DATA_ITEM_BUCKET:-$AWS_S3_BUCKET}
-      DATA_ITEM_BUCKET_REGION: ${DATA_ITEM_BUCKET_REGION:-us-east-1}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
-      MIGRATE_ON_STARTUP: ${MIGRATE_ON_STARTUP:-true}
-      DATA_ITEM_S3_PREFIX: ${DATA_ITEM_S3_PREFIX:-$AWS_S3_PREFIX}
-      BUNDLE_PAYLOAD_S3_PREFIX: ${BUNDLE_PAYLOAD_S3_PREFIX:-$AWS_S3_PREFIX}
-    ports:
-      - ${UPLOAD_SERVICE_PORT:-5100}:${UPLOAD_SERVICE_PORT:-5100}
-    volumes:
-      - ${UPLOAD_SERVICE_DATA_PATH:-./data/upload-service}:/temp
-    depends_on:
-      - upload-service-pg
-      - fulfillment-service
-    profiles: ['bundler']
-
-  fulfillment-service:
-    image: ghcr.io/ardriveapp/turbo-upload-service-fulfillment:${UPLOAD_SERVICE_IMAGE_TAG:-6299f5497f5de479a1fb17ec86b764a4bf018f7b}
-    environment:
-      ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-http://envoy:3000}
-      NODE_ENV: ${NODE_ENV:-local}
-      DB_HOST: ${UPLOAD_SERVICE_DB_HOST:-upload-service-pg}
-      DB_PORT: ${UPLOAD_SERVICE_DB_PORT:-5432}
-      APP_NAME: ${APP_NAME:-}
-      DB_PASSWORD: ${UPLOAD_SERVICE_DB_PASSWORD:-postgres}
-      PORT: ${FULFILLMENT_PORT:-4401}
-      AWS_ENDPOINT: ${AWS_ENDPOINT:-http://localstack:4566}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
-      SQS_PREPARE_BUNDLE_URL: ${SQS_PREPARE_BUNDLE_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/prepare-bundle-queue}
-      SQS_POST_BUNDLE_URL: ${SQS_POST_BUNDLE_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/post-bundle-queue}
-      SQS_SEED_BUNDLE_URL: ${SQS_SEED_BUNDLE_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/seed-bundle-queue}
-      SQS_FINALIZE_UPLOAD_URL: ${SQS_FINALIZE_UPLOAD_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/finalize-multipart-queue}
-      SQS_OPTICAL_URL: ${SQS_OPTICAL_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/optical-post-queue}
-      SQS_NEW_DATA_ITEM_URL: ${SQS_NEW_DATA_ITEM_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/batch-insert-new-data-items-queue}
-      SQS_UNBUNDLE_BDI_URL: ${SQS_UNBUNDLE_BDI_URL:-http://sqs.us-east-1.localstack.localstack.cloud:4566/000000000000/bdi-unbundle-queue}
-      PLAN_BUNDLE_ENABLED: ${PLAN_BUNDLE_ENABLED:-true}
-      VERIFY_BUNDLE_ENABLED: ${VERIFY_BUNDLE_ENABLED:-true}
-      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
-      OPTICAL_BRIDGE_URL: ${OPTICAL_BRIDGE_URL:-http://envoy:3000/ar-io/admin/queue-data-item}
-      SKIP_BALANCE_CHECKS: ${SKIP_BALANCE_CHECKS:-true}
-      DATA_ITEM_BUCKET: ${DATA_ITEM_BUCKET:-$AWS_S3_BUCKET}
-      DATA_ITEM_BUCKET_REGION: ${DATA_ITEM_BUCKET_REGION:-us-east-1}
-      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      OVERDUE_DATA_ITEM_THRESHOLD_MS: ${OVERDUE_DATA_ITEM_THRESHOLD_MS:-0} # plan all into bundles data items immediately
-      AR_IO_ADMIN_KEY: ${AR_IO_ADMIN_KEY:-$ADMIN_API_KEY}
-      DATA_ITEM_S3_PREFIX: ${DATA_ITEM_S3_PREFIX:-$AWS_S3_PREFIX}
-      BUNDLE_PAYLOAD_S3_PREFIX: ${BUNDLE_PAYLOAD_S3_PREFIX:-$AWS_S3_PREFIX}
-    depends_on:
-      localstack:
-        condition: service_healthy
-      upload-service-pg:
-        condition: service_started
-    profiles: ['bundler']
-
-  upload-service-pg:
-    image: postgres:13.8
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
-    ports:
-      - '5432' # don't expose postgres externally by default
-    volumes:
-      - ${UPLOAD_SERVICE_PG_DATA_PATH:-./data/upload-service-pg}:/var/lib/postgresql/data
-    profiles: ['bundler']
-
-  localstack:
-    image: ghcr.io/ardriveapp/turbo-upload-service-localstack:${UPLOAD_SERVICE_IMAGE_TAG:-6299f5497f5de479a1fb17ec86b764a4bf018f7b}
-    ports:
-      - '4566' # don't expose localstack externally by default
-      #- "127.0.0.1:4510-4559:4510-4559" # external services port range
-    environment:
-      # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
-      - SERVICES=${SERVICES:-s3,sqs,secretsmanager}
-      - DEBUG=${DEBUG:-0}
-      - NODE_ENV=${NODE_ENV:-local}
-      - ARWEAVE_WALLET=${ARWEAVE_WALLET:-$BUNDLER_ARWEAVE_WALLET}
-      - TURBO_OPTICAL_KEY=${TURBO_OPTICAL_KEY:-$BUNDLER_ARWEAVE_WALLET}
-      - PERSIST_DEFAULT=${PERSIST_LOCALSTACK:-1} # set to 0 to disable persistence of resources and s3 objects between restarts
-      - DATA_ITEM_BUCKET=${AWS_S3_BUCKET:-}
-    volumes:
-      - '${LOCALSTACK_VOLUME_DIR:-./data/localstack}:/var/lib/localstack'
-      - '${LOCALSTACK_VOLUME_DIR:-./data/localstack}:/persisted-data'
-      - '/var/run/docker.sock:/var/run/docker.sock'
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'curl -f http://localhost:4566/_localstack/health || exit 1',
-        ]
-      interval: 10s
-      timeout: 30s
-      retries: 10
-      start_period: 15s
-    profiles: ['bundler']
+networks:
+  ar-io-network:
+    name: ar-io-network
