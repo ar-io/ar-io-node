@@ -68,6 +68,24 @@ static_resources:
                               retry_on: '5xx,reset'
                               num_retries: 5
                             prefix_rewrite: '/'
+                        - match:
+                            prefix: '/ao/cu/'
+                          route:
+                            cluster: ao_service_cluster
+                            timeout: 0s
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
+                            prefix_rewrite: '/'
+                        - match:
+                            prefix: '/ao/cu'
+                          route:
+                            cluster: ao_service_cluster
+                            timeout: 0s
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
+                            prefix_rewrite: '/'
 
                         - match: { prefix: '/api-docs' }
                           route:
@@ -235,4 +253,19 @@ static_resources:
                     socket_address:
                       address: upload-service
                       port_value: 5100
+                      ipv4_compat: true
+
+    - name: ao_service_cluster
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: ao_service_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ao-cu
+                      port_value: 6363
                       ipv4_compat: true

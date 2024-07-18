@@ -75,20 +75,24 @@ Once running, requests can be directed to Envoy server at `localhost:3000`.
 
 You can run a [Turbo] [ANS-104] data item bundler as a sidecar to the ar.io gateway service. This will allow the deployed system to accept data items and bundle them into a single transaction before submitting them to the network. The bundler's APIs will be reachable at the `/bundler/` path. For more information on its APIs, you can access docs at `/bundler/api-docs/`.
 
-To get started, supply the required environment variables in `.env` for the integration, most notably:
+Note: A local bundler configured to integrate with an ar.io node relies upon GraphQL indexing of recently bundled and uploaded data to manage its pipeline operations. The ar.io node should have its indexes synced up to Arweave's current block height minus 18 blocks before starting up the bundler's services stack.
+
+Bundling services are most easily managed via an independent docker compose file whose services share their network with that of the core services docker compose stack. This allows you to spin the services up when your core service is prepared to integrate with it, or down whenever you want without affecting your core services stack.
+
+To get started, supply the required environment variables in an environment variables file (e.g. `.env.bundler`) for the integration, most notably:
 
 - `BUNDLER_ARWEAVE_WALLET`: a stringified JWK wallet used for uploading bundles to Arweave.
 - `ALLOW_LISTED_ADDRESSES`: a comma-separated list of allowed uploader wallet addresses (normalized). See [Managing Bundler Access](#managing-bundler-access) for more permissioning options.
 
-See the `.env.bundler.example` file for other configuration options, including settings for serving bundler-uploaded data items instantly from your gateway.
+See the `.env.bundler.example` file for other important configuration options, including settings for serving bundler-uploaded data items instantly from your gateway.
 
-Once environment variables are set, run docker compose with the `bundler` profile.
+Once environment variables are set, run docker compose with the bundler-specific compose file.
 
 ```shell
-docker compose --profile bundler up
+docker compose --env-file ./.env.bundler --file docker-compose.bundler.yaml up upload-service
 ```
 
-Now, the bundler service will be running alongside the ar.io gateway. Your gateway will now accept data items at `https://my-gateway.net/bundler/tx` 🚀
+Now, the bundler service will be running alongside the ar.io gateway. Your gateway will now accept data items at `<your gateway domain>/bundler/tx` 🚀
 
 #### Managing Bundler Access
 
@@ -101,6 +105,37 @@ By default, the bundler will only accept data items uploaded by data item signer
 | Allow all              | n/a                                         | true                | n/a                          | n/a                      |
 | Allow none             | EMPTY                                       | false               | EMPTY                        | EMPTY                    |
 | Allow payers           | EMPTY or supplied                           | false               | EMPTY or supplied            | your payment svc url     |
+
+### Run an AO Compute Unit (CU) as a Sidecar
+
+AO Compute Units are useful for interacting with AO Processes in manner that avoids Process side effects and that does not require gas payment via "[Dry Runs]".
+
+AO CU's rely on bundlers to periodically upload checkpoint data for evaluated Process memory. Additionally, they rely on gateway GQL to find those checkpoints, Scheduler assignments for each Process, and more. The indexing workload to support arbitrary AO Processes is effectively the indexing workload for most of Arweave's recent history. However, most recent AO Testnet Processes's data was bundled by Turbo in dedicated bundles with the tag:
+
+```
+Bundler-App-Name: AO
+```
+
+Including that tag filter in your indexing filters and indexing data from block height 1378000 forward should include the vast majority of the needed testnet data.
+
+If you control your own SU and can easily identify its L1 data transactions' tags, you can simply filter on those from a block height that captures all of the SU data for your processes of interest.
+
+Similarly to the bundler sidecar, the CU service is most easily managed via an independent docker compose file whose services share their network with that of the core services docker compose stack.
+
+To get started, supply the required environment variables in an environment variables file (e.g. `.env.ao`) for the integration, most notably:
+
+- `CU_WALLET`: a stringified JWK wallet used for uploading CU checkpoints to Arweave.
+- `PROCESS_CHECKPOINT_TRUSTED_OWNERS`: a comma-separated list of CU checkpoint uploader wallet addresses(normalized).
+
+See the `.env.ao.example` or the environment overrides in `docker-compose.ao.yaml` file for other important configuration options.
+
+Once environment variables are set, run docker compose with the ao-specific compose file.
+
+```shell
+docker compose --env-file ./.env.ao --file docker-compose.ao.yaml up ao-cu
+```
+
+Now, the CU service will be running alongside the ar.io gateway. Within the docker network it can be reached at `http://envoy:3000/ao/cu` and `http://ao-cu:6363`. From the docker host machine, it can be reached at `http://localhost:3000/ao/cu` and `http://localhost:6363`. From your custom domain configured to forward traffic to envoy, it can be reached at `<your gateway domain>/ao/cu`.
 
 ## Configuration
 
@@ -284,3 +319,4 @@ particular ID is blocked.
 [prometheus metrics]: https://github.com/siimon/prom-client
 [metrics naming recommendations]: https://prometheus.io/docs/practices/naming/
 [turbo]: https://github.com/ardriveapp/turbo-upload-service/
+[Dry Runs]: https://github.com/permaweb/ao/blob/main/connect/README.md#dryrun
