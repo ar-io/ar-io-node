@@ -24,10 +24,6 @@ import { GqlTransaction } from '../../types.js';
 export const DEFAULT_PAGE_SIZE = 10;
 export const MAX_PAGE_SIZE = 1000;
 
-import { ClickHouseGQL } from '../../database/clickhouse.js';
-
-const clickhouse = new ClickHouseGQL({ log });
-
 export function getPageSize({ first }: { first?: number }) {
   return Math.min(first ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
 }
@@ -102,7 +98,7 @@ export const resolvers: IResolvers = {
         resolver: 'transactions',
         queryParams,
       });
-      const txs = await clickhouse.getGqlTransactions({
+      return await db.getGqlTransactions({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
         cursor: queryParams.after,
@@ -117,9 +113,6 @@ export const resolvers: IResolvers = {
             : queryParams.parent,
         tags: queryParams.tags || [],
       });
-      console.log('HERE');
-      console.log(txs);
-      return txs;
     },
     block: async (_, queryParams, { db }) => {
       log.info('GraphQL block query', { resolver: 'block', queryParams });

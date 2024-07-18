@@ -15,24 +15,19 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { ValidationError } from 'apollo-server-express';
-import sql from 'sql-bricks';
 import * as winston from 'winston';
+import sql from 'sql-bricks';
 import { ClickHouseClient, createClient } from '@clickhouse/client';
+import { ValidationError } from 'apollo-server-express';
 
 import {
   b64UrlToHex,
   b64UrlToUtf8,
   hexToB64Url,
-  toB64Url,
   utf8ToB64Url,
 } from '../lib/encoding.js';
-import { currentUnixTimestamp } from '../lib/time.js';
-//import log from '../log.js';
 //import * as metrics from '../metrics.js';
-import {
-  GqlTransactionsResult
-} from '../types.js';
+import { GqlTransactionsResult, GqlQueryable } from '../types.js';
 
 // TODO reconcile this cursor fromat with what's in StandaloneSqlite
 export function encodeTransactionGqlCursor({
@@ -53,7 +48,7 @@ export function encodeTransactionGqlCursor({
   );
 }
 
-// TODO reconcile this cursor fromat with what's in StandaloneSqlite
+// TODO reconcile this cursor format with what's in StandaloneSqlite
 export function decodeTransactionGqlCursor(cursor: string | undefined) {
   try {
     if (!cursor) {
@@ -62,18 +57,19 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
         blockTransactionIndex: null,
         isDataItem: null,
         id: null,
-        indexedAt: null
+        indexedAt: null,
       };
     }
 
-    const [height, blockTransactionIndex, id, indexedAt] =
-      JSON.parse(b64UrlToUtf8(cursor)) as [
-        number | null,
-        number | null,
-        boolean | null,
-        string | null,
-        number | null,
-      ];
+    const [height, blockTransactionIndex, id, indexedAt] = JSON.parse(
+      b64UrlToUtf8(cursor),
+    ) as [
+      number | null,
+      number | null,
+      boolean | null,
+      string | null,
+      number | null,
+    ];
 
     return { height, blockTransactionIndex, id, indexedAt };
   } catch (error) {
@@ -103,21 +99,25 @@ function inB64UrlStrings(xs: string[]) {
   return sql(xs.map((x) => `unhex('${b64UrlToHex(x)}')`).join(', '));
 }
 
-export class ClickHouseGQL
-{
+export class ClickHouseDatabase implements GqlQueryable {
   private log: winston.Logger;
-  private client: ClickHouseClient;
+  private clickhouseClient: ClickHouseClient;
+  private gqlQueryable: GqlQueryable;
 
   constructor({
     log,
+    gqlQueryable,
   }: {
     log: winston.Logger;
+    gqlQueryable: GqlQueryable;
   }) {
     this.log = log;
 
-    this.client = createClient({
+    this.clickhouseClient = createClient({
       host: 'http://localhost:8123',
     });
+
+    this.gqlQueryable = gqlQueryable;
   }
 
   getGqlTransactionsBaseSql() {
@@ -128,17 +128,18 @@ export class ClickHouseGQL
         'block_transaction_index AS block_transaction_index',
         'is_data_item',
         'hex(id) AS id',
-        "'' AS anchor",
+        'hex(anchor)',
         'hex(target) AS target',
-        "'0' AS reward",
-        "'0' AS quantity",
-        "'0' AS data_size",
-        "'' AS content_type",
+        'toString(reward) AS reward',
+        'toString(quantity) AS quantity',
+        'toString(data_size) AS data_size',
+        'content_type',
         'hex(owner_address) AS owner_address',
-        "hex(parent) AS parent_id",
-        "tags",
+        'hex(parent_id) AS parent_id',
+        'tags_count',
+        'tags',
       )
-      .from('transactions t')
+      .from('transactions t');
   }
 
   addGqlTransactionFilters({
@@ -164,7 +165,7 @@ export class ClickHouseGQL
     bundledIn?: string[] | null;
     tags: { name: string; values: string[] }[];
   }) {
-    let maxDbHeight = Infinity;
+    const maxDbHeight = Infinity;
 
     if (ids?.length > 0) {
       query.where(sql.in('t.id', inB64UrlStrings(ids)));
@@ -179,11 +180,13 @@ export class ClickHouseGQL
     }
 
     if (tags) {
-      tags.forEach(tag => {
+      tags.forEach((tag) => {
         const hexName = Buffer.from(tag.name).toString('hex');
-        const hexValues = tag.values.map((value) => Buffer.from(value).toString('hex'));
+        const hexValues = tag.values.map((value) =>
+          Buffer.from(value).toString('hex'),
+        );
         const wheres = hexValues.map((hexValue) =>
-          sql(`has(tags, (unhex('${hexName}'), unhex('${hexValue}')))`)
+          sql(`has(tags, (unhex('${hexName}'), unhex('${hexValue}')))`),
         );
         query.where(sql.or.apply(null, wheres));
       });
@@ -360,7 +363,7 @@ export class ClickHouseGQL
     query.orderBy(orderBy);
   }
 
-  async getGqlTransactions ({
+  async getGqlTransactions({
     pageSize,
     cursor,
     sortOrder = 'HEIGHT_DESC',
@@ -399,42 +402,44 @@ export class ClickHouseGQL
     });
 
     const txsSql = txsQuery.toString();
-    const txsFinalSql = `${txsSql} LIMIT ${pageSize + 1}`;
-    console.log(txsFinalSql);
+    const sql = `${txsSql} LIMIT ${pageSize + 1}`;
 
     this.log.debug('Querying ClickHouse transactions...', { sql });
 
-    const row = await this.client.query({ query: txsFinalSql });
+    const row = await this.clickhouseClient.query({ query: sql });
     const jsonRow = await row.json();
     const txs = jsonRow.data.map((tx: any) => ({
-      height: tx.height,
-      blockTransactionIndex: tx.block_transaction_index,
-      isDataItem: tx.is_data_item,
+      height: tx.height as number,
+      blockTransactionIndex: tx.block_transaction_index as number,
+      isDataItem: tx.is_data_item as boolean,
       id: hexToB64Url(tx.id),
-      indexedAt: tx.indexed_at,
-      anchor: tx.anchor,
+      dataItemId: tx.is_data_item ? hexToB64Url(tx.id) : null,
+      indexedAt: tx.indexed_at as number,
+      anchor: tx.anchor ? hexToB64Url(tx.anchor) : null,
       signature: null,
       recipient: tx.target ? hexToB64Url(tx.target) : null,
       ownerAddress: hexToB64Url(tx.owner_address),
       ownerKey: null,
-      fee: tx.reward,
-      quantity: tx.quantity,
-      dataSize: tx.data_size,
-      // TODO filter out empty tags arrays based on count instead of tag content
-      tags: tx.tags.map((tag) => ({
-        name: tag[0],
-        value: tag[1]
-      })).filter((tag) => tag.name !== '' || tag.value !== ''),
-      contentType: tx.content_type,
-      blockIndepHash: tx.block_indep_hash ? hexToB64Url(tx.block_indep_hash) : null,
-      blockTimestamp: tx.block_timestamp,
-      blockPreviousBlock: tx.block_previous_block ? hexToB64Url(tx.block_previous_block) : null,
+      fee: tx.reward as string,
+      quantity: tx.quantity as string,
+      dataSize: tx.data_size as string,
+      tags:
+        tx.tags_count > 0
+          ? tx.tags.map((tag: any) => ({
+              name: tag[0] as string,
+              value: tag[1] as string,
+            }))
+          : [],
+      contentType: tx.content_type as string,
+      blockIndepHash: tx.block_indep_hash
+        ? hexToB64Url(tx.block_indep_hash)
+        : null,
+      blockTimestamp: tx.block_timestamp as number,
+      blockPreviousBlock: tx.block_previous_block
+        ? hexToB64Url(tx.block_previous_block)
+        : null,
       parentId: tx.parent_id ? hexToB64Url(tx.parent_id) : null,
     }));
-
-    console.log(jsonRow);
-
-    //const txs: any = [];
 
     return {
       pageInfo: {
@@ -447,5 +452,29 @@ export class ClickHouseGQL
         };
       }),
     };
+  }
+
+  async getGqlTransaction({ id }: { id: string }) {
+    return (
+      await this.getGqlTransactions({
+        pageSize: 1,
+        ids: [id],
+      })
+    ).edges[0].node;
+  }
+
+  getGqlBlock(args: { id: string }) {
+    return this.gqlQueryable.getGqlBlock(args);
+  }
+
+  getGqlBlocks(args: {
+    pageSize: number;
+    cursor?: string;
+    sortOrder?: 'HEIGHT_DESC' | 'HEIGHT_ASC';
+    ids?: string[];
+    minHeight?: number;
+    maxHeight?: number;
+  }) {
+    return this.gqlQueryable.getGqlBlocks(args);
   }
 }

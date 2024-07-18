@@ -59,7 +59,7 @@ app.use(arIoRouter);
 app.use(dataRouter);
 
 // GraphQL
-const apolloServerInstanceGql = apolloServer(system.db, {
+const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {
   introspection: true,
   persistedQueries: false,
 });

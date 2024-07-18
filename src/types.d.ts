@@ -299,11 +299,11 @@ interface GqlPageInfo {
 
 interface GqlTransaction {
   id: string;
-  anchor: string;
-  signature: string;
+  anchor: string | null;
+  signature: string | null;
   recipient: string | null;
   ownerAddress: string;
-  ownerKey: string;
+  ownerKey: string | null;
   fee: string;
   quantity: string;
   dataSize: string;
