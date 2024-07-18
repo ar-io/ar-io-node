@@ -27,7 +27,7 @@ import {
 import { headerNames } from '../constants.js';
 
 const MIN_SUCCESS_COUNT = 3;
-const MAX_CHUNK_SIZE = 1024 * 256 * 1.4; // 256KiB + 40% overhead;
+const MAX_CHUNK_SIZE = 1024 * 256 * 1.4; // 256KiB + 40% overhead for b64u encoding
 
 export const arweaveRouter = Router();
 

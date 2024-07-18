@@ -402,7 +402,6 @@ export interface JsonChunk {
   chunk: string;
 }
 
-// TODO better name
 export interface JsonChunkPost {
   data_root: string;
   chunk: string;
@@ -468,7 +467,6 @@ interface BroadcastChunkResult {
   results: BroadcastChunkResponses[];
 }
 
-// TODO better name?
 export interface ChunkBroadcaster {
   broadcastChunk({
     chunk,
