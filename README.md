@@ -89,7 +89,7 @@ See the `.env.bundler.example` file for other important configuration options, i
 Once environment variables are set, run docker compose with the bundler-specific compose file.
 
 ```shell
-docker compose --env-file ./.env.bundler --file docker-compose.bundler.yaml up upload-service
+docker compose --env-file ./.env.bundler --file docker-compose.bundler.yaml up
 ```
 
 Now, the bundler service will be running alongside the ar.io gateway. Your gateway will now accept data items at `<your gateway domain>/bundler/tx` 🚀
@@ -132,7 +132,7 @@ See the `.env.ao.example` or the environment overrides in `docker-compose.ao.yam
 Once environment variables are set, run docker compose with the ao-specific compose file.
 
 ```shell
-docker compose --env-file ./.env.ao --file docker-compose.ao.yaml up ao-cu
+docker compose --env-file ./.env.ao --file docker-compose.ao.yaml up
 ```
 
 Now, the CU service will be running alongside the ar.io gateway. Within the docker network it can be reached at `http://envoy:3000/ao/cu` and `http://ao-cu:6363`. From the docker host machine, it can be reached at `http://localhost:3000/ao/cu` and `http://localhost:6363`. From your custom domain configured to forward traffic to envoy, it can be reached at `<your gateway domain>/ao/cu`.
