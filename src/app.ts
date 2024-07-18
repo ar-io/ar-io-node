@@ -25,6 +25,7 @@ import log from './log.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
 import { dataRouter } from './routes/data/index.js';
+import { arweaveRouter } from './routes/arweave.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import * as system from './system.js';
@@ -57,6 +58,7 @@ app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
 app.use(dataRouter);
+app.use(arweaveRouter);
 
 // GraphQL
 const apolloServerInstanceGql = apolloServer(system.db, {

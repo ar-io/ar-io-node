@@ -35,13 +35,16 @@ import {
 } from '../lib/validation.js';
 import * as metrics from '../metrics.js';
 import {
+  BroadcastChunkResult,
   ChainSource,
   Chunk,
+  ChunkBroadcaster,
   ChunkByAnySource,
   ChunkData,
   ChunkDataByAnySource,
   ContiguousData,
   ContiguousDataSource,
+  JsonChunkPost,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonBlockStore,
@@ -57,6 +60,8 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
 const CHUNK_CACHE_TTL_SECONDS = 5;
+const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
+const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 
 interface Peer {
   url: string;
@@ -68,6 +73,7 @@ interface Peer {
 export class ArweaveCompositeClient
   implements
     ChainSource,
+    ChunkBroadcaster,
     ChunkByAnySource,
     ChunkDataByAnySource,
     ContiguousDataSource
@@ -85,6 +91,7 @@ export class ArweaveCompositeClient
 
   // Trusted node
   private trustedNodeUrl: string;
+  private chunkPostUrls: string[];
   private trustedNodeAxios;
 
   // Peers
@@ -121,6 +128,7 @@ export class ArweaveCompositeClient
     log,
     arweave,
     trustedNodeUrl,
+    chunkPostUrls,
     blockStore,
     chunkCache = new WeakMap(),
     txStore,
@@ -136,6 +144,7 @@ export class ArweaveCompositeClient
     log: winston.Logger;
     arweave: Arweave;
     trustedNodeUrl: string;
+    chunkPostUrls: string[];
     blockStore: PartialJsonBlockStore;
     chunkCache?: WeakMap<
       { absoluteOffset: number },
@@ -155,6 +164,7 @@ export class ArweaveCompositeClient
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
+    this.chunkPostUrls = chunkPostUrls.map((url) => url.replace(/\/$/, ''));
     this.failureSimulator = failureSimulator;
     this.txStore = txStore;
     this.blockStore = blockStore;
@@ -689,5 +699,75 @@ export class ArweaveCompositeClient
     });
 
     return response.data;
+  }
+
+  async broadcastChunk({
+    chunk,
+    abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
+    responseTimeout = DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
+    originAndHopsHeaders,
+  }: {
+    chunk: JsonChunkPost;
+    abortTimeout?: number;
+    responseTimeout?: number;
+    originAndHopsHeaders: Record<string, string | undefined>;
+  }): Promise<BroadcastChunkResult> {
+    let successCount = 0;
+    let failureCount = 0;
+
+    const results = await Promise.all(
+      this.chunkPostUrls.map(async (url) => {
+        try {
+          this.failureSimulator.maybeFail();
+
+          const resp = await axios({
+            url,
+            method: 'POST',
+            data: chunk,
+            signal: AbortSignal.timeout(abortTimeout),
+            timeout: responseTimeout,
+            validateStatus: (status) => status >= 200 && status < 300,
+            headers: originAndHopsHeaders,
+          });
+
+          successCount++;
+
+          return {
+            success: true,
+            statusCode: resp.status,
+            canceled: false,
+            timedOut: false,
+          };
+        } catch (error: any) {
+          let canceled = false;
+          let timedOut = false;
+
+          if (axios.isAxiosError(error)) {
+            timedOut = error.code === 'ECONNABORTED';
+            canceled = error.code === 'ERR_CANCELED';
+          }
+
+          this.log.warn('Failed to broadcast chunk:', {
+            message: error.message,
+            stack: error.stack,
+          });
+
+          failureCount++;
+
+          return {
+            success: false,
+            statusCode: error.response?.status,
+            canceled,
+            timedOut,
+          };
+        }
+      }),
+    );
+
+    return {
+      successCount,
+      failureCount,
+      results,
+    };
   }
 }

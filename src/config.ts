@@ -54,6 +54,29 @@ export const TRUSTED_GATEWAY_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
+// Trusted chunk POST URLs (for posting chunks received at /chunk)
+export const CHUNK_POST_URLS = env
+  .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
+  .split(',');
+
+// Chunk POST response timeout in milliseconds
+const CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING = env.varOrUndefined(
+  'CHUNK_POST_RESPONSE_TIMEOUT_MS',
+);
+export const CHUNK_POST_RESPONSE_TIMEOUT_MS =
+  CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING !== undefined
+    ? +CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING
+    : undefined;
+
+// Chunk POST abort timeout in milliseconds
+const CHUNK_POST_ABORT_TIMEOUT_MS_STRING = env.varOrUndefined(
+  'CHUNK_POST_ABORT_TIMEOUT_MS',
+);
+export const CHUNK_POST_ABORT_TIMEOUT_MS =
+  CHUNK_POST_ABORT_TIMEOUT_MS_STRING !== undefined
+    ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
+    : undefined;
+
 //
 // Data
 //

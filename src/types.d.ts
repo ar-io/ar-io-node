@@ -402,6 +402,14 @@ export interface JsonChunk {
   chunk: string;
 }
 
+export interface JsonChunkPost {
+  data_root: string;
+  chunk: string;
+  data_size: string;
+  data_path: string;
+  offset: string;
+}
+
 export interface ChunkData {
   hash: Buffer;
   chunk: Buffer;
@@ -444,6 +452,33 @@ export interface ChunkDataByAnySource {
     dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkData>;
+}
+
+type BroadcastChunkResponses = {
+  success: boolean;
+  statusCode: number;
+  canceled: boolean;
+  timedOut: boolean;
+};
+
+interface BroadcastChunkResult {
+  successCount: number;
+  failureCount: number;
+  results: BroadcastChunkResponses[];
+}
+
+export interface ChunkBroadcaster {
+  broadcastChunk({
+    chunk,
+    abortTimeout,
+    responseTimeout,
+    originAndHopsHeaders,
+  }: {
+    chunk: JsonChunkPost;
+    abortTimeout?: number;
+    responseTimeout?: number;
+    originAndHopsHeaders: Record<string, string | undefined>;
+  }): Promise<BroadcastChunkResult>;
 }
 
 export interface ContiguousData {

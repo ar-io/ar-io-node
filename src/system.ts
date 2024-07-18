@@ -113,6 +113,7 @@ export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
+  chunkPostUrls: config.CHUNK_POST_URLS,
   skipCache: config.SKIP_CACHE,
   blockStore: makeBlockStore({
     log,
