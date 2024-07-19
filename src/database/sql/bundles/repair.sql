@@ -35,7 +35,7 @@ WHERE matched_data_item_count IS NOT NULL
     SELECT 1
     FROM bundle_data_items bdi
     WHERE bdi.parent_id = bundles.id
-      AND bdi.filter_id = bundles.unbundle_filter_id
+      AND bdi.filter_id = bundles.index_filter_id
     GROUP BY bdi.parent_id
     HAVING COUNT(*) = bundles.matched_data_item_count
   ) AND last_fully_indexed_at IS NULL
