@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Adjusted data item indexing to record data item signature types in the DB. This
+  helps distinguish between signatures using different key formats, and will
+  enable querying by signature type in the future.
+- Adjusted data item indexing to record offsets for data items within bundles
+  and signatures and owners within data items. In the future this will allow us
+  to avoid saving owners and signatures in the DB and thus considerably reduce
+  the size of the bundles DB.
+- Added `ARNS_CACHE_TTL_MS` environment variable to control the TTL of ARNS cache
+  entries (defaults to 1 hour).
+- Added support for multiple ranges in a single HTTP range request.
+- Added experimental chunk POST endpoint that broadcasts chunks to the
+  comma-separate list of URLS in the `CHUNK_BROADCAST_URLS` environment
+  variable. It is available at `/chunk` on the internal gateway service port
+  (4000 by default) but is not yet exposed through Envoy.
+- Added support for running an AO CU adjacent to the gateway (see README.md for
+  details).
+- Added `X-ArNS-Process-Id` to ArNS resolved name headers.
+- Added a set of `AO_...` environment variables for specifying which AO
+  URLs should be used (see `docker-compose.yaml` for the complete list). The
+  `AO_CU_URL` is of particular use since the core and resolver services only
+  perform AO reads and only the CU is needed for reads.
+
+### Changed
+
+- Split the monolithic `docker-compose.yaml` into `docker-compose.yaml`,
+  `docker-compose.bundler.yaml`, and `docker-compose.ao.yaml` (see README for
+  details).
+- Replaced references to 'docker-compose' with 'docker compose' in the docs
+  since the former is mostly deprecated.
+- Reduce max fork depth from 50 to 18 inline to reflect Arweave 2.7.2 protocol
+  changes.
+
 ## [Release 14] - 2024-06-26
 
 ### Fixed
