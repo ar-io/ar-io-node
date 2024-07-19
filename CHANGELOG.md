@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 15] - 2024-07-29
+
+### Fixed
+
+- Fixed query error that was preventing bundles from being marked as fully
+  imported in the database.
 
 ### Added
 
@@ -39,6 +44,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   since the former is mostly deprecated.
 - Reduce max fork depth from 50 to 18 inline to reflect Arweave 2.7.2 protocol
   changes.
+- Increased the aggressiveness of bundle reprocessing by reducing reprocessing
+  interval from 10 minutes to 5 minutes and raising reprocessing batch size
+  from 100 to 1000.
+- Use a patched version of Litestream to work around insufficient S3 multipart
+  upload size in the upstream version.
 
 ## [Release 14] - 2024-06-26
 
