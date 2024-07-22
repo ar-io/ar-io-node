@@ -171,7 +171,7 @@ The following types of filters are supported:
 ```
 { "never": true } # the default
 { "always": true }
-{ "attributes": { "owner": <owner key>, ... }}
+{ "attributes": { "owner_address": <owner address>, ... }}
 { "tags": [{ "name": <utf8 tag name>, "value": <utf8 tag value> }, { "name": <utf8 tag name> }, ...]}
 { "and": [ <nested filter>, ... ]}
 { "or": [ <nested filter>, ... ]}
