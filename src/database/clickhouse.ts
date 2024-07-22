@@ -61,7 +61,7 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
       };
     }
 
-    const [height, blockTransactionIndex, id, indexedAt] = JSON.parse(
+    const [height, blockTransactionIndex, isDataItem, id, indexedAt] = JSON.parse(
       b64UrlToUtf8(cursor),
     ) as [
       number | null,
@@ -71,7 +71,7 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
       number | null,
     ];
 
-    return { height, blockTransactionIndex, id, indexedAt };
+    return { height, blockTransactionIndex, isDataItem, id, indexedAt };
   } catch (error) {
     throw new ValidationError('Invalid transaction cursor');
   }
@@ -186,7 +186,7 @@ export class ClickHouseDatabase implements GqlQueryable {
           Buffer.from(value).toString('hex'),
         );
         const wheres = hexValues.map((hexValue) =>
-          sql(`has(tags, (unhex('${hexName}'), unhex('${hexValue}')))`),
+          sql(`has(t.tags, (unhex('${hexName}'), unhex('${hexValue}')))`),
         );
         query.where(sql.or.apply(null, wheres));
       });
@@ -204,161 +204,72 @@ export class ClickHouseDatabase implements GqlQueryable {
       query.where(sql.in('t.parent_id', inB64UrlStrings(bundledIn)));
     }
 
-    // TODO need to review, but cursor handling should be fairly similar
-    //const {
-    //  height: cursorHeight,
-    //  blockTransactionIndex: cursorBlockTransactionIndex,
-    //  dataItemId: cursorDataItemId,
-    //  indexedAt: cursorIndexedAt,
-    //  id: cursorId,
-    //} = decodeTransactionGqlCursor(cursor);
-
-    //if (sortOrder === 'HEIGHT_DESC') {
-    //  if (
-    //    ['new_txs', 'new_items'].includes(source) &&
-    //    cursorHeight == null &&
-    //    cursorIndexedAt != null
-    //  ) {
-    //    query.where(
-    //      sql.or(
-    //        sql.and(
-    //          // indexed_at is only considered when the height is null
-    //          sql.isNull(`${heightSortTableAlias}.height`),
-    //          sql.or(
-    //            // If the indexed_at is less than the cursor, the ID is not
-    //            // considered
-    //            sql.lt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-    //            sql.and(
-    //              // If the indexedAt is the same as the cursor, the ID is
-    //              // compared
-    //              sql.lte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-    //              sql.lt(
-    //                'id',
-    //                cursorId ? fromB64Url(cursorId) : Buffer.from([0]),
-    //              ),
-    //            ),
-    //          ),
-    //        ),
-    //        // Non-null heights are always after pending transactions and data
-    //        // items when sorting in descending order
-    //        sql.isNotNull(`${heightSortTableAlias}.height`),
-    //      ),
-    //    );
-    //  } else if (cursorHeight != null && cursorBlockTransactionIndex != null) {
-    //    let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
-    //    query.where(
-    //      sql.lte(`${heightSortTableAlias}.height`, cursorHeight),
-    //      sql.or(
-    //        sql.lt(`${heightSortTableAlias}.height`, cursorHeight),
-    //        sql.and(
-    //          sql.eq(`${heightSortTableAlias}.height`, cursorHeight),
-    //          sql.lt(
-    //            `${blockTransactionIndexSortTableAlias}.block_transaction_index`,
-    //            cursorBlockTransactionIndex,
-    //          ),
-    //        ),
-    //        sql.and(
-    //          sql.eq(`${heightSortTableAlias}.height`, cursorHeight),
-    //          sql.eq(
-    //            `${blockTransactionIndexSortTableAlias}.block_transaction_index`,
-    //            cursorBlockTransactionIndex,
-    //          ),
-    //          sql.lt(
-    //            dataItemIdField,
-    //            cursorDataItemId
-    //              ? fromB64Url(cursorDataItemId)
-    //              : Buffer.from([0]),
-    //          ),
-    //        ),
-    //      ),
-    //    );
-    //  }
-    //  let orderBy = `${heightSortTableAlias}.height DESC NULLS FIRST`;
-    //  orderBy += `, ${blockTransactionIndexSortTableAlias}.block_transaction_index DESC NULLS FIRST`;
-    //  if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
-    //    orderBy += `, ${dataItemSortTableAlias}.data_item_id DESC`;
-    //  } else {
-    //    orderBy += `, 3 DESC`;
-    //  }
-    //  orderBy += `, indexed_at DESC`;
-    //  orderBy += `, 5 DESC`;
-    //  query.orderBy(orderBy);
-    //} else {
-    //  if (
-    //    ['new_txs', 'new_items'].includes(source) &&
-    //    cursorHeight == null &&
-    //    cursorIndexedAt != null
-    //  ) {
-    //    query.where(
-    //      // indexed_at is only considered when the height is null
-    //      sql.isNull(`${heightSortTableAlias}.height`),
-    //      sql.or(
-    //        // If the indexed_at is greater than the cursor, the ID is not
-    //        // considered
-    //        sql.gt(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-    //        sql.and(
-    //          // If the indexed_at is the same as the cursor, the ID is
-    //          // compared
-    //          sql.gte(`${txTableAlias}.indexed_at`, cursorIndexedAt),
-    //          sql.gt('id', cursorId ? fromB64Url(cursorId) : Buffer.from([0])),
-    //        ),
-    //      ),
-    //    );
-    //  } else if (
-    //    cursorHeight != undefined &&
-    //    cursorBlockTransactionIndex != undefined
-    //  ) {
-    //    let dataItemIdField = source === 'stable_items' ? 'sdi.id' : "x'00'";
-    //    query.where(
-    //      sql.gte(`${heightSortTableAlias}.height`, cursorHeight),
-    //      sql.or(
-    //        sql.gt(`${heightSortTableAlias}.height`, cursorHeight),
-    //        sql.and(
-    //          sql.eq(`${heightSortTableAlias}.height`, cursorHeight),
-    //          sql.gt(
-    //            `${blockTransactionIndexSortTableAlias}.block_transaction_index`,
-    //            cursorBlockTransactionIndex,
-    //          ),
-    //        ),
-    //        sql.and(
-    //          sql.eq(`${heightSortTableAlias}.height`, cursorHeight),
-    //          sql.eq(
-    //            `${blockTransactionIndexSortTableAlias}.block_transaction_index`,
-    //            cursorBlockTransactionIndex,
-    //          ),
-    //          sql.gt(
-    //            dataItemIdField,
-    //            cursorDataItemId
-    //              ? fromB64Url(cursorDataItemId)
-    //              : Buffer.from([0]),
-    //          ),
-    //        ),
-    //      ),
-    //    );
-    //  }
-    //  let orderBy = `${heightSortTableAlias}.height ASC NULLS LAST`;
-    //  orderBy += `, ${blockTransactionIndexSortTableAlias}.block_transaction_index ASC NULLS LAST`;
-    //  if (source === 'stable_items' && dataItemSortTableAlias !== undefined) {
-    //    orderBy += `, ${dataItemSortTableAlias}.data_item_id ASC`;
-    //  } else {
-    //    orderBy += `, 3 ASC`;
-    //  }
-    //  orderBy += `, indexed_at ASC`;
-    //  orderBy += `, 5 ASC`;
-    //  query.orderBy(orderBy);
-    //}
+    const {
+      height: cursorHeight,
+      blockTransactionIndex: cursorBlockTransactionIndex,
+      isDataItem: cursorIsDataItem,
+      id: cursorId,
+    } = decodeTransactionGqlCursor(cursor);
 
     let orderBy = '';
     if (sortOrder === 'HEIGHT_DESC') {
-      orderBy = 'height DESC, ';
-      orderBy += 'block_transaction_index DESC, ';
-      orderBy += 'is_data_item DESC, ';
-      orderBy += 'id DESC';
+      if (cursorHeight != null) {
+        query.where(
+          sql.lte('t.height', cursorHeight),
+          sql.or(
+            sql.lt('t.height', cursorHeight),
+            sql.and(
+              sql.eq('t.height', cursorHeight),
+              sql.lt('t.block_transaction_index', cursorBlockTransactionIndex),
+            ),
+            sql.and(
+              sql.eq('t.height', cursorHeight),
+              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
+              sql.lt('t.is_data_item', cursorIsDataItem),
+            ),
+            sql.and(
+              sql.eq('t.height', cursorHeight),
+              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
+              sql.eq('t.is_data_item', cursorIsDataItem),
+              sql.lt('t.id', sql(`unhex('${sql(b64UrlToHex(cursorId || ''))}')`)),
+            ),
+          ),
+        );
+      }
+
+      orderBy = 't.height DESC, ';
+      orderBy += 't.block_transaction_index DESC, ';
+      orderBy += 't.is_data_item DESC, ';
+      orderBy += 't.id DESC';
     } else {
-      orderBy = 'height ASC, ';
-      orderBy += 'block_transaction_index ASC, ';
-      orderBy += 'is_data_item ASC, ';
-      orderBy += 'id ASC';
+      if (cursorHeight != null) {
+        query.where(
+          sql.gte('t.height', cursorHeight),
+          sql.or(
+            sql.gt('t.height', cursorHeight),
+            sql.and(
+              sql.eq('t.height', cursorHeight),
+              sql.gt('t.block_transaction_index', cursorBlockTransactionIndex),
+            ),
+            sql.and(
+              sql.eq('t.height', cursorHeight),
+              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
+              sql.gt('t.is_data_item', cursorIsDataItem),
+            ),
+            sql.and(
+              sql.eq('t.height', cursorHeight),
+              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
+              sql.eq('t.is_data_item', cursorIsDataItem),
+              sql.gt('t.id', sql(`unhex('${sql(b64UrlToHex(cursorId || ''))}')`)),
+            ),
+          ),
+        );
+      }
+
+      orderBy = 't.height ASC, ';
+      orderBy += 't.block_transaction_index ASC, ';
+      orderBy += 't.is_data_item ASC, ';
+      orderBy += 't.id ASC';
     }
     query.orderBy(orderBy);
   }
