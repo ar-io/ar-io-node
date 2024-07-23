@@ -36,7 +36,7 @@ CREATE TABLE stable_transactions (
 
   -- Metadata
   tag_count INTEGER NOT NULL
-, offset INTEGER);
+, offset INTEGER, content_encoding TEXT);
 CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
 CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
 CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
@@ -130,7 +130,7 @@ CREATE TABLE new_transactions (
   -- Metadata
   tag_count INTEGER NOT NULL,
   indexed_at INTEGER NOT NULL
-, height INTEGER);
+, height INTEGER, content_encoding TEXT);
 CREATE INDEX new_transactions_target_id_idx ON new_transactions (target, id);
 CREATE INDEX new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
 CREATE TABLE new_block_transactions (

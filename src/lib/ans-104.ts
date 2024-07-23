@@ -77,6 +77,7 @@ export function normalizeAns104DataItem({
   dataHash: string;
 }): NormalizedDataItem {
   let contentType: string | undefined;
+  let contentEncoding: string | undefined;
 
   const tags = ans104DataItem.tags.map(
     (tag: { name: string; value: string }) => {
@@ -88,6 +89,14 @@ export function normalizeAns104DataItem({
         contentType = tag.value;
       }
 
+      // get content encoding from the first content-type tag
+      if (
+        contentEncoding === undefined &&
+        tag.name.toLowerCase() === 'content-encoding'
+      ) {
+        contentEncoding = tag.value;
+      }
+
       return {
         name: utf8ToB64Url(tag.name),
         value: utf8ToB64Url(tag.value),
@@ -97,6 +106,7 @@ export function normalizeAns104DataItem({
 
   return {
     anchor: ans104DataItem.anchor,
+    content_encoding: contentEncoding,
     content_type: contentType,
     data_hash: dataHash,
     data_offset: ans104DataItem.dataOffset,

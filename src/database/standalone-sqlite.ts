@@ -163,6 +163,10 @@ function isContentTypeTag(tagName: Buffer) {
   return tagName.toString('utf8').toLowerCase() === 'content-type';
 }
 
+function isContentEncodingTag(tagName: Buffer) {
+  return tagName.toString('utf8').toLowerCase() === 'content-encoding';
+}
+
 function ownerToAddress(owner: Buffer) {
   return crypto.createHash('sha256').update(owner).digest();
 }
@@ -180,6 +184,8 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
   const wallets = [] as { address: Buffer; public_modulus: Buffer }[];
 
   let contentType: string | undefined;
+  let contentEncoding: string | undefined;
+
   const txId = fromB64Url(tx.id);
 
   let transactionTagIndex = 0;
@@ -194,6 +200,10 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
 
     if (isContentTypeTag(tagName)) {
       contentType = tagValue.toString('utf8');
+    }
+
+    if (isContentEncodingTag(tagName)) {
+      contentEncoding = tagValue.toString('utf8');
     }
 
     newTxTags.push({
@@ -229,6 +239,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
       data_size: tx.data_size,
       data_root: fromB64Url(tx.data_root),
       content_type: contentType,
+      content_encoding: contentEncoding,
       tag_count: tx.tags.length,
       indexed_at: currentUnixTimestamp(),
       height: height,
@@ -250,6 +261,8 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
   const wallets = [] as { address: Buffer; public_modulus: Buffer }[];
 
   let contentType: string | undefined;
+  let contentEncoding: string | undefined;
+
   const id = fromB64Url(item.id);
 
   let dataItemTagIndex = 0;
@@ -264,6 +277,10 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
 
     if (isContentTypeTag(tagName)) {
       contentType = tagValue.toString('utf8');
+    }
+
+    if (isContentEncodingTag(tagName)) {
+      contentEncoding = tagValue.toString('utf8');
     }
 
     newDataItemTags.push({
@@ -308,6 +325,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
     bundleDataItem,
     newDataItem: {
       anchor: fromB64Url(item.anchor),
+      content_encoding: contentEncoding ?? item.content_encoding,
       content_type: contentType ?? item.content_type,
       data_offset: item.data_offset,
       data_size: item.data_size,
@@ -937,6 +955,7 @@ export class StandaloneSqliteDatabaseWorker {
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: coreRow?.data_size ?? dataRow?.data_size,
       contentType,
+      contentEncoding: coreRow?.content_encoding,
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
       verified: dataRow?.verified === true,
