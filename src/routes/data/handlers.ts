@@ -95,6 +95,10 @@ const setDataHeaders = ({
       data.sourceContentType ??
       DEFAULT_CONTENT_TYPE,
   );
+
+  if (dataAttributes?.contentEncoding !== undefined) {
+    res.header('Content-Encoding', dataAttributes.contentEncoding);
+  }
 };
 
 const getRequestAttributes = (req: Request): RequestAttributes => {

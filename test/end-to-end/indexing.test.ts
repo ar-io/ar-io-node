@@ -27,7 +27,7 @@ import axios from 'axios';
 import { default as wait } from 'wait';
 import Sqlite, { Database } from 'better-sqlite3';
 import crypto from 'node:crypto';
-import { b64UrlToUtf8, toB64Url } from '../../src/lib/encoding.js';
+import { b64UrlToUtf8, toB64Url, fromB64Url } from '../../src/lib/encoding.js';
 import { getMaxHeight, waitForBlocks } from './utils.js';
 import { Environment } from 'testcontainers/build/types.js';
 
@@ -629,6 +629,97 @@ describe('Indexing', function () {
         assert.equal(dataItem.tag_count, 2);
         assert.equal(dataItem.content_type, 'application/octet-stream');
       });
+    });
+  });
+
+  describe('Content-Encoding', function () {
+    const txId = 'NT9b6xQqxMGNsbp1h6N-pmd-YM0hWPP3KDcM2EA1Hk8';
+    const bundleId = '0WUql4Qv3OFf-e9PR2hnZM1wv9s5TPbub7uvZXaQf5w';
+    const dataItemId = 'XC6f7QFAxkSHltkW96fDz-hwUU_ntRS-cpiT2wTe8oA';
+    let bundlesDb: Database;
+    let coreDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAllTxs = () =>
+        coreDb.prepare('SELECT * FROM new_transactions').all();
+
+      const getAllDI = () =>
+        bundlesDb.prepare('SELECT * FROM new_data_items').all();
+
+      while (getAllTxs().length === 0 || getAllDI().length === 0) {
+        console.log('Waiting for pending txs and data items to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    before(async function () {
+      compose = await composeUp({
+        ARNS_ROOT_HOST: '',
+      });
+
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: { id: txId },
+      });
+
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-bundle',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: { id: bundleId },
+      });
+
+      bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
+      coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+
+      await waitForIndexing();
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('Verifying if transaction content-encoding was indexed', async function () {
+      const stmt = coreDb.prepare(
+        'SELECT * FROM new_transactions WHERE id = @id',
+      );
+      const transaction = stmt.get({ id: fromB64Url(txId) });
+
+      assert.equal(transaction.content_encoding, 'gzip');
+    });
+
+    it('Verifying if content-encoding header is sent', async function () {
+      const res = await axios.head(`http://localhost:4000/raw/${txId}`, {
+        decompress: false,
+      });
+
+      assert.equal(res.headers['content-encoding'], 'gzip');
+    });
+
+    it('Verifying if data item content-encoding was indexed', async function () {
+      const stmt = bundlesDb.prepare(
+        'SELECT * FROM new_data_items WHERE id = @id',
+      );
+      const dataItem = stmt.get({ id: fromB64Url(dataItemId) });
+
+      assert.equal(dataItem.content_encoding, 'gzip');
+    });
+
+    it('Verifying if content-encoding header is sent', async function () {
+      const res = await axios.head(`http://localhost:4000/raw/${dataItemId}`, {
+        decompress: false,
+      });
+
+      assert.equal(res.headers['content-encoding'], 'gzip');
     });
   });
 });

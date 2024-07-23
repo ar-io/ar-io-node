@@ -251,6 +251,7 @@ export interface NestedDataIndexWriter {
 
 export interface NormalizedBundleDataItem {
   anchor: string;
+  content_encoding?: string;
   content_type?: string;
   data_hash: string;
   data_offset: number;
@@ -277,6 +278,7 @@ export interface NormalizedBundleDataItem {
 
 export interface NormalizedOptimisticDataItem {
   anchor: string;
+  content_encoding?: string;
   content_type?: string;
   data_hash: null;
   data_offset: null;
@@ -495,6 +497,7 @@ export interface ContiguousDataAttributes {
   hash?: string;
   dataRoot?: string;
   size: number;
+  contentEncoding?: string;
   contentType: string | undefined;
   isManifest: boolean;
   stable: boolean;

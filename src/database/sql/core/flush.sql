@@ -36,11 +36,13 @@ ON CONFLICT DO NOTHING
 INSERT INTO stable_transactions (
   id, height, block_transaction_index, signature,
   format, last_tx, owner_address, target, quantity,
-  reward, data_size, data_root, content_type, tag_count
+  reward, data_size, data_root, content_type, tag_count,
+  content_encoding
 ) SELECT
   nt.id, nbt.height, nbt.block_transaction_index, nt.signature,
   nt.format, nt.last_tx, nt.owner_address, nt.target, nt.quantity,
-  nt.reward, nt.data_size, nt.data_root, nt.content_type, nt.tag_count
+  nt.reward, nt.data_size, nt.data_root, nt.content_type, nt.tag_count,
+  nt.content_encoding
 FROM new_transactions nt
 JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
 WHERE nbt.height < @end_height
