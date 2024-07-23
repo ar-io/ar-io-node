@@ -146,6 +146,7 @@ export const dataItemIndexWriter: DataItemIndexWriter = db;
 
 // Workers
 export const eventEmitter = new EventEmitter();
+eventEmitter.setMaxListeners(100);
 
 export const blockImporter = new BlockImporter({
   log,
