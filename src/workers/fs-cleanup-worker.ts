@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as winston from 'winston';
 
-const DEFAULT_BATCH_SIZE = 1000;
+const DEFAULT_BATCH_SIZE = 2000;
 const DEFAULT_BATCH_PAUSE_DURATION = 1000 * 5;
 const DEFAULT_RESTART_PAUSE_DURATION = 1000 * 60 * 60 * 4;
 
