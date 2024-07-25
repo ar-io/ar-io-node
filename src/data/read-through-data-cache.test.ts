@@ -78,7 +78,7 @@ describe('ReadThroughDataCache', function () {
         });
         return stream;
       },
-      cleanup: async(_) => Promise.resolve(),
+      cleanup: async (_) => Promise.resolve(),
       finalize: async (_, __) => Promise.resolve(),
     };
 
