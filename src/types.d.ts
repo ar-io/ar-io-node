@@ -596,7 +596,6 @@ export interface MatchableItem {
   txs?: string[];
   reward_addr?: string;
   parent_id?: string | null;
-  root_tx_id?: string | null;
 }
 
 export interface ItemFilter {
