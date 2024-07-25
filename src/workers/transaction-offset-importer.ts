@@ -67,7 +67,7 @@ export class TransactionOffsetImporter {
       this.inprogressTxIds.add(txId);
       log.debug('Queueing transaction for offset indexing...');
       this.queue.push(txId);
-      log.info('Transaction queued for offset indexing.');
+      log.debug('Transaction queued for offset indexing.');
     }
   }
 
@@ -76,11 +76,11 @@ export class TransactionOffsetImporter {
     try {
       log.debug('Fetching transaction offset...');
       const { offset } = await this.chainSource.getTxOffset(txId);
-      log.info('Transaction offset fetched.');
+      log.debug('Transaction offset fetched.');
 
       log.debug('Saving transaction offset...');
       await this.chainOffsetIndex.saveTxOffset(txId, offset);
-      log.info('Transaction offset saved.');
+      log.debug('Transaction offset saved.');
     } catch (error: any) {
       log.warn('Failed to fetch transaction offset:', {
         message: error?.message,
