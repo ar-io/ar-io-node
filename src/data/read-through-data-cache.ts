@@ -190,6 +190,16 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           if (cacheStream !== undefined) {
             const hash = hasher.digest('base64url');
 
+            try {
+              await this.dataStore.finalize(cacheStream, hash);
+            } catch (error: any) {
+              this.log.error('Error finalizing data in cache:', {
+                id,
+                message: error.message,
+                stack: error.stack,
+              });
+            }
+
             this.log.info('Successfully cached data', { id, hash });
             try {
               await this.contiguousDataIndex.saveDataContentAttributes({
@@ -202,16 +212,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               });
             } catch (error: any) {
               this.log.error('Error saving data content attributes:', {
-                id,
-                message: error.message,
-                stack: error.stack,
-              });
-            }
-
-            try {
-              await this.dataStore.finalize(cacheStream, hash);
-            } catch (error: any) {
-              this.log.error('Error finalizing data in cache:', {
                 id,
                 message: error.message,
                 stack: error.stack,
