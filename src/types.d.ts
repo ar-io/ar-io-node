@@ -152,6 +152,7 @@ export interface ContiguousDataStore {
     },
   ): Promise<Readable | undefined>;
   createWriteStream(): Promise<Writable>;
+  cleanup(stream: Writable): Promise<void>;
   finalize(stream: Writable, hash: string): Promise<void>;
 }
 

@@ -185,7 +185,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             message: error.message,
             stack: error.stack,
           });
-          // TODO unlink temp file?
+          await this.dataStore.cleanup(cacheStream);
         } else {
           if (cacheStream !== undefined) {
             const hash = hasher.digest('base64url');

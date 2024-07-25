@@ -92,6 +92,18 @@ export class FsDataStore implements ContiguousDataStore {
     return file;
   }
 
+  async cleanup(stream: fs.WriteStream) {
+    try {
+      stream.end();
+      await fs.promises.unlink(stream.path);
+    } catch (error: any) {
+      this.log.error('Failed to cleanup contigous data stream', {
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+  }
+
   async finalize(stream: fs.WriteStream, hash: string) {
     try {
       stream.end();
