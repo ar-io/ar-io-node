@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { strict as assert } from 'node:assert';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { rimraf } from 'rimraf';
 import {
   DockerComposeEnvironment,
@@ -288,6 +288,213 @@ describe('Indexing', function () {
 
       assert.equal(parentHashByDataHash[dataItemHash], bundleHash);
       assert.equal(parentHashByDataHash[nestedDataItemHash], dataItemHash);
+    });
+  });
+
+  describe('Nested bundles indexing', function () {
+    let dataDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAll = () =>
+        dataDb.prepare('SELECT * FROM contiguous_data_parents').all();
+
+      while (getAll().length === 0) {
+        console.log('Waiting for data items to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    beforeEach(async function () {
+      await cleanDb();
+    });
+
+    afterEach(async function () {
+      await compose.down();
+    });
+
+    it('Verifying if nested data items are not indexed when isNestedBundles is not set', async function () {
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER:
+          '{"attributes": {"owner_address": "JNC6vBhjHY1EPwV3pEeNmrsgFMxH5d38_LHsZ7jful8"}}',
+      });
+      dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
+
+      // queue bundle kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      // bundle structure:
+      // - kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      //   - 10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs
+      //     - EL_2rm9QpBT2n831U1mQQliGjO_FereFS5Zx-WVQMqE
+      //     - BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM
+      //   - 9dpPBLhon3Gm32G0PF5ayz8mKL4Zc2Xk8nZXPS8zDNk
+      //   - -Bnyyuo7VII7UljnJQE6E0Tejo4suHL3O6DpWJ81qmM
+      //   - GUUjPw19kKr8tetPs9yOhgFF_FNizsF2r1C6umjs0oQ
+      //   - hpzGxQy0YMM83y9Ehv-YJXkYwwV7rjvol4D4YvX8o7A
+      //     - XqW_HJMypBk74rzJVVHtVGMm5SMijd1Ffub5F244urM
+      //   - M8skxUWsHmqu4Rr4d7_DiHdwP_c4hjgRRSRNYlgKFfA
+      //   - oS1UlSpn-n8nAYWPGromctIKygTGjGyRi1KtK9m1AEs
+      //     - SRmeMXAf0HIR5zGyEQ_a3UpH508TpdzOnYQ0qjcIToI
+      //     - ykLYuWsexzA2gNVrEZpJcpuBlsBNVoZ0P-ZvwkenM-Q
+      //   - R5gMwFVviSQZnkPI2LAcB4qkrFAWuGOfzdVP-GR2qw4
+      //   - TKmWgTHZOnW4y0x0Y0S0Jzo6HXuybb0FOpdFL-hkiH8
+      //   - uLev-0kcr0fHACt9h5iQAqnH19diPE09ETn9iT6MNuo
+      //     - cdmhEOYCBCtxLp-KLlrcIdlQtvulobS9c6VT9Oy3H9g
+      //     - YdNeWprLu5YjPcPTUFK1avUp6XGKCMxJAkhyM2z0FmE
+      //   - vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: {
+          id: 'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+        },
+      });
+
+      await waitForIndexing();
+      await wait(10000);
+
+      const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
+      const idList = [
+        'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+        '10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs',
+        '9dpPBLhon3Gm32G0PF5ayz8mKL4Zc2Xk8nZXPS8zDNk',
+        '-Bnyyuo7VII7UljnJQE6E0Tejo4suHL3O6DpWJ81qmM',
+        'GUUjPw19kKr8tetPs9yOhgFF_FNizsF2r1C6umjs0oQ',
+        'hpzGxQy0YMM83y9Ehv-YJXkYwwV7rjvol4D4YvX8o7A',
+        'M8skxUWsHmqu4Rr4d7_DiHdwP_c4hjgRRSRNYlgKFfA',
+        'oS1UlSpn-n8nAYWPGromctIKygTGjGyRi1KtK9m1AEs',
+        'R5gMwFVviSQZnkPI2LAcB4qkrFAWuGOfzdVP-GR2qw4',
+        'TKmWgTHZOnW4y0x0Y0S0Jzo6HXuybb0FOpdFL-hkiH8',
+        'uLev-0kcr0fHACt9h5iQAqnH19diPE09ETn9iT6MNuo',
+        'vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM',
+      ];
+
+      const ids = stmt.all().map((row) => toB64Url(row.id));
+
+      assert.equal(ids.length, idList.length);
+      assert.deepEqual(ids.slice().sort(), idList.slice().sort());
+    });
+
+    it('Verifying if nested data items are indexed when isNestedBundles is true', async function () {
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER:
+          '{"or": [{"attributes": {"owner_address": "JNC6vBhjHY1EPwV3pEeNmrsgFMxH5d38_LHsZ7jful8"}}, { "isNestedBundle": true }]}',
+      });
+      dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
+
+      // queue bundle kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      // bundle structure:
+      // - kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      //   - 10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs
+      //     - EL_2rm9QpBT2n831U1mQQliGjO_FereFS5Zx-WVQMqE
+      //     - BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM
+      //   - 9dpPBLhon3Gm32G0PF5ayz8mKL4Zc2Xk8nZXPS8zDNk
+      //   - -Bnyyuo7VII7UljnJQE6E0Tejo4suHL3O6DpWJ81qmM
+      //   - GUUjPw19kKr8tetPs9yOhgFF_FNizsF2r1C6umjs0oQ
+      //   - hpzGxQy0YMM83y9Ehv-YJXkYwwV7rjvol4D4YvX8o7A
+      //     - XqW_HJMypBk74rzJVVHtVGMm5SMijd1Ffub5F244urM
+      //   - M8skxUWsHmqu4Rr4d7_DiHdwP_c4hjgRRSRNYlgKFfA
+      //   - oS1UlSpn-n8nAYWPGromctIKygTGjGyRi1KtK9m1AEs
+      //     - SRmeMXAf0HIR5zGyEQ_a3UpH508TpdzOnYQ0qjcIToI
+      //     - ykLYuWsexzA2gNVrEZpJcpuBlsBNVoZ0P-ZvwkenM-Q
+      //   - R5gMwFVviSQZnkPI2LAcB4qkrFAWuGOfzdVP-GR2qw4
+      //   - TKmWgTHZOnW4y0x0Y0S0Jzo6HXuybb0FOpdFL-hkiH8
+      //   - uLev-0kcr0fHACt9h5iQAqnH19diPE09ETn9iT6MNuo
+      //     - cdmhEOYCBCtxLp-KLlrcIdlQtvulobS9c6VT9Oy3H9g
+      //     - YdNeWprLu5YjPcPTUFK1avUp6XGKCMxJAkhyM2z0FmE
+      //   - vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: {
+          id: 'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+        },
+      });
+
+      await waitForIndexing();
+      await wait(10000);
+
+      const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
+      const idList = [
+        'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+        '10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs',
+        'EL_2rm9QpBT2n831U1mQQliGjO_FereFS5Zx-WVQMqE',
+        'BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM',
+        '9dpPBLhon3Gm32G0PF5ayz8mKL4Zc2Xk8nZXPS8zDNk',
+        '-Bnyyuo7VII7UljnJQE6E0Tejo4suHL3O6DpWJ81qmM',
+        'GUUjPw19kKr8tetPs9yOhgFF_FNizsF2r1C6umjs0oQ',
+        'hpzGxQy0YMM83y9Ehv-YJXkYwwV7rjvol4D4YvX8o7A',
+        'XqW_HJMypBk74rzJVVHtVGMm5SMijd1Ffub5F244urM',
+        'M8skxUWsHmqu4Rr4d7_DiHdwP_c4hjgRRSRNYlgKFfA',
+        'oS1UlSpn-n8nAYWPGromctIKygTGjGyRi1KtK9m1AEs',
+        'SRmeMXAf0HIR5zGyEQ_a3UpH508TpdzOnYQ0qjcIToI',
+        'ykLYuWsexzA2gNVrEZpJcpuBlsBNVoZ0P-ZvwkenM-Q',
+        'R5gMwFVviSQZnkPI2LAcB4qkrFAWuGOfzdVP-GR2qw4',
+        'TKmWgTHZOnW4y0x0Y0S0Jzo6HXuybb0FOpdFL-hkiH8',
+        'uLev-0kcr0fHACt9h5iQAqnH19diPE09ETn9iT6MNuo',
+        'cdmhEOYCBCtxLp-KLlrcIdlQtvulobS9c6VT9Oy3H9g',
+        'YdNeWprLu5YjPcPTUFK1avUp6XGKCMxJAkhyM2z0FmE',
+        'vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM',
+      ];
+
+      const ids = stmt.all().map((row) => toB64Url(row.id));
+
+      assert.equal(ids.length, idList.length);
+      assert.deepEqual(ids.slice().sort(), idList.slice().sort());
+    });
+
+    it("Verifying if nested data items are not indexed when isNestedBundles is true but attributes doesn't match top layer tx", async function () {
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER:
+          '{"or": [{"attributes": {"owner_address": "another_address"}}, { "isNestedBundle": true }]}',
+      });
+      dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
+
+      // queue bundle kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      // bundle structure:
+      // - kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
+      //   - 10F4NJtg5A5n3Acv5PyHNKt8pRlVFjxEYtdI1Omu6Vs
+      //     - EL_2rm9QpBT2n831U1mQQliGjO_FereFS5Zx-WVQMqE
+      //     - BPmdp7m8wQQvSKPInkolQyAV40xmbut930fN_e7YemM
+      //   - 9dpPBLhon3Gm32G0PF5ayz8mKL4Zc2Xk8nZXPS8zDNk
+      //   - -Bnyyuo7VII7UljnJQE6E0Tejo4suHL3O6DpWJ81qmM
+      //   - GUUjPw19kKr8tetPs9yOhgFF_FNizsF2r1C6umjs0oQ
+      //   - hpzGxQy0YMM83y9Ehv-YJXkYwwV7rjvol4D4YvX8o7A
+      //     - XqW_HJMypBk74rzJVVHtVGMm5SMijd1Ffub5F244urM
+      //   - M8skxUWsHmqu4Rr4d7_DiHdwP_c4hjgRRSRNYlgKFfA
+      //   - oS1UlSpn-n8nAYWPGromctIKygTGjGyRi1KtK9m1AEs
+      //     - SRmeMXAf0HIR5zGyEQ_a3UpH508TpdzOnYQ0qjcIToI
+      //     - ykLYuWsexzA2gNVrEZpJcpuBlsBNVoZ0P-ZvwkenM-Q
+      //   - R5gMwFVviSQZnkPI2LAcB4qkrFAWuGOfzdVP-GR2qw4
+      //   - TKmWgTHZOnW4y0x0Y0S0Jzo6HXuybb0FOpdFL-hkiH8
+      //   - uLev-0kcr0fHACt9h5iQAqnH19diPE09ETn9iT6MNuo
+      //     - cdmhEOYCBCtxLp-KLlrcIdlQtvulobS9c6VT9Oy3H9g
+      //     - YdNeWprLu5YjPcPTUFK1avUp6XGKCMxJAkhyM2z0FmE
+      //   - vJheXUrUOWM8nPtnw8XmccteEcjswwcESel3eJ1vxRM
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: {
+          id: 'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
+        },
+      });
+
+      await wait(10000);
+
+      const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
+
+      assert.equal(stmt.all().length, 0);
     });
   });
 
