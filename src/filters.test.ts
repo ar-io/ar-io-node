@@ -28,6 +28,7 @@ import {
   NeverMatch,
   createFilter,
   NegateMatch,
+  MatchNestedBundle,
 } from './filters.js';
 import { utf8ToB64Url } from './lib/encoding.js';
 
@@ -240,6 +241,57 @@ describe('MatchAttributes', () => {
     const result = await matchAttributes.match(TX);
 
     assert.strictEqual(result, true);
+  });
+});
+
+describe('MatchNestedBundle', () => {
+  const matchNestedBundle = new MatchNestedBundle();
+
+  it('should return true if parent_id and root_tx_id are present and different', async () => {
+    const item = {
+      parent_id: 'parent_id',
+      root_tx_id: 'root_tx_id',
+      tags: [],
+    };
+    const result = await matchNestedBundle.match(item);
+
+    assert.strictEqual(result, true);
+  });
+
+  it('should return false if parent_id and root_tx_id are present and the same', async () => {
+    const item = {
+      parent_id: 'parent_id',
+      root_tx_id: 'parent_id',
+      tags: [],
+    };
+    const result = await matchNestedBundle.match(item);
+
+    assert.strictEqual(result, false);
+  });
+
+  it("should return false if parent_id and/or root_tx_id aren't defined", async () => {
+    const item1 = {
+      parent_id: 'parent_id',
+      tags: [],
+    };
+    const result1 = await matchNestedBundle.match(item1);
+
+    assert.strictEqual(result1, false);
+
+    const item2 = {
+      root_tx_id: 'root_tx_id',
+      tags: [],
+    };
+    const result2 = await matchNestedBundle.match(item2);
+
+    assert.strictEqual(result2, false);
+
+    const item3 = {
+      tags: [],
+    };
+    const result3 = await matchNestedBundle.match(item3);
+
+    assert.strictEqual(result3, false);
   });
 });
 
