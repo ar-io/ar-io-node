@@ -155,23 +155,12 @@ export class MatchAttributes implements ItemFilter {
 
 export class MatchNestedBundle implements ItemFilter {
   async match(item: MatchableItem): Promise<boolean> {
-    console.log('----------------------------');
-    console.log({
-      id: item.id,
-      parent_id: item.parent_id,
-      root_tx_id: item.root_tx_id,
-    });
-    console.log('----------------------------');
     const hasParentId =
       item.parent_id !== undefined &&
       item.parent_id !== null &&
       item.parent_id !== '';
-    const hasRootTxId =
-      item.root_tx_id !== undefined &&
-      item.root_tx_id !== null &&
-      item.root_tx_id !== '';
 
-    return hasParentId && hasRootTxId && item.parent_id !== item.root_tx_id;
+    return hasParentId;
   }
 }
 
