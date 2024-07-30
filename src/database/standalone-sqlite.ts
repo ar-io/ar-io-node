@@ -413,6 +413,7 @@ export class StandaloneSqliteDatabaseWorker {
   saveBundlesStableDataFn: Sqlite.Transaction;
   deleteCoreStaleNewDataFn: Sqlite.Transaction;
   deleteBundlesStaleNewDataFn: Sqlite.Transaction;
+  saveDataContenAttributesFn: Sqlite.Transaction;
 
   constructor({
     log,
@@ -756,6 +757,45 @@ export class StandaloneSqliteDatabaseWorker {
         });
       },
     );
+
+    this.saveDataContenAttributesFn = this.dbs.data.transaction(
+      ({
+        id,
+        dataRoot,
+        hash,
+        dataSize,
+        contentType,
+        cachedAt,
+      }: {
+        id: string;
+        dataRoot?: string;
+        hash: string;
+        dataSize: number;
+        contentType?: string;
+        cachedAt?: number;
+      }) => {
+        const hashBuffer = fromB64Url(hash);
+        this.stmts.data.insertDataHash.run({
+          hash: hashBuffer,
+          data_size: dataSize,
+          original_source_content_type: contentType,
+          indexed_at: currentUnixTimestamp(),
+          cached_at: cachedAt,
+        });
+        this.stmts.data.insertDataId.run({
+          id: fromB64Url(id),
+          contiguous_data_hash: hashBuffer,
+          indexed_at: currentUnixTimestamp(),
+        });
+        if (dataRoot !== undefined) {
+          this.stmts.data.insertDataRoot.run({
+            data_root: fromB64Url(dataRoot),
+            contiguous_data_hash: hashBuffer,
+            indexed_at: currentUnixTimestamp(),
+          });
+        }
+      },
+    );
   }
 
   getMaxHeight() {
@@ -1086,26 +1126,14 @@ export class StandaloneSqliteDatabaseWorker {
     contentType?: string;
     cachedAt?: number;
   }) {
-    const hashBuffer = fromB64Url(hash);
-    this.stmts.data.insertDataHash.run({
-      hash: hashBuffer,
-      data_size: dataSize,
-      original_source_content_type: contentType,
-      indexed_at: currentUnixTimestamp(),
-      cached_at: cachedAt,
+    this.saveDataContenAttributesFn({
+      id,
+      dataRoot,
+      hash,
+      dataSize,
+      contentType,
+      cachedAt,
     });
-    this.stmts.data.insertDataId.run({
-      id: fromB64Url(id),
-      contiguous_data_hash: hashBuffer,
-      indexed_at: currentUnixTimestamp(),
-    });
-    if (dataRoot !== undefined) {
-      this.stmts.data.insertDataRoot.run({
-        data_root: fromB64Url(dataRoot),
-        contiguous_data_hash: hashBuffer,
-        indexed_at: currentUnixTimestamp(),
-      });
-    }
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
