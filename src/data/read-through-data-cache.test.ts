@@ -30,12 +30,17 @@ import {
 import { ReadThroughDataCache } from './read-through-data-cache.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable } from './test-utils.js';
+import {
+  DataContentAttributeImporter,
+  DataContentAttributeProperties,
+} from '../workers/data-content-attribute-importer.js';
 
 describe('ReadThroughDataCache', function () {
   let log: winston.Logger;
   let mockContiguousDataSource: ContiguousDataSource;
   let mockContiguousDataStore: ContiguousDataStore;
   let mockContiguousDataIndex: ContiguousDataIndex;
+  let mockDataContentAttributeImporter: DataContentAttributeImporter;
   let readThroughDataCache: ReadThroughDataCache;
   let requestAttributes: RequestAttributes;
 
@@ -122,6 +127,12 @@ describe('ReadThroughDataCache', function () {
       },
     };
 
+    mockDataContentAttributeImporter = {
+      queueDataContentAttributes: (_: DataContentAttributeProperties) => {
+        return;
+      },
+    } as DataContentAttributeImporter;
+
     mock.method(metrics.getDataErrorsTotal, 'inc');
     mock.method(metrics.getDataStreamErrorsTotal, 'inc');
     mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
@@ -131,6 +142,7 @@ describe('ReadThroughDataCache', function () {
       dataSource: mockContiguousDataSource,
       dataStore: mockContiguousDataStore,
       contiguousDataIndex: mockContiguousDataIndex,
+      dataContentAttributeImporter: mockDataContentAttributeImporter,
     });
 
     requestAttributes = {
