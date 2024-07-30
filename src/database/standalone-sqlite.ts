@@ -414,6 +414,8 @@ export class StandaloneSqliteDatabaseWorker {
   deleteCoreStaleNewDataFn: Sqlite.Transaction;
   deleteBundlesStaleNewDataFn: Sqlite.Transaction;
   saveDataContenAttributesFn: Sqlite.Transaction;
+  saveNestedDataIdFn: Sqlite.Transaction;
+  saveNestedDataHashFn: Sqlite.Transaction;
 
   constructor({
     log,
@@ -794,6 +796,47 @@ export class StandaloneSqliteDatabaseWorker {
             indexed_at: currentUnixTimestamp(),
           });
         }
+      },
+    );
+
+    this.saveNestedDataIdFn = this.dbs.data.transaction(
+      ({
+        id,
+        parentId,
+        dataOffset,
+        dataSize,
+      }: {
+        id: Buffer;
+        parentId: Buffer;
+        dataOffset: number;
+        dataSize: number;
+      }) => {
+        this.stmts.data.insertNestedDataId.run({
+          id: id,
+          parent_id: parentId,
+          data_offset: dataOffset,
+          data_size: dataSize,
+          indexed_at: currentUnixTimestamp(),
+        });
+      },
+    );
+
+    this.saveNestedDataHashFn = this.dbs.data.transaction(
+      ({
+        hash,
+        parentId,
+        dataOffset,
+      }: {
+        hash: Buffer;
+        parentId: Buffer;
+        dataOffset: number;
+      }) => {
+        this.stmts.data.insertNestedDataHash.run({
+          hash: hash,
+          parent_id: parentId,
+          data_offset: dataOffset,
+          indexed_at: currentUnixTimestamp(),
+        });
       },
     );
   }
@@ -2286,12 +2329,11 @@ export class StandaloneSqliteDatabaseWorker {
     dataOffset: number;
     dataSize: number;
   }) {
-    this.stmts.data.insertNestedDataId.run({
+    this.saveNestedDataIdFn({
       id: fromB64Url(id),
-      parent_id: fromB64Url(parentId),
-      data_offset: dataOffset,
-      data_size: dataSize,
-      indexed_at: currentUnixTimestamp(),
+      parentId: fromB64Url(parentId),
+      dataOffset: dataOffset,
+      dataSize,
     });
   }
 
@@ -2304,11 +2346,11 @@ export class StandaloneSqliteDatabaseWorker {
     parentId: string;
     dataOffset: number;
   }) {
-    this.stmts.data.insertNestedDataHash.run({
+    // TODO pass in indexedAt
+    this.saveNestedDataHashFn({
       hash: fromB64Url(hash),
-      parent_id: fromB64Url(parentId),
-      data_offset: dataOffset,
-      indexed_at: currentUnixTimestamp(),
+      parentId: fromB64Url(parentId),
+      dataOffset,
     });
   }
 }
