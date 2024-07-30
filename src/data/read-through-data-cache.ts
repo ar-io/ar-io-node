@@ -30,28 +30,33 @@ import {
   RequestAttributes,
 } from '../types.js';
 import * as metrics from '../metrics.js';
+import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
 
 export class ReadThroughDataCache implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
   private dataStore: ContiguousDataStore;
   private contiguousDataIndex: ContiguousDataIndex;
+  private dataContentAttributeImporter: DataContentAttributeImporter;
 
   constructor({
     log,
     dataSource,
     dataStore,
     contiguousDataIndex,
+    dataContentAttributeImporter,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
+    dataContentAttributeImporter: DataContentAttributeImporter;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
+    this.dataContentAttributeImporter = dataContentAttributeImporter;
   }
 
   async getCacheData(
@@ -202,7 +207,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
             this.log.info('Successfully cached data', { id, hash });
             try {
-              await this.contiguousDataIndex.saveDataContentAttributes({
+              this.dataContentAttributeImporter.queueDataContentAttributes({
                 id,
                 dataRoot: attributes?.dataRoot,
                 hash,

@@ -73,6 +73,7 @@ import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
+import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -342,6 +343,11 @@ for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
   }
 }
 
+const dataContentAttributeImporter = new DataContentAttributeImporter({
+  log,
+  contiguousDataIndex: contiguousDataIndex,
+});
+
 export const contiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource: new SequentialDataSource({
@@ -350,6 +356,7 @@ export const contiguousDataSource = new ReadThroughDataCache({
   }),
   dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
   contiguousDataIndex,
+  dataContentAttributeImporter,
 });
 
 const ans104Unbundler = new Ans104Unbundler({
