@@ -27,7 +27,7 @@ jobs:
         if: matrix.os == 'macos-latest'
 
       # Build and test TypeScript
-      - run: yarn --immutable --immutable-cache --ignore-engines
+      - run: yarn --immutable --immutable-cache
       - run: yarn build
       - run: yarn lint:check
       - run: yarn test:ci
