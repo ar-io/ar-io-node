@@ -145,6 +145,10 @@ export const FILTER_CHANGE_REPROCESS =
 export const BACKFILL_BUNDLE_RECORDS =
   env.varOrDefault('BACKFILL_BUNDLE_RECORDS', 'false') === 'true';
 
+// Whether or not to write the data item signatures to the database
+export const WRITE_ANS104_DATA_ITEM_DB_SIGNATURES =
+  env.varOrDefault('WRITE_ANS104_DATA_ITEM_DB_SIGNATURES', 'true') === 'true';
+
 //
 // ArNS and sandboxing
 //

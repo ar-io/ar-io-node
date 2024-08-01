@@ -338,7 +338,7 @@ export function dataItemToDbRows(item: NormalizedDataItem, height?: number) {
       owner_size: item.owner_size,
       parent_id: parentId,
       root_transaction_id: rootTxId,
-      signature: fromB64Url(item.signature),
+      signature: item.signature !== null ? fromB64Url(item.signature) : null,
       signature_offset: item.signature_offset,
       signature_size: item.signature_size,
       signature_type: item.signature_type,
@@ -869,6 +869,10 @@ export class StandaloneSqliteDatabaseWorker {
     const maybeTxHeight = this.stmts.bundles.selectTransactionHeight.get({
       transaction_id: rootTxId,
     })?.height;
+
+    if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
+      item.signature = null;
+    }
     this.insertDataItemFn(item, maybeTxHeight);
   }
 

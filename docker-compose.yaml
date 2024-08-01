@@ -89,6 +89,7 @@ services:
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
       - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
+      - WRITE_ANS104_DATA_ITEM_DB_SIGNATURES=${WRITE_ANS104_DATA_ITEM_DB_SIGNATURES:-}
     networks:
       - ar-io-network
     depends_on:
