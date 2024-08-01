@@ -268,7 +268,7 @@ export interface NormalizedBundleDataItem {
   parent_id: string;
   parent_index: number;
   root_tx_id: string;
-  signature: string;
+  signature: string | null;
   signature_offset: number;
   signature_size: number;
   signature_type: number;
@@ -295,7 +295,7 @@ export interface NormalizedOptimisticDataItem {
   parent_id: null;
   parent_index: null;
   root_tx_id: null;
-  signature: string;
+  signature: string | null;
   signature_offset: null;
   signature_size: null;
   signature_type: null;
@@ -587,7 +587,7 @@ export interface NameResolver {
 
 export interface MatchableItem {
   id?: string;
-  signature?: string;
+  signature?: string | null;
   owner?: string;
   owner_address?: string;
   target?: string;
