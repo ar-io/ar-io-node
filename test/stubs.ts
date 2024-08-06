@@ -171,6 +171,7 @@ export class ArweaveChainSourceStub implements ChainSource {
 export class ArweaveChunkSourceStub
   implements ChunkByAnySource, ChunkDataByAnySource
 {
+  stubData: string = 'abcdefghijklmnopqrstuvwxyz'.repeat(10);
   async getChunkByAny(
     txSize: number,
     absoluteOffset: number,

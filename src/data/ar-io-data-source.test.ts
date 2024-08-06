@@ -281,5 +281,39 @@ describe('ArIODataSource', () => {
         /Max hops reached/,
       );
     });
+
+    it('should include Range header when region is provided', async () => {
+      let rangeHeader: string | undefined;
+      mock.method(axios, 'get', async (_: string, config: any) => {
+        rangeHeader = config.headers['Range'];
+        return {
+          status: 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': '50',
+            'content-type': 'application/octet-stream',
+          },
+        };
+      });
+
+      const region = { offset: 100, size: 200 };
+      await dataSource.getData({ id: 'dataId', region });
+
+      assert.equal(rangeHeader, 'bytes=100-299');
+    });
+
+    it('should handle errors when fetching data with region', async () => {
+      mock.method(axios, 'get', () => {
+        throw new Error('Failed to fetch data with region');
+      });
+
+      const region = { offset: 100, size: 200 };
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId', region }),
+        /Failed to fetch contiguous data from ArIO peers/,
+      );
+
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 2);
+    });
   });
 });

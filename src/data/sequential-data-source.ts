@@ -21,6 +21,7 @@ import {
   ContiguousData,
   ContiguousDataAttributes,
   ContiguousDataSource,
+  Region,
   RequestAttributes,
 } from '../types.js';
 
@@ -43,10 +44,12 @@ export class SequentialDataSource implements ContiguousDataSource {
     id,
     dataAttributes,
     requestAttributes,
+    region,
   }: {
     id: string;
     dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
+    region?: Region;
   }): Promise<ContiguousData> {
     this.log.info('Sequentialy fetching from data sources', {
       id,
@@ -58,6 +61,7 @@ export class SequentialDataSource implements ContiguousDataSource {
           id,
           dataAttributes,
           requestAttributes,
+          region,
         });
         return data;
       } catch (error: any) {

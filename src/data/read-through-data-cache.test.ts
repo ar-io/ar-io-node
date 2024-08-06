@@ -385,6 +385,7 @@ describe('ReadThroughDataCache', function () {
         id: 'test-id',
         dataAttributes: undefined,
         requestAttributes,
+        region: undefined,
       });
       assert.deepEqual(
         (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
@@ -463,6 +464,137 @@ describe('ReadThroughDataCache', function () {
         );
         assert.equal(error.message, 'Stream destroyed intentionally');
       }
+    });
+
+    it('should fetch cached data successfully with region', async function () {
+      const region = { offset: 10, size: 50 };
+      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          size: 100,
+          contentType: 'plain/text',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+      mock.method(mockContiguousDataStore, 'get', (hash: string, reg: any) => {
+        assert.equal(hash, 'test-hash');
+        assert.deepEqual(reg, region);
+        return Promise.resolve(
+          new Readable({
+            read() {
+              this.push('partial test data');
+              this.push(null);
+            },
+          }),
+        );
+      });
+
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      assert.deepEqual(result, {
+        hash: 'test-hash',
+        stream: result.stream,
+        size: 50,
+        sourceContentType: 'plain/text',
+        verified: true,
+        cached: true,
+        requestAttributes: {
+          hops: requestAttributes.hops + 1,
+          origin: 'node-url',
+        },
+      });
+
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, 'partial test data');
+    });
+
+    it('should fetch data from the source with region when not available in cache', async function () {
+      const region = { offset: 10, size: 50 };
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+      mock.method(mockContiguousDataSource, 'getData', (params: any) => {
+        assert.deepEqual(params.region, region);
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('partial source data');
+              this.push(null);
+            },
+          }),
+          size: 50,
+          sourceContentType: 'plain/text',
+          verified: true,
+          cached: false,
+        });
+      });
+
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+        region,
+      });
+
+      assert.deepEqual(
+        (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
+        1,
+      );
+
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+
+      assert.equal(receivedData, 'partial source data');
+      assert.ok(result.stream instanceof Readable);
+      assert.equal(result.size, 50);
+      assert.equal(result.sourceContentType, 'plain/text');
+      assert.equal(result.verified, true);
+      assert.equal(result.cached, false);
+    });
+
+    it('should handle errors when fetching data with region', async function () {
+      const region = { offset: 10, size: 50 };
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        throw new Error('Failed to fetch data with region');
+      });
+
+      await assert.rejects(
+        readThroughDataCache.getData({
+          id: 'test-id',
+          requestAttributes,
+          region,
+        }),
+        /Failed to fetch data with region/,
+      );
+
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
+      assert.equal(
+        (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
+          .class,
+        'ReadThroughDataCache',
+      );
     });
   });
 });

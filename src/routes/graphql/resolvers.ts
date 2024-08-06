@@ -19,6 +19,7 @@ import { IResolvers } from '@graphql-tools/utils';
 
 import { winstonToAr } from '../../lib/encoding.js';
 import log from '../../log.js';
+import { signatureFetcher } from '../../system.js';
 import { GqlTransaction } from '../../types.js';
 
 export const DEFAULT_PAGE_SIZE = 10;
@@ -80,6 +81,18 @@ export function resolveTxBundledIn(tx: GqlTransaction) {
   return {
     id: tx.parentId,
   };
+}
+
+export async function resolveTxSignature(tx: GqlTransaction) {
+  if (tx.signature !== null) {
+    return tx.signature;
+  }
+
+  if (tx.parentId !== null) {
+    return signatureFetcher.getDataItemSignature(tx.id);
+  }
+
+  return '';
 }
 
 export const resolvers: IResolvers = {
@@ -150,5 +163,6 @@ export const resolvers: IResolvers = {
     owner: resolveTxOwner,
     parent: resolveTxParent,
     bundledIn: resolveTxBundledIn,
+    signature: resolveTxSignature,
   },
 };

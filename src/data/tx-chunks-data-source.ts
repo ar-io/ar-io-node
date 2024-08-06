@@ -25,9 +25,11 @@ import {
   ChunkDataByAnySource,
   ContiguousData,
   ContiguousDataSource,
+  Region,
   RequestAttributes,
 } from '../types.js';
 import * as metrics from '../metrics.js';
+import { ByteRangeTransform } from '../lib/stream.js';
 
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -51,9 +53,11 @@ export class TxChunksDataSource implements ContiguousDataSource {
   async getData({
     id,
     requestAttributes,
+    region,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
+    region?: Region;
   }): Promise<ContiguousData> {
     this.log.info('Fetching chunk data for TX', { id });
 
@@ -122,6 +126,21 @@ export class TxChunksDataSource implements ContiguousDataSource {
           class: this.constructor.name,
         });
       });
+
+      if (region) {
+        const byteRangeStream = new ByteRangeTransform(
+          region.offset,
+          region.size,
+        );
+        return {
+          stream: stream.pipe(byteRangeStream),
+          size: region.size,
+          verified: true,
+          cached: false,
+          requestAttributes:
+            generateRequestAttributes(requestAttributes)?.attributes,
+        };
+      }
 
       return {
         stream,

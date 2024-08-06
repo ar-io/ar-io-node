@@ -68,7 +68,7 @@ export class DataContentAttributeImporter {
     if (this.queue.length() >= this.maxQueueSize) {
       log.debug('Skipping save data content attributes, queue is full.');
     } else {
-      log.debug('Queueing data content attirbutes to be saved...');
+      log.debug('Queueing data content attributes to be saved...');
       this.queue.push(properties);
       log.debug('Data content attributes queued.');
     }

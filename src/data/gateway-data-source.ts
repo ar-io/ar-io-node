@@ -25,6 +25,7 @@ import {
 import {
   ContiguousData,
   ContiguousDataSource,
+  Region,
   RequestAttributes,
 } from '../types.js';
 import * as metrics from '../metrics.js';
@@ -54,15 +55,18 @@ export class GatewayDataSource implements ContiguousDataSource {
   async getData({
     id,
     requestAttributes,
+    region,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
+    region?: Region;
   }): Promise<ContiguousData> {
     const path = `/raw/${id}`;
     this.log.info('Fetching contiguous data from gateway', {
       id,
       trustedGatewayUrl: this.trustedGatewayAxios.defaults.baseURL,
       path,
+      region,
     });
 
     const requestAttributesHeaders =
@@ -73,6 +77,13 @@ export class GatewayDataSource implements ContiguousDataSource {
         headers: {
           'Accept-Encoding': 'identity',
           ...requestAttributesHeaders?.headers,
+          ...(region
+            ? {
+                Range: `bytes=${region.offset}-${
+                  region.offset + region.size - 1
+                }`,
+              }
+            : {}),
         },
         url: path,
         responseType: 'stream',
@@ -84,9 +95,12 @@ export class GatewayDataSource implements ContiguousDataSource {
         },
       });
 
-      if (response.status !== 200) {
+      if (
+        (region !== undefined && response.status !== 206) ||
+        (region === undefined && response.status !== 200)
+      ) {
         throw new Error(
-          `Unexpected status code from gateway: ${response.status}`,
+          `Unexpected status code from gateway: ${response.status}. Expected ${region !== undefined ? '206' : '200'}.`,
         );
       }
 

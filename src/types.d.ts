@@ -142,15 +142,14 @@ export interface ChunkMetadataStore {
   set(chunkMetadata: ChunkMetadata): Promise<void>;
 }
 
+type Region = {
+  offset: number;
+  size: number;
+};
+
 export interface ContiguousDataStore {
   has(hash: string): Promise<boolean>;
-  get(
-    hash: string,
-    region?: {
-      offset: number;
-      size: number;
-    },
-  ): Promise<Readable | undefined>;
+  get(hash: string, region?: Region): Promise<Readable | undefined>;
   createWriteStream(): Promise<Writable>;
   cleanup(stream: Writable): Promise<void>;
   finalize(stream: Writable, hash: string): Promise<void>;
@@ -315,7 +314,7 @@ interface GqlPageInfo {
 interface GqlTransaction {
   id: string;
   anchor: string;
-  signature: string;
+  signature: string | null;
   recipient: string | null;
   ownerAddress: string;
   ownerKey: string;
@@ -505,6 +504,13 @@ export interface ContiguousDataAttributes {
   verified: boolean;
 }
 
+export interface DataItemAttributes {
+  parentId: string;
+  signature: string | null;
+  signatureOffset: number;
+  signatureSize: number;
+}
+
 export interface ContiguousDataParent {
   parentId: string;
   parentHash?: string;
@@ -514,6 +520,7 @@ export interface ContiguousDataParent {
 
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
+  getDataItemAttributes(id: string): Promise<DataItemAttributes | undefined>;
   getDataParent(id: string): Promise<ContiguousDataParent | undefined>;
   saveDataContentAttributes({
     id,
@@ -537,10 +544,12 @@ export interface ContiguousDataSource {
     id,
     dataAttributes,
     requestAttributes,
+    region,
   }: {
     id: string;
     dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
+    region?: Region;
   }): Promise<ContiguousData>;
 }
 
@@ -609,3 +618,7 @@ export type KVBufferStore = {
   del(key: string): Promise<void>;
   has(key: string): Promise<boolean>;
 };
+
+export interface SignatureSource {
+  getDataItemSignature(id: string): Promise<string | undefined>;
+}
