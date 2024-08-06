@@ -49,7 +49,7 @@ export class SignatureFetcher implements SignatureSource {
 
       const dataItemAttributes = await this.dataIndex.getDataItemAttributes(id);
 
-      if (!dataItemAttributes) {
+      if (dataItemAttributes === undefined) {
         this.log.warn('No attributes found for data item', { id });
         return undefined;
       }
@@ -57,7 +57,7 @@ export class SignatureFetcher implements SignatureSource {
       const { parentId, signature, signatureOffset, signatureSize } =
         dataItemAttributes;
 
-      if (signature) {
+      if (typeof signature === 'string') {
         return signature;
       }
 
