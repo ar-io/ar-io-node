@@ -23,6 +23,7 @@ import { randomInt } from 'node:crypto';
 import {
   ContiguousData,
   ContiguousDataSource,
+  Region,
   RequestAttributes,
 } from '../types.js';
 import {
@@ -159,9 +160,11 @@ export class ArIODataSource implements ContiguousDataSource {
   async getData({
     id,
     requestAttributes,
+    region,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
+    region?: Region;
   }): Promise<ContiguousData> {
     const log = this.log.child({ method: 'getData' });
 
@@ -185,7 +188,14 @@ export class ArIODataSource implements ContiguousDataSource {
       const response = await this.request({
         peerAddress: selectedPeer,
         id,
-        headers: requestAttributesHeaders?.headers || {},
+        headers: {
+          ...(requestAttributesHeaders?.headers || {}),
+          ...(region
+            ? {
+                Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
+              }
+            : {}),
+        },
       });
 
       const parsedRequestAttributes = parseRequestAttributesHeaders({

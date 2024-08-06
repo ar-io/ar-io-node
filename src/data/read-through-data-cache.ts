@@ -112,6 +112,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       this.log.info('Found parent data ID', { id, ...parentData });
       // We might have a parent but no data size when retreiving by ID
       const size = dataSize ?? parentData.size;
+
       return this.getCacheData(
         parentData.parentId,
         parentData.parentHash,
@@ -130,10 +131,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     id,
     dataAttributes,
     requestAttributes,
+    region,
   }: {
     id: string;
     dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
+    region?: {
+      offset: number;
+      size: number;
+    };
   }): Promise<ContiguousData> {
     this.log.info('Checking for cached data...', {
       id,
@@ -148,9 +154,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         id,
         attributes?.hash,
         attributes?.size,
+        region,
       );
-      const processedRequestAttributes =
-        generateRequestAttributes(requestAttributes);
 
       if (cacheData !== undefined) {
         cacheData.stream.on('error', () => {
@@ -165,10 +170,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           });
         });
 
+        const processedRequestAttributes =
+          generateRequestAttributes(requestAttributes);
+
         return {
           hash: attributes?.hash,
           stream: cacheData.stream,
-          size: cacheData.size,
+          size: region?.size ?? cacheData.size,
           sourceContentType: attributes?.contentType,
           verified: attributes?.verified ?? false,
           cached: true,
@@ -180,6 +188,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         id,
         dataAttributes,
         requestAttributes,
+        region,
       });
       const hasher = crypto.createHash('sha256');
       const cacheStream = await this.dataStore.createWriteStream();

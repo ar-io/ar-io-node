@@ -56,6 +56,7 @@ import {
   ContiguousDataAttributes,
   ContiguousDataIndex,
   ContiguousDataParent,
+  DataItemAttributes,
   GqlQueryable,
   GqlTransaction,
   NestedDataIndexWriter,
@@ -966,6 +967,23 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
+  getDataItemAttributes(id: string) {
+    const row = this.stmts.bundles.selectDataItemAttributes.get({
+      id: fromB64Url(id),
+    });
+
+    if (row === undefined) {
+      return undefined;
+    }
+
+    return {
+      parentId: row.parent_id ? toB64Url(row.parent_id) : null,
+      signature: row.signature ? toB64Url(row.signature) : null,
+      signatureOffset: row.signature_offset,
+      signatureSize: row.signature_size,
+    };
+  }
+
   getDataParent(id: string) {
     const dataRow = this.stmts.data.selectDataParent.get({
       id: fromB64Url(id),
@@ -1697,7 +1715,7 @@ export class StandaloneSqliteDatabaseWorker {
         indexedAt: tx.indexed_at,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
-        signature: toB64Url(tx.signature),
+        signature: tx.signature !== null ? toB64Url(tx.signature) : null,
         recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
@@ -2375,6 +2393,11 @@ export class StandaloneSqliteDatabase
     Awaited<ReturnType<StandaloneSqliteDatabase['getDataAttributes']>>
   >;
 
+  private getDataItemAttributesCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getDataItemAttributes']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getDataItemAttributes']>>
+  >;
+
   constructor({
     log,
     coreDbPath,
@@ -2421,9 +2444,20 @@ export class StandaloneSqliteDatabase
       },
     );
 
+    this.getDataItemAttributesCircuitBreaker = new CircuitBreaker(
+      (id: string) => {
+        return this.queueRead('bundles', `getDataItemAttributes`, [id]);
+      },
+      {
+        name: 'getDataItemAttributes',
+        ...dataIndexCircuitBreakerOptions,
+      },
+    );
+
     metrics.circuitBreakerMetrics.add([
       this.getDataParentCircuitBreaker,
       this.getDataAttributesCircuitBreaker,
+      this.getDataItemAttributesCircuitBreaker,
     ]);
 
     //
@@ -2651,6 +2685,16 @@ export class StandaloneSqliteDatabase
   ): Promise<ContiguousDataAttributes | undefined> {
     try {
       return await this.getDataAttributesCircuitBreaker.fire(id);
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  async getDataItemAttributes(
+    id: string,
+  ): Promise<DataItemAttributes | undefined> {
+    try {
+      return await this.getDataItemAttributesCircuitBreaker.fire(id);
     } catch (_) {
       return undefined;
     }
@@ -2914,6 +2958,10 @@ if (!isMainThread) {
         case 'getDataAttributes':
           const dataAttributes = worker.getDataAttributes(args[0]);
           parentPort?.postMessage(dataAttributes);
+          break;
+        case 'getDataItemAttributes':
+          const dataItemAttributes = worker.getDataItemAttributes(args[0]);
+          parentPort?.postMessage(dataItemAttributes);
           break;
         case 'getDataParent':
           const dataParent = worker.getDataParent(args[0]);

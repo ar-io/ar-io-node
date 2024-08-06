@@ -74,6 +74,7 @@ import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
+import { SignatureFetcher } from './data/signature-fetcher.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -512,6 +513,12 @@ export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
       mempoolPollingIntervalMs: config.MEMPOOL_POLLING_INTERVAL_MS,
     })
   : undefined;
+
+export const signatureFetcher = new SignatureFetcher({
+  log,
+  dataSource: contiguousDataSource,
+  dataIndex: contiguousDataIndex,
+});
 
 let isShuttingDown = false;
 

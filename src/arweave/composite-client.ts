@@ -50,6 +50,7 @@ import {
   PartialJsonBlockStore,
   PartialJsonTransaction,
   PartialJsonTransactionStore,
+  Region,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -642,7 +643,13 @@ export class ArweaveCompositeClient
     };
   }
 
-  async getData({ id }: { id: string }): Promise<ContiguousData> {
+  async getData({
+    id,
+    region,
+  }: {
+    id: string;
+    region?: Region;
+  }): Promise<ContiguousData> {
     this.failureSimulator.maybeFail();
 
     try {
@@ -650,6 +657,11 @@ export class ArweaveCompositeClient
         this.trustedNodeRequestQueue.push({
           method: 'GET',
           url: `/tx/${id}/data`,
+          headers: region
+            ? {
+                Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
+              }
+            : {},
         }),
         this.trustedNodeRequestQueue.push({
           method: 'GET',

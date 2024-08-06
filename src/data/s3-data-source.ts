@@ -20,6 +20,7 @@ import winston from 'winston';
 import {
   ContiguousData,
   ContiguousDataSource,
+  Region,
   RequestAttributes,
 } from '../types.js';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
@@ -60,9 +61,11 @@ export class S3DataSource implements ContiguousDataSource {
   async getData({
     id,
     requestAttributes,
+    region,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
+    region?: Region;
   }): Promise<ContiguousData> {
     const log = this.log.child({ method: 'getData' });
     log.info('Fetching contiguous data from S3', {
@@ -94,10 +97,12 @@ export class S3DataSource implements ContiguousDataSource {
       }
 
       const payloadDataStartS3MetaDataTag = 'x-amz-meta-payload-data-start';
-      const range =
-        head.headers?.[payloadDataStartS3MetaDataTag] !== undefined
-          ? `bytes=${head.headers[payloadDataStartS3MetaDataTag]}-`
-          : `bytes=0-`;
+      let range = 'bytes=0-';
+      if (region) {
+        range = `bytes=${region.offset}-${region.offset + region.size - 1}`;
+      } else if (head.headers?.[payloadDataStartS3MetaDataTag] !== undefined) {
+        range = `bytes=${head.headers[payloadDataStartS3MetaDataTag]}-`;
+      }
 
       const response = await this.s3Client.GetObject({
         Bucket: this.s3Bucket,

@@ -122,7 +122,10 @@ describe('GatewayDataSource', () => {
             .class,
           'GatewayDataSource',
         );
-        assert.equal(error.message, 'Unexpected status code from gateway: 404');
+        assert.equal(
+          error.message,
+          'Unexpected status code from gateway: 404. Expected 200.',
+        );
       }
     });
 
@@ -263,6 +266,62 @@ describe('GatewayDataSource', () => {
 
       assert.equal(data.requestAttributes?.hops, 6);
       assert.equal(data.requestAttributes?.origin, 'node-url');
+    });
+
+    it('should include Range header when region is provided', async () => {
+      let requestParams: any;
+      mockedAxiosInstance.request = async (params: any) => {
+        requestParams = params;
+        return {
+          status: 206,
+          headers: {
+            'content-length': '200',
+            'content-type': 'application/octet-stream',
+          },
+          data: axiosStreamData,
+        };
+      };
+
+      const region = { offset: 100, size: 200 };
+      await dataSource.getData({ id: 'some-id', region });
+
+      assert.equal(requestParams.headers['Range'], 'bytes=100-299');
+    });
+
+    it('should handle errors when fetching data with region', async () => {
+      mockedAxiosInstance.request = async () => {
+        throw new Error('Failed to fetch data with region');
+      };
+
+      const region = { offset: 100, size: 200 };
+      await assert.rejects(
+        dataSource.getData({ id: 'some-id', region }),
+        /Failed to fetch data with region/,
+      );
+
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
+      assert.equal(
+        (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
+          .class,
+        'GatewayDataSource',
+      );
+    });
+
+    it('should accept 206 Partial Content status when region is provided', async () => {
+      mockedAxiosInstance.request = async () => ({
+        status: 206,
+        headers: {
+          'content-length': '200',
+          'content-type': 'application/octet-stream',
+        },
+        data: axiosStreamData,
+      });
+
+      const region = { offset: 100, size: 200 };
+      const data = await dataSource.getData({ id: 'some-id', region });
+
+      assert.equal(data.size, 200);
+      assert.equal(data.sourceContentType, 'application/octet-stream');
     });
   });
 });
