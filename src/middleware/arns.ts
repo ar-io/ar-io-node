@@ -34,6 +34,12 @@ export const createArnsMiddleware = ({
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
     if (
+      // Ignore requests that do end with the ArNS root hostname.
+      (config.ARNS_ROOT_HOST !== undefined &&
+        config.ARNS_ROOT_HOST !== '' &&
+        !req.hostname.endsWith('.' + config.ARNS_ROOT_HOST)) ||
+      // Ignore requests that do not include subdomains since ArNS always
+      // requires a subdomain.
       !Array.isArray(req.subdomains) ||
       // Ignore subdomains that are part of the ArNS root hostname or are
       // shorter than it (e.g., localhost).
