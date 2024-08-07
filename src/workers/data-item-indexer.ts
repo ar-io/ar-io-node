@@ -74,7 +74,7 @@ export class DataItemIndexer {
 
     try {
       log.debug('Indexing data item...');
-      this.indexWriter.saveDataItem(item);
+      await this.indexWriter.saveDataItem(item);
       this.eventEmitter.emit(events.ANS104_DATA_ITEM_INDEXED, item);
       log.debug('Data item indexed.');
     } catch (error) {
