@@ -80,7 +80,7 @@ export class SignatureFetcher implements SignatureSource {
 
       return toB64Url(signatureBuffer);
     } catch (error) {
-      this.log.error('Error fetching data itemsignature', {
+      this.log.error('Error fetching data item signature', {
         id,
         error: (error as Error).message,
       });
