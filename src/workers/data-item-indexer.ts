@@ -19,6 +19,7 @@ import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
 import * as winston from 'winston';
+import * as metrics from '../metrics.js';
 
 import * as events from '../events.js';
 import { DataItemIndexWriter, NormalizedDataItem } from '../types.js';
@@ -75,6 +76,7 @@ export class DataItemIndexer {
     try {
       log.debug('Indexing data item...');
       await this.indexWriter.saveDataItem(item);
+      metrics.dataItemsIndexedCounter.inc();
       this.eventEmitter.emit(events.ANS104_DATA_ITEM_INDEXED, item);
       log.debug('Data item indexed.');
     } catch (error) {
