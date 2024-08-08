@@ -77,6 +77,11 @@ export const dataItemsIndexedCounter = new promClient.Counter({
   help: 'Count of data items indexed',
 });
 
+export const dataItemDataIndexedCounter = new promClient.Counter({
+  name: 'data_item_data_indexed_total',
+  help: 'Count of data item data indexed',
+});
+
 //
 // Arweave client metrics
 //

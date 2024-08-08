@@ -138,7 +138,7 @@ export class Ans104DataIndexer {
             'Skipping data item parent ID indexing due to missing parent ID, data offset, or data size.',
           );
         }
-        metrics.dataItemsIndexedCounter.inc();
+        metrics.dataItemDataIndexedCounter.inc();
         this.eventEmitter.emit(events.ANS104_DATA_ITEM_DATA_INDEXED, item);
         log.debug('Data item data indexed.');
       } else {
