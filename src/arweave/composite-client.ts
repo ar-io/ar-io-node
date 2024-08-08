@@ -657,11 +657,6 @@ export class ArweaveCompositeClient
         this.trustedNodeRequestQueue.push({
           method: 'GET',
           url: `/tx/${id}/data`,
-          headers: region
-            ? {
-                Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
-              }
-            : {},
         }),
         this.trustedNodeRequestQueue.push({
           method: 'GET',
@@ -674,7 +669,11 @@ export class ArweaveCompositeClient
       }
 
       const size = +dataSizeResponse.data;
-      const txData = fromB64Url(dataResponse.data);
+      let txData = fromB64Url(dataResponse.data);
+
+      if (region) {
+        txData = txData.subarray(region.offset, region.offset + region.size);
+      }
 
       const stream = Readable.from(txData);
 
@@ -692,7 +691,7 @@ export class ArweaveCompositeClient
 
       return {
         stream,
-        size,
+        size: region ? region.size : size,
         verified: false,
         cached: false,
       };
