@@ -92,7 +92,7 @@ export async function resolveTxSignature(tx: GqlTransaction) {
     return signatureFetcher.getDataItemSignature(tx.id);
   }
 
-  return '';
+  return '<not-found>';
 }
 
 export const resolvers: IResolvers = {
