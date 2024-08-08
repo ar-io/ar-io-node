@@ -28,7 +28,7 @@ import {
   NormalizedDataItem,
 } from '../types.js';
 
-const DEFAULT_WORKER_COUNT = 2;
+const DEFAULT_WORKER_COUNT = 1;
 
 export class Ans104DataIndexer {
   // Dependencies
