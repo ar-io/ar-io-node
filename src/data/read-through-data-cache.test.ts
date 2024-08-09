@@ -555,7 +555,7 @@ describe('ReadThroughDataCache', function () {
 
       assert.deepEqual(
         (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
-        1,
+        0,
       );
 
       let receivedData = '';

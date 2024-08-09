@@ -190,54 +190,60 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         requestAttributes,
         region,
       });
-      const hasher = crypto.createHash('sha256');
-      const cacheStream = await this.dataStore.createWriteStream();
-      pipeline(data.stream, cacheStream, async (error: any) => {
-        if (error !== undefined) {
-          this.log.error('Error streaming or caching data:', {
-            id,
-            message: error.message,
-            stack: error.stack,
-          });
-          await this.dataStore.cleanup(cacheStream);
-        } else {
-          if (cacheStream !== undefined) {
-            const hash = hasher.digest('base64url');
 
-            try {
-              await this.dataStore.finalize(cacheStream, hash);
-            } catch (error: any) {
-              this.log.error('Error finalizing data in cache:', {
-                id,
-                message: error.message,
-                stack: error.stack,
-              });
-            }
+      // Skip caching when serving regions to avoid persisting data fragments
+      // and (more importantly) writing invalid ID to hash relationships in the
+      // DB.
+      if (region === undefined) {
+        const hasher = crypto.createHash('sha256');
+        const cacheStream = await this.dataStore.createWriteStream();
+        pipeline(data.stream, cacheStream, async (error: any) => {
+          if (error !== undefined) {
+            this.log.error('Error streaming or caching data:', {
+              id,
+              message: error.message,
+              stack: error.stack,
+            });
+            await this.dataStore.cleanup(cacheStream);
+          } else {
+            if (cacheStream !== undefined) {
+              const hash = hasher.digest('base64url');
 
-            this.log.debug('Successfully cached data', { id, hash });
-            try {
-              this.dataContentAttributeImporter.queueDataContentAttributes({
-                id,
-                dataRoot: attributes?.dataRoot,
-                hash,
-                dataSize: data.size,
-                contentType: data.sourceContentType,
-                cachedAt: currentUnixTimestamp(),
-              });
-            } catch (error: any) {
-              this.log.error('Error saving data content attributes:', {
-                id,
-                message: error.message,
-                stack: error.stack,
-              });
+              try {
+                await this.dataStore.finalize(cacheStream, hash);
+              } catch (error: any) {
+                this.log.error('Error finalizing data in cache:', {
+                  id,
+                  message: error.message,
+                  stack: error.stack,
+                });
+              }
+
+              this.log.info('Successfully cached data', { id, hash });
+              try {
+                this.dataContentAttributeImporter.queueDataContentAttributes({
+                  id,
+                  dataRoot: attributes?.dataRoot,
+                  hash,
+                  dataSize: data.size,
+                  contentType: data.sourceContentType,
+                  cachedAt: currentUnixTimestamp(),
+                });
+              } catch (error: any) {
+                this.log.error('Error saving data content attributes:', {
+                  id,
+                  message: error.message,
+                  stack: error.stack,
+                });
+              }
             }
           }
-        }
-      });
+        });
 
-      data.stream.on('data', (chunk) => {
-        hasher.update(chunk);
-      });
+        data.stream.on('data', (chunk) => {
+          hasher.update(chunk);
+        });
+      }
 
       data.stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
