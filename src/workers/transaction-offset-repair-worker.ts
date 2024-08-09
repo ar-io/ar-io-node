@@ -64,7 +64,7 @@ export class TransactionOffsetRepairWorker {
       for (const txId of txIds) {
         this.log.debug('Queueing missing transaction for offset indexing...');
         await this.txOffsetIndexer.queueTxId(txId);
-        this.log.info('Queued missing transaction for offset indexing.');
+        this.log.debug('Queued missing transaction for offset indexing.');
       }
     } catch (error: any) {
       this.log.error('Error retrying missing transactions:', error);

@@ -51,7 +51,7 @@ export class SequentialDataSource implements ContiguousDataSource {
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
-    this.log.info('Sequentialy fetching from data sources', {
+    this.log.debug('Sequentialy fetching from data sources', {
       id,
     });
 

@@ -68,7 +68,7 @@ export class S3DataSource implements ContiguousDataSource {
     region?: Region;
   }): Promise<ContiguousData> {
     const log = this.log.child({ method: 'getData' });
-    log.info('Fetching contiguous data from S3', {
+    log.debug('Fetching contiguous data from S3', {
       id,
       bucket: this.s3Bucket,
       prefix: this.s3Prefix,

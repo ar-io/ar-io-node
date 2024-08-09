@@ -59,7 +59,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
-    this.log.info('Fetching chunk data for TX', { id });
+    this.log.debug('Fetching chunk data for TX', { id });
 
     try {
       const [txDataRoot, txOffset] = await Promise.all([

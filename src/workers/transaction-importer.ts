@@ -55,9 +55,9 @@ export class TransactionImporter {
 
   async queueTx(tx: PartialJsonTransaction): Promise<void> {
     const log = this.log.child({ method: 'queueTx', txId: tx.id });
-    log.info('Queuing transaction...');
+    log.debug('Queuing transaction...');
     this.queue.push(tx);
-    log.info('Transaction queued.');
+    log.debug('Transaction queued.');
   }
 
   async importTx(tx: PartialJsonTransaction): Promise<void> {

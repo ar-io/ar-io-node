@@ -82,7 +82,7 @@ export class ArIODataSource implements ContiguousDataSource {
 
   async updatePeerList() {
     const log = this.log.child({ method: 'updatePeerList' });
-    log.info('Updating peers from ArIO contract');
+    log.debug('Updating peers from ArIO contract');
 
     try {
       const peers: Record<string, string> = {};
@@ -108,7 +108,7 @@ export class ArIODataSource implements ContiguousDataSource {
       } while (cursor !== undefined);
 
       this.peers = peers;
-      log.info('Updated peer list from ArIO contract');
+      log.debug('Updated peer list from ArIO contract');
     } catch (error: any) {
       log.error('Failed to update peer list', {
         message: error.message,
@@ -168,7 +168,7 @@ export class ArIODataSource implements ContiguousDataSource {
   }): Promise<ContiguousData> {
     const log = this.log.child({ method: 'getData' });
 
-    log.info('Fetching contiguous data from ArIO peer', {
+    log.debug('Fetching contiguous data from ArIO peer', {
       id,
     });
 

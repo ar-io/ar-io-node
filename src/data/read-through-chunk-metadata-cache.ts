@@ -54,7 +54,7 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
       .then(async (cachedChunkMetadata) => {
         // Chunk metadata is cached
         if (cachedChunkMetadata) {
-          this.log.info('Successfully fetched chunk data from cache', {
+          this.log.debug('Successfully fetched chunk data from cache', {
             dataRoot,
             relativeOffset,
           });
