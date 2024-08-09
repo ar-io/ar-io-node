@@ -107,7 +107,7 @@ services:
       - ar-io-network
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-b2c64c3e6838511966ca4b70c05294f35aa91114}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-97da51142c4910102a189557109df5b2d39ac32f}
     restart: on-failure
     ports:
       - 5050:5050
@@ -134,7 +134,7 @@ services:
       - ar-io-network
 
   resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-e35776ceb4324494d403b1fb900bfd06eb97a652}
+    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-7fe02ecda2027e504248d3f3716579f60b561de5}
     restart: on-failure
     ports:
       - 6000:6000
