@@ -26,7 +26,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added `data_item_data_indexed_total` Prometheus counter to count data items
   with data attributes indexed.
 
-
 ### Changed
 
 - Queue data attributes writes when serving data rather than writing them
@@ -41,7 +40,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Increased aggressiveness of contiguous data cleanup. It now pauses 5 seconds
   instead of 10 seconds per batch and runs every 4 hours instead of every 24
   hours.
-
 
 ## [Release 15] - 2024-07-19
 
