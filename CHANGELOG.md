@@ -4,7 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 16] - 2024-08-09
+
+### Fixed
+
+- Fixed promise leak caused by missing await when saving data items to the DB.
+- Modified ArNS middleware to not attempt resolution when receiving requests
+  for a different hostname than the one specified by `ARNS_ROOT_HOST`.
+
+### Added
+
+- Added support for returning `Content-Encoding` HTTP headers based on user
+  specified `Content-Encoding` tags.
+- Added `isNestedBundle` filter enables that matches any nested bundle when
+  indexing. This enables composite unbundling filters that match a set of L1
+  tags and bundles nested under them.
+- Added ability to skip writing ANS-104 signatures to the DB and load them
+  based on offsets from the data instead. This significantly reduces the size
+  of the bundles DB. It can be enabled by setting the
+  `WRITE_ANS104_DATA_ITEM_DB_SIGNATURES` environment variable to `false`.
+- Added `data_item_data_indexed_total` Prometheus counter to count data items
+  with data attributes indexed.
+
+
+### Changed
+
+- Queue data attributes writes when serving data rather than writing them
+  syncronously.
+- Reduced the default data indexer count to 1 to lessen the load on the data
+  DB.
+- Switched a number of overly verbose info logs to debug level.
+- Removed docker-compose on-failure restart limits to ensure that services
+  restart no matter how many times they fail.
+- Modified the `data_items_indexed_total` Prometheus counter to count data
+  items indexed for GraphQL querying instead of data attributes.
+- Increased aggressiveness of contiguous data cleanup. It now pauses 5 seconds
+  instead of 10 seconds per batch and runs every 4 hours instead of every 24
+  hours.
+
 
 ## [Release 15] - 2024-07-19
 
