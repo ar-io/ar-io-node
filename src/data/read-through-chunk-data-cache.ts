@@ -49,7 +49,7 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
       .then(async (cachedChunkData) => {
         // Chunk is cached
         if (cachedChunkData) {
-          this.log.info('Successfully fetched chunk data from cache', {
+          this.log.debug('Successfully fetched chunk data from cache', {
             dataRoot,
             relativeOffset,
           });

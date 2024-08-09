@@ -62,7 +62,7 @@ export class GatewayDataSource implements ContiguousDataSource {
     region?: Region;
   }): Promise<ContiguousData> {
     const path = `/raw/${id}`;
-    this.log.info('Fetching contiguous data from gateway', {
+    this.log.debug('Fetching contiguous data from gateway', {
       id,
       trustedGatewayUrl: this.trustedGatewayAxios.defaults.baseURL,
       path,

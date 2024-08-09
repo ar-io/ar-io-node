@@ -76,17 +76,17 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   > {
     if (hash !== undefined) {
       try {
-        this.log.info('Found data hash in index', { id, hash });
+        this.log.debug('Found data hash in index', { id, hash });
         const cacheStream = await this.dataStore.get(hash, region);
 
         if (cacheStream === undefined) {
-          this.log.info('Unable to find data in cache', {
+          this.log.debug('Unable to find data in cache', {
             id,
             hash,
             ...region,
           });
         } else {
-          this.log.info('Found data in cache', { id, hash, ...region });
+          this.log.debug('Found data in cache', { id, hash, ...region });
           // It should be impossible for dataSize to be undefined if hash is
           // set, but TypeScript doesn't know that.
           if (dataSize === undefined) {
@@ -106,10 +106,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       }
     }
 
-    this.log.info('Checking for parent data ID...', { id });
+    this.log.debug('Checking for parent data ID...', { id });
     const parentData = await this.contiguousDataIndex.getDataParent(id);
     if (parentData?.parentHash !== undefined) {
-      this.log.info('Found parent data ID', { id, ...parentData });
+      this.log.debug('Found parent data ID', { id, ...parentData });
       // We might have a parent but no data size when retreiving by ID
       const size = dataSize ?? parentData.size;
 
@@ -141,7 +141,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       size: number;
     };
   }): Promise<ContiguousData> {
-    this.log.info('Checking for cached data...', {
+    this.log.debug('Checking for cached data...', {
       id,
     });
 
@@ -214,7 +214,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               });
             }
 
-            this.log.info('Successfully cached data', { id, hash });
+            this.log.debug('Successfully cached data', { id, hash });
             try {
               this.dataContentAttributeImporter.queueDataContentAttributes({
                 id,
