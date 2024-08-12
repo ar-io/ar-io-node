@@ -76,6 +76,10 @@ import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher } from './data/signature-fetcher.js';
 
+import { createHelia } from 'helia';
+import { unixfs } from '@helia/unixfs';
+import { FsBlockstore } from 'blockstore-fs';
+
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
   log.error('Uncaught exception:', error);
@@ -83,6 +87,40 @@ process.on('uncaughtException', (error) => {
 
 const arweave = Arweave.init({});
 
+// IPFS via Helia
+const blockstore = new FsBlockstore(`/data/ipfs-data`);
+
+const helia = await createHelia({
+  blockstore,
+});
+
+const heliaFs = unixfs(helia);
+
+// Function to add data to IPFS with structured directories
+async function addToIPFS(data: Uint8Array, txId: string): Promise<string> {
+    try {
+        // Create the directory structure based on the transaction ID
+        const firstLevelDirCid = await heliaFs.addDirectory();
+        const secondLevelDirCid = await heliaFs.addDirectory();
+
+        // Add the file to IPFS
+        const fileCid = await heliaFs.addBytes(data);
+
+        // Copy the second-level directory into the first-level directory
+        const secondLevelCid = await heliaFs.cp(secondLevelDirCid, firstLevelDirCid, txId.slice(2, 4));
+
+        // Copy the file into the second-level directory with the full transaction ID as its name
+        const finalDirCid = await heliaFs.cp(fileCid, secondLevelCid, txId);
+
+        log.info(`Added data to IPFS: file CID = ${fileCid.toString()}, final directory CID = ${finalDirCid.toString()}`);
+        
+        // Return the CID of the final directory or the file, depending on what you need
+        return fileCid.toString();
+    } catch (error) {
+        log.error('Error adding data to IPFS:', error);
+        throw error;
+    }
+}
 // IO/AO SDK
 
 const arIO = IO.init({
@@ -210,6 +248,36 @@ const ans104TxMatcher = new MatchTags([
 export const prioritizedTxIds = new Set<string>();
 
 eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
+  const hasIPFSTag = tx.tags.some(
+    (tag) => tag.name === 'IPFS-CID' || tag.name === 'IPFS-Add',
+  );
+
+  const isOwner =
+    tx.owner_address === 'iKryOeZQMONi2965nKz528htMMN_sBcjlhc-VncoRjA';
+
+  if (hasIPFSTag || isOwner) {
+    log.info(
+      `Processing transaction ${tx.id}: IPFS Tag: ${hasIPFSTag}, Owner Match: ${isOwner}`,
+    );
+    try {
+      // get the data then hash it
+      // todo: get data
+      const testBuffer = Buffer.from(
+        'This is some sample data for testing purposes.',
+        'utf-8',
+      );
+      const data = new Uint8Array(testBuffer);
+      if (tx.id !== undefined) {
+        const cid = await addToIPFS(data, tx.id);
+        log.info(`Data for TX ${tx.id} added to IPFS with CID: ${cid}`);
+      } else {
+        log.error('Transaction ID is undefined. Cannot add to IPFS.');
+      }
+    } catch (error) {
+      log.error(`Error adding data for TX ${tx.id} to IPFS: `, error);
+    }
+  }
+
   if (await ans104TxMatcher.match(tx)) {
     metrics.bundlesCounter.inc({
       bundle_format: 'ans-104',
@@ -223,6 +291,41 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
 eventEmitter.on(
   events.ANS104_DATA_ITEM_DATA_INDEXED,
   async (item: MatchableItem) => {
+    const hasIPFSTag = item.tags.some(
+      (tag) => tag.name === 'IPFS-CID' || tag.name === 'IPFS-Add',
+    );
+
+    const isOwner =
+      item.owner_address === 'iKryOeZQMONi2965nKz528htMMN_sBcjlhc-VncoRjA';
+
+    if (hasIPFSTag || isOwner) {
+      log.info(
+        `Processing Data Item ${item.id}: IPFS Tag: ${hasIPFSTag}, Owner Match: ${isOwner}`,
+      );
+      try {
+        // get the data then hash it
+        // todo: get data
+        const testBuffer = Buffer.from(
+          'This is some sample data for testing purposes.',
+          'utf-8',
+        );
+        const data = new Uint8Array(testBuffer);
+        if (item.id !== undefined) {
+          const cid = await addToIPFS(data, item.id);
+          log.info(
+            `Data for Data Item ${item.id} added to IPFS with CID: ${cid}`,
+          );
+        } else {
+          log.error('Data Item ID is undefined. Cannot add to IPFS.');
+        }
+      } catch (error) {
+        log.error(
+          `Error adding data for Data Item ${item.id} to IPFS: `,
+          error,
+        );
+      }
+    }
+
     if (await ans104TxMatcher.match(item)) {
       metrics.bundlesCounter.inc({
         bundle_format: 'ans-104',

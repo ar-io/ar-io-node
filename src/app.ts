@@ -28,6 +28,7 @@ import { dataRouter } from './routes/data/index.js';
 import { arweaveRouter } from './routes/arweave.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
+import { ipfsRouter } from './routes/ipfs.js';
 import * as system from './system.js';
 
 system.arweaveClient.refreshPeers();
@@ -59,6 +60,7 @@ app.use(openApiRouter);
 app.use(arIoRouter);
 app.use(dataRouter);
 app.use(arweaveRouter);
+app.use(ipfsRouter);
 
 // GraphQL
 const apolloServerInstanceGql = apolloServer(system.db, {
