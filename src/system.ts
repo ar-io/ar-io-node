@@ -90,11 +90,11 @@ const arweave = Arweave.init({});
 // IPFS via Helia
 const blockstore = new FsBlockstore(`/data/ipfs-data`);
 
-const helia = await createHelia({
+export const helia = await createHelia({
   blockstore,
 });
 
-const heliaFs = unixfs(helia);
+export const heliaFs = unixfs(helia);
 
 // Function to add data to IPFS with structured directories
 async function addToIPFS(data: Uint8Array, txId: string): Promise<string> {

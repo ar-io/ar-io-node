@@ -32,6 +32,9 @@ import {
   ManifestPathResolver,
   RequestAttributes,
 } from '../../types.js';
+import log from '../../log.js';
+import { heliaFs } from '../../system.js';
+import { CID } from 'multiformats/cid';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
@@ -554,6 +557,22 @@ export const createDataHandler = ({
       manifestPath = req.params[2];
     }
 
+    // Retrieve the CID by transaction ID and set it in the response header
+    try {
+      if (id !== undefined) {
+        const cid = await getCIDByTransactionId(id); // Assumes id is not undefined
+        if (cid !== undefined) {
+          res.setHeader('X-IPFS-CID', cid);
+        }
+      }
+    } catch (error: any) {
+      log.error('Error retrieving CID for transaction:', {
+        dataId: id,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+
     // Return 404 if the data is blocked by ID
     try {
       if (await blockListValidator.isIdBlocked(id)) {
@@ -697,3 +716,26 @@ export const createDataHandler = ({
     }
   });
 };
+
+async function getCIDByTransactionId(txId: string): Promise<string | undefined> {
+  try {
+    // Resolve the directory structure based on the transaction ID
+    const firstLevelDir = txId.slice(0, 2);
+    const secondLevelDir = txId.slice(2, 4);
+
+    // Resolve the CID of the first-level directory
+    const firstLevelCid = await heliaFs.cat(CID.parse(firstLevelDir));
+    
+    // Resolve the CID of the second-level directory
+    const secondLevelCid = await heliaFs.cat(CID.parse(secondLevelDir));
+
+    // Finally, resolve the CID of the file
+    const fileCid = await heliaFs.cat(CID.parse(txId));
+
+    log.info(`Retrieved CID for transaction ID ${txId}: ${fileCid.toString()}`);
+    return fileCid.toString();
+  } catch (error) {
+    log.error(`Error retrieving CID for transaction ID ${txId}:`, error);
+    return undefined;
+  }
+}
