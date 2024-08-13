@@ -18,7 +18,7 @@
 import { Router } from 'express';
 import { CID } from 'multiformats/cid';
 import { ContiguousDataAttributes } from '../types';
-import { contiguousDataIndex, getTxIdByCid, heliaFs } from '../system';
+import { contiguousDataIndex, getTxIdByCid, heliaFs } from '../system.js';
 
 export const ipfsRouter = Router();
 
