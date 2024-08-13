@@ -88,7 +88,15 @@ process.on('uncaughtException', (error) => {
 const arweave = Arweave.init({});
 
 // IPFS via Helia
+
 const blockstore = new FsBlockstore(`/data/ipfs-data`);
+export const txIdToCidFilePath = 'data/txIdToCidMap.json';
+// Load existing mappings (if any) from the file
+let txIdToCidMap: Record<string, string> = {};
+if (fs.existsSync(txIdToCidFilePath)) {
+  const data = fs.readFileSync(txIdToCidFilePath, 'utf-8');
+  txIdToCidMap = JSON.parse(data);
+}
 
 export const helia = await createHelia({
   blockstore,
@@ -96,31 +104,31 @@ export const helia = await createHelia({
 
 export const heliaFs = unixfs(helia);
 
-// Function to add data to IPFS with structured directories
-async function addToIPFS(data: Uint8Array, txId: string): Promise<string> {
-    try {
-        // Create the directory structure based on the transaction ID
-        const firstLevelDirCid = await heliaFs.addDirectory();
-        const secondLevelDirCid = await heliaFs.addDirectory();
-
-        // Add the file to IPFS
-        const fileCid = await heliaFs.addBytes(data);
-
-        // Copy the second-level directory into the first-level directory
-        const secondLevelCid = await heliaFs.cp(secondLevelDirCid, firstLevelDirCid, txId.slice(2, 4));
-
-        // Copy the file into the second-level directory with the full transaction ID as its name
-        const finalDirCid = await heliaFs.cp(fileCid, secondLevelCid, txId);
-
-        log.info(`Added data to IPFS: file CID = ${fileCid.toString()}, final directory CID = ${finalDirCid.toString()}`);
-        
-        // Return the CID of the final directory or the file, depending on what you need
-        return fileCid.toString();
-    } catch (error) {
-        log.error('Error adding data to IPFS:', error);
-        throw error;
-    }
+// Function to add a mapping
+export function storeMapping(txId: string, cid: string): void {
+  txIdToCidMap[txId] = cid;
+  fs.writeFileSync(txIdToCidFilePath, JSON.stringify(txIdToCidMap, null, 2));
 }
+
+// Function to retrieve a CID by TX ID
+export function getCidByTxId(txId: string): string | undefined {
+  return txIdToCidMap[txId];
+}
+
+async function addToIPFS(data: Uint8Array): Promise<string> {
+  try {
+    // Add the data to IPFS without specifying a path
+    const fileCid = await heliaFs.addBytes(data);
+
+    // Log and return the CID
+    log.info(`Added data to IPFS: file CID = ${fileCid.toString()}`);
+    return fileCid.toString();
+  } catch (error) {
+    log.error('Error adding data to IPFS:', error);
+    throw error;
+  }
+}
+
 // IO/AO SDK
 
 const arIO = IO.init({
@@ -252,6 +260,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
     (tag) => tag.name === 'IPFS-CID' || tag.name === 'IPFS-Add',
   );
 
+  // TO DO: SET TO FILTER
   const isOwner =
     tx.owner_address === 'iKryOeZQMONi2965nKz528htMMN_sBcjlhc-VncoRjA';
 
@@ -268,8 +277,14 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
       );
       const data = new Uint8Array(testBuffer);
       if (tx.id !== undefined) {
-        const cid = await addToIPFS(data, tx.id);
-        log.info(`Data for TX ${tx.id} added to IPFS with CID: ${cid}`);
+        const cid = await addToIPFS(data);
+	log.info(`Data for TX ${tx.id} added to IPFS with CID: ${cid}`);
+	if (cid !== undefined) {
+	   storeMapping(tx.id, cid);
+           log.info(`Data for TX ${tx.id} mapped with CID: ${cid}`);
+	} else {
+	  log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+	}
       } else {
         log.error('Transaction ID is undefined. Cannot add to IPFS.');
       }
@@ -311,10 +326,16 @@ eventEmitter.on(
         );
         const data = new Uint8Array(testBuffer);
         if (item.id !== undefined) {
-          const cid = await addToIPFS(data, item.id);
+          const cid = await addToIPFS(data);
           log.info(
-            `Data for Data Item ${item.id} added to IPFS with CID: ${cid}`,
+            `Data Item ${item.id} added to IPFS with CID: ${cid}`,
           );
+	  if (cid !== undefined) {
+            storeMapping(item.id, cid);
+            log.info(`Data Item ${item.id} mapped with CID: ${cid}`);
+	  } else {
+	    log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+	  }
         } else {
           log.error('Data Item ID is undefined. Cannot add to IPFS.');
         }
