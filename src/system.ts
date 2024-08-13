@@ -104,10 +104,10 @@ if (fs.existsSync(txIdToCidFilePath)) {
   txIdToCidMap = JSON.parse(data);
 }
 const cidToTxIdMapFilePath = 'data/ipfs/cidToTxIdMap.json';
-const cidToTxIdMap: Record<string, string[]> = {};
+let cidToTxIdMap: Record<string, string[]> = {};
 if (fs.existsSync(cidToTxIdMapFilePath)) {
   const data = fs.readFileSync(txIdToCidFilePath, 'utf-8');
-  txIdToCidMap = JSON.parse(data);
+  cidToTxIdMap = JSON.parse(data);
 }
 
 // IPFS Utility Functions
