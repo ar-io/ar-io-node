@@ -124,6 +124,13 @@ export const ANS104_INDEX_FILTER = createFilter(
   JSON.parse(ANS104_INDEX_FILTER_STRING),
 );
 
+// Filter determining which IPFS transactions and data items to index
+export const IPFS_ADD_FILTER_PARSED = JSON.parse(
+  env.varOrDefault('IPFS_ADD_FILTER', '{"never": true}'),
+);
+export const IPFS_ADD_FILTER_STRING = canonicalize(IPFS_ADD_FILTER_PARSED);
+export const IPFS_ADD_FILTER = createFilter(JSON.parse(IPFS_ADD_FILTER_STRING));
+
 // The number of ANS-104 worker threads to run
 export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
   'ANS104_UNBUNDLE_WORKERS',
