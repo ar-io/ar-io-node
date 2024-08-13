@@ -87,7 +87,7 @@ const arweave = Arweave.init({});
 import { createHelia } from 'helia';
 import { unixfs } from '@helia/unixfs';
 import { FsBlockstore } from 'blockstore-fs';
-const blockstore = new FsBlockstore(`/data/ipfs`);
+const blockstore = new FsBlockstore(`data/helia-ipfs`);
 
 export const helia = await createHelia({
   blockstore,

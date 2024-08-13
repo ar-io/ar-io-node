@@ -38,6 +38,8 @@ services:
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
+      - ${HELIA_IPFS_DATA_PATH:-./data/helia-ipfs}:/app/data/helia-ipfs
+      - ${IPFS_MAPPING_DATA_PATH:-./data/ipfs}:/app/data/ipfs
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
