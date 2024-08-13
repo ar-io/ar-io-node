@@ -76,10 +76,6 @@ import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher } from './data/signature-fetcher.js';
 
-import { createHelia } from 'helia';
-import { unixfs } from '@helia/unixfs';
-import { FsBlockstore } from 'blockstore-fs';
-
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
   log.error('Uncaught exception:', error);
@@ -88,14 +84,10 @@ process.on('uncaughtException', (error) => {
 const arweave = Arweave.init({});
 
 // IPFS via Helia
-const blockstore = new FsBlockstore(`/data/ipfs-data`);
-export const txIdToCidFilePath = 'data/txIdToCidMap.json';
-// Load existing mappings (if any) from the file
-let txIdToCidMap: Record<string, string> = {};
-if (fs.existsSync(txIdToCidFilePath)) {
-  const data = fs.readFileSync(txIdToCidFilePath, 'utf-8');
-  txIdToCidMap = JSON.parse(data);
-}
+import { createHelia } from 'helia';
+import { unixfs } from '@helia/unixfs';
+import { FsBlockstore } from 'blockstore-fs';
+const blockstore = new FsBlockstore(`/data/ipfs`);
 
 export const helia = await createHelia({
   blockstore,
@@ -103,15 +95,52 @@ export const helia = await createHelia({
 
 export const heliaFs = unixfs(helia);
 
-// Function to add a mapping
-export function storeMapping(txId: string, cid: string): void {
+// IPFS txid and cid index storage
+// Load existing mappings (if any) from the file
+const txIdToCidFilePath = 'data/ipfs/txIdToCidMap.json';
+let txIdToCidMap: Record<string, string> = {};
+if (fs.existsSync(txIdToCidFilePath)) {
+  const data = fs.readFileSync(txIdToCidFilePath, 'utf-8');
+  txIdToCidMap = JSON.parse(data);
+}
+const cidToTxIdMapFilePath = 'data/ipfs/cidToTxIdMap.json';
+const cidToTxIdMap: Record<string, string[]> = {};
+if (fs.existsSync(cidToTxIdMapFilePath)) {
+  const data = fs.readFileSync(txIdToCidFilePath, 'utf-8');
+  txIdToCidMap = JSON.parse(data);
+}
+
+// IPFS Utility Functions
+// Add IPFS mappings to indexes
+export function storeIpfsMappings(txId: string, cid: string): void {
+  // Store TX ID -> CID mapping
   txIdToCidMap[txId] = cid;
+
+  // Initialize CID -> TX ID mapping array if not already present
+  if (!Array.isArray(cidToTxIdMap[cid])) {
+    cidToTxIdMap[cid] = [];
+  }
+
+  // Add the TX ID to the array for the given CID
+  cidToTxIdMap[cid].push(txId);
+
+  // Persist mappings to disk
   fs.writeFileSync(txIdToCidFilePath, JSON.stringify(txIdToCidMap, null, 2));
+  fs.writeFileSync(cidToTxIdMapFilePath, JSON.stringify(cidToTxIdMap, null, 2));
 }
 
 // Function to retrieve a CID by TX ID
 export function getCidByTxId(txId: string): string | undefined {
   return txIdToCidMap[txId];
+}
+
+// Function to retrieve the last TX ID by CID
+export function getTxIdByCid(cid: string): string | undefined {
+  const txIds = cidToTxIdMap[cid];
+  if (Array.isArray(txIds) && txIds.length > 0) {
+    return txIds[txIds.length - 1]; // Return the last item without removing it
+  }
+  return undefined;
 }
 
 // Helper function to load data from disk and generate CID
@@ -296,7 +325,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
         const cid = await loadDataAndGenerateCid(tx.id);
         log.info(`Data for TX ${tx.id} added to IPFS with CID: ${cid}`);
         if (cid !== undefined) {
-          storeMapping(tx.id, cid);
+          storeIpfsMappings(tx.id, cid);
           log.info(`Data for TX ${tx.id} mapped with CID: ${cid}`);
         } else {
           log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
@@ -339,7 +368,7 @@ eventEmitter.on(
           const cid = await loadDataAndGenerateCid(item.id);
           log.info(`Data Item ${item.id} added to IPFS with CID: ${cid}`);
           if (cid !== undefined) {
-            storeMapping(item.id, cid);
+            storeIpfsMappings(item.id, cid);
             log.info(`Data Item ${item.id} mapped with CID: ${cid}`);
           } else {
             log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');

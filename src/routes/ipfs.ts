@@ -17,16 +17,10 @@
  */
 import { Router } from 'express';
 import { CID } from 'multiformats/cid';
-import { unixfs } from '@helia/unixfs';
-import { createHelia } from 'helia';
+import { ContiguousDataAttributes } from '../types';
+import { contiguousDataIndex, getTxIdByCid, heliaFs } from '../system';
 
 export const ipfsRouter = Router();
-
-// Initialize Helia and UnixFS
-const helia = await createHelia({
-  // ... helia config
-});
-const heliaFs = unixfs(helia);
 
 // Fetch IPFS data via CID
 ipfsRouter.get('/ipfs/:cid', async (req, res) => {
@@ -37,12 +31,30 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
     const cidObject = CID.parse(cid);
     console.log(`Parsed CID: ${cidObject.toString()}`);
 
+    const txId = getTxIdByCid(cidObject.toString());
+
+    // Retrieve authoritative data attributes if they're available
+    let dataAttributes: ContiguousDataAttributes | undefined;
+    try {
+      if (txId !== undefined) {
+        dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
+      }
+    } catch (error: any) {
+      console.log('Error retrieving data attributes for CID:', {
+        cid: cidObject.toString(),
+        dataId: txId,
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+
+    const contentType =
+      dataAttributes?.contentType ?? 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+
     // Retrieve data from IPFS as an async iterable
     const fileStream = heliaFs.cat(cidObject);
     console.log(`Fetching data for CID: ${cidObject.toString()}`);
-
-    // Set the content type (optional, depending on what you're serving)
-    res.setHeader('Content-Type', 'application/octet-stream');
 
     for await (const chunk of fileStream) {
       console.log(`Writing chunk of data for CID: ${cidObject.toString()}`);
