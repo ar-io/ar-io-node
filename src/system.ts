@@ -304,29 +304,22 @@ const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Version', valueStartsWith: '2.' },
 ]);
 
+// const ipfsTxMatcher = new MatchTags(JSON.parse(process.env.IPFS_ADD_FILTER || '{}')
+const ipfsItemFilter = config.IPFS_ADD_FILTER;
+
 export const prioritizedTxIds = new Set<string>();
 
 eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
-  const hasIPFSTag = tx.tags.some(
-    (tag) => tag.name === 'IPFS-CID' || tag.name === 'IPFS-Add',
-  );
-
-  // TO DO: SET TO FILTER
-  const isOwner =
-    tx.owner_address === 'iKryOeZQMONi2965nKz528htMMN_sBcjlhc-VncoRjA';
-
-  if (hasIPFSTag || isOwner) {
-    log.info(
-      `Processing transaction ${tx.id}: IPFS Tag: ${hasIPFSTag}, Owner Match: ${isOwner}`,
-    );
+  if (await ipfsItemFilter.match(tx)) {
     try {
       // get the data then hash it
       if (tx.id !== undefined) {
         const cid = await loadDataAndGenerateCid(tx.id);
-        log.info(`Data for TX ${tx.id} added to IPFS with CID: ${cid}`);
         if (cid !== undefined) {
           storeIpfsMappings(tx.id, cid);
-          log.info(`Data for TX ${tx.id} mapped with CID: ${cid}`);
+          log.info(
+            `Data for TX ${tx.id} added to IPFS and mapped with CID: ${cid}`,
+          );
         } else {
           log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
         }
@@ -351,25 +344,17 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
 eventEmitter.on(
   events.ANS104_DATA_ITEM_DATA_INDEXED,
   async (item: MatchableItem) => {
-    const hasIPFSTag = item.tags.some(
-      (tag) => tag.name === 'IPFS-CID' || tag.name === 'IPFS-Add',
-    );
-
-    const isOwner =
-      item.owner_address === 'iKryOeZQMONi2965nKz528htMMN_sBcjlhc-VncoRjA';
-
-    if (hasIPFSTag || isOwner) {
-      log.info(
-        `Processing Data Item ${item.id}: IPFS Tag: ${hasIPFSTag}, Owner Match: ${isOwner}`,
-      );
+    if (await ipfsItemFilter.match(item)) {
       try {
         // get the data then hash it
         if (item.id !== undefined) {
           const cid = await loadDataAndGenerateCid(item.id);
-          log.info(`Data Item ${item.id} added to IPFS with CID: ${cid}`);
           if (cid !== undefined) {
             storeIpfsMappings(item.id, cid);
-            log.info(`Data Item ${item.id} mapped with CID: ${cid}`);
+            // TO DO: UPDATE METRICS
+            log.info(
+              `Data Item ${item.id} added to IPFS and mapped with CID: ${cid}`,
+            );
           } else {
             log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
           }
