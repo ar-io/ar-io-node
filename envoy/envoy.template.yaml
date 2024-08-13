@@ -86,7 +86,12 @@ static_resources:
                               retry_on: '5xx,reset'
                               num_retries: 5
                             prefix_rewrite: '/'
-
+                        - match: { prefix: '/ipfs/' }
+                          route:
+                            cluster: ario_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
                         - match: { prefix: '/api-docs' }
                           route:
                             cluster: ario_gateways
