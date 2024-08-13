@@ -75,16 +75,16 @@ export class TransactionFetcher {
     isPendingTx?: boolean;
   }): Promise<void> {
     const log = this.log.child({ method: 'queueTxId', txId });
-    log.info('Queuing transaction...');
+    log.debug('Queuing transaction...');
 
     const queuedItems = this.queue.getQueue();
     if (queuedItems.some((item) => item.txId === txId)) {
-      log.info('Transaction already queued.');
+      log.debug('Transaction already queued.');
       return;
     }
 
     this.queue.push({ txId, isPendingTx });
-    log.info('Transaction queued.');
+    log.debug('Transaction queued.');
   }
 
   async fetchTx({

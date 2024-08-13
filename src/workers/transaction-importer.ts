@@ -63,9 +63,9 @@ export class TransactionImporter {
   async importTx(tx: PartialJsonTransaction): Promise<void> {
     const log = this.log.child({ txId: tx.id });
     try {
-      log.info('Importing transaction...');
+      log.debug('Importing transaction...');
       await this.chainIndex.saveTx(tx);
-      log.info('Transaction imported.');
+      log.debug('Transaction imported.');
       this.eventEmitter.emit(events.TX_INDEXED, tx);
     } catch (error: any) {
       log.error('Failed to import transaction:', error);
