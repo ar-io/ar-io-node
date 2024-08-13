@@ -88,7 +88,6 @@ process.on('uncaughtException', (error) => {
 const arweave = Arweave.init({});
 
 // IPFS via Helia
-
 const blockstore = new FsBlockstore(`/data/ipfs-data`);
 export const txIdToCidFilePath = 'data/txIdToCidMap.json';
 // Load existing mappings (if any) from the file
@@ -115,16 +114,39 @@ export function getCidByTxId(txId: string): string | undefined {
   return txIdToCidMap[txId];
 }
 
-async function addToIPFS(data: Uint8Array): Promise<string> {
+// Helper function to load data from disk and generate CID
+export async function loadDataAndGenerateCid(txId: string): Promise<string> {
   try {
-    // Add the data to IPFS without specifying a path
-    const fileCid = await heliaFs.addBytes(data);
+    const data = await contiguousDataSource.getData({ id: txId });
 
-    // Log and return the CID
-    log.info(`Added data to IPFS: file CID = ${fileCid.toString()}`);
-    return fileCid.toString();
+    return new Promise(async (resolve, reject) => {
+      try {
+        const source = (async function* () {
+          for await (const chunk of data.stream) {
+            yield chunk; // Stream the data chunk by chunk
+          }
+        })();
+
+        // Use `addAll` to stream the data to IPFS
+        for await (const entry of heliaFs.addAll([
+          {
+            path: `${txId}`,
+            content: source,
+          },
+        ])) {
+          log.info(
+            `Generated CID for transaction ID ${txId}: ${entry.cid.toString()}`,
+          );
+          resolve(entry.cid.toString());
+          return;
+        }
+      } catch (error) {
+        log.error('Error adding data to IPFS:', error);
+        reject(error);
+      }
+    });
   } catch (error) {
-    log.error('Error adding data to IPFS:', error);
+    log.error(`Error generating CID for transaction ID ${txId}:`, error);
     throw error;
   }
 }
@@ -270,21 +292,15 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
     );
     try {
       // get the data then hash it
-      // todo: get data
-      const testBuffer = Buffer.from(
-        'This is some sample data for testing purposes.',
-        'utf-8',
-      );
-      const data = new Uint8Array(testBuffer);
       if (tx.id !== undefined) {
-        const cid = await addToIPFS(data);
-	log.info(`Data for TX ${tx.id} added to IPFS with CID: ${cid}`);
-	if (cid !== undefined) {
-	   storeMapping(tx.id, cid);
-           log.info(`Data for TX ${tx.id} mapped with CID: ${cid}`);
-	} else {
-	  log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
-	}
+        const cid = await loadDataAndGenerateCid(tx.id);
+        log.info(`Data for TX ${tx.id} added to IPFS with CID: ${cid}`);
+        if (cid !== undefined) {
+          storeMapping(tx.id, cid);
+          log.info(`Data for TX ${tx.id} mapped with CID: ${cid}`);
+        } else {
+          log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+        }
       } else {
         log.error('Transaction ID is undefined. Cannot add to IPFS.');
       }
@@ -319,23 +335,15 @@ eventEmitter.on(
       );
       try {
         // get the data then hash it
-        // todo: get data
-        const testBuffer = Buffer.from(
-          'This is some sample data for testing purposes.',
-          'utf-8',
-        );
-        const data = new Uint8Array(testBuffer);
         if (item.id !== undefined) {
-          const cid = await addToIPFS(data);
-          log.info(
-            `Data Item ${item.id} added to IPFS with CID: ${cid}`,
-          );
-	  if (cid !== undefined) {
+          const cid = await loadDataAndGenerateCid(item.id);
+          log.info(`Data Item ${item.id} added to IPFS with CID: ${cid}`);
+          if (cid !== undefined) {
             storeMapping(item.id, cid);
             log.info(`Data Item ${item.id} mapped with CID: ${cid}`);
-	  } else {
-	    log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
-	  }
+          } else {
+            log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+          }
         } else {
           log.error('Data Item ID is undefined. Cannot add to IPFS.');
         }
