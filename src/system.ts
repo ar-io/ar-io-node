@@ -163,9 +163,6 @@ export async function loadDataAndGenerateCid(txId: string): Promise<string> {
             content: source,
           },
         ])) {
-          log.info(
-            `Generated CID for transaction ID ${txId}: ${entry.cid.toString()}`,
-          );
           resolve(entry.cid.toString());
           return;
         }
@@ -317,14 +314,12 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
         const cid = await loadDataAndGenerateCid(tx.id);
         if (cid !== undefined) {
           storeIpfsMappings(tx.id, cid);
-          log.info(
-            `Data for TX ${tx.id} added to IPFS and mapped with CID: ${cid}`,
-          );
+          log.info(`TX ${tx.id} added to IPFS and mapped with CID: ${cid}`);
         } else {
-          log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+          log.error('TX CID is undefined. Cannot add to IPFS/TXID  Mapping.');
         }
       } else {
-        log.error('Transaction ID is undefined. Cannot add to IPFS.');
+        log.error('TX ID is undefined. Cannot add to IPFS.');
       }
     } catch (error) {
       log.error(`Error adding data for TX ${tx.id} to IPFS: `, error);
@@ -353,17 +348,19 @@ eventEmitter.on(
             storeIpfsMappings(item.id, cid);
             // TO DO: UPDATE METRICS
             log.info(
-              `Data Item ${item.id} added to IPFS and mapped with CID: ${cid}`,
+              `ANS104 Data Item ${item.id} added to IPFS and mapped with CID: ${cid}`,
             );
           } else {
-            log.error('CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+            log.error(
+              'ANS104 Data Item CID is undefined. Cannot add to IPFS/TXID  Mapping.',
+            );
           }
         } else {
-          log.error('Data Item ID is undefined. Cannot add to IPFS.');
+          log.error('ANS104 Data Item ID is undefined. Cannot add to IPFS.');
         }
       } catch (error) {
         log.error(
-          `Error adding data for Data Item ${item.id} to IPFS: `,
+          `Error adding data for ANS104 Data Item ${item.id} to IPFS: `,
           error,
         );
       }
