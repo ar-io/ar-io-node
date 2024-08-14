@@ -24,6 +24,7 @@ import {
   heliaFs,
   helia,
 } from '../system.js';
+import { base32 } from 'multiformats/bases/base32';
 import { car } from '@helia/car';
 import mime from 'mime';
 
@@ -33,8 +34,23 @@ export const ipfsRouter = Router();
 ipfsRouter.get('/ipfs/:cid', async (req, res) => {
   try {
     const { cid } = req.params;
-    const cidObject = CID.parse(cid);
-    console.log(`Received request for CID: ${cidObject.toString()}`);
+    let cidObject = CID.parse(cid);
+    try {
+      cidObject = CID.parse(cid);
+    } catch (error) {
+      console.error(`Invalid CID: ${cid}`);
+      res.status(400).send(`Invalid CID: ${cid}`);
+      return;
+    }
+
+    // Convert Base58 CID to Base32 if needed
+    if (cidObject.version === 0 || cid.startsWith('Qm')) {
+      const base32Cid = cidObject.toV1().toString(base32);
+      console.log(`Converted Base58 CID to Base32: ${base32Cid}`);
+      cidObject = CID.parse(base32Cid);
+    }
+
+    console.log(`Parsed and possibly converted CID: ${cidObject.toString()}`);
 
     const txId = getTxIdByCid(cidObject.toString());
 
