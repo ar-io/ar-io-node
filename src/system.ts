@@ -155,9 +155,13 @@ export async function handleIpfsCarFile(txId: string): Promise<string> {
         const reader = await CarReader.fromIterable(data.stream);
 
         // Import the CAR file into Helia
-        const roots = await car.import(helia, reader);
+        const c = car(helia); // Create the car instance using Helia
+        await c.import(reader);
 
-        // Assuming you want to return the root CID (first root)
+        // Get the root CIDs from the reader
+        const roots = await reader.getRoots();
+
+        // Assuming you want to return the first root CID
         if (roots.length > 0) {
           const rootCid = roots[0].toString();
           resolve(rootCid);
