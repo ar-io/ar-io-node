@@ -418,7 +418,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
           }
         } else {
           // If not, load the data, generate a CID and store it
-          const cid = await loadDataAndGenerateCid(tx.id);
+          const cid = await loadDataAndGenerateCid(tx.id, ipfsTagValue);
           if (cid !== undefined) {
             storeIpfsMappings(tx.id, cid);
             log.info(`TX ${tx.id} added to IPFS and mapped with CID: ${cid}`);
@@ -468,7 +468,7 @@ eventEmitter.on(
           );
           if (isIpfsCar) {
             // Handle storing IPFS car file
-            const cid = await handleIpfsCarFile(item.id);
+            const cid = await handleIpfsCarFile(item.id, ipfsTagValue);
             if (cid !== undefined) {
               storeIpfsMappings(item.id, cid);
               log.info(
@@ -481,7 +481,7 @@ eventEmitter.on(
             }
           } else {
             // If not, load the data, generate a CID and store it
-            const cid = await loadDataAndGenerateCid(item.id);
+            const cid = await loadDataAndGenerateCid(item.id, ipfsTagValue);
             if (cid !== undefined) {
               storeIpfsMappings(item.id, cid);
               log.info(
