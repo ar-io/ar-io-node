@@ -106,7 +106,7 @@ if (fs.existsSync(txIdToCidFilePath)) {
 const cidToTxIdMapFilePath = 'data/ipfs/cidToTxIdMap.json';
 let cidToTxIdMap: Record<string, string[]> = {};
 if (fs.existsSync(cidToTxIdMapFilePath)) {
-  const data = fs.readFileSync(txIdToCidFilePath, 'utf-8');
+  const data = fs.readFileSync(cidToTxIdMapFilePath, 'utf-8');
   cidToTxIdMap = JSON.parse(data);
 }
 
