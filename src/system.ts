@@ -162,10 +162,7 @@ export function isBase58CID(cidStr: string): boolean {
 }
 
 // Helper function to load a car file as contiguous data, and import into Helia IPFS
-export async function handleIpfsCarFile(
-  txId: string,
-  ipfsTagValue?: string,
-): Promise<string> {
+export async function handleIpfsCarFile(txId: string): Promise<string> {
   try {
     const data = await contiguousDataSource.getData({ id: txId });
 
@@ -182,15 +179,7 @@ export async function handleIpfsCarFile(
 
         // Assuming you want to return the first root CID
         if (roots.length > 0) {
-          let rootCid = roots[0].toString();
-
-          // Convert to Base58 if necessary
-          if (
-            CID.parse(rootCid).version === 1 ||
-            (ipfsTagValue !== undefined && isBase58CID(ipfsTagValue))
-          ) {
-            rootCid = CID.parse(rootCid).toV0().toString(base58btc);
-          }
+          const rootCid = roots[0].toString();
 
           resolve(rootCid);
           return;
@@ -232,14 +221,14 @@ export async function loadDataAndGenerateCid(
           },
         ])) {
           let cid = entry.cid.toString();
+          console.log('IPFS TAG VALUE IS: ', ipfsTagValue);
+          console.log('IPFS CID BEFORE IS: ', cid);
 
           // Convert to Base58 if necessary
-          if (
-            CID.parse(cid).version === 1 ||
-            (ipfsTagValue !== undefined && isBase58CID(ipfsTagValue))
-          ) {
+          if (ipfsTagValue !== undefined && isBase58CID(ipfsTagValue)) {
             cid = CID.parse(cid).toV0().toString(base58btc);
           }
+          console.log('IPFS CID AFTER IS: ', cid);
 
           resolve(cid);
           return;
@@ -449,15 +438,6 @@ eventEmitter.on(
   async (item: MatchableItem) => {
     if (await ipfsItemFilter.match(item)) {
       try {
-        // Extract the IPFS-Add or IPFS-CID tag value if it exists
-        let ipfsTagValue: string | undefined;
-        for (const tag of item.tags) {
-          const tagName = b64UrlToUtf8(tag.name);
-          if (tagName === 'IPFS-Add' || tagName === 'IPFS-CID') {
-            ipfsTagValue = b64UrlToUtf8(tag.value);
-            break;
-          }
-        }
         // get the data then hash it
         if (item.id !== undefined) {
           // check if its already an IPFS CAR content type
@@ -468,7 +448,7 @@ eventEmitter.on(
           );
           if (isIpfsCar) {
             // Handle storing IPFS car file
-            const cid = await handleIpfsCarFile(item.id, ipfsTagValue);
+            const cid = await handleIpfsCarFile(item.id);
             if (cid !== undefined) {
               storeIpfsMappings(item.id, cid);
               log.info(
@@ -480,7 +460,16 @@ eventEmitter.on(
               );
             }
           } else {
-            // If not, load the data, generate a CID and store it
+            // Extract the IPFS-Add or IPFS-CID tag value if it exists
+            let ipfsTagValue: string | undefined;
+            for (const tag of item.tags) {
+              const tagName = b64UrlToUtf8(tag.name);
+              if (tagName === 'IPFS-Add' || tagName === 'IPFS-CID') {
+                ipfsTagValue = b64UrlToUtf8(tag.value);
+                break;
+              }
+            }
+            // load the data, generate a CID and store it
             const cid = await loadDataAndGenerateCid(item.id, ipfsTagValue);
             if (cid !== undefined) {
               storeIpfsMappings(item.id, cid);
