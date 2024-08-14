@@ -405,7 +405,7 @@ eventEmitter.on(
           const isIpfsCar = item.tags.some(
             (tag) =>
               tag.name === 'Content-Type' ||
-              tag.name === 'application/vnd.ipld.car',
+              tag.value === 'application/vnd.ipld.car',
           );
           if (isIpfsCar) {
             // Handle storing IPFS car file
