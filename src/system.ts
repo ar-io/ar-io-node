@@ -375,15 +375,6 @@ export const prioritizedTxIds = new Set<string>();
 eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
   if (await ipfsItemFilter.match(tx)) {
     try {
-      // Extract the IPFS-Add or IPFS-CID tag value if it exists
-      let ipfsTagValue: string | undefined;
-      for (const tag of tx.tags) {
-        const tagName = b64UrlToUtf8(tag.name);
-        if (tagName === 'IPFS-Add' || tagName === 'IPFS-CID') {
-          ipfsTagValue = b64UrlToUtf8(tag.value);
-          break;
-        }
-      }
       // get the data then hash it
       if (tx.id !== undefined) {
         // check if its already an IPFS CAR content type
@@ -394,7 +385,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
         );
         if (isIpfsCar) {
           // Handle storing IPFS car file
-          const cid = await handleIpfsCarFile(tx.id, ipfsTagValue);
+          const cid = await handleIpfsCarFile(tx.id);
           if (cid !== undefined) {
             storeIpfsMappings(tx.id, cid);
             log.info(
@@ -406,7 +397,16 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
             );
           }
         } else {
-          // If not, load the data, generate a CID and store it
+          // Extract the IPFS-Add or IPFS-CID tag value if it exists
+          let ipfsTagValue: string | undefined;
+          for (const tag of tx.tags) {
+            const tagName = b64UrlToUtf8(tag.name);
+            if (tagName === 'IPFS-Add' || tagName === 'IPFS-CID') {
+              ipfsTagValue = b64UrlToUtf8(tag.value);
+              break;
+            }
+          }
+          // Load the data, generate a CID and store it
           const cid = await loadDataAndGenerateCid(tx.id, ipfsTagValue);
           if (cid !== undefined) {
             storeIpfsMappings(tx.id, cid);
