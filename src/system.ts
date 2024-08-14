@@ -198,10 +198,7 @@ export async function handleIpfsCarFile(txId: string): Promise<string> {
 }
 
 // Helper function to load contiguous data, generate CID, and import into Helia IPFS
-export async function loadDataAndGenerateCid(
-  txId: string,
-  ipfsTagValue?: string,
-): Promise<string> {
+export async function loadDataAndGenerateCid(txId: string): Promise<string> {
   try {
     const data = await contiguousDataSource.getData({ id: txId });
 
@@ -220,15 +217,7 @@ export async function loadDataAndGenerateCid(
             content: source,
           },
         ])) {
-          let cid = entry.cid.toString();
-          console.log('IPFS TAG VALUE IS: ', ipfsTagValue);
-          console.log('IPFS CID BEFORE IS: ', cid);
-
-          // Convert to Base58 if necessary
-          if (ipfsTagValue !== undefined && isBase58CID(ipfsTagValue)) {
-            cid = CID.parse(cid).toV0().toString(base58btc);
-          }
-          console.log('IPFS CID AFTER IS: ', cid);
+          const cid = entry.cid.toString();
 
           resolve(cid);
           return;
@@ -397,17 +386,8 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
             );
           }
         } else {
-          // Extract the IPFS-Add or IPFS-CID tag value if it exists
-          let ipfsTagValue: string | undefined;
-          for (const tag of tx.tags) {
-            const tagName = b64UrlToUtf8(tag.name);
-            if (tagName === 'IPFS-Add' || tagName === 'IPFS-CID') {
-              ipfsTagValue = b64UrlToUtf8(tag.value);
-              break;
-            }
-          }
           // Load the data, generate a CID and store it
-          const cid = await loadDataAndGenerateCid(tx.id, ipfsTagValue);
+          const cid = await loadDataAndGenerateCid(tx.id);
           if (cid !== undefined) {
             storeIpfsMappings(tx.id, cid);
             log.info(`TX ${tx.id} added to IPFS and mapped with CID: ${cid}`);
@@ -460,17 +440,8 @@ eventEmitter.on(
               );
             }
           } else {
-            // Extract the IPFS-Add or IPFS-CID tag value if it exists
-            let ipfsTagValue: string | undefined;
-            for (const tag of item.tags) {
-              const tagName = b64UrlToUtf8(tag.name);
-              if (tagName === 'IPFS-Add' || tagName === 'IPFS-CID') {
-                ipfsTagValue = b64UrlToUtf8(tag.value);
-                break;
-              }
-            }
             // load the data, generate a CID and store it
-            const cid = await loadDataAndGenerateCid(item.id, ipfsTagValue);
+            const cid = await loadDataAndGenerateCid(item.id);
             if (cid !== undefined) {
               storeIpfsMappings(item.id, cid);
               log.info(
