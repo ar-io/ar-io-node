@@ -89,6 +89,7 @@ import { unixfs } from '@helia/unixfs';
 import { car } from '@helia/car';
 import { FsBlockstore } from 'blockstore-fs';
 import { CarReader } from '@ipld/car';
+import { b64UrlToUtf8 } from './lib/encoding.js';
 const blockstore = new FsBlockstore(`data/helia-ipfs`);
 
 export const helia = await createHelia({
@@ -350,8 +351,8 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
         // check if its already an IPFS CAR content type
         const isIpfsCar = tx.tags.some(
           (tag) =>
-            tag.name === 'Content-Type' ||
-            tag.name === 'application/vnd.ipld.car',
+            b64UrlToUtf8(tag.name) === 'Content-Type' &&
+            b64UrlToUtf8(tag.value) === 'application/vnd.ipld.car',
         );
         if (isIpfsCar) {
           // Handle storing IPFS car file
@@ -404,8 +405,8 @@ eventEmitter.on(
           // check if its already an IPFS CAR content type
           const isIpfsCar = item.tags.some(
             (tag) =>
-              tag.name === 'Content-Type' &&
-              tag.value === 'application/vnd.ipld.car',
+              b64UrlToUtf8(tag.name) === 'Content-Type' &&
+              b64UrlToUtf8(tag.value) === 'application/vnd.ipld.car',
           );
           if (isIpfsCar) {
             // Handle storing IPFS car file
