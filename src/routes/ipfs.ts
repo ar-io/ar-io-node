@@ -18,7 +18,13 @@
 import { Router } from 'express';
 import { CID } from 'multiformats/cid';
 import { ContiguousDataAttributes } from '../types';
-import { contiguousDataIndex, getTxIdByCid, heliaFs } from '../system.js';
+import {
+  contiguousDataIndex,
+  getTxIdByCid,
+  heliaFs,
+  helia,
+} from '../system.js';
+import { car } from '@helia/car';
 
 export const ipfsRouter = Router();
 
@@ -52,17 +58,45 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
       dataAttributes?.contentType ?? 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
 
-    // Retrieve data from IPFS as an async iterable
-    const fileStream = heliaFs.cat(cidObject);
-    console.log(`Fetching data for CID: ${cidObject.toString()}`);
+    // If the content type is CAR, handle it differently
+    if (contentType === 'application/vnd.ipld.car') {
+      const c = car(helia);
 
-    for await (const chunk of fileStream) {
-      console.log(`Writing chunk of data for CID: ${cidObject.toString()}`);
-      res.write(chunk);
+      try {
+        const carStream = c.stream(cidObject);
+
+        for await (const chunk of carStream) {
+          console.log(`Writing CAR chunk for CID: ${cidObject.toString()}`);
+          res.write(chunk);
+        }
+
+        console.log(
+          `Finished writing CAR data for CID: ${cidObject.toString()}`,
+        );
+        res.end();
+      } catch (error) {
+        console.error(
+          `Error streaming CAR file from IPFS: ${(error as Error).message}`,
+        );
+        res
+          .status(500)
+          .send(
+            `Error streaming CAR file from IPFS: ${(error as Error).message}`,
+          );
+      }
+    } else {
+      // Retrieve data from IPFS as an async iterable for non-CAR files
+      const fileStream = heliaFs.cat(cidObject);
+      console.log(`Fetching data for CID: ${cidObject.toString()}`);
+
+      for await (const chunk of fileStream) {
+        console.log(`Writing chunk of data for CID: ${cidObject.toString()}`);
+        res.write(chunk);
+      }
+
+      console.log(`Finished writing data for CID: ${cidObject.toString()}`);
+      res.end();
     }
-
-    console.log(`Finished writing data for CID: ${cidObject.toString()}`);
-    res.end();
   } catch (error) {
     console.error(`Error retrieving IPFS data: ${(error as Error).message}`);
     res
