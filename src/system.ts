@@ -86,7 +86,9 @@ const arweave = Arweave.init({});
 // IPFS via Helia
 import { createHelia } from 'helia';
 import { unixfs } from '@helia/unixfs';
+import { car } from '@helia/car';
 import { FsBlockstore } from 'blockstore-fs';
+import { CarReader } from '@ipld/car';
 const blockstore = new FsBlockstore(`data/helia-ipfs`);
 
 export const helia = await createHelia({
@@ -143,7 +145,38 @@ export function getTxIdByCid(cid: string): string | undefined {
   return undefined;
 }
 
-// Helper function to load data from disk and generate CID
+// Helper function to load a car file as contiguous data, and import into Helia IPFS
+export async function handleIpfsCarFile(txId: string): Promise<string> {
+  try {
+    const data = await contiguousDataSource.getData({ id: txId });
+
+    return new Promise(async (resolve, reject) => {
+      try {
+        const reader = await CarReader.fromIterable(data.stream);
+
+        // Import the CAR file into Helia
+        const roots = await car.import(helia, reader);
+
+        // Assuming you want to return the root CID (first root)
+        if (roots.length > 0) {
+          const rootCid = roots[0].toString();
+          resolve(rootCid);
+          return;
+        } else {
+          reject(new Error('No roots found in CAR file.'));
+        }
+      } catch (error) {
+        log.error('Error importing CAR file to IPFS:', error);
+        reject(error);
+      }
+    });
+  } catch (error) {
+    log.error(`Error handling CAR file for transaction ID ${txId}:`, error);
+    throw error;
+  }
+}
+
+// Helper function to load contiguous data, generate CID, and import into Helia IPFS
 export async function loadDataAndGenerateCid(txId: string): Promise<string> {
   try {
     const data = await contiguousDataSource.getData({ id: txId });
@@ -301,7 +334,6 @@ const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Version', valueStartsWith: '2.' },
 ]);
 
-// const ipfsTxMatcher = new MatchTags(JSON.parse(process.env.IPFS_ADD_FILTER || '{}')
 const ipfsItemFilter = config.IPFS_ADD_FILTER;
 
 export const prioritizedTxIds = new Set<string>();
@@ -311,15 +343,37 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
     try {
       // get the data then hash it
       if (tx.id !== undefined) {
-        const cid = await loadDataAndGenerateCid(tx.id);
-        if (cid !== undefined) {
-          storeIpfsMappings(tx.id, cid);
-          log.info(`TX ${tx.id} added to IPFS and mapped with CID: ${cid}`);
+        // check if its already an IPFS CAR content type
+        const isIpfsCar = tx.tags.some(
+          (tag) =>
+            tag.name === 'Content-Type' ||
+            tag.name === 'application/vnd.ipld.car',
+        );
+        if (isIpfsCar) {
+          // Handle storing IPFS car file
+          const cid = await handleIpfsCarFile(tx.id);
+          if (cid !== undefined) {
+            storeIpfsMappings(tx.id, cid);
+            log.info(
+              `TX ${tx.id} added to IPFS as CAR and mapped with CID: ${cid}`,
+            );
+          } else {
+            log.error(
+              'TX CID is undefined. Cannot add CAR to IPFS/TXID Mapping.',
+            );
+          }
         } else {
-          log.error('TX CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+          // If not, load the data, generate a CID and store it
+          const cid = await loadDataAndGenerateCid(tx.id);
+          if (cid !== undefined) {
+            storeIpfsMappings(tx.id, cid);
+            log.info(`TX ${tx.id} added to IPFS and mapped with CID: ${cid}`);
+          } else {
+            log.error('TX CID is undefined. Cannot add to IPFS/TXID  Mapping.');
+          }
         }
       } else {
-        log.error('TX ID is undefined. Cannot add to IPFS.');
+        log.error('TX ID is undefined. Cannot map and add to IPFS.');
       }
     } catch (error) {
       log.error(`Error adding data for TX ${tx.id} to IPFS: `, error);
@@ -343,17 +397,38 @@ eventEmitter.on(
       try {
         // get the data then hash it
         if (item.id !== undefined) {
-          const cid = await loadDataAndGenerateCid(item.id);
-          if (cid !== undefined) {
-            storeIpfsMappings(item.id, cid);
-            // TO DO: UPDATE METRICS
-            log.info(
-              `ANS104 Data Item ${item.id} added to IPFS and mapped with CID: ${cid}`,
-            );
+          // check if its already an IPFS CAR content type
+          const isIpfsCar = item.tags.some(
+            (tag) =>
+              tag.name === 'Content-Type' ||
+              tag.name === 'application/vnd.ipld.car',
+          );
+          if (isIpfsCar) {
+            // Handle storing IPFS car file
+            const cid = await handleIpfsCarFile(item.id);
+            if (cid !== undefined) {
+              storeIpfsMappings(item.id, cid);
+              log.info(
+                `Data Item ${item.id} added to IPFS as CAR and mapped with CID: ${cid}`,
+              );
+            } else {
+              log.error(
+                'Data Item CID is undefined. Cannot add CAR to IPFS/TXID Mapping.',
+              );
+            }
           } else {
-            log.error(
-              'ANS104 Data Item CID is undefined. Cannot add to IPFS/TXID  Mapping.',
-            );
+            // If not, load the data, generate a CID and store it
+            const cid = await loadDataAndGenerateCid(item.id);
+            if (cid !== undefined) {
+              storeIpfsMappings(item.id, cid);
+              log.info(
+                `ANS104 Data Item ${item.id} added to IPFS and mapped with CID: ${cid}`,
+              );
+            } else {
+              log.error(
+                'ANS104 Data Item CID is undefined. Cannot add to IPFS/TXID  Mapping.',
+              );
+            }
           }
         } else {
           log.error('ANS104 Data Item ID is undefined. Cannot add to IPFS.');
