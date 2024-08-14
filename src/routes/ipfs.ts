@@ -33,26 +33,16 @@ export const ipfsRouter = Router();
 ipfsRouter.get('/ipfs/:cid', async (req, res) => {
   try {
     const { cid } = req.params;
-    console.log(`Received request for CID: ${cid}`);
-
     const cidObject = CID.parse(cid);
-    console.log(`Parsed CID: ${cidObject.toString()}`);
+    console.log(`Received request for CID: ${cidObject.toString()}`);
 
     const txId = getTxIdByCid(cidObject.toString());
 
-    // Retrieve authoritative data attributes if they're available
+    // Retrieve the CID and authoritative data attributes by transaction ID if they're available  and set it in the response header
     let dataAttributes: ContiguousDataAttributes | undefined;
-    try {
-      if (txId !== undefined) {
-        dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
-      }
-    } catch (error: any) {
-      console.log('Error retrieving data attributes for CID:', {
-        cid: cidObject.toString(),
-        dataId: txId,
-        message: error.message,
-        stack: error.stack,
-      });
+    if (txId !== undefined) {
+      res.setHeader('X-Arweave-Id', txId);
+      dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
     }
 
     // Check if the file is cached and has not been modified
@@ -62,16 +52,17 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
 
     const contentType =
       dataAttributes?.contentType ?? 'application/octet-stream';
-    res.setHeader('Content-Type', contentType);
-
     const fileExtension = mime.extension(contentType);
 
     let filename = cid;
     if (typeof fileExtension === 'string' && fileExtension !== '') {
       filename += `.${fileExtension}`;
+    } else if (contentType === 'application/vnd.ipld.car') {
+      filename += `.car`;
     }
 
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Type', contentType);
 
     // If the content type is CAR, handle it differently
     if (contentType === 'application/vnd.ipld.car') {
