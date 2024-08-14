@@ -404,7 +404,7 @@ eventEmitter.on(
           // check if its already an IPFS CAR content type
           const isIpfsCar = item.tags.some(
             (tag) =>
-              tag.name === 'Content-Type' ||
+              tag.name === 'Content-Type' &&
               tag.value === 'application/vnd.ipld.car',
           );
           if (isIpfsCar) {
