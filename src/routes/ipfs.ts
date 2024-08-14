@@ -25,6 +25,7 @@ import {
   helia,
 } from '../system.js';
 import { car } from '@helia/car';
+import mime from 'mime';
 
 export const ipfsRouter = Router();
 
@@ -54,9 +55,23 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
       });
     }
 
+    // Check if the file is cached and has not been modified
+    const etag = `"${cidObject.toString()}"`;
+    res.header('etag', etag);
+    res.header('Cache-Control', 'public, max-age=29030400, immutable');
+
     const contentType =
       dataAttributes?.contentType ?? 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
+
+    const fileExtension = mime.extension(contentType);
+
+    let filename = cid;
+    if (typeof fileExtension === 'string' && fileExtension !== '') {
+      filename += `.${fileExtension}`;
+    }
+
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
 
     // If the content type is CAR, handle it differently
     if (contentType === 'application/vnd.ipld.car') {
