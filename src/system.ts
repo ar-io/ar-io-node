@@ -148,19 +148,6 @@ export function getTxIdByCid(cid: string): string | undefined {
   return undefined;
 }
 
-export function isBase58CID(cidStr: string): boolean {
-  try {
-    // Try to parse the string as a CID
-    const cid = CID.parse(cidStr, base58btc);
-
-    // Check if the CID is using base58btc encoding and is version 0
-    return cid.toString(base58btc) === cidStr && cid.version === 0;
-  } catch (err) {
-    // If parsing fails, it's not a valid Base58 CID
-    return false;
-  }
-}
-
 // Helper function to load a car file as contiguous data, and import into Helia IPFS
 export async function handleIpfsCarFile(txId: string): Promise<string> {
   try {
