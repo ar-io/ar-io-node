@@ -18,12 +18,7 @@
 import { Router } from 'express';
 import { CID } from 'multiformats/cid';
 import { ContiguousDataAttributes } from '../types';
-import {
-  contiguousDataIndex,
-  getTxIdByCid,
-  heliaFs,
-  helia,
-} from '../system.js';
+import { contiguousDataIndex, heliaFs, helia } from '../system.js';
 import { base32 } from 'multiformats/bases/base32';
 import { car } from '@helia/car';
 import mime from 'mime';
