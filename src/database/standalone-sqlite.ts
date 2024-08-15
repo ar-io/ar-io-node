@@ -1098,7 +1098,6 @@ export class StandaloneSqliteDatabaseWorker {
   saveDataContentAttributes({
     id,
     dataRoot,
-    cid,
     hash,
     dataSize,
     contentType,
@@ -1106,7 +1105,6 @@ export class StandaloneSqliteDatabaseWorker {
   }: {
     id: string;
     dataRoot?: string;
-    cid?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
@@ -1130,14 +1128,6 @@ export class StandaloneSqliteDatabaseWorker {
         data_root: fromB64Url(dataRoot),
         contiguous_data_hash: hashBuffer,
         indexed_at: currentUnixTimestamp(),
-      });
-    }
-    if (cid !== undefined) {
-      this.stmts.data.insertCid.run({
-        hash: hashBuffer,
-        cid: cid,
-        indexed_at: currentUnixTimestamp(),
-        cached_at: cachedAt,
       });
     }
   }
@@ -2746,14 +2736,12 @@ export class StandaloneSqliteDatabase
   saveDataContentAttributes({
     id,
     dataRoot,
-    cid,
     hash,
     dataSize,
     contentType,
   }: {
     id: string;
     dataRoot?: string;
-    cid?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
@@ -2762,7 +2750,6 @@ export class StandaloneSqliteDatabase
       {
         id,
         dataRoot,
-        cid,
         hash,
         dataSize,
         contentType,

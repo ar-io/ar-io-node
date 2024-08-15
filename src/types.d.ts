@@ -537,7 +537,6 @@ export interface ContiguousDataIndex {
   saveDataContentAttributes({
     id,
     dataRoot,
-    cid,
     hash,
     dataSize,
     contentType,
@@ -545,7 +544,6 @@ export interface ContiguousDataIndex {
   }: {
     id: string;
     dataRoot?: string;
-    cid?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
