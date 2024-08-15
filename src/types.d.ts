@@ -526,11 +526,13 @@ export interface ContiguousDataIndex {
   saveDataContentCid({
     hash,
     cid,
+    dataSize,
     contentType,
     cachedAt,
   }: {
     hash: string;
     cid: string;
+    dataSize: number;
     contentType?: string;
     cachedAt?: number;
   }): Promise<void>;

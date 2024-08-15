@@ -1135,10 +1135,12 @@ export class StandaloneSqliteDatabaseWorker {
   saveDataContentCid({
     hash,
     cid,
+    dataSize,
     cachedAt,
   }: {
     hash: string;
     cid: string;
+    dataSize: number;
     contentType?: string;
     cachedAt?: number;
   }) {
@@ -1146,6 +1148,7 @@ export class StandaloneSqliteDatabaseWorker {
     this.stmts.data.insertDataCid.run({
       hash: hashBuffer,
       cid: cid,
+      data_size: dataSize,
       indexed_at: currentUnixTimestamp(),
       cached_at: cachedAt,
     });
@@ -2757,11 +2760,20 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
-  saveDataContentCid({ hash, cid }: { hash: string; cid: string }) {
+  saveDataContentCid({
+    hash,
+    cid,
+    dataSize,
+  }: {
+    hash: string;
+    cid: string;
+    dataSize: number;
+  }) {
     return this.queueWrite('data', 'saveDataContentCid', [
       {
         hash,
         cid,
+        dataSize,
       },
     ]);
   }

@@ -138,6 +138,7 @@ export async function saveIpfsHash(txId: string, cid: string): Promise<void> {
     contiguousDataIndex.saveDataContentCid({
       hash: dataAttributes.hash,
       cid,
+      dataSize: dataAttributes.size,
     });
   }
 }
