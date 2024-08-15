@@ -25,16 +25,13 @@ import mime from 'mime';
 
 export const ipfsRouter = Router();
 
-// Fetch IPFS data via CID
-ipfsRouter.get('/ipfs/:cid', async (req, res) => {
+export async function handleIpfsRequest(req: any, res: any, cid: string) {
   try {
-    const { cid } = req.params;
     let cidObject: CID;
-
     try {
       cidObject = CID.parse(cid);
       // Convert Base58 CID to Base32 if needed
-      if (cidObject.version === 0 || cid.startsWith('Qm')) {
+      if (cidObject.version === 0) {
         cidObject = cidObject.toV1();
         console.log(`Converted Base58 CID to Base32: ${cidObject.toString()}`);
       }
@@ -102,6 +99,12 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
       .status(500)
       .send(`Error retrieving IPFS data: ${(error as Error).message}`);
   }
+}
+
+// Fetch IPFS data via CID
+ipfsRouter.get('/ipfs/:cid', async (req, res) => {
+  const { cid } = req.params;
+  await handleIpfsRequest(req, res, cid);
 });
 
 async function handleRangeRequest(
