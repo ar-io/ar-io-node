@@ -969,6 +969,24 @@ export class StandaloneSqliteDatabaseWorker {
     };
   }
 
+  getCidTxId(cid: string) {
+    const dataRow = this.stmts.data.selectDataAttributes.get({
+      cid: cid,
+    });
+
+    const coreRow = this.stmts.core.selectDataAttributes.get({
+      id: dataRow.id,
+    });
+
+    if (coreRow === undefined && dataRow === undefined) {
+      return undefined;
+    }
+
+    return {
+      txid: dataRow.id,
+    };
+  }
+
   getDataItemAttributes(id: string) {
     const row = this.stmts.bundles.selectDataItemAttributes.get({
       id: fromB64Url(id),

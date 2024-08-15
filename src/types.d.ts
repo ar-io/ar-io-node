@@ -521,6 +521,7 @@ export interface ContiguousDataParent {
 
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
+  getCidTxId(cid: string): Promise<string | undefined>;
   getDataItemAttributes(id: string): Promise<DataItemAttributes | undefined>;
   getDataParent(id: string): Promise<ContiguousDataParent | undefined>;
   saveDataContentCid({

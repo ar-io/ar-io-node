@@ -57,10 +57,11 @@ SELECT
   cd.original_source_content_type,
   cd.cid,
   cdi.verified
+  cdi.id
 FROM contiguous_data cd
 LEFT JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
 LEFT JOIN data_roots dr ON dr.contiguous_data_hash = cd.hash
-WHERE cdi.id = :id OR dr.data_root = :data_root
+WHERE cdi.id = :id OR dr.data_root = :data_root OR cdi.cid = :cid
 LIMIT 1
 
 -- selectDataParent

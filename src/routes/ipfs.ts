@@ -52,7 +52,7 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
 
     console.log(`Parsed and possibly converted CID: ${cidObject.toString()}`);
 
-    const txId = getTxIdByCid(cidObject.toString());
+    const txId = await contiguousDataIndex.getCidTxId(cidObject.toString());
 
     // Retrieve the CID and authoritative data attributes by transaction ID if they're available  and set it in the response header
     let dataAttributes: ContiguousDataAttributes | undefined;
