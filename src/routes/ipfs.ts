@@ -55,8 +55,6 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
       console.log(txId);
       res.setHeader('X-Arweave-Id', txId);
       dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
-    } else {
-      console.log('No TX ID Defined!');
     }
 
     // Check if the file is cached and has not been modified
@@ -84,9 +82,8 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
 
       try {
         const carStream = c.stream(cidObject);
-
         for await (const chunk of carStream) {
-          console.log(`Writing CAR chunk for CID: ${cidObject.toString()}`);
+          // console.log(`Writing CAR chunk for CID: ${cidObject.toString()}`);
           res.write(chunk);
         }
 
@@ -107,10 +104,10 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
     } else {
       // Retrieve data from IPFS as an async iterable for non-CAR files
       const fileStream = heliaFs.cat(cidObject);
-      console.log(`Fetching data for CID: ${cidObject.toString()}`);
+      // console.log(`Fetching data for CID: ${cidObject.toString()}`);
 
       for await (const chunk of fileStream) {
-        console.log(`Writing chunk of data for CID: ${cidObject.toString()}`);
+        // console.log(`Writing chunk of data for CID: ${cidObject.toString()}`);
         res.write(chunk);
       }
 
