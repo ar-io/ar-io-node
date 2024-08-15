@@ -17,6 +17,7 @@ INSERT INTO contiguous_data (
 INSERT OR REPLACE INTO contiguous_data (
   hash,
   cid,
+  data_size,
   indexed_at,
   cached_at
 ) VALUES (
