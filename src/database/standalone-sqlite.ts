@@ -944,7 +944,6 @@ export class StandaloneSqliteDatabaseWorker {
     const dataRow = this.stmts.data.selectDataAttributes.get({
       id: fromB64Url(id),
       data_root: coreRow?.data_root,
-      cid: undefined,
     });
 
     if (coreRow === undefined && dataRow === undefined) {
@@ -971,9 +970,7 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getCidTxId(cid: string) {
-    const dataRow = this.stmts.data.selectDataAttributes.get({
-      id: undefined,
-      data_root: undefined,
+    const dataRow = this.stmts.data.selectDataCidHash.get({
       cid: cid,
     });
 
