@@ -50,12 +50,13 @@ export const createArnsMiddleware = ({
       return;
     }
 
-    const subdomain = req.subdomains.join('.');
+    const subdomain = req.subdomains.reverse().join('.');
+    console.log('Subdomain is: ', subdomain);
 
     // Check if the subdomain matches the IPFS pattern (e.g., {cid}.ipfs.gatewayurl.com)
     if (subdomain.endsWith('.ipfs')) {
       const cidString = subdomain.slice(0, subdomain.length - 5); // Remove '.ipfs'
-
+      console.log('CID String is: ', cidString);
       try {
         console.log(`Received request for IPFS CID subdomain: ${cidString}`);
 
