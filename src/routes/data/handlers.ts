@@ -558,7 +558,7 @@ export const createDataHandler = ({
     // Retrieve the CID by transaction ID and set it in the response header
     try {
       if (id !== undefined) {
-        const cid = getCidByTxId(id);
+        const cid = await getCidByTxId(id);
         if (cid !== undefined) {
           // Convert the CID to a string
           const cidString = cid.toString();
