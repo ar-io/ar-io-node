@@ -19,7 +19,7 @@ import { Router } from 'express';
 import { CID } from 'multiformats/cid';
 import { ContiguousDataAttributes } from '../types';
 import { contiguousDataIndex, heliaFs, helia } from '../system.js';
-import { base32 } from 'multiformats/bases/base32';
+
 import { car } from '@helia/car';
 import mime from 'mime';
 
@@ -29,38 +29,29 @@ export const ipfsRouter = Router();
 ipfsRouter.get('/ipfs/:cid', async (req, res) => {
   try {
     const { cid } = req.params;
-    let cidObject = CID.parse(cid);
+    let cidObject: CID;
+
     try {
       cidObject = CID.parse(cid);
+      // Convert Base58 CID to Base32 if needed
+      if (cidObject.version === 0 || cid.startsWith('Qm')) {
+        cidObject = cidObject.toV1();
+        console.log(`Converted Base58 CID to Base32: ${cidObject.toString()}`);
+      }
     } catch (error) {
       console.error(`Invalid CID: ${cid}`);
       res.status(400).send(`Invalid CID: ${cid}`);
       return;
     }
 
-    // Convert Base58 CID to Base32 if needed
-    if (cidObject.version === 0 || cid.startsWith('Qm')) {
-      const base32Cid = cidObject.toV1().toString(base32);
-      console.log(`Converted Base58 CID to Base32: ${base32Cid}`);
-      cidObject = CID.parse(base32Cid);
-    }
-
-    console.log(`Parsed and possibly converted CID: ${cidObject.toString()}`);
-
     const txId = await contiguousDataIndex.getCidTxId(cidObject.toString());
 
-    // Retrieve the CID and authoritative data attributes by transaction ID if they're available  and set it in the response header
+    // Retrieve data attributes and set the response header
     let dataAttributes: ContiguousDataAttributes | undefined;
     if (txId !== undefined) {
-      console.log(txId);
       res.setHeader('X-Arweave-Id', txId);
       dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
     }
-
-    // Check if the file is cached and has not been modified
-    const etag = `"${cidObject.toString()}"`;
-    res.header('etag', etag);
-    res.header('Cache-Control', 'public, max-age=29030400, immutable');
 
     const contentType =
       dataAttributes?.contentType ?? 'application/octet-stream';
@@ -75,45 +66,36 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
 
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     res.setHeader('Content-Type', contentType);
+    res.header('etag', `"${cidObject.toString()}"`);
+    res.header('Cache-Control', 'public, max-age=29030400, immutable');
 
-    // If the content type is CAR, handle it differently
     if (contentType === 'application/vnd.ipld.car') {
-      const c = car(helia);
-
-      try {
-        const carStream = c.stream(cidObject);
-        for await (const chunk of carStream) {
-          // console.log(`Writing CAR chunk for CID: ${cidObject.toString()}`);
-          res.write(chunk);
-        }
-
-        console.log(
-          `Finished writing CAR data for CID: ${cidObject.toString()}`,
-        );
-        res.end();
-      } catch (error) {
-        console.error(
-          `Error streaming CAR file from IPFS: ${(error as Error).message}`,
-        );
-        res
-          .status(500)
-          .send(
-            `Error streaming CAR file from IPFS: ${(error as Error).message}`,
-          );
-      }
-    } else {
-      // Retrieve data from IPFS as an async iterable for non-CAR files
-      const fileStream = heliaFs.cat(cidObject);
-      // console.log(`Fetching data for CID: ${cidObject.toString()}`);
-
-      for await (const chunk of fileStream) {
-        // console.log(`Writing chunk of data for CID: ${cidObject.toString()}`);
-        res.write(chunk);
-      }
-
-      console.log(`Finished writing data for CID: ${cidObject.toString()}`);
-      res.end();
+      return await streamCarFile(helia, cidObject, res);
     }
+
+    const { fileSize } = await heliaFs.stat(cidObject);
+
+    const rangeHeader = req.headers.range;
+    if (rangeHeader !== undefined) {
+      return await handleRangeRequest(
+        heliaFs,
+        cidObject,
+        rangeHeader,
+        fileSize,
+        res,
+      );
+    }
+
+    // Stream the entire file
+    const fileStream = heliaFs.cat(cidObject);
+    res.header('Content-Length', fileSize.toString());
+
+    for await (const chunk of fileStream) {
+      res.write(chunk);
+    }
+
+    res.end();
+    console.log(`Finished writing data for CID: ${cidObject.toString()}`);
   } catch (error) {
     console.error(`Error retrieving IPFS data: ${(error as Error).message}`);
     res
@@ -121,5 +103,64 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
       .send(`Error retrieving IPFS data: ${(error as Error).message}`);
   }
 });
+
+async function handleRangeRequest(
+  heliaFs: any,
+  cidObject: CID,
+  rangeHeader: string,
+  fileSize: bigint,
+  res: any,
+) {
+  const ranges = rangeHeader.match(/bytes=(\d*)-(\d*)/);
+
+  if (!ranges) {
+    res.status(416).send('Invalid range header');
+    return;
+  }
+
+  const start = ranges[1] ? BigInt(parseInt(ranges[1], 10)) : 0n;
+  const end = ranges[2] ? BigInt(parseInt(ranges[2], 10)) : fileSize - 1n;
+
+  if (start >= fileSize || end >= fileSize) {
+    res.status(416).header('Content-Range', `bytes */${fileSize}`).end();
+    return;
+  }
+
+  res.status(206).header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+  res.header('Accept-Ranges', 'bytes');
+  res.header('Content-Length', (end - start + 1n).toString());
+
+  const fileStream = heliaFs.cat(cidObject, {
+    offset: Number(start),
+    length: Number(end - start + 1n),
+  });
+
+  for await (const chunk of fileStream) {
+    res.write(chunk);
+  }
+
+  res.end();
+}
+
+async function streamCarFile(helia: any, cidObject: CID, res: any) {
+  try {
+    const c = car(helia);
+    const carStream = c.stream(cidObject);
+
+    for await (const chunk of carStream) {
+      res.write(chunk);
+    }
+
+    res.end();
+    console.log(`Finished writing CAR data for CID: ${cidObject.toString()}`);
+  } catch (error) {
+    console.error(
+      `Error streaming CAR file from IPFS: ${(error as Error).message}`,
+    );
+    res
+      .status(500)
+      .send(`Error streaming CAR file from IPFS: ${(error as Error).message}`);
+  }
+}
 
 export default ipfsRouter;
