@@ -978,9 +978,7 @@ export class StandaloneSqliteDatabaseWorker {
       return undefined;
     }
 
-    return {
-      txid: toB64Url(dataRow.id),
-    };
+    return toB64Url(dataRow.id);
   }
 
   getDataItemAttributes(id: string) {
