@@ -23,6 +23,7 @@ INSERT OR REPLACE INTO contiguous_data (
 ) VALUES (
   :hash,
   :cid,
+  :data_size,
   :indexed_at,
   :cached_at
 )
