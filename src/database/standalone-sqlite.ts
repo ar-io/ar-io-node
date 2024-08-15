@@ -2434,6 +2434,10 @@ export class StandaloneSqliteDatabase
     Parameters<StandaloneSqliteDatabase['getDataAttributes']>,
     Awaited<ReturnType<StandaloneSqliteDatabase['getDataAttributes']>>
   >;
+  private getCidTxIdCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getCidTxId']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getCidTxId']>>
+  >;
 
   private getDataItemAttributesCircuitBreaker: CircuitBreaker<
     Parameters<StandaloneSqliteDatabase['getDataItemAttributes']>,
@@ -2486,6 +2490,16 @@ export class StandaloneSqliteDatabase
       },
     );
 
+    this.getCidTxIdCircuitBreaker = new CircuitBreaker(
+      (id: string) => {
+        return this.queueRead('data', `getCidTxId`, [id]);
+      },
+      {
+        name: 'getCidTxId',
+        ...dataIndexCircuitBreakerOptions,
+      },
+    );
+
     this.getDataItemAttributesCircuitBreaker = new CircuitBreaker(
       (id: string) => {
         return this.queueRead('bundles', `getDataItemAttributes`, [id]);
@@ -2499,6 +2513,7 @@ export class StandaloneSqliteDatabase
     metrics.circuitBreakerMetrics.add([
       this.getDataParentCircuitBreaker,
       this.getDataAttributesCircuitBreaker,
+      this.getCidTxIdCircuitBreaker,
       this.getDataItemAttributesCircuitBreaker,
     ]);
 
@@ -2727,6 +2742,14 @@ export class StandaloneSqliteDatabase
   ): Promise<ContiguousDataAttributes | undefined> {
     try {
       return await this.getDataAttributesCircuitBreaker.fire(id);
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  async getCidTxId(id: string): Promise<string | undefined> {
+    try {
+      return await this.getCidTxIdCircuitBreaker.fire(id);
     } catch (_) {
       return undefined;
     }
@@ -3018,6 +3041,10 @@ if (!isMainThread) {
         case 'getDataAttributes':
           const dataAttributes = worker.getDataAttributes(args[0]);
           parentPort?.postMessage(dataAttributes);
+          break;
+        case 'getCidTxId':
+          const cid = worker.getCidTxId(args[0]);
+          parentPort?.postMessage(cid);
           break;
         case 'getDataItemAttributes':
           const dataItemAttributes = worker.getDataItemAttributes(args[0]);
