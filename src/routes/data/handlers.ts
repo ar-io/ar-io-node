@@ -560,9 +560,7 @@ export const createDataHandler = ({
       if (id !== undefined) {
         const cid = await getCidByTxId(id);
         if (cid !== undefined) {
-          // Convert the CID to a string
-          const cidString = cid.toString();
-          res.setHeader('X-IPFS-CID', cidString);
+          res.setHeader('X-IPFS-CID', cid);
         }
       }
     } catch (error: any) {

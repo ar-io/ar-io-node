@@ -52,8 +52,11 @@ ipfsRouter.get('/ipfs/:cid', async (req, res) => {
     // Retrieve the CID and authoritative data attributes by transaction ID if they're available  and set it in the response header
     let dataAttributes: ContiguousDataAttributes | undefined;
     if (txId !== undefined) {
+      console.log(txId);
       res.setHeader('X-Arweave-Id', txId);
       dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
+    } else {
+      console.log('No TX ID Defined!');
     }
 
     // Check if the file is cached and has not been modified

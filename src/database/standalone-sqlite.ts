@@ -2743,9 +2743,9 @@ export class StandaloneSqliteDatabase
     }
   }
 
-  async getCidTxId(id: string): Promise<string | undefined> {
+  async getCidTxId(cid: string): Promise<string | undefined> {
     try {
-      return await this.getCidTxIdCircuitBreaker.fire(id);
+      return await this.getCidTxIdCircuitBreaker.fire(cid);
     } catch (_) {
       return undefined;
     }
