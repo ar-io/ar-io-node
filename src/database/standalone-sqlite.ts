@@ -953,7 +953,7 @@ export class StandaloneSqliteDatabaseWorker {
     const contentType =
       coreRow?.content_type ?? dataRow?.original_source_content_type;
     const hash = dataRow?.hash;
-    const cid = dataRow?.cid || undefined;
+    const cid = dataRow?.cid;
     const dataRoot = coreRow?.data_root;
 
     return {
