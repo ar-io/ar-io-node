@@ -974,11 +974,7 @@ export class StandaloneSqliteDatabaseWorker {
       cid: cid,
     });
 
-    const coreRow = this.stmts.core.selectDataAttributes.get({
-      id: dataRow.id,
-    });
-
-    if (coreRow === undefined && dataRow === undefined) {
+    if (dataRow === undefined) {
       return undefined;
     }
 

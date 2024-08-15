@@ -56,7 +56,7 @@ SELECT
   cd.data_size,
   cd.original_source_content_type,
   cd.cid,
-  cdi.verified
+  cdi.verified,
   cdi.id
 FROM contiguous_data cd
 LEFT JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
