@@ -979,7 +979,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     return {
-      txid: fromB64Url(dataRow.id),
+      txid: toB64Url(dataRow.id),
     };
   }
 
