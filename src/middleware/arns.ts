@@ -22,6 +22,7 @@ import * as config from '../config.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound } from '../routes/data/handlers.js';
 import { NameResolver } from '../types.js';
+import { handleIpfsRequest } from '../routes/ipfs.js';
 
 const EXCLUDED_SUBDOMAINS = new Set('www');
 
@@ -48,6 +49,32 @@ export const createArnsMiddleware = ({
       next();
       return;
     }
+
+    const subdomain = req.subdomains.join('.');
+
+    // Check if the subdomain matches the IPFS pattern (e.g., {cid}.ipfs.gatewayurl.com)
+    if (subdomain.endsWith('.ipfs')) {
+      const cidString = subdomain.slice(0, subdomain.length - 5); // Remove '.ipfs'
+
+      try {
+        console.log(`Received request for IPFS CID subdomain: ${cidString}`);
+
+        // Handle the IPFS data retrieval and response using the cidString
+        await handleIpfsRequest(req, res, cidString);
+
+        return; // End here to prevent further processing
+      } catch (error) {
+        console.error(
+          `Error handling IPFS request for CID: ${cidString}`,
+          error,
+        );
+        res
+          .status(500)
+          .send(`Error handling IPFS request for CID: ${cidString}`);
+        return;
+      }
+    }
+
     const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
