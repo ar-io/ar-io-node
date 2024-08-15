@@ -495,6 +495,7 @@ export interface ContiguousData {
 
 export interface ContiguousDataAttributes {
   hash?: string;
+  cid?: string;
   dataRoot?: string;
   size: number;
   contentEncoding?: string;
@@ -522,9 +523,21 @@ export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
   getDataItemAttributes(id: string): Promise<DataItemAttributes | undefined>;
   getDataParent(id: string): Promise<ContiguousDataParent | undefined>;
+  saveDataContentCid({
+    hash,
+    cid,
+    contentType,
+    cachedAt,
+  }: {
+    hash: string;
+    cid: string;
+    contentType?: string;
+    cachedAt?: number;
+  }): Promise<void>;
   saveDataContentAttributes({
     id,
     dataRoot,
+    cid,
     hash,
     dataSize,
     contentType,
@@ -532,6 +545,7 @@ export interface ContiguousDataIndex {
   }: {
     id: string;
     dataRoot?: string;
+    cid?: string;
     hash: string;
     dataSize: number;
     contentType?: string;

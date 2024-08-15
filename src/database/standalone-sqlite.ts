@@ -953,10 +953,12 @@ export class StandaloneSqliteDatabaseWorker {
     const contentType =
       coreRow?.content_type ?? dataRow?.original_source_content_type;
     const hash = dataRow?.hash;
+    const cid = dataRow?.cid || undefined;
     const dataRoot = coreRow?.data_root;
 
     return {
       hash: hash ? toB64Url(hash) : undefined,
+      cid: cid,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: coreRow?.data_size ?? dataRow?.data_size,
       contentType,
@@ -1096,6 +1098,7 @@ export class StandaloneSqliteDatabaseWorker {
   saveDataContentAttributes({
     id,
     dataRoot,
+    cid,
     hash,
     dataSize,
     contentType,
@@ -1103,6 +1106,7 @@ export class StandaloneSqliteDatabaseWorker {
   }: {
     id: string;
     dataRoot?: string;
+    cid?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
@@ -1128,6 +1132,33 @@ export class StandaloneSqliteDatabaseWorker {
         indexed_at: currentUnixTimestamp(),
       });
     }
+    if (cid !== undefined) {
+      this.stmts.data.insertCid.run({
+        hash: hashBuffer,
+        cid: cid,
+        indexed_at: currentUnixTimestamp(),
+        cached_at: cachedAt,
+      });
+    }
+  }
+
+  saveDataContentCid({
+    hash,
+    cid,
+    cachedAt,
+  }: {
+    hash: string;
+    cid: string;
+    contentType?: string;
+    cachedAt?: number;
+  }) {
+    const hashBuffer = fromB64Url(hash);
+    this.stmts.data.insertDataCid.run({
+      hash: hashBuffer,
+      cid: cid,
+      indexed_at: currentUnixTimestamp(),
+      cached_at: cachedAt,
+    });
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
@@ -2715,12 +2746,14 @@ export class StandaloneSqliteDatabase
   saveDataContentAttributes({
     id,
     dataRoot,
+    cid,
     hash,
     dataSize,
     contentType,
   }: {
     id: string;
     dataRoot?: string;
+    cid?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
@@ -2729,9 +2762,19 @@ export class StandaloneSqliteDatabase
       {
         id,
         dataRoot,
+        cid,
         hash,
         dataSize,
         contentType,
+      },
+    ]);
+  }
+
+  saveDataContentCid({ hash, cid }: { hash: string; cid: string }) {
+    return this.queueWrite('data', 'saveDataContentCid', [
+      {
+        hash,
+        cid,
       },
     ]);
   }
@@ -2973,6 +3016,10 @@ if (!isMainThread) {
           break;
         case 'saveDataContentAttributes':
           worker.saveDataContentAttributes(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveDataContentCid':
+          worker.saveDataContentCid(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'getGqlTransactions':

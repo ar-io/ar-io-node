@@ -90,8 +90,6 @@ import { car } from '@helia/car';
 import { FsBlockstore } from 'blockstore-fs';
 import { CarReader } from '@ipld/car';
 import { b64UrlToUtf8 } from './lib/encoding.js';
-import { CID } from 'multiformats/cid';
-import { base58btc } from 'multiformats/bases/base58';
 const blockstore = new FsBlockstore(`data/helia-ipfs`);
 
 export const helia = await createHelia({
@@ -132,6 +130,16 @@ export function storeIpfsMappings(txId: string, cid: string): void {
   // Persist mappings to disk
   fs.writeFileSync(txIdToCidFilePath, JSON.stringify(txIdToCidMap, null, 2));
   fs.writeFileSync(cidToTxIdMapFilePath, JSON.stringify(cidToTxIdMap, null, 2));
+}
+
+export async function saveIpfsHash(txId: string, cid: string): Promise<void> {
+  const dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
+  if (dataAttributes !== undefined && dataAttributes.hash !== undefined) {
+    contiguousDataIndex.saveDataContentCid({
+      hash: dataAttributes.hash,
+      cid,
+    });
+  }
 }
 
 // Function to retrieve a CID by TX ID
@@ -363,9 +371,9 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
           // Handle storing IPFS car file
           const cid = await handleIpfsCarFile(tx.id);
           if (cid !== undefined) {
-            storeIpfsMappings(tx.id, cid);
+            await saveIpfsHash(tx.id, cid);
             log.info(
-              `TX ${tx.id} added to IPFS as CAR and mapped with CID: ${cid}`,
+              `TX ${tx.id} added to IPFS as CAR and saved with CID: ${cid}`,
             );
           } else {
             log.error(
@@ -376,7 +384,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
           // Load the data, generate a CID and store it
           const cid = await loadDataAndGenerateCid(tx.id);
           if (cid !== undefined) {
-            storeIpfsMappings(tx.id, cid);
+            await saveIpfsHash(tx.id, cid);
             log.info(`TX ${tx.id} added to IPFS and mapped with CID: ${cid}`);
           } else {
             log.error('TX CID is undefined. Cannot add to IPFS/TXID  Mapping.');
@@ -417,7 +425,7 @@ eventEmitter.on(
             // Handle storing IPFS car file
             const cid = await handleIpfsCarFile(item.id);
             if (cid !== undefined) {
-              storeIpfsMappings(item.id, cid);
+              await saveIpfsHash(item.id, cid);
               log.info(
                 `Data Item ${item.id} added to IPFS as CAR and mapped with CID: ${cid}`,
               );
@@ -430,9 +438,9 @@ eventEmitter.on(
             // load the data, generate a CID and store it
             const cid = await loadDataAndGenerateCid(item.id);
             if (cid !== undefined) {
-              storeIpfsMappings(item.id, cid);
+              await saveIpfsHash(item.id, cid);
               log.info(
-                `ANS104 Data Item ${item.id} added to IPFS and mapped with CID: ${cid}`,
+                `ANS104 Data Item ${item.id} added to IPFS and saved with CID: ${cid}`,
               );
             } else {
               log.error(

@@ -13,6 +13,19 @@ INSERT INTO contiguous_data (
   :cached_at
 ) ON CONFLICT DO NOTHING
 
+-- insertDataCid
+INSERT OR REPLACE INTO contiguous_data (
+  hash,
+  cid,
+  indexed_at,
+  cached_at
+) VALUES (
+  :hash,
+  :cid,
+  :indexed_at,
+  :cached_at
+)
+
 -- insertDataId
 INSERT OR REPLACE INTO contiguous_data_ids (
   id,
@@ -40,6 +53,7 @@ SELECT
   cd.hash,
   cd.data_size,
   cd.original_source_content_type,
+  cd.cid,
   cdi.verified
 FROM contiguous_data cd
 LEFT JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
