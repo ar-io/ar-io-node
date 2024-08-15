@@ -144,8 +144,9 @@ export async function saveIpfsHash(txId: string, cid: string): Promise<void> {
 }
 
 // Function to retrieve a CID by TX ID
-export function getCidByTxId(txId: string): string | undefined {
-  return txIdToCidMap[txId];
+export async function getCidByTxId(txId: string): Promise<string | undefined> {
+  const dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
+  return dataAttributes?.cid;
 }
 
 // Function to retrieve the last TX ID by CID
