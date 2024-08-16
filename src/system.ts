@@ -138,31 +138,27 @@ export async function handleIpfsCarFile(txId: string): Promise<string> {
   try {
     const data = await contiguousDataSource.getData({ id: txId });
 
-    return new Promise(async (resolve, reject) => {
-      try {
-        const reader = await CarReader.fromIterable(data.stream);
+    try {
+      const reader = await CarReader.fromIterable(data.stream);
 
-        // Import the CAR file into Helia
-        const c = car(helia); // Create the car instance using Helia
-        await c.import(reader);
+      // Import the CAR file into Helia
+      const c = car(helia); // Create the car instance using Helia
+      await c.import(reader);
 
-        // Get the root CIDs from the reader
-        const roots = await reader.getRoots();
+      // Get the root CIDs from the reader
+      const roots = await reader.getRoots();
+      // Assuming you want to return the first root CID
+      if (roots.length > 0) {
+        const rootCid = roots[0].toString();
 
-        // Assuming you want to return the first root CID
-        if (roots.length > 0) {
-          const rootCid = roots[0].toString();
-
-          resolve(rootCid);
-          return;
-        } else {
-          reject(new Error('No roots found in CAR file.'));
-        }
-      } catch (error) {
-        log.error('Error importing CAR file to IPFS:', error);
-        reject(error);
+        return rootCid;
+      } else {
+        throw new Error('No roots found in CAR file.');
       }
-    });
+    } catch (error) {
+      log.error('Error importing CAR file to IPFS:', error);
+      throw error;
+    }
   } catch (error) {
     log.error(`Error handling CAR file for transaction ID ${txId}:`, error);
     throw error;
@@ -174,31 +170,24 @@ export async function loadDataAndGenerateCid(txId: string): Promise<string> {
   try {
     const data = await contiguousDataSource.getData({ id: txId });
 
-    return new Promise(async (resolve, reject) => {
-      try {
-        const source = (async function* () {
-          for await (const chunk of data.stream) {
-            yield chunk; // Stream the data chunk by chunk
-          }
-        })();
-
-        // Use `addAll` to stream the data to IPFS
-        for await (const entry of heliaFs.addAll([
-          {
-            path: `${txId}`,
-            content: source,
-          },
-        ])) {
-          const cid = entry.cid.toString();
-
-          resolve(cid);
-          return;
-        }
-      } catch (error) {
-        log.error('Error adding data to IPFS:', error);
-        reject(error);
+    const source = (async function* () {
+      for await (const chunk of data.stream) {
+        yield chunk; // Stream the data chunk by chunk
       }
-    });
+    })();
+
+    // Use `addAll` to stream the data to IPFS
+    for await (const entry of heliaFs.addAll([
+      {
+        path: `${txId}`,
+        content: source,
+      },
+    ])) {
+      const cid = entry.cid.toString();
+      return cid; // Return the CID as soon as it's generated
+    }
+
+    throw new Error(`No CID generated from data for transaction ID ${txId}`); // Fallback in case no CID is returned
   } catch (error) {
     log.error(`Error generating CID for transaction ID ${txId}:`, error);
     throw error;
@@ -206,7 +195,6 @@ export async function loadDataAndGenerateCid(txId: string): Promise<string> {
 }
 
 // IO/AO SDK
-
 const arIO = IO.init({
   process: new AOProcess({
     processId: config.IO_PROCESS_ID,
