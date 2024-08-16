@@ -35,7 +35,6 @@
     "graphql": "^16.8.1",
     "helia": "^4.2.5",
     "json-canonicalize": "^1.0.6",
-    "level": "^8.0.1",
     "lmdb": "^2.9.2",
     "middleware-async": "^1.3.5",
     "msgpackr": "^1.10.0",

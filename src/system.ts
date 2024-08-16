@@ -114,25 +114,9 @@ if (fs.existsSync(cidToTxIdMapFilePath)) {
 }
 
 // IPFS Utility Functions
-// Add IPFS mappings to indexes
-export function storeIpfsMappings(txId: string, cid: string): void {
-  // Store TX ID -> CID mapping
-  txIdToCidMap[txId] = cid;
 
-  // Initialize CID -> TX ID mapping array if not already present
-  if (!Array.isArray(cidToTxIdMap[cid])) {
-    cidToTxIdMap[cid] = [];
-  }
-
-  // Add the TX ID to the array for the given CID
-  cidToTxIdMap[cid].push(txId);
-
-  // Persist mappings to disk
-  fs.writeFileSync(txIdToCidFilePath, JSON.stringify(txIdToCidMap, null, 2));
-  fs.writeFileSync(cidToTxIdMapFilePath, JSON.stringify(cidToTxIdMap, null, 2));
-}
-
-export async function saveIpfsHash(txId: string, cid: string): Promise<void> {
+// Helper function to save IPFS CIDs to the contiguous_data table
+export async function saveIpfsCid(txId: string, cid: string): Promise<void> {
   const dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
   if (dataAttributes !== undefined && dataAttributes.hash !== undefined) {
     contiguousDataIndex.saveDataContentCid({
@@ -143,19 +127,10 @@ export async function saveIpfsHash(txId: string, cid: string): Promise<void> {
   }
 }
 
-// Function to retrieve a CID by TX ID
+// Function to retrieve a CID from the contiguos_data table by TX ID
 export async function getCidByTxId(txId: string): Promise<string | undefined> {
   const dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
   return dataAttributes?.cid;
-}
-
-// Function to retrieve the last TX ID by CID
-export function getTxIdByCid(cid: string): string | undefined {
-  const txIds = cidToTxIdMap[cid];
-  if (Array.isArray(txIds) && txIds.length > 0) {
-    return txIds[txIds.length - 1]; // Return the last item without removing it
-  }
-  return undefined;
 }
 
 // Helper function to load a car file as contiguous data, and import into Helia IPFS
@@ -373,7 +348,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
           // Handle storing IPFS car file
           const cid = await handleIpfsCarFile(tx.id);
           if (cid !== undefined) {
-            await saveIpfsHash(tx.id, cid);
+            await saveIpfsCid(tx.id, cid);
             log.info(
               `TX ${tx.id} added to IPFS as CAR and saved with CID: ${cid}`,
             );
@@ -386,7 +361,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
           // Load the data, generate a CID and store it
           const cid = await loadDataAndGenerateCid(tx.id);
           if (cid !== undefined) {
-            await saveIpfsHash(tx.id, cid);
+            await saveIpfsCid(tx.id, cid);
             log.info(`TX ${tx.id} added to IPFS and mapped with CID: ${cid}`);
           } else {
             log.error('TX CID is undefined. Cannot add to IPFS/TXID  Mapping.');
@@ -427,7 +402,7 @@ eventEmitter.on(
             // Handle storing IPFS car file
             const cid = await handleIpfsCarFile(item.id);
             if (cid !== undefined) {
-              await saveIpfsHash(item.id, cid);
+              await saveIpfsCid(item.id, cid);
               log.info(
                 `Data Item ${item.id} added to IPFS as CAR and mapped with CID: ${cid}`,
               );
@@ -440,7 +415,7 @@ eventEmitter.on(
             // load the data, generate a CID and store it
             const cid = await loadDataAndGenerateCid(item.id);
             if (cid !== undefined) {
-              await saveIpfsHash(item.id, cid);
+              await saveIpfsCid(item.id, cid);
               log.info(
                 `ANS104 Data Item ${item.id} added to IPFS and saved with CID: ${cid}`,
               );

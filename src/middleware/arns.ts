@@ -51,7 +51,6 @@ export const createArnsMiddleware = ({
     }
 
     const subdomain = req.subdomains.reverse().join('.');
-    console.log('Subdomain is: ', subdomain);
 
     // Check if the subdomain matches the IPFS pattern (e.g., {cid}.ipfs.gatewayurl.com)
     if (subdomain.endsWith('.ipfs')) {
