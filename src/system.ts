@@ -98,23 +98,7 @@ export const helia = await createHelia({
 
 export const heliaFs = unixfs(helia);
 
-// IPFS txid and cid index storage
-// Load existing mappings (if any) from the file
-const txIdToCidFilePath = 'data/ipfs/txIdToCidMap.json';
-let txIdToCidMap: Record<string, string> = {};
-if (fs.existsSync(txIdToCidFilePath)) {
-  const data = fs.readFileSync(txIdToCidFilePath, 'utf-8');
-  txIdToCidMap = JSON.parse(data);
-}
-const cidToTxIdMapFilePath = 'data/ipfs/cidToTxIdMap.json';
-let cidToTxIdMap: Record<string, string[]> = {};
-if (fs.existsSync(cidToTxIdMapFilePath)) {
-  const data = fs.readFileSync(cidToTxIdMapFilePath, 'utf-8');
-  cidToTxIdMap = JSON.parse(data);
-}
-
 // IPFS Utility Functions
-
 // Helper function to save IPFS CIDs to the contiguous_data table
 export async function saveIpfsCid(txId: string, cid: string): Promise<void> {
   const dataAttributes = await contiguousDataIndex.getDataAttributes(txId);
