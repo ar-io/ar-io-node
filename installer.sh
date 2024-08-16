@@ -183,7 +183,7 @@ if [ "$RESOLVE_ARNS" = "y" ] || [ "$RESOLVE_ARNS" = "Y" ]; then
     read -r ARNS_ROOT_HOST
     if [ -n "$ARNS_ROOT_HOST" ]; then
         update_or_add_env_var "ARNS_ROOT_HOST" "$ARNS_ROOT_HOST"
-        
+
         # Check if the resolver service was selected
         if ! echo "$SERVICES_SELECTED" | grep -q "4"; then
             print_message "You chose to resolve ArNS names, but the resolver service is not enabled. The resolver service is necessary for this feature."
