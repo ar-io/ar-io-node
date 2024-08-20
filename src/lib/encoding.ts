@@ -166,7 +166,7 @@ export function jsonTxToMsgpackTx(
 ): PartialMsgpackTransaction {
   return {
     id: fromB64Url(jsonTx.id),
-    signature: fromB64Url(jsonTx.signature),
+    signature: jsonTx.signature !== null ? fromB64Url(jsonTx.signature) : null,
     format: jsonTx.format,
     last_tx: fromB64Url(jsonTx.last_tx),
     owner: fromB64Url(jsonTx.owner),
@@ -187,7 +187,8 @@ export function msgpackTxToJsonTx(
 ): PartialJsonTransaction {
   return {
     id: toB64Url(msgpackTx.id),
-    signature: toB64Url(msgpackTx.signature),
+    signature:
+      msgpackTx.signature !== null ? toB64Url(msgpackTx.signature) : null,
     format: msgpackTx.format,
     last_tx: toB64Url(msgpackTx.last_tx),
     owner: toB64Url(msgpackTx.owner),

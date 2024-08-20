@@ -230,7 +230,7 @@ export function txToDbRows(tx: PartialJsonTransaction, height?: number) {
     wallets,
     newTx: {
       id: txId,
-      signature: fromB64Url(tx.signature),
+      signature: tx.signature !== null ? fromB64Url(tx.signature) : null,
       format: tx.format,
       last_tx: fromB64Url(tx.last_tx),
       owner_address: ownerAddressBuffer,
@@ -629,6 +629,10 @@ export class StandaloneSqliteDatabaseWorker {
         }
 
         for (const tx of txs) {
+          console.log({ write: config.WRITE_TRANSACTION_DB_SIGNATURES });
+          if (config.WRITE_TRANSACTION_DB_SIGNATURES === false) {
+            tx.signature = null;
+          }
           const rows = txToDbRows(tx, block.height);
 
           this.stmts.core.updateNewDataItemHeights.run({
@@ -817,6 +821,11 @@ export class StandaloneSqliteDatabaseWorker {
     const maybeTxHeight = this.stmts.core.selectMissingTransactionHeight.get({
       transaction_id: txId,
     })?.height;
+
+    if (config.WRITE_TRANSACTION_DB_SIGNATURES === false) {
+      tx.signature = null;
+    }
+
     this.insertTxFn(tx, maybeTxHeight);
     this.stmts.core.deleteNewMissingTransaction.run({ transaction_id: txId });
   }
@@ -964,6 +973,7 @@ export class StandaloneSqliteDatabaseWorker {
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
       verified: dataRow?.verified === true,
+      signature: coreRow?.signature,
     };
   }
 
@@ -1831,7 +1841,7 @@ export class StandaloneSqliteDatabaseWorker {
         indexedAt: tx.indexed_at,
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
-        signature: toB64Url(tx.signature),
+        signature: tx.signature !== null ? toB64Url(tx.signature) : null,
         recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
