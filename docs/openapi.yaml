@@ -51,9 +51,6 @@ tags:
   - name: Admin
     description: |
       Access several password protected features and functions specific to your AR.IO Gateway.
-  - name: Admin
-    description: |
-      Access several password protected features and functions specific to your AR.IO Gateway.
   - name: Farcaster Frames
     description: |
       Retrieve and interact with Farcaster Frames using Arweave transactions.
@@ -676,7 +673,7 @@ paths:
     get:
       tags: [Chunks]
       summary: Get chunk offset information.
-      description:
+      description: Fetches information about the size and offset of a specified chunk.
       parameters:
         - name: offset
           in: path
