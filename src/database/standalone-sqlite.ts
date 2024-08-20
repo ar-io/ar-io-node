@@ -1108,26 +1108,28 @@ export class StandaloneSqliteDatabaseWorker {
     contentType?: string;
     cachedAt?: number;
   }) {
-    const hashBuffer = fromB64Url(hash);
-    this.stmts.data.insertDataHash.run({
-      hash: hashBuffer,
-      data_size: dataSize,
-      original_source_content_type: contentType,
-      indexed_at: currentUnixTimestamp(),
-      cached_at: cachedAt,
-    });
-    this.stmts.data.insertDataId.run({
-      id: fromB64Url(id),
-      contiguous_data_hash: hashBuffer,
-      indexed_at: currentUnixTimestamp(),
-    });
-    if (dataRoot !== undefined) {
-      this.stmts.data.insertDataRoot.run({
-        data_root: fromB64Url(dataRoot),
+    this.dbs.data.transaction(() => {
+      const hashBuffer = fromB64Url(hash);
+      this.stmts.data.insertDataHash.run({
+        hash: hashBuffer,
+        data_size: dataSize,
+        original_source_content_type: contentType,
+        indexed_at: currentUnixTimestamp(),
+        cached_at: cachedAt,
+      });
+      this.stmts.data.insertDataId.run({
+        id: fromB64Url(id),
         contiguous_data_hash: hashBuffer,
         indexed_at: currentUnixTimestamp(),
       });
-    }
+      if (dataRoot !== undefined) {
+        this.stmts.data.insertDataRoot.run({
+          data_root: fromB64Url(dataRoot),
+          contiguous_data_hash: hashBuffer,
+          indexed_at: currentUnixTimestamp(),
+        });
+      }
+    })();
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
@@ -2280,13 +2282,15 @@ export class StandaloneSqliteDatabaseWorker {
     dataOffset: number;
     dataSize: number;
   }) {
-    this.stmts.data.insertNestedDataId.run({
-      id: fromB64Url(id),
-      parent_id: fromB64Url(parentId),
-      data_offset: dataOffset,
-      data_size: dataSize,
-      indexed_at: currentUnixTimestamp(),
-    });
+    this.dbs.data.transaction(() => {
+      this.stmts.data.insertNestedDataId.run({
+        id: fromB64Url(id),
+        parent_id: fromB64Url(parentId),
+        data_offset: dataOffset,
+        data_size: dataSize,
+        indexed_at: currentUnixTimestamp(),
+      });
+    })();
   }
 
   async saveNestedDataHash({
@@ -2298,12 +2302,14 @@ export class StandaloneSqliteDatabaseWorker {
     parentId: string;
     dataOffset: number;
   }) {
-    this.stmts.data.insertNestedDataHash.run({
-      hash: fromB64Url(hash),
-      parent_id: fromB64Url(parentId),
-      data_offset: dataOffset,
-      indexed_at: currentUnixTimestamp(),
-    });
+    this.dbs.data.transaction(() => {
+      this.stmts.data.insertNestedDataHash.run({
+        hash: fromB64Url(hash),
+        parent_id: fromB64Url(parentId),
+        data_offset: dataOffset,
+        indexed_at: currentUnixTimestamp(),
+      });
+    })();
   }
 }
 
