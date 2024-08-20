@@ -88,11 +88,12 @@ export async function resolveTxSignature(tx: GqlTransaction) {
     return tx.signature;
   }
 
-  if (tx.parentId !== null) {
-    return signatureFetcher.getDataItemSignature(tx.id);
-  }
+  const signature =
+    tx.parentId !== null
+      ? await signatureFetcher.getDataItemSignature(tx.id)
+      : await signatureFetcher.getTransactionSignature(tx.id);
 
-  return '<not-found>';
+  return signature ?? '<not-found>';
 }
 
 export const resolvers: IResolvers = {

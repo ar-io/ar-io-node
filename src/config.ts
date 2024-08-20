@@ -149,6 +149,10 @@ export const BACKFILL_BUNDLE_RECORDS =
 export const WRITE_ANS104_DATA_ITEM_DB_SIGNATURES =
   env.varOrDefault('WRITE_ANS104_DATA_ITEM_DB_SIGNATURES', 'true') === 'true';
 
+// Whether or not to write the transaction signatures to the database
+export const WRITE_TRANSACTION_DB_SIGNATURES =
+  env.varOrDefault('WRITE_TRANSACTION_DB_SIGNATURES', 'true') === 'true';
+
 //
 // ArNS and sandboxing
 //

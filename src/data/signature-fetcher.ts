@@ -20,6 +20,7 @@ import {
   ContiguousDataSource,
   ContiguousDataIndex,
   ContiguousDataAttributes,
+  ChainSource,
 } from '../types.js';
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
@@ -28,19 +29,23 @@ export class SignatureFetcher implements SignatureSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
   private dataIndex: ContiguousDataIndex;
+  private chainSource: ChainSource;
 
   constructor({
     log,
     dataSource,
     dataIndex,
+    chainSource: chainSource,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
     dataIndex: ContiguousDataIndex;
+    chainSource: ChainSource;
   }) {
     this.log = log.child({ class: 'SignatureFetcher' });
     this.dataSource = dataSource;
     this.dataIndex = dataIndex;
+    this.chainSource = chainSource;
   }
 
   async getDataItemSignature(id: string): Promise<string | undefined> {
@@ -84,6 +89,40 @@ export class SignatureFetcher implements SignatureSource {
         id,
         error: (error as Error).message,
       });
+
+      return undefined;
+    }
+  }
+
+  async getTransactionSignature(id: string): Promise<string | undefined> {
+    try {
+      this.log.debug('Fetching transaction signature', { id });
+
+      const dataAttributes = await this.dataIndex.getDataAttributes(id);
+
+      if (dataAttributes === undefined) {
+        this.log.warn('No attributes found for transaction', { id });
+        return undefined;
+      }
+
+      const { signature } = dataAttributes;
+
+      if (typeof signature === 'string') {
+        return signature;
+      }
+
+      const signatureFromChain = await this.chainSource.getTxField(
+        id,
+        'signature',
+      );
+
+      return signatureFromChain ?? undefined;
+    } catch (error) {
+      this.log.error('Error fetching transaction signature', {
+        id,
+        error: (error as Error).message,
+      });
+
       return undefined;
     }
   }

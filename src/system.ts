@@ -518,6 +518,7 @@ export const signatureFetcher = new SignatureFetcher({
   log,
   dataSource: contiguousDataSource,
   dataIndex: contiguousDataIndex,
+  chainSource: arweaveClient,
 });
 
 let isShuttingDown = false;

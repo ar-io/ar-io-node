@@ -12,34 +12,6 @@ CREATE TABLE stable_block_transactions (
   block_transaction_index INTEGER NOT NULL,
   PRIMARY KEY(block_indep_hash, transaction_id, block_transaction_index)
 );
-CREATE TABLE stable_transactions (
-  -- Identity
-  id BLOB PRIMARY KEY,
-  height INTEGER NOT NULL,
-  block_transaction_index INTEGER NOT NULL,
-  signature BLOB NOT NULL,
-  format INTEGER NOT NULL,
-  last_tx BLOB NOT NULL,
-
-  -- Ownership
-  owner_address BLOB NOT NULL,
-  target BLOB,
-
-  -- Tokens
-  quantity TEXT NOT NULL,
-  reward TEXT NOT NULL,
-
-  -- Data
-  data_size INTEGER,
-  data_root BLOB,
-  content_type TEXT,
-
-  -- Metadata
-  tag_count INTEGER NOT NULL
-, offset INTEGER, content_encoding TEXT);
-CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
-CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
-CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
 CREATE TABLE missing_transactions (
   block_indep_hash BLOB NOT NULL,
   transaction_id BLOB NOT NULL,
@@ -107,32 +79,6 @@ CREATE TABLE new_blocks (
   missing_tx_count INTEGER NOT NULL
 );
 CREATE INDEX new_blocks_height_idx ON new_blocks (height);
-CREATE TABLE new_transactions (
-  -- Identity
-  id BLOB PRIMARY KEY,
-  signature BLOB NOT NULL,
-  format INTEGER NOT NULL,
-  last_tx BLOB NOT NULL,
-
-  -- Ownership
-  owner_address BLOB NOT NULL,
-  target BLOB,
-
-  -- Tokens
-  quantity TEXT NOT NULL,
-  reward TEXT NOT NULL,
-
-  -- Data
-  data_size INTEGER,
-  data_root BLOB,
-  content_type TEXT,
-
-  -- Metadata
-  tag_count INTEGER NOT NULL,
-  indexed_at INTEGER NOT NULL
-, height INTEGER, content_encoding TEXT);
-CREATE INDEX new_transactions_target_id_idx ON new_transactions (target, id);
-CREATE INDEX new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
 CREATE TABLE new_block_transactions (
   block_indep_hash BYTEA,
   transaction_id BYTEA NOT NULL,
@@ -193,8 +139,66 @@ CREATE INDEX missing_transactions_height_transaction_id_idx ON missing_transacti
 CREATE INDEX sable_block_transactions_transaction_id_idx
   ON stable_block_transactions (transaction_id);
 CREATE INDEX new_transaction_tags_transaction_id_idx ON new_transaction_tags (transaction_id);
+CREATE INDEX new_transaction_tags_height_indexed_at_idx ON new_transaction_tags (height, indexed_at);
+CREATE TABLE IF NOT EXISTS "stable_transactions" (
+  -- Identity
+  id BLOB PRIMARY KEY,
+  height INTEGER NOT NULL,
+  block_transaction_index INTEGER NOT NULL,
+  signature BLOB, -- Changed to nullable
+  format INTEGER NOT NULL,
+  last_tx BLOB NOT NULL,
+
+  -- Ownership
+  owner_address BLOB NOT NULL,
+  target BLOB,
+
+  -- Tokens
+  quantity TEXT NOT NULL,
+  reward TEXT NOT NULL,
+
+  -- Data
+  data_size INTEGER,
+  data_root BLOB,
+  content_type TEXT,
+
+  -- Metadata
+  tag_count INTEGER NOT NULL,
+  offset INTEGER,
+  content_encoding TEXT
+);
+CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
+CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
+CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
 CREATE INDEX stable_transactions_offset_idx
   ON stable_transactions (offset)
   WHERE format = 2 AND data_size > 0;
+CREATE TABLE IF NOT EXISTS "new_transactions" (
+  -- Identity
+  id BLOB PRIMARY KEY,
+  signature BLOB, -- Changed to nullable
+  format INTEGER NOT NULL,
+  last_tx BLOB NOT NULL,
+
+  -- Ownership
+  owner_address BLOB NOT NULL,
+  target BLOB,
+
+  -- Tokens
+  quantity TEXT NOT NULL,
+  reward TEXT NOT NULL,
+
+  -- Data
+  data_size INTEGER,
+  data_root BLOB,
+  content_type TEXT,
+
+  -- Metadata
+  tag_count INTEGER NOT NULL,
+  indexed_at INTEGER NOT NULL,
+  height INTEGER,
+  content_encoding TEXT
+);
+CREATE INDEX new_transactions_target_id_idx ON new_transactions (target, id);
+CREATE INDEX new_transactions_owner_address_id_idx ON new_transactions (owner_address, id);
 CREATE INDEX new_transactions_height_indexed_at_idx ON new_transactions (height, indexed_at);
-CREATE INDEX new_transaction_tags_height_indexed_at_idx ON new_transaction_tags (height, indexed_at);

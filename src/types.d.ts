@@ -47,7 +47,7 @@ export interface PartialJsonBlock {
 
 export interface PartialJsonTransaction {
   id: string;
-  signature: string;
+  signature: string | null;
   format: number;
   last_tx: string;
   owner: string;
@@ -94,7 +94,7 @@ export interface PartialMsgpackBlock {
 
 export interface PartialMsgpackTransaction {
   id: Buffer;
-  signature: Buffer;
+  signature: Buffer | null;
   format: number;
   last_tx: Buffer;
   owner: Buffer;
@@ -502,6 +502,7 @@ export interface ContiguousDataAttributes {
   isManifest: boolean;
   stable: boolean;
   verified: boolean;
+  signature: string | null;
 }
 
 export interface DataItemAttributes {
@@ -621,4 +622,5 @@ export type KVBufferStore = {
 
 export interface SignatureSource {
   getDataItemSignature(id: string): Promise<string | undefined>;
+  getTransactionSignature(id: string): Promise<string | undefined>;
 }
