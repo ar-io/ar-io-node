@@ -35,7 +35,7 @@ export class SignatureFetcher implements SignatureSource {
     log,
     dataSource,
     dataIndex,
-    chainSource: chainSource,
+    chainSource,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
