@@ -3075,7 +3075,7 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           break;
         case 'cleanupWal':
-          worker.resetToHeight(args[0]);
+          worker.cleanupWal(args[0]);
           parentPort?.postMessage(undefined);
           break;
         case 'terminate':
