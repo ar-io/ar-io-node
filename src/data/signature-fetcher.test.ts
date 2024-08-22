@@ -39,7 +39,7 @@ describe('SignatureFetcher', () => {
     } as unknown as ContiguousDataSource;
     dataIndex = {
       getDataItemAttributes: mock.fn(),
-      getDataAttributes: mock.fn(),
+      getTransactionAttributes: mock.fn(),
     } as unknown as ContiguousDataIndex;
     chainSource = {
       getTxField: mock.fn(),
@@ -111,7 +111,7 @@ describe('SignatureFetcher', () => {
 
   describe('getTransactionSignature', () => {
     it('should return undefined if no attributes found', async () => {
-      mock.method(dataIndex, 'getDataAttributes', async () => undefined);
+      mock.method(dataIndex, 'getTransactionAttributes', async () => undefined);
 
       const result = await signatureFetcher.getTransactionSignature('testId');
 
@@ -120,7 +120,7 @@ describe('SignatureFetcher', () => {
 
     it('should return signature if it exists in attributes', async () => {
       const testSignature = 'testSignature';
-      mock.method(dataIndex, 'getDataAttributes', async () => ({
+      mock.method(dataIndex, 'getTransactionAttributes', async () => ({
         signature: testSignature,
       }));
 
@@ -133,7 +133,7 @@ describe('SignatureFetcher', () => {
       const testId = 'testId';
       const testChainSignature = 'testChainSignature';
 
-      mock.method(dataIndex, 'getDataAttributes', async () => ({
+      mock.method(dataIndex, 'getTransactionAttributes', async () => ({
         signature: undefined,
       }));
 
@@ -145,7 +145,7 @@ describe('SignatureFetcher', () => {
     });
 
     it('should return undefined if signature not found in attributes or chain', async () => {
-      mock.method(dataIndex, 'getDataAttributes', async () => ({
+      mock.method(dataIndex, 'getTransactionAttributes', async () => ({
         signature: undefined,
       }));
 
@@ -157,7 +157,7 @@ describe('SignatureFetcher', () => {
     });
 
     it('should handle errors and return undefined', async () => {
-      mock.method(dataIndex, 'getDataAttributes', async () => {
+      mock.method(dataIndex, 'getTransactionAttributes', async () => {
         throw new Error('Test error');
       });
 
