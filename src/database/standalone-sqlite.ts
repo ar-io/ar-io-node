@@ -63,6 +63,7 @@ import {
   NormalizedDataItem,
   PartialJsonBlock,
   PartialJsonTransaction,
+  TransactionAttributes,
 } from '../types.js';
 import * as config from '../config.js';
 
@@ -629,7 +630,6 @@ export class StandaloneSqliteDatabaseWorker {
         }
 
         for (const tx of txs) {
-          console.log({ write: config.WRITE_TRANSACTION_DB_SIGNATURES });
           if (config.WRITE_TRANSACTION_DB_SIGNATURES === false) {
             tx.signature = null;
           }
@@ -991,6 +991,20 @@ export class StandaloneSqliteDatabaseWorker {
       signature: row.signature ? toB64Url(row.signature) : null,
       signatureOffset: row.signature_offset,
       signatureSize: row.signature_size,
+    };
+  }
+
+  getTransactionAttributes(id: string) {
+    const row = this.stmts.core.selectTransactionAttributes.get({
+      id: fromB64Url(id),
+    });
+
+    if (row === undefined) {
+      return undefined;
+    }
+
+    return {
+      signature: row.signature ? toB64Url(row.signature) : null,
     };
   }
 
@@ -2408,6 +2422,11 @@ export class StandaloneSqliteDatabase
     Awaited<ReturnType<StandaloneSqliteDatabase['getDataItemAttributes']>>
   >;
 
+  private getTransactionAttributesCircuitBreaker: CircuitBreaker<
+    Parameters<StandaloneSqliteDatabase['getTransactionAttributes']>,
+    Awaited<ReturnType<StandaloneSqliteDatabase['getTransactionAttributes']>>
+  >;
+
   constructor({
     log,
     coreDbPath,
@@ -2464,10 +2483,21 @@ export class StandaloneSqliteDatabase
       },
     );
 
+    this.getTransactionAttributesCircuitBreaker = new CircuitBreaker(
+      (id: string) => {
+        return this.queueRead('core', `getTransactionAttributes`, [id]);
+      },
+      {
+        name: 'getTransactionAttributes',
+        ...dataIndexCircuitBreakerOptions,
+      },
+    );
+
     metrics.circuitBreakerMetrics.add([
       this.getDataParentCircuitBreaker,
       this.getDataAttributesCircuitBreaker,
       this.getDataItemAttributesCircuitBreaker,
+      this.getTransactionAttributesCircuitBreaker,
     ]);
 
     //
@@ -2705,6 +2735,16 @@ export class StandaloneSqliteDatabase
   ): Promise<DataItemAttributes | undefined> {
     try {
       return await this.getDataItemAttributesCircuitBreaker.fire(id);
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  async getTransactionAttributes(
+    id: string,
+  ): Promise<TransactionAttributes | undefined> {
+    try {
+      return await this.getTransactionAttributesCircuitBreaker.fire(id);
     } catch (_) {
       return undefined;
     }
@@ -2972,6 +3012,12 @@ if (!isMainThread) {
         case 'getDataItemAttributes':
           const dataItemAttributes = worker.getDataItemAttributes(args[0]);
           parentPort?.postMessage(dataItemAttributes);
+          break;
+        case 'getTransactionAttributes':
+          const transactionAttributes = worker.getTransactionAttributes(
+            args[0],
+          );
+          parentPort?.postMessage(transactionAttributes);
           break;
         case 'getDataParent':
           const dataParent = worker.getDataParent(args[0]);
