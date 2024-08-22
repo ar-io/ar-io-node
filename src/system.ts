@@ -75,6 +75,7 @@ import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher } from './data/signature-fetcher.js';
+import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -521,6 +522,18 @@ export const signatureFetcher = new SignatureFetcher({
   chainSource: arweaveClient,
 });
 
+const dataSqliteWalCleanupWorker = config.ENABLE_DATA_DB_WAL_CLEANUP
+  ? new SQLiteWalCleanupWorker({
+      log,
+      db,
+      dbName: 'data',
+    })
+  : undefined;
+
+if (dataSqliteWalCleanupWorker !== undefined) {
+  dataSqliteWalCleanupWorker.start();
+}
+
 let isShuttingDown = false;
 
 export const shutdown = async (express: Server) => {
@@ -533,6 +546,7 @@ export const shutdown = async (express: Server) => {
       log.debug('Web server stopped successfully');
       eventEmitter.removeAllListeners();
       arIODataSource.stopUpdatingPeers();
+      dataSqliteWalCleanupWorker?.stop();
       await mempoolWatcher?.stop();
       await blockImporter.stop();
       await dataItemIndexer.stop();
