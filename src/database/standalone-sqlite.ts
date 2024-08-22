@@ -2329,7 +2329,7 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
-  cleanupWal(dbName: keyof typeof this.dbs): void {
+  cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation'): void {
     this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
   }
 }
