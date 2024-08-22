@@ -1072,4 +1072,21 @@ describe('StandaloneSqliteDatabase', () => {
       );
     });
   });
+
+  describe('cleanupWal', () => {
+    it('should not throw an error when called for each database', async () => {
+      const dbNames: ('core' | 'bundles' | 'data' | 'moderation')[] = [
+        'core',
+        'bundles',
+        'data',
+        'moderation',
+      ];
+
+      for (const dbName of dbNames) {
+        await assert.doesNotReject(async () => {
+          await db.cleanupWal(dbName);
+        });
+      }
+    });
+  });
 });

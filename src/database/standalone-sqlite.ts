@@ -2328,6 +2328,10 @@ export class StandaloneSqliteDatabaseWorker {
       indexed_at: currentUnixTimestamp(),
     });
   }
+
+  cleanupWal(dbName: keyof typeof this.dbs): void {
+    this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
+  }
 }
 
 type WorkerPoolName =
@@ -2926,6 +2930,10 @@ export class StandaloneSqliteDatabase
       },
     ]);
   }
+
+  async cleanupWal(dbName: WorkerPoolName): Promise<void> {
+    return this.queueWrite(dbName, 'cleanupWal', [dbName]);
+  }
 }
 
 type WorkerMessage = {
@@ -3065,6 +3073,10 @@ if (!isMainThread) {
         case 'saveNestedDataHash':
           worker.saveNestedDataHash(args[0]);
           parentPort?.postMessage(null);
+          break;
+        case 'cleanupWal':
+          worker.resetToHeight(args[0]);
+          parentPort?.postMessage(undefined);
           break;
         case 'terminate':
           parentPort?.postMessage(null);
