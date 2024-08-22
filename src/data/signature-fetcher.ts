@@ -98,14 +98,15 @@ export class SignatureFetcher implements SignatureSource {
     try {
       this.log.debug('Fetching transaction signature', { id });
 
-      const dataAttributes = await this.dataIndex.getDataAttributes(id);
+      const transactionAttributes =
+        await this.dataIndex.getTransactionAttributes(id);
 
-      if (dataAttributes === undefined) {
+      if (transactionAttributes === undefined) {
         this.log.warn('No attributes found for transaction', { id });
         return undefined;
       }
 
-      const { signature } = dataAttributes;
+      const { signature } = transactionAttributes;
 
       if (typeof signature === 'string') {
         return signature;

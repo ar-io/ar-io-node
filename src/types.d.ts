@@ -512,6 +512,10 @@ export interface DataItemAttributes {
   signatureSize: number;
 }
 
+export interface TransactionAttributes {
+  signature: string | null;
+}
+
 export interface ContiguousDataParent {
   parentId: string;
   parentHash?: string;
@@ -522,6 +526,9 @@ export interface ContiguousDataParent {
 export interface ContiguousDataIndex {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
   getDataItemAttributes(id: string): Promise<DataItemAttributes | undefined>;
+  getTransactionAttributes(
+    id: string,
+  ): Promise<TransactionAttributes | undefined>;
   getDataParent(id: string): Promise<ContiguousDataParent | undefined>;
   saveDataContentAttributes({
     id,
