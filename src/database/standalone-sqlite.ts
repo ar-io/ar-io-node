@@ -973,7 +973,6 @@ export class StandaloneSqliteDatabaseWorker {
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
       verified: dataRow?.verified === true,
-      signature: coreRow?.signature,
     };
   }
 
