@@ -595,7 +595,7 @@ describe('X-AR-IO headers', function () {
       );
 
       assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '7');
-      assert.equal(reqWithHeaders.headers['x-ar-io-origin'], 'another-host');
+      assert.equal(reqWithHeadefrs.headers['x-ar-io-origin'], 'another-host');
       assert.equal(reqWithHeaders.headers['x-ar-io-origin-node-release'], '10');
     });
 

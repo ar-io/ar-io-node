@@ -17,20 +17,30 @@
  */
 import { Logger } from 'winston';
 import { StandaloneArNSResolver } from '../resolution/standalone-arns-resolver.js';
+import { OnDemandArNSResolver } from '../resolution/on-demand-arns-resolver.js';
 import { TrustedGatewayArNSResolver } from '../resolution/trusted-gateway-arns-resolver.js';
 import { NameResolver } from '../types.js';
+import { AoIORead } from '@ar.io/sdk';
 
 export const createArNSResolver = ({
   log,
   type,
   url,
+  networkProcess,
 }: {
   log: Logger;
   type: string;
   url: string;
+  networkProcess?: AoIORead;
 }): NameResolver => {
   log.info(`Using ${type} for arns name resolution`);
   switch (type) {
+    case 'on-demand': {
+      return new OnDemandArNSResolver({
+        log,
+        networkProcess,
+      });
+    }
     case 'resolver': {
       return new StandaloneArNSResolver({
         log,
