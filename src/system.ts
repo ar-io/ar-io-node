@@ -494,6 +494,7 @@ export const nameResolver = new MemoryCacheArNSResolver({
     log,
     type: config.TRUSTED_ARNS_RESOLVER_TYPE,
     url: config.TRUSTED_ARNS_RESOLVER_URL,
+    networkProcess: arIO,
   }),
 });
 
