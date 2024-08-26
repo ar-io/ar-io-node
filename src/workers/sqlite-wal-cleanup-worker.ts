@@ -19,7 +19,7 @@
 import * as winston from 'winston';
 import { StandaloneSqliteDatabase } from '../database/standalone-sqlite.js';
 
-const CLEANUP_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 
 export class SQLiteWalCleanupWorker {
   private log: winston.Logger;
