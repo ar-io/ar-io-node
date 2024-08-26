@@ -57,27 +57,23 @@ export class StandaloneArNSResolver implements NameResolver {
       const resolvedId = data.txId;
       const ttl = data.ttlSeconds || DEFAULT_ARNS_TTL_SECONDS;
       const processId = data.processId;
-      if (isValidDataId(resolvedId)) {
-        this.log.info('Resolved name', {
-          name,
-          resolvedId,
-          ttl,
-        });
-        return {
-          name,
-          resolvedId,
-          resolvedAt: Date.now(),
-          processId: processId,
-          ttl,
-        };
-      } else {
-        this.log.warn('Invalid resolved data ID', {
-          name,
-          resolvedId,
-          processId,
-          ttl,
-        });
+
+      if (!isValidDataId(resolvedId)) {
+        throw new Error('Invalid resolved data ID');
       }
+
+      this.log.info('Resolved name', {
+        name,
+        resolvedId,
+        ttl,
+      });
+      return {
+        name,
+        resolvedId,
+        resolvedAt: Date.now(),
+        processId: processId,
+        ttl,
+      };
     } catch (error: any) {
       this.log.warn('Unable to resolve name:', {
         name,
