@@ -43,11 +43,9 @@ export class OnDemandArNSResolver implements NameResolver {
   }
 
   async resolve(name: string): Promise<NameResolution> {
-    this.log.info('Resolving name...', { name }).profile('Resolver', {
-      name,
-    });
+    this.log.info('Resolving name...', { name });
     try {
-      // start profiling
+      const start = Date.now();
       // get the base name which is the last of th array split by _
       const baseName = name.split('_').pop();
       if (baseName === undefined) {
@@ -96,15 +94,12 @@ export class OnDemandArNSResolver implements NameResolver {
         throw new Error('Invalid resolved data ID');
       }
 
-      this.log
-        .info('Resolved name', {
-          name,
-          resolvedId,
-          ttl,
-        })
-        .profile('Resolver', {
-          name,
-        });
+      this.log.info('Resolved name', {
+        name,
+        resolvedId,
+        ttl,
+        durationMs: Date.now() - start,
+      });
       return {
         name,
         resolvedId,
