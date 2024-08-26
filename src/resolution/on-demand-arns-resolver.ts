@@ -43,10 +43,11 @@ export class OnDemandArNSResolver implements NameResolver {
   }
 
   async resolve(name: string): Promise<NameResolution> {
-    this.log.info('Resolving name...', { name });
+    this.log.info('Resolving name...', { name }).profile('Resolver', {
+      name,
+    });
     try {
       // start profiling
-      this.log.profile('resolve', { name });
       // get the base name which is the last of th array split by _
       const baseName = name.split('_').pop();
       if (baseName === undefined) {
@@ -76,7 +77,9 @@ export class OnDemandArNSResolver implements NameResolver {
         }),
       });
 
-      const undername = name.replace(`_${baseName}`, '');
+      // if it is the root name, then it should point to '@'
+      const undername =
+        name === baseName ? '@' : name.replace(`_${baseName}`, '');
 
       const antRecord = await ant.getRecord({
         undername,
@@ -93,13 +96,15 @@ export class OnDemandArNSResolver implements NameResolver {
         throw new Error('Invalid resolved data ID');
       }
 
-      this.log.info('Resolved name', {
-        name,
-        resolvedId,
-        ttl,
-      });
-      // end profiling
-      this.log.profile('resolve', { name });
+      this.log
+        .info('Resolved name', {
+          name,
+          resolvedId,
+          ttl,
+        })
+        .profile('Resolver', {
+          name,
+        });
       return {
         name,
         resolvedId,
