@@ -56,7 +56,7 @@ export class OnDemandArNSResolver implements NameResolver {
         name: baseName,
       });
 
-      if (arnsRecord === undefined) {
+      if (arnsRecord === undefined || arnsRecord.processId === undefined) {
         throw new Error('Invalid name, arns record not found');
       }
 
