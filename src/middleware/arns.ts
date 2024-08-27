@@ -21,6 +21,7 @@ import { asyncMiddleware } from 'middleware-async';
 import * as config from '../config.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound } from '../routes/data/handlers.js';
+import { DATA_PATH_REGEX } from '../constants.js';
 import { NameResolver } from '../types.js';
 
 const EXCLUDED_SUBDOMAINS = new Set('www');
@@ -60,6 +61,12 @@ export const createArnsMiddleware = ({
       next();
       return;
     }
+
+    if (DATA_PATH_REGEX.test(req.path)) {
+      next();
+      return;
+    }
+
     const { resolvedId, ttl, processId } =
       await nameResolver.resolve(arnsSubdomain);
     if (resolvedId === undefined) {
