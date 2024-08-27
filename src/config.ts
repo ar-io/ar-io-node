@@ -255,6 +255,14 @@ export const WEBHOOK_BLOCK_FILTER = createFilter(
 // ArNS Resolution
 //
 
+export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
+  'ARNS_CACHE_TTL_SECONDS',
+  '60 * 60  ', // 1 hour
+);
+export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
+  'ARNS_CACHE_MAX_KEYS',
+  '10000',
+);
 export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
   'TRUSTED_ARNS_GATEWAY_URL',
   'https://__NAME__.arweave.dev',
