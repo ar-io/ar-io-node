@@ -466,10 +466,15 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   }
 });
 
+const shouldUnbundleDataItems = (queueDepth: number) => {
+  return queueDepth < config.MAX_DATA_ITEM_QUEUE_SIZE;
+};
+
 export const dataItemIndexer = new DataItemIndexer({
   log,
   eventEmitter,
   indexWriter: dataItemIndexWriter,
+  shouldUnbundle: shouldUnbundleDataItems,
 });
 
 const ans104DataIndexer = new Ans104DataIndexer({
@@ -477,6 +482,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
   eventEmitter,
   indexWriter: nestedDataIndexWriter,
   contiguousDataIndex,
+  shouldUnbundle: shouldUnbundleDataItems,
 });
 
 eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {

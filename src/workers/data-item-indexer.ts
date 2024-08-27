@@ -31,6 +31,7 @@ export class DataItemIndexer {
   private log: winston.Logger;
   private eventEmitter: EventEmitter;
   private indexWriter: DataItemIndexWriter;
+  private shouldUnbundle: (queueDepth: number) => boolean;
 
   // Data indexing queue
   private queue: queueAsPromised<NormalizedDataItem, void>;
@@ -40,15 +41,18 @@ export class DataItemIndexer {
     eventEmitter,
     indexWriter,
     workerCount = DEFAULT_WORKER_COUNT,
+    shouldUnbundle,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
     indexWriter: DataItemIndexWriter;
     workerCount?: number;
+    shouldUnbundle: (queueDepth: number) => boolean;
   }) {
     this.log = log.child({ class: 'DataItemIndexer' });
     this.indexWriter = indexWriter;
     this.eventEmitter = eventEmitter;
+    this.shouldUnbundle = shouldUnbundle;
 
     this.queue = fastq.promise(this.indexDataItem.bind(this), workerCount);
   }
@@ -60,9 +64,19 @@ export class DataItemIndexer {
       parentId: item.parent_id,
       rootTxId: item.root_tx_id,
     });
+
+    if (!this.shouldUnbundle(this.queueDepth())) {
+      log.warn('Skipping data item queuing due to high queue depth.');
+      return;
+    }
+
     log.debug('Queueing data item for indexing...');
     this.queue.push(item);
     log.debug('Data item queued for indexing.');
+  }
+
+  queueDepth(): number {
+    return this.queue.length();
   }
 
   async indexDataItem(item: NormalizedDataItem): Promise<void> {

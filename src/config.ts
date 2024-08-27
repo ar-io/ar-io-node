@@ -157,6 +157,13 @@ export const WRITE_TRANSACTION_DB_SIGNATURES =
 export const ENABLE_DATA_DB_WAL_CLEANUP =
   env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';
 
+// The maximum number of data items to queue for indexing before skipping
+// indexing new data items
+export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
+  'MAX_DATA_ITEM_QUEUE_SIZE',
+  '100000',
+);
+
 //
 // ArNS and sandboxing
 //
