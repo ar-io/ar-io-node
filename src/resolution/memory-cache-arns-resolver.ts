@@ -19,15 +19,16 @@ import { default as NodeCache } from 'node-cache';
 import winston from 'winston';
 
 import { NameResolution, NameResolver } from '../types.js';
+import * as config from '../config.js';
 
 export class MemoryCacheArNSResolver implements NameResolver {
   private log: winston.Logger;
   private resolver: NameResolver;
   private requestCache = new NodeCache({
-    checkperiod: 60 * 5, // 5 minutes
-    stdTTL: 60 * 60 * 2, // 2 hours
+    checkperiod: Math.min(60 * 5, config.ARNS_CACHE_TTL_SECONDS), // 5 minutes or less
+    stdTTL: config.ARNS_CACHE_TTL_SECONDS,
     useClones: false, // cloning promises is unsafe
-    maxKeys: 10000,
+    maxKeys: config.ARNS_CACHE_MAX_KEYS,
   });
 
   constructor({
