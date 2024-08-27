@@ -19,13 +19,12 @@ import { Router } from 'express';
 
 import log from '../../log.js';
 import * as system from '../../system.js';
+import {
+  DATA_PATH_REGEX,
+  RAW_DATA_PATH_REGEX,
+  FARCASTER_FRAME_DATA_PATH_REGEX,
+} from '../../constants.js';
 import { createDataHandler, createRawDataHandler } from './handlers.js';
-
-const DATA_PATH_REGEX =
-  /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
-const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
-const FARCASTER_FRAME_DATA_PATH_REGEX =
-  /^\/local\/farcaster\/frame\/([a-zA-Z0-9-_]{43})\/?$/i;
 
 // Used by ArNS Router
 export const dataHandler = createDataHandler({

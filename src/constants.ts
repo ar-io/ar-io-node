@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-const headerNames = {
+export const headerNames = {
   hops: 'X-AR-IO-Hops',
   origin: 'X-AR-IO-Origin',
   originNodeRelease: 'X-AR-IO-Origin-Node-Release',
@@ -26,4 +26,8 @@ const headerNames = {
   arnsProcessId: 'X-ArNS-Process-Id',
 };
 
-export { headerNames };
+export const DATA_PATH_REGEX =
+  /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
+export const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
+export const FARCASTER_FRAME_DATA_PATH_REGEX =
+  /^\/local\/farcaster\/frame\/([a-zA-Z0-9-_]{43})\/?$/i;
