@@ -38,6 +38,9 @@ export class CompositeArNSResolver implements NameResolver {
 
     try {
       for (const resolver of this.resolvers) {
+        this.log.debug('Attempting to resolve name with resolver', {
+          resolver,
+        });
         const resolution = await resolver.resolve(name);
         if (resolution.resolvedId !== undefined) {
           return resolution;
