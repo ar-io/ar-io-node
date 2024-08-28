@@ -21,36 +21,90 @@ import { OnDemandArNSResolver } from '../resolution/on-demand-arns-resolver.js';
 import { TrustedGatewayArNSResolver } from '../resolution/trusted-gateway-arns-resolver.js';
 import { NameResolver } from '../types.js';
 import { AoIORead } from '@ar.io/sdk';
+import { CompositeArNSResolver } from '../resolution/composite-arns-resolver.js';
 
 export const createArNSResolver = ({
   log,
   type,
-  url,
+  standaloneArnResolverUrl,
+  trustedGatewayUrl,
   networkProcess,
 }: {
   log: Logger;
   type: string;
-  url: string;
+  standaloneArnResolverUrl?: string;
+  trustedGatewayUrl?: string;
   networkProcess?: AoIORead;
 }): NameResolver => {
   log.info(`Using ${type} for arns name resolution`);
   switch (type) {
     case 'on-demand': {
-      return new OnDemandArNSResolver({
+      const resolvers: NameResolver[] = [];
+      if (standaloneArnResolverUrl !== undefined) {
+        resolvers.push(
+          new StandaloneArNSResolver({
+            log,
+            resolverUrl: standaloneArnResolverUrl,
+          }),
+        );
+      }
+      if (trustedGatewayUrl !== undefined) {
+        resolvers.push(
+          new TrustedGatewayArNSResolver({
+            log,
+            trustedGatewayUrl,
+          }),
+        );
+      }
+      return new CompositeArNSResolver({
         log,
-        networkProcess,
+        resolvers: [
+          new OnDemandArNSResolver({
+            log,
+            networkProcess,
+          }),
+          ...resolvers,
+        ],
       });
     }
     case 'resolver': {
-      return new StandaloneArNSResolver({
+      if (standaloneArnResolverUrl === undefined) {
+        throw new Error(
+          'Standalone ArNS resolver URL is required to use resolver type',
+        );
+      }
+      return new CompositeArNSResolver({
         log,
-        resolverUrl: url,
+        resolvers: [
+          new StandaloneArNSResolver({
+            log,
+            resolverUrl: standaloneArnResolverUrl,
+          }),
+          // fallback to on-demand resolver if the standalone resolver fails
+          new OnDemandArNSResolver({
+            log,
+            networkProcess,
+          }),
+        ],
       });
     }
     case 'gateway': {
-      return new TrustedGatewayArNSResolver({
+      if (trustedGatewayUrl === undefined) {
+        throw new Error('Trusted Gateway URL is required to use gateway type');
+      }
+      return new CompositeArNSResolver({
         log,
-        trustedGatewayUrl: url,
+        resolvers: [
+          new TrustedGatewayArNSResolver({
+            log,
+            trustedGatewayUrl,
+          }),
+          // fallback to on-demand resolver if the gateway resolver fails
+          new OnDemandArNSResolver({
+            log,
+            networkProcess,
+          }),
+        ],
       });
     }
     default: {
