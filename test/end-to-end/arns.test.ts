@@ -90,4 +90,24 @@ describe('ArNS', function () {
 
     assert.strictEqual(typeof res.headers['x-arns-process-id'], 'string');
   });
+
+  it('Verifying that "ardrive.ar-io.localhost/{txid}" is redirected', async function () {
+    const txId = 'TB2wJyKrPnkAW79DAwlJYwpgdHKpijEJWQfcwX715Co';
+    const expectedSandbox =
+      'jqo3ajzcvm7hsac3x5bqgckjmmfga5dsvgfdcckza7omc7xv4qva';
+    const expectedRedirect = `http://${expectedSandbox}.ar-io.localhost/${txId}?`;
+    const res = await axios.get(`http://localhost:4000/${txId}`, {
+      headers: { Host: 'ardrive.ar-io.localhost' },
+      maxRedirects: 0, // Prevent axios from following redirects
+      validateStatus: function (status) {
+        return status === 302; // Accept only 302 status
+      },
+    });
+
+    // Assert that the status code is 302
+    assert.strictEqual(res.status, 302);
+
+    // Assert that the Location header matches the expected URL
+    assert.strictEqual(res.headers['location'], expectedRedirect);
+  });
 });
