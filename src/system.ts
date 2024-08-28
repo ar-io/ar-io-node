@@ -375,7 +375,7 @@ const ans104DataIndexer = new Ans104DataIndexer({
 });
 
 const shouldUnbundleDataItems = () =>
-  ans104DataIndexer.queueDepth() < config.MAX_DATA_ITEM_QUEUE_SIZE ||
+  ans104DataIndexer.queueDepth() < config.MAX_DATA_ITEM_QUEUE_SIZE &&
   dataItemIndexer.queueDepth() < config.MAX_DATA_ITEM_QUEUE_SIZE;
 
 const ans104Unbundler = new Ans104Unbundler({
