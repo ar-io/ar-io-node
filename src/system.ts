@@ -493,7 +493,8 @@ export const nameResolver = new MemoryCacheArNSResolver({
   resolver: createArNSResolver({
     log,
     type: config.TRUSTED_ARNS_RESOLVER_TYPE,
-    url: config.TRUSTED_ARNS_RESOLVER_URL,
+    trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
+    standaloneArnResolverUrl: config.TRUSTED_ARNS_RESOLVER_URL,
     networkProcess: arIO,
   }),
 });
