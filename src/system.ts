@@ -361,6 +361,23 @@ export const contiguousDataSource = new ReadThroughDataCache({
   dataContentAttributeImporter,
 });
 
+export const dataItemIndexer = new DataItemIndexer({
+  log,
+  eventEmitter,
+  indexWriter: dataItemIndexWriter,
+});
+
+const ans104DataIndexer = new Ans104DataIndexer({
+  log,
+  eventEmitter,
+  indexWriter: nestedDataIndexWriter,
+  contiguousDataIndex,
+});
+
+const shouldUnbundleDataItems = () =>
+  ans104DataIndexer.queueDepth() < config.MAX_DATA_ITEM_QUEUE_SIZE ||
+  dataItemIndexer.queueDepth() < config.MAX_DATA_ITEM_QUEUE_SIZE;
+
 const ans104Unbundler = new Ans104Unbundler({
   log,
   eventEmitter,
@@ -368,6 +385,7 @@ const ans104Unbundler = new Ans104Unbundler({
   contiguousDataSource,
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
   workerCount: config.ANS104_UNBUNDLE_WORKERS,
+  shouldUnbundle: shouldUnbundleDataItems,
 });
 
 const bundleDataImporter = new BundleDataImporter({
@@ -464,19 +482,6 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
       stack: error.stack,
     });
   }
-});
-
-export const dataItemIndexer = new DataItemIndexer({
-  log,
-  eventEmitter,
-  indexWriter: dataItemIndexWriter,
-});
-
-const ans104DataIndexer = new Ans104DataIndexer({
-  log,
-  eventEmitter,
-  indexWriter: nestedDataIndexWriter,
-  contiguousDataIndex,
 });
 
 eventEmitter.on(events.ANS104_DATA_ITEM_MATCHED, async (dataItem: any) => {
