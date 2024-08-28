@@ -83,7 +83,7 @@ describe('Ans104Unbundler', () => {
       assert.equal(ans104Unbundler.queueDepth(), 2);
     });
 
-    it("should not queue item when shouldUnbundle returns false regardless if they're prioritized", async () => {
+    it('should queue prioritized item even when shouldUnbundle returns false', async () => {
       shouldUnbundleMock.mock.mockImplementation(() => false);
 
       for (let i = 0; i < 10; i++) {
@@ -91,7 +91,7 @@ describe('Ans104Unbundler', () => {
       }
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 10);
-      assert.equal(ans104Unbundler.queueDepth(), 0);
+      assert.equal(ans104Unbundler.queueDepth(), 9);
     });
 
     it('should not call shouldUnbundle when workerCount is 0', async () => {
