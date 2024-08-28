@@ -104,7 +104,7 @@ export class Ans104Unbundler {
       return;
     }
 
-    if (!this.shouldUnbundle()) {
+    if (!this.shouldUnbundle() && prioritized !== true) {
       log.warn('Skipping data item queuing due to high queue depth.');
       return;
     }
