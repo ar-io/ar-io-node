@@ -34,7 +34,7 @@ interface IndexProperty {
   index: number;
 }
 
-type UnbundleableItem = (NormalizedDataItem | PartialJsonTransaction) &
+export type UnbundleableItem = (NormalizedDataItem | PartialJsonTransaction) &
   IndexProperty;
 
 export class Ans104Unbundler {
@@ -46,6 +46,7 @@ export class Ans104Unbundler {
   private workerCount: number;
   private maxQueueSize: number;
   private queue: queueAsPromised<UnbundleableItem, void>;
+  private shouldUnbundle: () => boolean;
 
   // Parser
   private ans104Parser: Ans104Parser;
@@ -58,6 +59,8 @@ export class Ans104Unbundler {
     dataItemIndexFilterString,
     workerCount,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+    shouldUnbundle = () => true,
+    ans104Parser,
   }: {
     log: winston.Logger;
     eventEmitter: EventEmitter;
@@ -66,16 +69,20 @@ export class Ans104Unbundler {
     dataItemIndexFilterString: string;
     workerCount: number;
     maxQueueSize?: number;
+    shouldUnbundle?: () => boolean;
+    ans104Parser?: Ans104Parser;
   }) {
     this.log = log.child({ class: 'Ans104Unbundler' });
     this.filter = filter;
-    this.ans104Parser = new Ans104Parser({
-      log,
-      eventEmitter,
-      contiguousDataSource,
-      workerCount,
-      dataItemIndexFilterString,
-    });
+    this.ans104Parser =
+      ans104Parser ||
+      new Ans104Parser({
+        log,
+        eventEmitter,
+        contiguousDataSource,
+        workerCount,
+        dataItemIndexFilterString,
+      });
 
     this.workerCount = workerCount;
     this.maxQueueSize = maxQueueSize;
@@ -83,16 +90,25 @@ export class Ans104Unbundler {
       this.unbundle.bind(this),
       Math.max(workerCount, 1),
     );
+    this.shouldUnbundle = shouldUnbundle;
   }
 
   async queueItem(
     item: UnbundleableItem,
     prioritized: boolean | undefined,
   ): Promise<void> {
+    const log = this.log.child({ method: 'queueItem', id: item.id });
+
     if (this.workerCount === 0) {
+      log.warn('Skipping data item queuing due to no workers.');
       return;
     }
-    const log = this.log.child({ method: 'queueItem', id: item.id });
+
+    if (!this.shouldUnbundle()) {
+      log.warn('Skipping data item queuing due to high queue depth.');
+      return;
+    }
+
     if (prioritized === true) {
       log.debug('Queueing prioritized bundle...');
       this.queue.unshift(item);
@@ -135,6 +151,10 @@ export class Ans104Unbundler {
         stack: error?.stack,
       });
     }
+  }
+
+  queueDepth(): number {
+    return this.queue.length();
   }
 
   async stop(): Promise<void> {
