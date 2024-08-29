@@ -95,8 +95,16 @@ export function encodeTransactionGqlCursor({
   indexedAt: number | null;
   id: string | null;
 }) {
+  // We use AA (0x00) to indicate lack of data item ID for layer 1 transactions
+  const isDataItem = dataItemId != 'AA';
   return utf8ToB64Url(
-    JSON.stringify([height, blockTransactionIndex, dataItemId, indexedAt, id]),
+    JSON.stringify([
+      height,
+      blockTransactionIndex,
+      isDataItem,
+      id,
+      indexedAt,
+    ]),
   );
 }
 
@@ -112,16 +120,28 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
       };
     }
 
-    const [height, blockTransactionIndex, dataItemId, indexedAt, id] =
-      JSON.parse(b64UrlToUtf8(cursor)) as [
-        number | null,
-        number | null,
-        string | null,
-        number | null,
-        string | null,
-      ];
+    const [
+      height,
+      blockTransactionIndex,
+      isDataItem,
+      id,
+      indexedAt,
+    ] = JSON.parse(b64UrlToUtf8(cursor)) as [
+      number | null,
+      number | null,
+      boolean | null,
+      string | null,
+      number | null,
+      string | null,
+    ];
 
-    return { height, blockTransactionIndex, dataItemId, indexedAt, id };
+    return {
+      height,
+      blockTransactionIndex,
+      dataItemId: isDataItem ? id : 'AA',
+      indexedAt,
+      id,
+    };
   } catch (error) {
     throw new ValidationError('Invalid transaction cursor');
   }
