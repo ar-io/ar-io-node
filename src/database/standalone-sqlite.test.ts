@@ -49,8 +49,9 @@ import { processBundleStream } from '../lib/bundles.js';
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
 const DATA_ITEM_ID = 'zoljIRyzG5hp-R4EZV2q8kFI49OAoy23_B9YJ_yEEws';
+const ID = 'zoljIRyzG5hp-R4EZV2q8kFI49OAoy23_B9YJ_yEEws';
 const CURSOR =
-  'WzExMzgsNDIsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiLDE2MzAwMDAwMDAsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiXQ';
+  'WzExMzgsNDIsdHJ1ZSwiem9saklSeXpHNWhwLVI0RVpWMnE4a0ZJNDlPQW95MjNfQjlZSl95RUV3cyIsMTYzMDAwMDAwMF0';
 const INDEXED_AT = 1630000000;
 
 describe('SQLite helper functions', () => {
@@ -66,14 +67,14 @@ describe('SQLite helper functions', () => {
 
 describe('SQLite GraphQL cursor functions', () => {
   describe('encodeTransactionGqlCursor', () => {
-    it('should encode a height, blockTransactionIndex, indexedAt, and dataItemId', () => {
+    it('should encode a height, blockTransactionIndex, dataItemId, indexedAt, and id', () => {
       assert.equal(
         encodeTransactionGqlCursor({
           height: HEIGHT,
           blockTransactionIndex: BLOCK_TX_INDEX,
           dataItemId: DATA_ITEM_ID,
           indexedAt: INDEXED_AT,
-          id: DATA_ITEM_ID,
+          id: ID,
         }),
         CURSOR,
       );
@@ -87,7 +88,25 @@ describe('SQLite GraphQL cursor functions', () => {
         blockTransactionIndex: BLOCK_TX_INDEX,
         dataItemId: DATA_ITEM_ID,
         indexedAt: INDEXED_AT,
-        id: DATA_ITEM_ID,
+        id: ID,
+      });
+    });
+
+    it('should decode a cursor without a data item ID', () => {
+      const cursor = encodeTransactionGqlCursor({
+        height: HEIGHT,
+        blockTransactionIndex: BLOCK_TX_INDEX,
+        dataItemId: 'AA',
+        indexedAt: INDEXED_AT,
+        id: ID,
+      });
+
+      assert.deepEqual(decodeTransactionGqlCursor(cursor), {
+        height: HEIGHT,
+        blockTransactionIndex: BLOCK_TX_INDEX,
+        dataItemId: 'AA',
+        indexedAt: INDEXED_AT,
+        id: ID,
       });
     });
 
