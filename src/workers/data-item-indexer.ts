@@ -53,7 +53,10 @@ export class DataItemIndexer {
     this.queue = fastq.promise(this.indexDataItem.bind(this), workerCount);
   }
 
-  async queueDataItem(item: NormalizedDataItem): Promise<void> {
+  async queueDataItem(
+    item: NormalizedDataItem,
+    isPrioritized = false,
+  ): Promise<void> {
     const log = this.log.child({
       method: 'queueDataItem',
       id: item.id,
@@ -61,9 +64,15 @@ export class DataItemIndexer {
       rootTxId: item.root_tx_id,
     });
 
-    log.debug('Queueing data item for indexing...');
-    this.queue.push(item);
-    log.debug('Data item queued for indexing.');
+    if (isPrioritized) {
+      log.debug('Queueing prioritized data item for indexing...');
+      this.queue.unshift(item);
+      log.debug('Prioritized data item queued for indexing.');
+    } else {
+      log.debug('Queueing data item for indexing...');
+      this.queue.push(item);
+      log.debug('Data item queued for indexing.');
+    }
   }
 
   queueDepth(): number {
