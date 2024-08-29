@@ -181,27 +181,30 @@ arIoRouter.post(
       }
 
       for (const dataItemHeader of dataItemHeaders) {
-        system.dataItemIndexer.queueDataItem({
-          ...dataItemHeader,
-          tags: dataItemHeader.tags ?? [],
-          target: dataItemHeader.target ?? '',
-          anchor: dataItemHeader.anchor ?? '',
-          // These fields are not yet known, to be backfilled
-          data_hash: null,
-          data_offset: null,
-          filter: config.ANS104_INDEX_FILTER_STRING,
-          index: null,
-          offset: null,
-          owner_offset: null,
-          owner_size: null,
-          parent_id: null,
-          parent_index: null,
-          root_tx_id: null,
-          signature_offset: null,
-          signature_size: null,
-          signature_type: null,
-          size: null,
-        });
+        system.dataItemIndexer.queueDataItem(
+          {
+            ...dataItemHeader,
+            tags: dataItemHeader.tags ?? [],
+            target: dataItemHeader.target ?? '',
+            anchor: dataItemHeader.anchor ?? '',
+            // These fields are not yet known, to be backfilled
+            data_hash: null,
+            data_offset: null,
+            filter: config.ANS104_INDEX_FILTER_STRING,
+            index: null,
+            offset: null,
+            owner_offset: null,
+            owner_size: null,
+            parent_id: null,
+            parent_index: null,
+            root_tx_id: null,
+            signature_offset: null,
+            signature_size: null,
+            signature_type: null,
+            size: null,
+          },
+          true, // Prioritized
+        );
       }
 
       res.json({ message: 'Data item(s) queued' });
