@@ -217,7 +217,6 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
       parent_type: 'transaction',
     });
     eventEmitter.emit(events.ANS104_TX_INDEXED, tx);
-    eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, tx);
   }
 });
 
@@ -230,7 +229,6 @@ eventEmitter.on(
         parent_type: 'data_item',
       });
       eventEmitter.emit(events.ANS104_NESTED_BUNDLE_INDEXED, item);
-      eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, item);
     }
   },
 );
@@ -395,7 +393,10 @@ const bundleDataImporter = new BundleDataImporter({
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
 });
 
-async function queueBundle(item: NormalizedDataItem | PartialJsonTransaction) {
+async function queueBundle(
+  item: NormalizedDataItem | PartialJsonTransaction,
+  isPrioritized = false,
+) {
   try {
     if ('root_tx_id' in item && item.root_tx_id === null) {
       log.debug('Skipping download of optimistically indexed data item', {
@@ -411,9 +412,6 @@ async function queueBundle(item: NormalizedDataItem | PartialJsonTransaction) {
       rootTransactionId: 'root_tx_id' in item ? item.root_tx_id : item.id,
       format: 'ans-104',
     });
-
-    const isPrioritized = prioritizedTxIds.has(item.id);
-    prioritizedTxIds.delete(item.id);
 
     if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
       metrics.bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
@@ -451,17 +449,30 @@ async function queueBundle(item: NormalizedDataItem | PartialJsonTransaction) {
   }
 }
 
+// Queue bundles from the queue-bundle route
 eventEmitter.on(
   events.ANS104_BUNDLE_QUEUED,
   async (item: NormalizedDataItem | PartialJsonTransaction) => {
-    await queueBundle(item);
+    await queueBundle(item, true);
   },
 );
 
+// Queue L1 bundles
 eventEmitter.on(
-  events.ANS104_BUNDLE_INDEXED,
+  events.ANS104_TX_INDEXED,
   async (item: NormalizedDataItem | PartialJsonTransaction) => {
-    await queueBundle(item);
+    const isPrioritized = prioritizedTxIds.has(item.id);
+    prioritizedTxIds.delete(item.id);
+
+    await queueBundle(item, isPrioritized);
+  },
+);
+
+// Queue nested bundles
+eventEmitter.on(
+  events.ANS104_NESTED_BUNDLE_INDEXED,
+  async (item: NormalizedDataItem | PartialJsonTransaction) => {
+    await queueBundle(item, true);
   },
 );
 

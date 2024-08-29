@@ -116,15 +116,17 @@ arIoRouter.post(
   async (req, res) => {
     try {
       const { id } = req.body;
+
       if (id === undefined) {
         res.status(400).send("Must provide 'id'");
         return;
       }
-      system.prioritizedTxIds.add(id);
+
       system.eventEmitter.emit(events.ANS104_BUNDLE_QUEUED, {
         id,
         root_tx_id: id,
       });
+
       res.json({ message: 'Bundle queued' });
     } catch (error: any) {
       res.status(500).send(error?.message);
