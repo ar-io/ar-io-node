@@ -67,15 +67,15 @@ export const createArNSResolver = ({
 
   const resolvers: NameResolver[] = [];
 
-  // Add resolvers in the order specified by resolutionOrder
+  // add resolvers in the order specified by resolutionOrder
   for (const resolverType of resolutionOrder) {
-    // ignore invalid resolver types
     if (isArNSResolverType(resolverType)) {
       const resolver = resolverMap[resolverType];
       if (resolver !== undefined) {
         resolvers.push(resolver);
       }
     }
+    log.warn(`Ignoring unsupported resolver type: ${resolverType}`);
   }
 
   return new CompositeArNSResolver({
