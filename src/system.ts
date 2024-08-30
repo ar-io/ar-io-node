@@ -509,9 +509,9 @@ export const nameResolver = new MemoryCacheArNSResolver({
   log,
   resolver: createArNSResolver({
     log,
-    type: config.TRUSTED_ARNS_RESOLVER_TYPE,
     trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
     standaloneArnResolverUrl: config.TRUSTED_ARNS_RESOLVER_URL,
+    resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
     networkProcess: arIO,
   }),
 });

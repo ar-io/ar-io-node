@@ -257,7 +257,7 @@ export const WEBHOOK_BLOCK_FILTER = createFilter(
 
 export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
   'ARNS_CACHE_TTL_SECONDS',
-  '3600', // 1 hour
+  `${60 * 60}`, // 1 hour
 );
 
 export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
@@ -265,11 +265,17 @@ export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
   '10000',
 );
 
+export const ARNS_RESOLVER_PRIORITY_ORDER = env
+  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'resolver,on-demand,gateway')
+  .split(',');
+
 export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
   'TRUSTED_ARNS_GATEWAY_URL',
   'https://__NAME__.arweave.dev',
 );
 
+// @deprecated - use ARNS_RESOLVER_PRIORITY_ORDER instead to specify the order
+// of resolvers to try if the first one is not available.
 export const TRUSTED_ARNS_RESOLVER_TYPE = env.varOrDefault(
   'TRUSTED_ARNS_RESOLVER_TYPE',
   'gateway',
