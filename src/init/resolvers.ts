@@ -23,92 +23,63 @@ import { NameResolver } from '../types.js';
 import { AoIORead } from '@ar.io/sdk';
 import { CompositeArNSResolver } from '../resolution/composite-arns-resolver.js';
 
+const supportedResolvers = ['on-demand', 'resolver', 'gateway'] as const;
+export type ArNSResolverType = (typeof supportedResolvers)[number];
+
+export const isArNSResolverType = (type: string): type is ArNSResolverType => {
+  return supportedResolvers.includes(type as ArNSResolverType);
+};
+
 export const createArNSResolver = ({
   log,
-  type,
+  resolutionOrder,
   standaloneArnResolverUrl,
   trustedGatewayUrl,
   networkProcess,
 }: {
   log: Logger;
-  type: string;
+  resolutionOrder: (ArNSResolverType | string)[];
   standaloneArnResolverUrl?: string;
   trustedGatewayUrl?: string;
   networkProcess?: AoIORead;
 }): NameResolver => {
-  log.info(`Using ${type} for arns name resolution`);
-  switch (type) {
-    case 'on-demand': {
-      const resolvers: NameResolver[] = [];
-      if (standaloneArnResolverUrl !== undefined) {
-        resolvers.push(
-          new StandaloneArNSResolver({
+  log.info(`Using ${resolutionOrder} for arns name resolution`);
+  const resolverMap: Record<ArNSResolverType, NameResolver | undefined> = {
+    'on-demand': new OnDemandArNSResolver({
+      log,
+      networkProcess,
+    }),
+    resolver:
+      standaloneArnResolverUrl !== undefined
+        ? new StandaloneArNSResolver({
             log,
             resolverUrl: standaloneArnResolverUrl,
-          }),
-        );
-      }
-      if (trustedGatewayUrl !== undefined) {
-        resolvers.push(
-          new TrustedGatewayArNSResolver({
+          })
+        : undefined,
+    gateway:
+      trustedGatewayUrl !== undefined
+        ? new TrustedGatewayArNSResolver({
             log,
             trustedGatewayUrl,
-          }),
-        );
+          })
+        : undefined,
+  };
+
+  const resolvers: NameResolver[] = [];
+
+  // Add resolvers in the order specified by resolutionOrder
+  for (const resolverType of resolutionOrder) {
+    // ignore invalid resolver types
+    if (isArNSResolverType(resolverType)) {
+      const resolver = resolverMap[resolverType];
+      if (resolver !== undefined) {
+        resolvers.push(resolver);
       }
-      return new CompositeArNSResolver({
-        log,
-        resolvers: [
-          new OnDemandArNSResolver({
-            log,
-            networkProcess,
-          }),
-          ...resolvers,
-        ],
-      });
-    }
-    case 'resolver': {
-      if (standaloneArnResolverUrl === undefined) {
-        throw new Error(
-          'Standalone ArNS resolver URL is required to use resolver type',
-        );
-      }
-      return new CompositeArNSResolver({
-        log,
-        resolvers: [
-          new StandaloneArNSResolver({
-            log,
-            resolverUrl: standaloneArnResolverUrl,
-          }),
-          // fallback to on-demand resolver if the standalone resolver fails
-          new OnDemandArNSResolver({
-            log,
-            networkProcess,
-          }),
-        ],
-      });
-    }
-    case 'gateway': {
-      if (trustedGatewayUrl === undefined) {
-        throw new Error('Trusted Gateway URL is required to use gateway type');
-      }
-      return new CompositeArNSResolver({
-        log,
-        resolvers: [
-          new TrustedGatewayArNSResolver({
-            log,
-            trustedGatewayUrl,
-          }),
-          // fallback to on-demand resolver if the gateway resolver fails
-          new OnDemandArNSResolver({
-            log,
-            networkProcess,
-          }),
-        ],
-      });
-    }
-    default: {
-      throw new Error(`Unknown ArNSResolver type: ${type}`);
     }
   }
+
+  return new CompositeArNSResolver({
+    log,
+    resolvers,
+  });
 };
