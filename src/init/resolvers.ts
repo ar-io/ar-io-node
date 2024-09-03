@@ -74,8 +74,9 @@ export const createArNSResolver = ({
       if (resolver !== undefined) {
         resolvers.push(resolver);
       }
+    } else {
+      log.warn(`Ignoring unsupported resolver type: ${resolverType}`);
     }
-    log.warn(`Ignoring unsupported resolver type: ${resolverType}`);
   }
 
   return new CompositeArNSResolver({
