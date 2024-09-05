@@ -32,10 +32,12 @@ const createKvBufferStore = ({
   pathKey,
   type,
   log,
+  redisTtlSeconds = config.REDIS_CACHE_TTL_SECONDS,
 }: {
   pathKey: string;
   type: string;
   log: winston.Logger;
+  redisTtlSeconds?: number;
 }): KVBufferStore => {
   log.info(`Using ${type} for KVBufferStore for ${pathKey}`);
   switch (type) {
@@ -47,7 +49,7 @@ const createKvBufferStore = ({
     case 'redis': {
       return new RedisKvStore({
         redisUrl: config.REDIS_CACHE_URL,
-        ttlSeconds: config.REDIS_CACHE_TTL_SECONDS,
+        ttlSeconds: redisTtlSeconds,
         log,
       });
     }
@@ -121,10 +123,11 @@ export const makeTxStore = ({
 export const makeSignatureStore = ({ log }: { log: winston.Logger }) => {
   return new KvSignatureStore({
     log,
-    kvBufferStore: new RedisKvStore({
-      redisUrl: config.REDIS_CACHE_URL,
-      ttlSeconds: 60 * 60 * 4, // 4 hours
+    kvBufferStore: createKvBufferStore({
       log,
+      pathKey: 'signatures',
+      type: config.CHAIN_CACHE_TYPE,
+      redisTtlSeconds: 60 * 60 * 4, // 4 hours
     }),
   });
 };
