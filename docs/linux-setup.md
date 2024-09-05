@@ -128,7 +128,7 @@ These packages are not required to run a node in its basic form. However, they w
     ```
 
 
-11. Install build tools
+11. Install build tools:
     ```
     sudo apt install build-essential
     ```
