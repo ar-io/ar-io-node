@@ -21,6 +21,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataAttributes,
   ChainSource,
+  SignatureStore,
 } from '../types.js';
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
@@ -30,28 +31,38 @@ export class SignatureFetcher implements SignatureSource {
   private dataSource: ContiguousDataSource;
   private dataIndex: ContiguousDataIndex;
   private chainSource: ChainSource;
+  private signatureStore: SignatureStore;
 
   constructor({
     log,
     dataSource,
     dataIndex,
     chainSource,
+    signatureStore,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
     dataIndex: ContiguousDataIndex;
     chainSource: ChainSource;
+    signatureStore: SignatureStore;
   }) {
     this.log = log.child({ class: 'SignatureFetcher' });
     this.dataSource = dataSource;
     this.dataIndex = dataIndex;
     this.chainSource = chainSource;
+    this.signatureStore = signatureStore;
   }
 
   async getDataItemSignature(id: string): Promise<string | undefined> {
     try {
-      this.log.debug('Fetching data item signature', { id });
+      this.log.debug('Fetching data item signature from store', { id });
+      const signatureFromStore = await this.signatureStore.get(id);
 
+      if (signatureFromStore !== undefined) {
+        return signatureFromStore;
+      }
+
+      this.log.debug('Fetching data item signature', { id });
       const dataItemAttributes = await this.dataIndex.getDataItemAttributes(id);
 
       if (dataItemAttributes === undefined) {
@@ -96,8 +107,14 @@ export class SignatureFetcher implements SignatureSource {
 
   async getTransactionSignature(id: string): Promise<string | undefined> {
     try {
-      this.log.debug('Fetching transaction signature', { id });
+      this.log.debug('Fetching transaction signature from store', { id });
+      const signatureFromStore = await this.signatureStore.get(id);
 
+      if (signatureFromStore !== undefined) {
+        return signatureFromStore;
+      }
+
+      this.log.debug('Fetching transaction signature', { id });
       const transactionAttributes =
         await this.dataIndex.getTransactionAttributes(id);
 

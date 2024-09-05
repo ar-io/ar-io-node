@@ -26,6 +26,7 @@ import { KvBlockStore } from '../store/kv-block-store.js';
 import { KvTransactionStore } from '../store/kv-transaction-store.js';
 import { FsBlockStore } from '../store/fs-block-store.js';
 import { FsTransactionStore } from '../store/fs-transaction-store.js';
+import { KvSignatureStore } from '../store/kv-signature-store.js';
 
 const createKvBufferStore = ({
   pathKey,
@@ -115,4 +116,15 @@ export const makeTxStore = ({
       }),
     });
   }
+};
+
+export const makeSignatureStore = ({ log }: { log: winston.Logger }) => {
+  return new KvSignatureStore({
+    log,
+    kvBufferStore: new RedisKvStore({
+      redisUrl: config.REDIS_CACHE_URL,
+      ttlSeconds: 60 * 60 * 4, // 4 hours
+      log,
+    }),
+  });
 };
