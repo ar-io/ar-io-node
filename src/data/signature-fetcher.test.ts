@@ -68,6 +68,14 @@ describe('SignatureFetcher', () => {
       assert.strictEqual(result, undefined);
     });
 
+    it('should return signature from signature store if it exists', async () => {
+      mock.method(signatureStore, 'get', async () => 'signature-from-store');
+
+      const result = await signatureFetcher.getDataItemSignature('testId');
+
+      assert.strictEqual(result, 'signature-from-store');
+    });
+
     it('should return signature if it exists in attributes', async () => {
       const testSignature = 'testSignature';
       mock.method(dataIndex, 'getDataItemAttributes', async () => ({
@@ -122,6 +130,14 @@ describe('SignatureFetcher', () => {
       const result = await signatureFetcher.getTransactionSignature('testId');
 
       assert.strictEqual(result, undefined);
+    });
+
+    it('should return signature from signature store if it exists', async () => {
+      mock.method(signatureStore, 'get', async () => 'signature-from-store');
+
+      const result = await signatureFetcher.getDataItemSignature('testId');
+
+      assert.strictEqual(result, 'signature-from-store');
     });
 
     it('should return signature if it exists in attributes', async () => {
