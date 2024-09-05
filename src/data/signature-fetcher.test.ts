@@ -23,6 +23,7 @@ import {
   ContiguousDataSource,
   ContiguousDataIndex,
   ChainSource,
+  SignatureStore,
 } from '../types.js';
 
 describe('SignatureFetcher', () => {
@@ -31,6 +32,7 @@ describe('SignatureFetcher', () => {
   let dataIndex: ContiguousDataIndex;
   let chainSource: ChainSource;
   let signatureFetcher: SignatureFetcher;
+  let signatureStore: SignatureStore;
 
   beforeEach(() => {
     log = winston.createLogger({ silent: true });
@@ -44,12 +46,16 @@ describe('SignatureFetcher', () => {
     chainSource = {
       getTxField: mock.fn(),
     } as unknown as ChainSource;
+    signatureStore = {
+      get: mock.fn(),
+    } as unknown as SignatureStore;
 
     signatureFetcher = new SignatureFetcher({
       log,
       dataSource,
       dataIndex,
       chainSource,
+      signatureStore,
     });
   });
 

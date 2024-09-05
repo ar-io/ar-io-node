@@ -22,6 +22,7 @@ import * as config from '../config.js';
 import * as system from '../system.js';
 import * as events from '../events.js';
 import { release } from '../version.js';
+import { signatureStore } from '../system.js';
 
 export const arIoRouter = Router();
 
@@ -181,6 +182,11 @@ arIoRouter.post(
       }
 
       for (const dataItemHeader of dataItemHeaders) {
+        // cache signatures in signature store
+        if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
+          signatureStore.set(dataItemHeader.id, dataItemHeader.signature);
+        }
+
         system.dataItemIndexer.queueDataItem(
           {
             ...dataItemHeader,

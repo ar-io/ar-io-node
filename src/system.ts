@@ -35,7 +35,11 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
-import { makeBlockStore, makeTxStore } from './init/header-stores.js';
+import {
+  makeBlockStore,
+  makeTxStore,
+  makeSignatureStore,
+} from './init/header-stores.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';
@@ -533,11 +537,13 @@ export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
     })
   : undefined;
 
+export const signatureStore = makeSignatureStore({ log });
 export const signatureFetcher = new SignatureFetcher({
   log,
   dataSource: contiguousDataSource,
   dataIndex: contiguousDataIndex,
   chainSource: arweaveClient,
+  signatureStore,
 });
 
 const dataSqliteWalCleanupWorker = config.ENABLE_DATA_DB_WAL_CLEANUP

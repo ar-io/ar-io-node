@@ -123,6 +123,13 @@ export interface PartialJsonTransactionStore {
   del(txId: string): Promise<void>;
 }
 
+export interface SignatureStore {
+  has(key: string): Promise<boolean>;
+  get(id: string): Promise<string | undefined>;
+  set(id: string, signature: string): Promise<void>;
+  del(id: string): Promise<void>;
+}
+
 export interface ChunkDataStore {
   has(dataRoot: string, relativeOffset: number): Promise<boolean>;
   get(dataRoot: string, relativeOffset: number): Promise<ChunkData | undefined>;
