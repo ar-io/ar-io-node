@@ -23,7 +23,7 @@ import { headerNames } from '../constants.js';
 import { sendNotFound } from '../routes/data/handlers.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { NameResolver } from '../types.js';
-
+import * as metrics from '../metrics.js';
 const EXCLUDED_SUBDOMAINS = new Set('www');
 
 export const createArnsMiddleware = ({
@@ -53,7 +53,7 @@ export const createArnsMiddleware = ({
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
       // Avoid collisions with sandbox URLs by ensuring the subdomain length
-      // is below the mininimum length of a sandbox subdomain. Undernames are
+      // is below the minimum length of a sandbox subdomain. Undernames are
       // are an exception because they can be longer and '_' cannot appear in
       // base32.
       (arnsSubdomain.length > 48 && !arnsSubdomain.match(/_/))
@@ -67,8 +67,10 @@ export const createArnsMiddleware = ({
       return;
     }
 
+    const start = Date.now();
     const { resolvedId, ttl, processId } =
       await nameResolver.resolve(arnsSubdomain);
+    metrics.arnsResolutionTime.observe(Date.now() - start);
     if (resolvedId === undefined) {
       sendNotFound(res);
       return;
@@ -76,6 +78,7 @@ export const createArnsMiddleware = ({
     res.header(headerNames.arnsResolvedId, resolvedId);
     res.header(headerNames.arnsTtlSeconds, ttl.toString());
     res.header(headerNames.arnsProcessId, processId);
+    // TODO: add a header for arns cache status
     res.header('Cache-Control', `public, max-age=${ttl}`);
     dataHandler(req, res, next);
   });

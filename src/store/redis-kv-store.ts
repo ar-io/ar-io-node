@@ -17,7 +17,6 @@
  */
 import { RedisClientType, commandOptions, createClient } from 'redis';
 import winston from 'winston';
-
 import * as metrics from '../metrics.js';
 import { KVBufferStore } from '../types.js';
 
@@ -56,8 +55,6 @@ export class RedisKvStore implements KVBufferStore {
     });
   }
 
-  // TODO: close connection to redis safely
-
   async get(key: string): Promise<Buffer | undefined> {
     const value = await this.client.get(
       commandOptions({ returnBuffers: true }),
@@ -81,5 +78,9 @@ export class RedisKvStore implements KVBufferStore {
     await this.client.set(key, buffer, {
       EX: this.ttlSeconds,
     });
+  }
+
+  async close(): Promise<void> {
+    await this.client.quit();
   }
 }

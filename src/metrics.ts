@@ -180,6 +180,21 @@ export const redisErrorCounter = new promClient.Counter({
   help: 'Number of errors redis cache has received',
 });
 
+export const arnsCacheHitCounter = new promClient.Counter({
+  name: 'arns_cache_hit_total',
+  help: 'Number of hits in the arns cache',
+});
+
+export const arnsCacheMissCounter = new promClient.Counter({
+  name: 'arns_cache_miss_total',
+  help: 'Number of misses in the arns cache',
+});
+
+export const arnsResolutionTime = new promClient.Summary({
+  name: 'arns_resolution_time',
+  help: 'Time it takes to resolve an arns name',
+});
+
 // Data source metrics
 
 export const getDataErrorsTotal = new promClient.Counter({

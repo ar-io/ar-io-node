@@ -71,11 +71,11 @@ services:
       - WEBHOOK_INDEX_FILTER=${WEBHOOK_INDEX_FILTER:-}
       - WEBHOOK_BLOCK_FILTER=${WEBHOOK_BLOCK_FILTER:-}
       - CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD=${CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD:-}
-      - TRUSTED_ARNS_RESOLVER_URL=${TRUSTED_ARNS_RESOLVER_URL:-}
       - TRUSTED_ARNS_GATEWAY_URL=${TRUSTED_ARNS_GATEWAY_URL:-https://__NAME__.arweave.net}
       - ARNS_RESOLVER_PRIORITY_ORDER=${ARNS_RESOLVER_PRIORITY_ORDER:-on-demand,gateway}
       - ARNS_CACHE_TTL_SECONDS=${ARNS_CACHE_TTL_SECONDS:-3600}
       - ARNS_CACHE_MAX_KEYS=${ARNS_CACHE_MAX_KEYS:-10000}
+      - ARNS_CACHE_TYPE=${ARNS_CACHE_TYPE:-redis}
       - ENABLE_MEMPOOL_WATCHER=${ENABLE_MEMPOOL_WATCHER:-false}
       - MEMPOOL_POOLING_INTERVAL_MS=${MEMPOOL_POOLING_INTERVAL_MS:-}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
@@ -136,28 +136,6 @@ services:
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
       - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
-    networks:
-      - ar-io-network
-
-  resolver:
-    image: ghcr.io/ar-io/arns-resolver:${RESOLVER_IMAGE_TAG:-7fe02ecda2027e504248d3f3716579f60b561de5}
-    restart: on-failure
-    ports:
-      - 6000:6000
-    environment:
-      - PORT=6000
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - IO_PROCESS_ID=${IO_PROCESS_ID:-}
-      - RUN_RESOLVER=${RUN_RESOLVER:-false}
-      - EVALUATION_INTERVAL_MS=${EVALUATION_INTERVAL_MS:-}
-      - ARNS_CACHE_TTL_MS=${RESOLVER_CACHE_TTL_MS:-}
-      - ARNS_CACHE_PATH=${ARNS_CACHE_PATH:-./data/arns}
-      - AO_CU_URL=${AO_CU_URL:-}
-      - AO_MU_URL=${AO_MU_URL:-}
-      - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
-      - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
-    volumes:
-      - ${ARNS_CACHE_PATH:-./data/arns}:/app/data/arns
     networks:
       - ar-io-network
 
