@@ -26,6 +26,7 @@ static_resources:
                         - match: { prefix: '/' }
                           route:
                             cluster: ario_gateways
+                            timeout: 0s
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
