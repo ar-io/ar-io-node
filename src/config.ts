@@ -284,9 +284,8 @@ export const TRUSTED_ARNS_RESOLVER_TYPE = env.varOrDefault(
   'gateway',
 );
 
-export const TRUSTED_ARNS_RESOLVER_URL = env.varOrDefault(
+export const TRUSTED_ARNS_RESOLVER_URL = env.varOrUndefined(
   'TRUSTED_ARNS_RESOLVER_URL',
-  TRUSTED_ARNS_GATEWAY_URL,
 );
 
 //
