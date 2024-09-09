@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Use the correct environment variable to populate WEBHOOK_BLOCK_FILTER in
+  `docker-compose.yaml`.
+- Don't cache data regions retrieved to satisfy range requests to avoid
+  unnecessary storage overhead and prevent inserting invalid ID to hash
+  mappings into the data DB.
+
+### Added
+
+- Added a new ClickHouse based DB backend. It can be used in combination with
+  the SQLite DB backend to enable batch loading of historical data from
+  Parquet. It also opens up the possibility of higher DB performance and
+  scalability. In its current state it should be considered a technology
+  preview. It won't be useful to most users until we either provide Parquet
+  files to load into it or automate flushing of the SQLite DB to it (both are
+  planned in future release). It is not intended to be standalone solution. It
+  supports bulk loading and efficient GraphQL querying of transactions and data
+  items, but it relies on SQLite (or potentially another OLTP in the future) to
+  index recent data. These limitations allow greatly simplified schema and
+  query construction. Querying the new ClickHouse DB for transaction and data
+  items via GraphQL is enabled by setting the 'CLICKHOUSE_URL' environment
+  variable.
+- Added the ability to skip storing transaction signatures in the DB by setting
+  WRITE_TRANSACTION_DB_SIGNATURES to false. Missing signatures are fetched from
+  the trusted Arweave node when needed for GraphQL results.
+- Added a Redis backed signature cache to support retrieving optimistically
+  indexed data item signatures in GraphQL queries when writing data items
+  signatures to the DB has been disabled.
+- Added on-demand and composite ArNS resolvers. The on-demand resolver
+  fetches results directly from an AO CU. The composite resolver attempts
+  resolution in the order specified by the ARNS_RESOLVER_PRIORITY_ORDER
+  environment variable (defaults to 'on-demand,gateway').
+- Added a queue_length Prometheus metric to fasciliate monitoring queues and
+  inform future optimizations
+- Added SQLite WAL cleanup worker to help manage the size of the `data.db-wal`
+  file. Future improvements to `data.db` usage are also planned to further
+  improve WAL management.
+
+### Changed
+
+- Handle data requests by ID on ArNS sites. This enables ArNS sites to use
+  relative links to data by ID.
+- Replaced ARNS_RESOLVER_TYPE with ARNS_RESOLVER_PRIORITY_ORDER (defaults to
+  'on-demand,gateway').
+- Introduced unbundling back pressure. When either data item data or GraphQL
+  indexing queue depths are more than the value specified by the
+  MAX_DATA_ITEM_QUEUE_SIZE environment variable (defaults to 100000),
+  unbundling is paused until the queues length falls bellow that threshold.
+  This prevents the gateway from running out of memory when the unbundling rate
+  exceeds the indexing rate while avoiding wasteful bundle reprocessing.
+- Prioritized optimistic data item indexing by inserting optimistic data items
+  at the front of the indexing queues.
+- Prioritized nested bundle indexing by inserting nested bundles at the front
+  of the unbundling queue.
+
 ## [Release 16] - 2024-08-09
 
 ### Fixed
