@@ -95,7 +95,7 @@ describe('ArNS', function () {
     const txId = 'TB2wJyKrPnkAW79DAwlJYwpgdHKpijEJWQfcwX715Co';
     const expectedSandbox =
       'jqo3ajzcvm7hsac3x5bqgckjmmfga5dsvgfdcckza7omc7xv4qva';
-    const expectedRedirect = `http://${expectedSandbox}.ar-io.localhost/${txId}?`;
+    const expectedRedirect = `https://${expectedSandbox}.ar-io.localhost/${txId}?`;
     const res = await axios.get(`http://localhost:4000/${txId}`, {
       headers: { Host: 'ardrive.ar-io.localhost' },
       maxRedirects: 0, // Prevent axios from following redirects
