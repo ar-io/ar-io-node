@@ -23,6 +23,7 @@ import { AoIORead } from '@ar.io/sdk';
 import { CompositeArNSResolver } from '../resolution/composite-arns-resolver.js';
 import { RedisKvStore } from '../store/redis-kv-store.js';
 import { NodeKvStore } from '../store/node-kv-store.js';
+import { KvArnsStore } from '../store/kv-arns-store.js';
 
 const supportedResolvers = ['on-demand', 'gateway'] as const;
 export type ArNSResolverType = (typeof supportedResolvers)[number];
@@ -68,7 +69,7 @@ export const createArNSResolver = ({
   networkProcess,
 }: {
   log: Logger;
-  cache: KVBufferStore;
+  cache: KvArnsStore;
   resolutionOrder: (ArNSResolverType | string)[];
   trustedGatewayUrl?: string;
   networkProcess?: AoIORead;
