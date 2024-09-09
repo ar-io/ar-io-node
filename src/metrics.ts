@@ -191,8 +191,8 @@ export const arnsCacheMissCounter = new promClient.Counter({
 });
 
 export const arnsResolutionTime = new promClient.Summary({
-  name: 'arns_resolution_time',
-  help: 'Time it takes to resolve an arns name',
+  name: 'arns_resolution_time_ms',
+  help: 'Time in ms it takes to resolve an arns name',
 });
 
 // Data source metrics
