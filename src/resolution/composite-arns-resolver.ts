@@ -18,6 +18,7 @@
 import winston from 'winston';
 import { KVBufferStore, NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
+import { KvArnsStore } from '../store/kv-arns-store.js';
 
 export class CompositeArNSResolver implements NameResolver {
   private log: winston.Logger;
@@ -31,22 +32,18 @@ export class CompositeArNSResolver implements NameResolver {
   }: {
     log: winston.Logger;
     resolvers: NameResolver[];
-    cache: KVBufferStore;
+    cache: KvArnsStore;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.resolvers = resolvers;
     this.cache = cache;
   }
 
-  private hashKey(key: string): string {
-    return `arns|${key}`;
-  }
-
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
 
     try {
-      const cachedResolutionBuffer = await this.cache.get(this.hashKey(name));
+      const cachedResolutionBuffer = await this.cache.get(name);
       if (cachedResolutionBuffer) {
         const cachedResolution: NameResolution = JSON.parse(
           cachedResolutionBuffer.toString(),
@@ -73,9 +70,7 @@ export class CompositeArNSResolver implements NameResolver {
           });
           const resolution = await resolver.resolve(name);
           if (resolution.resolvedId !== undefined) {
-            const hashKey = this.hashKey(name);
-            const resolutionBuffer = Buffer.from(JSON.stringify(resolution));
-            await this.cache.set(hashKey, resolutionBuffer);
+            await this.cache.set(name, Buffer.from(JSON.stringify(resolution)));
             this.log.info('Resolved name', { name, resolution });
             return resolution;
           }

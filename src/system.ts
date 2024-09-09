@@ -81,6 +81,7 @@ import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher } from './data/signature-fetcher.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
+import { KvArnsStore } from './store/kv-arns-store.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -550,12 +551,14 @@ export const manifestPathResolver = new StreamingManifestPathResolver({
   log,
 });
 
-export const arnsResolverCache = createArNSKvStore({
-  log,
-  type: config.ARNS_CACHE_TYPE,
-  redisUrl: config.REDIS_CACHE_URL,
-  ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
-  maxKeys: config.ARNS_CACHE_MAX_KEYS,
+export const arnsResolverCache = new KvArnsStore({
+  kvBufferStore: createArNSKvStore({
+    log,
+    type: config.ARNS_CACHE_TYPE,
+    redisUrl: config.REDIS_CACHE_URL,
+    ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
+    maxKeys: config.ARNS_CACHE_MAX_KEYS,
+  }),
 });
 
 export const nameResolver = createArNSResolver({
