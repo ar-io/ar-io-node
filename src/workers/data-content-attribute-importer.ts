@@ -89,4 +89,8 @@ export class DataContentAttributeImporter {
     await this.queue.drained();
     log.debug('Stopped successfully.');
   }
+
+  queueDepth(): number {
+    return this.queue.length();
+  }
 }

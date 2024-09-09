@@ -781,4 +781,8 @@ export class ArweaveCompositeClient
       results,
     };
   }
+
+  queueDepth(): number {
+    return this.trustedNodeRequestQueue.length();
+  }
 }

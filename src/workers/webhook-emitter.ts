@@ -244,4 +244,8 @@ export class WebhookEmitter {
       this.log.error('Unexpected error while emitting webhook:', error);
     }
   }
+
+  queueDepth(): number {
+    return this.emissionQueue.length();
+  }
 }

@@ -136,6 +136,9 @@ export const arweaveClient = new ArweaveCompositeClient({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
 });
+metrics.registerQueueLengthGauge('arweaveClientRequests', {
+  length: () => arweaveClient.queueDepth(),
+});
 
 export const db = new StandaloneSqliteDatabase({
   log,
@@ -255,6 +258,9 @@ export const txFetcher = new TransactionFetcher({
   chainSource: arweaveClient,
   eventEmitter,
 });
+metrics.registerQueueLengthGauge('txFetcher', {
+  length: () => txFetcher.queueDepth(),
+});
 
 // Async fetch block TXs that failed sync fetch
 eventEmitter.on(events.BLOCK_TX_FETCH_FAILED, ({ id: txId }) => {
@@ -265,6 +271,9 @@ const txImporter = new TransactionImporter({
   log,
   chainIndex,
   eventEmitter,
+});
+metrics.registerQueueLengthGauge('txImporter', {
+  length: () => txImporter.queueDepth(),
 });
 
 // Queue fetched TXs to
@@ -282,6 +291,9 @@ const txOffsetImporter = new TransactionOffsetImporter({
   log,
   chainSource: arweaveClient,
   chainOffsetIndex,
+});
+metrics.registerQueueLengthGauge('txOffsetImporter', {
+  length: () => txOffsetImporter.queueDepth(),
 });
 
 export const txOffsetRepairWorker = new TransactionOffsetRepairWorker({
@@ -364,6 +376,9 @@ const dataContentAttributeImporter = new DataContentAttributeImporter({
   log,
   contiguousDataIndex: contiguousDataIndex,
 });
+metrics.registerQueueLengthGauge('dataContentAttributeImporter', {
+  length: () => dataContentAttributeImporter.queueDepth(),
+});
 
 export const contiguousDataSource = new ReadThroughDataCache({
   log,
@@ -381,12 +396,18 @@ export const dataItemIndexer = new DataItemIndexer({
   eventEmitter,
   indexWriter: dataItemIndexWriter,
 });
+metrics.registerQueueLengthGauge('dataItemIndexer', {
+  length: () => dataItemIndexer.queueDepth(),
+});
 
 const ans104DataIndexer = new Ans104DataIndexer({
   log,
   eventEmitter,
   indexWriter: nestedDataIndexWriter,
   contiguousDataIndex,
+});
+metrics.registerQueueLengthGauge('ans104DataIndexer', {
+  length: () => ans104DataIndexer.queueDepth(),
 });
 
 const shouldUnbundleDataItems = () =>
@@ -402,12 +423,18 @@ const ans104Unbundler = new Ans104Unbundler({
   workerCount: config.ANS104_UNBUNDLE_WORKERS,
   shouldUnbundle: shouldUnbundleDataItems,
 });
+metrics.registerQueueLengthGauge('ans104Unbundler', {
+  length: () => ans104Unbundler.queueDepth(),
+});
 
 const bundleDataImporter = new BundleDataImporter({
   log,
   contiguousDataSource,
   ans104Unbundler,
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
+});
+metrics.registerQueueLengthGauge('bundleDataImporter', {
+  length: () => bundleDataImporter.queueDepth(),
 });
 
 async function queueBundle(
@@ -539,6 +566,9 @@ const webhookEmitter = new WebhookEmitter({
   indexFilter: config.WEBHOOK_INDEX_FILTER,
   blockFilter: config.WEBHOOK_BLOCK_FILTER,
   log,
+});
+metrics.registerQueueLengthGauge('webhookEmitter', {
+  length: () => webhookEmitter.queueDepth(),
 });
 
 export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER

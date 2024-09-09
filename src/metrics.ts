@@ -16,6 +16,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import * as promClient from 'prom-client';
+import { Gauge } from 'prom-client';
+
 /* eslint-disable */
 // @ts-ignore
 import PrometheusMetrics from 'opossum-prometheus';
@@ -196,4 +198,25 @@ export const getDataStreamSuccessesTotal = new promClient.Counter({
   name: 'get_data_stream_successes_total',
   help: 'Count of data stream successes',
   labelNames: ['class'],
+});
+
+// Queue length metrics
+
+const queues: { [key: string]: { length: () => number } } = {};
+export function registerQueueLengthGauge(
+  name: string,
+  queue: { length: () => number },
+) {
+  queues[name] = queue;
+}
+
+export const queueLengthGauge = new Gauge({
+  name: 'queue_length',
+  help: 'Current length of queues',
+  labelNames: ['queue_name'],
+  collect() {
+    Object.entries(queues).forEach(([queueName, queue]) => {
+      this.set({ queue_name: queueName }, queue.length());
+    });
+  },
 });
