@@ -237,6 +237,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
       parent_type: 'transaction',
     });
     eventEmitter.emit(events.ANS104_TX_INDEXED, tx);
+    eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, tx);
   }
 });
 
@@ -249,6 +250,7 @@ eventEmitter.on(
         parent_type: 'data_item',
       });
       eventEmitter.emit(events.ANS104_NESTED_BUNDLE_INDEXED, item);
+      eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, item);
     }
   },
 );
