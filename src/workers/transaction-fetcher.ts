@@ -121,4 +121,8 @@ export class TransactionFetcher {
     await this.queue.drained();
     log.debug('Stopped successfully.');
   }
+
+  queueDepth(): number {
+    return this.queue.length();
+  }
 }
