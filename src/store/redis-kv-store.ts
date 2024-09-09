@@ -43,6 +43,7 @@ export class RedisKvStore implements KVBufferStore {
       this.log.error(`Redis error`, {
         message: error.message,
         stack: error.stack,
+        url: redisUrl,
       });
       metrics.redisErrorCounter.inc();
     });
@@ -50,6 +51,7 @@ export class RedisKvStore implements KVBufferStore {
       this.log.error(`Redis connection error`, {
         message: error.message,
         stack: error.stack,
+        url: redisUrl,
       });
       metrics.redisConnectionErrorsCounter.inc();
     });
