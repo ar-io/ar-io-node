@@ -15,41 +15,49 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { RootDatabase, open } from 'lmdb';
-
+import NodeCache from 'node-cache';
 import { KVBufferStore } from '../types.js';
 
-export class LmdbKVStore implements KVBufferStore {
-  private db: RootDatabase<Buffer, string>;
+export class NodeKvStore implements KVBufferStore {
+  private cache: NodeCache;
 
-  constructor({ dbPath }: { dbPath: string }) {
-    this.db = open({
-      path: dbPath,
-      encoding: 'binary',
-      commitDelay: 100, // 100ms delay - increases writes per transaction to reduce I/O
+  constructor({
+    ttlSeconds,
+    maxKeys,
+  }: {
+    ttlSeconds: number;
+    maxKeys: number;
+  }) {
+    this.cache = new NodeCache({
+      stdTTL: ttlSeconds,
+      maxKeys,
+      deleteOnExpire: true,
+      useClones: false, // cloning promises is unsafe
+      checkperiod: Math.min(60 * 5, ttlSeconds),
     });
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    const value = this.db.get(key);
-    return value;
-  }
-
-  async has(key: string): Promise<boolean> {
-    return this.db.doesExist(key);
-  }
-
-  async del(key: string): Promise<void> {
-    if (await this.has(key)) {
-      await this.db.remove(key);
+    const value = this.cache.get(key);
+    if (value === undefined) {
+      return undefined;
     }
+    return value as Buffer;
   }
 
   async set(key: string, buffer: Buffer): Promise<void> {
-    await this.db.put(key, buffer);
+    this.cache.set(key, buffer);
+  }
+
+  async del(key: string): Promise<void> {
+    this.cache.del(key);
+  }
+
+  async has(key: string): Promise<boolean> {
+    return this.cache.has(key);
   }
 
   async close(): Promise<void> {
-    await this.db.close();
+    this.cache.close();
   }
 }

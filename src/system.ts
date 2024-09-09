@@ -44,7 +44,6 @@ import {
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';
-import { MemoryCacheArNSResolver } from './resolution/memory-cache-arns-resolver.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
@@ -74,7 +73,7 @@ import { TransactionRepairWorker } from './workers/transaction-repair-worker.js'
 import { TransactionOffsetImporter } from './workers/transaction-offset-importer.js';
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
-import { createArNSResolver } from './init/resolvers.js';
+import { createArNSKvStore, createArNSResolver } from './init/resolvers.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
@@ -551,15 +550,20 @@ export const manifestPathResolver = new StreamingManifestPathResolver({
   log,
 });
 
-export const nameResolver = new MemoryCacheArNSResolver({
+export const arnsResolverCache = createArNSKvStore({
   log,
-  resolver: createArNSResolver({
-    log,
-    trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
-    standaloneArnResolverUrl: config.TRUSTED_ARNS_RESOLVER_URL,
-    resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
-    networkProcess: arIO,
-  }),
+  type: config.ARNS_CACHE_TYPE,
+  redisUrl: config.REDIS_CACHE_URL,
+  ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
+  maxKeys: config.ARNS_CACHE_MAX_KEYS,
+});
+
+export const nameResolver = createArNSResolver({
+  log,
+  trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
+  resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
+  networkProcess: arIO,
+  cache: arnsResolverCache,
 });
 
 const webhookEmitter = new WebhookEmitter({
@@ -616,6 +620,7 @@ export const shutdown = async (express: Server) => {
       eventEmitter.removeAllListeners();
       arIODataSource.stopUpdatingPeers();
       dataSqliteWalCleanupWorker?.stop();
+      await arnsResolverCache.close();
       await mempoolWatcher?.stop();
       await blockImporter.stop();
       await dataItemIndexer.stop();

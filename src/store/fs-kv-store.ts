@@ -66,4 +66,8 @@ export class FsKVStore implements KVBufferStore {
       await fse.move(tmpPath, this.bufferPath(key));
     }
   }
+
+  async close(): Promise<void> {
+    // No-op
+  }
 }

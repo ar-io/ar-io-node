@@ -633,6 +633,7 @@ export type KVBufferStore = {
   set(key: string, buffer: Buffer): Promise<void>;
   del(key: string): Promise<void>;
   has(key: string): Promise<boolean>;
+  close(): Promise<void>;
 };
 
 export interface SignatureSource {
