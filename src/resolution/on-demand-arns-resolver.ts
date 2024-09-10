@@ -22,11 +22,17 @@ import { NameResolution, NameResolver } from '../types.js';
 import { ANT, AoClient, AoIORead, AOProcess, IO } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
+import CircuitBreaker from 'opossum';
+import * as metrics from '../metrics.js';
 
 export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
   private networkProcess: AoIORead;
   private ao: AoClient;
+  private aoCircuitBreaker: CircuitBreaker<
+    Parameters<AoIORead['getArNSRecord']>,
+    Awaited<ReturnType<AoIORead['getArNSRecord']>>
+  >;
 
   constructor({
     log,
@@ -42,16 +48,35 @@ export class OnDemandArNSResolver implements NameResolver {
         ao: ao,
       }),
     }),
+    circuitBreakerOptions = {
+      timeout: config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS,
+      errorThresholdPercentage:
+        config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+      rollingCountTimeout:
+        config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+      resetTimeout: config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+    },
   }: {
     log: winston.Logger;
     networkProcess?: AoIORead;
     ao?: AoClient;
+    circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({
       class: 'OnDemandArNSResolver',
     });
     this.networkProcess = networkProcess;
     this.ao = ao;
+    this.aoCircuitBreaker = new CircuitBreaker(
+      ({ name }: { name: string }) => {
+        return this.networkProcess.getArNSRecord({ name });
+      },
+      {
+        name: 'getArNSRecord',
+        ...circuitBreakerOptions,
+      },
+    );
+    metrics.circuitBreakerMetrics.add(this.aoCircuitBreaker);
   }
 
   async resolve(name: string): Promise<NameResolution> {
@@ -62,10 +87,8 @@ export class OnDemandArNSResolver implements NameResolver {
       if (baseName === undefined) {
         throw new Error('Invalid name');
       }
-      // find that name in the network process
-      const arnsRecord = await this.networkProcess.getArNSRecord({
-        name: baseName,
-      });
+      // find that name in the network process, using the circuit breaker if there are persistent AO issues
+      const arnsRecord = await this.aoCircuitBreaker.fire({ name: baseName });
 
       if (arnsRecord === undefined || arnsRecord.processId === undefined) {
         throw new Error('Invalid name, arns record not found');
