@@ -563,7 +563,7 @@ export const arnsResolverCache = new KvArnsStore({
 
 export const nameResolver = createArNSResolver({
   log,
-  trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
+  trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
   networkProcess: arIO,
   cache: arnsResolverCache,
