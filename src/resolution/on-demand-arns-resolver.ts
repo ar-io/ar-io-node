@@ -72,8 +72,8 @@ export class OnDemandArNSResolver implements NameResolver {
         return this.networkProcess.getArNSRecord({ name });
       },
       {
-        name: 'getArNSRecord',
         ...circuitBreakerOptions,
+        name: 'getArNSRecord',
       },
     );
     metrics.circuitBreakerMetrics.add(this.aoCircuitBreaker);
