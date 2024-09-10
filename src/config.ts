@@ -276,7 +276,7 @@ export const ARNS_RESOLVER_PRIORITY_ORDER = env
 
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS',
-  `${60 * 1000}`, // 1 minute
+  `${5 * 1000}`, // 5 seconds
 );
 
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
@@ -288,13 +288,13 @@ export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   +env.varOrDefault(
     'ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
-    `${1000 * 10}`, // 10 seconds
+    `${60 * 1000}`, // 1 minute
   );
 
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   +env.varOrDefault(
     'ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
-    `${1000 * 60}`, // 1 minute
+    `${5 * 60 * 1000}`, // 5 minutes
   );
 
 // TODO: support multiple gateway urls
