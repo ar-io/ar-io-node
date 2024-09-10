@@ -277,7 +277,7 @@ export const ARNS_RESOLVER_PRIORITY_ORDER = env
 // TODO: support multiple gateway urls
 export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
   'TRUSTED_ARNS_GATEWAY_URL',
-  'https://__NAME__.arweave.net',
+  `${new URL(TRUSTED_GATEWAY_URL).origin}://__NAME__.${new URL(TRUSTED_GATEWAY_URL).hostname}`,
 );
 
 //
