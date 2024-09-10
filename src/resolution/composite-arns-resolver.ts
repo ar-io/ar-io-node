@@ -41,6 +41,7 @@ export class CompositeArNSResolver implements NameResolver {
 
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
+    let resolution: NameResolution | undefined;
 
     try {
       const cachedResolutionBuffer = await this.cache.get(name);
@@ -48,6 +49,7 @@ export class CompositeArNSResolver implements NameResolver {
         const cachedResolution: NameResolution = JSON.parse(
           cachedResolutionBuffer.toString(),
         );
+        resolution = cachedResolution; // hold on tho this in case we need it
         if (
           cachedResolution !== undefined &&
           cachedResolution.resolvedAt !== undefined &&
@@ -83,26 +85,22 @@ export class CompositeArNSResolver implements NameResolver {
         }
       }
       this.log.warn('Unable to resolve name against all resolvers', { name });
-      return {
-        name,
-        resolvedId: undefined,
-        resolvedAt: undefined,
-        processId: undefined,
-        ttl: undefined,
-      };
     } catch (error: any) {
       this.log.error('Error resolving name:', {
         name,
         message: error.message,
         stack: error.stack,
       });
-      return {
+    }
+    // return the resolution if it exists, otherwise return an empty resolution
+    return (
+      resolution ?? {
         name,
         resolvedId: undefined,
         resolvedAt: undefined,
         ttl: undefined,
         processId: undefined,
-      };
-    }
+      }
+    );
   }
 }
