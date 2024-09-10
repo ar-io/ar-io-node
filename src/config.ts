@@ -274,6 +274,29 @@ export const ARNS_RESOLVER_PRIORITY_ORDER = env
   .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'on-demand,gateway')
   .split(',');
 
+export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
+  'ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS',
+  `${60 * 1000}`, // 1 minute
+);
+
+export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
+  +env.varOrDefault(
+    'ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
+    '50',
+  );
+
+export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
+  +env.varOrDefault(
+    'ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
+    `${1000 * 10}`, // 10 seconds
+  );
+
+export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
+  +env.varOrDefault(
+    'ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
+    `${1000 * 60}`, // 1 minute
+  );
+
 // TODO: support multiple gateway urls
 export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
   'TRUSTED_ARNS_GATEWAY_URL',
