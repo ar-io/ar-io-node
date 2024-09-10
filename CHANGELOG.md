@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 17] - 2024-09-09
 
+### Notes
+
+- This release includes a **LONG RUNNING MIGRATION**. Your node may appear
+  unresponsive while it is running. It is best to wait for it to complete. If
+  it fails or is interrupted, removing your SQLite DBs (in `data/sqlite` by
+  default) should resolve the issue, provided you are willing to lose your
+  GraphQL index and let your node rebuild it.
+
 ### Fixed
 
 - Use the correct environment variable to populate WEBHOOK_BLOCK_FILTER in
