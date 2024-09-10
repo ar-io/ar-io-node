@@ -16,14 +16,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import winston from 'winston';
-import { KVBufferStore, NameResolution, NameResolver } from '../types.js';
+import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import { KvArnsStore } from '../store/kv-arns-store.js';
 
 export class CompositeArNSResolver implements NameResolver {
   private log: winston.Logger;
   private resolvers: NameResolver[];
-  private cache: KVBufferStore;
+  private cache: KvArnsStore;
 
   constructor({
     log,
@@ -70,7 +70,7 @@ export class CompositeArNSResolver implements NameResolver {
           });
           const resolution = await resolver.resolve(name);
           if (resolution.resolvedId !== undefined) {
-            await this.cache.set(name, Buffer.from(JSON.stringify(resolution)));
+            this.cache.set(name, Buffer.from(JSON.stringify(resolution)));
             this.log.info('Resolved name', { name, resolution });
             return resolution;
           }
