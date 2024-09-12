@@ -20,7 +20,7 @@ import { default as asyncHandler } from 'express-async-handler';
 import { PassThrough, Transform } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
-import { headerNames } from '../../constants.js';
+import { headerNames, REQUEST_METHOD_HEAD } from '../../constants.js';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import {
@@ -38,8 +38,6 @@ const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
 const NOT_FOUND_MAX_AGE = 60; // 1 minute
 
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
-
-const REQUEST_METHOD_HEAD = 'HEAD';
 
 const setDataHeaders = ({
   res,

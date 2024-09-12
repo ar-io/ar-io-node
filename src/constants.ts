@@ -25,7 +25,7 @@ export const headerNames = {
   arnsResolvedId: 'X-ArNS-Resolved-Id',
   arnsProcessId: 'X-ArNS-Process-Id',
 };
-
+export const REQUEST_METHOD_HEAD = 'HEAD';
 export const DATA_PATH_REGEX =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 export const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;

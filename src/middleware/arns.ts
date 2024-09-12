@@ -19,7 +19,7 @@ import { Handler } from 'express';
 import { asyncMiddleware } from 'middleware-async';
 
 import * as config from '../config.js';
-import { headerNames } from '../constants.js';
+import { headerNames, REQUEST_METHOD_HEAD } from '../constants.js';
 import { sendNotFound } from '../routes/data/handlers.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { NameResolution, NameResolver } from '../types.js';
@@ -105,5 +105,11 @@ export const createArnsMiddleware = ({
     res.header(headerNames.arnsProcessId, processId);
     // TODO: add a header for arns cache status
     res.header('Cache-Control', `public, max-age=${ttl}`);
+
+    if (req.method === REQUEST_METHOD_HEAD) {
+      res.end();
+      return;
+    }
+
     dataHandler(req, res, next);
   });
