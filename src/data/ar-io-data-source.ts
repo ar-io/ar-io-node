@@ -84,13 +84,14 @@ export class ArIODataSource implements ContiguousDataSource {
     const log = this.log.child({ method: 'updatePeerList' });
     log.debug('Updating peers from ArIO contract');
 
-    try {
-      const peers: Record<string, string> = {};
-      let cursor: string | undefined;
-      do {
+    const peers: Record<string, string> = {};
+    let cursor: string | undefined;
+    do {
+      try {
+        // depending on how often this is called, we may want to add a circuit breaker
         const { nextCursor, items } = await this.arIO.getGateways({
           cursor,
-        }); // TODO: better error handling if one paged request fails we may want to still update the rest
+        });
 
         for (const gateway of items) {
           // skip our own node wallet
@@ -105,16 +106,21 @@ export class ArIODataSource implements ContiguousDataSource {
             `${gateway.settings.protocol}://${gateway.settings.fqdn}`;
         }
         cursor = nextCursor;
-      } while (cursor !== undefined);
-
-      this.peers = peers;
-      log.debug('Updated peer list from ArIO contract');
-    } catch (error: any) {
-      log.error('Failed to update peer list', {
-        message: error.message,
-        stack: error.stack,
-      });
-    }
+      } catch (error: any) {
+        log.error(
+          'Failed to fetch gateways from IO. Returning current peer list.',
+          {
+            message: error.message,
+            stack: error.stack,
+          },
+        );
+        break;
+      }
+    } while (cursor !== undefined);
+    log.debug('Updated peer list from ArIO contract', {
+      peers: Object.keys(peers),
+    });
+    this.peers = peers;
   }
 
   selectPeer(): string {
