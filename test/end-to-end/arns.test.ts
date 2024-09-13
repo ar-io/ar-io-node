@@ -113,13 +113,8 @@ describe('ArNS', function () {
 
   // verify the /ar-io/resolver/:name endpoint
   it('Verifying that /ar-io/resolver/:name returns 200 and resolution data', async function () {
-    const txId = 'TB2wJyKrPnkAW79DAwlJYwpgdHKpijEJWQfcwX715Co';
-    const res = await axios.get(
-      'http://localhost:4000/ar-io/resolver/ardrive',
-      {
-        headers: { Host: 'ardrive.ar-io.localhost' },
-      },
-    );
+    const txId = '7czHwMqgYHC3eJrPagyFA03UT4YXIN1um__tpHUXAHE';
+    const res = await axios.get('http://localhost:4000/ar-io/resolver/ardrive');
 
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.data.txId, txId);
@@ -129,15 +124,10 @@ describe('ArNS', function () {
 
   // verify the headers are set correctly on the response
   it('Verifying that /ar-io/resolver/:name returns 200 and sets the correct headers', async function () {
-    const txId = 'TB2wJyKrPnkAW79DAwlJYwpgdHKpijEJWQfcwX715Co';
-    const res = await axios.get(
-      'http://localhost:4000/ar-io/resolver/ardrive',
-      {
-        headers: { Host: 'ardrive.ar-io.localhost' },
-      },
-    );
+    const txId = '7czHwMqgYHC3eJrPagyFA03UT4YXIN1um__tpHUXAHE';
+    const res = await axios.get('http://localhost:4000/ar-io/resolver/ardrive');
 
-    assert.strictEqual(typeof res.headers['x-arns-resolved-id'], txId);
+    assert.strictEqual(res.headers['x-arns-resolved-id'], txId);
     assert.strictEqual(typeof res.headers['x-arns-ttl-seconds'], 'string');
     assert.strictEqual(typeof res.headers['x-arns-process-id'], 'string');
   });
@@ -146,7 +136,7 @@ describe('ArNS', function () {
     const res = await axios.get(
       'http://localhost:4000/ar-io/resolver/nonexistent',
       {
-        headers: { Host: 'ardrive.ar-io.localhost' },
+        validateStatus: (status) => status === 404, // only accept 404 status
       },
     );
 

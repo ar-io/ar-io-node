@@ -24,6 +24,7 @@ import * as system from '../system.js';
 import { dataHandler } from './data/index.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound } from './data/handlers.js';
+import { DEFAULT_ARNS_TTL_SECONDS } from '../resolution/trusted-gateway-arns-resolver.js';
 
 export const arnsRouter = Router();
 
@@ -53,18 +54,16 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
 
   const { resolvedId, ttl, processId, resolvedAt } = resolved;
 
-  // check if they are undefined
-  if (
-    resolvedId === undefined ||
-    ttl === undefined ||
-    processId === undefined
-  ) {
+  if (resolvedId === undefined) {
     sendNotFound(res);
     return;
   }
 
   res.header(headerNames.arnsResolvedId, resolvedId);
-  res.header(headerNames.arnsTtlSeconds, ttl.toString());
+  res.header(
+    headerNames.arnsTtlSeconds,
+    ttl.toString() || DEFAULT_ARNS_TTL_SECONDS.toString(),
+  );
   res.header(headerNames.arnsProcessId, processId);
 
   // add arns headers
