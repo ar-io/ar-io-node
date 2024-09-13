@@ -23,6 +23,7 @@
               openjdk
               sqlite-interactive
               python3
+              duckdb
             ];
           };
         };
