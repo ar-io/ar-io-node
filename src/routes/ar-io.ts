@@ -23,6 +23,8 @@ import * as system from '../system.js';
 import * as events from '../events.js';
 import { release } from '../version.js';
 import { signatureStore } from '../system.js';
+import log from '../log.js';
+import { ParquetExporter } from '../workers/parquet-exporter.js';
 
 export const arIoRouter = Router();
 
@@ -214,6 +216,38 @@ arIoRouter.post(
       }
 
       res.json({ message: 'Data item(s) queued' });
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
+arIoRouter.post(
+  '/ar-io/admin/export-parquet',
+  express.json(),
+  async (req, res) => {
+    try {
+      const { outputDir, startHeight, endHeight, maxFileRows } = req.body;
+
+      if (!outputDir || !startHeight || !endHeight || !maxFileRows) {
+        res.status(400).send('Missing required parameters');
+        return;
+      }
+
+      const parquetExporter = new ParquetExporter({
+        log,
+        duckDbPath: './data/duckdb/tags.duckdb',
+        sqliteDbPath: './data/sqlite/bundles.db',
+      });
+
+      await parquetExporter.exportDataItemTagsParquet({
+        outputDir,
+        startHeight,
+        endHeight,
+        maxFileRows,
+      });
+
+      res.json({ message: 'Parquet export started' });
     } catch (error: any) {
       res.status(500).send(error?.message);
     }
