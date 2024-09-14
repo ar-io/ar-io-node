@@ -298,9 +298,8 @@ export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   );
 
 // TODO: support multiple gateway urls
-export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
+export const TRUSTED_ARNS_GATEWAY_URL = env.varOrUndefined(
   'TRUSTED_ARNS_GATEWAY_URL',
-  'https://__NAME__.arweave.net',
 );
 
 //
