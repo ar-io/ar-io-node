@@ -74,7 +74,6 @@ export const createArNSResolver = ({
   trustedGatewayUrl?: string;
   networkProcess?: AoIORead;
 }): NameResolver => {
-  log.info(`Using ${resolutionOrder} for arns name resolution`);
   const resolverMap: Record<ArNSResolverType, NameResolver | undefined> = {
     'on-demand': new OnDemandArNSResolver({
       log,
@@ -102,6 +101,10 @@ export const createArNSResolver = ({
       log.warn(`Ignoring unsupported resolver type: ${resolverType}`);
     }
   }
+
+  log.info(
+    `Using ${resolvers.map((r) => r.constructor.name).join(',')} for arns name resolution`,
+  );
 
   return new CompositeArNSResolver({
     log,
