@@ -50,7 +50,11 @@ const app = express();
 
 app.use(
   cors({
-    exposedHeaders: [headerNames.arnsResolvedId, headerNames.arnsTtlSeconds],
+    exposedHeaders: [
+      headerNames.arnsResolvedId,
+      headerNames.arnsTtlSeconds,
+      headerNames.arnsProcessId,
+    ],
   }),
 );
 
