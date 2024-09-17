@@ -36,6 +36,7 @@ services:
       - ${CONTIGUOUS_DATA_PATH:-./data/contiguous}:/app/data/contiguous
       - ${HEADERS_DATA_PATH:-./data/headers}:/app/data/headers
       - ${SQLITE_DATA_PATH:-./data/sqlite}:/app/data/sqlite
+      - ${DUCKDB_DATA_PATH:-./data/duckdb}:/app/data/duckdb
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
     environment:
