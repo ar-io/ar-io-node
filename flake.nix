@@ -22,7 +22,7 @@
               yaml-language-server
               openjdk
               sqlite-interactive
-              python3
+              python311
               duckdb
             ];
           };
