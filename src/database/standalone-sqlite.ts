@@ -2434,6 +2434,7 @@ export class StandaloneSqliteDatabase
   >;
 
   private saveNestedDataHashCache: NodeCache;
+  private saveDataContentAttributesCache: NodeCache;
 
   constructor({
     log,
@@ -2509,10 +2510,16 @@ export class StandaloneSqliteDatabase
     ]);
 
     //
-    // Initialize save nested data hash cache
+    // Initialize method caches
     //
 
     this.saveNestedDataHashCache = new NodeCache({
+      stdTTL: 60 * 7, // 7 minutes
+      checkperiod: 60, // 1 minute
+      useClones: false,
+    });
+
+    this.saveDataContentAttributesCache = new NodeCache({
       stdTTL: 60 * 7, // 7 minutes
       checkperiod: 60, // 1 minute
       useClones: false,
@@ -2793,6 +2800,15 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
   }) {
+    if (this.saveDataContentAttributesCache.get(id)) {
+      metrics.saveMethodsDuplicateCounter.inc({
+        method: 'saveDataContentAttributes',
+      });
+      return Promise.resolve();
+    }
+
+    this.saveDataContentAttributesCache.set(id, true);
+
     return this.queueWrite('data', 'saveDataContentAttributes', [
       {
         id,
@@ -2938,8 +2954,6 @@ export class StandaloneSqliteDatabase
     dataOffset: number;
   }): Promise<void> {
     const key = `${hash}:${parentId}`;
-
-    console.log('cache size:', this.saveNestedDataHashCache.getStats());
 
     if (this.saveNestedDataHashCache.get(key)) {
       metrics.saveMethodsDuplicateCounter.inc({
