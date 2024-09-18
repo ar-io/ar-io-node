@@ -29,6 +29,7 @@ import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
 import CircuitBreaker from 'opossum';
+import NodeCache from 'node-cache';
 
 // TODO enable eslint
 /* eslint-disable */
@@ -2432,6 +2433,8 @@ export class StandaloneSqliteDatabase
     Awaited<ReturnType<StandaloneSqliteDatabase['getTransactionAttributes']>>
   >;
 
+  private saveNestedDataHashCache: NodeCache;
+
   constructor({
     log,
     coreDbPath,
@@ -2504,6 +2507,16 @@ export class StandaloneSqliteDatabase
       this.getDataItemAttributesCircuitBreaker,
       this.getTransactionAttributesCircuitBreaker,
     ]);
+
+    //
+    // Initialize save nested data hash cache
+    //
+
+    this.saveNestedDataHashCache = new NodeCache({
+      stdTTL: 60 * 7, // 7 minutes
+      checkperiod: 60, // 1 minute
+      useClones: false,
+    });
 
     //
     // Initialize workers
@@ -2924,6 +2937,19 @@ export class StandaloneSqliteDatabase
     parentId: string;
     dataOffset: number;
   }): Promise<void> {
+    const key = `${hash}:${parentId}`;
+
+    console.log('cache size:', this.saveNestedDataHashCache.getStats());
+
+    if (this.saveNestedDataHashCache.get(key)) {
+      metrics.saveMethodsDuplicateCounter.inc({
+        method: 'saveNestedDataHash',
+      });
+
+      return;
+    }
+    this.saveNestedDataHashCache.set(key, true);
+
     return this.queueWrite('data', 'saveNestedDataHash', [
       {
         hash,
