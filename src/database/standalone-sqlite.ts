@@ -406,6 +406,8 @@ export class StandaloneSqliteDatabaseWorker {
   private bundleFormatIds: { [filter: string]: number } = {};
   private filterIds: { [filter: string]: number } = {};
 
+  private insertDataHashCache: NodeCache;
+
   // Transactions
   resetBundlesToHeightFn: Sqlite.Transaction;
   resetCoreToHeightFn: Sqlite.Transaction;
@@ -762,6 +764,12 @@ export class StandaloneSqliteDatabaseWorker {
         });
       },
     );
+
+    this.insertDataHashCache = new NodeCache({
+      stdTTL: 60 * 7, // 7 minutes
+      checkperiod: 60, // 1 minute
+      useClones: false,
+    });
   }
 
   getMaxHeight() {
@@ -1133,13 +1141,7 @@ export class StandaloneSqliteDatabaseWorker {
     cachedAt?: number;
   }) {
     const hashBuffer = fromB64Url(hash);
-    this.stmts.data.insertDataHash.run({
-      hash: hashBuffer,
-      data_size: dataSize,
-      original_source_content_type: contentType,
-      indexed_at: currentUnixTimestamp(),
-      cached_at: cachedAt,
-    });
+
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
@@ -1152,6 +1154,19 @@ export class StandaloneSqliteDatabaseWorker {
         indexed_at: currentUnixTimestamp(),
       });
     }
+
+    if (this.insertDataHashCache.get(hash)) {
+      return;
+    }
+    this.insertDataHashCache.set(hash, true);
+
+    this.stmts.data.insertDataHash.run({
+      hash: hashBuffer,
+      data_size: dataSize,
+      original_source_content_type: contentType,
+      indexed_at: currentUnixTimestamp(),
+      cached_at: cachedAt,
+    });
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
