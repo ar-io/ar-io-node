@@ -124,6 +124,12 @@ export const methodDurationSummary = new promClient.Summary({
   labelNames: ['worker', 'role', 'method'],
 });
 
+export const saveMethodsDuplicateCounter = new promClient.Counter({
+  name: 'save_methods_duplicate_total',
+  help: 'Count of duplicate calls to save methods',
+  labelNames: ['method'],
+});
+
 //
 // Block importer metrics
 //
