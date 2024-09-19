@@ -114,7 +114,7 @@ services:
       - ar-io-network
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-4761f3b7ce06538e2be431621a82e10f0cd37787}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-3008cdba20a39e74f5ee8888146779999806caf6}
     restart: on-failure
     ports:
       - 5050:5050
