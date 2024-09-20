@@ -2448,7 +2448,6 @@ export class StandaloneSqliteDatabase
     Awaited<ReturnType<StandaloneSqliteDatabase['getTransactionAttributes']>>
   >;
 
-  private saveNestedDataHashCache: NodeCache;
   private saveDataContentAttributesCache: NodeCache;
 
   constructor({
@@ -2527,12 +2526,6 @@ export class StandaloneSqliteDatabase
     //
     // Initialize method caches
     //
-
-    this.saveNestedDataHashCache = new NodeCache({
-      stdTTL: 60 * 7, // 7 minutes
-      checkperiod: 60, // 1 minute
-      useClones: false,
-    });
 
     this.saveDataContentAttributesCache = new NodeCache({
       stdTTL: 60 * 7, // 7 minutes
@@ -2968,17 +2961,6 @@ export class StandaloneSqliteDatabase
     parentId: string;
     dataOffset: number;
   }): Promise<void> {
-    const key = `${hash}:${parentId}`;
-
-    if (this.saveNestedDataHashCache.get(key)) {
-      metrics.saveMethodsDuplicateCounter.inc({
-        method: 'saveNestedDataHash',
-      });
-
-      return;
-    }
-    this.saveNestedDataHashCache.set(key, true);
-
     return this.queueWrite('data', 'saveNestedDataHash', [
       {
         hash,
