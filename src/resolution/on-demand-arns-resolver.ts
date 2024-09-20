@@ -67,6 +67,7 @@ export class OnDemandArNSResolver implements NameResolver {
     });
     this.networkProcess = networkProcess;
     this.ao = ao;
+    // TODO: use getRecords instead of getArNSRecord
     this.aoCircuitBreaker = new CircuitBreaker(
       ({ name }: { name: string }) => {
         return this.networkProcess.getArNSRecord({ name });
@@ -90,8 +91,21 @@ export class OnDemandArNSResolver implements NameResolver {
       // find that name in the network process, using the circuit breaker if there are persistent AO issues
       const arnsRecord = await this.aoCircuitBreaker.fire({ name: baseName });
 
-      if (arnsRecord === undefined || arnsRecord.processId === undefined) {
-        throw new Error('Invalid name, arns record not found');
+      if (arnsRecord === undefined) {
+        throw new Error('Unexpected undefined from CU');
+      }
+
+      if (
+        arnsRecord === null ||
+        arnsRecord.processId === undefined
+      ) {
+        return {
+          name,
+          resolvedId: undefined,
+          resolvedAt: Date.now(),
+          ttl: 300,
+          processId: undefined,
+        };
       }
 
       const processId = arnsRecord.processId;

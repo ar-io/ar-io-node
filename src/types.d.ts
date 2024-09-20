@@ -596,7 +596,17 @@ export interface ValidNameResolution {
   processId: string;
 }
 
+// Name resolved, but is missing
 export interface MissingNameResolution {
+  name: string;
+  resolvedId: undefined;
+  resolvedAt: number;
+  ttl: number;
+  processId: undefined;
+}
+
+// An error occured while resolving the name
+export interface FailedNameResolution {
   name: string;
   resolvedId: undefined;
   resolvedAt: undefined;
@@ -604,7 +614,10 @@ export interface MissingNameResolution {
   processId: undefined;
 }
 
-type NameResolution = ValidNameResolution | MissingNameResolution;
+type NameResolution =
+  | ValidNameResolution
+  | MissingNameResolution
+  | FailedNameResolution;
 
 export interface NameResolver {
   resolve(name: string): Promise<NameResolution>;

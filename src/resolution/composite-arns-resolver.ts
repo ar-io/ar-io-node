@@ -49,7 +49,7 @@ export class CompositeArNSResolver implements NameResolver {
         const cachedResolution: NameResolution = JSON.parse(
           cachedResolutionBuffer.toString(),
         );
-        resolution = cachedResolution; // hold on tho this in case we need it
+        resolution = cachedResolution; // hold on to this in case we need it
         if (
           cachedResolution !== undefined &&
           cachedResolution.resolvedAt !== undefined &&
@@ -71,7 +71,7 @@ export class CompositeArNSResolver implements NameResolver {
             name,
           });
           const resolution = await resolver.resolve(name);
-          if (resolution.resolvedId !== undefined) {
+          if (resolution.resolvedAt !== undefined) {
             this.cache.set(name, Buffer.from(JSON.stringify(resolution)));
             this.log.info('Resolved name', { name, resolution });
             return resolution;
