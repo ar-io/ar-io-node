@@ -95,10 +95,7 @@ export class OnDemandArNSResolver implements NameResolver {
         throw new Error('Unexpected undefined from CU');
       }
 
-      if (
-        arnsRecord === null ||
-        arnsRecord.processId === undefined
-      ) {
+      if (arnsRecord === null || arnsRecord.processId === undefined) {
         return {
           name,
           resolvedId: undefined,
