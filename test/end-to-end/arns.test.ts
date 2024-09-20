@@ -113,7 +113,7 @@ describe('ArNS', function () {
 
   // verify the /ar-io/resolver/:name endpoint
   it('Verifying that /ar-io/resolver/:name returns 200 and resolution data', async function () {
-    const txId = '7czHwMqgYHC3eJrPagyFA03UT4YXIN1um__tpHUXAHE';
+    const txId = 'rhYmL-2y7NC1SX9TauCNzNK9QmZ3h6Vd4pfCC8fgGcQ';
     const res = await axios.get('http://localhost:4000/ar-io/resolver/ardrive');
 
     assert.strictEqual(res.status, 200);
@@ -124,7 +124,7 @@ describe('ArNS', function () {
 
   // verify the headers are set correctly on the response
   it('Verifying that /ar-io/resolver/:name returns 200 and sets the correct headers', async function () {
-    const txId = '7czHwMqgYHC3eJrPagyFA03UT4YXIN1um__tpHUXAHE';
+    const txId = 'rhYmL-2y7NC1SX9TauCNzNK9QmZ3h6Vd4pfCC8fgGcQ';
     const res = await axios.get('http://localhost:4000/ar-io/resolver/ardrive');
 
     assert.strictEqual(res.headers['x-arns-resolved-id'], txId);
