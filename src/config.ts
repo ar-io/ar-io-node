@@ -276,19 +276,19 @@ export const ARNS_RESOLVER_PRIORITY_ORDER = env
 
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS',
-  `${5 * 1000}`, // 5 seconds
+  `${10 * 1000}`, // 10 seconds
 );
 
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
   +env.varOrDefault(
     'ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
-    '50',
+    '75', // 75% error rate
   );
 
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   +env.varOrDefault(
     'ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
-    `${60 * 1000}`, // 1 minute
+    `${3 * 60 * 1000}`, // 3 minutes
   );
 
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
