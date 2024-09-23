@@ -36,15 +36,32 @@ INSERT OR REPLACE INTO data_roots (
 )
 
 -- selectDataAttributes
-SELECT
-  cd.hash,
-  cd.data_size,
-  cd.original_source_content_type,
-  cdi.verified
-FROM contiguous_data cd
-LEFT JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
-LEFT JOIN data_roots dr ON dr.contiguous_data_hash = cd.hash
-WHERE cdi.id = :id OR dr.data_root = :data_root
+SELECT *
+FROM (
+  SELECT
+    cd.hash,
+    cd.data_size,
+    cd.original_source_content_type,
+    cdi.verified
+  FROM contiguous_data cd
+  JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
+  WHERE cdi.id = :id
+  LIMIT 1
+)
+UNION
+SELECT *
+FROM (
+  SELECT
+    cd.hash,
+    cd.data_size,
+    cd.original_source_content_type,
+    cdi.verified
+  FROM data_roots dr
+  JOIN contiguous_data cd ON dr.contiguous_data_hash = cd.hash
+  JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
+  WHERE dr.data_root = :data_root
+  LIMIT 1
+)
 LIMIT 1
 
 -- selectDataParent
