@@ -2347,7 +2347,7 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
-  cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation'): void {
+  cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation') {
     const walCheckpoint = this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
 
     return walCheckpoint[0];
