@@ -2973,25 +2973,27 @@ export class StandaloneSqliteDatabase
   }
 
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
-    this.queueWrite(dbName, 'cleanupWal', [dbName]).then((walCheckpoint) => {
-      this.log.info('WAL checkpoint', {
-        dbName,
-        walCheckpoint,
-      });
+    return this.queueWrite(dbName, 'cleanupWal', [dbName]).then(
+      (walCheckpoint) => {
+        this.log.info('WAL checkpoint', {
+          dbName,
+          walCheckpoint,
+        });
 
-      metrics.sqliteWalCheckpointPages.set(
-        { db: dbName, type: 'busy' },
-        walCheckpoint.busy,
-      );
-      metrics.sqliteWalCheckpointPages.set(
-        { db: dbName, type: 'log' },
-        walCheckpoint.log,
-      );
-      metrics.sqliteWalCheckpointPages.set(
-        { db: dbName, type: 'checkpointed' },
-        walCheckpoint.checkpointed,
-      );
-    });
+        metrics.sqliteWalCheckpointPages.set(
+          { db: dbName, type: 'busy' },
+          walCheckpoint.busy,
+        );
+        metrics.sqliteWalCheckpointPages.set(
+          { db: dbName, type: 'log' },
+          walCheckpoint.log,
+        );
+        metrics.sqliteWalCheckpointPages.set(
+          { db: dbName, type: 'checkpointed' },
+          walCheckpoint.checkpointed,
+        );
+      },
+    );
   }
 }
 
