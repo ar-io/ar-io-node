@@ -2348,7 +2348,9 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation'): void {
-    this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
+    const walCheckpoint = this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
+
+    return walCheckpoint[0];
   }
 }
 
@@ -2971,7 +2973,25 @@ export class StandaloneSqliteDatabase
   }
 
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
-    return this.queueWrite(dbName, 'cleanupWal', [dbName]);
+    this.queueWrite(dbName, 'cleanupWal', [dbName]).then((walCheckpoint) => {
+      this.log.info('WAL checkpoint', {
+        dbName,
+        walCheckpoint,
+      });
+
+      metrics.sqliteWalCheckpointPages.set(
+        { db: dbName, type: 'busy' },
+        walCheckpoint.busy,
+      );
+      metrics.sqliteWalCheckpointPages.set(
+        { db: dbName, type: 'log' },
+        walCheckpoint.log,
+      );
+      metrics.sqliteWalCheckpointPages.set(
+        { db: dbName, type: 'checkpointed' },
+        walCheckpoint.checkpointed,
+      );
+    });
   }
 }
 
@@ -3114,8 +3134,8 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           break;
         case 'cleanupWal':
-          worker.cleanupWal(args[0]);
-          parentPort?.postMessage(undefined);
+          const walCheckpoint = worker.cleanupWal(args[0]);
+          parentPort?.postMessage(walCheckpoint);
           break;
         case 'terminate':
           parentPort?.postMessage(null);
