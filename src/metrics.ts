@@ -130,6 +130,12 @@ export const saveMethodsDuplicateCounter = new promClient.Counter({
   labelNames: ['method'],
 });
 
+export const sqliteWalCheckpointPages = new promClient.Gauge({
+  name: 'sqlite_wal_checkpoint_pages',
+  help: 'Number of pages in the WAL',
+  labelNames: ['db', 'type'],
+});
+
 //
 // Block importer metrics
 //
