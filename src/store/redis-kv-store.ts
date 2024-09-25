@@ -40,7 +40,9 @@ export class RedisKvStore implements KVBufferStore {
     this.ttlSeconds = ttlSeconds;
     this.client = createClient({
       url: redisUrl,
-      ...(useTls ? { tls: {} } : {}), // use base tls options if useTls is true
+      socket: {
+        tls: useTls,
+      },
     });
     this.client.on('error', (error: any) => {
       this.log.error(`Redis error`, {
