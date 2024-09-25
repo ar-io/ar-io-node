@@ -32,12 +32,16 @@ const createKvBufferStore = ({
   pathKey,
   type,
   log,
+  redisUrl = config.REDIS_CACHE_URL,
   redisTtlSeconds = config.REDIS_CACHE_TTL_SECONDS,
+  useTls = config.REDIS_USE_TLS,
 }: {
   pathKey: string;
   type: string;
   log: winston.Logger;
+  redisUrl?: string;
   redisTtlSeconds?: number;
+  useTls?: boolean;
 }): KVBufferStore => {
   log.info(`Using ${type} for KVBufferStore for ${pathKey}`);
   switch (type) {
@@ -48,9 +52,9 @@ const createKvBufferStore = ({
     }
     case 'redis': {
       return new RedisKvStore({
-        redisUrl: config.REDIS_CACHE_URL,
+        redisUrl,
         ttlSeconds: redisTtlSeconds,
-        useTls: config.REDIS_USE_TLS,
+        useTls,
         log,
       });
     }
