@@ -558,6 +558,7 @@ export const arnsResolverCache = new KvArnsStore({
     redisUrl: config.REDIS_CACHE_URL,
     ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
     maxKeys: config.ARNS_CACHE_MAX_KEYS,
+    useTls: config.REDIS_USE_TLS,
   }),
 });
 

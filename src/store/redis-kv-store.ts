@@ -28,16 +28,19 @@ export class RedisKvStore implements KVBufferStore {
   constructor({
     log,
     redisUrl,
+    useTls,
     ttlSeconds,
   }: {
     log: winston.Logger;
     redisUrl: string;
+    useTls: boolean;
     ttlSeconds: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.ttlSeconds = ttlSeconds;
     this.client = createClient({
       url: redisUrl,
+      ...(useTls ? { tls: {} } : {}), // use base tls options if useTls is true
     });
     this.client.on('error', (error: any) => {
       this.log.error(`Redis error`, {

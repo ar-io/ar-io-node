@@ -36,12 +36,14 @@ export const createArNSKvStore = ({
   log,
   type,
   redisUrl,
+  useTls,
   ttlSeconds,
   maxKeys,
 }: {
   type: 'redis' | 'node' | string;
   log: Logger;
   redisUrl: string;
+  useTls: boolean;
   ttlSeconds: number;
   maxKeys: number;
 }): KVBufferStore => {
@@ -56,6 +58,7 @@ export const createArNSKvStore = ({
       log,
       redisUrl,
       ttlSeconds,
+      useTls,
     });
   }
   return new NodeKvStore({ ttlSeconds, maxKeys });
