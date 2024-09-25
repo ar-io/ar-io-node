@@ -209,6 +209,9 @@ export const REDIS_CACHE_URL = env.varOrDefault(
   'redis://localhost:6379',
 );
 
+export const REDIS_USE_TLS =
+  env.varOrDefault('REDIS_USE_TLS', 'false') === 'true';
+
 // Default Redis TTL
 export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
   'REDIS_CACHE_TTL_SECONDS',

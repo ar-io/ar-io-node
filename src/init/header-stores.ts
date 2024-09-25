@@ -50,6 +50,7 @@ const createKvBufferStore = ({
       return new RedisKvStore({
         redisUrl: config.REDIS_CACHE_URL,
         ttlSeconds: redisTtlSeconds,
+        useTls: config.REDIS_USE_TLS,
         log,
       });
     }
