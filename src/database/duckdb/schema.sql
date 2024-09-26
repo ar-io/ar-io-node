@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS tags (
 
 CREATE TABLE IF NOT EXISTS transactions (
   id BLOB NOT NULL,
+  indexed_at UBIGINT,
   block_transaction_index USMALLINT,
   is_data_item BOOLEAN,
   target BLOB,

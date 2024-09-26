@@ -124,6 +124,7 @@ export class ParquetExporter {
     const query = `
       SELECT
         id,
+        NULL AS indexed_at,
         block_transaction_index,
         0 AS is_data_item,
         target,
@@ -172,6 +173,7 @@ export class ParquetExporter {
     const query = `
       SELECT
         id,
+        indexed_at,
         NULL AS block_transaction_index,
         1 AS is_data_item,
         target,
