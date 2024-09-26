@@ -24,23 +24,34 @@ export class CompositeArNSResolver implements NameResolver {
   private log: winston.Logger;
   private resolvers: NameResolver[];
   private cache: KvArnsStore;
+  private overrides:
+    | {
+        ttlSeconds?: number;
+        // TODO: other overrides like fallback txId if not found in resolution
+      }
+    | undefined;
 
   constructor({
     log,
     resolvers,
     cache,
+    overrides,
   }: {
     log: winston.Logger;
     resolvers: NameResolver[];
     cache: KvArnsStore;
+    overrides?: {
+      ttlSeconds?: number;
+    };
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.resolvers = resolvers;
     this.cache = cache;
+    this.overrides = overrides;
   }
 
   async resolve(name: string): Promise<NameResolution> {
-    this.log.info('Resolving name...', { name });
+    this.log.info('Resolving name...', { name, overrides: this.overrides });
     let resolution: NameResolution | undefined;
 
     try {
@@ -50,11 +61,13 @@ export class CompositeArNSResolver implements NameResolver {
           cachedResolutionBuffer.toString(),
         );
         resolution = cachedResolution; // hold on to this in case we need it
+        // use the override ttl if it exists, otherwise use the cached resolution ttl
+        const ttlSeconds = this.overrides?.ttlSeconds ?? cachedResolution.ttl;
         if (
           cachedResolution !== undefined &&
           cachedResolution.resolvedAt !== undefined &&
-          cachedResolution.ttl !== undefined &&
-          cachedResolution.resolvedAt + cachedResolution.ttl * 1000 > Date.now()
+          ttlSeconds !== undefined &&
+          cachedResolution.resolvedAt + ttlSeconds * 1000 > Date.now()
         ) {
           metrics.arnsCacheHitCounter.inc();
           this.log.info('Cache hit for arns name', { name });

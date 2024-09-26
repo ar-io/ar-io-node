@@ -268,6 +268,15 @@ export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
   `${60 * 60}`, // 1 hour
 );
 
+export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING = env.varOrUndefined(
+  'ARNS_RESOLVER_OVERRIDE_TTL_SECONDS',
+);
+
+export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS =
+  ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING !== undefined
+    ? +ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING
+    : undefined;
+
 export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
   'ARNS_CACHE_MAX_KEYS',
   '10000',
