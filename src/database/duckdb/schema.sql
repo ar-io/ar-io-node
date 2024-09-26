@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS transactions (
   target BLOB,
   quantity DECIMAL(20,0),
   reward DECIMAL(20,0),
-  signature BLOB,
   last_tx BLOB NOT NULL,
   data_size UBIGINT,
   content_type TEXT,
