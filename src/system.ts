@@ -568,6 +568,10 @@ export const nameResolver = createArNSResolver({
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
   networkProcess: arIO,
   cache: arnsResolverCache,
+  overrides: {
+    ttlSeconds: config.ARNS_RESOLVER_OVERRIDE_TTL_SECONDS,
+    // TODO: other overrides like fallback txId if not found in resolution
+  },
 });
 
 const webhookEmitter = new WebhookEmitter({

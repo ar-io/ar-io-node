@@ -70,12 +70,16 @@ export const createArNSResolver = ({
   resolutionOrder,
   trustedGatewayUrl,
   networkProcess,
+  overrides,
 }: {
   log: Logger;
   cache: KvArnsStore;
   resolutionOrder: (ArNSResolverType | string)[];
   trustedGatewayUrl?: string;
   networkProcess?: AoIORead;
+  overrides?: {
+    ttlSeconds?: number;
+  };
 }): NameResolver => {
   const resolverMap: Record<ArNSResolverType, NameResolver | undefined> = {
     'on-demand': new OnDemandArNSResolver({
@@ -113,5 +117,6 @@ export const createArNSResolver = ({
     log,
     resolvers,
     cache,
+    overrides,
   });
 };
