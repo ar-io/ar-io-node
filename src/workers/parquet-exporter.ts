@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import * as winston from 'winston';
 import { Database } from 'duckdb-async';
 
@@ -427,12 +427,14 @@ export class ParquetExporter {
     } catch (error) {
       this.log.error('Error exporting Parquet files:', error);
     } finally {
-      // Truncate tables
-      await this.truncateTable('blocks');
-      await this.truncateTable('transactions');
-      await this.truncateTable('tags');
-
       await this.db.close();
+
+      // Delete the output folder
+      try {
+        rmSync(outputDir, { recursive: true, force: true });
+      } catch (error) {
+        this.log.error(`Error deleting duckdb folder ${outputDir}:`, error);
+      }
       this.isExporting = false;
     }
   }
@@ -473,15 +475,6 @@ export class ParquetExporter {
       return result[0].count;
     } catch (error) {
       throw `Error getting row count for height ${height} in ${tableName}: ${error}`;
-    }
-  }
-
-  private async truncateTable(tableName: string): Promise<void> {
-    try {
-      await this.db.exec(`TRUNCATE TABLE ${tableName};`);
-      await this.db.exec(`CHECKPOINT ${tableName};`);
-    } catch (error) {
-      throw `Error truncating table ${tableName}: ${error}`;
     }
   }
 }
