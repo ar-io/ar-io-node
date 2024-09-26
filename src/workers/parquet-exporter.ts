@@ -224,7 +224,7 @@ export class ParquetExporter {
         stt.height,
         stt.transaction_id AS id,
         stt.transaction_tag_index AS tag_index,
-        NULL AS created_at,
+        NULL AS indexed_at,
         tn.name AS tag_name,
         tv.value AS tag_value,
         0 AS is_data_item
@@ -260,7 +260,7 @@ export class ParquetExporter {
         sdit.height,
         sdit.data_item_id AS id,
         sdit.data_item_tag_index AS tag_index,
-        sdi.indexed_at AS created_at,
+        sdi.indexed_at,
         tn.name AS tag_name,
         tv.value AS tag_value,
         1 AS is_data_item
