@@ -229,18 +229,28 @@ arIoRouter.post(
     try {
       const { outputDir, startHeight, endHeight, maxFileRows } = req.body;
 
-      if (!outputDir || !startHeight || !endHeight || !maxFileRows) {
-        res.status(400).send('Missing required parameters');
+      if (
+        typeof outputDir !== 'string' ||
+        outputDir.trim() === '' ||
+        !Number.isInteger(startHeight) ||
+        startHeight < 0 ||
+        !Number.isInteger(endHeight) ||
+        endHeight < 0 ||
+        !Number.isInteger(maxFileRows) ||
+        maxFileRows < 0
+      ) {
+        res.status(400).send('Invalid or missing required parameters');
         return;
       }
 
       const parquetExporter = await ParquetExporter.create({
         log,
-        duckDbPath: 'data/duckdb/tags.duckdb',
-        sqliteDbPath: 'data/sqlite/bundles.db',
+        duckDbPath: 'data/duckdb/db.duckdb',
+        sqliteBundlesDbPath: 'data/sqlite/bundles.db',
+        sqliteCoreDbPath: 'data/sqlite/core.db',
       });
 
-      await parquetExporter.exportDataItemTagsParquet({
+      await parquetExporter.export({
         outputDir,
         startHeight,
         endHeight,
