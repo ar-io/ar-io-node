@@ -121,8 +121,10 @@ export class ParquetExporter {
     try {
       await this.db.exec(`INSERT INTO blocks ${query}`);
       log.info('Blocks inserted into DuckDB');
-    } catch (error) {
-      throw `Error importing blocks: ${error}`;
+    } catch (error: any) {
+      const newError = new Error('Error importing blocks');
+      newError.stack = error.stack;
+      throw newError;
     }
   }
 
@@ -156,9 +158,9 @@ export class ParquetExporter {
         NULL AS data_offset,
         NULL AS owner_offset,
         NULL AS owner_size,
-        CASE 
-          WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus 
-          ELSE NULL 
+        CASE
+          WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
+          ELSE NULL
         END AS owner,
         NULL AS signature_offset,
         NULL AS signature_size,
@@ -176,8 +178,10 @@ export class ParquetExporter {
     try {
       await this.db.exec(`INSERT INTO transactions ${query}`);
       log.info('Transactions inserted into DuckDB');
-    } catch (error) {
-      throw `Error importing transactions: ${error}`;
+    } catch (error: any) {
+      const newError = new Error('Error importing transactions');
+      newError.stack = error.stack;
+      throw newError;
     }
   }
 
@@ -211,9 +215,9 @@ export class ParquetExporter {
         sdi.data_offset,
         sdi.owner_offset,
         sdi.owner_size,
-        CASE 
-          WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus 
-          ELSE NULL 
+        CASE
+          WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
+          ELSE NULL
         END AS owner,
         sdi.signature_offset,
         sdi.signature_size,
@@ -231,8 +235,10 @@ export class ParquetExporter {
     try {
       await this.db.exec(`INSERT INTO transactions ${query}`);
       log.info('Data items inserted into DuckDB');
-    } catch (error) {
-      throw `Error importing data items: ${error}`;
+    } catch (error: any) {
+      const newError = new Error('Error importing data items');
+      newError.stack = error.stack;
+      throw newError;
     }
   }
 
@@ -268,8 +274,10 @@ export class ParquetExporter {
     try {
       await this.db.exec(`INSERT INTO tags ${query}`);
       log.info('Transaction tags inserted into DuckDB');
-    } catch (error) {
-      throw `Error importing transaction tags: ${error}`;
+    } catch (error: any) {
+      const newError = new Error('Error importing transaction tags');
+      newError.stack = error.stack;
+      throw newError;
     }
   }
 
@@ -307,8 +315,10 @@ export class ParquetExporter {
     try {
       await this.db.exec(`INSERT INTO tags ${query}`);
       log.info('Data item tags inserted into DuckDB');
-    } catch (error) {
-      throw `Error importing data item tags: ${error}`;
+    } catch (error: any) {
+      const newError = new Error('Error importing data item tags');
+      newError.stack = error.stack;
+      throw newError;
     }
   }
 
@@ -361,8 +371,12 @@ export class ParquetExporter {
 
           minHeight = height + 1n;
           rowCount = 0n;
-        } catch (error) {
-          throw `Error exporting Parquet file ${fileName}: ${error}`;
+        } catch (error: any) {
+          const newError = new Error(
+            `Error exporting Parquet file ${fileName}`,
+          );
+          newError.stack = error.stack;
+          throw newError;
         }
       }
     }
@@ -438,7 +452,7 @@ export class ParquetExporter {
 
       log.info('Parquet export complete');
     } catch (error) {
-      log.error('Error exporting Parquet files:', {
+      log.error('Error exporting Parquet files', {
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
@@ -448,6 +462,7 @@ export class ParquetExporter {
       // Delete the duckdb file
       try {
         rmSync(this.duckDbPath, { recursive: true, force: true });
+        rmSync(`${this.duckDbPath}.wal`, { force: true });
       } catch (error) {
         log.error(`Error deleting duckdb file ${this.duckDbPath}:`, error);
       }

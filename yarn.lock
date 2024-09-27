@@ -4211,17 +4211,17 @@ dotenv@^16.3.1:
   resolved "https://registry.yarnpkg.com/dotenv/-/dotenv-16.4.5.tgz#cdd3b3b604cb327e286b4762e13502f717cb099f"
   integrity sha512-ZmdL2rui+eB2YwhsWzjInR8LldtZHGDoQ1ugH85ppHKwpUHL7j7rN0Ti9NCnGiQbhaZ11FpR+7ao1dNsmduNUg==
 
-duckdb-async@^1.0.0:
-  version "1.0.0"
-  resolved "https://registry.yarnpkg.com/duckdb-async/-/duckdb-async-1.0.0.tgz#0dd51f03404cec4a1ab0e8fa5941c756479122f4"
-  integrity sha512-1UTAZ2LVk9s4NPMiLnB9L2DI716I/LqtDYL8I7RFEP981/fo0SaqcRQFwtgPPz8MyEPcx8QPPmAWEsal5q68xQ==
+duckdb-async@^1.1.0:
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/duckdb-async/-/duckdb-async-1.1.0.tgz#d01b4bcefb47138cbfe4216b20f935b74c0a444f"
+  integrity sha512-UQybqQMn0KGZkmCMtDq7Eg2z5LICPR0pHTihdvzbVwhNJHknnVIMI8U21Cd0zbwFsewQVfvYwZRxyDxb0F5F7g==
   dependencies:
-    duckdb "1.0.0"
+    duckdb "1.1.0"
 
-duckdb@1.0.0:
-  version "1.0.0"
-  resolved "https://registry.yarnpkg.com/duckdb/-/duckdb-1.0.0.tgz#de81d9b93311bb816901b582de27ae75fa0e20e2"
-  integrity sha512-QwpcIeN42A2lL19S70mUFibZgRcEcZpCkKHdzDgecHaYZhXj3+1i2cxSDyAk/RVg5CYnqj1Dp4jAuN4cc80udA==
+duckdb@1.1.0:
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/duckdb/-/duckdb-1.1.0.tgz#d3897d4e75ff40476471936a6c39c42845977f69"
+  integrity sha512-T814+D3H8y1bCidJP5QxnIoE0UC6ETbEctFPyIEkCt1byPioKpiuNy8ieY2GqG5ZXTMLkaynNo1JZ7pev+B0Rg==
   dependencies:
     "@mapbox/node-pre-gyp" "^1.0.0"
     node-addon-api "^7.0.0"
