@@ -485,8 +485,10 @@ export class ParquetExporter {
         minHeight: result[0].min_height,
         maxHeight: result[0].max_height,
       };
-    } catch (error) {
-      throw `Error getting height range for ${tableName}: ${error}`;
+    } catch (error: any) {
+      const newError = new Error(`Error getting height range for ${tableName}`);
+      newError.stack = error.stack;
+      throw newError;
     }
   }
 
@@ -504,8 +506,12 @@ export class ParquetExporter {
       const result = await this.db.all(query);
 
       return result[0].count;
-    } catch (error) {
-      throw `Error getting row count for height ${height} in ${tableName}: ${error}`;
+    } catch (error: any) {
+      const newError = new Error(
+        `Error getting row count for height ${height} in ${tableName}`,
+      );
+      newError.stack = error.stack;
+      throw newError;
     }
   }
 }
