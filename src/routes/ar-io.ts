@@ -243,14 +243,14 @@ arIoRouter.post(
         return;
       }
 
-      const parquetExporter = await ParquetExporter.create({
+      const parquetExporter = new ParquetExporter({
         log,
         duckDbPath: 'data/duckdb/db.duckdb',
-        sqliteBundlesDbPath: 'data/sqlite/bundles.db',
-        sqliteCoreDbPath: 'data/sqlite/core.db',
+        bundlesDbPath: 'data/sqlite/bundles.db',
+        coreDbPath: 'data/sqlite/core.db',
       });
 
-      await parquetExporter.export({
+      parquetExporter.export({
         outputDir,
         startHeight,
         endHeight,
