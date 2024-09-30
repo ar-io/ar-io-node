@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Improved performance of data attributes query that was preventing `data.db`
+  WAL flushing.
+
+### Added
+
+- Added WAL `sqlite_wal_checkpoint_pages` Prometheus metric to help monitor WAL
+  flushing behavior.
+- Added a POST `/ar-io/admin/export-parquet` admin endpoing that can be used to
+  export the contents of the SQLite3 core and bundle DBs as Parquet. To trigger
+  an export, POST JSON containing `outputDir`, `startHeight`, `endHeight`, and
+  `maxFileRows` keys. The resulting Parquet files can then be queried directly
+  using DuckDB or loaded into another system (e.g. ClickHouse). Scripts will be
+  provide to help automate the latter in future release.
+- Added `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS` that can be used to override ArNS
+  TTLs to force faster refreshes.
+- Added a GET `/ar-io/resolver/:name` resolution endpoint that returns an ArNS
+  resolution for the given name.
+
+### Changed
+
+- Removed ArNS resolver service in favor of integrated resolver. If a
+  standalone resolver is still desired, the core service can be run with the
+  `START_WRITERS` environment variable set to `false`. This will disable
+  indexing while preserving resolver functionality.
+- Deduplicated writes to `data.db` to improve performance and reduce WAL growth
+  rate.
+
 ## [Release 17] - 2024-09-09
 
 ### Notes
