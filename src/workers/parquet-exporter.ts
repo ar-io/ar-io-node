@@ -15,92 +15,156 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { Connection, Database } from 'duckdb-async';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  isMainThread,
+  parentPort,
+  Worker,
+  workerData,
+} from 'node:worker_threads';
 import * as winston from 'winston';
-import { Database } from 'duckdb-async';
+
+const EXPORT_COMPLETE = 'export-complete';
+const EXPORT_ERROR = 'export-error';
 
 export class ParquetExporter {
   private log: winston.Logger;
-  private db: Database;
-  private duckDbPath: string;
+  private worker: Worker | null = null;
   private isExporting = false;
+  private duckDbPath: string;
+  private bundlesDbPath: string;
+  private coreDbPath: string;
 
   constructor({
     log,
-    db,
     duckDbPath,
+    bundlesDbPath,
+    coreDbPath,
   }: {
     log: winston.Logger;
-    db: Database;
     duckDbPath: string;
+    bundlesDbPath: string;
+    coreDbPath: string;
   }) {
-    this.log = log;
-    this.db = db;
+    this.log = log.child({ class: 'ParquetExporter' });
     this.duckDbPath = duckDbPath;
+    this.bundlesDbPath = bundlesDbPath;
+    this.coreDbPath = coreDbPath;
   }
 
-  static async create({
-    log,
-    duckDbPath,
-    sqliteBundlesDbPath,
-    sqliteCoreDbPath,
+  async export({
+    outputDir,
+    startHeight,
+    endHeight,
+    maxFileRows,
   }: {
-    log: winston.Logger;
-    duckDbPath: string;
-    sqliteBundlesDbPath: string;
-    sqliteCoreDbPath: string;
-  }) {
-    const logger = log.child({ class: 'ParquetExporter' });
-    let db: Database;
-
-    try {
-      db = await Database.create(duckDbPath);
-
-      const duckDbSchema = readFileSync(
-        './src/database/duckdb/schema.sql',
-        'utf8',
-      );
-      await db.exec(duckDbSchema);
-
-      logger.debug('DuckDB schema created');
-    } catch (error) {
-      logger.error('Error creating DuckDB database', error);
-      throw error;
+    outputDir: string;
+    startHeight: number;
+    endHeight: number;
+    maxFileRows: number;
+  }): Promise<void> {
+    if (this.isExporting) {
+      this.log.error('An export is already in progress');
+      return;
     }
+    this.isExporting = true;
 
-    try {
-      await db.exec(`INSTALL sqlite; LOAD sqlite;`);
-      await db.exec(
-        `ATTACH '${sqliteBundlesDbPath}' AS sqlite_bundles_db (TYPE sqlite);`,
-      );
-      await db.exec(
-        `ATTACH '${sqliteCoreDbPath}' AS sqlite_core_db (TYPE sqlite);`,
-      );
+    return new Promise((resolve, reject) => {
+      const workerUrl = new URL('./parquet-exporter.js', import.meta.url);
+      this.worker = new Worker(workerUrl, {
+        workerData: {
+          outputDir,
+          startHeight,
+          endHeight,
+          maxFileRows,
+          duckDbPath: this.duckDbPath,
+          bundlesDbPath: this.bundlesDbPath,
+          coreDbPath: this.coreDbPath,
+        },
+      });
 
-      logger.debug('SQLite databases loaded');
-    } catch (error) {
-      logger.error('Error loading SQLite databases', error);
-      throw error;
-    }
+      let startTime: number;
 
-    logger.info('DuckDB database created!');
+      this.worker.on('online', () => {
+        startTime = Date.now();
 
-    return new ParquetExporter({
-      log: logger,
-      db,
-      duckDbPath,
+        this.log.info('Started Parquet export', {
+          outputDir,
+          startHeight,
+          endHeight,
+          maxFileRows,
+        });
+
+        this.worker?.postMessage('start');
+      });
+
+      this.worker.on('message', (message: any) => {
+        if (message.eventName === EXPORT_COMPLETE) {
+          const endTime = Date.now();
+          const duration = (endTime - startTime) / 1000; // Convert to seconds
+
+          this.log.info(
+            `Parquet export completed in ${duration.toFixed(2)} seconds`,
+            { outputDir, startHeight, endHeight, maxFileRows },
+          );
+
+          this.isExporting = false;
+          this.worker?.terminate();
+          resolve();
+        } else if (message.eventName === EXPORT_ERROR) {
+          this.isExporting = false;
+          this.worker?.terminate();
+          this.log.error('Parquet export error', {
+            error: message.error,
+            stack: message.stack,
+          });
+          reject(new Error(message.error));
+        }
+      });
+
+      this.worker.on('error', (error) => {
+        this.log.error('Worker error', error);
+        this.isExporting = false;
+        reject(error);
+      });
+
+      this.worker.on('exit', (code) => {
+        if (code !== 0) {
+          this.isExporting = false;
+          reject(new Error(`Worker stopped with exit code ${code}`));
+        }
+      });
     });
   }
 
-  private async importBlocks({
-    startHeight,
-    endHeight,
-  }: {
-    startHeight: number;
-    endHeight: number;
-  }) {
-    const log = this.log.child({ method: 'importBlocks' });
-    const query = `
+  async stop(): Promise<void> {
+    const worker = this.worker;
+
+    if (worker) {
+      return new Promise((resolve) => {
+        worker.on('exit', () => {
+          resolve();
+        });
+        worker.postMessage('terminate');
+      });
+    }
+  }
+}
+
+const importBlocks = async ({
+  db,
+  coreDbPath,
+  startHeight,
+  endHeight,
+}: {
+  db: Connection;
+  coreDbPath: string;
+  startHeight: number;
+  endHeight: number;
+}) => {
+  const query = `
+      INSERT INTO blocks
       SELECT
         indep_hash,
         height,
@@ -111,32 +175,35 @@ export class ParquetExporter {
         tx_count,
         block_size
       FROM
-        sqlite_core_db.stable_blocks
+        sqlite_scan('${coreDbPath}', 'stable_blocks')
       WHERE
         height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
         height ASC;
     `;
 
-    try {
-      await this.db.exec(`INSERT INTO blocks ${query}`);
-      log.info('Blocks inserted into DuckDB');
-    } catch (error: any) {
-      const newError = new Error('Error importing blocks');
-      newError.stack = error.stack;
-      throw newError;
-    }
+  try {
+    await db.exec(query);
+  } catch (error: any) {
+    const newError = new Error('Error importing blocks');
+    newError.stack = error.stack;
+    throw newError;
   }
+};
 
-  private async importTransactions({
-    startHeight,
-    endHeight,
-  }: {
-    startHeight: number;
-    endHeight: number;
-  }) {
-    const log = this.log.child({ method: 'importTransactions' });
-    const query = `
+const importTransactions = async ({
+  db,
+  coreDbPath,
+  startHeight,
+  endHeight,
+}: {
+  db: Connection;
+  coreDbPath: string;
+  startHeight: number;
+  endHeight: number;
+}) => {
+  const query = `
+      INSERT INTO transactions
       SELECT
         st.id,
         NULL AS indexed_at,
@@ -166,34 +233,37 @@ export class ParquetExporter {
         NULL AS signature_size,
         NULL AS signature_type
       FROM
-        sqlite_core_db.stable_transactions st
+        sqlite_scan('${coreDbPath}', 'stable_transactions') st
       LEFT JOIN
-        sqlite_core_db.wallets w ON st.owner_address = w.address
+        sqlite_scan('${coreDbPath}', 'wallets') w ON st.owner_address = w.address
       WHERE
         st.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
         st.height ASC;
     `;
 
-    try {
-      await this.db.exec(`INSERT INTO transactions ${query}`);
-      log.info('Transactions inserted into DuckDB');
-    } catch (error: any) {
-      const newError = new Error('Error importing transactions');
-      newError.stack = error.stack;
-      throw newError;
-    }
+  try {
+    await db.exec(query);
+  } catch (error: any) {
+    const newError = new Error('Error importing transactions');
+    newError.stack = error.stack;
+    throw newError;
   }
+};
 
-  private async importDataItems({
-    startHeight,
-    endHeight,
-  }: {
-    startHeight: number;
-    endHeight: number;
-  }) {
-    const log = this.log.child({ method: 'importDataItems' });
-    const query = `
+const importDataItems = async ({
+  db,
+  bundlesDbPath,
+  startHeight,
+  endHeight,
+}: {
+  db: Connection;
+  bundlesDbPath: string;
+  startHeight: number;
+  endHeight: number;
+}) => {
+  const query = `
+      INSERT INTO transactions
       SELECT
         sdi.id,
         sdi.indexed_at,
@@ -223,34 +293,37 @@ export class ParquetExporter {
         sdi.signature_size,
         sdi.signature_type
       FROM
-        sqlite_bundles_db.stable_data_items sdi
+        sqlite_scan('${bundlesDbPath}', 'stable_data_items') sdi
       LEFT JOIN
-        sqlite_bundles_db.wallets w ON sdi.owner_address = w.address
+        sqlite_scan('${bundlesDbPath}', 'wallets') w ON sdi.owner_address = w.address
       WHERE
         sdi.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
         sdi.height ASC;
     `;
 
-    try {
-      await this.db.exec(`INSERT INTO transactions ${query}`);
-      log.info('Data items inserted into DuckDB');
-    } catch (error: any) {
-      const newError = new Error('Error importing data items');
-      newError.stack = error.stack;
-      throw newError;
-    }
+  try {
+    await db.exec(query);
+  } catch (error: any) {
+    const newError = new Error('Error importing data items');
+    newError.stack = error.stack;
+    throw newError;
   }
+};
 
-  private async importTransactionTags({
-    startHeight,
-    endHeight,
-  }: {
-    startHeight: number;
-    endHeight: number;
-  }) {
-    const log = this.log.child({ method: 'importTransactionTags' });
-    const query = `
+const importTransactionTags = async ({
+  db,
+  coreDbPath,
+  startHeight,
+  endHeight,
+}: {
+  db: Connection;
+  coreDbPath: string;
+  startHeight: number;
+  endHeight: number;
+}) => {
+  const query = `
+      INSERT INTO tags
       SELECT
         stt.height,
         stt.transaction_id AS id,
@@ -260,36 +333,39 @@ export class ParquetExporter {
         tv.value AS tag_value,
         0 AS is_data_item
       FROM
-        sqlite_core_db.stable_transaction_tags stt
+        sqlite_scan('${coreDbPath}', 'stable_transaction_tags') stt
       JOIN
-        sqlite_core_db.tag_names tn ON stt.tag_name_hash = tn.hash
+        sqlite_scan('${coreDbPath}', 'tag_names') tn ON stt.tag_name_hash = tn.hash
       JOIN
-        sqlite_core_db.tag_values tv ON stt.tag_value_hash = tv.hash
+        sqlite_scan('${coreDbPath}', 'tag_values') tv ON stt.tag_value_hash = tv.hash
       WHERE
         stt.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
         stt.height ASC;
     `;
 
-    try {
-      await this.db.exec(`INSERT INTO tags ${query}`);
-      log.info('Transaction tags inserted into DuckDB');
-    } catch (error: any) {
-      const newError = new Error('Error importing transaction tags');
-      newError.stack = error.stack;
-      throw newError;
-    }
+  try {
+    await db.exec(query);
+  } catch (error: any) {
+    const newError = new Error('Error importing transaction tags');
+    newError.stack = error.stack;
+    throw newError;
   }
+};
 
-  private async importDataItemTags({
-    startHeight,
-    endHeight,
-  }: {
-    startHeight: number;
-    endHeight: number;
-  }) {
-    const log = this.log.child({ method: 'importDataItemTags' });
-    const query = `
+const importDataItemTags = async ({
+  db,
+  bundlesDbPath,
+  startHeight,
+  endHeight,
+}: {
+  db: Connection;
+  bundlesDbPath: string;
+  startHeight: number;
+  endHeight: number;
+}) => {
+  const query = `
+      INSERT INTO tags
       SELECT
         sdit.height,
         sdit.data_item_id AS id,
@@ -299,134 +375,185 @@ export class ParquetExporter {
         tv.value AS tag_value,
         1 AS is_data_item
       FROM
-        sqlite_bundles_db.stable_data_item_tags sdit
+        sqlite_scan('${bundlesDbPath}', 'stable_data_item_tags') sdit
       JOIN
-        sqlite_bundles_db.tag_names tn ON sdit.tag_name_hash = tn.hash
+        sqlite_scan('${bundlesDbPath}', 'tag_names') tn ON sdit.tag_name_hash = tn.hash
       JOIN
-        sqlite_bundles_db.tag_values tv ON sdit.tag_value_hash = tv.hash
+        sqlite_scan('${bundlesDbPath}', 'tag_values') tv ON sdit.tag_value_hash = tv.hash
       JOIN
-        sqlite_bundles_db.stable_data_items sdi ON sdit.data_item_id = sdi.id
+        sqlite_scan('${bundlesDbPath}', 'stable_data_items') sdi ON sdit.data_item_id = sdi.id
       WHERE
         sdit.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
         sdit.height ASC;
     `;
 
-    try {
-      await this.db.exec(`INSERT INTO tags ${query}`);
-      log.info('Data item tags inserted into DuckDB');
-    } catch (error: any) {
-      const newError = new Error('Error importing data item tags');
-      newError.stack = error.stack;
-      throw newError;
-    }
+  try {
+    await db.exec(query);
+  } catch (error: any) {
+    const newError = new Error('Error importing data item tags');
+    newError.stack = error.stack;
+    throw newError;
+  }
+};
+
+const exportToParquet = async ({
+  db,
+  outputDir,
+  tableName,
+  startHeight,
+  endHeight,
+  maxFileRows,
+}: {
+  db: Connection;
+  outputDir: string;
+  tableName: string;
+  startHeight: number;
+  endHeight: number;
+  maxFileRows: number;
+}): Promise<void> => {
+  if (!existsSync(outputDir)) {
+    mkdirSync(outputDir, { recursive: true });
   }
 
-  private async exportToParquet({
-    outputDir,
-    tableName,
-    startHeight,
-    endHeight,
-    maxFileRows,
-  }: {
-    outputDir: string;
-    tableName: string;
-    startHeight: number;
-    endHeight: number;
-    maxFileRows: number;
-  }): Promise<void> {
-    const log = this.log.child({ method: 'exportToParquet' });
+  let { minHeight, maxHeight } = await getHeightRange(db, tableName);
+  minHeight = minHeight > BigInt(startHeight) ? minHeight : BigInt(startHeight);
+  maxHeight = maxHeight < BigInt(endHeight) ? maxHeight : BigInt(endHeight);
+  let rowCount = 0n;
 
-    if (!existsSync(outputDir)) {
-      mkdirSync(outputDir, { recursive: true });
-    }
+  for (let height = minHeight; height <= maxHeight; height++) {
+    const heightRowCount = await getRowCountForHeight(db, tableName, height);
+    rowCount += heightRowCount;
 
-    let { minHeight, maxHeight } = await this.getHeightRange(tableName);
-    minHeight =
-      minHeight > BigInt(startHeight) ? minHeight : BigInt(startHeight);
-    maxHeight = maxHeight < BigInt(endHeight) ? maxHeight : BigInt(endHeight);
-    let rowCount = 0n;
+    if (rowCount >= maxFileRows || height === maxHeight) {
+      const fileName = `${tableName}-minHeight:${minHeight}-maxHeight:${height}-rowCount:${rowCount}.parquet`;
+      const filePath = `${outputDir}/${fileName}`;
 
-    log.info(
-      `Exporting Parquet file(s) for ${tableName} from height ${minHeight} to ${maxHeight}`,
-    );
-
-    for (let height = minHeight; height <= maxHeight; height++) {
-      const heightRowCount = await this.getRowCountForHeight(tableName, height);
-      rowCount += heightRowCount;
-
-      if (rowCount >= maxFileRows || height === maxHeight) {
-        const fileName = `${tableName}-minHeight:${minHeight}-maxHeight:${height}-rowCount:${rowCount}.parquet`;
-        const filePath = `${outputDir}/${fileName}`;
-
-        try {
-          await this.db.exec(`
+      try {
+        await db.exec(`
             COPY (
               SELECT * FROM ${tableName}
               WHERE height >= ${minHeight} AND height <= ${height}
             ) TO '${filePath}' (FORMAT PARQUET, COMPRESSION 'zstd')
           `);
 
-          log.info(`Exported Parquet file: ${fileName}`);
-
-          minHeight = height + 1n;
-          rowCount = 0n;
-        } catch (error: any) {
-          const newError = new Error(
-            `Error exporting Parquet file ${fileName}`,
-          );
-          newError.stack = error.stack;
-          throw newError;
-        }
+        minHeight = height + 1n;
+        rowCount = 0n;
+      } catch (error: any) {
+        const newError = new Error(`Error exporting Parquet file ${fileName}`);
+        newError.stack = error.stack;
+        throw newError;
       }
     }
-
-    log.info(`Parquet export for ${tableName} complete`);
   }
+};
 
-  async export({
-    outputDir,
-    startHeight,
-    endHeight,
-    maxFileRows,
-  }: {
-    outputDir: string;
-    startHeight: number;
-    endHeight: number;
-    maxFileRows: number;
-  }): Promise<void> {
-    const log = this.log.child({ method: 'export' });
+const getHeightRange = async (
+  db: Connection,
+  tableName: string,
+): Promise<{ minHeight: bigint; maxHeight: bigint }> => {
+  const query = `
+      SELECT MIN(height) as min_height, MAX(height) as max_height
+      FROM ${tableName}
+    `;
 
-    if (this.isExporting) {
-      log.error('An export is already in progress');
-      return;
-    }
-    this.isExporting = true;
+  try {
+    const result = await db.all(query);
 
-    if (startHeight > endHeight) {
-      log.error('startHeight must be less than or equal to endHeight');
-      return;
-    }
+    return {
+      minHeight: result[0].min_height,
+      maxHeight: result[0].max_height,
+    };
+  } catch (error: any) {
+    const newError = new Error(`Error getting height range for ${tableName}`);
+    newError.stack = error.stack;
+    throw newError;
+  }
+};
 
-    if (maxFileRows <= 0) {
-      log.error('maxFileRows must be a positive number');
-      return;
-    }
+const getRowCountForHeight = async (
+  db: Connection,
+  tableName: string,
+  height: bigint,
+): Promise<bigint> => {
+  const query = `
+      SELECT COUNT(*) as count
+      FROM ${tableName}
+      WHERE height = ${height}
+    `;
 
-    if (!existsSync(outputDir)) {
-      mkdirSync(outputDir, { recursive: true });
-    }
+  try {
+    const result = await db.all(query);
+
+    return result[0].count;
+  } catch (error: any) {
+    const newError = new Error(
+      `Error getting row count for height ${height} in ${tableName}`,
+    );
+    newError.stack = error.stack;
+    throw newError;
+  }
+};
+
+if (!isMainThread) {
+  const runExport = async (data: any) => {
+    const {
+      outputDir,
+      startHeight,
+      endHeight,
+      maxFileRows,
+      duckDbPath,
+      bundlesDbPath,
+      coreDbPath,
+    } = data;
+
+    const db = await Database.create(duckDbPath);
+    const connection = await db.connect();
 
     try {
+      const duckDbSchema = readFileSync(
+        './src/database/duckdb/schema.sql',
+        'utf8',
+      );
+      await connection.exec(duckDbSchema);
+
+      await connection.exec(`INSTALL sqlite; LOAD sqlite;`);
+
       // Import data into DuckDB
-      await this.importBlocks({ startHeight, endHeight });
-      await this.importTransactions({ startHeight, endHeight });
-      await this.importDataItems({ startHeight, endHeight });
-      await this.importTransactionTags({ startHeight, endHeight });
-      await this.importDataItemTags({ startHeight, endHeight });
+      await importBlocks({
+        db: connection,
+        coreDbPath,
+        startHeight,
+        endHeight,
+      });
+      await importTransactions({
+        db: connection,
+        coreDbPath,
+        startHeight,
+        endHeight,
+      });
+      await importDataItems({
+        db: connection,
+        bundlesDbPath,
+        startHeight,
+        endHeight,
+      });
+      await importTransactionTags({
+        db: connection,
+        coreDbPath,
+        startHeight,
+        endHeight,
+      });
+      await importDataItemTags({
+        db: connection,
+        bundlesDbPath,
+        startHeight,
+        endHeight,
+      });
 
       // Export data to Parquet files
-      await this.exportToParquet({
+      await exportToParquet({
+        db: connection,
         outputDir,
         tableName: 'blocks',
         startHeight,
@@ -434,7 +561,8 @@ export class ParquetExporter {
         maxFileRows,
       });
 
-      await this.exportToParquet({
+      await exportToParquet({
+        db: connection,
         outputDir,
         tableName: 'transactions',
         startHeight,
@@ -442,7 +570,8 @@ export class ParquetExporter {
         maxFileRows,
       });
 
-      await this.exportToParquet({
+      await exportToParquet({
+        db: connection,
         outputDir,
         tableName: 'tags',
         startHeight,
@@ -450,68 +579,28 @@ export class ParquetExporter {
         maxFileRows,
       });
 
-      log.info('Parquet export complete');
-    } catch (error) {
-      log.error('Error exporting Parquet files', {
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
+      parentPort?.postMessage({ eventName: EXPORT_COMPLETE });
+    } catch (error: any) {
+      parentPort?.postMessage({
+        eventName: EXPORT_ERROR,
+        error: error.message,
+        stack: error.stack,
       });
     } finally {
-      await this.db.close();
+      await connection.close();
+      await db.close();
 
       // Delete the duckdb file
-      try {
-        rmSync(this.duckDbPath, { recursive: true, force: true });
-        rmSync(`${this.duckDbPath}.wal`, { force: true });
-      } catch (error) {
-        log.error(`Error deleting duckdb file ${this.duckDbPath}:`, error);
-      }
-      this.isExporting = false;
+      rmSync(duckDbPath, { recursive: true, force: true });
+      rmSync(`${duckDbPath}.wal`, { force: true });
     }
-  }
+  };
 
-  private async getHeightRange(
-    tableName: string,
-  ): Promise<{ minHeight: bigint; maxHeight: bigint }> {
-    const query = `
-      SELECT MIN(height) as min_height, MAX(height) as max_height
-      FROM ${tableName}
-    `;
-
-    try {
-      const result = await this.db.all(query);
-
-      return {
-        minHeight: result[0].min_height,
-        maxHeight: result[0].max_height,
-      };
-    } catch (error: any) {
-      const newError = new Error(`Error getting height range for ${tableName}`);
-      newError.stack = error.stack;
-      throw newError;
+  parentPort?.on('message', (message) => {
+    if (message === 'terminate') {
+      process.exit(0);
+    } else {
+      runExport(workerData);
     }
-  }
-
-  private async getRowCountForHeight(
-    tableName: string,
-    height: bigint,
-  ): Promise<bigint> {
-    const query = `
-      SELECT COUNT(*) as count
-      FROM ${tableName}
-      WHERE height = ${height}
-    `;
-
-    try {
-      const result = await this.db.all(query);
-
-      return result[0].count;
-    } catch (error: any) {
-      const newError = new Error(
-        `Error getting row count for height ${height} in ${tableName}`,
-      );
-      newError.stack = error.stack;
-      throw newError;
-    }
-  }
+  });
 }
