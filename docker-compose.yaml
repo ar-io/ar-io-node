@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-a79c9d6a3991cf17dc9928520ae3123a66b11173}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: on-failure
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-39e1ed9c487ebd7290f39410d1e5ea1dc1bf4c59}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: on-failure
@@ -87,7 +87,7 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
       - AWS_S3_PREFIX=${AWS_S3_PREFIX:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-18}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-19-pre}
       - CHUNK_POST_URLS=${CHUNK_POST_URLS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
       - CHUNK_POST_ABORT_TIMEOUT_MS=${CHUNK_POST_ABORT_TIMEOUT_MS:-}
@@ -134,7 +134,7 @@ services:
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-18}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-19-pre}
       - AO_CU_URL=${AO_CU_URL:-}
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
@@ -143,7 +143,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
     build:
       context: litestream/
       dockerfile: Dockerfile
