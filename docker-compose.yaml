@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-a79c9d6a3991cf17dc9928520ae3123a66b11173}
     build:
       context: envoy/
     restart: on-failure
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-39e1ed9c487ebd7290f39410d1e5ea1dc1bf4c59}
     build:
       context: .
     restart: on-failure
@@ -116,7 +116,7 @@ services:
       - ar-io-network
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-3008cdba20a39e74f5ee8888146779999806caf6}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-d907ca69c177a26b2bc7ab22a8329d1d8ee16a89}
     restart: on-failure
     ports:
       - 5050:5050
@@ -143,7 +143,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
     build:
       context: litestream/
       dockerfile: Dockerfile
