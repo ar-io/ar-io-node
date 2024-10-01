@@ -82,6 +82,7 @@ import { DataContentAttributeImporter } from './workers/data-content-attribute-i
 import { SignatureFetcher } from './data/signature-fetcher.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArnsStore } from './store/kv-arns-store.js';
+import { parquetExporter } from './routes/ar-io.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -628,6 +629,7 @@ export const shutdown = async (express: Server) => {
       eventEmitter.removeAllListeners();
       arIODataSource.stopUpdatingPeers();
       dataSqliteWalCleanupWorker?.stop();
+      parquetExporter?.stop();
       await arnsResolverCache.close();
       await mempoolWatcher?.stop();
       await blockImporter.stop();

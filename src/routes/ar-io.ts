@@ -222,6 +222,8 @@ arIoRouter.post(
   },
 );
 
+export let parquetExporter: ParquetExporter | null = null;
+
 arIoRouter.post(
   '/ar-io/admin/export-parquet',
   express.json(),
@@ -243,7 +245,7 @@ arIoRouter.post(
         return;
       }
 
-      const parquetExporter = new ParquetExporter({
+      parquetExporter = new ParquetExporter({
         log,
         duckDbPath: 'data/duckdb/db.duckdb',
         bundlesDbPath: 'data/sqlite/bundles.db',

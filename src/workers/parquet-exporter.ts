@@ -129,6 +129,7 @@ export class ParquetExporter {
       this.worker.on('error', (error) => {
         this.log.error('Worker error', error);
         this.isExporting = false;
+        this.worker?.terminate();
         reject(error);
       });
 
@@ -142,6 +143,7 @@ export class ParquetExporter {
   }
 
   async stop(): Promise<void> {
+    const log = this.log.child({ method: 'stop' });
     const worker = this.worker;
 
     if (worker) {
@@ -149,9 +151,12 @@ export class ParquetExporter {
         worker.on('exit', () => {
           resolve();
         });
-        worker.postMessage('terminate');
+
+        worker.terminate();
       });
     }
+
+    log.debug('Stopped successfully.');
   }
 }
 
@@ -600,9 +605,7 @@ if (!isMainThread) {
   };
 
   parentPort?.on('message', (message) => {
-    if (message === 'terminate') {
-      process.exit(0);
-    } else {
+    if (message === 'start') {
       runExport(workerData);
     }
   });
