@@ -118,15 +118,15 @@ export const arweaveTxFetchCounter = new promClient.Counter({
 // SQLite metrics
 //
 
-export const methodDurationSummary = new promClient.Summary({
+export const sqliteMethodDurationSummary = new promClient.Summary({
   name: 'standalone_sqlite_method_duration_seconds',
-  help: 'Count of failed Arweave peer info requests',
+  help: 'StandaloneSqlite method call durations',
   labelNames: ['worker', 'role', 'method'],
 });
 
-export const saveMethodsDuplicateCounter = new promClient.Counter({
-  name: 'save_methods_duplicate_total',
-  help: 'Count of duplicate calls to save methods',
+export const sqliteMethodDuplicateCallsCounter = new promClient.Counter({
+  name: 'standalone_sqlite_method_duplicate_calls_total',
+  help: 'StandaloneSqlite method call duplicate count',
   labelNames: ['method'],
 });
 
