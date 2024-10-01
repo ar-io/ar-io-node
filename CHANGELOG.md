@@ -14,17 +14,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Added WAL `sqlite_wal_checkpoint_pages` Prometheus metric to help monitor WAL
-  flushing behavior.
-- Added a POST `/ar-io/admin/export-parquet` admin endpoing that can be used to
+  flushing.
+- Added a POST `/ar-io/admin/export-parquet` endpoint that can be used to
   export the contents of the SQLite3 core and bundle DBs as Parquet. To trigger
   an export, POST JSON containing `outputDir`, `startHeight`, `endHeight`, and
   `maxFileRows` keys. The resulting Parquet files can then be queried directly
   using DuckDB or loaded into another system (e.g. ClickHouse). Scripts will be
-  provide to help automate the latter in future release.
-- Added `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS` that can be used to override ArNS
-  TTLs to force faster refreshes.
-- Added a GET `/ar-io/resolver/:name` resolution endpoint that returns an ArNS
-  resolution for the given name.
+  provided to help automate the latter in a future release.
+- Added `ARNS_RESOLVER_OVERRIDE_TTL_SECONDS` that can be used to force ArNS
+  names to refresh before their TTLs expire.
+- Added a GET `/ar-io/resolver/:name` endpoint that returns an ArNS resolution
+  for the given name.
 
 ### Changed
 
