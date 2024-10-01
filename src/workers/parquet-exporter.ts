@@ -102,12 +102,15 @@ export class ParquetExporter {
       this.worker.on('message', (message: any) => {
         if (message.eventName === EXPORT_COMPLETE) {
           const endTime = Date.now();
-          const duration = (endTime - startTime) / 1000; // Convert to seconds
+          const durationInSeconds = (endTime - startTime) / 1000; // Convert to seconds
 
-          this.log.info(
-            `Parquet export completed in ${duration.toFixed(2)} seconds`,
-            { outputDir, startHeight, endHeight, maxFileRows },
-          );
+          this.log.info(`Parquet export completed`, {
+            outputDir,
+            startHeight,
+            endHeight,
+            maxFileRows,
+            durationInSeconds,
+          });
 
           this.isExporting = false;
           this.worker?.terminate();
