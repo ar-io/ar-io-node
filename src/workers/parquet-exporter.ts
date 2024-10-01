@@ -24,6 +24,8 @@ import {
   workerData,
 } from 'node:worker_threads';
 import * as winston from 'winston';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 
 const EXPORT_COMPLETE = 'export-complete';
 const EXPORT_ERROR = 'export-error';
@@ -518,9 +520,12 @@ if (!isMainThread) {
     const db = await Database.create(duckDbPath);
     const connection = await db.connect();
 
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+
     try {
       const duckDbSchema = readFileSync(
-        './src/database/duckdb/schema.sql',
+        `${__dirname}/../database/duckdb/schema.sql`,
         'utf8',
       );
       await connection.exec(duckDbSchema);
