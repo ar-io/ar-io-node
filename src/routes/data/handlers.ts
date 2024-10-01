@@ -96,8 +96,21 @@ const setDataHeaders = ({
       DEFAULT_CONTENT_TYPE,
   );
 
-  if (dataAttributes?.contentEncoding !== undefined) {
-    res.header('Content-Encoding', dataAttributes.contentEncoding);
+  if (dataAttributes !== undefined) {
+    res.header(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
+    res.header(
+      headerNames.verified,
+      dataAttributes.verified ? 'true' : 'false',
+    );
+
+    if (dataAttributes.hash !== undefined) {
+      res.header(headerNames.digest, dataAttributes.hash);
+      res.header('ETag', dataAttributes.hash);
+    }
+
+    if (dataAttributes.contentEncoding !== undefined) {
+      res.header('Content-Encoding', dataAttributes.contentEncoding);
+    }
   }
 };
 
@@ -146,6 +159,19 @@ const handleRangeRequest = (
     dataAttributes?.contentType ??
     data.sourceContentType ??
     'application/octet-stream';
+
+  if (dataAttributes !== undefined) {
+    res.setHeader(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
+    res.setHeader(
+      headerNames.verified,
+      dataAttributes.verified ? 'true' : 'false',
+    );
+
+    if (dataAttributes.hash !== undefined) {
+      res.setHeader(headerNames.digest, dataAttributes.hash);
+      res.setHeader('ETag', dataAttributes.hash);
+    }
+  }
 
   if (isSingleRange) {
     const totalSize = data.size;
