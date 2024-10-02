@@ -329,6 +329,16 @@ describe('X-AR-IO headers', function () {
         resWithHeaders.headers['x-ar-io-origin-node-release'],
         'v1.0.0',
       );
+      assert.equal(
+        resWithHeaders.headers['x-ar-io-digest'],
+        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+      );
+      assert.equal(
+        resWithHeaders.headers['etag'],
+        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+      );
+      assert.equal(resWithHeaders.headers['x-ar-io-stable'], 'false');
+      assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
     });
 
     it('Verifying that /<id> for a manifest with a missing index returns no hops, origin and node release', async function () {
@@ -454,6 +464,16 @@ describe('X-AR-IO headers', function () {
       assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
       assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
       assert.equal(resWithHeaders.headers['x-ar-io-origin-node-release'], '10');
+      assert.equal(
+        resWithHeaders.headers['x-ar-io-digest'],
+        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+      );
+      assert.equal(
+        resWithHeaders.headers['etag'],
+        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+      );
+      assert.equal(resWithHeaders.headers['x-ar-io-stable'], 'false');
+      assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
     });
 
     it('Verifying that /<id> for a manifest with a missing index returns no hops, origin and node release', async function () {
