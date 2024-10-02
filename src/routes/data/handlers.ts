@@ -41,6 +41,27 @@ const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
 
+const setDigestStableVerifiedHeaders = ({
+  res,
+  dataAttributes,
+}: {
+  res: Response;
+  dataAttributes: ContiguousDataAttributes | undefined;
+}) => {
+  if (dataAttributes !== undefined) {
+    res.setHeader(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
+    res.setHeader(
+      headerNames.verified,
+      dataAttributes.verified ? 'true' : 'false',
+    );
+
+    if (dataAttributes.hash !== undefined) {
+      res.setHeader(headerNames.digest, dataAttributes.hash);
+      res.setHeader('ETag', dataAttributes.hash);
+    }
+  }
+};
+
 const setDataHeaders = ({
   res,
   dataAttributes,
@@ -96,22 +117,11 @@ const setDataHeaders = ({
       DEFAULT_CONTENT_TYPE,
   );
 
-  if (dataAttributes !== undefined) {
-    res.header(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
-    res.header(
-      headerNames.verified,
-      dataAttributes.verified ? 'true' : 'false',
-    );
-
-    if (dataAttributes.hash !== undefined) {
-      res.header(headerNames.digest, dataAttributes.hash);
-      res.header('ETag', dataAttributes.hash);
-    }
-
-    if (dataAttributes.contentEncoding !== undefined) {
-      res.header('Content-Encoding', dataAttributes.contentEncoding);
-    }
+  if (dataAttributes?.contentEncoding !== undefined) {
+    res.header('Content-Encoding', dataAttributes.contentEncoding);
   }
+
+  setDigestStableVerifiedHeaders({ res, dataAttributes });
 };
 
 const getRequestAttributes = (req: Request): RequestAttributes => {
@@ -160,18 +170,7 @@ const handleRangeRequest = (
     data.sourceContentType ??
     'application/octet-stream';
 
-  if (dataAttributes !== undefined) {
-    res.setHeader(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
-    res.setHeader(
-      headerNames.verified,
-      dataAttributes.verified ? 'true' : 'false',
-    );
-
-    if (dataAttributes.hash !== undefined) {
-      res.setHeader(headerNames.digest, dataAttributes.hash);
-      res.setHeader('ETag', dataAttributes.hash);
-    }
-  }
+  setDigestStableVerifiedHeaders({ res, dataAttributes });
 
   if (isSingleRange) {
     const totalSize = data.size;

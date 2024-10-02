@@ -40,9 +40,11 @@ describe('Data routes', () => {
     beforeEach(() => {
       app = express();
       dataIndex = {
+        getDataItemAttributes: () => Promise.resolve(undefined),
         getDataAttributes: () => Promise.resolve(undefined),
         getDataParent: () => Promise.resolve(undefined),
         saveDataContentAttributes: () => Promise.resolve(undefined),
+        getTransactionAttributes: () => Promise.resolve(undefined),
       };
       dataSource = {
         getData: () =>
