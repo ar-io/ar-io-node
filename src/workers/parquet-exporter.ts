@@ -39,8 +39,15 @@ type Message = {
   stack?: string;
 };
 
-type ExportStatus = {
-  pending: boolean;
+type ExportStatus = 'not_started' | 'running' | 'completed' | 'errored';
+
+const NOT_STARTED: ExportStatus = 'not_started';
+const RUNNING: ExportStatus = 'running';
+const COMPLETED: ExportStatus = 'completed';
+const ERRORED: ExportStatus = 'errored';
+
+type ExportData = {
+  status: ExportStatus;
   outputDir?: string;
   startHeight?: number;
   endHeight?: number;
@@ -55,8 +62,8 @@ export class ParquetExporter {
   private duckDbPath: string;
   private bundlesDbPath: string;
   private coreDbPath: string;
-  private exportStatus: ExportStatus = {
-    pending: false,
+  private exportStatus: ExportData = {
+    status: NOT_STARTED,
   };
 
   constructor({
@@ -87,12 +94,12 @@ export class ParquetExporter {
     endHeight: number;
     maxFileRows: number;
   }): Promise<void> {
-    if (this.exportStatus.pending) {
+    if (this.exportStatus.status === RUNNING) {
       this.log.error('An export is already in progress');
       return;
     }
 
-    this.exportStatus.pending = true;
+    this.exportStatus.status = RUNNING;
 
     return new Promise((resolve, reject) => {
       const workerUrl = new URL('./parquet-exporter.js', import.meta.url);
@@ -137,7 +144,7 @@ export class ParquetExporter {
           });
 
           this.exportStatus = {
-            pending: false,
+            status: COMPLETED,
             outputDir,
             startHeight,
             endHeight,
@@ -148,7 +155,7 @@ export class ParquetExporter {
           resolve();
         } else if (message.eventName === EXPORT_ERROR) {
           this.exportStatus = {
-            pending: false,
+            status: ERRORED,
             error: message.error,
           };
 
@@ -163,7 +170,7 @@ export class ParquetExporter {
 
       this.worker.on('error', (error) => {
         this.exportStatus = {
-          pending: false,
+          status: ERRORED,
           error: error.message,
         };
 
@@ -175,7 +182,7 @@ export class ParquetExporter {
       this.worker.on('exit', (code) => {
         if (code !== 0) {
           this.exportStatus = {
-            pending: false,
+            status: ERRORED,
             error: `Worker stopped with exit code ${code}`,
           };
 
@@ -185,7 +192,7 @@ export class ParquetExporter {
     });
   }
 
-  status(): ExportStatus {
+  status(): ExportData {
     return this.exportStatus;
   }
 
