@@ -941,17 +941,25 @@ export class StandaloneSqliteDatabaseWorker {
       const endHeight = block.height - MAX_FORK_DEPTH;
 
       this.saveCoreStableDataFn(endHeight);
-      this.saveBundlesStableDataFn(endHeight);
 
       this.deleteCoreStaleNewDataFn(
         endHeight,
         maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
       );
-      this.deleteBundlesStaleNewDataFn(
-        endHeight,
-        maxStableBlockTimestamp - NEW_DATA_ITEM_CLEANUP_WAIT_SECS,
-      );
+
+      return { endHeight, maxStableBlockTimestamp };
     }
+
+    return {};
+  }
+
+  flushStableDataItems(endHeight: number, maxStableBlockTimestamp: number) {
+    this.saveBundlesStableDataFn(endHeight);
+
+    this.deleteBundlesStaleNewDataFn(
+      endHeight,
+      maxStableBlockTimestamp - NEW_DATA_ITEM_CLEANUP_WAIT_SECS,
+    );
   }
 
   getDataAttributes(id: string) {
@@ -2370,7 +2378,7 @@ const WORKER_POOL_NAMES: Array<WorkerPoolName> = [
   'bundles',
 ];
 
-type WorkerMethodName = keyof StandaloneSqliteDatabase;
+type WorkerMethodName = keyof StandaloneSqliteDatabaseWorker;
 
 type WorkerRoleName = 'read' | 'write';
 const WORKER_ROLE_NAMES: Array<WorkerRoleName> = ['read', 'write'];
@@ -2742,16 +2750,22 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'saveBundle', [bundle]);
   }
 
-  saveBlockAndTxs(
+  async saveBlockAndTxs(
     block: PartialJsonBlock,
     txs: PartialJsonTransaction[],
     missingTxIds: string[],
   ): Promise<void> {
-    return this.queueWrite('core', 'saveBlockAndTxs', [
-      block,
-      txs,
-      missingTxIds,
-    ]);
+    const { endHeight, maxStableBlockTimestamp } = await this.queueWrite(
+      'core',
+      'saveBlockAndTxs',
+      [block, txs, missingTxIds],
+    );
+    if (endHeight !== undefined && maxStableBlockTimestamp !== undefined) {
+      await this.queueWrite('bundles', 'flushStableDataItems', [
+        endHeight,
+        maxStableBlockTimestamp,
+      ]);
+    }
   }
 
   async getDataAttributes(
@@ -3068,9 +3082,18 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           break;
         case 'saveBlockAndTxs':
-          const [block, txs, missingTxIds] = args;
-          worker.saveBlockAndTxs(block, txs, missingTxIds);
-          parentPort?.postMessage(null);
+          {
+            const [block, txs, missingTxIds] = args;
+            const ret = worker.saveBlockAndTxs(block, txs, missingTxIds);
+            parentPort?.postMessage(ret);
+          }
+          break;
+        case 'flushStableDataItems':
+          {
+            const [endHeight, maxStableBlockTimestamp] = args;
+            worker.flushStableDataItems(endHeight, maxStableBlockTimestamp);
+            parentPort?.postMessage(null);
+          }
           break;
         case 'getDataAttributes':
           const dataAttributes = worker.getDataAttributes(args[0]);
