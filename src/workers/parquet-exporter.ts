@@ -97,8 +97,9 @@ export class ParquetExporter {
     maxFileRows: number;
   }): Promise<void> {
     if (this.exportStatus.status === RUNNING) {
-      this.log.error('An export is already in progress');
-      return;
+      const error = new Error('An export is already in progress');
+      this.log.error(error.message);
+      return Promise.reject(error);
     }
 
     this.exportStatus.status = RUNNING;
