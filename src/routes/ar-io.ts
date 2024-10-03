@@ -27,6 +27,20 @@ import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
 
 export const arIoRouter = Router();
+export let parquetExporter: ParquetExporter | null = null;
+
+const getParquetExporter = () => {
+  if (parquetExporter === null) {
+    parquetExporter = new ParquetExporter({
+      log,
+      duckDbPath: 'data/duckdb/db.duckdb',
+      bundlesDbPath: 'data/sqlite/bundles.db',
+      coreDbPath: 'data/sqlite/core.db',
+    });
+  }
+
+  return parquetExporter;
+};
 
 arIoRouter.use(
   createPrometheusMiddleware({
@@ -222,8 +236,6 @@ arIoRouter.post(
   },
 );
 
-export let parquetExporter: ParquetExporter | null = null;
-
 arIoRouter.post(
   '/ar-io/admin/export-parquet',
   express.json(),
@@ -245,14 +257,9 @@ arIoRouter.post(
         return;
       }
 
-      parquetExporter = new ParquetExporter({
-        log,
-        duckDbPath: 'data/duckdb/db.duckdb',
-        bundlesDbPath: 'data/sqlite/bundles.db',
-        coreDbPath: 'data/sqlite/core.db',
-      });
+      const exporter = getParquetExporter();
 
-      parquetExporter.export({
+      exporter.export({
         outputDir,
         startHeight,
         endHeight,
@@ -260,6 +267,22 @@ arIoRouter.post(
       });
 
       res.json({ message: 'Parquet export started' });
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
+arIoRouter.get(
+  '/ar-io/admin/export-parquet/status',
+  express.json(),
+  async (_, res) => {
+    try {
+      const exporter = getParquetExporter();
+
+      const status = exporter.status();
+
+      res.json(status);
     } catch (error: any) {
       res.status(500).send(error?.message);
     }
