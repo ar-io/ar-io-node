@@ -53,6 +53,8 @@ type ExportData = {
   endHeight?: number;
   maxFileRows?: number;
   durationInSeconds?: number;
+  endTime?: string;
+  endTimestamp?: number;
   error?: string;
 };
 
@@ -132,8 +134,8 @@ export class ParquetExporter {
 
       this.worker.on('message', (message: Message) => {
         if (message.eventName === EXPORT_COMPLETE) {
-          const endTime = Date.now();
-          const durationInSeconds = (endTime - startTime) / 1000; // Convert to seconds
+          const endTime = new Date();
+          const durationInSeconds = (endTime.getTime() - startTime) / 1000; // Convert to seconds
 
           this.log.info(`Parquet export completed`, {
             outputDir,
@@ -149,19 +151,28 @@ export class ParquetExporter {
             startHeight,
             endHeight,
             maxFileRows,
+            endTime: endTime.toISOString(),
+            endTimestamp: endTime.getTime(),
             durationInSeconds,
           };
 
           resolve();
         } else if (message.eventName === EXPORT_ERROR) {
+          const endTime = new Date();
+          const durationInSeconds = (endTime.getTime() - startTime) / 1000; // Convert to seconds
+
           this.exportStatus = {
             status: ERRORED,
             error: message.error,
+            endTime: endTime.toISOString(),
+            endTimestamp: endTime.getTime(),
+            durationInSeconds,
           };
 
           this.log.error('Parquet export error', {
             error: message.error,
             stack: message.stack,
+            durationInSeconds,
           });
 
           reject(new Error(message.error));
