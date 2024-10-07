@@ -18,32 +18,38 @@
 
 import { Logger } from 'winston';
 import WebTorrent from 'webtorrent';
+import { FsDataStore } from '../store/fs-data-store.js';
 import { ContiguousDataSource } from '../types.js';
 
 export class SeedingWorker {
   private log: Logger;
   private contiguousDataSource: ContiguousDataSource;
+  private fsDataStore: FsDataStore;
 
   public webTorrentClient: WebTorrent.Instance;
 
   constructor({
     log,
     contiguousDataSource,
+    fsDataStore,
   }: {
     log: Logger;
     contiguousDataSource: ContiguousDataSource;
+    fsDataStore: FsDataStore;
   }) {
     this.webTorrentClient = new WebTorrent();
     this.contiguousDataSource = contiguousDataSource;
+    this.fsDataStore = fsDataStore;
     this.log = log.child({ class: 'SeedingWorker' });
   }
 
   async seed(txId: string) {
     this.log.debug(`Seeding ${txId}`);
-    const data = await this.contiguousDataSource.getData({ id: txId });
+    await this.contiguousDataSource.getData({ id: txId });
+    const dataPath = this.fsDataStore.dataPath(txId);
     await new Promise<void>((resolve) =>
       this.webTorrentClient.seed(
-        data.stream,
+        dataPath,
         {
           announce: [
             'wss://tracker.btorrent.xyz',

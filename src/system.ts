@@ -394,13 +394,15 @@ metrics.registerQueueLengthGauge('dataContentAttributeImporter', {
   length: () => dataContentAttributeImporter.queueDepth(),
 });
 
+const fsDataStore = new FsDataStore({ log, baseDir: 'data/contiguous' });
+
 export const contiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource: new SequentialDataSource({
     log,
     dataSources,
   }),
-  dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
+  dataStore: fsDataStore,
   contiguousDataIndex,
   dataContentAttributeImporter,
 });
@@ -627,7 +629,11 @@ if (dataSqliteWalCleanupWorker !== undefined) {
   dataSqliteWalCleanupWorker.start();
 }
 
-export const seedingWorker = new SeedingWorker({ log, contiguousDataSource });
+export const seedingWorker = new SeedingWorker({
+  log,
+  contiguousDataSource,
+  fsDataStore,
+});
 
 let isShuttingDown = false;
 

@@ -44,7 +44,7 @@ export class FsDataStore implements ContiguousDataStore {
     return `${this.baseDir}/data/${hashPrefix}`;
   }
 
-  private dataPath(hash: string) {
+  public dataPath(hash: string) {
     return `${this.dataDir(hash)}/${hash}`;
   }
 
