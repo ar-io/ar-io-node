@@ -2397,13 +2397,14 @@ const WORKER_POOL_SIZES: WorkerPoolSizes = {
 
 export class StandaloneSqliteDatabase
   implements
-  BundleIndex,
-  BlockListValidator,
-  ChainIndex,
-  ChainOffsetIndex,
-  ContiguousDataIndex,
-  GqlQueryable,
-  NestedDataIndexWriter {
+    BundleIndex,
+    BlockListValidator,
+    ChainIndex,
+    ChainOffsetIndex,
+    ContiguousDataIndex,
+    GqlQueryable,
+    NestedDataIndexWriter
+{
   log: winston.Logger;
 
   private workers: {
@@ -2414,13 +2415,13 @@ export class StandaloneSqliteDatabase
     moderation: { read: any[]; write: any[] };
     bundles: { read: any[]; write: any[] };
   } = {
-      core: { read: [], write: [] },
-      data: { read: [], write: [] },
-      gql: { read: [], write: [] },
-      debug: { read: [], write: [] },
-      moderation: { read: [], write: [] },
-      bundles: { read: [], write: [] },
-    };
+    core: { read: [], write: [] },
+    data: { read: [], write: [] },
+    gql: { read: [], write: [] },
+    debug: { read: [], write: [] },
+    moderation: { read: [], write: [] },
+    bundles: { read: [], write: [] },
+  };
   private workQueues: {
     core: { read: any[]; write: any[] };
     data: { read: any[]; write: any[] };
@@ -2429,13 +2430,13 @@ export class StandaloneSqliteDatabase
     moderation: { read: any[]; write: any[] };
     bundles: { read: any[]; write: any[] };
   } = {
-      core: { read: [], write: [] },
-      data: { read: [], write: [] },
-      gql: { read: [], write: [] },
-      debug: { read: [], write: [] },
-      moderation: { read: [], write: [] },
-      bundles: { read: [], write: [] },
-    };
+    core: { read: [], write: [] },
+    data: { read: [], write: [] },
+    gql: { read: [], write: [] },
+    debug: { read: [], write: [] },
+    moderation: { read: [], write: [] },
+    bundles: { read: [], write: [] },
+  };
 
   // Data index circuit breakers
   private getDataParentCircuitBreaker: CircuitBreaker<
@@ -2659,6 +2660,10 @@ export class StandaloneSqliteDatabase
     method: WorkerMethodName,
     args: any,
   ): Promise<any> {
+    metrics.sqliteInFlightOps.inc({
+      worker: workerName,
+      role,
+    });
     const end = metrics.sqliteMethodDurationSummary.startTimer({
       worker: workerName,
       role,
@@ -2675,7 +2680,13 @@ export class StandaloneSqliteDatabase
       });
       this.drainQueue();
     });
-    ret.finally(() => end());
+    ret.finally(() => {
+      metrics.sqliteInFlightOps.dec({
+        worker: workerName,
+        role,
+      });
+      end();
+    });
     return ret;
   }
 

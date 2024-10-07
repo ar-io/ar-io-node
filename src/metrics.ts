@@ -136,6 +136,12 @@ export const sqliteWalCheckpointPages = new promClient.Gauge({
   labelNames: ['db', 'type'],
 });
 
+export const sqliteInFlightOps = new promClient.Gauge({
+  name: 'sqlite_in_flight_ops',
+  help: 'Number of in-flight SQLite operations',
+  labelNames: ['worker', 'role'],
+});
+
 //
 // Block importer metrics
 //
