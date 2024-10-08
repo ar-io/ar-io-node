@@ -4,6 +4,8 @@
 *.log
 /.direnv
 /.env
+/.env.ao
+/.env.bundler
 /coverage
 /data
 /dist
