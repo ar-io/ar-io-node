@@ -89,6 +89,16 @@ export const ON_DEMAND_RETRIEVAL_ORDER = env
   )
   .split(',');
 
+// seeding-worker (torrent) filter
+export const SEEDING_WORKER_FILTER_STRING = env.varOrUndefined(
+  'SEEDING_WORKER_FILTER',
+);
+
+export const SEEDING_WORKER_FILTER =
+  SEEDING_WORKER_FILTER_STRING === undefined
+    ? undefined
+    : createFilter(JSON.parse(SEEDING_WORKER_FILTER_STRING));
+
 //
 // Indexing
 //

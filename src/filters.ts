@@ -164,6 +164,16 @@ export class MatchNestedBundle implements ItemFilter {
   }
 }
 
+export class MatchLayer1 implements ItemFilter {
+  async match(item: MatchableItem): Promise<boolean> {
+    return (
+      item.parent_id === '' ||
+      item.parent_id === null ||
+      item.parent_id === undefined
+    );
+  }
+}
+
 /**
  * Examples:
  *
@@ -202,6 +212,8 @@ export function createFilter(filter: any): ItemFilter {
     return new MatchAttributes(filter.attributes);
   } else if (filter?.isNestedBundle) {
     return new MatchNestedBundle();
+  } else if (filter?.isLayer1) {
+    return new MatchLayer1();
   } else if (filter?.not) {
     return new NegateMatch(createFilter(filter.not));
   } else if (filter?.and) {

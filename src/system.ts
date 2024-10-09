@@ -80,6 +80,7 @@ import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher } from './data/signature-fetcher.js';
+import { SeedingWorker } from './workers/seeding-worker.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArnsStore } from './store/kv-arns-store.js';
 import { parquetExporter } from './routes/ar-io.js';
@@ -240,6 +241,16 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
     eventEmitter.emit(events.ANS104_TX_INDEXED, tx);
     eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, tx);
   }
+
+  const seedingWorkerFilter = config.SEEDING_WORKER_FILTER;
+
+  if (
+    seedingWorkerFilter !== undefined &&
+    tx.id !== undefined &&
+    (await seedingWorkerFilter.match(tx))
+  ) {
+    seedingWorker.seed(tx.id);
+  }
 });
 
 eventEmitter.on(
@@ -383,13 +394,15 @@ metrics.registerQueueLengthGauge('dataContentAttributeImporter', {
   length: () => dataContentAttributeImporter.queueDepth(),
 });
 
+const fsDataStore = new FsDataStore({ log, baseDir: 'data/contiguous' });
+
 export const contiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource: new SequentialDataSource({
     log,
     dataSources,
   }),
-  dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
+  dataStore: fsDataStore,
   contiguousDataIndex,
   dataContentAttributeImporter,
 });
@@ -615,6 +628,12 @@ const dataSqliteWalCleanupWorker = config.ENABLE_DATA_DB_WAL_CLEANUP
 if (dataSqliteWalCleanupWorker !== undefined) {
   dataSqliteWalCleanupWorker.start();
 }
+
+export const seedingWorker = new SeedingWorker({
+  log,
+  contiguousDataSource,
+  fsDataStore,
+});
 
 let isShuttingDown = false;
 
