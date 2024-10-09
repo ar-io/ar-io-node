@@ -1140,6 +1140,7 @@ export class StandaloneSqliteDatabaseWorker {
     dataSize,
     contentType,
     cachedAt,
+    verified,
   }: {
     id: string;
     dataRoot?: string;
@@ -1147,19 +1148,26 @@ export class StandaloneSqliteDatabaseWorker {
     dataSize: number;
     contentType?: string;
     cachedAt?: number;
+    verified?: boolean;
   }) {
     const hashBuffer = fromB64Url(hash);
+    const currentTimestamp = currentUnixTimestamp();
 
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
       indexed_at: currentUnixTimestamp(),
+      verified: verified ? 1 : 0,
+      verified_at: verified ? currentTimestamp : 0,
     });
+
     if (dataRoot !== undefined) {
       this.stmts.data.insertDataRoot.run({
         data_root: fromB64Url(dataRoot),
         contiguous_data_hash: hashBuffer,
-        indexed_at: currentUnixTimestamp(),
+        indexed_at: currentTimestamp,
+        verified: verified ? 1 : 0,
+        verified_at: verified ? currentTimestamp : 0,
       });
     }
 
@@ -1172,7 +1180,7 @@ export class StandaloneSqliteDatabaseWorker {
       hash: hashBuffer,
       data_size: dataSize,
       original_source_content_type: contentType,
-      indexed_at: currentUnixTimestamp(),
+      indexed_at: currentTimestamp,
       cached_at: cachedAt,
     });
   }
@@ -2329,13 +2337,25 @@ export class StandaloneSqliteDatabaseWorker {
     dataOffset: number;
     dataSize: number;
   }) {
+    const currentTimestamp = currentUnixTimestamp();
+    const dataId = fromB64Url(id);
+
     this.stmts.data.insertNestedDataId.run({
-      id: fromB64Url(id),
+      id: dataId,
       parent_id: fromB64Url(parentId),
       data_offset: dataOffset,
       data_size: dataSize,
-      indexed_at: currentUnixTimestamp(),
+      indexed_at: currentTimestamp,
     });
+
+    const parentAttributes = this.getDataAttributes(parentId);
+    if (parentAttributes?.verified) {
+      this.stmts.data.updateVerifiedDataId.run({
+        id: dataId,
+        verified: 1,
+        verified_at: currentTimestamp,
+      });
+    }
   }
 
   async saveNestedDataHash({
@@ -2827,12 +2847,14 @@ export class StandaloneSqliteDatabase
     hash,
     dataSize,
     contentType,
+    verified,
   }: {
     id: string;
     dataRoot?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
+    verified?: boolean;
   }) {
     if (this.saveDataContentAttributesCache.get(id)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
@@ -2850,6 +2872,7 @@ export class StandaloneSqliteDatabase
         hash,
         dataSize,
         contentType,
+        verified,
       },
     ]);
   }

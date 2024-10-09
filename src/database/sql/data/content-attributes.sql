@@ -17,22 +17,37 @@ INSERT INTO contiguous_data (
 INSERT OR REPLACE INTO contiguous_data_ids (
   id,
   contiguous_data_hash,
-  indexed_at
+  verified,
+  indexed_at,
+  verified_at
 ) VALUES (
   :id,
   :contiguous_data_hash,
-  :indexed_at
+  :verified,
+  :indexed_at,
+  :verified_at
 )
+
+-- updateVerifiedDataId
+UPDATE contiguous_data_ids
+SET
+  verified = :verified,
+  verified_at = :verified_at
+WHERE id = :id;
 
 -- insertDataRoot
 INSERT OR REPLACE INTO data_roots (
   data_root,
   contiguous_data_hash,
-  indexed_at
+  verified,
+  indexed_at,
+  verified_at
 ) VALUES (
   :data_root,
   :contiguous_data_hash,
-  :indexed_at
+  :verified,
+  :indexed_at,
+  :verified_at
 )
 
 -- selectDataAttributes
