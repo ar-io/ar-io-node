@@ -228,6 +228,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   dataSize: data.size,
                   contentType: data.sourceContentType,
                   cachedAt: currentUnixTimestamp(),
+                  verified: data.verified,
                 });
               } catch (error: any) {
                 this.log.error('Error saving data content attributes:', {

@@ -96,6 +96,7 @@ describe('ReadThroughDataCache', function () {
             isManifest: false,
             stable: false,
             verified: false,
+            signature: null,
           };
         }
 

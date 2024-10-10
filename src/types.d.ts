@@ -545,6 +545,7 @@ export interface ContiguousDataIndex {
     dataSize,
     contentType,
     cachedAt,
+    verified,
   }: {
     id: string;
     dataRoot?: string;
@@ -552,6 +553,7 @@ export interface ContiguousDataIndex {
     dataSize: number;
     contentType?: string;
     cachedAt?: number;
+    verified?: boolean;
   }): Promise<void>;
 }
 

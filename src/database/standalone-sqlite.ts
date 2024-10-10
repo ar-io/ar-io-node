@@ -1140,6 +1140,7 @@ export class StandaloneSqliteDatabaseWorker {
     dataSize,
     contentType,
     cachedAt,
+    verified,
   }: {
     id: string;
     dataRoot?: string;
@@ -1147,19 +1148,28 @@ export class StandaloneSqliteDatabaseWorker {
     dataSize: number;
     contentType?: string;
     cachedAt?: number;
+    verified?: boolean;
   }) {
     const hashBuffer = fromB64Url(hash);
+    const currentTimestamp = currentUnixTimestamp();
+    const isVerified = verified ? 1 : 0;
+    const verifiedAt = verified ? currentTimestamp : null;
 
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
       indexed_at: currentUnixTimestamp(),
+      verified: isVerified,
+      verified_at: verifiedAt,
     });
+
     if (dataRoot !== undefined) {
       this.stmts.data.insertDataRoot.run({
         data_root: fromB64Url(dataRoot),
         contiguous_data_hash: hashBuffer,
-        indexed_at: currentUnixTimestamp(),
+        indexed_at: currentTimestamp,
+        verified: isVerified,
+        verified_at: verifiedAt,
       });
     }
 
@@ -1172,7 +1182,7 @@ export class StandaloneSqliteDatabaseWorker {
       hash: hashBuffer,
       data_size: dataSize,
       original_source_content_type: contentType,
-      indexed_at: currentUnixTimestamp(),
+      indexed_at: currentTimestamp,
       cached_at: cachedAt,
     });
   }
@@ -2329,12 +2339,22 @@ export class StandaloneSqliteDatabaseWorker {
     dataOffset: number;
     dataSize: number;
   }) {
+    const currentTimestamp = currentUnixTimestamp();
+    const idBuffer = fromB64Url(id);
+    const parentIdBuffer = fromB64Url(parentId);
+
     this.stmts.data.insertNestedDataId.run({
-      id: fromB64Url(id),
-      parent_id: fromB64Url(parentId),
+      id: idBuffer,
+      parent_id: parentIdBuffer,
       data_offset: dataOffset,
       data_size: dataSize,
-      indexed_at: currentUnixTimestamp(),
+      indexed_at: currentTimestamp,
+    });
+
+    this.stmts.data.updateVerifiedDataId.run({
+      id: idBuffer,
+      parent_id: parentIdBuffer,
+      verified_at: currentTimestamp,
     });
   }
 
@@ -2827,12 +2847,14 @@ export class StandaloneSqliteDatabase
     hash,
     dataSize,
     contentType,
+    verified,
   }: {
     id: string;
     dataRoot?: string;
     hash: string;
     dataSize: number;
     contentType?: string;
+    verified?: boolean;
   }) {
     if (this.saveDataContentAttributesCache.get(id)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
@@ -2850,6 +2872,7 @@ export class StandaloneSqliteDatabase
         hash,
         dataSize,
         contentType,
+        verified,
       },
     ]);
   }
