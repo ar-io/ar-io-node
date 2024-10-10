@@ -1152,13 +1152,15 @@ export class StandaloneSqliteDatabaseWorker {
   }) {
     const hashBuffer = fromB64Url(hash);
     const currentTimestamp = currentUnixTimestamp();
+    const isVerified = verified ? 1 : 0;
+    const verifiedAt = verified ? currentTimestamp : null;
 
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
       indexed_at: currentUnixTimestamp(),
-      verified: verified ? 1 : 0,
-      verified_at: verified ? currentTimestamp : 0,
+      verified: isVerified,
+      verified_at: verifiedAt,
     });
 
     if (dataRoot !== undefined) {
@@ -1166,8 +1168,8 @@ export class StandaloneSqliteDatabaseWorker {
         data_root: fromB64Url(dataRoot),
         contiguous_data_hash: hashBuffer,
         indexed_at: currentTimestamp,
-        verified: verified ? 1 : 0,
-        verified_at: verified ? currentTimestamp : 0,
+        verified: isVerified,
+        verified_at: verifiedAt,
       });
     }
 
@@ -2338,24 +2340,22 @@ export class StandaloneSqliteDatabaseWorker {
     dataSize: number;
   }) {
     const currentTimestamp = currentUnixTimestamp();
-    const dataId = fromB64Url(id);
+    const idBuffer = fromB64Url(id);
+    const parentIdBuffer = fromB64Url(parentId);
 
     this.stmts.data.insertNestedDataId.run({
-      id: dataId,
-      parent_id: fromB64Url(parentId),
+      id: idBuffer,
+      parent_id: parentIdBuffer,
       data_offset: dataOffset,
       data_size: dataSize,
       indexed_at: currentTimestamp,
     });
 
-    const parentAttributes = this.getDataAttributes(parentId);
-    if (parentAttributes?.verified) {
-      this.stmts.data.updateVerifiedDataId.run({
-        id: dataId,
-        verified: 1,
-        verified_at: currentTimestamp,
-      });
-    }
+    this.stmts.data.updateVerifiedDataId.run({
+      id: idBuffer,
+      parent_id: parentIdBuffer,
+      verified_at: currentTimestamp,
+    });
   }
 
   async saveNestedDataHash({

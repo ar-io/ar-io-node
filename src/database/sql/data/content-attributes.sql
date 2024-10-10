@@ -30,10 +30,19 @@ INSERT OR REPLACE INTO contiguous_data_ids (
 
 -- updateVerifiedDataId
 UPDATE contiguous_data_ids
-SET
-  verified = :verified,
+  SET
+    verified = CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM contiguous_data_ids AS parent
+        WHERE parent.id = :parent_id
+        AND parent.verified = TRUE
+      ) THEN 1
+      ELSE 0
+  END,
   verified_at = :verified_at
-WHERE id = :id;
+WHERE
+  id = :id;
 
 -- insertDataRoot
 INSERT OR REPLACE INTO data_roots (
