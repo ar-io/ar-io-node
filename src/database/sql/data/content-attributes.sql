@@ -40,7 +40,10 @@ UPDATE contiguous_data_ids
       ) THEN 1
       ELSE 0
   END,
-  verified_at = :verified_at
+  verified_at = CASE
+      WHEN verified = 1 THEN :verified_at
+      ELSE NULL
+    END
 WHERE
   id = :id;
 
