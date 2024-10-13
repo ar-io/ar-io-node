@@ -4,6 +4,9 @@
   },
   "src/*.test.ts": {
     "alternate": "src/{}.ts",
-    "dispatch": "npx c8 -r lcov mocha --no-warnings --color=false"
+    "dispatch": "NODE_OPTIONS='--import=./register.js ' node --test --test-reporter spec --test-concurrency 1 {file}"
+  },
+  "*": {
+    "dispatch": "NODE_OPTIONS='--import=./register.js ' node --test --test-reporter spec --test-concurrency 1 src/**/*.test.ts"
   }
 }
