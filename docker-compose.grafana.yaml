@@ -35,7 +35,7 @@ services:
       - 1024:1024
     environment:
       - TERM=linux
-      - GF_SERVER_ROOT_URL=${GF_SERVER_ROOT_URL:-http://localhost:3000/grafana}
+      - GF_SERVER_ROOT_URL=${GF_SERVER_ROOT_URL:-http://localhost:1024}
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-polystat-panel
       - GF_SERVER_HTTP_PORT=1024
