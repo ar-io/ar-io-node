@@ -294,7 +294,7 @@ docker compose --file docker-compose.grafana.yaml up -d
 
 Once the dashboard is running, you can access it at `http://localhost:1024/grafana` and login with the username and password `admin`.
 
-This dashboard is pre-configured to work with the ar.io gateway metrics exposed via the `ar-io-core` service and is ready to be used without any additional configuration for simple observability. You can modify the dashboard to better fit your needs by editing the `dashboard.json` file. Refer to the [Grafana documentation](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/view-dashboard-json-model/) to learn more about how to create and modify Grafana dashboards using JSON model files.
+This dashboard is pre-configured to work with the ar.io gateway metrics exposed via the `ar-io-core` service and is ready to be used without any additional configuration for simple observability. You can modify the dashboard to better fit your needs by editing the `dashboard.json` file. Refer to the [Grafana documentation] to learn more about how to create and modify Grafana dashboards using JSON model files.
 
 ## Principles and Practices
 
@@ -332,3 +332,6 @@ This dashboard is pre-configured to work with the ar.io gateway metrics exposed 
 [metrics naming recommendations]: https://prometheus.io/docs/practices/naming/
 [turbo]: https://github.com/ardriveapp/turbo-upload-service/
 [Dry Runs]: https://github.com/permaweb/ao/blob/main/connect/README.md#dryrun
+[Grafana]: https://grafana.com/
+[Grafana documentation]: https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/view-dashboard-json-model/
+[Prometheus]: https://prometheus.io/
