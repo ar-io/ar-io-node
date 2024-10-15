@@ -540,6 +540,7 @@ export interface ContiguousDataIndex {
   getDataParent(id: string): Promise<ContiguousDataParent | undefined>;
   saveDataContentAttributes({
     id,
+    parentId,
     dataRoot,
     hash,
     dataSize,
@@ -548,6 +549,7 @@ export interface ContiguousDataIndex {
     verified,
   }: {
     id: string;
+    parentId?: string;
     dataRoot?: string;
     hash: string;
     dataSize: number;

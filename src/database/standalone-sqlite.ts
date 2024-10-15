@@ -1135,6 +1135,7 @@ export class StandaloneSqliteDatabaseWorker {
 
   saveDataContentAttributes({
     id,
+    parentId,
     dataRoot,
     hash,
     dataSize,
@@ -1143,6 +1144,7 @@ export class StandaloneSqliteDatabaseWorker {
     verified,
   }: {
     id: string;
+    parentId?: string;
     dataRoot?: string;
     hash: string;
     dataSize: number;
@@ -1153,14 +1155,14 @@ export class StandaloneSqliteDatabaseWorker {
     const hashBuffer = fromB64Url(hash);
     const currentTimestamp = currentUnixTimestamp();
     const isVerified = verified ? 1 : 0;
-    const verifiedAt = verified ? currentTimestamp : null;
 
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
+      parent_id: parentId ? fromB64Url(parentId) : null,
       contiguous_data_hash: hashBuffer,
       indexed_at: currentTimestamp,
       verified: isVerified,
-      verified_at: verifiedAt,
+      verified_at: currentTimestamp,
     });
 
     if (dataRoot !== undefined) {
@@ -1169,7 +1171,7 @@ export class StandaloneSqliteDatabaseWorker {
         contiguous_data_hash: hashBuffer,
         indexed_at: currentTimestamp,
         verified: isVerified,
-        verified_at: verifiedAt,
+        verified_at: currentTimestamp,
       });
     }
 
@@ -2339,22 +2341,12 @@ export class StandaloneSqliteDatabaseWorker {
     dataOffset: number;
     dataSize: number;
   }) {
-    const currentTimestamp = currentUnixTimestamp();
-    const idBuffer = fromB64Url(id);
-    const parentIdBuffer = fromB64Url(parentId);
-
     this.stmts.data.insertNestedDataId.run({
-      id: idBuffer,
-      parent_id: parentIdBuffer,
+      id: fromB64Url(id),
+      parent_id: fromB64Url(parentId),
       data_offset: dataOffset,
       data_size: dataSize,
-      indexed_at: currentTimestamp,
-    });
-
-    this.stmts.data.updateVerifiedDataId.run({
-      id: idBuffer,
-      parent_id: parentIdBuffer,
-      verified_at: currentTimestamp,
+      indexed_at: currentUnixTimestamp(),
     });
   }
 
@@ -2843,6 +2835,7 @@ export class StandaloneSqliteDatabase
 
   saveDataContentAttributes({
     id,
+    parentId,
     dataRoot,
     hash,
     dataSize,
@@ -2850,6 +2843,7 @@ export class StandaloneSqliteDatabase
     verified,
   }: {
     id: string;
+    parentId?: string;
     dataRoot?: string;
     hash: string;
     dataSize: number;
@@ -2868,6 +2862,7 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveDataContentAttributes', [
       {
         id,
+        parentId,
         dataRoot,
         hash,
         dataSize,
