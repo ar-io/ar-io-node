@@ -44,18 +44,20 @@ const REQUEST_METHOD_HEAD = 'HEAD';
 const setDigestStableVerifiedHeaders = ({
   res,
   dataAttributes,
+  data,
 }: {
   res: Response;
   dataAttributes: ContiguousDataAttributes | undefined;
+  data: ContiguousData;
 }) => {
   if (dataAttributes !== undefined) {
     res.setHeader(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
     res.setHeader(
       headerNames.verified,
-      dataAttributes.verified ? 'true' : 'false',
+      dataAttributes.verified && data.cached ? 'true' : 'false',
     );
 
-    if (dataAttributes.hash !== undefined) {
+    if (dataAttributes.hash !== undefined && data.cached) {
       res.setHeader(headerNames.digest, dataAttributes.hash);
       res.setHeader('ETag', dataAttributes.hash);
     }
