@@ -1158,7 +1158,7 @@ export class StandaloneSqliteDatabaseWorker {
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       contiguous_data_hash: hashBuffer,
-      indexed_at: currentUnixTimestamp(),
+      indexed_at: currentTimestamp,
       verified: isVerified,
       verified_at: verifiedAt,
     });
