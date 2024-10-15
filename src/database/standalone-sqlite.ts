@@ -989,7 +989,7 @@ export class StandaloneSqliteDatabaseWorker {
       contentEncoding: coreRow?.content_encoding,
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
-      verified: dataRow?.verified === true,
+      verified: dataRow?.verified === 1,
     };
   }
 
