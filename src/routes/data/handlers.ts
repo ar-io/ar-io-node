@@ -57,11 +57,7 @@ const setDigestStableVerifiedHeaders = ({
       dataAttributes.verified && data.cached ? 'true' : 'false',
     );
 
-    if (
-      dataAttributes.hash !== undefined &&
-      data.cached &&
-      dataAttributes.verified
-    ) {
+    if (dataAttributes.hash !== undefined && data.cached) {
       res.setHeader(headerNames.digest, dataAttributes.hash);
       res.setHeader('ETag', dataAttributes.hash);
     }
