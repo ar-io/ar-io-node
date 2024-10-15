@@ -101,6 +101,7 @@ export class Ans104DataIndexer {
         if (item.data_hash != null) {
           await this.contiguousDataIndex.saveDataContentAttributes({
             id: item.id,
+            parentId: item.parent_id,
             hash: item.data_hash,
             dataSize: item.data_size,
             contentType: item.content_type,
