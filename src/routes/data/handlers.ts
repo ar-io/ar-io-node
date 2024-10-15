@@ -57,7 +57,11 @@ const setDigestStableVerifiedHeaders = ({
       dataAttributes.verified && data.cached ? 'true' : 'false',
     );
 
-    if (dataAttributes.hash !== undefined && data.cached) {
+    if (
+      dataAttributes.hash !== undefined &&
+      data.cached &&
+      dataAttributes.verified
+    ) {
       res.setHeader(headerNames.digest, dataAttributes.hash);
       res.setHeader('ETag', dataAttributes.hash);
     }
@@ -123,7 +127,7 @@ const setDataHeaders = ({
     res.header('Content-Encoding', dataAttributes.contentEncoding);
   }
 
-  setDigestStableVerifiedHeaders({ res, dataAttributes });
+  setDigestStableVerifiedHeaders({ res, dataAttributes, data });
 };
 
 const getRequestAttributes = (req: Request): RequestAttributes => {
@@ -172,7 +176,7 @@ const handleRangeRequest = (
     data.sourceContentType ??
     'application/octet-stream';
 
-  setDigestStableVerifiedHeaders({ res, dataAttributes });
+  setDigestStableVerifiedHeaders({ res, dataAttributes, data });
 
   if (isSingleRange) {
     const totalSize = data.size;
