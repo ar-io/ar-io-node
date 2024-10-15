@@ -422,5 +422,256 @@ st
       const head = request(app).head('/not-a-real-id-id').expect(404);
       await Promise.all([get, head]);
     });
+
+    describe('Headers', () => {
+      describe('X-AR-IO-Verified', () => {
+        it("should return false when data isn't verified", async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: false,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-cache'], 'MISS');
+              assert.equal(res.headers['x-ar-io-verified'], 'false');
+            });
+        });
+
+        it("should return false when data isn't verified AND cached", async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: false,
+              signature: null,
+            });
+
+          dataSource.getData = () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('testing...')),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-cache'], 'HIT');
+              assert.equal(res.headers['x-ar-io-verified'], 'false');
+            });
+        });
+
+        it('should return false when data is verified but not cached', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-cache'], 'MISS');
+              assert.equal(res.headers['x-ar-io-verified'], 'false');
+            });
+        });
+
+        it('should return true when data is verified AND cached', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('testing...')),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-cache'], 'HIT');
+              assert.equal(res.headers['x-ar-io-verified'], 'true');
+            });
+        });
+      });
+
+      describe('X-AR-IO-Digest/Etag', () => {
+        it("shouldn't return digest/etag when hash is not available", async () => {
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-digest'], undefined);
+              assert.equal(res.headers['etag'], undefined);
+            });
+        });
+
+        it("shouldn't return digest/etag when hash is available AND data is not cached", async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: false,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-digest'], undefined);
+              assert.equal(res.headers['etag'], undefined);
+            });
+        });
+
+        it('should return digest/etag when hash is available AND data is cached', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: false,
+              signature: null,
+            });
+
+          dataSource.getData = () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('testing...')),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-digest'], 'hash');
+              assert.equal(res.headers['etag'], 'hash');
+            });
+        });
+      });
+    });
   });
 });
