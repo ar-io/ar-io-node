@@ -20,30 +20,36 @@ INSERT OR REPLACE INTO contiguous_data_ids (
   verified,
   indexed_at,
   verified_at
-) VALUES (
+)
+SELECT
   :id,
   :contiguous_data_hash,
   :verified,
   :indexed_at,
   :verified_at
-)
+WHERE
+  NOT EXISTS (
+    SELECT 1
+    FROM contiguous_data_ids
+    WHERE id = :id AND verified = 1
+  );
 
 -- updateVerifiedDataId
 UPDATE contiguous_data_ids
-  SET
-    verified = CASE
-      WHEN EXISTS (
-        SELECT 1
+SET
+  verified = CASE
+    WHEN EXISTS (
+      SELECT 1
         FROM contiguous_data_ids AS parent
         WHERE parent.id = :parent_id
         AND parent.verified = TRUE
       ) THEN 1
-      ELSE 0
+    ELSE 0
   END,
   verified_at = CASE
-      WHEN verified = 1 THEN :verified_at
-      ELSE NULL
-    END
+    WHEN verified = 1 THEN :verified_at
+    ELSE NULL
+  END
 WHERE
   id = :id;
 
