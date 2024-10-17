@@ -1,0 +1,45 @@
+# allows grafana to connect to the ar-io network of primary docker-compose file
+networks:
+  ar-io-network:
+    external: true
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    networks:
+      - ar-io-network
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  node-exporter:
+    image: prom/node-exporter:v1.3.1
+    restart: unless-stopped
+    networks:
+      - ar-io-network
+    ports:
+      - 9100:9100
+    volumes:
+      - '/:/host:ro'
+    command:
+      - '--path.rootfs=/host'
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    networks:
+      - ar-io-network
+    ports:
+      - 1024:1024
+    environment:
+      - TERM=linux
+      - GF_SERVER_ROOT_URL=${GF_SERVER_ROOT_URL:-http://localhost:1024/grafana}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-polystat-panel
+      - GF_SERVER_HTTP_PORT=1024
+    volumes:
+      - './monitoring/grafana/dashboards:/etc/grafana/dashboards'
+      - './monitoring/grafana/provisioning:/etc/grafana/provisioning'
+      - './data/grafana:/var/lib/grafana'
