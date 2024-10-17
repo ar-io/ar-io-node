@@ -18,7 +18,6 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": 1,
   "links": [],
   "liveNow": false,
   "panels": [
@@ -663,6 +662,7 @@
     },
     {
       "datasource": {
+        "default": true,
         "type": "prometheus",
         "uid": "prometheus"
       },
@@ -745,11 +745,11 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "exemplar": false,
+          "exemplar": true,
           "expr": "sum(rate(http_request_duration_seconds_sum{job=\"ar-io-node\"}[$__rate_interval])) \n/\nsum(rate(http_request_duration_seconds_count{job=\"ar-io-node\"}[$__rate_interval]))",
           "format": "time_series",
           "instant": false,
-          "legendFormat": "__auto",
+          "legendFormat": "Average Response Time (ms)",
           "range": true,
           "refId": "A"
         }
@@ -858,6 +858,7 @@
     },
     {
       "datasource": {
+        "default": true,
         "type": "prometheus",
         "uid": "prometheus"
       },
@@ -920,7 +921,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 32
       },
       "id": 7,
       "options": {
@@ -941,7 +942,7 @@
           "editorMode": "code",
           "expr": "max((node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes * 100)",
           "instant": false,
-          "legendFormat": "__auto",
+          "legendFormat": "File System Usage %",
           "range": true,
           "refId": "A"
         }
@@ -951,6 +952,7 @@
     },
     {
       "datasource": {
+        "default": true,
         "type": "prometheus",
         "uid": "prometheus"
       },
@@ -1013,7 +1015,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 32
       },
       "id": 8,
       "options": {
@@ -1032,7 +1034,7 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "rate(node_disk_read_bytes_total[$__rate_interval])",
+          "expr": "sum(rate(node_disk_read_bytes_total[$__rate_interval]))",
           "instant": false,
           "legendFormat": "IO - read (bytes/sec)",
           "range": true,
@@ -1041,7 +1043,7 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "rate(node_disk_written_bytes_total[$__rate_interval])",
+          "expr": "sum(rate(node_disk_written_bytes_total[$__rate_interval]))",
           "hide": false,
           "instant": false,
           "legendFormat": "IO - write (bytes/sec)",
@@ -1060,13 +1062,13 @@
     "list": []
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-1h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "ar-io-node",
   "uid": "e2df8ed6-ae23-48f1-9c2c-202769beb5ed",
-  "version": 98,
+  "version": 16,
   "weekStart": ""
 }
