@@ -39,6 +39,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Bundle data is now retrieved as chunks from Arweave nodes by default so that
+  data roots can be compared against the chain (see entry about background
+  retrieval above).
 - Changed observer configuration to use 8 instead of 5 chosen names. These are
   combined with 2 names prescribed from the contract for a total of 10 names
   observed each epoch to provide increased ArNS observation coverage.
