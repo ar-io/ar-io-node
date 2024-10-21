@@ -15,15 +15,12 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import dotenv from 'dotenv';
 import { canonicalize } from 'json-canonicalize';
 import { isMainThread } from 'node:worker_threads';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
 import { release } from './version.js';
-
-dotenv.config();
 
 //
 // HTTP server
@@ -81,11 +78,19 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
 // Data
 //
 
-// Data retrieval priority order
+// On-demand data retrieval priority order
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
     's3,trusted-gateway,chunks,tx-data',
+  )
+  .split(',');
+
+// Background data retrieval priority order
+export const BACKGROUND_RETRIEVAL_ORDER = env
+  .varOrDefault(
+    'BACKGROUND_RETRIEVAL_ORDER',
+    'chunks,s3,trusted-gateway,tx-data',
   )
   .split(',');
 

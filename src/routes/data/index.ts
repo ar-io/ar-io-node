@@ -30,7 +30,7 @@ import { createDataHandler, createRawDataHandler } from './handlers.js';
 export const dataHandler = createDataHandler({
   log,
   dataIndex: system.contiguousDataIndex,
-  dataSource: system.contiguousDataSource,
+  dataSource: system.onDemandContiguousDataSource,
   blockListValidator: system.blockListValidator,
   manifestPathResolver: system.manifestPathResolver,
 });
@@ -42,7 +42,7 @@ dataRouter.get(
   createRawDataHandler({
     log,
     dataIndex: system.contiguousDataIndex,
-    dataSource: system.contiguousDataSource,
+    dataSource: system.onDemandContiguousDataSource,
     blockListValidator: system.blockListValidator,
   }),
 );

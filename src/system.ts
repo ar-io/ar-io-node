@@ -350,28 +350,36 @@ const s3DataSource =
       })
     : undefined;
 
-const dataSources: ContiguousDataSource[] = [];
-for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
+function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   switch (sourceName) {
     case 's3':
-      if (s3DataSource !== undefined) {
-        dataSources.push(s3DataSource);
-      }
-      break;
+      return s3DataSource;
     case 'ario-peer':
-      dataSources.push(arIODataSource);
-      break;
+      return arIODataSource;
     case 'trusted-gateway':
-      dataSources.push(gatewayDataSource);
-      break;
+      return gatewayDataSource;
     case 'chunks':
-      dataSources.push(txChunksDataSource);
-      break;
+      return txChunksDataSource;
     case 'tx-data':
-      dataSources.push(arweaveClient);
-      break;
+      return arweaveClient;
     default:
       throw new Error(`Unknown data source: ${sourceName}`);
+  }
+}
+
+const onDemandDataSources: ContiguousDataSource[] = [];
+for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
+  const dataSource = getDataSource(sourceName);
+  if (dataSource !== undefined) {
+    onDemandDataSources.push(dataSource);
+  }
+}
+
+const backgroundDataSources: ContiguousDataSource[] = [];
+for (const sourceName of config.BACKGROUND_RETRIEVAL_ORDER) {
+  const dataSource = getDataSource(sourceName);
+  if (dataSource !== undefined) {
+    backgroundDataSources.push(dataSource);
   }
 }
 
@@ -383,13 +391,29 @@ metrics.registerQueueLengthGauge('dataContentAttributeImporter', {
   length: () => dataContentAttributeImporter.queueDepth(),
 });
 
-export const contiguousDataSource = new ReadThroughDataCache({
+const contiguousDataStore = new FsDataStore({
+  log,
+  baseDir: 'data/contiguous',
+});
+
+export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
   dataSource: new SequentialDataSource({
     log,
-    dataSources,
+    dataSources: onDemandDataSources,
   }),
-  dataStore: new FsDataStore({ log, baseDir: 'data/contiguous' }),
+  dataStore: contiguousDataStore,
+  contiguousDataIndex,
+  dataContentAttributeImporter,
+});
+
+export const backgroundContiguousDataSource = new ReadThroughDataCache({
+  log,
+  dataSource: new SequentialDataSource({
+    log,
+    dataSources: backgroundDataSources,
+  }),
+  dataStore: contiguousDataStore,
   contiguousDataIndex,
   dataContentAttributeImporter,
 });
@@ -421,7 +445,7 @@ const ans104Unbundler = new Ans104Unbundler({
   log,
   eventEmitter,
   filter: config.ANS104_UNBUNDLE_FILTER,
-  contiguousDataSource,
+  contiguousDataSource: backgroundContiguousDataSource,
   dataItemIndexFilterString: config.ANS104_INDEX_FILTER_STRING,
   workerCount: config.ANS104_UNBUNDLE_WORKERS,
   shouldUnbundle: shouldUnbundleDataItems,
@@ -432,7 +456,7 @@ metrics.registerQueueLengthGauge('ans104Unbundler', {
 
 const bundleDataImporter = new BundleDataImporter({
   log,
-  contiguousDataSource,
+  contiguousDataSource: backgroundContiguousDataSource,
   ans104Unbundler,
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
 });
@@ -598,7 +622,7 @@ export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
 export const signatureStore = makeSignatureStore({ log });
 export const signatureFetcher = new SignatureFetcher({
   log,
-  dataSource: contiguousDataSource,
+  dataSource: onDemandContiguousDataSource,
   dataIndex: contiguousDataIndex,
   chainSource: arweaveClient,
   signatureStore,

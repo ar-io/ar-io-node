@@ -19,7 +19,7 @@ import { createLogger, format, transports } from 'winston';
 
 import * as env from './lib/env.js';
 
-const LOG_LEVEL = env.varOrDefault('LOG_LEVEL', 'info');
+const LOG_LEVEL = env.varOrDefault('LOG_LEVEL', 'info').toLowerCase();
 const LOG_ALL_STACKTRACES =
   env.varOrDefault('LOG_ALL_STACKTRACES', 'false') === 'true';
 const LOG_FORMAT = env.varOrDefault('LOG_FORMAT', 'simple');
