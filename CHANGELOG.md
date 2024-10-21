@@ -34,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added `sqlite_in_flight_ops` Prometheus metric with `worker` (`core`,
   `bundles`, `data`, or `moderation`) and `role` (`read` or `write`) labels to
   support monitoring the number of in-flight DB operations.
+- Added experimental Grafana and Prometheus based observability stack. See the
+  "Monitoring and Observability" section of the README for more details.
 
 ### Changed
 
