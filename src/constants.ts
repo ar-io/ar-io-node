@@ -24,6 +24,7 @@ export const headerNames = {
   stable: 'X-AR-IO-Stable',
   verified: 'X-AR-IO-Verified',
   cache: 'X-Cache',
+  rootTransactionId: 'X-AR-IO-Root-Transaction-Id',
   arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
   arnsProcessId: 'X-ArNS-Process-Id',

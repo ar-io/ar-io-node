@@ -46,6 +46,8 @@ const tx3 = 'lbeIMUvoEqR2q-pKsT4Y5tz6mm9ppemReyLnQ8P7XpM';
 // manifest with paths without trailing slash
 const tx4 = 'sYaO7sklQ8FyObQNLy7kDbEvwUNKKes7mUnv-_Ri9bE';
 
+const bundle1 = '73QwVewKc0hXmuiaahtGJqHEY5pb85SoqCC33VE0Teg';
+
 describe('Data', function () {
   let compose: StartedDockerComposeEnvironment;
 
@@ -274,6 +276,60 @@ describe('X-Cache header', function () {
     const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
 
     assert.equal(res.headers['x-cache'], 'HIT');
+  });
+});
+
+describe('X-AR-IO-Root-Transaction-Id header', function () {
+  let compose: StartedDockerComposeEnvironment;
+
+  before(async function () {
+    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
+    compose = await new DockerComposeEnvironment(
+      projectRootPath,
+      'docker-compose.yaml',
+    )
+      .withEnvironment({
+        START_HEIGHT: '1',
+        STOP_HEIGHT: '1',
+        GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
+        ANS104_UNBUNDLE_FILTER: '{"always": true}',
+        ANS104_INDEX_FILTER: '{"always": true}',
+        ADMIN_API_KEY: 'secret',
+      })
+      .withBuild()
+      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+      .up(['core']);
+
+    await axios.post(
+      'http://localhost:4000/ar-io/admin/queue-bundle',
+      { id: bundle1 },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer secret',
+        },
+      },
+    );
+
+    // hopefully enough time to unbundle it
+    await wait(10000);
+  });
+
+  after(async function () {
+    await compose.down();
+  });
+
+  it('Verifying header for trascation', async function () {
+    const bundleRes = await axios.head(`http://localhost:4000/raw/${bundle1}`);
+
+    assert.equal(bundleRes.headers['x-ar-io-root-transaction-id'], undefined);
+  });
+
+  it('Verifying header for data item', async function () {
+    const datasItemRes = await axios.head(`http://localhost:4000/raw/${tx1}`);
+
+    assert.equal(datasItemRes.headers['x-ar-io-root-transaction-id'], bundle1);
   });
 });
 

@@ -672,6 +672,65 @@ st
             });
         });
       });
+
+      describe('X-AR-IO-Root-Transaction-Id', () => {
+        it("shouldn't return root transaction id for transactions", async () => {
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(
+                res.headers['x-ar-io-root-transaction-id'],
+                undefined,
+              );
+            });
+        });
+
+        it('should return root transaction id for data items', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              rootTransactionId: 'root-tx',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              blockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(
+                res.headers['x-ar-io-root-transaction-id'],
+                'root-tx',
+              );
+            });
+        });
+      });
     });
   });
 });
