@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Adjusted data item flushing to use the bundle DB worker instead of the core
+  DB worker to prevent write contention and failed flushes under heavy
+  unbundling load.
+
+### Added
+
+- Added `X-AR-IO-Digest`, `X-AR-IO-Stable`, `X-AR-IO-Verified`, and `ETag`
+  headers. `X-AR-IO-Digest` contains a base64 URL encoded representation of the
+  SHA-256 hash of the data item data. It may be empty if the gateway has not
+  previously cached the data locally. `X-AR-IO-Stable` contains either `true`
+  or `false` depending on whether the associated Arweave transaction is more
+  than 18 blocks old or not. `X-AR-IO-Verified` contains either `true` if the
+  gateway has verified the data root of the L1 transaction or the L1 root
+  parent of the data item or `false` if it has not. `ETag` contains the same
+  value a `X-AR-IO-Digest` and is used to improve HTTP caching efficiency.
+- Added support for using a different data source for on-demand and background
+  data retrieval. Background data retrieval is used when unbundling. The
+  background retrieval data source order is configurable using the
+  `BACKGROUND_RETRIEVAL_ORDER` environment variable and defaults to
+  `chunks,s3,trusted-gateway,tx-data`. Priority is given to chunk retrieval
+  since chunks are verifiable.
+- Added an `/ar-io/admin/export-parquet/status` to support monitoring of
+  in-progress Parquet export status.
+- Added `sqlite_in_flight_ops` Prometheus metric with `worker` (`core`,
+  `bundles`, `data`, or `moderation`) and `role` (`read` or `write`) labels to
+  support monitoring the number of in-flight DB operations.
+
+### Changed
+
+- Changed observer configuration to use 8 instead of 5 chosen names. These are
+  combined with 2 names prescribed from the contract for a total of 10 names
+  observed each epoch to provide increased ArNS observation coverage.
+- Verification status is set on data items when unbundling a parent that has
+  already been verified.
+
 ## [Release 18] - 2024-10-01
 
 ### Fixed
