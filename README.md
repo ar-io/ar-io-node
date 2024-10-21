@@ -286,15 +286,24 @@ particular ID is blocked.
 
 ### Monitoring and Observability
 
-The ar-io-node leverages [Prometheus] to collect metrics from the system and recommends [Grafana] to visualize them. To access a templated Grafana dashboard for the ar.io gateway, you can run:
+The ar-io-node leverages [Prometheus] to collect metrics from the system and
+recommends [Grafana] to visualize them. To access a templated Grafana dashboard
+for the ar.io gateway, you can run:
 
 ```
 docker compose --file docker-compose.grafana.yaml up -d
 ```
 
-Once the dashboard is running, you can access it at `http://localhost:1024/grafana` and login with the username and password `admin`.
+Once the dashboard is running, you can access it at
+`http://localhost:1024/grafana` and login with the username and password
+`admin`.
 
-This dashboard is pre-configured to work with the ar.io gateway metrics exposed via the `ar-io-core` service and is ready to be used without any additional configuration for simple observability. You can modify the dashboard to better fit your needs by editing the `dashboard.json` file. Refer to the [Grafana documentation] to learn more about how to create and modify Grafana dashboards using JSON model files.
+This dashboard is pre-configured to work with the ar.io gateway metrics exposed
+via the `ar-io-core` service and is ready to be used without any additional
+configuration for simple observability. You can modify the dashboard to better
+fit your needs by editing the `dashboard.json` file. Refer to the [Grafana
+documentation] to learn more about how to create and modify Grafana dashboards
+using JSON model files.
 
 ## Principles and Practices
 
