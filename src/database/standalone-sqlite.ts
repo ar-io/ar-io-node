@@ -981,12 +981,19 @@ export class StandaloneSqliteDatabaseWorker {
     const hash = dataRow?.hash;
     const dataRoot = coreRow?.data_root;
 
+    const rootTransactionId =
+      coreRow?.root_transaction_id !== null &&
+      coreRow?.root_transaction_id !== undefined
+        ? toB64Url(coreRow.root_transaction_id)
+        : undefined;
+
     return {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
       size: coreRow?.data_size ?? dataRow?.data_size,
-      contentType,
       contentEncoding: coreRow?.content_encoding,
+      contentType,
+      rootTransactionId,
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
       verified: dataRow?.verified === 1,

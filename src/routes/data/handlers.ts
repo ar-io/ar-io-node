@@ -73,9 +73,6 @@ const setDataHeaders = ({
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
 }) => {
-  // TODO add etag
-  // TODO add header indicating stability
-  // TODO add header indicating whether data is verified
   // TODO cached header for zero length data (maybe...)
 
   // Allow range requests
@@ -121,6 +118,10 @@ const setDataHeaders = ({
 
   if (dataAttributes?.contentEncoding !== undefined) {
     res.header('Content-Encoding', dataAttributes.contentEncoding);
+  }
+
+  if (dataAttributes?.rootTransactionId !== undefined) {
+    res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
   setDigestStableVerifiedHeaders({ res, dataAttributes, data });

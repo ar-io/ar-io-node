@@ -506,7 +506,8 @@ export interface ContiguousDataAttributes {
   dataRoot?: string;
   size: number;
   contentEncoding?: string;
-  contentType: string | undefined;
+  contentType?: string;
+  rootTransactionId?: string;
   isManifest: boolean;
   stable: boolean;
   verified: boolean;
