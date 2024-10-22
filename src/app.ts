@@ -36,6 +36,8 @@ system.headerFsCacheCleanupWorker?.start();
 
 system.contiguousDataFsCacheCleanupWorker?.start();
 
+system.chunkDataFsCacheCleanupWorker?.start();
+
 // Allow starting without writers to support SQLite replication
 if (config.START_WRITERS) {
   system.blockImporter.start();

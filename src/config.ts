@@ -233,6 +233,15 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   '',
 );
 
+export const ENABLE_FS_CHUNK_CACHE_CLEANUP =
+  env.varOrDefault('ENABLE_FS_CHUNK_CACHE_CLEANUP', 'false') === 'true';
+
+// The threshold in seconds to cleanup the filesystem chunk data cache
+export const CHUNK_DATA_CACHE_CLEANUP_THRESHOLD = +env.varOrDefault(
+  'CHUNK_DATA_CACHE_CLEANUP_THRESHOLD',
+  `${60 * 60 * 24}`, // 1 day
+);
+
 //
 // Webhooks
 //
