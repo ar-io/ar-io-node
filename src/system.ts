@@ -224,6 +224,34 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
     })
   : undefined;
 
+export const chunkDataFsCacheCleanupWorker =
+  config.ENABLE_FS_CHUNK_CACHE_CLEANUP &&
+  !isNaN(config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD)
+    ? new FsCleanupWorker({
+        log,
+        basePath: 'data/chunks',
+        shouldDelete: async (path) => {
+          try {
+            const stats = await fs.promises.stat(path);
+            const mostRecentTime =
+              stats.atime > stats.mtime ? stats.atime : stats.mtime;
+
+            const currentTimestamp = Date.now();
+
+            const thresholdDate = new Date(
+              currentTimestamp -
+                config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD * 1000,
+            );
+
+            return mostRecentTime <= thresholdDate;
+          } catch (err) {
+            log.error(`Error getting file stats for ${path}`, err);
+            return false;
+          }
+        },
+      })
+    : undefined;
+
 const ans104TxMatcher = new MatchTags([
   { name: 'Bundle-Format', value: 'binary' },
   { name: 'Bundle-Version', valueStartsWith: '2.' },
@@ -671,6 +699,7 @@ export const shutdown = async (express: Server) => {
       await db.stop();
       await headerFsCacheCleanupWorker?.stop();
       await contiguousDataFsCacheCleanupWorker?.stop();
+      await chunkDataFsCacheCleanupWorker?.stop();
 
       process.exit(0);
     });
