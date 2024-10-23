@@ -1,0 +1,4 @@
+{:paths ["bb"]
+ :tasks
+ {:requires ([metasys.tasks :as tasks])
+  update-oi-knowledge (tasks/update-oi-knowledge)}}
