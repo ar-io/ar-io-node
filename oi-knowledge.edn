@@ -1,0 +1,6 @@
+{;; ClickHouse ADR Knowledge
+ "33c0fd24-c547-4d66-b9d3-aaad2151f651"
+ {:files
+  {;; ClickHouse ADR File
+   "9fe5e13f-b294-49d4-94fa-5a55c8a0dcea"
+   "docs/madr/001-clickhouse-gql.md"}}}
