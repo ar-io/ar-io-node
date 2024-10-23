@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+# Load the .env
+set -o allexport
+source .env
+set +o allexport
+
+content="$(jq -sRr @json < docs/madr/001-clickhouse-gql.md)"
+
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OI_API_KEY" \
+  -d "{ \"content\": $content }" \
+  "$OI_URL/api/v1/files/9fe5e13f-b294-49d4-94fa-5a55c8a0dcea/data/content/update"
+
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OI_API_KEY" \
+  -d "{ \"file_id\": \"9fe5e13f-b294-49d4-94fa-5a55c8a0dcea\" }" \
+  "$OI_URL/api/v1/knowledge/33c0fd24-c547-4d66-b9d3-aaad2151f651/file/update"
