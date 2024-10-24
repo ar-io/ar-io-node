@@ -25,5 +25,12 @@ test-results.xml
 # JetBrains
 /.idea
 
+# Metasys (Babashka and Clojure)
+/.clj-kondo
+/.cpcache
+/.env.metasys
+/.lsp
+/.nrepl-port
+
 # Exceptions
 !/data/.gitkeep
