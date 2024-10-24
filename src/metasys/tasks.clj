@@ -8,10 +8,12 @@
 (def oi-knowledge (-> "oi-knowledge.edn" slurp edn/read-string))
 
 (defn update-oi-knowledge []
-  (doseq [[k-id k] oi-knowledge]
+  (doseq [{:keys [id files]} oi-knowledge
+          :let [k-id id]]
     (log/infof "Updating knowledge %s..." k-id)
-    (doseq [[f-id path] (:files k)
-            :let [f-url (str cfg/oi-base-url "/api/v1/files/" f-id "/data/content/update")
+    (doseq [{:keys [id path]} files
+            :let [f-id id
+                  f-url (str cfg/oi-base-url "/api/v1/files/" f-id "/data/content/update")
                   k-url (str cfg/oi-base-url "/api/v1/knowledge/" k-id "/file/update")]]
       (log/infof "Updating file %s with contents of %s..." f-id path)
       (http/post f-url {:headers {:content-type "application/json"}
