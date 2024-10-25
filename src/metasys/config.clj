@@ -16,9 +16,13 @@
 
 (def dot-env (read-env))
 
-(defn env [vname]
-  (or (System/getenv vname)
-      (dot-env vname)))
+(defn env [v]
+  (or (System/getenv v)
+      (dot-env v)))
 
 (def oi-api-key (env "OI_API_KEY"))
 (def oi-base-url (env "OI_BASE_URL"))
+
+(comment
+  (read-env)
+  (env "OI_BASE_URL"))
