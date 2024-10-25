@@ -5,7 +5,9 @@
             [metasys.config :as cfg]
             [taoensso.timbre :as log]))
 
-(def oi-knowledge (-> "oi-knowledge.edn" slurp edn/read-string))
+(def oi-knowledge (-> "oi-knowledge.edn"
+                      slurp
+                      edn/read-string))
 
 (defn update-oi-knowledge []
   (doseq [{:keys [id files]} oi-knowledge

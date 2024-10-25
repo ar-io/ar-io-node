@@ -1,6 +1,5 @@
 (ns metasys.config
-  (:require [clojure.edn :as edn]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [metasys.util :as util]))
 
 (defn read-env
@@ -23,7 +22,3 @@
 
 (def oi-api-key (env "OI_API_KEY"))
 (def oi-base-url (env "OI_BASE_URL"))
-
-(def oi-knowledge (-> "oi-knowledge.edn"
-                      slurp
-                      edn/read-string))
