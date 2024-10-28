@@ -313,22 +313,6 @@ const handleRangeRequest = (
   }
 };
 
-const setRawDataHeaders = (res: Response) => {
-  // Unset CORS headers
-  res.removeHeader('Access-Control-Allow-Origin');
-  res.removeHeader('Access-Control-Allow-Methods');
-  res.removeHeader('Access-Control-Allow-Headers');
-
-  // TODO restict this to non-ArNS, non-manifest domains (requires knowledge of
-  // primary domain)
-  res.header(
-    'Content-Security-Policy',
-    `default-src 'self'; frame-src 'none'; object-src 'none'`,
-  );
-  res.header('Cross-Origin-Opener-Policy', 'same-origin');
-  res.header('Cross-Origin-Embedder-Policy', 'require-corp');
-};
-
 export const sendNotFound = (res: Response) => {
   res.header(
     'Cache-Control',
@@ -408,12 +392,10 @@ export const createRawDataHandler = ({
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
-        setRawDataHeaders(res);
         handleRangeRequest(log, rangeHeader, res, req, data, dataAttributes);
       } else {
         // Set headers and stream data
         setDataHeaders({ res, dataAttributes, data });
-        setRawDataHeaders(res);
         res.header('Content-Length', data.size.toString());
 
         if (req.method === REQUEST_METHOD_HEAD) {
