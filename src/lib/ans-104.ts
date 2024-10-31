@@ -67,6 +67,7 @@ export function normalizeAns104DataItem({
   filter,
   ans104DataItem,
   dataHash,
+  rootParentOffset,
 }: {
   rootTxId: string;
   parentId: string;
@@ -75,6 +76,7 @@ export function normalizeAns104DataItem({
   filter: string;
   ans104DataItem: DataItemInfo;
   dataHash: string;
+  rootParentOffset: number;
 }): NormalizedDataItem {
   let contentType: string | undefined;
   let contentEncoding: string | undefined;
@@ -121,6 +123,7 @@ export function normalizeAns104DataItem({
     owner_size: ans104DataItem.ownerSize,
     parent_id: parentId,
     parent_index: parentIndex,
+    root_parent_offset: rootParentOffset,
     root_tx_id: rootTxId,
     signature: ans104DataItem.signature,
     signature_offset: ans104DataItem.signatureOffset,
@@ -277,10 +280,12 @@ export class Ans104Parser {
     rootTxId,
     parentId,
     parentIndex,
+    rootParentOffset,
   }: {
     rootTxId: string;
     parentId: string;
     parentIndex: number;
+    rootParentOffset: number;
   }): Promise<void> {
     // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve, reject) => {
@@ -341,6 +346,7 @@ export class Ans104Parser {
                 parentId,
                 parentIndex,
                 bundlePath,
+                rootParentOffset,
               },
             });
             this.drainQueue();
@@ -412,7 +418,8 @@ if (!isMainThread) {
       process.exit(0);
     }
 
-    const { rootTxId, parentId, parentIndex, bundlePath } = message;
+    const { rootTxId, parentId, parentIndex, bundlePath, rootParentOffset } =
+      message;
     let stream: fs.ReadStream | undefined = undefined;
     try {
       stream = fs.createReadStream(bundlePath);
@@ -460,6 +467,7 @@ if (!isMainThread) {
           filter: workerData.dataItemIndexFilterString,
           ans104DataItem: dataItem,
           dataHash: dataItemHash,
+          rootParentOffset,
         });
 
         if (await filter.match(normalizedDataItem)) {

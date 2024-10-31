@@ -25,6 +25,7 @@ export const headerNames = {
   verified: 'X-AR-IO-Verified',
   cache: 'X-Cache',
   rootTransactionId: 'X-AR-IO-Root-Transaction-Id',
+  dataItemDataOffset: 'X-AR-IO-Data-Item-Data-Offset',
   arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
   arnsProcessId: 'X-ArNS-Process-Id',

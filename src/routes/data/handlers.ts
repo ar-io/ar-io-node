@@ -124,6 +124,16 @@ const setDataHeaders = ({
     res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
+  if (
+    dataAttributes?.rootParentOffset !== undefined &&
+    dataAttributes?.dataOffset !== undefined
+  ) {
+    res.header(
+      headerNames.dataItemDataOffset,
+      (dataAttributes.rootParentOffset + dataAttributes.dataOffset).toString(),
+    );
+  }
+
   setDigestStableVerifiedHeaders({ res, dataAttributes, data });
 };
 

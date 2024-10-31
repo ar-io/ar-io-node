@@ -333,6 +333,69 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
   });
 });
 
+describe('X-AR-IO-Data-Item-Data-Offset header', function () {
+  let compose: StartedDockerComposeEnvironment;
+  const bundle = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
+  const bdi = 'fLxHz2WbpNFL7x1HrOyUlsAVHYaKSyj6IqgCJlFuv9g';
+  const di = 'Dc-q5iChuRWcsjVBFstEqmLTx4SWkGZxcVO9OTEGjkQ';
+
+  before(async function () {
+    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+
+    compose = await new DockerComposeEnvironment(
+      projectRootPath,
+      'docker-compose.yaml',
+    )
+      .withEnvironment({
+        START_HEIGHT: '1',
+        STOP_HEIGHT: '1',
+        GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
+        ANS104_UNBUNDLE_FILTER: '{"always": true}',
+        ANS104_INDEX_FILTER: '{"always": true}',
+        ADMIN_API_KEY: 'secret',
+      })
+      .withBuild()
+      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+      .up(['core']);
+
+    await axios.post(
+      'http://localhost:4000/ar-io/admin/queue-bundle',
+      { id: bundle },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer secret',
+        },
+      },
+    );
+
+    // hopefully enough time to unbundle it
+    await wait(10000);
+  });
+
+  after(async function () {
+    await compose.down();
+  });
+
+  it('Verifying header for L1 bundle', async function () {
+    const res = await axios.head(`http://localhost:4000/raw/${bundle}`);
+
+    assert.equal(res.headers['x-ar-io-data-item-data-offset'], undefined);
+  });
+
+  it('Verifying header for bundle data item', async function () {
+    const res = await axios.head(`http://localhost:4000/raw/${bdi}`);
+
+    assert.equal(res.headers['x-ar-io-data-item-data-offset'], '3072');
+  });
+
+  it('Verifying header for data item inside bundle data item', async function () {
+    const res = await axios.head(`http://localhost:4000/raw/${di}`);
+
+    assert.equal(res.headers['x-ar-io-data-item-data-offset'], '5783');
+  });
+});
+
 describe('X-AR-IO headers', function () {
   describe('with ARNS_ROOT_HOST', function () {
     let compose: StartedDockerComposeEnvironment;
