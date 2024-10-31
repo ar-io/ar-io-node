@@ -24,6 +24,7 @@ import { Ans104Parser } from '../lib/ans-104.js';
 import {
   ContiguousDataSource,
   ItemFilter,
+  NormalizedBundleDataItem,
   NormalizedDataItem,
   PartialJsonTransaction,
 } from '../types.js';
@@ -36,6 +37,12 @@ interface IndexProperty {
 
 export type UnbundleableItem = (NormalizedDataItem | PartialJsonTransaction) &
   IndexProperty;
+
+const isNormalizedBundleDataItem = (
+  item: UnbundleableItem,
+): item is NormalizedBundleDataItem =>
+  (item as NormalizedBundleDataItem).root_parent_offset !== undefined &&
+  (item as NormalizedBundleDataItem).data_offset !== undefined;
 
 export class Ans104Unbundler {
   // Dependencies
@@ -138,10 +145,22 @@ export class Ans104Unbundler {
       }
       if (await this.filter.match(item)) {
         log.info('Unbundling bundle...');
+        let rootParentOffset = 0;
+
+        if (
+          isNormalizedBundleDataItem(item) &&
+          rootTxId !== item.id &&
+          item.root_parent_offset !== null &&
+          item.data_offset !== null
+        ) {
+          rootParentOffset = item.root_parent_offset + item.data_offset;
+        }
+
         await this.ans104Parser.parseBundle({
           rootTxId,
           parentId: item.id,
           parentIndex: item.index,
+          rootParentOffset,
         });
         log.info('Bundle unbundled.');
       }

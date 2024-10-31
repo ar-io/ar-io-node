@@ -219,6 +219,7 @@ arIoRouter.post(
             owner_size: null,
             parent_id: null,
             parent_index: null,
+            root_parent_offset: null,
             root_tx_id: null,
             signature_offset: null,
             signature_size: null,
