@@ -394,6 +394,26 @@ describe('X-AR-IO-Data-Item-Data-Offset header', function () {
 
     assert.equal(res.headers['x-ar-io-data-item-data-offset'], '5783');
   });
+
+  it('Comparing data downloaded through L1 tx using offsets and data item data', async function () {
+    const dataItem = await axios.get(`http://localhost:4000/${di}`, {
+      responseType: 'arraybuffer',
+    });
+    const dataItemOffset = parseInt(
+      dataItem.headers['x-ar-io-data-item-data-offset'],
+      10,
+    );
+    const dataItemSize = parseInt(dataItem.headers['content-length'], 10);
+
+    const rangeRequest = await axios.get(`http://localhost:4000/${bundle}`, {
+      headers: {
+        Range: `bytes=${dataItemOffset}-${dataItemOffset + dataItemSize - 1}`,
+      },
+      responseType: 'arraybuffer',
+    });
+
+    assert.deepEqual(rangeRequest.data, dataItem.data);
+  });
 });
 
 describe('X-AR-IO headers', function () {
