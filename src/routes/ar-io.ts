@@ -21,6 +21,7 @@ import createPrometheusMiddleware from 'express-prometheus-middleware';
 import * as config from '../config.js';
 import * as system from '../system.js';
 import * as events from '../events.js';
+import * as metrics from '../metrics.js';
 import { release } from '../version.js';
 import { signatureStore } from '../system.js';
 import log from '../log.js';
@@ -55,14 +56,36 @@ arIoRouter.use(
 );
 
 // Healthcheck
-arIoRouter.get('/ar-io/healthcheck', (_req, res) => {
-  const data = {
-    uptime: process.uptime(),
-    message: 'Welcome to the Permaweb.',
-    date: new Date(),
-  };
+arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
+  let status = 'ok';
+  const reasons: string[] = [];
+  const date = new Date();
 
-  res.status(200).send(data);
+  if (config.MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS !== undefined) {
+    const currentTimeStampSeconds = Math.floor(date.getTime() / 1000);
+    const dataItemLastIndexedTimestamp = (
+      await metrics.dataItemLastIndexedTimestampSeconds.get()
+    ).values[0].value;
+    const dataItemIndexInterval =
+      currentTimeStampSeconds - dataItemLastIndexedTimestamp;
+
+    if (
+      dataItemIndexInterval >
+      config.MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS
+    ) {
+      status = 'unhealthy';
+      reasons.push(
+        `Last data item indexed more than ${config.MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS} seconds ago.`,
+      );
+    }
+  }
+
+  res.status(200).send({
+    status,
+    uptime: process.uptime(),
+    date,
+    ...(reasons.length > 0 && { reasons }),
+  });
 });
 
 // ar.io network info

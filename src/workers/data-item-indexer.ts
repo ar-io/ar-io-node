@@ -91,6 +91,9 @@ export class DataItemIndexer {
       log.debug('Indexing data item...');
       await this.indexWriter.saveDataItem(item);
       metrics.dataItemsIndexedCounter.inc();
+      metrics.dataItemLastIndexedTimestampSeconds.set(
+        Math.floor(Date.now() / 1000),
+      );
       this.eventEmitter.emit(events.ANS104_DATA_ITEM_INDEXED, item);
       log.debug('Data item indexed.');
     } catch (error) {
