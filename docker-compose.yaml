@@ -101,10 +101,13 @@ services:
       - ENABLE_DATA_DB_WAL_CLEANUP=${ENABLE_DATA_DB_WAL_CLEANUP:-}
       - MAX_DATA_ITEM_QUEUE_SIZE=${MAX_DATA_ITEM_QUEUE_SIZE:-}
       - TAG_SELECTIVITY=${TAG_SELECTIVITY:-}
+      - MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS=${MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS:-}
     networks:
       - ar-io-network
     depends_on:
       - redis
+    labels:
+      autoheal: ${RUN_AUTOHEAL:-false}
 
   redis:
     image: redis:${REDIS_IMAGE_TAG:-7}
@@ -161,6 +164,17 @@ services:
       - TVAL_AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX=${AR_IO_SQLITE_BACKUP_S3_BUCKET_PREFIX:-}
     networks:
       - ar-io-network
+
+  autoheal:
+    image: willfarrell/autoheal@sha256:fd2c5500ab9210be9fa0d365162301eb0d16923f1d9a36de887f5d1751c6eb8c
+    network_mode: none
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_ONLY_MONITOR_RUNNING=false
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock
 
 networks:
   ar-io-network:
