@@ -54,6 +54,7 @@ app.use(
       headerNames.arnsResolvedId,
       headerNames.arnsTtlSeconds,
       headerNames.arnsProcessId,
+      headerNames.arnsResolvedAt,
     ],
   }),
 );

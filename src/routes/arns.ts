@@ -65,7 +65,7 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     ttl.toString() || DEFAULT_ARNS_TTL_SECONDS.toString(),
   );
   res.header(headerNames.arnsProcessId, processId);
-
+  res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
   // add arns headers
   res.json({
     txId: resolvedId,
