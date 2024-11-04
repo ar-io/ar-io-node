@@ -90,7 +90,7 @@ export const createArnsMiddleware = ({
     };
 
     const start = Date.now();
-    const { resolvedId, ttl, processId } =
+    const { resolvedId, ttl, processId, resolvedAt } =
       await getArnsResolutionPromise().finally(() => {
         // remove from cache after resolution
         arnsRequestCache.del(arnsSubdomain);
@@ -103,6 +103,7 @@ export const createArnsMiddleware = ({
     res.header(headerNames.arnsResolvedId, resolvedId);
     res.header(headerNames.arnsTtlSeconds, ttl.toString());
     res.header(headerNames.arnsProcessId, processId);
+    res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
     // TODO: add a header for arns cache status
     res.header('Cache-Control', `public, max-age=${ttl}`);
     dataHandler(req, res, next);
