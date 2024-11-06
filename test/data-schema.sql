@@ -36,3 +36,4 @@ CREATE TABLE contiguous_data_id_parents (
   indexed_at INTEGER NOT NULL,
   PRIMARY KEY (id, parent_id)
 );
+CREATE INDEX contiguous_data_ids_verified ON contiguous_data_ids (id) WHERE verified = FALSE;

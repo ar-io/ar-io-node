@@ -2378,6 +2378,11 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  getUnverifiedDataIds() {
+    const dataIds = this.stmts.data.selectUnverifiedContiguousDataIds.all();
+    return dataIds.map((row) => toB64Url(row.id));
+  }
+
   cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation') {
     const walCheckpoint = this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
 
@@ -3031,6 +3036,10 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
+  getUnverifiedDataIds() {
+    return this.queueRead('data', 'getUnverifiedDataIds', undefined);
+  }
+
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
     return this.queueWrite(dbName, 'cleanupWal', [dbName]).then(
       (walCheckpoint) => {
@@ -3202,6 +3211,10 @@ if (!isMainThread) {
         case 'saveNestedDataHash':
           worker.saveNestedDataHash(args[0]);
           parentPort?.postMessage(null);
+          break;
+        case 'getUnverifiedDataIds':
+          const unverifiedIds = worker.getUnverifiedDataIds();
+          parentPort?.postMessage(unverifiedIds);
           break;
         case 'cleanupWal':
           const walCheckpoint = worker.cleanupWal(args[0]);
