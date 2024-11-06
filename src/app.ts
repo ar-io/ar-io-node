@@ -82,11 +82,4 @@ apolloServerInstanceGql.start().then(() => {
   });
 });
 
-// Handle shutdown signals
-process.on('SIGINT', async () => {
-  await system.shutdown(server);
-});
-
-process.on('SIGTERM', async () => {
-  await system.shutdown(server);
-});
+export { server };
