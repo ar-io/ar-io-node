@@ -67,6 +67,7 @@ import {
   TransactionAttributes,
 } from '../types.js';
 import * as config from '../config.js';
+import { DetailedError } from '../lib/error.js';
 
 const CPU_COUNT = os.cpus().length;
 const MAX_WORKER_COUNT = 12;
@@ -2598,9 +2599,15 @@ export class StandaloneSqliteDatabase
           self.workers[pool][role].push({ takeWork });
           takeWork();
         })
-        .on('message', (result) => {
-          if (result === '__ERROR__') {
-            job.reject(new Error('Worker error'));
+        .on('message', async (result) => {
+          if (result && result.stack) {
+            const { message, stack, workerMethod, workerArgs } = result;
+            const error = new DetailedError(message, {
+              stack,
+              workerMethod,
+              workerArgs,
+            });
+            job.reject(error);
           } else {
             job.resolve(result);
           }
@@ -3204,14 +3211,29 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           process.exit(0);
       }
-    } catch (error) {
+    } catch (e: any) {
       if (errorCount > MAX_WORKER_ERRORS) {
         log.error('Too many errors in StandaloneSqlite worker, exiting.');
         process.exit(1);
       }
-      log.error('Error in StandaloneSqlite worker:', error);
+
+      const error = new DetailedError('Error in StandaloneSqlite worker', {
+        stack: e.stack,
+      });
+
+      log.error(error.message, {
+        message: error.message,
+        stack: error.stack,
+        workerMethod: method,
+        workerArgs: args,
+      });
       errorCount++;
-      parentPort?.postMessage('__ERROR__');
+      parentPort?.postMessage({
+        message: error.message,
+        stack: error.stack,
+        workerMethod: method,
+        workerArgs: args,
+      });
     }
   });
 }
