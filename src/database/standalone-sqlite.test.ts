@@ -161,6 +161,7 @@ describe('SQLite data conversion functions', () => {
           ans104DataItem: dataItem,
           filter: '',
           dataHash: '',
+          rootParentOffset: 0,
         });
         const rows = dataItemToDbRows(normalizedDataItem);
 
@@ -1070,6 +1071,48 @@ describe('StandaloneSqliteDatabase', () => {
           .import_attempt_count,
         1,
       );
+    });
+  });
+
+  describe('getUnverifiedDataIds', () => {
+    it("should return an empty list if there's no unverified data ids", async () => {
+      const emptyDbIds = await db.getUnverifiedDataIds();
+      assert.equal(emptyDbIds.length, 0);
+
+      // inserting a verified data id
+      await db.saveDataContentAttributes({
+        id: '0000000000000000000000000000000000000000000',
+        hash: '0000000000000000000000000000000000000000000',
+        dataSize: 10,
+        verified: true,
+      });
+
+      const unverifiedIds = await db.getUnverifiedDataIds();
+      assert.equal(unverifiedIds.length, 0);
+    });
+
+    it('should return a list of ids if unverified data ids exists', async () => {
+      // inserting a verified data id
+      await db.saveDataContentAttributes({
+        id: '0000000000000000000000000000000000000000000',
+        hash: '0000000000000000000000000000000000000000000',
+        dataSize: 10,
+        verified: true,
+      });
+
+      // inserting an unverified data id
+      await db.saveDataContentAttributes({
+        id: 'fLxHz2WbpNFL7x1HrOyUlsAVHYaKSyj6IqgCJlFuv9g',
+        hash: 'hash',
+        dataSize: 10,
+        verified: false,
+      });
+
+      const unverifiedIds = await db.getUnverifiedDataIds();
+      assert.equal(unverifiedIds.length, 1);
+      assert.deepEqual(unverifiedIds, [
+        'fLxHz2WbpNFL7x1HrOyUlsAVHYaKSyj6IqgCJlFuv9g',
+      ]);
     });
   });
 
