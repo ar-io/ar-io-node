@@ -1116,6 +1116,72 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
+  describe('getRootTxId', () => {
+    const dataItemRootTxId = '0000000000000000000000000000000000000000000';
+    const dataItem = {
+      anchor: 'a',
+      dataOffset: 10,
+      dataSize: 1,
+      id: DATA_ITEM_ID,
+      offset: 10,
+      owner: 'a',
+      ownerOffset: 1,
+      ownerSize: 1,
+      sigName: 'a',
+      signature: 'a',
+      signatureOffset: 1,
+      signatureSize: 1,
+      signatureType: 1,
+      size: 1,
+      tags: [],
+      target: 'a',
+    };
+    const normalizedDataItem = normalizeAns104DataItem({
+      rootTxId: dataItemRootTxId,
+      parentId: dataItemRootTxId,
+      parentIndex: -1,
+      index: 0,
+      ans104DataItem: dataItem,
+      filter: '',
+      dataHash: '',
+      rootParentOffset: 0,
+    });
+
+    it('should return undefined if id is not found', async () => {
+      const rootTxId = await db.getRootTxId(DATA_ITEM_ID);
+      assert.equal(rootTxId, undefined);
+    });
+
+    it('should return root transcation id of a given data item', async () => {
+      await db.saveDataItem(normalizedDataItem);
+
+      const rootTxId = await db.getRootTxId(DATA_ITEM_ID);
+      assert.equal(rootTxId, dataItemRootTxId);
+    });
+
+    it('should return undefined if the root transcation id of a given data item is null', async () => {
+      const dataItem = normalizedDataItem;
+      dataItem.root_tx_id = null;
+      await db.saveDataItem(dataItem);
+
+      const rootTxId = await db.getRootTxId(DATA_ITEM_ID);
+      assert.equal(rootTxId, undefined);
+    });
+
+    it('should return the same L1 transcation id given an L1 transaction ', async () => {
+      const l1TxId = 'vYQNQruccPlvxatkcRYmoaVywIzHxS3DuBG1CPxNMPA';
+      const height = 982575;
+
+      const { block, txs, missingTxIds } =
+        await chainSource.getBlockAndTxsByHeight(height);
+
+      await db.saveBlockAndTxs(block, txs, missingTxIds);
+
+      const rootTxId = await db.getRootTxId(l1TxId);
+      assert.equal(rootTxId, l1TxId);
+    });
+  });
+
   describe('cleanupWal', () => {
     it('should not throw an error when called for each database', async () => {
       const dbNames: ('core' | 'bundles' | 'data' | 'moderation')[] = [

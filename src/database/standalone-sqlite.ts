@@ -2397,6 +2397,15 @@ export class StandaloneSqliteDatabaseWorker {
     return dataIds.map((row) => toB64Url(row.id));
   }
 
+  getRootTxId(id: string) {
+    const row = this.stmts.core.selectRootTxId.get({ id: fromB64Url(id) });
+    if (row.root_transaction_id) {
+      return toB64Url(row.root_transaction_id);
+    }
+
+    return;
+  }
+
   cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation') {
     const walCheckpoint = this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
 
@@ -3057,6 +3066,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('data', 'getUnverifiedDataIds', undefined);
   }
 
+  getRootTxId(id: string) {
+    return this.queueRead('core', 'getRootTxId', [id]);
+  }
+
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
     return this.queueWrite(dbName, 'cleanupWal', [dbName]).then(
       (walCheckpoint) => {
@@ -3233,6 +3246,10 @@ if (!isMainThread) {
         case 'getUnverifiedDataIds':
           const unverifiedIds = worker.getUnverifiedDataIds();
           parentPort?.postMessage(unverifiedIds);
+          break;
+        case 'getRootTxId':
+          const rootTxId = worker.getRootTxId(args[0]);
+          parentPort?.postMessage(rootTxId);
           break;
         case 'cleanupWal':
           const walCheckpoint = worker.cleanupWal(args[0]);
