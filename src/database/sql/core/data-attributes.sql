@@ -50,3 +50,11 @@ FROM (
   WHERE id = @id
 )
 LIMIT 1;
+
+-- selectRootTxId
+SELECT COALESCE(
+  (SELECT root_transaction_id FROM bundles.stable_data_items WHERE id = @id),
+  (SELECT root_transaction_id FROM bundles.new_data_items WHERE id = @id),
+  (SELECT id FROM stable_transactions WHERE id = @id),
+  (SELECT id FROM new_transactions WHERE id = @id)
+) AS root_transaction_id;
