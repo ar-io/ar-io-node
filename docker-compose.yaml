@@ -120,6 +120,18 @@ services:
     networks:
       - ar-io-network
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_IMAGE_TAG:-24}
+    profiles:
+      - clickhouse
+    ulimits:
+      nofile:
+        soft: '262144'
+        hard: '262144'
+    volumes:
+      - ${CLICKHOUSE_DATA_PATH:-./data/clickhouse}:/var/lib/clickhouse
+      - ${CLICKHOUSE_LOGS_PATH:-./logs/clickhouse}:/var/log/clickhouse-server
+
   observer:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-latest}
     restart: on-failure
