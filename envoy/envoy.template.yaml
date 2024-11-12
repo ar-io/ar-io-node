@@ -70,6 +70,14 @@ static_resources:
                               num_retries: 5
                             prefix_rewrite: '/'
                         - match:
+                            prefix: '/chunk'
+                            headers:
+                              - name: ':method'
+                                exact_match: 'POST'
+                          route:
+                            cluster: ario_gateways
+                            timeout: 30s
+                        - match:
                             prefix: '/ao/cu/'
                           route:
                             cluster: ao_service_cluster
