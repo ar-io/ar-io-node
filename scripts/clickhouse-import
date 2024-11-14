@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+parquet_path=${PARQUET_PATH:-data/parquet}
+
+for blocks_parquet in "$parquet_path/blocks"*.parquet; do
+    height_range=$(basename "$blocks_parquet" | sed 's/blocks-//;s/-rowCount:[0-9]*\.parquet//')
+    txs_parquet=$(ls data/parquet/transactions-"$height_range"-*.parquet)
+    tags_parquet=$(ls data/parquet/tags-"$height_range"-*.parquet)
+
+    echo "Importing $blocks_parquet..."
+    clickhouse client --query="INSERT INTO staging_blocks FROM INFILE '$blocks_parquet' FORMAT Parquet;"
+
+    echo "Importing $txs_parquet..."
+    clickhouse client --query="INSERT INTO staging_transactions FROM INFILE '$txs_parquet' FORMAT Parquet;"
+
+    echo "Importing $tags_parquet"
+    clickhouse client --query="INSERT INTO staging_tags FROM INFILE '$tags_parquet' FORMAT Parquet;"
+
+    for prefix in "" "owner_" "target_"; do
+      cat <<EOF | clickhouse client
+INSERT INTO ${prefix}transactions
+SELECT
+  txs.height,
+  txs.block_transaction_index,
+  txs.is_data_item,
+  txs.id,
+  txs.anchor,
+  txs.owner_address,
+  txs.target,
+  txs.quantity,
+  txs.reward,
+  txs.data_size,
+  txs.content_type,
+  txs.format,
+  txs.data_root,
+  txs.parent AS parent_id,
+  blocks.indep_hash AS block_indep_hash,
+  blocks.block_timestamp,
+  blocks.previous_block AS block_previous_block,
+  txs.indexed_at,
+  CASE
+    WHEN tags.id IS NOT NULL THEN COUNT(*)
+    ELSE 0
+  END AS tags_count,
+  CASE
+    WHEN tags.id IS NOT NULL THEN
+      arrayMap((x) -> (x.2, x.3), arraySort((x) -> x.1, groupArray((tag_index, tag_name, tag_value))))
+    ELSE []
+  END AS tags
+FROM staging_transactions txs
+LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
+JOIN staging_blocks blocks ON txs.height = blocks.height
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, tags.id
+EOF
+    done
+
+    clickhouse client --query="TRUNCATE TABLE staging_blocks"
+    clickhouse client --query="TRUNCATE TABLE staging_transactions"
+    clickhouse client --query="TRUNCATE TABLE staging_tags"
+done
