@@ -126,6 +126,10 @@ services:
     image: clickhouse/clickhouse-server:${CLICKHOUSE_IMAGE_TAG:-24}
     profiles:
       - clickhouse
+    ports:
+      - 8123:8123
+      - 8443:8443
+      - 9000:9000
     ulimits:
       nofile:
         soft: '262144'

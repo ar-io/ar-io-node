@@ -6,28 +6,38 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let pkgs = import nixpkgs { inherit system; };
-      in {
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+      in
+      {
         devShells = {
           default = pkgs.mkShell {
             name = "ar-io-node-shell";
             buildInputs = with pkgs; [
+              clickhouse
+              duckdb
               gnumake
               graphviz
-              nodejs_20
-              yarn
               nodePackages.typescript-language-server
-              yaml-language-server
+              nodejs_20
               openjdk
-              sqlite-interactive
               python311
-              duckdb
+              sqlite-interactive
+              yaml-language-server
+              yarn
             ];
           };
         };
-      });
+      }
+    );
 
   nixConfig.bash-prompt = "\\e[32m[ar-io-node-shell]$\\e[0m ";
 }
