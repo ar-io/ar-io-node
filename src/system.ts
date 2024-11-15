@@ -74,6 +74,7 @@ import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repa
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSKvStore, createArNSResolver } from './init/resolvers.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
+import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
@@ -641,6 +642,18 @@ if (dataSqliteWalCleanupWorker !== undefined) {
   dataSqliteWalCleanupWorker.start();
 }
 
+const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
+  ? new DataVerificationWorker({
+      log,
+      contiguousDataIndex,
+      contiguousDataSource: gatewayDataSource,
+    })
+  : undefined;
+
+if (dataVerificationWorker !== undefined) {
+  dataVerificationWorker.start();
+}
+
 let isShuttingDown = false;
 
 export const shutdown = async (exitCode = 0) => {
@@ -672,6 +685,7 @@ export const shutdown = async (exitCode = 0) => {
       await db.stop();
       await headerFsCacheCleanupWorker?.stop();
       await contiguousDataFsCacheCleanupWorker?.stop();
+      await dataVerificationWorker?.stop();
 
       process.exit(exitCode);
     });

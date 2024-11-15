@@ -170,6 +170,14 @@ export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
 );
 
 //
+// Verification
+//
+
+// Whether or not to enable the background data verification worker
+export const ENABLE_BACKGROUND_DATA_VERIFICATION =
+  env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'false') === 'true';
+
+//
 // GraphQL
 //
 
