@@ -4,7 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 20] - 2024-11-15
+
+### Added
+
+- Exposed the core service chunk POST endpoint via Envoy. It accepts a Arweave
+  data chunk and broadcasts it to either the comma separated list of URLs
+  specified by the CHUNK_POST_URLs environment variable or, if none are
+  specified, the `/chunk` path on URL specified by the TRUST_GATEWAY_URL
+  environment variable.
+- Added a `X-AR-IO-Root-Transaction-Id` HTTP header to data responses
+  containing the root base layer transaction ID for the ID in question if it's
+  been indexed.
+- Added a `X-AR-IO-Data-Item-Data-Offset` HTTP header containing the offset of
+  the data item relative to the root bundle base layer transaction for it. In
+  conjunction with `X-AR-IO-Root-Transaction-Id`, it enables retrieving data
+  for data item IDs from base layer data using first a `HEAD` request to
+  retrieve the root ID and data offset followed by a range request into the
+  root bundle. This greatly increases the likelihood of retriving data item
+  data by ID since only an index into the base layer and Arweave chunk
+  availability is needed for this access method to succeed.
+- Added an experimental ClickHouse service to `docker-compose.yaml` (available
+  via the `clickhouse` profile). This will be used as a supplemental GraphQL DB
+  in upcoming releases.
+- Added a data item indexing healthcheck that can be enabled by setting the
+  `RUN_AUTOHEAL` environment variable to `true`. When enabled, it will restart
+  the `core` service if no data items have been indexed since the value
+  specified by the `MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS`
+  environment variable.
 
 ## [Release 19] - 2024-10-21
 
