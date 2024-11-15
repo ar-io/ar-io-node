@@ -24,7 +24,7 @@ import { DataRootComputer } from '../lib/data-root.js';
 
 const DEFAULT_STREAM_TIMEOUT = 1000 * 30; // 30 seconds
 const DEFAULT_WORKER_COUNT = 1;
-const DEFAULT_INTERVAL = 1000 * 60 * 1; // 1 minute
+const DEFAULT_INTERVAL = 1000 * 60 * 10; // 10 minutes
 
 export class DataVerificationWorker {
   // Dependencies
