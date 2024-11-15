@@ -84,6 +84,11 @@ export const dataItemDataIndexedCounter = new promClient.Counter({
   help: 'Count of data item data indexed',
 });
 
+export const dataItemLastIndexedTimestampSeconds = new promClient.Gauge({
+  name: 'data_item_last_indexed_timestamp_seconds',
+  help: 'Timestamp of the last indexed data item',
+});
+
 //
 // Arweave client metrics
 //

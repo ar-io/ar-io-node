@@ -172,9 +172,40 @@ export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
 // Whether or not to enable the background data verification worker
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
   env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'false') === 'true';
+//
+// GraphQL
+//
+
+export const TAG_SELECTIVITY = JSON.parse(
+  env.varOrDefault(
+    'TAG_SELECTIVITY',
+    JSON.stringify({
+      'Parent-Folder-Id': 20,
+      Message: 20,
+      'Drive-Id': 10,
+      Process: 10,
+      Recipient: 10,
+      'App-Name': -10,
+      'Content-Type': -10,
+      'Data-Protocol': -10,
+    }),
+  ),
+) as Record<string, number>;
 
 // ClickHouse URL
 export const CLICKHOUSE_URL = env.varOrUndefined('CLICKHOUSE_URL');
+
+//
+// Healthchecks
+//
+
+export const MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS_STRING =
+  env.varOrUndefined('MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS');
+
+export const MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS =
+  MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS_STRING !== undefined
+    ? +MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS_STRING
+    : undefined;
 
 //
 // ArNS and sandboxing
@@ -326,7 +357,7 @@ export const TRUSTED_ARNS_GATEWAY_URL = env.varOrUndefined(
 //
 // Mempool watcher
 //
-//
+
 export const ENABLE_MEMPOOL_WATCHER =
   env.varOrDefault('ENABLE_MEMPOOL_WATCHER', 'false') === 'true';
 
@@ -338,7 +369,7 @@ export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
 //
 // AWS settings
 //
-//
+
 export const AWS_ACCESS_KEY_ID = env.varOrUndefined('AWS_ACCESS_KEY_ID');
 export const AWS_SECRET_ACCESS_KEY = env.varOrUndefined(
   'AWS_SECRET_ACCESS_KEY',
@@ -367,7 +398,9 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   '500',
 );
 
+//
 // AO
+//
 
 export const AO_MU_URL = env.varOrUndefined('AO_MU_URL');
 export const AO_CU_URL = env.varOrUndefined('AO_CU_URL');

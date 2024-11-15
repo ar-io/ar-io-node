@@ -148,6 +148,7 @@ export const db = new StandaloneSqliteDatabase({
   dataDbPath: 'data/sqlite/data.db',
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
+  tagSelectivity: config.TAG_SELECTIVITY,
 });
 
 export const chainIndex: ChainIndex = db;

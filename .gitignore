@@ -2,6 +2,7 @@
 *.db-shm
 *.db-wal
 *.log
+.aider*
 /.direnv
 /.env
 /.env.ao

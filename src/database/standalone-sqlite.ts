@@ -78,11 +78,6 @@ const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const NEW_DATA_ITEM_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const BUNDLE_REPROCESS_WAIT_SECS = 60 * 15;
-const LOW_SELECTIVITY_TAG_NAMES = new Set(['App-Name', 'Content-Type']);
-
-function tagJoinSortPriority(tag: { name: string; values: string[] }) {
-  return LOW_SELECTIVITY_TAG_NAMES.has(tag.name) ? 1 : 0;
-}
 
 export function encodeTransactionGqlCursor({
   height,
@@ -410,6 +405,8 @@ export class StandaloneSqliteDatabaseWorker {
 
   private insertDataHashCache: NodeCache;
 
+  private tagSelectivity: Record<string, number>;
+
   // Transactions
   resetBundlesToHeightFn: Sqlite.Transaction;
   resetCoreToHeightFn: Sqlite.Transaction;
@@ -427,12 +424,14 @@ export class StandaloneSqliteDatabaseWorker {
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
+    tagSelectivity,
   }: {
     log: winston.Logger;
     coreDbPath: string;
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
+    tagSelectivity: Record<string, number>;
   }) {
     this.log = log;
 
@@ -773,6 +772,8 @@ export class StandaloneSqliteDatabaseWorker {
       checkperiod: 60, // 1 minute
       useClones: false,
     });
+
+    this.tagSelectivity = tagSelectivity;
   }
 
   getMaxHeight() {
@@ -1470,16 +1471,29 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     if (tags) {
-      // To improve performance, force tags with large result sets to be last
-      const sortByTagJoinPriority = R.sortBy(tagJoinSortPriority);
-      sortByTagJoinPriority(tags).forEach((tag, index) => {
+      // Order tag joins by selectivity (most selective first) to narrow
+      // results as early as possible
+      const sortByTagSelectivity = R.sortBy(
+        (tag: { name: string; values: string[] }) => {
+          return -(this.tagSelectivity[tag.name] ?? 0);
+        },
+      );
+      sortByTagSelectivity(tags).forEach((tag, index) => {
         const tagAlias = `"${index}_${index}"`;
         let joinCond: { [key: string]: string };
         if (source === 'stable_txs' || source === 'stable_items') {
           if (index === 0) {
-            heightSortTableAlias = tagAlias;
-            blockTransactionIndexSortTableAlias = tagAlias;
-            dataItemSortTableAlias = tagAlias;
+            if (
+              // Order results by selective tags ...
+              this.tagSelectivity[tag.name] >= 0 ||
+              // ... or non-selective tags if neither recipients nor owners
+              // were specified
+              (recipients?.length === 0 && owners?.length === 0)
+            ) {
+              heightSortTableAlias = tagAlias;
+              blockTransactionIndexSortTableAlias = tagAlias;
+              dataItemSortTableAlias = tagAlias;
+            }
             joinCond = {
               [`${blockTransactionIndexTableAlias}.block_transaction_index`]: `${tagAlias}.block_transaction_index`,
               [`${heightTableAlias}.height`]: `${tagAlias}.height`,
@@ -2511,12 +2525,14 @@ export class StandaloneSqliteDatabase
     dataDbPath,
     moderationDbPath,
     bundlesDbPath,
+    tagSelectivity,
   }: {
     log: winston.Logger;
     coreDbPath: string;
     dataDbPath: string;
     moderationDbPath: string;
     bundlesDbPath: string;
+    tagSelectivity: Record<string, number>;
   }) {
     this.log = log.child({ class: `${this.constructor.name}` });
 
@@ -2602,6 +2618,7 @@ export class StandaloneSqliteDatabase
           dataDbPath,
           moderationDbPath,
           bundlesDbPath,
+          tagSelectivity: tagSelectivity,
         },
       });
 
@@ -3102,6 +3119,7 @@ if (!isMainThread) {
     dataDbPath: workerData.dataDbPath,
     moderationDbPath: workerData.moderationDbPath,
     bundlesDbPath: workerData.bundlesDbPath,
+    tagSelectivity: workerData.tagSelectivity,
   });
 
   let errorCount = 0;
