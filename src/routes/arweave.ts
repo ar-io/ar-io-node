@@ -19,6 +19,7 @@ import { Router, default as express } from 'express';
 
 import log from '../log.js';
 import * as system from '../system.js';
+import * as metrics from '../metrics.js';
 import {
   CHUNK_POST_URLS,
   CHUNK_POST_ABORT_TIMEOUT_MS,
@@ -54,8 +55,10 @@ arweaveRouter.post('/chunk', async (req, res) => {
     if (
       result.successCount >= Math.min(MIN_SUCCESS_COUNT, CHUNK_POST_URLS.length)
     ) {
+      metrics.arweaveChunkBroadcastCounter.inc({ status: 'success' });
       res.status(200).send(result);
     } else {
+      metrics.arweaveChunkBroadcastCounter.inc({ status: 'fail' });
       res.status(500).send(result);
     }
   } catch (error: any) {
