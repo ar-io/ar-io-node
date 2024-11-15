@@ -120,6 +120,18 @@ export const arweaveTxFetchCounter = new promClient.Counter({
   labelNames: ['node_type'],
 });
 
+export const arweaveChunkPostCounter = new promClient.Counter({
+  name: 'arweave_chunk_post_total',
+  help: 'Counts individual POST request to endpoint',
+  labelNames: ['endpoint', 'status'],
+});
+
+export const arweaveChunkBroadcastCounter = new promClient.Counter({
+  name: 'arweave_chunk_broadcast_total',
+  help: 'Counts successful broadcast accounting for min threshold count etc',
+  labelNames: ['status'],
+});
+
 //
 // SQLite metrics
 //

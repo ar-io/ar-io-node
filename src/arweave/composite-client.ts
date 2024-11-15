@@ -743,6 +743,11 @@ export class ArweaveCompositeClient
 
           successCount++;
 
+          metrics.arweaveChunkPostCounter.inc({
+            endpoint: url,
+            status: 'success',
+          });
+
           return {
             success: true,
             statusCode: resp.status,
@@ -764,6 +769,11 @@ export class ArweaveCompositeClient
           });
 
           failureCount++;
+
+          metrics.arweaveChunkPostCounter.inc({
+            endpoint: url,
+            status: 'fail',
+          });
 
           return {
             success: false,
