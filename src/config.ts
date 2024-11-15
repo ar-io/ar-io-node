@@ -169,6 +169,10 @@ export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
   '100000',
 );
 
+// Whether or not to enable the background data verification worker
+export const ENABLE_BACKGROUND_DATA_VERIFICATION =
+  env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'false') === 'true';
+
 // ClickHouse URL
 export const CLICKHOUSE_URL = env.varOrUndefined('CLICKHOUSE_URL');
 

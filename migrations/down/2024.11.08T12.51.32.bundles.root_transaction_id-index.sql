@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS bundle_data_items_root_transaction_id_id_idx;

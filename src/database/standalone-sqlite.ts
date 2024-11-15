@@ -449,6 +449,7 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     this.dbs.core.exec(`ATTACH DATABASE '${bundlesDbPath}' AS bundles`);
+    this.dbs.data.exec(`ATTACH DATABASE '${bundlesDbPath}' AS bundles`);
     this.dbs.bundles.exec(`ATTACH DATABASE '${coreDbPath}' AS core`);
 
     this.stmts = { core: {}, data: {}, moderation: {}, bundles: {} };
@@ -2392,6 +2393,13 @@ export class StandaloneSqliteDatabaseWorker {
     return;
   }
 
+  async saveVerificationStatus(id: string) {
+    this.stmts.data.updateDataItemVerificationStatus.run({
+      id: fromB64Url(id),
+      verified_at: currentUnixTimestamp(),
+    });
+  }
+
   cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation') {
     const walCheckpoint = this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
 
@@ -3045,12 +3053,16 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
-  getUnverifiedDataIds() {
+  async getUnverifiedDataIds() {
     return this.queueRead('data', 'getUnverifiedDataIds', undefined);
   }
 
-  getRootTxId(id: string) {
+  async getRootTxId(id: string) {
     return this.queueRead('core', 'getRootTxId', [id]);
+  }
+
+  async saveVerificationStatus(id: string) {
+    return this.queueWrite('data', 'saveVerificationStatus', [id]);
   }
 
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
@@ -3232,6 +3244,10 @@ if (!isMainThread) {
         case 'getRootTxId':
           const rootTxId = worker.getRootTxId(args[0]);
           parentPort?.postMessage(rootTxId);
+          break;
+        case 'saveVerificationStatus':
+          worker.saveVerificationStatus(args[0]);
+          parentPort?.postMessage(null);
           break;
         case 'cleanupWal':
           const walCheckpoint = worker.cleanupWal(args[0]);
