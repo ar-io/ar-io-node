@@ -88,6 +88,7 @@ export const dataItemLastIndexedTimestampSeconds = new promClient.Gauge({
   name: 'data_item_last_indexed_timestamp_seconds',
   help: 'Timestamp of the last indexed data item',
 });
+dataItemLastIndexedTimestampSeconds.setToCurrentTime();
 
 //
 // Arweave client metrics
