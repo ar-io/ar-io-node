@@ -54,7 +54,7 @@ export class FsCleanupWorker {
     pauseDuration?: number;
     restartPauseDuration?: number;
   }) {
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log.child({ class: this.constructor.name, basePath });
     this.shouldDelete = shouldDelete ?? (() => Promise.resolve(true));
     this.deleteCallback =
       deleteCallback ?? ((file: string) => fs.promises.unlink(file));
