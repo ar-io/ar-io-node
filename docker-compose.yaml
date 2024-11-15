@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-0d3e2a9594f0520a2f374450851fd4ddf1321c09}
     build:
       context: envoy/
     restart: on-failure
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-7dc3908e2146d4497403c2ed20cea4fbba966c55}
     build:
       context: .
     restart: on-failure
@@ -88,7 +88,7 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
       - AWS_S3_PREFIX=${AWS_S3_PREFIX:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-20-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-20}
       - CHUNK_POST_URLS=${CHUNK_POST_URLS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
       - CHUNK_POST_ABORT_TIMEOUT_MS=${CHUNK_POST_ABORT_TIMEOUT_MS:-}
@@ -133,7 +133,7 @@ services:
       - ${CLICKHOUSE_LOGS_PATH:-./logs/clickhouse}:/var/log/clickhouse-server
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-c8d2ba1dbc8d1b4efd60c6ec041986fedbaa0d89}
     restart: on-failure
     ports:
       - 5050:5050
@@ -151,7 +151,7 @@ services:
       - REPORT_GENERATION_INTERVAL_MS=${REPORT_GENERATION_INTERVAL_MS:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-20-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-20}
       - AO_CU_URL=${AO_CU_URL:-}
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
@@ -160,7 +160,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
     build:
       context: litestream/
       dockerfile: Dockerfile
