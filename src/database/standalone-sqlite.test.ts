@@ -1251,8 +1251,6 @@ describe('StandaloneSqliteDatabase', () => {
         .all()
         .map((row) => ({ id: toB64Url(row.id), verified: row.verified }));
 
-      console.log({ contiguousDataIds });
-
       assert.equal(contiguousDataIds.length, 3);
       assert.equal(contiguousDataIds[0].id, dataItemRootTxId);
       assert.equal(contiguousDataIds[0].verified, 0);
