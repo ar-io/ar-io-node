@@ -43,7 +43,7 @@ export class DataVerificationWorker {
     contiguousDataSource,
     workerCount = DEFAULT_WORKER_COUNT,
     streamTimeout = DEFAULT_STREAM_TIMEOUT,
-    interval = config.BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS,
+    interval = config.BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS * 1000,
   }: {
     log: winston.Logger;
     contiguousDataIndex: ContiguousDataIndex;
@@ -80,6 +80,8 @@ export class DataVerificationWorker {
   async queueRootTx() {
     const log = this.log.child({ method: 'queueRootTx' });
 
+    log.debug('Queueing data items for verification.');
+
     if (this.workerCount === 0) {
       log.warn('Skipping data item queuing due to no workers.');
       return;
@@ -95,7 +97,6 @@ export class DataVerificationWorker {
         rootTxIds.push(rootTxId);
       }
     }
-
     const queuedItems = this.queue.getQueue();
     for (const rootTxId of rootTxIds) {
       if (rootTxId !== undefined && !queuedItems.includes(rootTxId)) {

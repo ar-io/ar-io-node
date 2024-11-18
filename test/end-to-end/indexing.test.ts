@@ -839,6 +839,69 @@ describe('Indexing', function () {
     });
   });
 
+  describe('Background data verification', function () {
+    let dataDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexing = async () => {
+      const getAll = () =>
+        dataDb.prepare('SELECT * FROM contiguous_data_ids').all();
+
+      while (getAll().length === 0) {
+        console.log('Waiting for data items to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    const waitVerification = async () => {
+      const getAll = () =>
+        dataDb.prepare('SELECT verified FROM contiguous_data_ids').all();
+
+      while (getAll().some((row) => row.verified === 0)) {
+        console.log('Waiting for data items to be verified...');
+
+        await wait(5000);
+      }
+    };
+
+    before(async function () {
+      compose = await composeUp({
+        ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
+        BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '10',
+        BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateway',
+      });
+      dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
+
+      await axios.post(
+        'http://localhost:4000/ar-io/admin/queue-bundle',
+        {
+          id: '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ',
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer secret',
+          },
+        },
+      );
+
+      await waitForIndexing();
+      await waitVerification();
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('should verify unverified data', async () => {
+      const stmt = dataDb.prepare('SELECT verified FROM contiguous_data_ids');
+      const rows = stmt.all();
+
+      assert.equal(rows.length, 79);
+      assert.ok(rows.every((row) => row.verified === 1));
+    });
+  });
+
   describe('Content-Encoding', function () {
     const txId = 'NT9b6xQqxMGNsbp1h6N-pmd-YM0hWPP3KDcM2EA1Hk8';
     const bundleId = '0WUql4Qv3OFf-e9PR2hnZM1wv9s5TPbub7uvZXaQf5w';
