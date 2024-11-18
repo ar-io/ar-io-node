@@ -177,6 +177,11 @@ export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
   env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'false') === 'true';
 
+export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
+  'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
+  '600', // 10 minuters
+);
+
 //
 // GraphQL
 //

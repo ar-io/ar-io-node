@@ -21,10 +21,10 @@ import type { queueAsPromised } from 'fastq';
 import * as winston from 'winston';
 import { ContiguousDataIndex, ContiguousDataSource } from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
+import * as config from '../config.js';
 
 const DEFAULT_STREAM_TIMEOUT = 1000 * 30; // 30 seconds
 const DEFAULT_WORKER_COUNT = 1;
-const DEFAULT_INTERVAL = 1000 * 60 * 10; // 10 minutes
 
 export class DataVerificationWorker {
   // Dependencies
@@ -43,7 +43,7 @@ export class DataVerificationWorker {
     contiguousDataSource,
     workerCount = DEFAULT_WORKER_COUNT,
     streamTimeout = DEFAULT_STREAM_TIMEOUT,
-    interval = DEFAULT_INTERVAL,
+    interval = config.BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS,
   }: {
     log: winston.Logger;
     contiguousDataIndex: ContiguousDataIndex;
