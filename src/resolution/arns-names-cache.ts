@@ -53,8 +53,8 @@ export class ArNSNamesCache {
     cacheTtl = DEFAULT_CACHE_TTL,
   }: {
     log: winston.Logger;
-    networkProcess?: AoIORead;
     ao?: AoClient;
+    networkProcess?: AoIORead;
     cacheTtl?: number;
   }) {
     this.log = log.child({
