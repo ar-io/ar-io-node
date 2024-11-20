@@ -361,7 +361,7 @@ export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
 
 export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
   'ARNS_NAMES_CACHE_TTL_SECONDS',
-  `${60 * 60}`, // 1 hour
+  `${5 * 60}`, // 5 minutes
 );
 
 // TODO: support multiple gateway urls
