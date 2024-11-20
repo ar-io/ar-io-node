@@ -19,6 +19,7 @@ import winston from 'winston';
 import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import { KvArnsStore } from '../store/kv-arns-store.js';
+import { ArNSNamesCache } from './arns-names-cache.js';
 
 export class CompositeArNSResolver implements NameResolver {
   private log: winston.Logger;
@@ -30,6 +31,7 @@ export class CompositeArNSResolver implements NameResolver {
         // TODO: other overrides like fallback txId if not found in resolution
       }
     | undefined;
+  private arnsNamesCache: ArNSNamesCache;
 
   constructor({
     log,
@@ -48,63 +50,74 @@ export class CompositeArNSResolver implements NameResolver {
     this.resolvers = resolvers;
     this.cache = cache;
     this.overrides = overrides;
+    this.arnsNamesCache = new ArNSNamesCache({ log });
   }
 
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name, overrides: this.overrides });
+    const arnsNamesCache = await this.arnsNamesCache.getNames();
     let resolution: NameResolution | undefined;
 
-    try {
-      const cachedResolutionBuffer = await this.cache.get(name);
-      if (cachedResolutionBuffer) {
-        const cachedResolution: NameResolution = JSON.parse(
-          cachedResolutionBuffer.toString(),
-        );
-        resolution = cachedResolution; // hold on to this in case we need it
-        // use the override ttl if it exists, otherwise use the cached resolution ttl
-        const ttlSeconds = this.overrides?.ttlSeconds ?? cachedResolution.ttl;
-        if (
-          cachedResolution !== undefined &&
-          cachedResolution.resolvedAt !== undefined &&
-          ttlSeconds !== undefined &&
-          cachedResolution.resolvedAt + ttlSeconds * 1000 > Date.now()
-        ) {
-          metrics.arnsCacheHitCounter.inc();
-          this.log.info('Cache hit for arns name', { name });
-          return cachedResolution;
-        }
-      }
-      metrics.arnsCacheMissCounter.inc();
-      this.log.info('Cache miss for arns name', { name });
-
-      for (const resolver of this.resolvers) {
-        try {
-          this.log.info('Attempting to resolve name with resolver', {
-            type: resolver.constructor.name,
-            name,
-          });
-          const resolution = await resolver.resolve(name);
-          if (resolution.resolvedAt !== undefined) {
-            this.cache.set(name, Buffer.from(JSON.stringify(resolution)));
-            this.log.info('Resolved name', { name, resolution });
-            return resolution;
-          }
-        } catch (error: any) {
-          this.log.error('Error resolving name with resolver', {
-            resolver,
-            message: error.message,
-            stack: error.stack,
-          });
-        }
-      }
-      this.log.warn('Unable to resolve name against all resolvers', { name });
-    } catch (error: any) {
-      this.log.error('Error resolving name:', {
-        name,
-        message: error.message,
-        stack: error.stack,
-      });
+    if (arnsNamesCache.length === 0) {
+      this.log.debug('Cached ArNS names list is empty');
     }
+
+    if (arnsNamesCache.includes(name)) {
+      try {
+        const cachedResolutionBuffer = await this.cache.get(name);
+        if (cachedResolutionBuffer) {
+          const cachedResolution: NameResolution = JSON.parse(
+            cachedResolutionBuffer.toString(),
+          );
+          resolution = cachedResolution; // hold on to this in case we need it
+          // use the override ttl if it exists, otherwise use the cached resolution ttl
+          const ttlSeconds = this.overrides?.ttlSeconds ?? cachedResolution.ttl;
+          if (
+            cachedResolution !== undefined &&
+            cachedResolution.resolvedAt !== undefined &&
+            ttlSeconds !== undefined &&
+            cachedResolution.resolvedAt + ttlSeconds * 1000 > Date.now()
+          ) {
+            metrics.arnsCacheHitCounter.inc();
+            this.log.info('Cache hit for arns name', { name });
+            return cachedResolution;
+          }
+        }
+        metrics.arnsCacheMissCounter.inc();
+        this.log.info('Cache miss for arns name', { name });
+
+        for (const resolver of this.resolvers) {
+          try {
+            this.log.info('Attempting to resolve name with resolver', {
+              type: resolver.constructor.name,
+              name,
+            });
+            const resolution = await resolver.resolve(name);
+            if (resolution.resolvedAt !== undefined) {
+              this.cache.set(name, Buffer.from(JSON.stringify(resolution)));
+              this.log.info('Resolved name', { name, resolution });
+              return resolution;
+            }
+          } catch (error: any) {
+            this.log.error('Error resolving name with resolver', {
+              resolver,
+              message: error.message,
+              stack: error.stack,
+            });
+          }
+        }
+        this.log.warn('Unable to resolve name against all resolvers', { name });
+      } catch (error: any) {
+        this.log.error('Error resolving name:', {
+          name,
+          message: error.message,
+          stack: error.stack,
+        });
+      }
+    } else {
+      this.log.error(`${name} not included in the cached ArNS names list`);
+    }
+
     // return the resolution if it exists, otherwise return an empty resolution
     return (
       resolution ?? {
