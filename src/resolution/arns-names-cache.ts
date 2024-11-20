@@ -29,7 +29,7 @@ import { connect } from '@permaweb/aoconnect';
 
 const DEFAULT_CACHE_TTL = config.ARNS_NAMES_CACHE_TTL_SECONDS * 1000;
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_RETRY_DELAY = 60 * 1000; // 1 minute
+const DEFAULT_RETRY_DELAY = 5 * 1000; // 5 seconds
 
 export class ArNSNamesCache {
   private log: winston.Logger;
