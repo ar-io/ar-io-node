@@ -56,7 +56,7 @@ describe('ArNSNamesCache', () => {
     });
 
     const names = await cache.getNames();
-    assert.deepEqual(names, ['name-1-1', 'name-1-2', 'name-1-3']);
+    assert.deepEqual(names, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -69,11 +69,11 @@ describe('ArNSNamesCache', () => {
     });
 
     const names1 = await cache.getNames();
-    assert.deepEqual(names1, ['name-1-1', 'name-1-2', 'name-1-3']);
+    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
     assert.equal(await cache.getCacheSize(), 3);
 
     const names2 = await cache.getNames();
-    assert.deepEqual(names2, ['name-1-1', 'name-1-2', 'name-1-3']);
+    assert.deepEqual(names2, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -84,11 +84,11 @@ describe('ArNSNamesCache', () => {
     });
 
     const names1 = await cache.getNames();
-    assert.deepEqual(names1, ['name-1-1', 'name-1-2', 'name-1-3']);
+    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
     assert.equal(await cache.getCacheSize(), 3);
 
     const names2 = await cache.getNames({ forceCacheUpdate: true });
-    assert.deepEqual(names2, ['name-2-1', 'name-2-2', 'name-2-3']);
+    assert.deepEqual(names2, new Set(['name-2-1', 'name-2-2', 'name-2-3']));
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -101,14 +101,14 @@ describe('ArNSNamesCache', () => {
     });
 
     const names1 = await cache.getNames();
-    assert.deepEqual(names1, ['name-1-1', 'name-1-2', 'name-1-3']);
+    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
     assert.equal(await cache.getCacheSize(), 3);
 
     // Wait for cache to expire
     await new Promise((resolve) => setTimeout(resolve, cacheTtl + 10));
 
     const names2 = await cache.getNames();
-    assert.deepEqual(names2, ['name-2-1', 'name-2-2', 'name-2-3']);
+    assert.deepEqual(names2, new Set(['name-2-1', 'name-2-2', 'name-2-3']));
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -140,7 +140,7 @@ describe('ArNSNamesCache', () => {
     });
 
     const initialNames = await cache.getNames();
-    assert.deepEqual(initialNames, ['name-1']);
+    assert.deepEqual(initialNames, new Set(['name-1']));
     assert.equal(await cache.getCacheSize(), 1);
 
     // Now try to force update which should fail

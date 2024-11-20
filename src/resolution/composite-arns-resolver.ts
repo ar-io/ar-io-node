@@ -58,11 +58,11 @@ export class CompositeArNSResolver implements NameResolver {
     const arnsNamesCache = await this.arnsNamesCache.getNames();
     let resolution: NameResolution | undefined;
 
-    if (arnsNamesCache.length === 0) {
+    if (arnsNamesCache.size === 0) {
       this.log.debug('Cached ArNS names list is empty');
     }
 
-    if (arnsNamesCache.includes(name)) {
+    if (arnsNamesCache.has(name)) {
       try {
         const cachedResolutionBuffer = await this.cache.get(name);
         if (cachedResolutionBuffer) {
