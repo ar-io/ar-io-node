@@ -102,6 +102,8 @@ export class OnDemandArNSResolver implements NameResolver {
           resolvedAt: Date.now(),
           ttl: 300,
           processId: undefined,
+          limit: undefined,
+          index: undefined,
         };
       }
 
@@ -119,9 +121,19 @@ export class OnDemandArNSResolver implements NameResolver {
       const undername =
         name === baseName ? '@' : name.replace(`_${baseName}`, '');
 
-      const antRecord = await ant.getRecord({
-        undername,
-      });
+      // enforce the limit of undername resolution, the ant contract is responsible for returning names in the order they should be resolved
+      const antRecords = await ant.getRecords();
+
+      const nameIndex = antRecords.findIndex(
+        (record) => record.name === undername,
+      );
+
+      // validate the undername exists on the ant records
+      if (nameIndex === -1) {
+        throw new Error('Undername does not exist on the ant records');
+      }
+
+      const antRecord = antRecords[nameIndex];
 
       if (antRecord === undefined) {
         throw new Error('Invalid name, ant record for name not found');
@@ -139,6 +151,8 @@ export class OnDemandArNSResolver implements NameResolver {
         resolvedAt: Date.now(),
         processId: processId,
         ttl,
+        limit: arnsRecord.undernameLimit,
+        index: nameIndex,
       };
     } catch (error: any) {
       this.log.warn('Unable to resolve name:', {
@@ -154,6 +168,8 @@ export class OnDemandArNSResolver implements NameResolver {
       resolvedAt: undefined,
       ttl: undefined,
       processId: undefined,
+      limit: undefined,
+      index: undefined,
     };
   }
 }

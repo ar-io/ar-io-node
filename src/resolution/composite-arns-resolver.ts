@@ -113,6 +113,8 @@ export class CompositeArNSResolver implements NameResolver {
         resolvedAt: undefined,
         ttl: undefined,
         processId: undefined,
+        limit: undefined,
+        index: undefined,
       }
     );
   }

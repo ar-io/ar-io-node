@@ -331,6 +331,13 @@ export const sendNotFound = (res: Response) => {
   res.status(404).send('Not found');
 };
 
+export const sendPaymentRequired = (
+  res: Response,
+  text = 'Payment required',
+) => {
+  res.status(402).send(text);
+};
+
 // Data routes
 export const createRawDataHandler = ({
   log,
