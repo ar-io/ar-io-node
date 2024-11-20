@@ -32,7 +32,7 @@ const DEFAULT_CACHE_TTL = config.ARNS_NAMES_CACHE_TTL_SECONDS * 1000;
 export class ArNSNamesCache {
   private log: winston.Logger;
   private networkProcess: AoIORead;
-  private namesCache: Promise<string[]>;
+  private namesCache: Promise<Set<string>>;
   private lastCacheTime = 0;
   private cacheTtl: number;
 
@@ -71,7 +71,7 @@ export class ArNSNamesCache {
     forceCacheUpdate = false,
   }: {
     forceCacheUpdate?: boolean;
-  } = {}): Promise<string[]> {
+  } = {}): Promise<Set<string>> {
     const log = this.log.child({ method: 'getNames' });
 
     const expiredTtl = Date.now() - this.lastCacheTime > this.cacheTtl;
@@ -94,10 +94,10 @@ export class ArNSNamesCache {
 
   async getCacheSize(): Promise<number> {
     const names = await this.namesCache;
-    return names.length;
+    return names.size;
   }
 
-  private async getNamesFromContract(): Promise<string[]> {
+  private async getNamesFromContract(): Promise<Set<string>> {
     const log = this.log.child({ method: 'getNamesFromContract' });
     log.info('Starting to fetch names from contract');
 
@@ -105,15 +105,15 @@ export class ArNSNamesCache {
       contract: this.networkProcess,
     });
 
-    const names = Object.keys(records);
+    const names = new Set(Object.keys(records));
 
-    if (names.length === 0) {
+    if (names.size === 0) {
       // Assume empty results mean there was an error
       // The current sdk version we use fetchAllArNSRecords does not throw an error
       throw new Error('Failed to fetch ArNS records');
     }
 
-    log.info(`Fetched ${names.length} names from contract`);
+    log.info(`Fetched ${names.size} names from contract`);
     return names;
   }
 }
