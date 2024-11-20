@@ -112,41 +112,165 @@ describe('ArNSNamesCache', () => {
     assert.equal(await cache.getCacheSize(), 3);
   });
 
-  it('should handle errors gracefully', async () => {
+  it('should retry on failure and succeed within max retries', async () => {
     let callCount = 0;
-
     const mockNetworkProcess = {
       async getArNSRecords() {
         callCount++;
-
-        if (callCount === 1) {
-          return {
-            items: [
-              {
-                name: 'name-1',
-              },
-            ],
-            nextCursor: undefined,
-          };
+        if (callCount <= 2) {
+          throw new Error('Temporary failure');
         }
-
-        throw new Error();
+        return {
+          items: [{ name: 'success-after-retry' }],
+          nextCursor: undefined,
+        };
       },
     } as unknown as AoIORead;
 
     const cache = new ArNSNamesCache({
       log,
       networkProcess: mockNetworkProcess,
+      maxRetries: 3,
+      retryDelay: 0,
+    });
+
+    const names = await cache.getNames();
+    assert.deepEqual(names, new Set(['success-after-retry']));
+    assert.equal(callCount, 3);
+  });
+
+  it('should fail after exhausting all retry attempts', async () => {
+    let callCount = 0;
+    const mockNetworkProcess = {
+      async getArNSRecords() {
+        callCount++;
+        throw new Error(`Attempt ${callCount} failed`);
+      },
+    } as unknown as AoIORead;
+
+    const cache = new ArNSNamesCache({
+      log,
+      networkProcess: mockNetworkProcess,
+      maxRetries: 3,
+      retryDelay: 0,
+    });
+
+    await assert.rejects(
+      () => cache.getNames(),
+      /Failed to fetch ArNS records after 3 attempts/,
+    );
+    assert.equal(callCount, 3);
+  });
+
+  it('should respect the retry delay between attempts', async () => {
+    let callCount = 0;
+    const timestamps: number[] = [];
+
+    const mockNetworkProcess = {
+      async getArNSRecords() {
+        callCount++;
+        timestamps.push(Date.now());
+        if (callCount < 3) {
+          throw new Error('Temporary failure');
+        }
+        return {
+          items: [{ name: 'success' }],
+          nextCursor: undefined,
+        };
+      },
+    } as unknown as AoIORead;
+
+    const retryDelay = 100;
+    const cache = new ArNSNamesCache({
+      log,
+      networkProcess: mockNetworkProcess,
+      maxRetries: 3,
+      retryDelay,
+    });
+
+    await cache.getNames();
+
+    assert.ok(timestamps[1] - timestamps[0] >= retryDelay);
+    assert.ok(timestamps[2] - timestamps[1] >= retryDelay);
+  });
+
+  it('should handle empty results as failures and retry', async () => {
+    let callCount = 0;
+    const mockNetworkProcess = {
+      async getArNSRecords() {
+        callCount++;
+        if (callCount < 2) {
+          return { items: [], nextCursor: undefined };
+        }
+        return {
+          items: [{ name: 'success' }],
+          nextCursor: undefined,
+        };
+      },
+    } as unknown as AoIORead;
+
+    const cache = new ArNSNamesCache({
+      log,
+      networkProcess: mockNetworkProcess,
+      maxRetries: 3,
+      retryDelay: 0,
+    });
+
+    const names = await cache.getNames();
+    assert.deepEqual(names, new Set(['success']));
+    assert.equal(callCount, 2);
+  });
+
+  it('should return last successful names if all retry attempts fail', async () => {
+    let callCount = 0;
+    const mockNetworkProcess = {
+      async getArNSRecords() {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            items: [{ name: 'initial-success' }],
+            nextCursor: undefined,
+          };
+        }
+        throw new Error('Network error');
+      },
+    } as unknown as AoIORead;
+
+    const cache = new ArNSNamesCache({
+      log,
+      networkProcess: mockNetworkProcess,
+      maxRetries: 3,
+      retryDelay: 0,
     });
 
     const initialNames = await cache.getNames();
-    assert.deepEqual(initialNames, new Set(['name-1']));
-    assert.equal(await cache.getCacheSize(), 1);
+    assert.deepEqual(initialNames, new Set(['initial-success']));
 
-    // Now try to force update which should fail
+    const updatedNames = await cache.getNames({ forceCacheUpdate: true });
+    assert.deepEqual(updatedNames, new Set(['initial-success']));
+    assert.equal(callCount, 4); // 1 initial + 3 retry attempts
+  });
+
+  it('should throw error if all retries fail and no previous successful cache exists', async () => {
+    let callCount = 0;
+    const mockNetworkProcess = {
+      async getArNSRecords() {
+        callCount++;
+        throw new Error(`Attempt ${callCount} failed`);
+      },
+    } as unknown as AoIORead;
+
+    const cache = new ArNSNamesCache({
+      log,
+      networkProcess: mockNetworkProcess,
+      maxRetries: 3,
+      retryDelay: 0,
+    });
+
     await assert.rejects(
-      () => cache.getNames({ forceCacheUpdate: true }),
-      /Failed to fetch ArNS records/,
+      () => cache.getNames(),
+      /Failed to fetch ArNS records after 3 attempts/,
     );
+    assert.equal(callCount, 3);
   });
 });
