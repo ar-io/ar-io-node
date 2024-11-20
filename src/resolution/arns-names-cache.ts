@@ -28,13 +28,18 @@ import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 
 const DEFAULT_CACHE_TTL = config.ARNS_NAMES_CACHE_TTL_SECONDS * 1000;
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_RETRY_DELAY = 60 * 1000; // 1 minute
 
 export class ArNSNamesCache {
   private log: winston.Logger;
   private networkProcess: AoIORead;
   private namesCache: Promise<Set<string>>;
+  private lastSuccessfulNames: Set<string> | null = null;
   private lastCacheTime = 0;
   private cacheTtl: number;
+  private maxRetries: number;
+  private retryDelay: number;
 
   constructor({
     log,
@@ -51,17 +56,23 @@ export class ArNSNamesCache {
       }),
     }),
     cacheTtl = DEFAULT_CACHE_TTL,
+    maxRetries = DEFAULT_MAX_RETRIES,
+    retryDelay = DEFAULT_RETRY_DELAY,
   }: {
     log: winston.Logger;
     ao?: AoClient;
     networkProcess?: AoIORead;
     cacheTtl?: number;
+    maxRetries?: number;
+    retryDelay?: number;
   }) {
     this.log = log.child({
       class: 'ArNSNamesCache',
     });
     this.networkProcess = networkProcess;
     this.cacheTtl = cacheTtl;
+    this.maxRetries = maxRetries;
+    this.retryDelay = retryDelay;
 
     this.log.info('Initiating cache load');
     this.namesCache = this.getNames({ forceCacheUpdate: true });
@@ -101,19 +112,63 @@ export class ArNSNamesCache {
     const log = this.log.child({ method: 'getNamesFromContract' });
     log.info('Starting to fetch names from contract');
 
-    const records = await fetchAllArNSRecords({
-      contract: this.networkProcess,
-    });
+    let lastError: Error | null = null;
 
-    const names = new Set(Object.keys(records));
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        const records = await fetchAllArNSRecords({
+          contract: this.networkProcess,
+        });
 
-    if (names.size === 0) {
-      // Assume empty results mean there was an error
-      // The current sdk version we use fetchAllArNSRecords does not throw an error
-      throw new Error('Failed to fetch ArNS records');
+        const names = new Set(Object.keys(records));
+
+        if (names.size === 0) {
+          throw new Error('Failed to fetch ArNS names');
+        }
+
+        log.info(
+          `Successfully fetched ${names.size} names from contract on attempt ${attempt}`,
+        );
+
+        this.lastSuccessfulNames = names;
+
+        return names;
+      } catch (error) {
+        lastError = error as Error;
+
+        if (attempt === this.maxRetries) {
+          if (this.lastSuccessfulNames) {
+            log.warn(
+              `Failed to fetch names after ${this.maxRetries} attempts, falling back to last successful cache of ${this.lastSuccessfulNames.size} names`,
+              {
+                error: lastError.message,
+              },
+            );
+            return this.lastSuccessfulNames;
+          }
+
+          log.error(
+            `Failed to fetch names after ${this.maxRetries} attempts and no previous successful cache exists`,
+            {
+              error: lastError.message,
+            },
+          );
+          throw new Error(
+            `Failed to fetch ArNS records after ${this.maxRetries} attempts: ${lastError.message}`,
+          );
+        }
+
+        log.warn(
+          `Attempt ${attempt}/${this.maxRetries} failed, retrying in ${this.retryDelay}ms`,
+          {
+            error: lastError.message,
+          },
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, this.retryDelay));
+      }
     }
 
-    log.info(`Fetched ${names.size} names from contract`);
-    return names;
+    throw lastError || new Error('Unexpected error in getNamesFromContract');
   }
 }
