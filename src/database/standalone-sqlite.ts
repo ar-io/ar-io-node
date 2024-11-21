@@ -371,6 +371,10 @@ type DebugInfo = {
     maxStable: number;
     minNew: number;
     maxNew: number;
+    minStableDataItem: number;
+    maxStableDataItem: number;
+    minNewDataItem: number;
+    maxNewDataItem: number;
   };
   timestamps: {
     now: number;
@@ -1131,6 +1135,10 @@ export class StandaloneSqliteDatabaseWorker {
         maxStable: chainStats.stable_blocks_max_height ?? -1,
         minNew: chainStats.new_blocks_min_height ?? -1,
         maxNew: chainStats.new_blocks_max_height ?? -1,
+        minStableDataItem: dataItemStats.min_stable_height ?? -1,
+        maxStableDataItem: dataItemStats.max_stable_height ?? -1,
+        minNewDataItem: dataItemStats.min_new_height ?? -1,
+        maxNewDataItem: dataItemStats.max_new_height ?? -1,
       },
       timestamps: {
         now: currentUnixTimestamp(),
