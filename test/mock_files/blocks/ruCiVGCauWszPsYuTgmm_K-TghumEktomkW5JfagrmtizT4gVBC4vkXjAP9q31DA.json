@@ -1,1 +1,20 @@
-{"nonce":"AQEAAAABAQEBAQABAQABAAEBAQABAAAAAAEAAAEBAQEAAQEBAAAAAQAAAQEBAQABAAAAAQAAAQEBAQEBAQAAAAAAAAABAAEBAQEAAAAAAQAAAAEBAQABAQEBAQEAAQEBAAEAAQAAAAAAAQAAAAEAAAABAQABAQAAAQABAAAAAQEAAAABAAEAAQEAAAEBAQABAQEBAAABAQEBAQEBAQABAAAAAQEAAQEAAA","previous_block":"ChZaPqrcisSP9pExEW-Cm9yZV8yD0KkYllXBqg77bddhs4hVzlgyxtqwdBWBbn4d","timestamp":1528509093,"last_retarget":1528508080,"diff":31,"height":178,"hash":"AAAAAT8EFBxzvXCOS6-MPk9dByHBU-mvznUIPAKEhfdXZW2ZLZ0V5Y9p91z8gmEj","indep_hash":"ruCiVGCauWszPsYuTgmm_K-TghumEktomkW5JfagrmtizT4gVBC4vkXjAP9q31DA","txs":[],"tx_root":"","tx_tree":[],"wallet_list":"gbzDHCtZBTEVO6aownmjbGpW82uPJWFwzcN5nUHEpnk","reward_addr":"dOYVBAk5-dANRRr04vIRcdk1quYd9sl3wju9OBcS6r4","tags":[],"reward_pool":63443623778,"weave_size":599058,"block_size":0,"poa":{"option":"1","tx_path":"","data_path":"","chunk":""}}
+{
+  "nonce": "AQEAAAABAQEBAQABAQABAAEBAQABAAAAAAEAAAEBAQEAAQEBAAAAAQAAAQEBAQABAAAAAQAAAQEBAQEBAQAAAAAAAAABAAEBAQEAAAAAAQAAAAEBAQABAQEBAQEAAQEBAAEAAQAAAAAAAQAAAAEAAAABAQABAQAAAQABAAAAAQEAAAABAAEAAQEAAAEBAQABAQEBAAABAQEBAQEBAQABAAAAAQEAAQEAAA",
+  "previous_block": "ChZaPqrcisSP9pExEW-Cm9yZV8yD0KkYllXBqg77bddhs4hVzlgyxtqwdBWBbn4d",
+  "timestamp": 1528509093,
+  "last_retarget": 1528508080,
+  "diff": 31,
+  "height": 178,
+  "hash": "AAAAAT8EFBxzvXCOS6-MPk9dByHBU-mvznUIPAKEhfdXZW2ZLZ0V5Y9p91z8gmEj",
+  "indep_hash": "ruCiVGCauWszPsYuTgmm_K-TghumEktomkW5JfagrmtizT4gVBC4vkXjAP9q31DA",
+  "txs": [],
+  "tx_root": "",
+  "tx_tree": [],
+  "wallet_list": "gbzDHCtZBTEVO6aownmjbGpW82uPJWFwzcN5nUHEpnk",
+  "reward_addr": "dOYVBAk5-dANRRr04vIRcdk1quYd9sl3wju9OBcS6r4",
+  "tags": [],
+  "reward_pool": 63443623778,
+  "weave_size": 599058,
+  "block_size": 0,
+  "poa": { "option": "1", "tx_path": "", "data_path": "", "chunk": "" }
+}

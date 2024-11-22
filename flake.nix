@@ -22,6 +22,7 @@
           default = pkgs.mkShell {
             name = "ar-io-node-shell";
             buildInputs = with pkgs; [
+              biome
               clickhouse
               duckdb
               gnumake

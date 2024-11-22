@@ -1,1 +1,20 @@
-{"nonce":"AAEBAAAAAAEBAAEAAQEAAAEAAAEBAQEAAAAAAAAAAAAAAQEAAQEBAAABAQEAAQAAAAAAAAEAAAABAAEAAAAAAAAAAAEAAQAAAAAAAAAAAAAAAAAAAAEBAAEBAAEAAQEAAAEAAQABAQABAQEAAAEAAQAAAAEBAAEBAAEAAQEAAAABAQABAAEBAQAAAAEBAQEAAQAAAAEAAAABAAABAAAAAAEAAQEBAQABAAAAAAEBAAEAAAA","previous_block":"Hjy0koWXGxxsjL7rnPzXLI4Ia0Hl701ekYt7fmXWLAAAI--tXp4UJ89g0gNUTJiq","timestamp":1528491712,"last_retarget":1528491597,"diff":28,"height":3,"hash":"AAAABWntWLtEPC41GwPiimbi_kYM0VsR1XCdWN-MQErWEK0ZYuVY_hsOhNYPKLuU","indep_hash":"JRhPWF4b66QtiYXe-nBHhj6nKVc7oFgvnwOEqhWmfUGdronQUeOUkyI789uBSGPP","txs":[],"tx_root":"","tx_tree":[],"wallet_list":"YVInLWBNhtgbUi6KTH0Gg1yL4UDC4F6UdoincYgU2s0","reward_addr":"RHbeHaCbFU8g9pXhzZT-vTh2DtKzsUlLBKnicV6pDIw","tags":[],"reward_pool":0,"weave_size":0,"block_size":0,"poa":{"option":"1","tx_path":"","data_path":"","chunk":""}}
+{
+  "nonce": "AAEBAAAAAAEBAAEAAQEAAAEAAAEBAQEAAAAAAAAAAAAAAQEAAQEBAAABAQEAAQAAAAAAAAEAAAABAAEAAAAAAAAAAAEAAQAAAAAAAAAAAAAAAAAAAAEBAAEBAAEAAQEAAAEAAQABAQABAQEAAAEAAQAAAAEBAAEBAAEAAQEAAAABAQABAAEBAQAAAAEBAQEAAQAAAAEAAAABAAABAAAAAAEAAQEBAQABAAAAAAEBAAEAAAA",
+  "previous_block": "Hjy0koWXGxxsjL7rnPzXLI4Ia0Hl701ekYt7fmXWLAAAI--tXp4UJ89g0gNUTJiq",
+  "timestamp": 1528491712,
+  "last_retarget": 1528491597,
+  "diff": 28,
+  "height": 3,
+  "hash": "AAAABWntWLtEPC41GwPiimbi_kYM0VsR1XCdWN-MQErWEK0ZYuVY_hsOhNYPKLuU",
+  "indep_hash": "JRhPWF4b66QtiYXe-nBHhj6nKVc7oFgvnwOEqhWmfUGdronQUeOUkyI789uBSGPP",
+  "txs": [],
+  "tx_root": "",
+  "tx_tree": [],
+  "wallet_list": "YVInLWBNhtgbUi6KTH0Gg1yL4UDC4F6UdoincYgU2s0",
+  "reward_addr": "RHbeHaCbFU8g9pXhzZT-vTh2DtKzsUlLBKnicV6pDIw",
+  "tags": [],
+  "reward_pool": 0,
+  "weave_size": 0,
+  "block_size": 0,
+  "poa": { "option": "1", "tx_path": "", "data_path": "", "chunk": "" }
+}

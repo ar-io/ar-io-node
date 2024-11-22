@@ -1,1 +1,20 @@
-{"nonce":"AAEBAQAAAQEBAQEAAAEAAQEAAQABAQABAAEAAQABAAEBAAABAQEAAQAAAAEAAQA","previous_block":"9MOn9iez-FfEQR4-c6nQJYRCe-wUcT5WLNuKlJvOMFrozWeuMhGGWeGUXJFRn8zi","timestamp":1528505201,"last_retarget":1528504813,"diff":31,"height":142,"hash":"AAAAAQVIV8RaUgKJmr6VJZROXVypohJc6t46GMGcEH_5i55BrGLUY-tw2plKXcth","indep_hash":"ihdMtHXx32rManslosmsyK0F9GLDA9QiZjyY_5bvjU0NUMeFZOWAMOm1A1FKL7l3","txs":[],"tx_root":"","tx_tree":[],"wallet_list":"OVC6ahGqstiX-_s1JN1DKOeolYhbX3FLGYaQQt5PbfQ","reward_addr":"Eo80tPIqVRGJiBkKvhkfpUg_3VsY3AKzc-e044Y9E3U","tags":[],"reward_pool":61998317323,"weave_size":599058,"block_size":0,"poa":{"option":"1","tx_path":"","data_path":"","chunk":""}}
+{
+  "nonce": "AAEBAQAAAQEBAQEAAAEAAQEAAQABAQABAAEAAQABAAEBAAABAQEAAQAAAAEAAQA",
+  "previous_block": "9MOn9iez-FfEQR4-c6nQJYRCe-wUcT5WLNuKlJvOMFrozWeuMhGGWeGUXJFRn8zi",
+  "timestamp": 1528505201,
+  "last_retarget": 1528504813,
+  "diff": 31,
+  "height": 142,
+  "hash": "AAAAAQVIV8RaUgKJmr6VJZROXVypohJc6t46GMGcEH_5i55BrGLUY-tw2plKXcth",
+  "indep_hash": "ihdMtHXx32rManslosmsyK0F9GLDA9QiZjyY_5bvjU0NUMeFZOWAMOm1A1FKL7l3",
+  "txs": [],
+  "tx_root": "",
+  "tx_tree": [],
+  "wallet_list": "OVC6ahGqstiX-_s1JN1DKOeolYhbX3FLGYaQQt5PbfQ",
+  "reward_addr": "Eo80tPIqVRGJiBkKvhkfpUg_3VsY3AKzc-e044Y9E3U",
+  "tags": [],
+  "reward_pool": 61998317323,
+  "weave_size": 599058,
+  "block_size": 0,
+  "poa": { "option": "1", "tx_path": "", "data_path": "", "chunk": "" }
+}

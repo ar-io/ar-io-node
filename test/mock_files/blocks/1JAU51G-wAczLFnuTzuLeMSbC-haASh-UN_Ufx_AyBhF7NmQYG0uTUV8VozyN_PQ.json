@@ -1,12 +1,6 @@
 {
-  "usd_to_ar_rate": [
-    "328",
-    "17839"
-  ],
-  "scheduled_usd_to_ar_rate": [
-    "8159",
-    "445975"
-  ],
+  "usd_to_ar_rate": ["328", "17839"],
+  "scheduled_usd_to_ar_rate": ["8159", "445975"],
   "packing_2_5_threshold": "0",
   "strict_data_split_threshold": "30607159107830",
   "nonce": "82jmx6fPLCT5twSrX9M2zU_9HkFOE6eg2aqNBjw1ByU",
