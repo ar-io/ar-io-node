@@ -391,8 +391,13 @@ export const AWS_SECRET_ACCESS_KEY = env.varOrUndefined(
 );
 export const AWS_REGION = env.varOrUndefined('AWS_REGION');
 export const AWS_ENDPOINT = env.varOrUndefined('AWS_ENDPOINT');
-export const AWS_S3_BUCKET = env.varOrUndefined('AWS_S3_BUCKET');
-export const AWS_S3_PREFIX = env.varOrUndefined('AWS_S3_PREFIX');
+
+export const AWS_S3_CONTIGUOUS_DATA_BUCKET = env.varOrUndefined(
+  'AWS_S3_CONTIGUOUS_DATA_BUCKET',
+);
+export const AWS_S3_CONTIGUOUS_DATA_PREFIX = env.varOrUndefined(
+  'AWS_S3_CONTIGUOUS_DATA_PREFIX',
+);
 
 //
 // Development and testing

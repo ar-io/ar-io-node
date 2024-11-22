@@ -68,5 +68,5 @@ This document describes the environment variables that can be used to configure 
 | AWS_SECRET_ACCESS_KEY | String | undefined | AWS secret access key for accessing AWS services |
 | AWS_REGION | String | undefined | AWS region where the resources are located |
 | AWS_ENDPOINT | String | undefined | Custom endpoint for AWS services |
-| AWS_S3_BUCKET | String | undefined | AWS S3 bucket name used for storing data |
-| AWS_S3_PREFIX | String | undefined | Prefix for the S3 bucket to organize data |
+| AWS_S3_CONTIGUOUS_DATA_BUCKET | String | undefined | AWS S3 bucket name used for storing data |
+| AWS_S3_CONTIGUOUS_DATA_PREFIX | String | undefined | Prefix for the S3 bucket to organize data |

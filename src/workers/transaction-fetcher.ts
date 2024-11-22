@@ -18,7 +18,7 @@
 import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import * as EventEmitter from 'node:events';
-import { default as wait } from 'wait';
+import wait from 'wait';
 import * as winston from 'winston';
 
 import * as events from '../events.js';
