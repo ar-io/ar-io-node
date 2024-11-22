@@ -108,7 +108,7 @@ describe('DataSources', () => {
           AWS_ACCESS_KEY_ID: 'test',
           AWS_SECRET_ACCESS_KEY: 'test',
           AWS_REGION: 'eu-central-1',
-          AWS_S3_BUCKET: 'ar.io',
+          AWS_S3_CONTIGUOUS_DATA_BUCKET: 'ar.io',
           AWS_ENDPOINT: `http://localstack:4566`,
           ON_DEMAND_RETRIEVAL_ORDER: 's3',
         })

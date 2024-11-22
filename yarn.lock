@@ -202,24 +202,24 @@
     "@smithy/util-utf8" "^2.0.0"
     tslib "^2.6.2"
 
-"@aws-lite/client@^0.21.7":
-  version "0.21.10"
-  resolved "https://registry.yarnpkg.com/@aws-lite/client/-/client-0.21.10.tgz#bc3d6474296e4c45da24fdb5045ba13538e32e22"
-  integrity sha512-fOn3lg1ynBAxqcELRf084bNJ6gu+GGoNyC+hwitW/hg3Vc1z1ZbK5HWWTrDw8HdM/fEQ0UN++g7GXVN1GVctdQ==
+"@aws-lite/client@^0.22.4":
+  version "0.22.4"
+  resolved "https://registry.yarnpkg.com/@aws-lite/client/-/client-0.22.4.tgz#e054b6a791f7ebf1adf72cd6c1b64202e09944ee"
+  integrity sha512-52ua/U3+JXecuTtrTZ1XjSbDL2S+iyfOD/1daYRnPQ83YPNzo4BJe1iIVwtZbJB6goLyeVolxSlPmnuqF6JFvw==
   dependencies:
     aws4 "^1.13.0"
 
-"@aws-lite/s3-types@^0.1.24":
-  version "0.1.25"
-  resolved "https://registry.yarnpkg.com/@aws-lite/s3-types/-/s3-types-0.1.25.tgz#03090edf081abc7b905caba6e0f01a6fa79adc54"
-  integrity sha512-Y8QLRMvRixBRpwPW+9Ol27hr5uqT40sn+bonMrhNq7rkfScHShreo6KHx7a2Zo+Mxg3DDLw+8EXbkzdcOxcm2Q==
+"@aws-lite/s3-types@^0.2.6":
+  version "0.2.6"
+  resolved "https://registry.yarnpkg.com/@aws-lite/s3-types/-/s3-types-0.2.6.tgz#fb88e5e78fd8b92b4db17143fdb91b7f4be92ee1"
+  integrity sha512-eaB0M6iubHtE6A16OD/kJBKXnIgQLrH4XcjIy2FKaj/eJnvHKhrqYiyLdzLEk43knhYN7PXdFmYzwcpXSOy4zw==
   dependencies:
     "@aws-sdk/client-s3" "3"
 
-"@aws-lite/s3@^0.1.21":
-  version "0.1.22"
-  resolved "https://registry.yarnpkg.com/@aws-lite/s3/-/s3-0.1.22.tgz#a2f5f2a8206f97d2c8a2580451570d8857bb066e"
-  integrity sha512-9OL95fTvHV80JvFTxLx8hhWQ6DgwHUts02KpXITA8syCDnYgua2rNcpwQ5b6GZzpL7yNXU0dud/Y6edThbffig==
+"@aws-lite/s3@^0.2.6":
+  version "0.2.6"
+  resolved "https://registry.yarnpkg.com/@aws-lite/s3/-/s3-0.2.6.tgz#6274b232faf633f289db4765d7e77819670982bf"
+  integrity sha512-kFxZz3D3XB3P71QQaciHYaVJIIYpGFhAo8iSSyNlbV8lNvw3nd+AZaWQisGTtnWormpFxshEwNPtZxbtJbJ85w==
 
 "@aws-sdk/client-s3@3":
   version "3.614.0"

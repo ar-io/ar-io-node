@@ -84,6 +84,7 @@ import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArnsStore } from './store/kv-arns-store.js';
 import { parquetExporter } from './routes/ar-io.js';
 import { server } from './app.js';
+import { S3DataStore } from './store/s3-data-store.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -342,12 +343,12 @@ const arIODataSource = new ArIODataSource({
 });
 
 const s3DataSource =
-  awsClient !== undefined && config.AWS_S3_BUCKET !== undefined
+  awsClient !== undefined && config.AWS_S3_CONTIGUOUS_DATA_BUCKET !== undefined
     ? new S3DataSource({
         log,
         s3Client: awsClient.S3,
-        s3Bucket: config.AWS_S3_BUCKET,
-        s3Prefix: config.AWS_S3_PREFIX,
+        s3Bucket: config.AWS_S3_CONTIGUOUS_DATA_BUCKET,
+        s3Prefix: config.AWS_S3_CONTIGUOUS_DATA_PREFIX,
         awsClient,
       })
     : undefined;
@@ -393,10 +394,19 @@ metrics.registerQueueLengthGauge('dataContentAttributeImporter', {
   length: () => dataContentAttributeImporter.queueDepth(),
 });
 
-const contiguousDataStore = new FsDataStore({
-  log,
-  baseDir: 'data/contiguous',
-});
+const contiguousDataStore =
+  awsClient !== undefined && config.AWS_S3_CONTIGUOUS_DATA_BUCKET !== undefined
+    ? new S3DataStore({
+        log,
+        baseDir: 'data/contiguous',
+        s3Client: awsClient.S3,
+        s3Prefix: config.AWS_S3_CONTIGUOUS_DATA_PREFIX,
+        s3Bucket: config.AWS_S3_CONTIGUOUS_DATA_BUCKET,
+      })
+    : new FsDataStore({
+        log,
+        baseDir: 'data/contiguous',
+      });
 
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
