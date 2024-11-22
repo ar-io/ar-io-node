@@ -2427,6 +2427,12 @@ export class StandaloneSqliteDatabaseWorker {
 
     return walCheckpoint[0];
   }
+
+  pruneStableDataItems(indexedAtThreshold: number) {
+    this.stmts.bundles.deleteStableDataItemsLessThanIndexedAt.run({
+      indexed_at_threshold: indexedAtThreshold
+    });
+  }
 }
 
 type WorkerPoolName =
@@ -3090,6 +3096,10 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveVerificationStatus', [id]);
   }
 
+  async pruneStableDataItems(indexedAtThreshold: number): Promise<void> {
+    return this.queueWrite('bundles', 'pruneStableDataItems', [indexedAtThreshold]); 
+  }
+
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
     return this.queueWrite(dbName, 'cleanupWal', [dbName]).then(
       (walCheckpoint) => {
@@ -3273,6 +3283,10 @@ if (!isMainThread) {
           break;
         case 'saveVerificationStatus':
           worker.saveVerificationStatus(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'pruneStableDataItems':
+          worker.pruneStableDataItems(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'cleanupWal':
