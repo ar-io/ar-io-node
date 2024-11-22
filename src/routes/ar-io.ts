@@ -23,7 +23,7 @@ import * as system from '../system.js';
 import * as events from '../events.js';
 import * as metrics from '../metrics.js';
 import { release } from '../version.js';
-import { signatureStore } from '../system.js';
+import { db, signatureStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
 
@@ -307,6 +307,29 @@ arIoRouter.get(
       const status = exporter.status();
 
       res.json(status);
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
+// Prune stable data items before a given timestamp
+arIoRouter.post(
+  '/ar-io/admin/prune-stable-data-items',
+  express.json(),
+  async (req, res) => {
+    try {
+      const { indexedAtThreshold } = req.body;
+
+      if (!Number.isInteger(indexedAtThreshold) || indexedAtThreshold < 0) {
+        res
+          .status(400)
+          .send('Invalid indexedAtThreshold - must be a positive integer');
+        return;
+      }
+
+      await db.pruneStableDataItems(indexedAtThreshold);
+      res.json({ message: 'Stable data items pruned successfully' });
     } catch (error: any) {
       res.status(500).send(error?.message);
     }
