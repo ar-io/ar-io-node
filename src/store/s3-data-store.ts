@@ -197,8 +197,15 @@ export class S3DataStore implements ContiguousDataStore {
 
   async cleanup(stream: fs.WriteStream) {
     try {
-      stream.end();
-      await fs.promises.unlink(stream.path);
+      if (!stream.destroyed) {
+        await new Promise((resolve) => {
+          stream.end(resolve);
+        });
+      }
+
+      if (typeof stream.path === 'string' && stream.path.length > 0) {
+        await fs.promises.unlink(stream.path);
+      }
     } catch (error: any) {
       this.log.error('Failed to cleanup contigous data stream', {
         message: error.message,
