@@ -73,12 +73,6 @@ export class S3DataStore implements ContiguousDataStore {
     const log = this.log.child({ method: 'has' });
     const key = this.s3Key(hash);
 
-    log.debug('Checking if object exists in S3', {
-      hash,
-      bucket: this.s3Bucket,
-      key,
-    });
-
     try {
       await this.s3Client.HeadObject({
         Bucket: this.s3Bucket,
@@ -127,13 +121,6 @@ export class S3DataStore implements ContiguousDataStore {
   ): Promise<Readable | undefined> {
     const log = this.log.child({ method: 'get' });
     const key = this.s3Key(hash);
-
-    log.debug('Getting object from S3', {
-      hash,
-      bucket: this.s3Bucket,
-      key,
-      ...region,
-    });
 
     try {
       const params: {
@@ -218,7 +205,7 @@ export class S3DataStore implements ContiguousDataStore {
     const log = this.log.child({ method: 'finalize' });
     const key = this.s3Key(hash);
 
-    log.debug('Finalizing data stream to S3 using multipart upload', {
+    log.debug('Finalizing data stream to S3', {
       hash,
       bucket: this.s3Bucket,
       key,
@@ -232,11 +219,6 @@ export class S3DataStore implements ContiguousDataStore {
 
       const fileStats = await fs.promises.stat(stream.path);
       const fileSize = fileStats.size;
-
-      log.debug('File stats for upload', {
-        size: fileSize,
-        path: stream.path,
-      });
 
       if (fileSize === 0) {
         throw new Error('Cannot upload empty file');
@@ -276,13 +258,6 @@ export class S3DataStore implements ContiguousDataStore {
       const partSize = MIN_PART_SIZE;
       const numParts = Math.ceil(fileSize / partSize);
 
-      log.debug('Starting multipart upload', {
-        uploadId,
-        numParts,
-        partSize,
-        totalSize: fileSize,
-      });
-
       const fileHandle = await fs.promises.open(stream.path, 'r');
       try {
         for (let partNumber = 1; partNumber <= numParts; partNumber++) {
@@ -304,11 +279,6 @@ export class S3DataStore implements ContiguousDataStore {
             );
           }
 
-          log.debug(`Uploading part ${partNumber}/${numParts}`, {
-            partNumber,
-            size: currentPartSize,
-          });
-
           const response = await this.s3Client.UploadPart({
             Bucket: this.s3Bucket,
             Key: `${key}?partNumber=${partNumber}&uploadId=${uploadId}`,
@@ -320,14 +290,7 @@ export class S3DataStore implements ContiguousDataStore {
           }
 
           parts.push({ PartNumber: partNumber, ETag: response.ETag });
-
-          log.debug(`Successfully uploaded part ${partNumber}/${numParts}`);
         }
-
-        log.debug('Completing multipart upload', {
-          uploadId,
-          numParts: parts.length,
-        });
 
         await this.s3Client.CompleteMultipartUpload({
           Bucket: this.s3Bucket,
@@ -348,9 +311,6 @@ export class S3DataStore implements ContiguousDataStore {
       }
 
       await fs.promises.unlink(stream.path);
-      log.debug('Cleaned up temporary file', {
-        tempPath: stream.path,
-      });
     } catch (error: any) {
       log.error('Failed to finalize data stream to S3', {
         hash,

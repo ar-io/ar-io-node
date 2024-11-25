@@ -16,22 +16,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-// declare module '@aws-lite/s3' {
-//   import {
-//     S3ClientConfig,
-//     GetObjectCommandInput,
-//     PutObjectCommandInput,
-//     GetObjectCommandOutput,
-//     PutObjectCommandOutput,
-//   } from '@aws-sdk/client-s3';
-
-//   interface S3Client {
-//     getObject(params: GetObjectCommandInput): Promise<GetObjectCommandOutput>;
-//   }
-
-//   export default function s3(options: S3ClientConfig): S3Client;
-// }
-
 declare module '@aws-lite/s3' {
   import { AwsLiteS3 } from '@aws-lite/s3-types';
 
