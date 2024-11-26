@@ -305,7 +305,9 @@ const importTransactions = async ({
         END AS owner,
         NULL AS signature_offset,
         NULL AS signature_size,
-        NULL AS signature_type
+        NULL AS signature_type,
+        NULL AS root_transaction_id,
+        NULL AS root_parent_offset
       FROM
         sqlite_scan('${coreDbPath}', 'stable_transactions') st
       LEFT JOIN
@@ -365,7 +367,9 @@ const importDataItems = async ({
         END AS owner,
         sdi.signature_offset,
         sdi.signature_size,
-        sdi.signature_type
+        sdi.signature_type,
+        sdi.root_transaction_id,
+        sdi.root_parent_offset
       FROM
         sqlite_scan('${bundlesDbPath}', 'stable_data_items') sdi
       LEFT JOIN

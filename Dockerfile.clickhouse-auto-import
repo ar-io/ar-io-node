@@ -1,0 +1,29 @@
+FROM debian:bullseye-slim
+
+# Install required packages and ClickHouse
+RUN apt-get update && apt-get install -y \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LO https://github.com/ClickHouse/ClickHouse/releases/download/v24.11.1.2557-stable/clickhouse-common-static-24.11.1.2557-amd64.tgz \
+    && tar -xzf clickhouse-common-static-24.11.1.2557-amd64.tgz \
+    && mv ./clickhouse-common-static-24.11.1.2557/usr/bin/clickhouse usr/local/bin/ \
+    && rm -r clickhouse-common-static-24.11.1.2557-amd64.tgz ./clickhouse-common-static-24.11.1.2557
+
+# Create necessary directories
+WORKDIR /app
+RUN mkdir -p data/parquet/imported
+
+# Copy the auto-import script
+COPY src/database/clickhouse/schema.sql /app/src/database/clickhouse/schema.sql
+COPY scripts/clickhouse-auto-import /app/scripts/
+COPY scripts/clickhouse-import /app/scripts/
+
+# Make scripts executable
+RUN chmod +x /app/scripts/clickhouse-auto-import /app/scripts/clickhouse-import
+
+# Environment variables
+ENV ADMIN_API_KEY=""
+
+# Run the auto-import script
+CMD ["/app/scripts/clickhouse-auto-import"]

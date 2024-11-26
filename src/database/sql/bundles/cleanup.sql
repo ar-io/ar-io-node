@@ -13,5 +13,5 @@ WHERE height < @height_threshold OR (
   )
 
 -- deleteStableDataItemsLessThanIndexedAt
-DELETE FROM stable_data_items 
+DELETE FROM stable_data_items
 WHERE indexed_at < @indexed_at_threshold
