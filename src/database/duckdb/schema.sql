@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   owner BLOB,
   signature_offset UINTEGER,
   signature_size UINTEGER,
-  signature_type UINTEGER
+  signature_type UINTEGER,
+  root_transaction_id BLOB,
+  root_parent_offset UINTEGER
 );
 
 CREATE TABLE IF NOT EXISTS blocks (

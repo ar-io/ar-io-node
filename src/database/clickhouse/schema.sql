@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS staging_transactions (
   signature_offset UInt64,
   signature_size UInt64,
   signature_type UInt64,
+  root_transaction_id BLOB,
+  root_parent_offset UInt64,
   PRIMARY KEY (height, block_transaction_index, is_data_item, id)
 ) Engine = MergeTree()
 ORDER BY (height, block_transaction_index, is_data_item, id);
@@ -48,6 +50,7 @@ CREATE TABLE IF NOT EXISTS staging_tags (
   tag_name BLOB NOT NULL,
   tag_value BLOB NOT NULL,
   is_data_item BOOLEAN NOT NULL,
+  inserted_at DateTime DEFAULT now(),
   PRIMARY KEY (height, id)
 ) Engine = MergeTree()
 ORDER BY (height, id);
@@ -71,10 +74,22 @@ CREATE TABLE IF NOT EXISTS transactions (
   block_timestamp UInt32,
   block_previous_block BLOB,
   indexed_at UInt64,
-  updated_at UInt64,
+  inserted_at DateTime,
+  "offset" UInt64,
+  "size" UInt64,
+  data_offset UInt64,
+  owner_offset UInt64,
+  owner_size UInt64,
+  owner BLOB,
+  signature_offset UInt64,
+  signature_size UInt64,
+  signature_type UInt32,
+  root_transaction_id BLOB,
+  root_parent_offset UInt64,
   tags Array(Tuple(BLOB, BLOB)),
+  tags_count UInt32,
   PRIMARY KEY (height, block_transaction_index, is_data_item, id)
-) Engine = MergeTree()
+) Engine = ReplacingMergeTree(inserted_at)
 ORDER BY (height, block_transaction_index, is_data_item, id);
 
 CREATE TABLE IF NOT EXISTS owner_transactions (
@@ -96,10 +111,22 @@ CREATE TABLE IF NOT EXISTS owner_transactions (
   block_timestamp UInt32,
   block_previous_block BLOB,
   indexed_at UInt64,
-  updated_at UInt64,
+  inserted_at DateTime,
+  "offset" UInt64,
+  "size" UInt64,
+  data_offset UInt64,
+  owner_offset UInt64,
+  owner_size UInt64,
+  owner BLOB,
+  signature_offset UInt64,
+  signature_size UInt64,
+  signature_type UInt32,
+  root_transaction_id BLOB,
+  root_parent_offset UInt64,
   tags Array(Tuple(BLOB, BLOB)),
+  tags_count UInt32,
   PRIMARY KEY (owner_address, height, block_transaction_index, is_data_item, id)
-) Engine = MergeTree()
+) Engine = ReplacingMergeTree(inserted_at)
 ORDER BY (owner_address, height, block_transaction_index, is_data_item, id);
 
 CREATE TABLE IF NOT EXISTS target_transactions (
@@ -121,8 +148,20 @@ CREATE TABLE IF NOT EXISTS target_transactions (
   block_timestamp UInt32,
   block_previous_block BLOB,
   indexed_at UInt64,
-  updated_at UInt64,
+  inserted_at DateTime,
+  "offset" UInt64,
+  "size" UInt64,
+  data_offset UInt64,
+  owner_offset UInt64,
+  owner_size UInt64,
+  owner BLOB,
+  signature_offset UInt64,
+  signature_size UInt64,
+  signature_type UInt32,
+  root_transaction_id BLOB,
+  root_parent_offset UInt64,
   tags Array(Tuple(BLOB, BLOB)),
+  tags_count UInt32,
   PRIMARY KEY (target, height, block_transaction_index, is_data_item, id)
-) Engine = MergeTree()
+) Engine = ReplacingMergeTree(inserted_at)
 ORDER BY (target, height, block_transaction_index, is_data_item, id);

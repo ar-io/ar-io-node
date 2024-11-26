@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Load environment variables from .env if it exists
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+fi
+
+# Set local variables with defaults
+ar_io_host=${AR_IO_HOST:-localhost}
+ar_io_port=${AR_IO_PORT:-4000}
+parquet_dir=${PARQUET_DATA_PATH:-./data/parquet}
+sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-360} # Export every hour by default
+
+if [ -z "${ADMIN_API_KEY:-}" ]; then
+    echo "Error: ADMIN_API_KEY environment variable is not set in .env"
+    exit 1
+fi
+
+imported_dir="$parquet_dir/imported"
+height_interval=10000
+max_rows_per_file=1000000
+
+mkdir -p "$parquet_dir" "$imported_dir"
+
+while true; do
+    # Get stable height range from admin debug endpoint
+    debug_info=$(curl -s -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")
+    min_height=$(echo "$debug_info" | jq -r '.db.heights.minStableDataItem')
+    max_height=$(echo "$debug_info" | jq -r '.db.heights.maxStableDataItem')
+    max_indexed_at=$(echo "$debug_info" | jq -r '.db.timestamps.maxStableDataItemIndexedAt')
+
+    # Align to inverals of 10,000
+    current_height=$(((min_height / height_interval) * height_interval))
+
+    while [ "$current_height" -le "$max_height" ]; do
+        end_height=$((current_height + height_interval))
+
+        echo "Processing heights $current_height to $end_height..."
+
+        # Export to Parquet files using API
+        curl -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet" \
+            -H "Authorization: Bearer $ADMIN_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"outputDir\": \"$parquet_dir\",
+                \"startHeight\": $current_height,
+                \"endHeight\": $end_height,
+                \"maxFileRows\": $max_rows_per_file
+            }"
+
+        # Wait for the export to complete
+        while true; do
+            if ! status=$(curl -s -f -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet/status"); then
+                echo "Failed to get export status"
+                rm -f "$parquet_dir"/*.parquet
+                exit 1
+            fi
+
+            export_status=$(echo "$status" | jq -r '.status')
+            if [ "$export_status" = "completed" ]; then
+                break
+            elif [ "$export_status" = "errored" ]; then
+                error=$(echo "$status" | jq -r '.error')
+                echo "Export failed: $error"
+                rm -f "$parquet_dir"/*.parquet
+                exit 1
+            fi
+
+            echo "Waiting for export to complete..."
+            sleep 10
+        done
+
+        # Import Parquet files
+        ./scripts/clickhouse-import
+
+        # Move processed files to imported directory
+        mv "$parquet_dir"/*.parquet "$imported_dir/"
+
+        # Prune stable data items
+        curl -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
+            -H "Authorization: Bearer $ADMIN_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"indexedAtThreshold\": $max_indexed_at}"
+
+        current_height=$end_height
+    done
+
+    echo "Sleeping for $sleep_interval seconds..."
+    sleep "$sleep_interval"
+done

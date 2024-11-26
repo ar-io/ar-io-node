@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
+clickhouse_host=${CLICKHOUSE_HOST:-localhost}
 parquet_path=${PARQUET_PATH:-data/parquet}
+
+clickhouse client --host "$clickhouse_host" --multiquery < src/database/clickhouse/schema.sql
 
 for blocks_parquet in "$parquet_path/blocks"*.parquet; do
     height_range=$(basename "$blocks_parquet" | sed 's/blocks-//;s/-rowCount:[0-9]*\.parquet//')
@@ -8,16 +11,16 @@ for blocks_parquet in "$parquet_path/blocks"*.parquet; do
     tags_parquet=$(ls data/parquet/tags-"$height_range"-*.parquet)
 
     echo "Importing $blocks_parquet..."
-    clickhouse client --query="INSERT INTO staging_blocks FROM INFILE '$blocks_parquet' FORMAT Parquet;"
+    clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_blocks FROM INFILE '$blocks_parquet' FORMAT Parquet;"
 
     echo "Importing $txs_parquet..."
-    clickhouse client --query="INSERT INTO staging_transactions FROM INFILE '$txs_parquet' FORMAT Parquet;"
+    clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_transactions FROM INFILE '$txs_parquet' FORMAT Parquet;"
 
     echo "Importing $tags_parquet"
-    clickhouse client --query="INSERT INTO staging_tags FROM INFILE '$tags_parquet' FORMAT Parquet;"
+    clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_tags FROM INFILE '$tags_parquet' FORMAT Parquet;"
 
     for prefix in "" "owner_" "target_"; do
-      cat <<EOF | clickhouse client
+      cat <<EOF | clickhouse client --host "$clickhouse_host"
 INSERT INTO ${prefix}transactions
 SELECT
   txs.height,
@@ -38,23 +41,35 @@ SELECT
   blocks.block_timestamp,
   blocks.previous_block AS block_previous_block,
   txs.indexed_at,
-  CASE
-    WHEN tags.id IS NOT NULL THEN COUNT(*)
-    ELSE 0
-  END AS tags_count,
+  now() AS inserted_at,
+  txs."offset",
+  txs."size",
+  txs.data_offset,
+  txs.owner_offset,
+  txs.owner_size,
+  txs.owner,
+  txs.signature_offset,
+  txs.signature_size,
+  txs.signature_type,
+  txs.root_transaction_id,
+  txs.root_parent_offset,
   CASE
     WHEN tags.id IS NOT NULL THEN
       arrayMap((x) -> (x.2, x.3), arraySort((x) -> x.1, groupArray((tag_index, tag_name, tag_value))))
     ELSE []
-  END AS tags
+  END AS tags,
+  CASE
+    WHEN tags.id IS NOT NULL THEN COUNT(*)
+    ELSE 0
+  END AS tags_count
 FROM staging_transactions txs
 LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
 JOIN staging_blocks blocks ON txs.height = blocks.height
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, tags.id
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, tags.id
 EOF
     done
 
-    clickhouse client --query="TRUNCATE TABLE staging_blocks"
-    clickhouse client --query="TRUNCATE TABLE staging_transactions"
-    clickhouse client --query="TRUNCATE TABLE staging_tags"
+    clickhouse client --host "$clickhouse_host" --query="TRUNCATE TABLE staging_blocks"
+    clickhouse client --host "$clickhouse_host" --query="TRUNCATE TABLE staging_transactions"
+    clickhouse client --host "$clickhouse_host" --query="TRUNCATE TABLE staging_tags"
 done

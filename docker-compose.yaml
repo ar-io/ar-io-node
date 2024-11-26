@@ -39,6 +39,7 @@ services:
       - ${DUCKDB_DATA_PATH:-./data/duckdb}:/app/data/duckdb
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
+      - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
@@ -106,6 +107,7 @@ services:
       - MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS=${MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS:-}
       - ENABLE_BACKGROUND_DATA_VERIFICATION=${ENABLE_BACKGROUND_DATA_VERIFICATION:-}
       - BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS=${BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS:-}
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
     networks:
       - ar-io-network
     depends_on:
@@ -134,11 +136,36 @@ services:
       - 9000:9000
     ulimits:
       nofile:
-        soft: '262144'
-        hard: '262144'
+        soft: 262144
+        hard: 262144
     volumes:
       - ${CLICKHOUSE_DATA_PATH:-./data/clickhouse}:/var/lib/clickhouse
       - ${CLICKHOUSE_LOGS_PATH:-./logs/clickhouse}:/var/log/clickhouse-server
+    networks:
+      - ar-io-network
+
+  clickhouse-auto-import:
+    image: clickhouse-auto-import:latest
+    profiles:
+      - clickhouse
+    build:
+      context: .
+      dockerfile: Dockerfile.clickhouse-auto-import
+    restart: on-failure
+    volumes:
+      - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
+    environment:
+      - PARQUET_DATA_PATH=${PARQUET_DATA_PATH:-./data/parquet}
+      - CLICKHOUSE_HOST=clickhouse
+      - AR_IO_HOST=core
+      - AR_IO_PORT=4000
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+      - CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-}
+    networks:
+      - ar-io-network
+    depends_on:
+      - core
+      - clickhouse
 
   observer:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-latest}
