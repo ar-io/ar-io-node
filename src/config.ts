@@ -54,7 +54,7 @@ export const TRUSTED_GATEWAY_URL = env.varOrDefault(
 // Trusted gateway URLs (for retrieving contiguous data)
 export const TRUSTED_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
-    'TRUSTED_GATEWAY_URLS',
+    'TRUSTED_GATEWAYS_URLS',
     JSON.stringify({
       [TRUSTED_GATEWAY_URL]: 1,
     }),
