@@ -8,6 +8,7 @@ This document describes the environment variables that can be used to configure 
 | STOP_HEIGHT | Number or "Infinity" | "Infinity" | Stop block height for node synchronization (Infinity = keep syncing until stopped) |
 | TRUSTED_NODE_URL | String | "https://arweave.net" | Arweave node to use for fetching data |
 | TRUSTED_GATEWAY_URL | String | "https://arweave.net" | Arweave node to use for proxying requests |
+| TRUSTED_GATEWAYS_URLS | String | TRUSTED_GATEWAY_URL | A JSON map of gateways and priority |
 | TRUSTED_ARNS_GATEWAY_URL | String | "https://__NAME__.arweave.dev" | ArNS gateway |
 | INSTANCE_ID | String | "" | Adds an "INSTANCE_ID" field to output logs |
 | LOG_FORMAT | String | "simple" | Sets the format of output logs, accepts "simple" and "json" |
@@ -18,8 +19,8 @@ This document describes the environment variables that can be used to configure 
 | ADMIN_API_KEY | String | Generated | API key used for admin API requests (if not set, it's generated and logged into the console) |
 | BACKFILL_BUNDLE_RECORDS | Boolean | false | If true, ar.io node will start indexing missing bundles |
 | FILTER_CHANGE_REPROCESS | Boolean | false | If true, all indexed bundles will be reprocessed with the new filters (you can use this when you change the filters) |
-| ON_DEMAND_RETRIEVAL_ORDER | String | s3,trusted-gateway,chunks,tx-data | Data source retrieval order for on-demand data requests |
-| BACKGROUND_RETRIEVAL_ORDER | String | chunks,s3,trusted-gateway,chunks,tx-data | Data source retrieval order for background data requests (i.e., unbundling) |
+| ON_DEMAND_RETRIEVAL_ORDER | String | s3,trusted-gateways,chunks,tx-data | Data source retrieval order for on-demand data requests |
+| BACKGROUND_RETRIEVAL_ORDER | String | chunks,s3,trusted-gateways,chunks,tx-data | Data source retrieval order for background data requests (i.e., unbundling) |
 | ANS104_UNBUNDLE_FILTER | String | {"never": true} | Only bundles compliant with this filter will be unbundled |
 | ANS104_INDEX_FILTER | String | {"never": true} | Only bundles compliant with this filter will be indexed |
 | ANS104_DOWNLOAD_WORKERS | String | 5 | Sets the number of ANS-104 bundles to attempt to download in parallel |

@@ -722,7 +722,8 @@ describe('X-AR-IO headers', function () {
           START_HEIGHT: '0',
           STOP_HEIGHT: '0',
           ARNS_ROOT_HOST: 'ar-io.localhost',
-          TRUSTED_GATEWAY_URL: 'http://host.testcontainers.internal:4001',
+          TRUSTED_GATEWAYS_URLS:
+            '{"http://host.testcontainers.internal:4001": 1}',
         })
         .withExposedPorts(4000)
         .withWaitStrategy(Wait.forHttp('/ar-io/info', 4000))

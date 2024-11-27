@@ -24,7 +24,7 @@ import awsLiteS3 from '@aws-lite/s3';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
-import { GatewayDataSource } from './data/gateway-data-source.js';
+import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
@@ -331,9 +331,9 @@ const txChunksDataSource = new TxChunksDataSource({
   chunkSource: chunkDataSource,
 });
 
-const gatewayDataSource = new GatewayDataSource({
+const gatewaysDataSource = new GatewaysDataSource({
   log,
-  trustedGatewayUrl: config.TRUSTED_GATEWAY_URL,
+  trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
 });
 
 const arIODataSource = new ArIODataSource({
@@ -359,8 +359,8 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return s3DataSource;
     case 'ario-peer':
       return arIODataSource;
-    case 'trusted-gateway':
-      return gatewayDataSource;
+    case 'trusted-gateways':
+      return gatewaysDataSource;
     case 'chunks':
       return txChunksDataSource;
     case 'tx-data':
@@ -656,7 +656,7 @@ const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
   ? new DataVerificationWorker({
       log,
       contiguousDataIndex,
-      contiguousDataSource: gatewayDataSource,
+      contiguousDataSource: gatewaysDataSource,
     })
   : undefined;
 

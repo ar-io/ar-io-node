@@ -51,6 +51,16 @@ export const TRUSTED_GATEWAY_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
+// Trusted gateway URLs (for retrieving contiguous data)
+export const TRUSTED_GATEWAYS_URLS = JSON.parse(
+  env.varOrDefault(
+    'TRUSTED_GATEWAY_URLS',
+    JSON.stringify({
+      [TRUSTED_GATEWAY_URL]: 1,
+    }),
+  ),
+) as Record<string, number>;
+
 // Trusted chunk POST URLs (for posting chunks received at /chunk)
 export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
@@ -82,7 +92,7 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
-    's3,trusted-gateway,chunks,tx-data',
+    's3,trusted-gateways,chunks,tx-data',
   )
   .split(',');
 
@@ -90,7 +100,7 @@ export const ON_DEMAND_RETRIEVAL_ORDER = env
 export const BACKGROUND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'BACKGROUND_RETRIEVAL_ORDER',
-    'chunks,s3,trusted-gateway,tx-data',
+    'chunks,s3,trusted-gateways,tx-data',
   )
   .split(',');
 
