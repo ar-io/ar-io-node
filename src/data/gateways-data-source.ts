@@ -179,8 +179,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
               priority,
               error: error.message,
             });
-
-            continue;
           }
         }
 

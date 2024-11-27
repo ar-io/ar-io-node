@@ -61,6 +61,20 @@ export const TRUSTED_GATEWAYS_URLS = JSON.parse(
   ),
 ) as Record<string, number>;
 
+// Validate URLs and weights
+Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in TRUSTED_GATEWAY_URLS: ${url}`);
+  }
+  if (typeof weight !== 'number' || weight <= 0) {
+    throw new Error(
+      `Invalid weight in TRUSTED_GATEWAY_URLS for ${url}: ${weight}`,
+    );
+  }
+});
+
 // Trusted chunk POST URLs (for posting chunks received at /chunk)
 export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
