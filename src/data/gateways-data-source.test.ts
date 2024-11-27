@@ -19,13 +19,14 @@ import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import axios from 'axios';
 import * as winston from 'winston';
-import { GatewayDataSource } from './gateway-data-source.js';
+import { GatewaysDataSource } from './gateways-data-source.js';
 import { RequestAttributes } from '../types.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
+import { Readable } from 'node:stream';
 
 let log: winston.Logger;
-let dataSource: GatewayDataSource;
+let dataSource: GatewaysDataSource;
 let mockedAxiosInstance: any;
 let requestAttributes: RequestAttributes;
 
@@ -37,7 +38,7 @@ beforeEach(async () => {
   mockedAxiosInstance = {
     request: async () => ({
       status: 200,
-      data: axiosStreamData,
+      data: Readable.from(['mocked stream']),
       headers: {
         'content-length': '123',
         'content-type': 'application/json',
@@ -55,9 +56,9 @@ beforeEach(async () => {
   mock.method(metrics.getDataStreamErrorsTotal, 'inc');
   mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
 
-  dataSource = new GatewayDataSource({
+  dataSource = new GatewaysDataSource({
     log,
-    trustedGatewayUrl: 'https://gateway.domain',
+    trustedGatewaysUrls: { 'https://gateway.domain': 1 },
   });
 
   requestAttributes = { origin: 'node-url', hops: 0 };
@@ -68,6 +69,116 @@ afterEach(async () => {
 });
 
 describe('GatewayDataSource', () => {
+  describe('Gateway Prioritization', () => {
+    it('should initialize trusted gateways map correctly', () => {
+      const dataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway1.com': 1,
+          'https://gateway2.com': 1,
+          'https://gateway3.com': 2,
+          'https://gateway4.com': 3,
+        },
+      });
+
+      const gatewaysMap = (dataSource as any).trustedGateways;
+
+      assert.equal(gatewaysMap.size, 3);
+      assert.deepEqual(gatewaysMap.get(1), [
+        'https://gateway1.com',
+        'https://gateway2.com',
+      ]);
+      assert.deepEqual(gatewaysMap.get(2), ['https://gateway3.com']);
+      assert.deepEqual(gatewaysMap.get(3), ['https://gateway4.com']);
+    });
+
+    it('should throw error when no gateways are provided', () => {
+      assert.throws(() => {
+        new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {},
+        });
+      }, /At least one gateway URL must be provided/);
+    });
+
+    it('should try gateways in priority order', async () => {
+      const requestLog: string[] = [];
+
+      const dataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway1.com': 1,
+          'https://gateway2.com': 2,
+          'https://gateway3.com': 3,
+        },
+      });
+
+      mock.method(axios, 'create', (config: any) => ({
+        request: async () => {
+          requestLog.push(config.baseURL);
+          if (config.baseURL !== 'https://gateway3.com') {
+            throw new Error('Network Error');
+          }
+          return {
+            status: 200,
+            data: axiosStreamData,
+            headers: {
+              'content-length': '123',
+              'content-type': 'application/json',
+              'X-AR-IO-Origin': 'node-url',
+            },
+          };
+        },
+        defaults: config,
+      }));
+
+      await dataSource.getData({ id: 'test-id' });
+
+      assert.equal(requestLog[0], 'https://gateway1.com');
+      assert.equal(requestLog[1], 'https://gateway2.com');
+      assert.equal(requestLog[2], 'https://gateway3.com');
+    });
+
+    it('should try all gateways in same priority tier before moving to next tier', async () => {
+      const requestLog: string[] = [];
+
+      const dataSource = new GatewaysDataSource({
+        log,
+        trustedGatewaysUrls: {
+          'https://gateway1.com': 1,
+          'https://gateway2.com': 1,
+          'https://gateway3.com': 2,
+        },
+      });
+
+      mock.method(axios, 'create', (config: any) => ({
+        request: async () => {
+          requestLog.push(config.baseURL);
+          if (config.baseURL !== 'https://gateway3.com') {
+            throw new Error('Network Error');
+          }
+          return {
+            status: 200,
+            data: axiosStreamData,
+            headers: {
+              'content-length': '123',
+              'content-type': 'application/json',
+              'X-AR-IO-Origin': 'node-url',
+            },
+          };
+        },
+        defaults: config,
+      }));
+
+      await dataSource.getData({ id: 'test-id' });
+
+      assert.equal(requestLog.length, 3);
+      assert.ok(requestLog.slice(0, 2).includes('https://gateway1.com'));
+      assert.ok(requestLog.slice(0, 2).includes('https://gateway2.com'));
+      assert.equal(requestLog[2], 'https://gateway3.com');
+    });
+  });
+
   describe('getData', () => {
     it('should fetch data successfully from the gateway', async () => {
       const data = await dataSource.getData({
@@ -75,17 +186,14 @@ describe('GatewayDataSource', () => {
         requestAttributes,
       });
 
-      assert.deepEqual(data, {
-        stream: axiosStreamData,
-        size: 123,
-        sourceContentType: 'application/json',
-        verified: false,
-        cached: false,
-        requestAttributes: {
-          hops: requestAttributes.hops + 1,
-          origin: requestAttributes.origin,
-          originNodeRelease: undefined,
-        },
+      assert.equal(data.size, 123);
+      assert.equal(data.sourceContentType, 'application/json');
+      assert.equal(data.verified, false);
+      assert.equal(data.cached, false);
+      assert.deepEqual(data.requestAttributes, {
+        hops: requestAttributes.hops + 1,
+        origin: requestAttributes.origin,
+        originNodeRelease: undefined,
       });
 
       let receivedData = '';
@@ -102,7 +210,7 @@ describe('GatewayDataSource', () => {
       assert.equal(
         (metrics.getDataStreamSuccessesTotal.inc as any).mock.calls[0]
           .arguments[0].class,
-        'GatewayDataSource',
+        'GatewaysDataSource',
       );
     });
 
@@ -120,7 +228,7 @@ describe('GatewayDataSource', () => {
         assert.equal(
           (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
             .class,
-          'GatewayDataSource',
+          'GatewaysDataSource',
         );
         assert.equal(
           error.message,
@@ -145,7 +253,7 @@ describe('GatewayDataSource', () => {
         assert.equal(
           (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
             .class,
-          'GatewayDataSource',
+          'GatewaysDataSource',
         );
         assert.equal(error.message, 'Network Error');
       }
@@ -178,7 +286,7 @@ describe('GatewayDataSource', () => {
         assert.equal(
           (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
             .arguments[0].class,
-          'GatewayDataSource',
+          'GatewaysDataSource',
         );
         assert.equal(error.message, 'Stream destroyed intentionally');
       }
@@ -303,7 +411,7 @@ describe('GatewayDataSource', () => {
       assert.equal(
         (metrics.getDataErrorsTotal.inc as any).mock.calls[0].arguments[0]
           .class,
-        'GatewayDataSource',
+        'GatewaysDataSource',
       );
     });
 

@@ -868,7 +868,7 @@ describe('Indexing', function () {
       compose = await composeUp({
         ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
         BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '10',
-        BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateway',
+        BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
       });
       dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
