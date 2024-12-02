@@ -86,6 +86,9 @@ describe('WebhookEmitter', () => {
         WEBHOOK_INDEX_FILTER: '{"always": true}',
         WEBHOOK_TARGET_SERVERS: 'http://host.testcontainers.internal:4001',
         WEBHOOK_BLOCK_FILTER: '{"always": true}',
+        TRUSTED_GATEWAYS_URLS:
+          '{"https://arweave.net": 1, "https://ar-io.dev": 2}',
+        BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
       })
       .withExposedPorts(4000)
       .withWaitStrategy(Wait.forHttp('/ar-io/info', 4000))

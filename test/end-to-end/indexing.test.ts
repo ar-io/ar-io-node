@@ -42,6 +42,8 @@ const composeUp = async ({
   ANS104_UNBUNDLE_FILTER = '{"always": true}',
   ANS104_INDEX_FILTER = '{"always": true}',
   ADMIN_API_KEY = 'secret',
+  TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://ar-io.dev": 2}',
+  BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
   ...ENVIRONMENT
 }: Environment = {}) => {
   await cleanDb();
@@ -53,6 +55,8 @@ const composeUp = async ({
       ANS104_UNBUNDLE_FILTER,
       ANS104_INDEX_FILTER,
       ADMIN_API_KEY,
+      TRUSTED_GATEWAYS_URLS,
+      BACKGROUND_RETRIEVAL_ORDER,
       ...ENVIRONMENT,
     })
     .withBuild()
