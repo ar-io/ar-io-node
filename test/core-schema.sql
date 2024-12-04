@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS "stable_transactions" (
   tag_count INTEGER NOT NULL,
   offset INTEGER,
   content_encoding TEXT
-);
+, indexed_at INTEGER);
 CREATE INDEX stable_transactions_id_height_block_transaction_index_idx ON stable_transactions (height, block_transaction_index);
 CREATE INDEX stable_transactions_target_height_block_transaction_index_idx ON stable_transactions (target, height, block_transaction_index);
 CREATE INDEX stable_transactions_owner_address_height_block_transaction_index_idx ON stable_transactions (owner_address, height, block_transaction_index);
