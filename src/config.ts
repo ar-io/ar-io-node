@@ -98,6 +98,11 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
 
+export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+  'CHUNK_POST_MIN_SUCCESS_COUNT',
+  '3',
+);
+
 //
 // Data
 //

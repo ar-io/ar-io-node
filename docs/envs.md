@@ -71,3 +71,4 @@ This document describes the environment variables that can be used to configure 
 | AWS_ENDPOINT | String | undefined | Custom endpoint for AWS services |
 | AWS_S3_CONTIGUOUS_DATA_BUCKET | String | undefined | AWS S3 bucket name used for storing data |
 | AWS_S3_CONTIGUOUS_DATA_PREFIX | String | undefined | Prefix for the S3 bucket to organize data |
+| CHUNK_POST_MIN_SUCCESS_COUNT | String | "3" | minimum count of 200 responses for of a given chunk to be considered properly seeded |
