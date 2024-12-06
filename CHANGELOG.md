@@ -9,19 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Added a ClickHouse auto-import service. When enabled it calls the Parquet
-  export API, imports the exported Parquet into ClickHouse, and deletes data items
-  in SQLite up to where the Parquet export ended. To use it, run Docker Compose
-  with the `clickhouse` profile set the `CLICKHOUSE_URL` to
-  `http://clickhouse:8123`. Using this configuration the core service will also
-  combine results from ClickHouse and SQLite when querying transaction data via
-  GraphQL. Note: if you have a large number of data items in SQLite, the first
-  export and subsequent delete may take an exteneded period. Also, this
-  functionality is considered **experimental**. We expect there are still bugs
-  to be found in it and we may make breaking changes to the ClickHouse schema
-  in the future. If you choose to use it in production (not yet recommended), we
-  suggest backing up copies of the Parquet files found in
-  `data/parquet/imported` so that they can be reimported them if anything goes
-  wrong or future changes require it.
+  export API, imports the exported Parquet into ClickHouse, moves the Parquet
+  files to an `imported` subdirectory, and deletes data items in SQLite up to
+  where the Parquet export ended. To use it, run Docker Compose with the
+  `clickhouse` profile, set the `CLICKHOUSE_URL` to `http://clickhouse:8123`,
+  and ensure you have set an `ADMIN_KEY`.
+  Using this configuration the core service will also combine results from
+  ClickHouse and SQLite when querying transaction data via GraphQL. Note: if
+  you have a large number of data items in SQLite, the first export and
+  subsequent delete may take an exteneded period. Also, this functionality is
+  considered **experimental**. We expect there are still bugs to be found in it
+  and we may make breaking changes to the ClickHouse schema in the future. If
+  you choose to use it in production (not yet recommended), we suggest backing
+  up copies of the Parquet files found in `data/parquet/imported` so that they
+  can be reimported if anything goes wrong or future changes require it.
 - Added a background data verification process that will attempt to recompute
   data roots for bundles and compare them to data roots indexed from Arweave
   nodes. When the data roots match, all descendent data items will be marked as
@@ -31,6 +32,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `ENABLE_BACKGROUND_DATA_VERIFICATION` environment variable to true. The
   interval between attempts to verify batches of bundles is configurable using
   the  `BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS` environment variable.
+- Added a `CHUNK_POST_MIN_SUCCESS_COUNT` environment variable to configure how
+  many Arweave nodes must accept a chunk before a chunk broadcast is considered
+  successful.
 - Added `arweave_chunk_post_total` and `arweave_chunk_broadcast_total`
   Prometheus metrics to respectively track the number of successful chunk POSTs
   to Arweave nodes and the number of chunks successfully broadcast.
@@ -43,19 +47,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   in the future.
 - Added support for multiple prioritized trusted gateways configurable by
   setting the `TRUSTED_GATEWAYS_URLS` environment variable to a JSON value
-  containing a mapping of gateway hosts to priority. Data requests are sent to
-  other gateways in ascending priority order. If multiple gateways share the
+  containing a mapping of gateway hosts to priorities. Data requests are sent
+  to other gateways in ascending priority order. If multiple gateways share the
   same priority, all the gateways with the same priority are tried in a random
-  order before continue go the next priority.
-- Add S3 contiguous data cache. It is enabled by default when the
-  `AWS_S3_CONTIGUOUS_DATA_BUCKET` and `AWS_S3_CONTIGUOUS_DATA_PREFIX`
+  order before continuing on to the next priority.
+- Added support for caching contiguous data in S3. It is enabled by default
+  when the `AWS_S3_CONTIGUOUS_DATA_BUCKET` and `AWS_S3_CONTIGUOUS_DATA_PREFIX`
   environment variables are set.
 
 ### Changed
 
 - `trusted-gateway` was changed to `trusted-gateways` in
-  `ON_DEMAND_RETRIEVAL_ORDER` and `BACKGROUND_RETRIEVAL_ORDER` please update
-  them with the appropriate values if you've overriden them locally.
+  `ON_DEMAND_RETRIEVAL_ORDER` and `BACKGROUND_RETRIEVAL_ORDER`.
+- Renamed the S3 contiguous environment variables - `AWS_S3_BUCKET` to
+  `AWS_S3_CONTIGUOUS_DATA_BUCKET` and `AWS_S3_PREFIX` to
+  `AWS_S3_CONTIGUOUS_DATA_PREFIX`.
 
 ## [Release 20] - 2024-11-15
 
