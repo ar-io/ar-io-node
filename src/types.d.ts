@@ -403,9 +403,13 @@ export interface GqlQueryable {
   }): Promise<GqlBlocksResult>;
 }
 
-export interface BlockListValidator {
+export interface DataBlockListValidator {
   isIdBlocked(id: string | undefined): Promise<boolean>;
   isHashBlocked(hash: string | undefined): Promise<boolean>;
+}
+
+export interface NameBlockListValidator {
+  isNameBlocked(name: string): Promise<boolean>;
 }
 
 export interface JsonChunk {

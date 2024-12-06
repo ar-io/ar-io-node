@@ -25,6 +25,7 @@ import log from '../../log.js';
 import {
   ContiguousDataIndex,
   ContiguousDataSource,
+  DataBlockListValidator,
   ManifestPathResolver,
 } from '../../types.js';
 import { createDataHandler } from './handlers.js';
@@ -34,17 +35,20 @@ describe('Data routes', () => {
     let app: express.Express;
     let dataIndex: ContiguousDataIndex;
     let dataSource: ContiguousDataSource;
-    let blockListValidator: any;
+    let dataBlockListValidator: DataBlockListValidator;
     let manifestPathResolver: ManifestPathResolver;
 
     beforeEach(() => {
       app = express();
       dataIndex = {
-        getDataItemAttributes: () => Promise.resolve(undefined),
         getDataAttributes: () => Promise.resolve(undefined),
+        getDataItemAttributes: () => Promise.resolve(undefined),
+        getTransactionAttributes: () => Promise.resolve(undefined),
         getDataParent: () => Promise.resolve(undefined),
         saveDataContentAttributes: () => Promise.resolve(undefined),
-        getTransactionAttributes: () => Promise.resolve(undefined),
+        getUnverifiedDataIds: () => Promise.resolve([]),
+        getRootTxId: () => Promise.resolve(undefined),
+        saveVerificationStatus: () => Promise.resolve(undefined),
       };
       dataSource = {
         getData: () =>
@@ -59,7 +63,7 @@ describe('Data routes', () => {
             },
           }),
       };
-      blockListValidator = {
+      dataBlockListValidator = {
         isIdBlocked: () => Promise.resolve(false),
         isHashBlocked: () => Promise.resolve(false),
       };
@@ -90,7 +94,7 @@ describe('Data routes', () => {
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -110,7 +114,7 @@ describe('Data routes', () => {
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -130,7 +134,7 @@ describe('Data routes', () => {
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -151,7 +155,7 @@ describe('Data routes', () => {
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -172,7 +176,7 @@ describe('Data routes', () => {
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -193,7 +197,7 @@ describe('Data routes', () => {
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -248,7 +252,7 @@ in
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -303,7 +307,7 @@ es
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -358,7 +362,7 @@ st
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -382,7 +386,7 @@ st
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
@@ -409,12 +413,12 @@ st
           log,
           dataIndex,
           dataSource,
-          blockListValidator,
+          dataBlockListValidator,
           manifestPathResolver,
         }),
       );
 
-      mock.method(blockListValidator, 'isIdBlocked', () =>
+      mock.method(dataBlockListValidator, 'isIdBlocked', () =>
         Promise.resolve(true),
       );
 
@@ -442,7 +446,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -485,7 +489,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -516,7 +520,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -559,7 +563,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -582,7 +586,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -614,7 +618,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -658,7 +662,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -681,7 +685,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );
@@ -715,7 +719,7 @@ st
               log,
               dataIndex,
               dataSource,
-              blockListValidator,
+              dataBlockListValidator,
               manifestPathResolver,
             }),
           );

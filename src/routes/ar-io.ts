@@ -133,6 +133,40 @@ arIoRouter.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
   }
 });
 
+// Block resolution of ArNS name
+arIoRouter.put('/ar-io/admin/block-name', express.json(), async (req, res) => {
+  try {
+    const { name, source, notes } = req.body;
+    if (name === undefined) {
+      res.status(400).send("Must provide 'name'");
+      return;
+    }
+    system.db.blockName({ name, source, notes });
+    res.json({ message: 'Name blocked' });
+  } catch (error: any) {
+    res.status(500).send(error?.message);
+  }
+});
+
+// Unblock resolution of ArNS name
+arIoRouter.put(
+  '/ar-io/admin/unblock-name',
+  express.json(),
+  async (req, res) => {
+    try {
+      const { name } = req.body;
+      if (name === undefined) {
+        res.status(400).send("Must provide 'name'");
+        return;
+      }
+      system.db.unblockName({ name });
+      res.json({ message: 'Name unblocked' });
+    } catch (error: any) {
+      res.status(500).send(error?.message);
+    }
+  },
+);
+
 // Queue a TX ID for processing
 arIoRouter.post('/ar-io/admin/queue-tx', express.json(), async (req, res) => {
   try {

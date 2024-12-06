@@ -156,6 +156,7 @@ CREATE INDEX new_data_items_target_id_idx ON new_data_items (target, id);
 CREATE INDEX new_data_items_owner_address_id_idx ON new_data_items (owner_address, id);
 CREATE INDEX new_data_items_height_indexed_at_idx ON new_data_items (height, indexed_at);
 CREATE INDEX bundle_data_items_root_transaction_id_idx ON bundle_data_items (root_transaction_id);
+CREATE INDEX stable_data_items_indexed_at_idx ON stable_data_items (indexed_at);
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bundle_formats (

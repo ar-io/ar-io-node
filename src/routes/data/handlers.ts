@@ -24,7 +24,7 @@ import { headerNames } from '../../constants.js';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import {
-  BlockListValidator,
+  DataBlockListValidator,
   ContiguousData,
   ContiguousDataAttributes,
   ContiguousDataIndex,
@@ -336,12 +336,12 @@ export const createRawDataHandler = ({
   log,
   dataIndex,
   dataSource,
-  blockListValidator,
+  dataBlockListValidator,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
-  blockListValidator: BlockListValidator;
+  dataBlockListValidator: DataBlockListValidator;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req);
@@ -349,7 +349,7 @@ export const createRawDataHandler = ({
 
     // Return 404 if the data is blocked by ID
     try {
-      if (await blockListValidator.isIdBlocked(id)) {
+      if (await dataBlockListValidator.isIdBlocked(id)) {
         sendNotFound(res);
         return;
       }
@@ -378,7 +378,7 @@ export const createRawDataHandler = ({
 
     // Return 404 if the data is blocked by hash
     try {
-      if (await blockListValidator.isHashBlocked(dataAttributes?.hash)) {
+      if (await dataBlockListValidator.isHashBlocked(dataAttributes?.hash)) {
         sendNotFound(res);
         return;
       }
@@ -552,13 +552,13 @@ export const createDataHandler = ({
   log,
   dataIndex,
   dataSource,
-  blockListValidator,
+  dataBlockListValidator,
   manifestPathResolver,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
-  blockListValidator: BlockListValidator;
+  dataBlockListValidator: DataBlockListValidator;
   manifestPathResolver: ManifestPathResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
@@ -576,7 +576,7 @@ export const createDataHandler = ({
 
     // Return 404 if the data is blocked by ID
     try {
-      if (await blockListValidator.isIdBlocked(id)) {
+      if (await dataBlockListValidator.isIdBlocked(id)) {
         sendNotFound(res);
         return;
       }
@@ -596,7 +596,7 @@ export const createDataHandler = ({
 
       // Return 404 if the data is blocked by hash
       try {
-        if (await blockListValidator.isHashBlocked(dataAttributes?.hash)) {
+        if (await dataBlockListValidator.isHashBlocked(dataAttributes?.hash)) {
           sendNotFound(res);
           return;
         }
