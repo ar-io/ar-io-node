@@ -66,11 +66,11 @@ Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
   try {
     new URL(url);
   } catch (error) {
-    throw new Error(`Invalid URL in TRUSTED_GATEWAY_URLS: ${url}`);
+    throw new Error(`Invalid URL in TRUSTED_GATEWAYS_URLS: ${url}`);
   }
   if (typeof weight !== 'number' || weight <= 0) {
     throw new Error(
-      `Invalid weight in TRUSTED_GATEWAY_URLS for ${url}: ${weight}`,
+      `Invalid weight in TRUSTED_GATEWAYS_URLS for ${url}: ${weight}`,
     );
   }
 });
