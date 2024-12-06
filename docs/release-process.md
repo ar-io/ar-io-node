@@ -17,7 +17,7 @@
 ## Post Release
 
 1. Switch back to the `develop` branch.
-1. Bump the release number and add a "-pre" suffice to `release` constant in
+1. Bump the release number and add a "-pre" suffix to `release` constant in
    `src/version.ts`.
 1. Set AR_IO_NODE_RELEASE environment variable in `docker-compose.yaml` to the
    same value used in `src/version.ts`.
