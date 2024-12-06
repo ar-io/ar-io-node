@@ -8,16 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Added a ClickHouse auto-import service. When enabled it calls the Parquet
+- Added a ClickHouse auto-import service. When enabled, it calls the Parquet
   export API, imports the exported Parquet into ClickHouse, moves the Parquet
   files to an `imported` subdirectory, and deletes data items in SQLite up to
   where the Parquet export ended. To use it, run Docker Compose with the
   `clickhouse` profile, set the `CLICKHOUSE_URL` to `http://clickhouse:8123`,
   and ensure you have set an `ADMIN_KEY`.
-  Using this configuration the core service will also combine results from
+  Using this configuration, the core service will also combine results from
   ClickHouse and SQLite when querying transaction data via GraphQL. Note: if
   you have a large number of data items in SQLite, the first export and
-  subsequent delete may take an exteneded period. Also, this functionality is
+  subsequent delete may take an extended period. Also, this functionality is
   considered **experimental**. We expect there are still bugs to be found in it
   and we may make breaking changes to the ClickHouse schema in the future. If
   you choose to use it in production (not yet recommended), we suggest backing
@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   can be reimported if anything goes wrong or future changes require it.
 - Added a background data verification process that will attempt to recompute
   data roots for bundles and compare them to data roots indexed from Arweave
-  nodes. When the data roots match, all descendent data items will be marked as
+  nodes. When the data roots match, all descendant data items will be marked as
   verified. This enables verification of data initially retrieived from sources,
   like other gateways, that serve contiguous data instead of verifiable chunks.
   Data verification can be enabled by setting the
