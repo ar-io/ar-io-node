@@ -49,7 +49,8 @@ import { currentUnixTimestamp } from '../lib/time.js';
 import log from '../log.js';
 import * as metrics from '../metrics.js';
 import {
-  BlockListValidator,
+  DataBlockListValidator,
+  NameBlockListValidator,
   BundleIndex,
   BundleRecord,
   ChainIndex,
@@ -2326,6 +2327,16 @@ export class StandaloneSqliteDatabaseWorker {
     return false;
   }
 
+  isNameBlocked(name: string): boolean {
+    if (name.length > 0) {
+      const row = this.stmts.moderation.isNameBlocked.get({
+        name,
+      });
+      return row?.is_blocked === 1;
+    }
+    return false;
+  }
+
   blockData({
     id,
     hash,
@@ -2362,6 +2373,37 @@ export class StandaloneSqliteDatabaseWorker {
         blocked_at: currentUnixTimestamp(),
       });
     }
+  }
+
+  blockName({
+    name,
+    source,
+    notes,
+  }: {
+    name: string;
+    source?: string;
+    notes?: string;
+  }) {
+    let sourceId = undefined;
+    if (source !== undefined) {
+      this.stmts.moderation.insertSource.run({
+        name: source,
+      });
+      sourceId = this.stmts.moderation.getSourceByName.get({
+        name: source,
+      })?.id;
+    }
+
+    this.stmts.moderation.insertBlockedName.run({
+      name,
+      block_source_id: sourceId,
+      notes,
+      blocked_at: currentUnixTimestamp(),
+    });
+  }
+
+  unblockName({ name }: { name: string }) {
+    this.stmts.moderation.deleteBlockedName.run({ name });
   }
 
   async saveNestedDataId({
@@ -2430,7 +2472,7 @@ export class StandaloneSqliteDatabaseWorker {
 
   pruneStableDataItems(indexedAtThreshold: number) {
     this.stmts.bundles.deleteStableDataItemsLessThanIndexedAt.run({
-      indexed_at_threshold: indexedAtThreshold
+      indexed_at_threshold: indexedAtThreshold,
     });
   }
 }
@@ -2471,7 +2513,8 @@ const WORKER_POOL_SIZES: WorkerPoolSizes = {
 export class StandaloneSqliteDatabase
   implements
     BundleIndex,
-    BlockListValidator,
+    DataBlockListValidator,
+    NameBlockListValidator,
     ChainIndex,
     ChainOffsetIndex,
     ContiguousDataIndex,
@@ -3024,6 +3067,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('moderation', 'isHashBlocked', [hash]);
   }
 
+  async isNameBlocked(name: string): Promise<boolean> {
+    return this.queueRead('moderation', 'isNameBlocked', [name]);
+  }
+
   async blockData({
     id,
     hash,
@@ -3043,6 +3090,28 @@ export class StandaloneSqliteDatabase
         notes,
       },
     ]);
+  }
+
+  async blockName({
+    name,
+    source,
+    notes,
+  }: {
+    name: string;
+    source?: string;
+    notes?: string;
+  }): Promise<void> {
+    return this.queueWrite('moderation', 'blockName', [
+      {
+        name,
+        source,
+        notes,
+      },
+    ]);
+  }
+
+  async unblockName({ name }: { name: string }): Promise<void> {
+    return this.queueWrite('moderation', 'unblockName', [{ name }]);
   }
 
   async saveNestedDataId({
@@ -3097,7 +3166,9 @@ export class StandaloneSqliteDatabase
   }
 
   async pruneStableDataItems(indexedAtThreshold: number): Promise<void> {
-    return this.queueWrite('bundles', 'pruneStableDataItems', [indexedAtThreshold]); 
+    return this.queueWrite('bundles', 'pruneStableDataItems', [
+      indexedAtThreshold,
+    ]);
   }
 
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
@@ -3261,8 +3332,20 @@ if (!isMainThread) {
           const isHashBlocked = worker.isHashBlocked(args[0]);
           parentPort?.postMessage(isHashBlocked);
           break;
+        case 'isNameBlocked':
+          const isNameBlocked = worker.isNameBlocked(args[0]);
+          parentPort?.postMessage(isNameBlocked);
+          break;
         case 'blockData':
           worker.blockData(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'blockName':
+          worker.blockName(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'unblockName':
+          worker.unblockName(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'saveNestedDataId':
