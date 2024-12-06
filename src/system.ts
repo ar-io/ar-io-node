@@ -47,7 +47,8 @@ import { StreamingManifestPathResolver } from './resolution/streaming-manifest-p
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import {
-  BlockListValidator,
+  DataBlockListValidator,
+  NameBlockListValidator,
   BundleIndex,
   ChainIndex,
   ChainOffsetIndex,
@@ -156,7 +157,8 @@ export const chainIndex: ChainIndex = db;
 export const chainOffsetIndex: ChainOffsetIndex = db;
 export const bundleIndex: BundleIndex = db;
 export const contiguousDataIndex: ContiguousDataIndex = db;
-export const blockListValidator: BlockListValidator = db;
+export const dataBlockListValidator: DataBlockListValidator = db;
+export const nameBlockListValidator: NameBlockListValidator = db;
 export const nestedDataIndexWriter: NestedDataIndexWriter = db;
 export const dataItemIndexWriter: DataItemIndexWriter = db;
 export const gqlQueryable: GqlQueryable = (() => {

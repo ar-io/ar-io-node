@@ -31,7 +31,7 @@ export const dataHandler = createDataHandler({
   log,
   dataIndex: system.contiguousDataIndex,
   dataSource: system.onDemandContiguousDataSource,
-  blockListValidator: system.blockListValidator,
+  dataBlockListValidator: system.dataBlockListValidator,
   manifestPathResolver: system.manifestPathResolver,
 });
 
@@ -43,7 +43,7 @@ dataRouter.get(
     log,
     dataIndex: system.contiguousDataIndex,
     dataSource: system.onDemandContiguousDataSource,
-    blockListValidator: system.blockListValidator,
+    dataBlockListValidator: system.dataBlockListValidator,
   }),
 );
 dataRouter.get(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);

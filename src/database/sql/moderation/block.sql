@@ -17,3 +17,12 @@ ON CONFLICT DO NOTHING
 SELECT id, name, created_at
 FROM block_sources
 WHERE name = @name
+
+-- insertBlockedName
+INSERT INTO blocked_names (name, block_source_id, notes, blocked_at)
+VALUES (@name, @block_source_id, @notes, @blocked_at)
+ON CONFLICT DO NOTHING
+
+-- deleteBlockedName
+DELETE FROM blocked_names
+WHERE name = @name;

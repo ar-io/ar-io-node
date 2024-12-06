@@ -22,7 +22,11 @@ import * as config from '../config.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound } from '../routes/data/handlers.js';
 import { DATA_PATH_REGEX } from '../constants.js';
-import { NameResolution, NameResolver } from '../types.js';
+import {
+  NameBlockListValidator,
+  NameResolution,
+  NameResolver,
+} from '../types.js';
 import * as metrics from '../metrics.js';
 import NodeCache from 'node-cache';
 
@@ -38,9 +42,11 @@ const arnsRequestCache = new NodeCache({
 export const createArnsMiddleware = ({
   dataHandler,
   nameResolver,
+  nameBlockListValidator,
 }: {
   dataHandler: Handler;
   nameResolver: NameResolver;
+  nameBlockListValidator: NameBlockListValidator;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
     if (
@@ -58,7 +64,9 @@ export const createArnsMiddleware = ({
       next();
       return;
     }
+
     const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
+
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
       // Avoid collisions with sandbox URLs by ensuring the subdomain length
@@ -73,6 +81,11 @@ export const createArnsMiddleware = ({
 
     if (DATA_PATH_REGEX.test(req.path)) {
       next();
+      return;
+    }
+
+    if (await nameBlockListValidator.isNameBlocked(arnsSubdomain)) {
+      sendNotFound(res);
       return;
     }
 

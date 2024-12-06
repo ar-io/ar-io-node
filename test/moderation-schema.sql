@@ -20,3 +20,9 @@ CREATE TABLE blocked_hashes (
 CREATE INDEX blocked_hashes_source_id_idx
   ON blocked_hashes (block_source_id);
 CREATE UNIQUE INDEX block_sources_name_idx ON block_sources (name);
+CREATE TABLE blocked_names (
+  name TEXT PRIMARY KEY,
+  block_source_id INTEGER,
+  notes TEXT,
+  blocked_at INTEGER
+);
