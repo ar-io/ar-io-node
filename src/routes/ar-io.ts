@@ -137,8 +137,12 @@ arIoRouter.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
 arIoRouter.put('/ar-io/admin/block-name', express.json(), async (req, res) => {
   try {
     const { name, source, notes } = req.body;
-    if (name === undefined) {
-      res.status(400).send("Must provide 'name'");
+    if (typeof name !== 'string' || name.trim() === '') {
+      res.status(400).send("'name' must be a non-empty string");
+      return;
+    }
+    if (name.length > 51) {
+      res.status(400).send("'name' exceeds maximum length");
       return;
     }
 
@@ -158,8 +162,12 @@ arIoRouter.put(
   async (req, res) => {
     try {
       const { name } = req.body;
-      if (name === undefined) {
-        res.status(400).send("Must provide 'name'");
+      if (typeof name !== 'string' || name.trim() === '') {
+        res.status(400).send("'name' must be a non-empty string");
+        return;
+      }
+      if (name.length > 51) {
+        res.status(400).send("'name' exceeds maximum length");
         return;
       }
 
