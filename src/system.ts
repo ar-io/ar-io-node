@@ -86,7 +86,7 @@ import { KvArnsStore } from './store/kv-arns-store.js';
 import { parquetExporter } from './routes/ar-io.js';
 import { server } from './app.js';
 import { S3DataStore } from './store/s3-data-store.js';
-import { BlockedNamesCache } from './middleware/arns.js';
+import { BlockedNamesCache } from './blocked-names-cache.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
