@@ -141,7 +141,10 @@ arIoRouter.put('/ar-io/admin/block-name', express.json(), async (req, res) => {
       res.status(400).send("Must provide 'name'");
       return;
     }
+
     system.db.blockName({ name, source, notes });
+    system.blockedNamesCache.addName(name);
+
     res.json({ message: 'Name blocked' });
   } catch (error: any) {
     res.status(500).send(error?.message);
@@ -159,7 +162,10 @@ arIoRouter.put(
         res.status(400).send("Must provide 'name'");
         return;
       }
+
       system.db.unblockName({ name });
+      system.blockedNamesCache.removeName(name);
+
       res.json({ message: 'Name unblocked' });
     } catch (error: any) {
       res.status(500).send(error?.message);

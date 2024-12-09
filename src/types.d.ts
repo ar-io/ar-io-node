@@ -410,6 +410,7 @@ export interface DataBlockListValidator {
 
 export interface NameBlockListValidator {
   isNameBlocked(name: string): Promise<boolean>;
+  getBlockedNames(): Promise<string[]>;
 }
 
 export interface JsonChunk {

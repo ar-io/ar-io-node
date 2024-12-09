@@ -12,3 +12,6 @@ WHERE hash = @hash
 SELECT 1 AS is_blocked
 FROM blocked_names
 WHERE name = @name
+
+-- selectBlockedNames
+SELECT name FROM blocked_names;

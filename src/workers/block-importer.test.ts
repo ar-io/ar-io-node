@@ -76,6 +76,7 @@ describe('BlockImporter', () => {
       coreDbPath,
       dataDbPath,
       moderationDbPath,
+      tagSelectivity: {},
     });
   });
 

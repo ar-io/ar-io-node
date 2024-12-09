@@ -2337,6 +2337,12 @@ export class StandaloneSqliteDatabaseWorker {
     return false;
   }
 
+  getBlockedNames(): string[] {
+    return this.stmts.moderation.selectBlockedNames
+      .all()
+      .map((row) => row.name);
+  }
+
   blockData({
     id,
     hash,
@@ -3071,6 +3077,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('moderation', 'isNameBlocked', [name]);
   }
 
+  async getBlockedNames(): Promise<string[]> {
+    return this.queueRead('moderation', 'getBlockedNames', undefined);
+  }
+
   async blockData({
     id,
     hash,
@@ -3335,6 +3345,10 @@ if (!isMainThread) {
         case 'isNameBlocked':
           const isNameBlocked = worker.isNameBlocked(args[0]);
           parentPort?.postMessage(isNameBlocked);
+          break;
+        case 'getBlockedNames':
+          const blockedNames = worker.getBlockedNames();
+          parentPort?.postMessage(blockedNames);
           break;
         case 'blockData':
           worker.blockData(args[0]);

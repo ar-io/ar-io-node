@@ -33,7 +33,6 @@ if (config.ARNS_ROOT_HOST !== undefined) {
     createArnsMiddleware({
       dataHandler,
       nameResolver: system.nameResolver,
-      nameBlockListValidator: system.nameBlockListValidator,
     }),
   );
 
