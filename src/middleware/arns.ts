@@ -22,13 +22,11 @@ import * as config from '../config.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound } from '../routes/data/handlers.js';
 import { DATA_PATH_REGEX } from '../constants.js';
-import {
-  NameBlockListValidator,
-  NameResolution,
-  NameResolver,
-} from '../types.js';
+import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
+import * as system from '../system.js';
 import NodeCache from 'node-cache';
+import * as winston from 'winston';
 
 const EXCLUDED_SUBDOMAINS = new Set('www');
 
@@ -42,11 +40,9 @@ const arnsRequestCache = new NodeCache({
 export const createArnsMiddleware = ({
   dataHandler,
   nameResolver,
-  nameBlockListValidator,
 }: {
   dataHandler: Handler;
   nameResolver: NameResolver;
-  nameBlockListValidator: NameBlockListValidator;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
     if (
@@ -84,7 +80,7 @@ export const createArnsMiddleware = ({
       return;
     }
 
-    if (await nameBlockListValidator.isNameBlocked(arnsSubdomain)) {
+    if (system.blockedNamesCache.isBlocked(arnsSubdomain)) {
       sendNotFound(res);
       return;
     }
@@ -121,3 +117,81 @@ export const createArnsMiddleware = ({
     res.header('Cache-Control', `public, max-age=${ttl}`);
     dataHandler(req, res, next);
   });
+
+export class BlockedNamesCache {
+  private log: winston.Logger;
+  private cache: NodeCache;
+  private cacheKey: string;
+  private fetchBlockedNames: () => Promise<string[]>;
+  private fetchInterval: number;
+
+  constructor({
+    log,
+    cacheTTL = 3600,
+    fetchInterval = 3600000,
+    fetchBlockedNames,
+  }: {
+    log: winston.Logger;
+    cacheTTL?: number;
+    fetchInterval?: number;
+    fetchBlockedNames: () => Promise<string[]>;
+  }) {
+    this.log = log.child({ class: this.constructor.name });
+    this.cache = new NodeCache({ stdTTL: cacheTTL });
+    this.cacheKey = 'blockedNames';
+    this.fetchBlockedNames = fetchBlockedNames;
+    this.fetchInterval = fetchInterval;
+
+    this.startAutoRefresh();
+  }
+
+  async loadCache() {
+    try {
+      const blockedNames = await this.fetchBlockedNames();
+      this.cache.set(this.cacheKey, blockedNames);
+      this.log.debug('Blocked names cache updated.');
+    } catch (error) {
+      this.log.error('Failed to update blocked names cache:', error);
+    }
+  }
+
+  getNames() {
+    const names = this.cache.get<string[]>(this.cacheKey);
+    if (!names) {
+      this.log.warn('Cache miss: blocked names not found.');
+      return [];
+    }
+
+    return names;
+  }
+
+  isBlocked(name: string) {
+    const blockedNames = this.getNames();
+    return blockedNames.includes(name);
+  }
+
+  public addName(name: string) {
+    const blockedNames = this.getNames();
+    if (!blockedNames.includes(name)) {
+      blockedNames.push(name);
+      this.cache.set(this.cacheKey, blockedNames);
+    }
+  }
+
+  public removeName(name: string) {
+    const blockedNames = this.getNames();
+    const index = blockedNames.indexOf(name);
+    if (index !== -1) {
+      // splice was used to avoid creating a new array
+      blockedNames.splice(index, 1);
+      this.cache.set(this.cacheKey, blockedNames);
+    }
+  }
+
+  startAutoRefresh() {
+    this.loadCache();
+    setInterval(() => {
+      this.loadCache();
+    }, this.fetchInterval);
+  }
+}

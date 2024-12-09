@@ -86,6 +86,7 @@ import { KvArnsStore } from './store/kv-arns-store.js';
 import { parquetExporter } from './routes/ar-io.js';
 import { server } from './app.js';
 import { S3DataStore } from './store/s3-data-store.js';
+import { BlockedNamesCache } from './middleware/arns.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -665,6 +666,13 @@ const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
 if (dataVerificationWorker !== undefined) {
   dataVerificationWorker.start();
 }
+
+export const blockedNamesCache = new BlockedNamesCache({
+  log,
+  cacheTTL: 3600,
+  fetchInterval: 3600000,
+  fetchBlockedNames: () => nameBlockListValidator.getBlockedNames(),
+});
 
 let isShuttingDown = false;
 
