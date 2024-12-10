@@ -25,5 +25,5 @@
     "swc": true,
     "esm": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "scripts"]
 }

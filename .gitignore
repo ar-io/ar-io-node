@@ -14,6 +14,8 @@
 /vendor
 /wallets
 test-results.xml
+/scripts/import-data/bundles
+/scripts/import-data/transactions
 
 # Generated docs
 /docs/sqlite/bundles
