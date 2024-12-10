@@ -69,7 +69,7 @@ args.forEach((arg, index) => {
 const fetchWithRetry = async (
   url: string,
   options: RequestInit = {},
-  retries = 5,
+  retries = 15,
   retryInterval = 300, // interval in milliseconds
 ): Promise<Response> => {
   let attempt = 0;
@@ -320,8 +320,10 @@ const writeTransactionsToFile = async ({
       transactions: bundles,
     });
 
-    console.log(
-      `Transactions and bundles from block ${range.min} to ${range.max} saved!`,
-    );
+    if (transactions.size !== 0 || bundles.size !== 0) {
+      console.log(
+        `Transactions and bundles from block ${range.min} to ${range.max} saved!`,
+      );
+    }
   }
 })();
