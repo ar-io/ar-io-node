@@ -321,7 +321,7 @@ const writeTransactionsToFile = async ({
     });
 
     console.log(
-      `Transactions and bundles from block ${MIN_BLOCK_HEIGHT} to ${MAX_BLOCK_HEIGHT} saved!`,
+      `Transactions and bundles from block ${range.min} to ${range.max} saved!`,
     );
   }
 })();
