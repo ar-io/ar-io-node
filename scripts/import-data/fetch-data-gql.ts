@@ -30,16 +30,36 @@ let BLOCK_RANGE_SIZE = 100;
 args.forEach((arg, index) => {
   switch (arg) {
     case '--gqlEndpoint':
-      GQL_ENDPOINT = args[index + 1];
+      if (args[index + 1]) {
+        GQL_ENDPOINT = args[index + 1];
+      } else {
+        console.error('Missing value for --gqlEndpoint');
+        process.exit(1);
+      }
       break;
     case '--minHeight':
-      MIN_BLOCK_HEIGHT = parseInt(args[index + 1], 10);
+      if (args[index + 1]) {
+        MIN_BLOCK_HEIGHT = parseInt(args[index + 1], 10);
+      } else {
+        console.error('Missing value for --minHeight');
+        process.exit(1);
+      }
       break;
     case '--maxHeight':
-      MAX_BLOCK_HEIGHT = parseInt(args[index + 1], 10);
+      if (args[index + 1]) {
+        MAX_BLOCK_HEIGHT = parseInt(args[index + 1], 10);
+      } else {
+        console.error('Missing value for --maxHeight');
+        process.exit(1);
+      }
       break;
     case '--blockRangeSize':
-      BLOCK_RANGE_SIZE = parseInt(args[index + 1], 10);
+      if (args[index + 1]) {
+        BLOCK_RANGE_SIZE = parseInt(args[index + 1], 10);
+      } else {
+        console.error('Missing value for --blockRangeSize');
+        process.exit(1);
+      }
       break;
     default:
       break;
