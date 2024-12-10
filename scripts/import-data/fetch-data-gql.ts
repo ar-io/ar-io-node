@@ -188,7 +188,11 @@ const fetchGql = async ({
     },
     body: JSON.stringify({ query: gqlQuery({ minBlock, maxBlock, cursor }) }),
   });
-  const { data } = await response.json();
+  const result = await response.json();
+  if (result.errors) {
+    throw new Error(`GraphQL error: ${JSON.stringify(result.errors)}`);
+  }
+  const { data } = result;
   return data;
 };
 
