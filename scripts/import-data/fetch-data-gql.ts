@@ -27,6 +27,20 @@ let MIN_BLOCK_HEIGHT = 0;
 let MAX_BLOCK_HEIGHT: number | undefined;
 let BLOCK_RANGE_SIZE = 100;
 let BUNDLES_FETCH_ROOT_TX = true;
+let GQL_TAGS = `[
+  {
+    name: "App-Name"
+    values: [
+      "ArDrive-App"
+      "ArDrive-Web"
+      "ArDrive-CLI"
+      "ArDrive-Desktop"
+      "ArDrive-Mobile"
+      "ArDrive-Core"
+      "ArDrive-Sync"
+    ]
+  }
+]`;
 
 args.forEach((arg, index) => {
   switch (arg) {
@@ -67,6 +81,14 @@ args.forEach((arg, index) => {
         BUNDLES_FETCH_ROOT_TX = args[index + 1] === 'true';
       } else {
         console.error('Missing value for --fetchOnlyRootTx');
+        process.exit(1);
+      }
+      break;
+    case '--gqlTags':
+      if (args[index + 1]) {
+        GQL_TAGS = args[index + 1];
+      } else {
+        console.error('Missing value for --gqlTags');
         process.exit(1);
       }
       break;
@@ -164,20 +186,7 @@ query {
       min: ${minBlock}
       max: ${maxBlock}
     }
-    tags: [
-      {
-        name: "App-Name"
-        values: [
-          "ArDrive-App"
-          "ArDrive-Web"
-          "ArDrive-CLI"
-          "ArDrive-Desktop"
-          "ArDrive-Mobile"
-          "ArDrive-Core"
-          "ArDrive-Sync"
-        ]
-      }
-    ]
+    tags:  ${GQL_TAGS}
     first: 100
     sort: HEIGHT_ASC
     after: "${cursor !== undefined ? cursor : ''}"
