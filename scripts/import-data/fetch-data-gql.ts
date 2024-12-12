@@ -18,6 +18,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { transport } from 'winston';
 const args = process.argv.slice(2);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -286,14 +287,10 @@ type BlockTransactions = Map<number, Set<string>>;
 const getTransactionsForRange = async ({ min, max }: BlockRange) => {
   let cursor: string | undefined;
   let hasNextPage = true;
-  let page = 0;
   const transactions: BlockTransactions = new Map();
   const bundles: BlockTransactions = new Map();
 
   while (hasNextPage) {
-    console.log(
-      `Fetching transactions and bundles from block ${min} to ${max}. Page ${page}`,
-    );
     const {
       transactions: { edges, pageInfo },
     } = await fetchGql({
@@ -328,8 +325,6 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
         transactions.get(blockHeight)?.add(id);
       }
     }
-
-    page++;
   }
 
   return { transactions, bundles };
@@ -364,6 +359,14 @@ const writeTransactionsToFile = async ({
   }
 };
 
+const countTransactions = (map: BlockTransactions) => {
+  let total = 0;
+  map.forEach((set) => {
+    total += set.size;
+  });
+  return total;
+};
+
 (async () => {
   if (MAX_BLOCK_HEIGHT === undefined) {
     MAX_BLOCK_HEIGHT = await fetchLatestBlockHeight();
@@ -379,6 +382,9 @@ const writeTransactionsToFile = async ({
     `Starting to fetch transactions and bundles from block ${MIN_BLOCK_HEIGHT} to ${MAX_BLOCK_HEIGHT}`,
   );
 
+  let txCount = 0;
+  let bundleCount = 0;
+
   for (const range of blockRanges) {
     const { transactions, bundles } = await getTransactionsForRange(range);
 
@@ -391,9 +397,15 @@ const writeTransactionsToFile = async ({
       transactions: bundles,
     });
 
+    txCount += countTransactions(transactions);
+    bundleCount += countTransactions(bundles);
+
     if (transactions.size !== 0 || bundles.size !== 0) {
       console.log(
         `Transactions and bundles from block ${range.min} to ${range.max} saved!`,
+      );
+      console.log(
+        `Saved transactions: ${txCount}, Saved bundles: ${bundleCount}`,
       );
     }
   }
