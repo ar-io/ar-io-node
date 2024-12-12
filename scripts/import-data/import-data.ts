@@ -18,7 +18,11 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fetchLatestBlockHeight, fetchWithRetry } from './utils.js';
+import {
+  fetchLatestBlockHeight,
+  fetchWithRetry,
+  getFilesInRange,
+} from './utils.js';
 const args = process.argv.slice(2);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,32 +105,6 @@ args.forEach((arg, index) => {
       break;
   }
 });
-
-const getFilesInRange = async ({
-  folder,
-  min,
-  max,
-}: {
-  folder: string;
-  min: number;
-  max: number;
-}): Promise<string[]> => {
-  try {
-    const files = await fs.readdir(folder);
-
-    const filesInRange = files
-      .filter((file) => path.extname(file) === '.json')
-      .filter((file) => {
-        const match = file.match(/^\d+/);
-        const number = match ? parseInt(match[0], 10) : null;
-        return number !== null && number >= min && number <= max;
-      });
-
-    return filesInRange;
-  } catch (error) {
-    throw new Error(`Error processing files: ${(error as Error).message}`);
-  }
-};
 
 const importFromFiles = async ({
   files,

@@ -16,6 +16,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+import * as fs from 'node:fs/promises';
+import path from 'node:path';
+
 export const fetchWithRetry = async (
   url: string,
   options: RequestInit = {},
@@ -28,6 +31,7 @@ export const fetchWithRetry = async (
     try {
       const response = await fetch(url, options);
 
+      console.log({ status: response.status });
       if (response.ok) {
         return response;
       }
@@ -67,4 +71,30 @@ export const fetchLatestBlockHeight = async () => {
   });
   const { blocks } = await response.json();
   return blocks as number;
+};
+
+export const getFilesInRange = async ({
+  folder,
+  min,
+  max,
+}: {
+  folder: string;
+  min: number;
+  max: number;
+}): Promise<string[]> => {
+  try {
+    const files = await fs.readdir(folder);
+
+    const filesInRange = files
+      .filter((file) => path.extname(file) === '.json')
+      .filter((file) => {
+        const match = file.match(/^\d+/);
+        const number = match ? parseInt(match[0], 10) : null;
+        return number !== null && number >= min && number <= max;
+      });
+
+    return filesInRange;
+  } catch (error) {
+    throw new Error(`Error processing files: ${(error as Error).message}`);
+  }
 };
