@@ -26,6 +26,7 @@ let GQL_ENDPOINT = 'https://arweave-search.goldsky.com/graphql';
 let MIN_BLOCK_HEIGHT = 0;
 let MAX_BLOCK_HEIGHT: number | undefined;
 let BLOCK_RANGE_SIZE = 100;
+let BUNDLES_FETCH_ROOT_TX = true;
 
 args.forEach((arg, index) => {
   switch (arg) {
@@ -58,6 +59,14 @@ args.forEach((arg, index) => {
         BLOCK_RANGE_SIZE = parseInt(args[index + 1], 10);
       } else {
         console.error('Missing value for --blockRangeSize');
+        process.exit(1);
+      }
+      break;
+    case '--fetchOnlyRootTx':
+      if (args[index + 1]) {
+        BUNDLES_FETCH_ROOT_TX = args[index + 1] === 'true';
+      } else {
+        console.error('Missing value for --fetchOnlyRootTx');
         process.exit(1);
       }
       break;
@@ -140,7 +149,7 @@ const getBlockRanges = ({
   return ranges;
 };
 
-const gqlQuery = ({
+const txsGqlQuery = ({
   minBlock,
   maxBlock,
   cursor,
@@ -192,6 +201,52 @@ query {
 }
 `;
 
+const rootTxGqlQuery = (txId: string) => `
+query {
+  transaction(
+    id: "${txId}"
+  ) {
+    bundledIn {
+      id
+    }
+  }
+}
+`;
+
+const getRootTxId = async (txId: string) => {
+  let rootTxId: string | undefined;
+  let currentId = txId;
+
+  while (rootTxId === undefined) {
+    const response = await fetchWithRetry(GQL_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: rootTxGqlQuery(currentId),
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.errors) {
+      throw new Error(`GraphQL error: ${JSON.stringify(result.errors)}`);
+    }
+
+    const { data } = result;
+    const bundleId = data.transaction.bundledIn?.id;
+
+    if (bundleId === undefined) {
+      rootTxId = currentId;
+    } else {
+      currentId = bundleId;
+    }
+  }
+
+  return rootTxId;
+};
+
 const fetchGql = async ({
   minBlock,
   maxBlock,
@@ -206,7 +261,9 @@ const fetchGql = async ({
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ query: gqlQuery({ minBlock, maxBlock, cursor }) }),
+    body: JSON.stringify({
+      query: txsGqlQuery({ minBlock, maxBlock, cursor }),
+    }),
   });
   const result = await response.json();
   if (result.errors) {
@@ -252,7 +309,12 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
       }
 
       if (bundleId !== undefined) {
-        bundles.get(blockHeight)?.add(bundleId);
+        if (BUNDLES_FETCH_ROOT_TX) {
+          const rootTxId = await getRootTxId(bundleId);
+          bundles.get(blockHeight)?.add(rootTxId);
+        } else {
+          bundles.get(blockHeight)?.add(bundleId);
+        }
       } else {
         transactions.get(blockHeight)?.add(id);
       }
