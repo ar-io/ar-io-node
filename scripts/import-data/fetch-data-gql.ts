@@ -347,7 +347,7 @@ const writeTransactionsToFile = async ({
   for (const [height, ids] of transactions.entries()) {
     if (ids.size === 0) continue;
 
-    const content = JSON.stringify([...ids], null, 2);
+    const content = JSON.stringify([...ids]);
     const filePath = path.join(outputDir, `${height}.json`);
 
     try {
