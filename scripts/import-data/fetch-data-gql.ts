@@ -18,7 +18,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { transport } from 'winston';
+import { fetchLatestBlockHeight, fetchWithRetry } from './utils.js';
 const args = process.argv.slice(2);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -97,52 +97,6 @@ args.forEach((arg, index) => {
       break;
   }
 });
-
-const fetchWithRetry = async (
-  url: string,
-  options: RequestInit = {},
-  retries = 15,
-  retryInterval = 300, // interval in milliseconds
-): Promise<Response> => {
-  let attempt = 0;
-
-  while (attempt < retries) {
-    try {
-      const response = await fetch(url, options);
-
-      if (response.ok) {
-        return response;
-      }
-
-      throw new Error(`HTTP error! status: ${response.status}`);
-    } catch (error) {
-      attempt++;
-
-      if (attempt >= retries) {
-        throw new Error(
-          `Fetch failed after ${retries} attempts: ${(error as Error).message}`,
-        );
-      }
-
-      const waitTime = retryInterval * attempt;
-      console.warn(
-        `Fetch attempt ${attempt} failed. Retrying in ${waitTime}ms...`,
-      );
-
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
-    }
-  }
-
-  throw new Error('Unexpected error in fetchWithRetry');
-};
-
-const fetchLatestBlockHeight = async () => {
-  const response = await fetchWithRetry('https://arweave.net/info', {
-    method: 'GET',
-  });
-  const { blocks } = await response.json();
-  return blocks as number;
-};
 
 type BlockRange = { min: number; max: number };
 const getBlockRanges = ({
