@@ -93,6 +93,7 @@ export class ArweaveCompositeClient
   // Trusted node
   private trustedNodeUrl: string;
   private chunkPostUrls: string[];
+  private secondaryChunkPostUrls: string[];
   private trustedNodeAxios;
 
   // Peers
@@ -130,6 +131,7 @@ export class ArweaveCompositeClient
     arweave,
     trustedNodeUrl,
     chunkPostUrls,
+    secondaryChunkPostUrls,
     blockStore,
     chunkCache = new WeakMap(),
     txStore,
@@ -146,6 +148,7 @@ export class ArweaveCompositeClient
     arweave: Arweave;
     trustedNodeUrl: string;
     chunkPostUrls: string[];
+    secondaryChunkPostUrls: string[];
     blockStore: PartialJsonBlockStore;
     chunkCache?: WeakMap<
       { absoluteOffset: number },
@@ -166,6 +169,9 @@ export class ArweaveCompositeClient
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.chunkPostUrls = chunkPostUrls.map((url) => url.replace(/\/$/, ''));
+    this.secondaryChunkPostUrls = secondaryChunkPostUrls.map((url) =>
+      url.replace(/\/$/, ''),
+    );
     this.failureSimulator = failureSimulator;
     this.txStore = txStore;
     this.blockStore = blockStore;
@@ -771,6 +777,63 @@ export class ArweaveCompositeClient
           failureCount++;
 
           metrics.arweaveChunkPostCounter.inc({
+            endpoint: url,
+            status: 'fail',
+          });
+
+          return {
+            success: false,
+            statusCode: error.response?.status,
+            canceled,
+            timedOut,
+          };
+        }
+      }),
+    );
+
+    Promise.all(
+      this.secondaryChunkPostUrls.map(async (url) => {
+        try {
+          this.failureSimulator.maybeFail();
+
+          const resp = await axios({
+            url,
+            method: 'POST',
+            data: chunk,
+            signal: AbortSignal.timeout(abortTimeout),
+            timeout: responseTimeout,
+            validateStatus: (status) => status >= 200 && status < 300,
+            headers: originAndHopsHeaders,
+          });
+
+          metrics.secondaryArweaveChunkPostCounter.inc({
+            endpoint: url,
+            status: 'success',
+          });
+
+          return {
+            success: true,
+            statusCode: resp.status,
+            canceled: false,
+            timedOut: false,
+          };
+        } catch (error: any) {
+          let canceled = false;
+          let timedOut = false;
+
+          if (axios.isAxiosError(error)) {
+            timedOut = error.code === 'ECONNABORTED';
+            canceled = error.code === 'ERR_CANCELED';
+          }
+
+          this.log.debug('Failed to broadcast chunk to secondary chunk node:', {
+            message: error.message,
+            stack: error.stack,
+          });
+
+          failureCount++;
+
+          metrics.secondaryArweaveChunkPostCounter.inc({
             endpoint: url,
             status: 'fail',
           });

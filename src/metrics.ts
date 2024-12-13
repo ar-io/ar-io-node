@@ -138,6 +138,12 @@ export const arweaveChunkBroadcastCounter = new promClient.Counter({
   labelNames: ['status'],
 });
 
+export const secondaryArweaveChunkPostCounter = new promClient.Counter({
+  name: 'secondary_arweave_chunk_post_total',
+  help: 'Counts individual POST request to secondary chunk endpoints',
+  labelNames: ['endpoint', 'status'],
+});
+
 //
 // SQLite metrics
 //
