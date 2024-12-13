@@ -199,7 +199,13 @@ const getRootTxId = async (txId: string) => {
     }
 
     const { data } = result;
-    const bundleId = data.transaction?.bundledIn?.id;
+
+    if (data.transaction === null) {
+      console.warn("Can't get any results while fetching rootTxId for", txId);
+      return;
+    }
+
+    const bundleId = data.transaction.bundledIn?.id;
 
     if (bundleId === undefined) {
       rootTxId = currentId;
@@ -237,6 +243,8 @@ const fetchGql = async ({
   return data;
 };
 
+const txsMissingRootTx = new Set<string>();
+
 type BlockTransactions = Map<number, Set<string>>;
 const getTransactionsForRange = async ({ min, max }: BlockRange) => {
   let cursor: string | undefined;
@@ -271,12 +279,15 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
 
       if (bundleId !== undefined) {
         if (BUNDLES_FETCH_ROOT_TX) {
-          let rootTxId = rootTxIdsForBundles.get(bundleId);
+          const cachedRootTxId = rootTxIdsForBundles.get(bundleId);
+          const rootTxId = cachedRootTxId ?? (await getRootTxId(bundleId));
+
           if (rootTxId === undefined) {
-            rootTxId = await getRootTxId(bundleId);
+            txsMissingRootTx.add(bundleId);
+          } else {
             rootTxIdsForBundles.set(bundleId, rootTxId);
+            bundles.get(blockHeight)?.add(rootTxId);
           }
-          bundles.get(blockHeight)?.add(rootTxId);
         } else {
           bundles.get(blockHeight)?.add(bundleId);
         }
@@ -359,12 +370,31 @@ const countTransactions = (map: BlockTransactions) => {
     txCount += countTransactions(transactions);
     bundleCount += countTransactions(bundles);
 
-    if (transactions.size !== 0 || bundles.size !== 0) {
+    if (transactions.size > 0 || bundles.size > 0) {
       console.log(
         `Transactions and bundles from block ${range.min} to ${range.max} saved!`,
       );
       console.log(
         `Saved transactions: ${txCount}, Saved bundles: ${bundleCount}`,
+      );
+    }
+
+    if (txsMissingRootTx.size > 0) {
+      console.warn(
+        `Failed to fetch rootTxId for ${txsMissingRootTx.size} transactions`,
+      );
+
+      const txMissingRootTxPath = path.join(
+        __dirname,
+        'txs-missing-root-tx-id.json',
+      );
+      await fs.writeFile(
+        txMissingRootTxPath,
+        JSON.stringify([...txsMissingRootTx]),
+      );
+
+      console.log(
+        'Transactions missing root transaction id were written to txs-missing-root-tx-id.json file',
       );
     }
   }
