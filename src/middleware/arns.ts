@@ -28,6 +28,7 @@ import * as system from '../system.js';
 import NodeCache from 'node-cache';
 
 const EXCLUDED_SUBDOMAINS = new Set('www');
+const MAX_ARNS_NAME_LENGTH = 51;
 
 // simple cache that stores the arns resolution promises to avoid duplicate requests to the name resolver
 const arnsRequestCache = new NodeCache({
@@ -68,7 +69,7 @@ export const createArnsMiddleware = ({
       // is below the minimum length of a sandbox subdomain. Undernames are
       // are an exception because they can be longer and '_' cannot appear in
       // base32.
-      (arnsSubdomain.length > 48 && !arnsSubdomain.match(/_/))
+      (arnsSubdomain.length > MAX_ARNS_NAME_LENGTH && !arnsSubdomain.match(/_/))
     ) {
       next();
       return;
