@@ -83,52 +83,6 @@ const countIds = async ({
   return counter;
 };
 
-// const importFromFiles = async ({
-//   files,
-//   type,
-// }: {
-//   files: string[];
-//   type: 'transactions' | 'bundles';
-// }) => {
-//   let counter = 0;
-//   let folder: string;
-//   let endpoint: string;
-//   switch (type) {
-//     case 'transactions':
-//       folder = TRANSACTIONS_DIR;
-//       endpoint = `${ARIO_ENDPOINT}/ar-io/admin/queue-tx`;
-//       break;
-//     case 'bundles':
-//       folder = BUNDLES_DIR;
-//       endpoint = `${ARIO_ENDPOINT}/ar-io/admin/queue-bundle`;
-//       break;
-//     default:
-//       throw new Error('Invalid type');
-//   }
-
-//   for (const file of files) {
-//     const filePath = path.join(folder, file);
-//     const ids = JSON.parse(await fs.readFile(filePath, 'utf-8')) as string[];
-//     console.log(
-//       `Importing ${ids.length} ${type} from block ${file.split('.')[0]}`,
-//     );
-
-//     for (const id of ids) {
-//       counter++;
-//       await fetchWithRetry(endpoint, {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           Authorization: `Bearer ${ADMIN_KEY}`,
-//         },
-//         body: JSON.stringify({ id }),
-//       });
-//     }
-//   }
-
-//   return { queued: counter };
-// };
-
 (async () => {
   const transactionFiles = await getFilesInRange({
     folder: TRANSACTIONS_DIR,
@@ -141,34 +95,40 @@ const countIds = async ({
     max: MAX_BLOCK_HEIGHT,
   });
 
-  const firstTransactionHeight = parseInt(
-    transactionFiles[0].split('.')[0],
-    10,
-  );
-  const lastTransactionHeight = parseInt(
-    transactionFiles[transactionFiles.length - 1].split('.')[0],
-    10,
-  );
-  const transactionCount = await countIds({
-    folder: TRANSACTIONS_DIR,
-    files: transactionFiles,
-  });
+  console.log({ transactionFiles, bundleFiles });
 
-  const firstBundleHeight = parseInt(bundleFiles[0].split('.')[0], 10);
-  const lastBundleHeight = parseInt(
-    bundleFiles[bundleFiles.length - 1].split('.')[0],
-    10,
-  );
-  const bundleCount = await countIds({
-    folder: BUNDLES_DIR,
-    files: bundleFiles,
-  });
+  if (transactionFiles.length > 0) {
+    const firstTransactionHeight = parseInt(
+      transactionFiles[0].split('.')[0],
+      10,
+    );
+    const lastTransactionHeight = parseInt(
+      transactionFiles[transactionFiles.length - 1].split('.')[0],
+      10,
+    );
+    const transactionCount = await countIds({
+      folder: TRANSACTIONS_DIR,
+      files: transactionFiles,
+    });
 
-  console.log(
-    `Total transactions from ${firstTransactionHeight} to ${lastTransactionHeight}: ${transactionCount}`,
-  );
+    console.log(
+      `Total transactions from ${firstTransactionHeight} to ${lastTransactionHeight}: ${transactionCount}`,
+    );
+  }
 
-  console.log(
-    `Total bundles from ${firstBundleHeight} to ${lastBundleHeight}: ${bundleCount}`,
-  );
+  if (bundleFiles.length > 0) {
+    const firstBundleHeight = parseInt(bundleFiles[0].split('.')[0], 10);
+    const lastBundleHeight = parseInt(
+      bundleFiles[bundleFiles.length - 1].split('.')[0],
+      10,
+    );
+    const bundleCount = await countIds({
+      folder: BUNDLES_DIR,
+      files: bundleFiles,
+    });
+
+    console.log(
+      `Total bundles from ${firstBundleHeight} to ${lastBundleHeight}: ${bundleCount}`,
+    );
+  }
 })();
