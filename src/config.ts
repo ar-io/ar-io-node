@@ -80,6 +80,10 @@ export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
   .split(',');
 
+export const SECONDARY_CHUNK_POST_URLS = env
+  .varOrDefault('SECONDARY_CHUNK_POST_URLS', '')
+  .split(',');
+
 // Chunk POST response timeout in milliseconds
 const CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING = env.varOrUndefined(
   'CHUNK_POST_RESPONSE_TIMEOUT_MS',
