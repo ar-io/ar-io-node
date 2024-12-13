@@ -111,4 +111,28 @@ args.forEach((arg, index) => {
   console.log(
     `Parquet export started from block ${MIN_BLOCK_HEIGHT} to ${MAX_BLOCK_HEIGHT}`,
   );
+
+  let isComplete = false;
+
+  while (!isComplete) {
+    const response = await fetchWithRetry(
+      `${ARIO_ENDPOINT}/ar-io/admin/export-parquet/status`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${ADMIN_KEY}`,
+        },
+      },
+    );
+
+    const data = await response.json();
+    isComplete = data.status === 'completed';
+
+    if (isComplete) {
+      console.log('Parque export finished!');
+      console.log(data);
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
 })();
