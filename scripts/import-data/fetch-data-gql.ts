@@ -199,7 +199,7 @@ const getRootTxId = async (txId: string) => {
     }
 
     const { data } = result;
-    const bundleId = data.transaction.bundledIn?.id;
+    const bundleId = data.transaction?.bundledIn?.id;
 
     if (bundleId === undefined) {
       rootTxId = currentId;
@@ -243,6 +243,7 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
   let hasNextPage = true;
   const transactions: BlockTransactions = new Map();
   const bundles: BlockTransactions = new Map();
+  const rootTxIdsForBundles: Map<string, string> = new Map();
 
   while (hasNextPage) {
     const {
@@ -270,7 +271,11 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
 
       if (bundleId !== undefined) {
         if (BUNDLES_FETCH_ROOT_TX) {
-          const rootTxId = await getRootTxId(bundleId);
+          let rootTxId = rootTxIdsForBundles.get(bundleId);
+          if (rootTxId === undefined) {
+            rootTxId = await getRootTxId(bundleId);
+            rootTxIdsForBundles.set(bundleId, rootTxId);
+          }
           bundles.get(blockHeight)?.add(rootTxId);
         } else {
           bundles.get(blockHeight)?.add(bundleId);

@@ -31,7 +31,7 @@ export const fetchWithRetry = async (
     try {
       const response = await fetch(url, options);
 
-      console.log({ status: response.status });
+      console.log(response);
       if (response.ok) {
         return response;
       }

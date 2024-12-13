@@ -16,6 +16,7 @@
 test-results.xml
 /scripts/import-data/bundles
 /scripts/import-data/transactions
+/scripts/import-data/parquet
 
 # Generated docs
 /docs/sqlite/bundles
