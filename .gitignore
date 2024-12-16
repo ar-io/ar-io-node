@@ -14,6 +14,10 @@
 /vendor
 /wallets
 test-results.xml
+/scripts/import-data/bundles
+/scripts/import-data/transactions
+/scripts/import-data/parquet
+/scripts/import-data/missing-root-tx-ids
 
 # Generated docs
 /docs/sqlite/bundles

@@ -25,8 +25,7 @@ import {
   NormalizedDataItem,
   PartialJsonTransaction,
 } from '../types.js';
-
-const DEFAULT_MAX_QUEUE_SIZE = 1000;
+import * as config from '../config.js';
 
 interface IndexProperty {
   index: number;
@@ -56,7 +55,7 @@ export class BundleDataImporter {
     contiguousDataSource,
     ans104Unbundler,
     workerCount,
-    maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+    maxQueueSize = config.BUNDLE_DATA_IMPORTER_QUEUE_SIZE,
   }: {
     log: winston.Logger;
     contiguousDataSource: ContiguousDataSource;
@@ -137,5 +136,9 @@ export class BundleDataImporter {
 
   queueDepth(): number {
     return this.queue.length();
+  }
+
+  async isQueueFull(): Promise<boolean> {
+    return this.queue.length() >= this.maxQueueSize;
   }
 }

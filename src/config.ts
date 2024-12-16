@@ -202,6 +202,12 @@ export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
   '100000',
 );
 
+// The maximum number of bundles to queue for unbundling before skipping
+export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
+  'BUNDLE_DATA_IMPORTER_QUEUE_SIZE',
+  '1000',
+);
+
 //
 // Verification
 //

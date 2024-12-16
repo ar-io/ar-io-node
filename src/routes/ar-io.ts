@@ -210,6 +210,11 @@ arIoRouter.post(
         return;
       }
 
+      if (await system.bundleDataImporter.isQueueFull()) {
+        res.status(429).send('Bundle importer queue is full');
+        return;
+      }
+
       system.eventEmitter.emit(events.ANS104_BUNDLE_QUEUED, {
         id,
         root_tx_id: id,

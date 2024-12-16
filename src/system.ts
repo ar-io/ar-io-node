@@ -470,11 +470,12 @@ metrics.registerQueueLengthGauge('ans104Unbundler', {
   length: () => ans104Unbundler.queueDepth(),
 });
 
-const bundleDataImporter = new BundleDataImporter({
+export const bundleDataImporter = new BundleDataImporter({
   log,
   contiguousDataSource: backgroundContiguousDataSource,
   ans104Unbundler,
   workerCount: config.ANS104_DOWNLOAD_WORKERS,
+  maxQueueSize: config.BUNDLE_DATA_IMPORTER_QUEUE_SIZE,
 });
 metrics.registerQueueLengthGauge('bundleDataImporter', {
   length: () => bundleDataImporter.queueDepth(),
