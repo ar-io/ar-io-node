@@ -243,8 +243,6 @@ const fetchGql = async ({
   return data;
 };
 
-const txsMissingRootTx = new Set<string>();
-
 type BlockTransactions = Map<number, Set<string>>;
 const getTransactionsForRange = async ({ min, max }: BlockRange) => {
   let cursor: string | undefined;
@@ -252,6 +250,7 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
   const transactions: BlockTransactions = new Map();
   const bundles: BlockTransactions = new Map();
   const rootTxIdsForBundles: Map<string, string> = new Map();
+  const txsMissingRootTx = new Set<string>();
 
   while (hasNextPage) {
     const {
@@ -297,7 +296,7 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
     }
   }
 
-  return { transactions, bundles };
+  return { transactions, bundles, txsMissingRootTx };
 };
 
 const writeTransactionsToFile = async ({
@@ -329,6 +328,42 @@ const writeTransactionsToFile = async ({
   }
 };
 
+const writeTxMissingRootTxIds = async ({
+  ids,
+  minHeight,
+  maxHeight,
+  outputDir,
+}: {
+  ids: Set<string>;
+  minHeight: number;
+  maxHeight: number;
+  outputDir: string;
+}) => {
+  if (ids.size === 0) return;
+  try {
+    const missingRootTxDir = path.join(outputDir, 'missing-root-tx-ids');
+    await fs.mkdir(missingRootTxDir, { recursive: true });
+
+    const filePath = path.join(
+      missingRootTxDir,
+      `tx-missing-root-tx-ids-${minHeight}-${maxHeight}.json`,
+    );
+
+    const content = JSON.stringify([...ids]);
+
+    await fs.writeFile(filePath, content, 'utf8');
+
+    console.warn(
+      `Failed to fetch rootTxId for ${ids.size} transactions.\ntx-missing-root-tx-ids-${minHeight}-${maxHeight}.json was written.`,
+    );
+  } catch (error) {
+    console.error(
+      `Failed to write tx-missing-root-tx-ids-${minHeight}-${maxHeight}.json: ${error}`,
+    );
+    throw error;
+  }
+};
+
 const countTransactions = (map: BlockTransactions) => {
   let total = 0;
   map.forEach((set) => {
@@ -356,7 +391,8 @@ const countTransactions = (map: BlockTransactions) => {
   let bundleCount = 0;
 
   for (const range of blockRanges) {
-    const { transactions, bundles } = await getTransactionsForRange(range);
+    const { transactions, bundles, txsMissingRootTx } =
+      await getTransactionsForRange(range);
 
     await writeTransactionsToFile({
       outputDir: path.join(__dirname, 'transactions'),
@@ -365,6 +401,12 @@ const countTransactions = (map: BlockTransactions) => {
     await writeTransactionsToFile({
       outputDir: path.join(__dirname, 'bundles'),
       transactions: bundles,
+    });
+    await writeTxMissingRootTxIds({
+      ids: txsMissingRootTx,
+      minHeight: range.min,
+      maxHeight: range.max,
+      outputDir: __dirname,
     });
 
     txCount += countTransactions(transactions);
@@ -376,25 +418,6 @@ const countTransactions = (map: BlockTransactions) => {
       );
       console.log(
         `Saved transactions: ${txCount}, Saved bundles: ${bundleCount}`,
-      );
-    }
-
-    if (txsMissingRootTx.size > 0) {
-      console.warn(
-        `Failed to fetch rootTxId for ${txsMissingRootTx.size} transactions`,
-      );
-
-      const txMissingRootTxPath = path.join(
-        __dirname,
-        'txs-missing-root-tx-id.json',
-      );
-      await fs.writeFile(
-        txMissingRootTxPath,
-        JSON.stringify([...txsMissingRootTx]),
-      );
-
-      console.log(
-        'Transactions missing root transaction id were written to txs-missing-root-tx-id.json file',
       );
     }
   }
