@@ -483,6 +483,7 @@ metrics.registerQueueLengthGauge('bundleDataImporter', {
 async function queueBundle(
   item: NormalizedDataItem | PartialJsonTransaction,
   isPrioritized = false,
+  bypassFilter = false,
 ) {
   try {
     if ('root_tx_id' in item && item.root_tx_id === null) {
@@ -500,7 +501,7 @@ async function queueBundle(
       format: 'ans-104',
     });
 
-    if (await config.ANS104_UNBUNDLE_FILTER.match(item)) {
+    if (bypassFilter || (await config.ANS104_UNBUNDLE_FILTER.match(item))) {
       metrics.bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
       await db.saveBundle({
         id: item.id,
@@ -540,7 +541,7 @@ async function queueBundle(
 eventEmitter.on(
   events.ANS104_BUNDLE_QUEUED,
   async (item: NormalizedDataItem | PartialJsonTransaction) => {
-    await queueBundle(item, true);
+    await queueBundle(item, true, true);
   },
 );
 
