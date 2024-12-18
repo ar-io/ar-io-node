@@ -4,7 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 22] - 2024-12-18
+
+### Added
+
+- Added the ability to block and unblock ArNS names (e.g., to comply with
+  hosting provider TOS). To block a name, POST `{ "name": "<name to block>" }`
+  to `/ar-io/admin/block-name`. To unblock a name, POST
+  `{ "name": "<name to unblock>" }` to `/ar-io/admin/unblock-name`.
+
+### Change
+
+- Return an HTTP 429 response to POSTs to `/ar-io/admin/queue-bundle` when the
+  bundle data import queue is full so that scripts queuing bundles can wait
+  rather than overflowing it.
+
+### Fix
+
+- Adjust ArNS length limit from <= 48 to <= 51 to match the limit enforced by
+  the AO process.
 
 ## [Release 21] - 2024-12-05
 
