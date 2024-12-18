@@ -13,13 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   to `/ar-io/admin/block-name`. To unblock a name, POST
   `{ "name": "<name to unblock>" }` to `/ar-io/admin/unblock-name`.
 
-### Change
+### Changed
 
 - Return an HTTP 429 response to POSTs to `/ar-io/admin/queue-bundle` when the
   bundle data import queue is full so that scripts queuing bundles can wait
   rather than overflowing it.
 
-### Fix
+### Fixed
 
 - Adjust ArNS length limit from <= 48 to <= 51 to match the limit enforced by
   the AO process.
