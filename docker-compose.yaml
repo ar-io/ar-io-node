@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-adb7069c042f31d10677389996a7def96a92729a}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-59e66be99e1f6b5df09b9117934fe49ff8124f38}
     build:
       context: .
     restart: on-failure
@@ -146,7 +146,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-e3777e103ecf30b344d01346df3ceeea497befe3}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-59e66be99e1f6b5df09b9117934fe49ff8124f38}
     profiles:
       - clickhouse
     build:
@@ -169,7 +169,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-c8d2ba1dbc8d1b4efd60c6ec041986fedbaa0d89}
     restart: on-failure
     ports:
       - 5050:5050
