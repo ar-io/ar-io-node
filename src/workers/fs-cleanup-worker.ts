@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as winston from 'winston';
-import * as config from '../config';
+import * as config from '../config.js';
 
 export class FsCleanupWorker {
   // Dependencies
