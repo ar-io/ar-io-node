@@ -39,9 +39,9 @@ export class FsCleanupWorker {
     basePath,
     shouldDelete,
     deleteCallback,
-    batchSize = config.FS_CLEANUP_BATCH_SIZE,
-    pauseDuration = config.FS_CLEANUP_BATCH_PAUSE_DURATION,
-    restartPauseDuration = config.FS_CLEANUP_RESTART_PAUSE_DURATION,
+    batchSize = config.FS_CLEANUP_WORKER_BATCH_SIZE,
+    pauseDuration = config.FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION,
+    restartPauseDuration = config.FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION,
   }: {
     log: winston.Logger;
     basePath: string;
