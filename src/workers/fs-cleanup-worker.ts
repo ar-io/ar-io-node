@@ -18,10 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as winston from 'winston';
-
-const DEFAULT_BATCH_SIZE = 2000;
-const DEFAULT_BATCH_PAUSE_DURATION = 1000 * 5;
-const DEFAULT_RESTART_PAUSE_DURATION = 1000 * 60 * 60 * 4;
+import * as config from '../config';
 
 export class FsCleanupWorker {
   // Dependencies
@@ -42,9 +39,9 @@ export class FsCleanupWorker {
     basePath,
     shouldDelete,
     deleteCallback,
-    batchSize = DEFAULT_BATCH_SIZE,
-    pauseDuration = DEFAULT_BATCH_PAUSE_DURATION,
-    restartPauseDuration = DEFAULT_RESTART_PAUSE_DURATION,
+    batchSize = config.FS_CLEANUP_BATCH_SIZE,
+    pauseDuration = config.FS_CLEANUP_BATCH_PAUSE_DURATION,
+    restartPauseDuration = config.FS_CLEANUP_RESTART_PAUSE_DURATION,
   }: {
     log: winston.Logger;
     basePath: string;
