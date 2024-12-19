@@ -205,6 +205,29 @@ export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
 );
 
 //
+// File system cleanup
+//
+
+// The number of files to process in each batch during cleanup
+export const FS_CLEANUP_BATCH_SIZE = +env.varOrDefault(
+  'FS_CLEANUP_BATCH_SIZE',
+  '2000',
+);
+
+// The pause duration between cleanup batches in milliseconds
+export const FS_CLEANUP_BATCH_PAUSE_DURATION = +env.varOrDefault(
+  'FS_CLEANUP_BATCH_PAUSE_DURATION',
+  '5000',
+);
+
+// The pause duration before restarting cleanup from the beginning in milliseconds
+export const FS_CLEANUP_RESTART_PAUSE_DURATION = +env.varOrDefault(
+  'FS_CLEANUP_RESTART_PAUSE_DURATION',
+  `${1000 * 60 * 60 * 4}`, // every 4 hours
+);
+
+//
+//
 // Verification
 //
 
