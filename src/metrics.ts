@@ -68,6 +68,12 @@ export const bundlesUnbundledCounter = new promClient.Counter({
   labelNames: ['bundle_format'],
 });
 
+export const dataItemsUnbundledCounter = new promClient.Counter({
+  name: 'data_items_unbundled_total',
+  help: 'Count of data items unbundled for potential indexing',
+  labelNames: ['bundle_format'],
+});
+
 export const dataItemsQueuedCounter = new promClient.Counter({
   name: 'data_items_queued_total',
   help: 'Count of data items queued for indexing',

@@ -567,6 +567,10 @@ eventEmitter.on(
 eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
   try {
     metrics.bundlesUnbundledCounter.inc({ bundle_format: 'ans-104' });
+    metrics.dataItemsUnbundledCounter.inc(
+      { bundle_format: 'ans-104' },
+      bundleEvent.itemCount,
+    );
     db.saveBundle({
       id: bundleEvent.parentId,
       format: 'ans-104',
