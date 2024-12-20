@@ -105,7 +105,7 @@ const projectRootPath = process.cwd();
 
 describe('Metrics', function () {
   const START_HEIGHT = 0;
-  const STOP_HEIGHT = 1;
+  const STOP_HEIGHT = 5;
 
   describe('arweave_tx_fetch_total', function () {
     let coreDb: Database;
