@@ -2394,6 +2394,7 @@ export class StandaloneSqliteDatabaseWorker {
     if (source !== undefined) {
       this.stmts.moderation.insertSource.run({
         name: source,
+        created_at: currentUnixTimestamp(),
       });
       sourceId = this.stmts.moderation.getSourceByName.get({
         name: source,
