@@ -773,6 +773,58 @@ paths:
           description: Unauthorized, API key likely incorrect.
       security:
         - bearerAuth: []
+  '/ar-io/admin/block-name':
+    put:
+      tags: [Admin]
+      summary: Blocks an ARNS name so your AR.IO Gateway will not serve it.
+      description: Blocks an ARNS name so your AR.IO Gateway will not serve it.
+      operationId: adminBlockName
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: The name you want to block.
+                notes:
+                  type: string
+                  description: Any notes or comments related to the block name. Documentation purposes only.
+                source:
+                  type: string
+                  description: The source from which the block name was obtained. Documentation purposes only.
+      responses:
+        '200':
+          description: Successful operation.
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
+  '/ar-io/admin/unblock-name':
+    put:
+      tags: [Admin]
+      summary: Unblock an ARNS name.
+      description: Unblock an ARNS name so your AR.IO Gateway will serve it again.
+      operationId: adminUnblockName
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: The name you want to unblock.
+      responses:
+        '200':
+          description: Successful operation.
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
   '/local/farcaster/frame/{txId}':
     get:
       tags: [Farcaster Frames]
