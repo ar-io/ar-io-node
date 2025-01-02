@@ -19,9 +19,9 @@ import winston from 'winston';
 
 import {
   AoClient,
-  AoIORead,
+  AoARIORead,
   AOProcess,
-  IO,
+  ARIO,
   fetchAllArNSRecords,
 } from '@ar.io/sdk';
 import * as config from '../config.js';
@@ -33,7 +33,7 @@ const DEFAULT_RETRY_DELAY = 5 * 1000; // 5 seconds
 
 export class ArNSNamesCache {
   private log: winston.Logger;
-  private networkProcess: AoIORead;
+  private networkProcess: AoARIORead;
   private namesCache: Promise<Set<string>>;
   private lastSuccessfulNames: Set<string> | null = null;
   private lastCacheTime = 0;
@@ -49,7 +49,7 @@ export class ArNSNamesCache {
       GRAPHQL_URL: config.AO_GRAPHQL_URL,
       GATEWAY_URL: config.AO_GATEWAY_URL,
     }),
-    networkProcess = IO.init({
+    networkProcess = ARIO.init({
       process: new AOProcess({
         processId: config.IO_PROCESS_ID,
         ao: ao,
@@ -61,7 +61,7 @@ export class ArNSNamesCache {
   }: {
     log: winston.Logger;
     ao?: AoClient;
-    networkProcess?: AoIORead;
+    networkProcess?: AoARIORead;
     cacheTtl?: number;
     maxRetries?: number;
     retryDelay?: number;

@@ -19,7 +19,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import winston from 'winston';
 import { ArNSNamesCache } from './arns-names-cache.js';
-import { AoIORead } from '@ar.io/sdk';
+import { AoARIORead } from '@ar.io/sdk';
 
 const createMockNetworkProcess = () => {
   let callCount = 0;
@@ -41,7 +41,7 @@ const createMockNetworkProcess = () => {
         nextCursor: undefined,
       };
     },
-  } as unknown as AoIORead;
+  } as unknown as AoARIORead;
 };
 
 describe('ArNSNamesCache', () => {
@@ -125,7 +125,7 @@ describe('ArNSNamesCache', () => {
           nextCursor: undefined,
         };
       },
-    } as unknown as AoIORead;
+    } as unknown as AoARIORead;
 
     const cache = new ArNSNamesCache({
       log,
@@ -146,7 +146,7 @@ describe('ArNSNamesCache', () => {
         callCount++;
         throw new Error(`Attempt ${callCount} failed`);
       },
-    } as unknown as AoIORead;
+    } as unknown as AoARIORead;
 
     const cache = new ArNSNamesCache({
       log,
@@ -178,7 +178,7 @@ describe('ArNSNamesCache', () => {
           nextCursor: undefined,
         };
       },
-    } as unknown as AoIORead;
+    } as unknown as AoARIORead;
 
     const retryDelay = 100;
     const cache = new ArNSNamesCache({
@@ -207,7 +207,7 @@ describe('ArNSNamesCache', () => {
           nextCursor: undefined,
         };
       },
-    } as unknown as AoIORead;
+    } as unknown as AoARIORead;
 
     const cache = new ArNSNamesCache({
       log,
@@ -234,7 +234,7 @@ describe('ArNSNamesCache', () => {
         }
         throw new Error('Network error');
       },
-    } as unknown as AoIORead;
+    } as unknown as AoARIORead;
 
     const cache = new ArNSNamesCache({
       log,
@@ -258,7 +258,7 @@ describe('ArNSNamesCache', () => {
         callCount++;
         throw new Error(`Attempt ${callCount} failed`);
       },
-    } as unknown as AoIORead;
+    } as unknown as AoARIORead;
 
     const cache = new ArNSNamesCache({
       log,

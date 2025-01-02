@@ -19,7 +19,7 @@ import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import * as winston from 'winston';
 import axios from 'axios';
-import { AoIORead, IO } from '@ar.io/sdk';
+import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
@@ -29,7 +29,7 @@ import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 let log: winston.Logger;
 let dataSource: ArIODataSource;
 let requestAttributes: RequestAttributes;
-let mockedArIOInstance: AoIORead;
+let mockedArIOInstance: AoARIORead;
 let mockedAxiosGet: any;
 
 before(async () => {
@@ -70,7 +70,7 @@ beforeEach(async () => {
     },
   });
 
-  mock.method(IO, 'init', () => mockedArIOInstance);
+  mock.method(ARIO, 'init', () => mockedArIOInstance);
 
   mock.method(axios, 'get', mockedAxiosGet);
 
@@ -80,7 +80,7 @@ beforeEach(async () => {
 
   dataSource = new ArIODataSource({
     log,
-    arIO: IO.init(),
+    arIO: ARIO.init(),
     nodeWallet: 'localNode',
   });
 
