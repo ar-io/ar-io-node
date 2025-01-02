@@ -17,7 +17,7 @@
  */
 import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
-import { AoIORead } from '@ar.io/sdk';
+import { AoARIORead } from '@ar.io/sdk';
 import { randomInt } from 'node:crypto';
 
 import {
@@ -43,7 +43,7 @@ export class ArIODataSource implements ContiguousDataSource {
   private requestTimeoutMs: number;
   private updatePeersRefreshIntervalMs: number;
 
-  private arIO: AoIORead;
+  private arIO: AoARIORead;
   peers: Record<string, string> = {};
   private intervalId?: NodeJS.Timeout;
 
@@ -56,7 +56,7 @@ export class ArIODataSource implements ContiguousDataSource {
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
   }: {
     log: winston.Logger;
-    arIO: AoIORead;
+    arIO: AoARIORead;
     nodeWallet?: string;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
@@ -108,7 +108,7 @@ export class ArIODataSource implements ContiguousDataSource {
         cursor = nextCursor;
       } catch (error: any) {
         log.error(
-          'Failed to fetch gateways from IO. Returning current peer list.',
+          'Failed to fetch gateways from ARIO Returning current peer list.',
           {
             message: error.message,
             stack: error.stack,
