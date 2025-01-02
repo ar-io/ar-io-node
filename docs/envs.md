@@ -17,6 +17,7 @@ This document describes the environment variables that can be used to configure 
 | SIMULATED_REQUEST_FAILURE_RATE | Number | 0 | Number from 0 to 1, representing the probability of a request failing |
 | AR_IO_WALLET | String | "" | Arweave wallet address used for staking and rewards |
 | ADMIN_API_KEY | String | Generated | API key used for admin API requests (if not set, it's generated and logged into the console) |
+| ADMIN_API_KEY_FILE | String | Generated | Alternative way to set the API key used for admin API requests via filepath, it takes precedene over ADMIN_API_KEY if defined |
 | BACKFILL_BUNDLE_RECORDS | Boolean | false | If true, ar.io node will start indexing missing bundles |
 | FILTER_CHANGE_REPROCESS | Boolean | false | If true, all indexed bundles will be reprocessed with the new filters (you can use this when you change the filters) |
 | ON_DEMAND_RETRIEVAL_ORDER | String | s3,trusted-gateways,chunks,tx-data | Data source retrieval order for on-demand data requests |
