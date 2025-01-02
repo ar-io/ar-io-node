@@ -17,6 +17,7 @@
  */
 import { canonicalize } from 'json-canonicalize';
 import { isMainThread } from 'node:worker_threads';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
@@ -31,9 +32,20 @@ export const PORT = +env.varOrDefault('PORT', '4000');
 
 // API key for accessing admin HTTP endpoints
 // It's set once in the main thread
-export const ADMIN_API_KEY = isMainThread
+export let ADMIN_API_KEY = isMainThread
   ? env.varOrRandom('ADMIN_API_KEY')
   : undefined;
+
+const ADMIN_API_KEY_FILE = isMainThread
+  ? env.varOrUndefined('ADMIN_API_KEY_FILE')
+  : undefined;
+
+if (ADMIN_API_KEY_FILE !== undefined) {
+  if (!existsSync(ADMIN_API_KEY_FILE)) {
+    throw new Error(`ADMIN_API_KEY_FILE not found: ${ADMIN_API_KEY_FILE}`);
+  }
+  ADMIN_API_KEY = readFileSync(ADMIN_API_KEY_FILE).toString().trim();
+}
 
 //
 // Nodes
