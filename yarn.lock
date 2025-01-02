@@ -119,10 +119,10 @@
   dependencies:
     xss "^1.0.8"
 
-"@ar.io/sdk@^3.1.0-alpha.11":
-  version "3.1.0-alpha.11"
-  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-3.1.0-alpha.11.tgz#ef66226c4e4fbdf61856a07712f591b36849bb5a"
-  integrity sha512-E40PPBIQ9nob59/4pSghiay+VuSuaIby39O5iLnC9w1gO76UTCUaGJDszKDozuvG6xFkHQkzWqKC8F/FqT/ZeA==
+"@ar.io/sdk@^3.1.0":
+  version "3.1.0"
+  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-3.1.0.tgz#adb95ec64627f73c2b7c76db5e0afbc34ac18361"
+  integrity sha512-ePtvVcffzJcU+LoHqjL0RwJeS/3dCgEolWw7/ywIWwXvzYbbhASdNdBEb6/Liz8baMO/GYsaUGVSpnjmVKC0aw==
   dependencies:
     "@dha-team/arbundles" "^1.0.1"
     "@permaweb/aoconnect" "^0.0.57"
