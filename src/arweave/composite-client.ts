@@ -800,9 +800,10 @@ export class ArweaveCompositeClient
         canceled = error.code === 'ERR_CANCELED';
       }
 
-      this.log.warn('Failed to broadcast chunk:', {
+      this.log.error('Failed to broadcast chunk:', {
         message: error.message,
         stack: error.stack,
+        url,
       });
 
       return {
@@ -828,7 +829,7 @@ export class ArweaveCompositeClient
     let successCount = 0;
     let failureCount = 0;
 
-    const primaryResults = await Promise.all(
+    const results = await Promise.all(
       this.chunkPostUrls.map(async (url) => {
         const response = await this.postChunk({
           url,
@@ -860,7 +861,6 @@ export class ArweaveCompositeClient
       }),
     );
 
-    let results = primaryResults;
     let secondarySuccessCount = 0;
 
     if (this.secondaryChunkPostUrls.length > 0) {
@@ -877,57 +877,40 @@ export class ArweaveCompositeClient
 
         const circuitBreaker = this.secondaryChunkPostCircuitBreakers[url];
         const task = limit(async () => {
-          try {
-            const response = await circuitBreaker.fire({
-              url,
-              chunk,
-              abortTimeout,
-              responseTimeout,
-              originAndHopsHeaders,
+          const response = await circuitBreaker.fire({
+            url,
+            chunk,
+            abortTimeout,
+            responseTimeout,
+            originAndHopsHeaders,
+          });
+
+          if (response.success) {
+            secondarySuccessCount++;
+            metrics.arweaveChunkPostCounter.inc({
+              endpoint: url,
+              status: 'success',
+              role: 'secondary',
             });
-
-            if (response.success) {
-              secondarySuccessCount++;
-              metrics.arweaveChunkPostCounter.inc({
-                endpoint: url,
-                status: 'success',
-                role: 'secondary',
-              });
-            } else {
-              failureCount++;
-              metrics.arweaveChunkPostCounter.inc({
-                endpoint: url,
-                status: 'fail',
-                role: 'secondary',
-              });
-            }
-
-            return response;
-          } catch (error: any) {
-            failureCount++;
-            this.log.debug('Secondary chunk broadcast failed:', { error });
+          } else {
             metrics.arweaveChunkPostCounter.inc({
               endpoint: url,
               status: 'fail',
               role: 'secondary',
             });
-            return {
-              success: false,
-              statusCode: error?.response?.status,
-              canceled: error.code === 'ERR_CANCELED',
-              timedOut: error.code === 'ECONNABORTED',
-            };
           }
+
+          return response;
         });
 
         secondaryResults.push(task);
       }
 
-      results = [...results, ...(await Promise.all(secondaryResults))];
+      Promise.all(secondaryResults);
     }
 
     return {
-      successCount: successCount + secondarySuccessCount,
+      successCount,
       failureCount,
       results,
     };
