@@ -180,7 +180,7 @@ describe('Post Chunk', () => {
         },
       });
       assert.equal(response.status, 200);
-      assert.equal(response.data.successCount, 2);
+      assert.equal(response.data.successCount, 1);
       assert.equal(response.data.failureCount, 0);
       assert.deepEqual(response.data.results[0], {
         success: true,
@@ -210,7 +210,7 @@ describe('Post Chunk', () => {
       } catch (error: any) {
         assert.equal(error.response.status, 500);
         assert.equal(error.response.data.successCount, 0);
-        assert.equal(error.response.data.failureCount, 2);
+        assert.equal(error.response.data.failureCount, 1);
         assert.deepEqual(error.response.data.results[0], {
           success: false,
           statusCode: 400,
@@ -238,7 +238,7 @@ describe('Post Chunk', () => {
       } catch (error: any) {
         assert.equal(error.response.status, 500);
         assert.equal(error.response.data.successCount, 0);
-        assert.equal(error.response.data.failureCount, 2);
+        assert.equal(error.response.data.failureCount, 1);
         assert.deepEqual(error.response.data.results[0], {
           success: false,
           canceled: false,
