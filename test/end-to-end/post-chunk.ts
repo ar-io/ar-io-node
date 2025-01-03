@@ -158,4 +158,93 @@ describe('Post Chunk', () => {
       }
     });
   });
+
+  describe('posting to secondary urls', () => {
+    beforeEach(async () => {
+      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    });
+
+    afterEach(async function () {
+      await compose.down();
+    });
+
+    it('Verifying that chunk was uploaded successfully', async () => {
+      compose = await startContainerWithEnvs({
+        START_HEIGHT: '1',
+        STOP_HEIGHT: '1',
+        SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
+      });
+      const response = await axios.post('http://localhost:4000/chunk', chunk, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.data.successCount, 2);
+      assert.equal(response.data.failureCount, 0);
+      assert.deepEqual(response.data.results[0], {
+        success: true,
+        statusCode: 200,
+        canceled: false,
+        timedOut: false,
+      });
+    });
+
+    it('Verifying that invalid chunk fail to upload', async () => {
+      compose = await startContainerWithEnvs({
+        START_HEIGHT: '1',
+        STOP_HEIGHT: '1',
+        SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
+      });
+      const invalidChunk = JSON.parse(chunk);
+      invalidChunk.chunk = '';
+
+      try {
+        await axios.post('http://localhost:4000/chunk', invalidChunk, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        assert.fail('Expected an error to be thrown');
+      } catch (error: any) {
+        assert.equal(error.response.status, 500);
+        assert.equal(error.response.data.successCount, 0);
+        assert.equal(error.response.data.failureCount, 2);
+        assert.deepEqual(error.response.data.results[0], {
+          success: false,
+          statusCode: 400,
+          canceled: false,
+          timedOut: false,
+        });
+      }
+    });
+
+    it('Verifying that chunk upload timed out', async () => {
+      compose = await startContainerWithEnvs({
+        START_HEIGHT: '1',
+        STOP_HEIGHT: '1',
+        CHUNK_POST_RESPONSE_TIMEOUT_MS: '1',
+        SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
+      });
+      try {
+        await axios.post('http://localhost:4000/chunk', chunk, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        assert.fail('Expected an error to be thrown');
+      } catch (error: any) {
+        assert.equal(error.response.status, 500);
+        assert.equal(error.response.data.successCount, 0);
+        assert.equal(error.response.data.failureCount, 2);
+        assert.deepEqual(error.response.data.results[0], {
+          success: false,
+          canceled: false,
+          timedOut: true,
+        });
+      }
+    });
+  });
 });
