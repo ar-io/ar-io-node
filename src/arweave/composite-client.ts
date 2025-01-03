@@ -24,6 +24,8 @@ import { Readable } from 'node:stream';
 import * as rax from 'retry-axios';
 import { default as wait } from 'wait';
 import * as winston from 'winston';
+import pLimit from 'p-limit';
+import CircuitBreaker from 'opossum';
 
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
@@ -34,8 +36,10 @@ import {
   validateChunk,
 } from '../lib/validation.js';
 import * as metrics from '../metrics.js';
+import * as config from '../config.js';
 import {
   BroadcastChunkResult,
+  BroadcastChunkResponses,
   ChainSource,
   Chunk,
   ChunkBroadcaster,
@@ -94,7 +98,16 @@ export class ArweaveCompositeClient
   private trustedNodeUrl: string;
   private chunkPostUrls: string[];
   private secondaryChunkPostUrls: string[];
+  private secondaryChunkPostConcurrency: number;
+  private secondaryChunkPostMinSuccessCount: number;
   private trustedNodeAxios;
+  private secondaryChunkPostCircuitBreakers: Record<
+    string,
+    CircuitBreaker<
+      Parameters<ArweaveCompositeClient['postChunk']>,
+      Awaited<ReturnType<ArweaveCompositeClient['postChunk']>>
+    >
+  > = {};
 
   // Peers
   private peers: Record<string, Peer> = {};
@@ -131,7 +144,6 @@ export class ArweaveCompositeClient
     arweave,
     trustedNodeUrl,
     chunkPostUrls,
-    secondaryChunkPostUrls,
     blockStore,
     chunkCache = new WeakMap(),
     txStore,
@@ -148,7 +160,6 @@ export class ArweaveCompositeClient
     arweave: Arweave;
     trustedNodeUrl: string;
     chunkPostUrls: string[];
-    secondaryChunkPostUrls: string[];
     blockStore: PartialJsonBlockStore;
     chunkCache?: WeakMap<
       { absoluteOffset: number },
@@ -169,9 +180,39 @@ export class ArweaveCompositeClient
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.chunkPostUrls = chunkPostUrls.map((url) => url.replace(/\/$/, ''));
-    this.secondaryChunkPostUrls = secondaryChunkPostUrls.map((url) =>
+    this.secondaryChunkPostUrls = config.SECONDARY_CHUNK_POST_URLS.map((url) =>
       url.replace(/\/$/, ''),
     );
+    this.secondaryChunkPostConcurrency =
+      config.SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT;
+    this.secondaryChunkPostMinSuccessCount =
+      config.SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT;
+    this.secondaryChunkPostUrls.forEach((url) => {
+      const circuitBreaker = new CircuitBreaker(
+        ({
+          url,
+          chunk,
+          abortTimeout,
+          responseTimeout,
+          originAndHopsHeaders,
+        }) => {
+          return this.postChunk({
+            url,
+            chunk,
+            abortTimeout,
+            responseTimeout,
+            originAndHopsHeaders,
+          });
+        },
+        {
+          name: `secondaryBroadcastChunk-${url}`,
+        },
+      );
+
+      this.secondaryChunkPostCircuitBreakers[url] = circuitBreaker;
+      metrics.circuitBreakerMetrics.add(circuitBreaker);
+    });
+
     this.failureSimulator = failureSimulator;
     this.txStore = txStore;
     this.blockStore = blockStore;
@@ -718,6 +759,61 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
+  async postChunk({
+    url,
+    chunk,
+    abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
+    responseTimeout = DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
+    originAndHopsHeaders,
+  }: {
+    url: string;
+    chunk: JsonChunkPost;
+    abortTimeout?: number;
+    responseTimeout?: number;
+    originAndHopsHeaders: Record<string, string | undefined>;
+  }) {
+    try {
+      this.failureSimulator.maybeFail();
+
+      const resp = await axios({
+        url,
+        method: 'POST',
+        data: chunk,
+        signal: AbortSignal.timeout(abortTimeout),
+        timeout: responseTimeout,
+        validateStatus: (status) => status >= 200 && status < 300,
+        headers: originAndHopsHeaders,
+      });
+
+      return {
+        success: true,
+        statusCode: resp.status,
+        canceled: false,
+        timedOut: false,
+      };
+    } catch (error: any) {
+      let canceled = false;
+      let timedOut = false;
+
+      if (axios.isAxiosError(error)) {
+        timedOut = error.code === 'ECONNABORTED';
+        canceled = error.code === 'ERR_CANCELED';
+      }
+
+      this.log.warn('Failed to broadcast chunk:', {
+        message: error.message,
+        stack: error.stack,
+      });
+
+      return {
+        success: false,
+        statusCode: error.response?.status,
+        canceled,
+        timedOut,
+      };
+    }
+  }
+
   async broadcastChunk({
     chunk,
     abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
@@ -732,124 +828,106 @@ export class ArweaveCompositeClient
     let successCount = 0;
     let failureCount = 0;
 
-    const results = await Promise.all(
+    const primaryResults = await Promise.all(
       this.chunkPostUrls.map(async (url) => {
-        try {
-          this.failureSimulator.maybeFail();
+        const response = await this.postChunk({
+          url,
+          chunk,
+          abortTimeout,
+          responseTimeout,
+          originAndHopsHeaders,
+        });
 
-          const resp = await axios({
-            url,
-            method: 'POST',
-            data: chunk,
-            signal: AbortSignal.timeout(abortTimeout),
-            timeout: responseTimeout,
-            validateStatus: (status) => status >= 200 && status < 300,
-            headers: originAndHopsHeaders,
-          });
-
+        if (response.success) {
           successCount++;
 
           metrics.arweaveChunkPostCounter.inc({
             endpoint: url,
             status: 'success',
+            role: 'primary',
           });
-
-          return {
-            success: true,
-            statusCode: resp.status,
-            canceled: false,
-            timedOut: false,
-          };
-        } catch (error: any) {
-          let canceled = false;
-          let timedOut = false;
-
-          if (axios.isAxiosError(error)) {
-            timedOut = error.code === 'ECONNABORTED';
-            canceled = error.code === 'ERR_CANCELED';
-          }
-
-          this.log.warn('Failed to broadcast chunk:', {
-            message: error.message,
-            stack: error.stack,
-          });
-
+        } else {
           failureCount++;
 
           metrics.arweaveChunkPostCounter.inc({
             endpoint: url,
             status: 'fail',
+            role: 'primary',
           });
-
-          return {
-            success: false,
-            statusCode: error.response?.status,
-            canceled,
-            timedOut,
-          };
         }
+
+        return response;
       }),
     );
 
-    Promise.all(
-      this.secondaryChunkPostUrls.map(async (url) => {
-        try {
-          this.failureSimulator.maybeFail();
+    let results = primaryResults;
+    let secondarySuccessCount = 0;
 
-          const resp = await axios({
-            url,
-            method: 'POST',
-            data: chunk,
-            signal: AbortSignal.timeout(abortTimeout),
-            timeout: responseTimeout,
-            validateStatus: (status) => status >= 200 && status < 300,
-            headers: originAndHopsHeaders,
-          });
+    if (this.secondaryChunkPostUrls.length > 0) {
+      const secondaryResults: Promise<BroadcastChunkResponses>[] = [];
 
-          metrics.secondaryArweaveChunkPostCounter.inc({
-            endpoint: url,
-            status: 'success',
-          });
+      const shuffledSecondaryChunkPostUrls = this.secondaryChunkPostUrls.sort(
+        () => Math.random() - 0.5,
+      );
 
-          return {
-            success: true,
-            statusCode: resp.status,
-            canceled: false,
-            timedOut: false,
-          };
-        } catch (error: any) {
-          let canceled = false;
-          let timedOut = false;
+      const limit = pLimit(this.secondaryChunkPostConcurrency);
+      for (const url of shuffledSecondaryChunkPostUrls) {
+        if (secondarySuccessCount >= this.secondaryChunkPostMinSuccessCount)
+          break;
 
-          if (axios.isAxiosError(error)) {
-            timedOut = error.code === 'ECONNABORTED';
-            canceled = error.code === 'ERR_CANCELED';
+        const circuitBreaker = this.secondaryChunkPostCircuitBreakers[url];
+        const task = limit(async () => {
+          try {
+            const response = await circuitBreaker.fire({
+              url,
+              chunk,
+              abortTimeout,
+              responseTimeout,
+              originAndHopsHeaders,
+            });
+
+            if (response.success) {
+              secondarySuccessCount++;
+              metrics.arweaveChunkPostCounter.inc({
+                endpoint: url,
+                status: 'success',
+                role: 'secondary',
+              });
+            } else {
+              failureCount++;
+              metrics.arweaveChunkPostCounter.inc({
+                endpoint: url,
+                status: 'fail',
+                role: 'secondary',
+              });
+            }
+
+            return response;
+          } catch (error: any) {
+            failureCount++;
+            this.log.debug('Secondary chunk broadcast failed:', { error });
+            metrics.arweaveChunkPostCounter.inc({
+              endpoint: url,
+              status: 'fail',
+              role: 'secondary',
+            });
+            return {
+              success: false,
+              statusCode: error?.response?.status,
+              canceled: error.code === 'ERR_CANCELED',
+              timedOut: error.code === 'ECONNABORTED',
+            };
           }
+        });
 
-          this.log.debug('Failed to broadcast chunk to secondary chunk node:', {
-            message: error.message,
-            stack: error.stack,
-          });
+        secondaryResults.push(task);
+      }
 
-          failureCount++;
-
-          metrics.secondaryArweaveChunkPostCounter.inc({
-            endpoint: url,
-            status: 'fail',
-          });
-
-          return {
-            success: false,
-            statusCode: error.response?.status,
-            canceled,
-            timedOut,
-          };
-        }
-      }),
-    );
+      results = [...results, ...(await Promise.all(secondaryResults))];
+    }
 
     return {
-      successCount,
+      successCount: successCount + secondarySuccessCount,
       failureCount,
       results,
     };
