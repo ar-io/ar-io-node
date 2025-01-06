@@ -315,7 +315,7 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
               rootTxIdCache.set(bundleId, { rootTxId, bundleType });
               if (bundleType === 'ans102') {
                 if (!ans102.has(blockHeight)) {
-                  ans104.set(blockHeight, new Set());
+                  ans102.set(blockHeight, new Set());
                 }
                 ans102.get(blockHeight)?.add(rootTxId);
               } else if (bundleType === 'ans104') {
