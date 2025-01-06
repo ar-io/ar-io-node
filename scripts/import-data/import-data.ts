@@ -32,9 +32,9 @@ let ADMIN_KEY: string | undefined;
 let MIN_BLOCK_HEIGHT = 0;
 let MAX_BLOCK_HEIGHT: number | undefined;
 let TRANSACTIONS_DIR = path.join(__dirname, 'transactions');
-let BUNDLES_DIR = path.join(__dirname, 'bundles');
+let ANS104_DIR = path.join(__dirname, 'ans104');
 
-type ImportType = 'transaction' | 'bundle' | 'both';
+type ImportType = 'transaction' | 'ans104' | 'all';
 let IMPORT_TYPE: ImportType | undefined;
 
 args.forEach((arg, index) => {
@@ -79,11 +79,11 @@ args.forEach((arg, index) => {
         process.exit(1);
       }
       break;
-    case '--bundlesDir':
+    case '--ans104Dir':
       if (args[index + 1]) {
-        BUNDLES_DIR = args[index + 1];
+        ANS104_DIR = args[index + 1];
       } else {
-        console.error('Missing value for --bundlesDir');
+        console.error('Missing value for --ans104Dir');
         process.exit(1);
       }
       break;
@@ -91,8 +91,8 @@ args.forEach((arg, index) => {
       const importType = args[index + 1];
       if (
         importType === 'transaction' ||
-        importType === 'bundle' ||
-        importType === 'both'
+        importType === 'ans104' ||
+        importType === 'all'
       ) {
         IMPORT_TYPE = importType;
       } else {
@@ -111,7 +111,7 @@ const importFromFiles = async ({
   type,
 }: {
   files: string[];
-  type: 'transactions' | 'bundles';
+  type: 'transactions' | 'ans104';
 }) => {
   let counter = 0;
   let folder: string;
@@ -121,8 +121,8 @@ const importFromFiles = async ({
       folder = TRANSACTIONS_DIR;
       endpoint = `${ARIO_ENDPOINT}/ar-io/admin/queue-tx`;
       break;
-    case 'bundles':
-      folder = BUNDLES_DIR;
+    case 'ans104':
+      folder = ANS104_DIR;
       endpoint = `${ARIO_ENDPOINT}/ar-io/admin/queue-bundle`;
       break;
     default:
@@ -164,7 +164,7 @@ const importFromFiles = async ({
   let transactionFiles: string[] = [];
   let bundleFiles: string[] = [];
 
-  switch (IMPORT_TYPE ?? 'both') {
+  switch (IMPORT_TYPE ?? 'all') {
     case 'transaction':
       transactionFiles = await getFilesInRange({
         folder: TRANSACTIONS_DIR,
@@ -172,21 +172,21 @@ const importFromFiles = async ({
         max: MAX_BLOCK_HEIGHT,
       });
       break;
-    case 'bundle':
+    case 'ans104':
       bundleFiles = await getFilesInRange({
-        folder: BUNDLES_DIR,
+        folder: ANS104_DIR,
         min: MIN_BLOCK_HEIGHT,
         max: MAX_BLOCK_HEIGHT,
       });
       break;
-    case 'both':
+    case 'all':
       transactionFiles = await getFilesInRange({
         folder: TRANSACTIONS_DIR,
         min: MIN_BLOCK_HEIGHT,
         max: MAX_BLOCK_HEIGHT,
       });
       bundleFiles = await getFilesInRange({
-        folder: BUNDLES_DIR,
+        folder: ANS104_DIR,
         min: MIN_BLOCK_HEIGHT,
         max: MAX_BLOCK_HEIGHT,
       });
@@ -208,7 +208,7 @@ const importFromFiles = async ({
 
   const queuedBundles = await importFromFiles({
     files: bundleFiles,
-    type: 'bundles',
+    type: 'ans104',
   });
 
   if (queuedBundles.queued > 0) {

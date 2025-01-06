@@ -173,6 +173,10 @@ query {
     bundledIn {
       id
     }
+    tags {
+      name
+      value
+    }
   }
 }
 `;
@@ -180,6 +184,7 @@ query {
 const getRootTxId = async (txId: string) => {
   let rootTxId: string | undefined;
   let currentId = txId;
+  let bundleType: string | null = null;
 
   while (rootTxId === undefined) {
     const response = await fetchWithRetry(GQL_ENDPOINT, {
@@ -212,9 +217,22 @@ const getRootTxId = async (txId: string) => {
     } else {
       currentId = bundleId;
     }
+
+    const tags = data.transaction.tags;
+
+    const bundleVersionTag = tags.find(
+      (tag: { name: string; value: string }) => tag.name === 'Bundle-Version',
+    );
+    if (bundleVersionTag) {
+      if (bundleVersionTag.value === '1.0.0') {
+        bundleType = 'ans102';
+      } else if (bundleVersionTag.value === '2.0.0') {
+        bundleType = 'ans104';
+      }
+    }
   }
 
-  return rootTxId;
+  return { rootTxId, bundleType };
 };
 
 const fetchGql = async ({
@@ -248,9 +266,11 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
   let cursor: string | undefined;
   let hasNextPage = true;
   const transactions: BlockTransactions = new Map();
-  const bundles: BlockTransactions = new Map();
-  const rootTxIdsForBundles: Map<string, string> = new Map();
+  const ans104: BlockTransactions = new Map();
+  const ans102: BlockTransactions = new Map();
+  const rootTxIdCache: Map<string, Record<string, string | null>> = new Map();
   const txsMissingRootTx = new Set<string>();
+  const dataItemsPerBlock = new Map<string, number>();
 
   while (hasNextPage) {
     const {
@@ -272,23 +292,42 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
       if (!transactions.has(blockHeight)) {
         transactions.set(blockHeight, new Set());
       }
-      if (!bundles.has(blockHeight)) {
-        bundles.set(blockHeight, new Set());
-      }
 
       if (bundleId !== undefined) {
-        if (BUNDLES_FETCH_ROOT_TX) {
-          const cachedRootTxId = rootTxIdsForBundles.get(bundleId);
-          const rootTxId = cachedRootTxId ?? (await getRootTxId(bundleId));
+        if (!dataItemsPerBlock.has(blockHeight)) {
+          dataItemsPerBlock.set(blockHeight, 0);
+        }
+        dataItemsPerBlock.set(
+          blockHeight,
+          dataItemsPerBlock.get(blockHeight)! + 1, // eslint-disable-line
+        );
 
-          if (rootTxId === undefined) {
+        if (BUNDLES_FETCH_ROOT_TX) {
+          const cachedRootTxId = rootTxIdCache.get(bundleId);
+          const rootTxIdForBundle =
+            cachedRootTxId ?? (await getRootTxId(bundleId));
+
+          if (rootTxIdForBundle === undefined) {
             txsMissingRootTx.add(bundleId);
           } else {
-            rootTxIdsForBundles.set(bundleId, rootTxId);
-            bundles.get(blockHeight)?.add(rootTxId);
+            const { rootTxId, bundleType } = rootTxIdForBundle;
+            if (rootTxId !== null) {
+              rootTxIdCache.set(bundleId, { rootTxId, bundleType });
+              if (bundleType === 'ans102') {
+                if (!ans102.has(blockHeight)) {
+                  ans104.set(blockHeight, new Set());
+                }
+                ans102.get(blockHeight)?.add(rootTxId);
+              } else if (bundleType === 'ans104') {
+                if (!ans104.has(blockHeight)) {
+                  ans104.set(blockHeight, new Set());
+                }
+                ans104.get(blockHeight)?.add(rootTxId);
+              }
+            }
           }
         } else {
-          bundles.get(blockHeight)?.add(bundleId);
+          ans104.get(blockHeight)?.add(bundleId);
         }
       } else {
         transactions.get(blockHeight)?.add(id);
@@ -296,7 +335,7 @@ const getTransactionsForRange = async ({ min, max }: BlockRange) => {
     }
   }
 
-  return { transactions, bundles, txsMissingRootTx };
+  return { transactions, ans104, ans102, txsMissingRootTx, dataItemsPerBlock };
 };
 
 const writeTransactionsToFile = async ({
@@ -325,6 +364,50 @@ const writeTransactionsToFile = async ({
       console.error(`Failed to write ${filePath}: ${error}`);
       throw error;
     }
+  }
+};
+
+const writeDataItemsPerBlockCount = async ({
+  outputDir,
+  dataItemsPerBlock,
+}: {
+  outputDir: string;
+  dataItemsPerBlock: Map<string, number>;
+}) => {
+  try {
+    await fs.mkdir(outputDir, { recursive: true });
+  } catch (error) {
+    console.error(`Failed to create directory: ${error}`);
+    throw error;
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0'); // Month is 0-indexed
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const timestamp = `${year}${month}${day}${hour}${minutes}`;
+
+  const totalCount = Array.from(dataItemsPerBlock.values()).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+
+  const content =
+    Array.from(dataItemsPerBlock.entries())
+      .map(([height, counter]) => `${height},${counter}`)
+      .join('\n') + `\ntotal,${totalCount}`;
+  const filePath = path.join(
+    outputDir,
+    `data-items-per-block-${timestamp}.csv`,
+  );
+
+  try {
+    await fs.writeFile(filePath, content);
+  } catch (error) {
+    console.error(`Failed to write ${filePath}: ${error}`);
+    throw error;
   }
 };
 
@@ -388,19 +471,29 @@ const countTransactions = (map: BlockTransactions) => {
   );
 
   let txCount = 0;
-  let bundleCount = 0;
+  let ans104Count = 0;
+  let ans102Count = 0;
 
   for (const range of blockRanges) {
-    const { transactions, bundles, txsMissingRootTx } =
-      await getTransactionsForRange(range);
+    const {
+      transactions,
+      ans104,
+      ans102,
+      txsMissingRootTx,
+      dataItemsPerBlock,
+    } = await getTransactionsForRange(range);
 
     await writeTransactionsToFile({
       outputDir: path.join(__dirname, 'transactions'),
       transactions,
     });
     await writeTransactionsToFile({
-      outputDir: path.join(__dirname, 'bundles'),
-      transactions: bundles,
+      outputDir: path.join(__dirname, 'ans104'),
+      transactions: ans104,
+    });
+    await writeTransactionsToFile({
+      outputDir: path.join(__dirname, 'ans102'),
+      transactions: ans102,
     });
     await writeTxMissingRootTxIds({
       ids: txsMissingRootTx,
@@ -408,16 +501,21 @@ const countTransactions = (map: BlockTransactions) => {
       maxHeight: range.max,
       outputDir: __dirname,
     });
+    await writeDataItemsPerBlockCount({
+      outputDir: __dirname,
+      dataItemsPerBlock,
+    });
 
     txCount += countTransactions(transactions);
-    bundleCount += countTransactions(bundles);
+    ans104Count += countTransactions(ans104);
+    ans102Count += countTransactions(ans102);
 
-    if (transactions.size > 0 || bundles.size > 0) {
+    if (transactions.size > 0 || ans104.size > 0 || ans102.size > 0) {
       console.log(
         `Transactions and bundles from block ${range.min} to ${range.max} saved!`,
       );
       console.log(
-        `Saved transactions: ${txCount}, Saved bundles: ${bundleCount}`,
+        `Saved transactions: ${txCount}, ans-104 bundles: ${ans104Count}, ans-102 bundles: ${ans102Count}`,
       );
     }
   }
