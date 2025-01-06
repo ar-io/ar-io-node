@@ -24,7 +24,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let TRANSACTIONS_DIR = path.join(__dirname, 'transactions');
-let BUNDLES_DIR = path.join(__dirname, 'bundles');
+let ANS104_DIR = path.join(__dirname, 'ans104');
+let ANS102_DIR = path.join(__dirname, 'ans102');
 let MIN_BLOCK_HEIGHT = 0;
 let MAX_BLOCK_HEIGHT = Infinity;
 
@@ -38,11 +39,19 @@ args.forEach((arg, index) => {
         process.exit(1);
       }
       break;
-    case '--bundlesDir':
+    case '--ans104Dir':
       if (args[index + 1]) {
-        BUNDLES_DIR = args[index + 1];
+        ANS104_DIR = args[index + 1];
       } else {
-        console.error('Missing value for --bundlesDir');
+        console.error('Missing value for --ans104Dir');
+        process.exit(1);
+      }
+      break;
+    case '--ans102Dir':
+      if (args[index + 1]) {
+        ANS102_DIR = args[index + 1];
+      } else {
+        console.error('Missing value for --ans102Dir');
         process.exit(1);
       }
       break;
@@ -89,13 +98,16 @@ const countIds = async ({
     min: MIN_BLOCK_HEIGHT,
     max: MAX_BLOCK_HEIGHT,
   });
-  const bundleFiles = await getFilesInRange({
-    folder: BUNDLES_DIR,
+  const ans104Files = await getFilesInRange({
+    folder: ANS104_DIR,
     min: MIN_BLOCK_HEIGHT,
     max: MAX_BLOCK_HEIGHT,
   });
-
-  console.log({ transactionFiles, bundleFiles });
+  const ans102Files = await getFilesInRange({
+    folder: ANS102_DIR,
+    min: MIN_BLOCK_HEIGHT,
+    max: MAX_BLOCK_HEIGHT,
+  });
 
   if (transactionFiles.length > 0) {
     const firstTransactionHeight = parseInt(
@@ -116,19 +128,35 @@ const countIds = async ({
     );
   }
 
-  if (bundleFiles.length > 0) {
-    const firstBundleHeight = parseInt(bundleFiles[0].split('.')[0], 10);
+  if (ans104Files.length > 0) {
+    const firstBundleHeight = parseInt(ans104Files[0].split('.')[0], 10);
     const lastBundleHeight = parseInt(
-      bundleFiles[bundleFiles.length - 1].split('.')[0],
+      ans104Files[ans104Files.length - 1].split('.')[0],
       10,
     );
     const bundleCount = await countIds({
-      folder: BUNDLES_DIR,
-      files: bundleFiles,
+      folder: ANS104_DIR,
+      files: ans104Files,
     });
 
     console.log(
-      `Total bundles from ${firstBundleHeight} to ${lastBundleHeight}: ${bundleCount}`,
+      `Total ans-104 bundles from ${firstBundleHeight} to ${lastBundleHeight}: ${bundleCount}`,
+    );
+  }
+
+  if (ans102Files.length > 0) {
+    const firstBundleHeight = parseInt(ans102Files[0].split('.')[0], 10);
+    const lastBundleHeight = parseInt(
+      ans102Files[ans102Files.length - 1].split('.')[0],
+      10,
+    );
+    const bundleCount = await countIds({
+      folder: ANS102_DIR,
+      files: ans102Files,
+    });
+
+    console.log(
+      `Total ans-102 bundles from ${firstBundleHeight} to ${lastBundleHeight}: ${bundleCount}`,
     );
   }
 })();
