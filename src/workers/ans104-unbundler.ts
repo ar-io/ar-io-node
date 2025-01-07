@@ -52,7 +52,10 @@ export class Ans104Unbundler {
   // Unbundling queue
   private workerCount: number;
   private maxQueueSize: number;
-  private queue: queueAsPromised<UnbundleableItem, void>;
+  private queue: queueAsPromised<
+    { item: UnbundleableItem; bypassFilter: boolean },
+    void
+  >;
   private shouldUnbundle: () => boolean;
 
   // Parser
@@ -103,6 +106,7 @@ export class Ans104Unbundler {
   async queueItem(
     item: UnbundleableItem,
     prioritized: boolean | undefined,
+    bypassFilter = false,
   ): Promise<void> {
     const log = this.log.child({ method: 'queueItem', id: item.id });
 
@@ -118,18 +122,24 @@ export class Ans104Unbundler {
 
     if (prioritized === true) {
       log.debug('Queueing prioritized bundle...');
-      this.queue.unshift(item);
+      this.queue.unshift({ item, bypassFilter });
       log.debug('Prioritized bundle queued.');
     } else if (this.queue.length() < this.maxQueueSize) {
       log.debug('Queueing bundle...');
-      this.queue.push(item);
+      this.queue.push({ item, bypassFilter });
       log.debug('Bundle queued.');
     } else {
       log.debug('Skipping unbundle, queue is full.');
     }
   }
 
-  async unbundle(item: UnbundleableItem): Promise<void> {
+  async unbundle({
+    item,
+    bypassFilter,
+  }: {
+    item: UnbundleableItem;
+    bypassFilter: boolean;
+  }): Promise<void> {
     const log = this.log.child({ method: 'unbundle', id: item.id });
     try {
       let rootTxId: string | undefined;
@@ -143,7 +153,7 @@ export class Ans104Unbundler {
         // Data item without root_tx_id (should be impossible)
         throw new Error('Missing root_tx_id on data item.');
       }
-      if (await this.filter.match(item)) {
+      if (bypassFilter || (await this.filter.match(item))) {
         log.info('Unbundling bundle...');
         let rootParentOffset = 0;
 

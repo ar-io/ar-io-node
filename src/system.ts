@@ -519,6 +519,7 @@ async function queueBundle(
               : -1, // parent indexes are not needed for L1
         },
         isPrioritized,
+        bypassFilter,
       );
       metrics.bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
     } else {
