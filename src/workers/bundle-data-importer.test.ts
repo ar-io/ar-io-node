@@ -150,11 +150,15 @@ describe('BundleDataImporter', () => {
         maxQueueSize: 1,
       });
 
-      await bundleDataImporter.download({ item: mockItem, prioritized: true });
+      await bundleDataImporter.download({
+        item: mockItem,
+        prioritized: true,
+        bypassFilter: false,
+      });
 
       assert.deepEqual(
         (ans104Unbundler.queueItem as any).mock.calls[0].arguments,
-        [mockItem, true],
+        [mockItem, true, false],
       );
     });
 
@@ -168,6 +172,7 @@ describe('BundleDataImporter', () => {
           await bundleDataImporter.download({
             item: mockItem,
             prioritized: true,
+            bypassFilter: false,
           });
         },
         {

@@ -37,6 +37,7 @@ type UnbundleableItem = (NormalizedDataItem | PartialJsonTransaction) &
 interface UnbundlingQueueItem {
   item: UnbundleableItem;
   prioritized: boolean | undefined;
+  bypassFilter: boolean;
 }
 
 export class BundleDataImporter {
@@ -77,6 +78,7 @@ export class BundleDataImporter {
   async queueItem(
     item: UnbundleableItem,
     prioritized: boolean | undefined,
+    bypassFilter = false,
   ): Promise<void> {
     const log = this.log.child({ method: 'queueItem', id: item.id });
     if (this.workerCount === 0) {
@@ -86,11 +88,11 @@ export class BundleDataImporter {
 
     if (prioritized === true) {
       log.debug('Queueing prioritized bundle download...');
-      this.queue.unshift({ item, prioritized });
+      this.queue.unshift({ item, prioritized, bypassFilter });
       log.debug('Prioritized bundle download queued.');
     } else if (this.queue.length() < this.maxQueueSize) {
       log.debug('Queueing bundle download...');
-      this.queue.push({ item, prioritized });
+      this.queue.push({ item, prioritized, bypassFilter });
       log.debug('Bundle download queued.');
     } else {
       log.debug('Skipping bundle download, queue is full.');
@@ -100,10 +102,8 @@ export class BundleDataImporter {
   async download({
     item,
     prioritized,
-  }: {
-    item: UnbundleableItem;
-    prioritized: boolean | undefined;
-  }): Promise<void> {
+    bypassFilter,
+  }: UnbundlingQueueItem): Promise<void> {
     const log = this.log.child({ method: 'download', id: item.id });
 
     const data = await this.contiguousDataSource.getData({ id: item.id });
@@ -111,7 +111,7 @@ export class BundleDataImporter {
     return new Promise((resolve, reject) => {
       data.stream.on('end', () => {
         log.debug('Bundle data downloaded complete. Queuing for unbundling..');
-        this.ans104Unbundler.queueItem(item, prioritized);
+        this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
         resolve();
       });
 

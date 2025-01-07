@@ -38,6 +38,7 @@ describe('Ans104Unbundler', () => {
     shouldUnbundleMock = mock.fn(() => true);
     mockAns104Parser = {
       stop: mock.fn(),
+      parseBundle: () => Promise.resolve(),
     };
 
     ans104Unbundler = new Ans104Unbundler({
@@ -103,6 +104,28 @@ describe('Ans104Unbundler', () => {
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 0);
       assert.equal(ans104Unbundler.queueDepth(), 0);
+    });
+
+    it("should parse bundle even if filter doesn't match if bypassFilter is true", async () => {
+      mock.method(mockAns104Parser, 'parseBundle');
+      (ans104Unbundler as any).filter = { match: () => false };
+
+      const mockItem = {
+        id: 'test-id',
+        root_tx_id: 'root_tx_id',
+      } as UnbundleableItem;
+
+      await ans104Unbundler.queueItem(mockItem, false, true);
+
+      assert.deepEqual(
+        (mockAns104Parser.parseBundle as any).mock.calls[0].arguments[0],
+        {
+          parentId: 'test-id',
+          parentIndex: undefined,
+          rootParentOffset: 0,
+          rootTxId: 'root_tx_id',
+        },
+      );
     });
   });
 });
