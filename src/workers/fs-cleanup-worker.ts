@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as winston from 'winston';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 export class FsCleanupWorker {
   // Dependencies
@@ -98,6 +99,7 @@ export class FsCleanupWorker {
 
     await Promise.all(
       batch.map((file) => {
+        metrics.filesCleanedTotal.inc();
         if (this.deleteCallback !== undefined) {
           return this.deleteCallback(file);
         } else {

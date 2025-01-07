@@ -277,3 +277,12 @@ export const queueLengthGauge = new Gauge({
     });
   },
 });
+
+//
+// Filesystem cleanup metrics
+//
+
+export const filesCleanedTotal = new promClient.Counter({
+  name: 'files_cleaned_total',
+  help: 'Count of files deleted by the filesystem cleanup worker',
+});
