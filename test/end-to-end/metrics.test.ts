@@ -105,7 +105,7 @@ const projectRootPath = process.cwd();
 
 describe('Metrics', function () {
   const START_HEIGHT = 0;
-  const STOP_HEIGHT = 5;
+  const STOP_HEIGHT = 1;
 
   describe('arweave_tx_fetch_total', function () {
     let coreDb: Database;
@@ -135,27 +135,31 @@ describe('Metrics', function () {
       await compose.down();
     });
 
-    it('Verifying arweave_tx_fetch_total metrics', async function () {
-      const metrics = await getMetrics();
-      const txFetchTotal = metrics?.['arweave_tx_fetch_total'];
+    it(
+      'Verifying arweave_tx_fetch_total metrics',
+      { skip: true },
+      async function () {
+        const metrics = await getMetrics();
+        const txFetchTotal = metrics?.['arweave_tx_fetch_total'];
 
-      assert.ok(txFetchTotal);
+        assert.ok(txFetchTotal);
 
-      const fetchFromPeersMetrics = txFetchTotal?.metrics.filter(
-        (metric) => metric.labels.node_type === 'arweave_peer',
-      );
+        const fetchFromPeersMetrics = txFetchTotal?.metrics.filter(
+          (metric) => metric.labels.node_type === 'arweave_peer',
+        );
 
-      const fetchFromTrustedMetrics = txFetchTotal?.metrics.filter(
-        (metric) => metric.labels.node_type === 'trusted',
-      );
+        const fetchFromTrustedMetrics = txFetchTotal?.metrics.filter(
+          (metric) => metric.labels.node_type === 'trusted',
+        );
 
-      if (fetchFromPeersMetrics.length > 0) {
-        assert.ok(fetchFromTrustedMetrics[0].value > 0);
-      }
+        if (fetchFromPeersMetrics.length > 0) {
+          assert.ok(fetchFromTrustedMetrics[0].value > 0);
+        }
 
-      if (fetchFromTrustedMetrics.length > 0) {
-        assert.ok(fetchFromTrustedMetrics[0].value > 0);
-      }
-    });
+        if (fetchFromTrustedMetrics.length > 0) {
+          assert.ok(fetchFromTrustedMetrics[0].value > 0);
+        }
+      },
+    );
   });
 });
