@@ -241,7 +241,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
   if (await ans104TxMatcher.match(tx)) {
     metrics.bundlesCounter.inc({
       bundle_format: 'ans-104',
-      parent_type: 'transaction',
+      contiguous_data_type: 'transaction',
     });
     eventEmitter.emit(events.ANS104_TX_INDEXED, tx);
     eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, tx);
@@ -254,7 +254,7 @@ eventEmitter.on(
     if (await ans104TxMatcher.match(item)) {
       metrics.bundlesCounter.inc({
         bundle_format: 'ans-104',
-        parent_type: 'data_item',
+        contiguous_data_type: 'data_item',
       });
       eventEmitter.emit(events.ANS104_NESTED_BUNDLE_INDEXED, item);
       eventEmitter.emit(events.ANS104_BUNDLE_INDEXED, item);

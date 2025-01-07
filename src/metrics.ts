@@ -47,7 +47,7 @@ export const uncaughtExceptionCounter = new promClient.Counter({
 export const bundlesCounter = new promClient.Counter({
   name: 'bundles_total',
   help: 'Count of all bundles seen',
-  labelNames: ['bundle_format', 'parent_type'],
+  labelNames: ['bundle_format', 'contiguous_data_type'],
 });
 
 export const bundlesMatchedCounter = new promClient.Counter({
