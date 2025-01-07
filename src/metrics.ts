@@ -83,11 +83,13 @@ export const dataItemsQueuedCounter = new promClient.Counter({
 export const dataItemsIndexedCounter = new promClient.Counter({
   name: 'data_items_indexed_total',
   help: 'Count of data items indexed',
+  labelNames: ['parent_type'],
 });
 
 export const dataItemDataIndexedCounter = new promClient.Counter({
   name: 'data_item_data_indexed_total',
   help: 'Count of data item data indexed',
+  labelNames: ['parent_type'],
 });
 
 export const dataItemLastIndexedTimestampSeconds = new promClient.Gauge({
@@ -210,7 +212,9 @@ export const lastHeightImported = new promClient.Gauge({
   help: 'Height of the last block imported',
 });
 
+//
 // Redis Cache Metrics
+//
 
 export const redisConnectionErrorsCounter = new promClient.Counter({
   name: 'redis_connection_errors_total',
@@ -237,7 +241,9 @@ export const arnsResolutionTime = new promClient.Summary({
   help: 'Time in ms it takes to resolve an arns name',
 });
 
+//
 // Data source metrics
+//
 
 export const getDataErrorsTotal = new promClient.Counter({
   name: 'get_data_errors_total',
@@ -257,7 +263,9 @@ export const getDataStreamSuccessesTotal = new promClient.Counter({
   labelNames: ['class'],
 });
 
+//
 // Queue length metrics
+//
 
 const queues: { [key: string]: { length: () => number } } = {};
 export function registerQueueLengthGauge(
