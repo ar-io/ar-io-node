@@ -23,21 +23,41 @@ The hardware specifications listed below represent the minimum system requiremen
 
 - 12 core CPU
 - 32 GB Ram
-- 2 TB SSD storage 
+- 2 TB SSD storage
 - Stable 1 Gbps internet connection
 
 
 ## Install Packages
 
-If you would like to quickly install all required and suggested packages, you can run the following 2 commands in your terminal, and skip to [installing the Node](#install-the-node).
+If you would like to quickly install all required and suggested packages, you can run the following 4 commands in your terminal, and skip to [installing the Node](#install-the-node).
 
 
-```
-sudo apt update -y && sudo apt upgrade -y && sudo apt install -y curl openssh-server docker-compose git certbot nginx sqlite3 build-essential && sudo systemctl enable ssh && curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list && sudo apt-get update -y && sudo apt-get install -y yarn && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && source ~/.bashrc && sudo ufw allow 22 80 443 && sudo ufw enable
+```bash
+sudo apt update -y && sudo apt upgrade -y && sudo apt install -y curl openssh-server git certbot nginx sqlite3 build-essential && sudo systemctl enable ssh && curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list && sudo apt-get update -y && sudo apt-get install -y yarn && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && source ~/.bashrc && sudo ufw allow 22 80 443 && sudo ufw enable
 ```
 
+```bash
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
 ```
-nvm install 16.15.1 && nvm use 16.15.1
+
+```bash
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+```bash
+nvm install 20.11.1 && nvm use 20.11.1
 ```
 
 ### Required packages
@@ -54,7 +74,7 @@ nvm install 16.15.1 && nvm use 16.15.1
     ```
     sudo ufw enable
 
-    # Optional: If using SSH, allow port 22 
+    # Optional: If using SSH, allow port 22
     sudo ufw allow 22
 
     # Allow ports 80 and 443 for HTTP and HTTPS
@@ -77,7 +97,23 @@ nvm install 16.15.1 && nvm use 16.15.1
 
 5. Install Docker:
     ```
-    sudo apt install docker-compose -y
+     # Add Docker's official GPG key:
+    sudo apt-get update
+    sudo apt-get install ca-certificates curl
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+    # Add the repository to Apt sources:
+    echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt-get update
+    ```
+
+    ```
+    sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     ```
     - Test Docker installation:
         ```
@@ -173,19 +209,19 @@ These packages are not required to run a node in its basic form. However, they w
 
 - Build the Docker container:
     ```
-    sudo docker-compose up -d
+    sudo docker compose up -d
     ```
     - Explanation of flags:
         - `up`: Start the Docker containers.
         - `-d`: Run the containers as background processes (detached mode).
 
-    **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-compose.yaml` file. 
+    **NOTE**: Effective with Release #3, it is no longer required to include the `--build` flag when starting your gateway. Docker will automatically build using the image specified in the `docker-compose.yaml` file.
 
 To ensure your node is running correctly, follow the next two steps.
 
 - Check the logs for errors:
     ```
-    sudo docker-compose logs -f --tail=0
+    sudo docker compose logs -f --tail=0
     ```
     - Explanation of flags:
         - `-f`: Follow the logs in real time.
@@ -202,7 +238,7 @@ The following guide assumes you are running your node on a local home computer.
 
 - Point the Domain at Your Home Internet:
     - Obtain your public IP address by visiting https://www.whatsmyip.org/ or running:
-    
+
         ```
         curl ifconfig.me
         ```
