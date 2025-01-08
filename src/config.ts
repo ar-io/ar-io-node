@@ -240,6 +240,18 @@ export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   '1000',
 );
 
+// The maximum number of data items indexed to flush stable data items
+export const DATA_ITEM_FLUSH_COUNT_THRESHOLD = +env.varOrDefault(
+  'DATA_ITEM_FLUSH_COUNT_THRESHOLD',
+  '1000',
+);
+
+// The interval in seconds to flush stable data items
+export const MAX_FLUSH_INTERVAL_SECONDS = +env.varOrDefault(
+  'MAX_FLUSH_INTERVAL_SECONDS',
+  '600',
+);
+
 //
 // File system cleanup
 //
@@ -262,7 +274,6 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   `${1000 * 60 * 60 * 4}`, // every 4 hours
 );
 
-//
 //
 // Verification
 //

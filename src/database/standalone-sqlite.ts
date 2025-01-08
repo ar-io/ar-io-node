@@ -785,6 +785,12 @@ export class StandaloneSqliteDatabaseWorker {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
 
+  getMaxStableBlockTimestamp() {
+    return (
+      this.stmts.core.selectMaxStableBlockTimestamp.get().block_timestamp ?? -1
+    );
+  }
+
   getBlockHashByHeight(height: number): string | undefined {
     if (height < 0) {
       throw new Error(`Invalid height ${height}, must be >= 0.`);
@@ -2583,6 +2589,9 @@ export class StandaloneSqliteDatabase
 
   private saveDataContentAttributesCache: NodeCache;
 
+  private newDataItemsCount: number = 0;
+  private lastFlushDataItemsTime: number = Date.now();
+
   constructor({
     log,
     coreDbPath,
@@ -2842,6 +2851,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getMaxHeight', undefined);
   }
 
+  getMaxStableBlockTimestamp(): Promise<number> {
+    return this.queueRead('core', 'getMaxStableBlockTimestamp', undefined);
+  }
+
   getBlockHashByHeight(height: number): Promise<string | undefined> {
     return this.queueRead('core', 'getBlockHashByHeight', [height]);
   }
@@ -2885,12 +2898,44 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('core', 'saveTxOffset', [id, offset]);
   }
 
-  saveDataItem(item: NormalizedDataItem): Promise<void> {
+  async saveDataItem(item: NormalizedDataItem): Promise<void> {
+    if (this.shouldFlushDataItems()) {
+      await this.flushStableDataItems();
+    }
+
+    this.newDataItemsCount++;
     return this.queueWrite('bundles', 'saveDataItem', [item]);
   }
 
   saveBundle(bundle: BundleRecord): Promise<void> {
     return this.queueWrite('bundles', 'saveBundle', [bundle]);
+  }
+
+  async flushStableDataItems(
+    endHeight?: number,
+    maxStableBlockTimestamp?: number,
+  ): Promise<void> {
+    this.newDataItemsCount = 0;
+    this.lastFlushDataItemsTime = Date.now();
+
+    endHeight = endHeight || (await this.getMaxHeight());
+    maxStableBlockTimestamp =
+      maxStableBlockTimestamp || (await this.getMaxStableBlockTimestamp());
+
+    return this.queueWrite('bundles', 'flushStableDataItems', [
+      endHeight,
+      maxStableBlockTimestamp,
+    ]);
+  }
+
+  shouldFlushDataItems(): boolean {
+    const flushIntervalExceeded =
+      Date.now() - this.lastFlushDataItemsTime >
+      config.MAX_FLUSH_INTERVAL_SECONDS * 1000;
+    const newDataItemsCountExceeded =
+      this.newDataItemsCount >= config.DATA_ITEM_FLUSH_COUNT_THRESHOLD;
+
+    return flushIntervalExceeded || newDataItemsCountExceeded;
   }
 
   async saveBlockAndTxs(
@@ -2903,11 +2948,12 @@ export class StandaloneSqliteDatabase
       'saveBlockAndTxs',
       [block, txs, missingTxIds],
     );
-    if (endHeight !== undefined && maxStableBlockTimestamp !== undefined) {
-      await this.queueWrite('bundles', 'flushStableDataItems', [
-        endHeight,
-        maxStableBlockTimestamp,
-      ]);
+
+    const heightAndMaxStableExists =
+      endHeight !== undefined && maxStableBlockTimestamp !== undefined;
+
+    if (heightAndMaxStableExists || this.shouldFlushDataItems()) {
+      await this.flushStableDataItems(endHeight, maxStableBlockTimestamp);
     }
   }
 
@@ -3230,6 +3276,10 @@ if (!isMainThread) {
         case 'getMaxHeight':
           const maxHeight = worker.getMaxHeight();
           parentPort?.postMessage(maxHeight);
+          break;
+        case 'getMaxStableBlockTimestamp':
+          const maxStableBlockTimestamp = worker.getMaxStableBlockTimestamp();
+          parentPort?.postMessage(maxStableBlockTimestamp);
           break;
         case 'getBlockHashByHeight':
           const newBlockHash = worker.getBlockHashByHeight(args[0]);
