@@ -88,8 +88,14 @@ export const getFilesInRange = async ({
       .filter((file) => path.extname(file) === '.json')
       .filter((file) => {
         const match = file.match(/^\d+/);
-        const number = match ? parseInt(match[0], 10) : null;
-        return number !== null && number >= min && number <= max;
+        if (!match) return false;
+        const number = parseInt(match[0], 10);
+        return number >= min && number <= max;
+      })
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/^\d+/)?.[0] ?? '0', 10);
+        const numB = parseInt(b.match(/^\d+/)?.[0] ?? '0', 10);
+        return numA - numB;
       });
 
     return filesInRange;
