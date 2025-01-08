@@ -83,7 +83,7 @@ export class OnDemandArNSResolver implements NameResolver {
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
-      // get the base name which is the last of th array split by _
+      // get the base name which is the last of the array split by _
       const baseName = name.split('_').pop();
       if (baseName === undefined) {
         throw new Error('Invalid name');

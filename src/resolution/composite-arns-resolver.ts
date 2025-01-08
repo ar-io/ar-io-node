@@ -31,7 +31,7 @@ export class CompositeArNSResolver implements NameResolver {
         // TODO: other overrides like fallback txId if not found in resolution
       }
     | undefined;
-  private arnsNamesCache: ArNSNamesCache;
+  private arnsBaseNamesCache: ArNSNamesCache;
 
   constructor({
     log,
@@ -50,20 +50,33 @@ export class CompositeArNSResolver implements NameResolver {
     this.resolvers = resolvers;
     this.cache = cache;
     this.overrides = overrides;
-    this.arnsNamesCache = new ArNSNamesCache({ log });
+    this.arnsBaseNamesCache = new ArNSNamesCache({ log });
   }
 
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name, overrides: this.overrides });
-    const arnsNamesCache = await this.arnsNamesCache.getNames();
+    const arnsBaseNamesCache = await this.arnsBaseNamesCache.getNames();
     let resolution: NameResolution | undefined;
 
-    if (arnsNamesCache.size === 0) {
+    if (arnsBaseNamesCache.size === 0) {
       this.log.debug('Cached ArNS names list is empty');
     }
 
-    if (arnsNamesCache.has(name)) {
+    // parse out base arns name, if undername
+    const baseName = name.split('_').pop();
+    if (baseName === undefined) {
+      return {
+        name,
+        resolvedId: undefined,
+        resolvedAt: undefined,
+        ttl: undefined,
+        processId: undefined,
+      };
+    }
+
+    if (arnsBaseNamesCache.has(baseName)) {
       try {
+        // check if our resolution cache contains the FULL name
         const cachedResolutionBuffer = await this.cache.get(name);
         if (cachedResolutionBuffer) {
           const cachedResolution: NameResolution = JSON.parse(
