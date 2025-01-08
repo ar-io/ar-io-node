@@ -90,7 +90,10 @@ export class DataItemIndexer {
     try {
       log.debug('Indexing data item...');
       await this.indexWriter.saveDataItem(item);
-      metrics.dataItemsIndexedCounter.inc();
+      metrics.dataItemsIndexedCounter.inc({
+        parent_type:
+          item.parent_id === item.root_tx_id ? 'transaction' : 'data_item',
+      });
       metrics.dataItemLastIndexedTimestampSeconds.set(
         Math.floor(Date.now() / 1000),
       );

@@ -136,7 +136,10 @@ export class Ans104DataIndexer {
             'Skipping data item parent ID indexing due to missing parent ID.',
           );
         }
-        metrics.dataItemDataIndexedCounter.inc();
+        metrics.dataItemDataIndexedCounter.inc({
+          parent_type:
+            item.parent_id === item.root_tx_id ? 'transaction' : 'data_item',
+        });
         this.eventEmitter.emit(events.ANS104_DATA_ITEM_DATA_INDEXED, item);
         log.debug('Data item data indexed.');
       } else {
