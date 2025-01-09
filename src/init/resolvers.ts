@@ -116,7 +116,7 @@ export const createArNSResolver = ({
   return new CompositeArNSResolver({
     log,
     resolvers,
-    cache,
+    resolutionCache: cache,
     overrides,
   });
 };

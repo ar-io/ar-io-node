@@ -23,6 +23,7 @@ import {
   AOProcess,
   ARIO,
   fetchAllArNSRecords,
+  AoArNSNameData,
 } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
@@ -39,8 +40,8 @@ const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
 export class ArNSNamesCache {
   private log: winston.Logger;
   private networkProcess: AoARIORead;
-  private namesCache: Promise<Set<string>>;
-  private lastSuccessfulNames: Set<string> | null = null;
+  private namesCache: Promise<Map<string, AoArNSNameData>>;
+  private lastSuccessfulNames: Map<string, AoArNSNameData> | null = null;
   private lastCacheTime = 0;
   private cacheTtl: number;
   private maxRetries: number;
@@ -96,7 +97,7 @@ export class ArNSNamesCache {
     forceCacheUpdate = false,
   }: {
     forceCacheUpdate?: boolean;
-  } = {}): Promise<Set<string>> {
+  } = {}): Promise<Map<string, AoArNSNameData>> {
     const log = this.log.child({ method: 'getNames' });
 
     const expiredTtl = Date.now() - this.lastCacheTime > this.cacheTtl;
@@ -117,14 +118,16 @@ export class ArNSNamesCache {
     return this.namesCache;
   }
 
-  async has(name: string): Promise<boolean> {
+  async getName(name: string): Promise<AoArNSNameData | undefined> {
     const names = await this.getNames();
-    const nameExists = names.has(name);
+    const nameData = names.get(name);
     // schedule the next debounce based on the cache hit or miss
     await this.scheduleCacheRefresh(
-      nameExists ? this.cacheHitDebounceTtl : this.cacheMissDebounceTtl,
+      nameData !== undefined
+        ? this.cacheHitDebounceTtl
+        : this.cacheMissDebounceTtl,
     );
-    return nameExists;
+    return nameData;
   }
 
   private async scheduleCacheRefresh(ttl: number): Promise<void> {
@@ -154,7 +157,7 @@ export class ArNSNamesCache {
     return names.size;
   }
 
-  private async getNamesFromContract(): Promise<Set<string>> {
+  private async getNamesFromContract(): Promise<Map<string, AoArNSNameData>> {
     const log = this.log.child({ method: 'getNamesFromContract' });
     log.info('Starting to fetch names from contract');
 
@@ -166,20 +169,18 @@ export class ArNSNamesCache {
           contract: this.networkProcess,
         });
 
-        const names = new Set(Object.keys(records));
-
         // to be safe, we will throw here to force a retry if no names returned
-        if (names.size === 0) {
+        if (Object.keys(records).length === 0) {
           throw new Error('Failed to fetch ArNS names');
         }
 
         log.info(
-          `Successfully fetched ${names.size} names from contract on attempt ${attempt}`,
+          `Successfully fetched ${Object.keys(records).length} names from contract on attempt ${attempt}`,
         );
 
-        this.lastSuccessfulNames = names;
+        this.lastSuccessfulNames = new Map(Object.entries(records));
 
-        return names;
+        return this.lastSuccessfulNames;
       } catch (error) {
         lastError = error as Error;
 

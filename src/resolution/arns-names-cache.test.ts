@@ -33,12 +33,15 @@ const createMockNetworkProcess = () => {
         items: [
           {
             name: `name-${callCount}-1`,
+            processId: 'process-1',
           },
           {
             name: `name-${callCount}-2`,
+            processId: 'process-2',
           },
           {
             name: `name-${callCount}-3`,
+            processId: 'process-3',
           },
         ],
         nextCursor: undefined,
@@ -64,7 +67,14 @@ describe('ArNSNamesCache', () => {
     });
 
     const names = await cache.getNames();
-    assert.deepEqual(names, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
+    assert.deepEqual(
+      names,
+      new Map([
+        ['name-1-1', { processId: 'process-1' }],
+        ['name-1-2', { processId: 'process-2' }],
+        ['name-1-3', { processId: 'process-3' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -77,11 +87,25 @@ describe('ArNSNamesCache', () => {
     });
 
     const names1 = await cache.getNames();
-    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
+    assert.deepEqual(
+      names1,
+      new Map([
+        ['name-1-1', { processId: 'process-1' }],
+        ['name-1-2', { processId: 'process-2' }],
+        ['name-1-3', { processId: 'process-3' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 3);
 
     const names2 = await cache.getNames();
-    assert.deepEqual(names2, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
+    assert.deepEqual(
+      names2,
+      new Map([
+        ['name-1-1', { processId: 'process-1' }],
+        ['name-1-2', { processId: 'process-2' }],
+        ['name-1-3', { processId: 'process-3' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -92,11 +116,25 @@ describe('ArNSNamesCache', () => {
     });
 
     const names1 = await cache.getNames();
-    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
+    assert.deepEqual(
+      names1,
+      new Map([
+        ['name-1-1', { processId: 'process-1' }],
+        ['name-1-2', { processId: 'process-2' }],
+        ['name-1-3', { processId: 'process-3' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 3);
 
     const names2 = await cache.getNames({ forceCacheUpdate: true });
-    assert.deepEqual(names2, new Set(['name-2-1', 'name-2-2', 'name-2-3']));
+    assert.deepEqual(
+      names2,
+      new Map([
+        ['name-2-1', { processId: 'process-1' }],
+        ['name-2-2', { processId: 'process-2' }],
+        ['name-2-3', { processId: 'process-3' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -109,14 +147,28 @@ describe('ArNSNamesCache', () => {
     });
 
     const names1 = await cache.getNames();
-    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
+    assert.deepEqual(
+      names1,
+      new Map([
+        ['name-1-1', { processId: 'process-1' }],
+        ['name-1-2', { processId: 'process-2' }],
+        ['name-1-3', { processId: 'process-3' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 3);
 
     // Wait for cache to expire
     await new Promise((resolve) => setTimeout(resolve, cacheTtl + 10));
 
     const names2 = await cache.getNames();
-    assert.deepEqual(names2, new Set(['name-2-1', 'name-2-2', 'name-2-3']));
+    assert.deepEqual(
+      names2,
+      new Map([
+        ['name-2-1', { processId: 'process-1' }],
+        ['name-2-2', { processId: 'process-2' }],
+        ['name-2-3', { processId: 'process-3' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 3);
   });
 
@@ -129,7 +181,7 @@ describe('ArNSNamesCache', () => {
           throw new Error('Temporary failure');
         }
         return {
-          items: [{ name: 'success-after-retry' }],
+          items: [{ name: 'success-after-retry', processId: 'process-1' }],
           nextCursor: undefined,
         };
       },
@@ -143,7 +195,10 @@ describe('ArNSNamesCache', () => {
     });
 
     const names = await cache.getNames();
-    assert.deepEqual(names, new Set(['success-after-retry']));
+    assert.deepEqual(
+      names,
+      new Map([['success-after-retry', { processId: 'process-1' }]]),
+    );
     assert.equal(callCount, 3);
   });
 
@@ -211,7 +266,7 @@ describe('ArNSNamesCache', () => {
           return { items: [], nextCursor: undefined };
         }
         return {
-          items: [{ name: 'success' }],
+          items: [{ name: 'success', processId: 'process-1' }],
           nextCursor: undefined,
         };
       },
@@ -225,7 +280,7 @@ describe('ArNSNamesCache', () => {
     });
 
     const names = await cache.getNames();
-    assert.deepEqual(names, new Set(['success']));
+    assert.deepEqual(names, new Map([['success', { processId: 'process-1' }]]));
     assert.equal(callCount, 2);
   });
 
@@ -236,7 +291,7 @@ describe('ArNSNamesCache', () => {
         callCount++;
         if (callCount === 1) {
           return {
-            items: [{ name: 'initial-success' }],
+            items: [{ name: 'initial-success', processId: 'process-1' }],
             nextCursor: undefined,
           };
         }
@@ -252,10 +307,16 @@ describe('ArNSNamesCache', () => {
     });
 
     const initialNames = await cache.getNames();
-    assert.deepEqual(initialNames, new Set(['initial-success']));
+    assert.deepEqual(
+      initialNames,
+      new Map([['initial-success', { processId: 'process-1' }]]),
+    );
 
     const updatedNames = await cache.getNames({ forceCacheUpdate: true });
-    assert.deepEqual(updatedNames, new Set(['initial-success']));
+    assert.deepEqual(
+      updatedNames,
+      new Map([['initial-success', { processId: 'process-1' }]]),
+    );
     assert.equal(callCount, 4); // 1 initial + 3 retry attempts
   });
 
@@ -291,19 +352,20 @@ describe('ArNSNamesCache', () => {
         if (callCount === 0) {
           callCount++;
           return {
-            items: [{ name: 'name-0' }],
+            items: [{ name: 'name-0', processId: 'process-0' }],
             nextCursor: undefined,
           };
         }
         callCount++;
         return {
-          items: [{ name: 'name-0' }, { name: 'name-1' }],
+          items: [
+            { name: 'name-0', processId: 'process-0' },
+            { name: 'name-1', processId: 'process-1' },
+          ],
           nextCursor: undefined,
         };
       },
     } as unknown as AoARIORead;
-
-    log.level = 'debug';
 
     const cache = new ArNSNamesCache({
       log,
@@ -316,13 +378,13 @@ describe('ArNSNamesCache', () => {
     assert.equal(callCount, 1);
 
     // check a missing name, this should instantiate the debounce timeout to refresh the cache in 1 second
-    const missingName = await cache.has('name-1');
-    assert.equal(missingName, false, 'Name should not be cached');
+    const missingName = await cache.getName('name-1');
+    assert.equal(missingName, undefined, 'Name should not be cached');
     assert.equal(callCount, 1);
 
     // it should not trigger a refresh if the name is requested again within the ttl
-    const missingName2 = await cache.has('name-1');
-    assert.equal(missingName2, false, 'Name should not be cached');
+    const missingName2 = await cache.getName('name-1');
+    assert.equal(missingName2, undefined, 'Name should not be cached');
     assert.equal(callCount, 1);
 
     // wait the ttl + 5ms and assert that it does trigger a refresh and getArNSRecords is called again
@@ -335,7 +397,13 @@ describe('ArNSNamesCache', () => {
 
     // assert that the names are refreshed and the cache size is updated
     const names = await cache.getNames();
-    assert.deepEqual(names, new Set(['name-0', 'name-1']));
+    assert.deepEqual(
+      names,
+      new Map([
+        ['name-0', { processId: 'process-0' }],
+        ['name-1', { processId: 'process-1' }],
+      ]),
+    );
     assert.equal(await cache.getCacheSize(), 2);
   });
 
@@ -344,7 +412,10 @@ describe('ArNSNamesCache', () => {
     const mockNetworkProcess = {
       async getArNSRecords() {
         callCount++;
-        return { items: [{ name: 'name-1' }], nextCursor: undefined };
+        return {
+          items: [{ name: 'name-1', processId: 'process-1' }],
+          nextCursor: undefined,
+        };
       },
     } as unknown as AoARIORead;
 
@@ -361,19 +432,19 @@ describe('ArNSNamesCache', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     // request a hit
-    const hitName = await cache.has('name-1');
-    assert.equal(hitName, true);
+    const hitName = await cache.getName('name-1');
+    assert.deepEqual(hitName, { processId: 'process-1' });
     assert.equal(callCount, 1);
 
     // assert that getArNS records is not called again if name is requested between cache hit cache and ttl
-    const hitName2 = await cache.has('name-1');
-    assert.equal(hitName2, true);
+    const hitName2 = await cache.getName('name-1');
+    assert.deepEqual(hitName2, { processId: 'process-1' });
     assert.equal(callCount, 1);
 
     // wait the ttl and assert that it does trigger a refresh
     await new Promise((resolve) => setTimeout(resolve, 15));
-    const debouncedName = await cache.has('name-1');
-    assert.equal(debouncedName, true);
+    const debouncedName = await cache.getName('name-1');
+    assert.deepEqual(debouncedName, { processId: 'process-1' });
     assert.equal(callCount, 2);
   });
 });
