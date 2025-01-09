@@ -20,12 +20,12 @@ import createPrometheusMiddleware from 'express-prometheus-middleware';
 
 import * as config from '../config.js';
 import * as system from '../system.js';
-import * as events from '../events.js';
 import * as metrics from '../metrics.js';
 import { release } from '../version.js';
 import { db, signatureStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
+import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 
 export const arIoRouter = Router();
 export let parquetExporter: ParquetExporter | null = null;
@@ -215,10 +215,16 @@ arIoRouter.post(
         return;
       }
 
-      system.eventEmitter.emit(events.ANS104_BUNDLE_QUEUED, {
-        id,
-        root_tx_id: id,
-      });
+      const queuedBundle = await system.queueBundle(
+        { id, root_tx_id: id } as NormalizedDataItem | PartialJsonTransaction,
+        true,
+        true,
+      );
+
+      if (queuedBundle.error !== undefined) {
+        res.status(503).send(queuedBundle.error);
+        return;
+      }
 
       res.json({ message: 'Bundle queued' });
     } catch (error: any) {

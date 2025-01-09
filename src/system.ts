@@ -479,12 +479,15 @@ export const bundleDataImporter = new BundleDataImporter({
 metrics.registerQueueLengthGauge('bundleDataImporter', {
   length: () => bundleDataImporter.queueDepth(),
 });
-
-async function queueBundle(
+export type QueueBundleResponse = {
+  status: 'skipped' | 'queued' | 'error';
+  error?: string;
+};
+export async function queueBundle(
   item: NormalizedDataItem | PartialJsonTransaction,
   isPrioritized = false,
   bypassFilter = false,
-) {
+): Promise<QueueBundleResponse> {
   try {
     if ('root_tx_id' in item && item.root_tx_id === null) {
       log.debug('Skipping download of optimistically indexed data item', {
@@ -492,7 +495,7 @@ async function queueBundle(
         rootTxId: item.root_tx_id,
         parentId: item.parent_id,
       });
-      return;
+      return { status: 'skipped' };
     }
 
     await db.saveBundle({
@@ -530,21 +533,17 @@ async function queueBundle(
         skippedAt: currentUnixTimestamp(),
       });
     }
+
+    return { status: 'queued' };
   } catch (error: any) {
     log.error('Error saving or queueing bundle', {
       message: error.message,
       stack: error.stack,
     });
+
+    return { status: 'error', error: 'Error queueing bundle' };
   }
 }
-
-// Queue bundles from the queue-bundle route
-eventEmitter.on(
-  events.ANS104_BUNDLE_QUEUED,
-  async (item: NormalizedDataItem | PartialJsonTransaction) => {
-    await queueBundle(item, true, true);
-  },
-);
 
 // Queue L1 bundles
 eventEmitter.on(
