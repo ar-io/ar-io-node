@@ -31,6 +31,11 @@ const DEFAULT_CACHE_TTL = config.ARNS_NAMES_CACHE_TTL_SECONDS * 1000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_DELAY = 5 * 1000; // 5 seconds
 
+const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
+  config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
+const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
+  config.ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS * 1000;
+
 export class ArNSNamesCache {
   private log: winston.Logger;
   private networkProcess: AoARIORead;
@@ -40,6 +45,10 @@ export class ArNSNamesCache {
   private cacheTtl: number;
   private maxRetries: number;
   private retryDelay: number;
+  private cacheMissDebounceTtl: number;
+  private cacheHitDebounceTtl: number;
+  private debounceTimeout: NodeJS.Timeout | null = null;
+  private isDebouncing = false;
 
   constructor({
     log,
@@ -58,6 +67,8 @@ export class ArNSNamesCache {
     cacheTtl = DEFAULT_CACHE_TTL,
     maxRetries = DEFAULT_MAX_RETRIES,
     retryDelay = DEFAULT_RETRY_DELAY,
+    cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
+    cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
   }: {
     log: winston.Logger;
     ao?: AoClient;
@@ -65,6 +76,8 @@ export class ArNSNamesCache {
     cacheTtl?: number;
     maxRetries?: number;
     retryDelay?: number;
+    cacheMissDebounceTtl?: number;
+    cacheHitDebounceTtl?: number;
   }) {
     this.log = log.child({
       class: 'ArNSNamesCache',
@@ -73,7 +86,8 @@ export class ArNSNamesCache {
     this.cacheTtl = cacheTtl;
     this.maxRetries = maxRetries;
     this.retryDelay = retryDelay;
-
+    this.cacheMissDebounceTtl = cacheMissDebounceTtl;
+    this.cacheHitDebounceTtl = cacheHitDebounceTtl;
     this.log.info('Initiating cache load');
     this.namesCache = this.getNames({ forceCacheUpdate: true });
   }
@@ -89,18 +103,50 @@ export class ArNSNamesCache {
     const shouldRefresh = forceCacheUpdate || expiredTtl;
 
     if (shouldRefresh) {
-      if (forceCacheUpdate) {
-        log.debug('Forcing cache update');
-      } else {
-        log.debug('Cache expired, refreshing...');
-      }
+      this.log.debug('Refreshing names cache promise', {
+        forced: forceCacheUpdate,
+      });
       this.namesCache = this.getNamesFromContract();
       this.lastCacheTime = Date.now();
     } else {
-      log.debug('Using cached names list');
+      log.debug('Using cached names promise', {
+        expiration: this.lastCacheTime + this.cacheTtl,
+      });
     }
 
     return this.namesCache;
+  }
+
+  async has(name: string): Promise<boolean> {
+    const names = await this.getNames();
+    const nameExists = names.has(name);
+    // schedule the next debounce based on the cache hit or miss
+    await this.scheduleCacheRefresh(
+      nameExists ? this.cacheHitDebounceTtl : this.cacheMissDebounceTtl,
+    );
+    return nameExists;
+  }
+
+  private async scheduleCacheRefresh(ttl: number): Promise<void> {
+    if (this.isDebouncing) {
+      this.log.debug('Already debouncing, skipping...');
+      return;
+    }
+    if (this.debounceTimeout) {
+      clearTimeout(this.debounceTimeout);
+      this.debounceTimeout = null;
+    }
+    this.log.debug(
+      `Setting cache debounce timeout to refresh cache in ${ttl}ms`,
+    );
+    // set the new timeout to refresh the cache after the debounce interval
+    this.debounceTimeout = setTimeout(async () => {
+      this.log.debug('Debounce timeout triggered, refreshing cache...');
+      this.getNames({ forceCacheUpdate: true });
+      this.debounceTimeout = null;
+      this.isDebouncing = false;
+    }, ttl);
+    this.isDebouncing = true; // set the debouncing flag to true to prevent multiple debounces
   }
 
   async getCacheSize(): Promise<number> {
@@ -122,6 +168,7 @@ export class ArNSNamesCache {
 
         const names = new Set(Object.keys(records));
 
+        // to be safe, we will throw here to force a retry if no names returned
         if (names.size === 0) {
           throw new Error('Failed to fetch ArNS names');
         }

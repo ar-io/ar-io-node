@@ -55,10 +55,9 @@ export class CompositeArNSResolver implements NameResolver {
 
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name, overrides: this.overrides });
-    const arnsBaseNamesCache = await this.arnsBaseNamesCache.getNames();
     let resolution: NameResolution | undefined;
 
-    if (arnsBaseNamesCache.size === 0) {
+    if ((await this.arnsBaseNamesCache.getCacheSize()) === 0) {
       this.log.debug('Cached ArNS names list is empty');
     }
 
@@ -74,7 +73,7 @@ export class CompositeArNSResolver implements NameResolver {
       };
     }
 
-    if (arnsBaseNamesCache.has(baseName)) {
+    if (await this.arnsBaseNamesCache.has(baseName)) {
       try {
         // check if our resolution cache contains the FULL name
         const cachedResolutionBuffer = await this.cache.get(name);
