@@ -34,9 +34,9 @@ export const fetchWithRetry = async (
       if (response.ok) {
         return response;
       }
-      if (response.status === 429) {
+      if (response.status === 429 || response.status === 503) {
         console.warn(
-          `Import queue is full! Waiting 30 seconds before retrying...`,
+          `${await response.text()}. Waiting 30 seconds before retrying...`,
         );
         await new Promise((resolve) => setTimeout(resolve, 30000));
         continue;
