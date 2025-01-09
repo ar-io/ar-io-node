@@ -107,6 +107,14 @@ export class ArweaveCompositeClient
   private secondaryChunkPostConcurrency: number;
   private secondaryChunkPostMinSuccessCount: number;
   private trustedNodeAxios;
+  private primaryChunkPostCircuitBreakers: Record<
+    string,
+    CircuitBreaker<
+      Parameters<ArweaveCompositeClient['postChunk']>,
+      Awaited<ReturnType<ArweaveCompositeClient['postChunk']>>
+    >
+  > = {};
+
   private secondaryChunkPostCircuitBreakers: Record<
     string,
     CircuitBreaker<
@@ -194,6 +202,42 @@ export class ArweaveCompositeClient
       config.SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT;
     this.secondaryChunkPostMinSuccessCount =
       config.SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT;
+
+    const commonCircuitBreakerOptions = {
+      errorThresholdPercentage: 50,
+    };
+
+    // Initialize circuit breakers for primary chunk post nodes
+    this.chunkPostUrls.forEach((url) => {
+      const circuitBreaker = new CircuitBreaker(
+        ({
+          url,
+          chunk,
+          abortTimeout,
+          responseTimeout,
+          originAndHopsHeaders,
+        }) => {
+          return this.postChunk({
+            url,
+            chunk,
+            abortTimeout,
+            responseTimeout,
+            originAndHopsHeaders,
+          });
+        },
+        {
+          name: `primaryBroadcastChunk-${url}`,
+          capacity: 100,
+          resetTimeout: 5000,
+          ...commonCircuitBreakerOptions,
+        },
+      );
+
+      this.primaryChunkPostCircuitBreakers[url] = circuitBreaker;
+      metrics.circuitBreakerMetrics.add(circuitBreaker);
+    });
+
+    // Initialize circuit breakers for secondary chunk post nodes
     this.secondaryChunkPostUrls.forEach((url) => {
       const circuitBreaker = new CircuitBreaker(
         ({
@@ -213,6 +257,9 @@ export class ArweaveCompositeClient
         },
         {
           name: `secondaryBroadcastChunk-${url}`,
+          capacity: 10,
+          resetTimeout: 10000,
+          ...commonCircuitBreakerOptions,
         },
       );
 
@@ -1045,7 +1092,8 @@ export class ArweaveCompositeClient
 
     const results = await Promise.all(
       this.chunkPostUrls.map(async (url) => {
-        const response = await this.postChunk({
+        const circuitBreaker = this.primaryChunkPostCircuitBreakers[url];
+        const response = await circuitBreaker.fire({
           url,
           chunk,
           abortTimeout,
