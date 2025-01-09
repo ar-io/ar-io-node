@@ -207,7 +207,7 @@ These packages are not required to run a node in its basic form. However, they w
 
     - More advanced configuration options can be found at [ar.io/docs](https://ar.io/docs/gateways/ar-io-node/advanced-config.html)
 
-- Build the Docker container:
+- Start the Docker container:
     ```
     sudo docker compose up -d
     ```
