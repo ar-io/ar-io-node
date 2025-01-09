@@ -62,14 +62,20 @@ flowchart TD
 
 - **Name list TTL** - The maximum interval between name list cache refreshes
   for names already in the cached name list. Suggested default: 1 hour.
-- **Name list miss debounce interval** - The miminum amount of time between
+- **Name list miss debounce interval** - The minimum amount of time between
   name list cache refreshes triggered by names not found in the cache.
   Suggested default: 10 seconds.
+- **Name list hit debounce interval** - The maximum amount of time between
+  name list cache refreshes triggered by names found in the cache. Suggested
+  default: 1 hour.
 - **ANT state TTL** - The maximum interval between individual ANT state cache
   refreshes when the ANT state is already cached. Suggested default: 1 hour.
-- **ANT state debounce interval** - The minimum amount of time between ANT
+- **ANT state miss debounce interval** - The minimum amount of time between ANT
   state cache refreshes triggered by missing ANT state. Suggested default: 10
   seconds.
+- **ANT state hit debounce interval** - The maximum amount of time between ANT
+  state cache refreshes triggered by names found in the ANT state cache.
+  Suggested default: 5 minutes.
 - **ANT state concurrency limit** - The maximum number of parallel in-flight
   ANT state requests to the CU. Suggested default: 10.
 

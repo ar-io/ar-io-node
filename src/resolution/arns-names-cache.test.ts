@@ -19,7 +19,10 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import winston from 'winston';
 import { ArNSNamesCache } from './arns-names-cache.js';
-import { AoARIORead } from '@ar.io/sdk';
+import { AoARIORead, Logger as ARIOLogger } from '@ar.io/sdk';
+
+// disable sdk logging to reduce noise
+ARIOLogger.default.setLogLevel('none');
 
 const createMockNetworkProcess = () => {
   let callCount = 0;
@@ -46,7 +49,12 @@ const createMockNetworkProcess = () => {
 
 describe('ArNSNamesCache', () => {
   const log = winston.createLogger({
+    // when debugging, set silent to false
     transports: [new winston.transports.Console({ silent: true })],
+    format: winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.json(),
+    ),
   });
 
   it('should fetch and cache names on initialization', async () => {
@@ -272,5 +280,100 @@ describe('ArNSNamesCache', () => {
       /Failed to fetch ArNS records after 3 attempts/,
     );
     assert.equal(callCount, 3);
+  });
+
+  it('should debounce after provided ttl on a cache miss', async () => {
+    let callCount = 0;
+    const mockNetworkProcess = {
+      // on first call, return empty, then return success
+      async getArNSRecords() {
+        // on first two calls, return empty, then return success
+        if (callCount === 0) {
+          callCount++;
+          return {
+            items: [{ name: 'name-0' }],
+            nextCursor: undefined,
+          };
+        }
+        callCount++;
+        return {
+          items: [{ name: 'name-0' }, { name: 'name-1' }],
+          nextCursor: undefined,
+        };
+      },
+    } as unknown as AoARIORead;
+
+    log.level = 'debug';
+
+    const cache = new ArNSNamesCache({
+      log,
+      networkProcess: mockNetworkProcess,
+      cacheTtl: 10000, // cache the names list for 10s
+      cacheMissDebounceTtl: 10, // cache miss should trigger a refresh within 10ms
+    });
+
+    // call count will get incremented on instantiation of the cache
+    assert.equal(callCount, 1);
+
+    // check a missing name, this should instantiate the debounce timeout to refresh the cache in 1 second
+    const missingName = await cache.has('name-1');
+    assert.equal(missingName, false, 'Name should not be cached');
+    assert.equal(callCount, 1);
+
+    // it should not trigger a refresh if the name is requested again within the ttl
+    const missingName2 = await cache.has('name-1');
+    assert.equal(missingName2, false, 'Name should not be cached');
+    assert.equal(callCount, 1);
+
+    // wait the ttl + 5ms and assert that it does trigger a refresh and getArNSRecords is called again
+    await new Promise((resolve) => setTimeout(resolve, 15)); // wait 15ms to ensure the debounce is triggered
+    assert.equal(
+      callCount,
+      2,
+      'getArNSRecords should be called again after debounce is triggered',
+    );
+
+    // assert that the names are refreshed and the cache size is updated
+    const names = await cache.getNames();
+    assert.deepEqual(names, new Set(['name-0', 'name-1']));
+    assert.equal(await cache.getCacheSize(), 2);
+  });
+
+  it('should debounce after provided ttl on a cache hit', async () => {
+    let callCount = 0;
+    const mockNetworkProcess = {
+      async getArNSRecords() {
+        callCount++;
+        return { items: [{ name: 'name-1' }], nextCursor: undefined };
+      },
+    } as unknown as AoARIORead;
+
+    const cache = new ArNSNamesCache({
+      log,
+      networkProcess: mockNetworkProcess,
+      cacheTtl: 10000, // cache the names list for 10s
+      cacheHitDebounceTtl: 10, // cache hit should trigger a refresh within 10ms
+    });
+
+    // call count will get incremented on instantiation of the cache
+    assert.equal(callCount, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // request a hit
+    const hitName = await cache.has('name-1');
+    assert.equal(hitName, true);
+    assert.equal(callCount, 1);
+
+    // assert that getArNS records is not called again if name is requested between cache hit cache and ttl
+    const hitName2 = await cache.has('name-1');
+    assert.equal(hitName2, true);
+    assert.equal(callCount, 1);
+
+    // wait the ttl and assert that it does trigger a refresh
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const debouncedName = await cache.has('name-1');
+    assert.equal(debouncedName, true);
+    assert.equal(callCount, 2);
   });
 });
