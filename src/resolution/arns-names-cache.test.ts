@@ -28,7 +28,7 @@ ARIOLogger.default.setLogLevel('none');
 describe('ArNSNamesCache', () => {
   const log = winston.createLogger({
     // when debugging, set silent to false
-    transports: [new winston.transports.Console({ silent: false })],
+    transports: [new winston.transports.Console({ silent: true })],
     format: winston.format.combine(
       winston.format.timestamp(),
       winston.format.json(),

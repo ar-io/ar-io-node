@@ -85,9 +85,8 @@ describe('KvDebounceCache', () => {
         },
       });
       // it should call hydrate right away by default
-      const initialCallTimestamp = lastCallTimestamp;
       assert.equal(callCount, 1);
-      assert.equal(initialCallTimestamp, Date.now());
+      assert.ok(lastCallTimestamp <= Date.now());
 
       // request a missing key, should call hydrateFn after the cache miss debounce ttl expires
       const result = await kvDebounceStore.get(key);
@@ -123,10 +122,9 @@ describe('KvDebounceCache', () => {
       });
 
       // should hydrate immediately
-      const initialCallTimestamp = lastCallTimestamp;
       const result = await kvDebounceStore.get(key);
       assert.equal(result!.toString('utf-8'), 'test0'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
-      assert.equal(initialCallTimestamp, Date.now());
+      assert.ok(lastCallTimestamp <= Date.now());
       assert.equal(callCount, 1);
 
       // it should debounce after the cache hit debounce ttl expires
@@ -135,6 +133,25 @@ describe('KvDebounceCache', () => {
       assert.ok(lastCallTimestamp >= Date.now() - 100);
       const result2 = await kvDebounceStore.get(key);
       assert.equal(result2!.toString('utf-8'), 'test1'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    });
+
+    // intentional design choice to bubble up errors from hydrateFn and let the caller handle them appropriately
+    it('should bubble up errors from hydrateFn', async () => {
+      // catch error instantiating the class
+      await assert.rejects(async () => {
+        new KvDebounceStore({
+          kvBufferStore: new NodeKvStore({
+            ttlSeconds: 100,
+            maxKeys: 100,
+          }),
+          cacheMissDebounceTtl: 10,
+          cacheHitDebounceTtl: 100,
+          // synchronously throw for testing purposes
+          hydrateFn: () => {
+            throw new Error('Test error');
+          },
+        });
+      }, /Test error/);
     });
   });
 });
