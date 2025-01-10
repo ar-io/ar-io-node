@@ -18,30 +18,48 @@
 import winston from 'winston';
 import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
-import { KvArnsStore } from '../store/kv-arns-store.js';
-import { ArNSNamesCache } from './arns-names-cache.js';
+import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
+import { KvDebounceStore } from '../store/kv-debounce-store.js';
+import { AoARIORead, AOProcess, ARIO } from '@ar.io/sdk';
+import * as config from '../config.js';
+import { connect } from '@permaweb/aoconnect';
+import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
 
 export class CompositeArNSResolver implements NameResolver {
   private log: winston.Logger;
   private resolvers: NameResolver[];
-  private resolutionCache: KvArnsStore;
+  private resolutionCache: KvArNSResolutionStore;
+  private registryDebounceCache: KvDebounceStore;
   private overrides:
     | {
         ttlSeconds?: number;
         // TODO: other overrides like fallback txId if not found in resolution
       }
     | undefined;
-  private arnsBaseNamesCache: ArNSNamesCache;
 
   constructor({
     log,
     resolvers,
     resolutionCache,
+    networkProcess = ARIO.init({
+      process: new AOProcess({
+        processId: config.IO_PROCESS_ID,
+        ao: connect({
+          MU_URL: config.AO_MU_URL,
+          CU_URL: config.AO_CU_URL,
+          GRAPHQL_URL: config.AO_GRAPHQL_URL,
+          GATEWAY_URL: config.AO_GATEWAY_URL,
+        }),
+      }),
+    }),
+    registryCache,
     overrides,
   }: {
     log: winston.Logger;
     resolvers: NameResolver[];
-    resolutionCache: KvArnsStore;
+    networkProcess?: AoARIORead;
+    resolutionCache: KvArNSResolutionStore;
+    registryCache: KvArNSRegistryStore;
     overrides?: {
       ttlSeconds?: number;
     };
@@ -50,16 +68,44 @@ export class CompositeArNSResolver implements NameResolver {
     this.resolvers = resolvers;
     this.resolutionCache = resolutionCache;
     this.overrides = overrides;
-    this.arnsBaseNamesCache = new ArNSNamesCache({ log });
+
+    // wrap the registry cache in a debounce cache that calls hydrateFn on cache miss and cache hit
+    this.registryDebounceCache = new KvDebounceStore({
+      kvBufferStore: registryCache,
+      cacheMissDebounceTtl:
+        config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS,
+      cacheHitDebounceTtl:
+        config.ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS,
+      hydrateFn: async () => {
+        try {
+          this.log.info('Hydrating registry cache...');
+          let cursor = undefined;
+          do {
+            const { items: records, nextCursor } =
+              await networkProcess.getArNSRecords({ cursor, limit: 1000 });
+            cursor = nextCursor;
+            for (const record of records) {
+              // do not await as we are caching here and will read later
+              registryCache.set(
+                record.name,
+                Buffer.from(JSON.stringify(record)),
+              );
+            }
+          } while (cursor !== undefined);
+          this.log.info('Successfully hydrated registry cache');
+        } catch (error: any) {
+          this.log.error('Error hydrating registry cache', {
+            error: error.message,
+            stack: error.stack,
+          });
+        }
+      },
+    });
   }
 
   async resolve(name: string): Promise<NameResolution> {
     this.log.info('Resolving name...', { name, overrides: this.overrides });
     let resolution: NameResolution | undefined;
-
-    if ((await this.arnsBaseNamesCache.getCacheSize()) === 0) {
-      this.log.debug('Cached ArNS names list is empty');
-    }
 
     // parse out base arns name, if undername
     const baseName = name.split('_').pop();
@@ -75,7 +121,7 @@ export class CompositeArNSResolver implements NameResolver {
 
     try {
       // check if our base name is in our arns names cache, this triggers a debounce with a ttl dependent on if it's in the cache or not
-      const baseNameInCache = await this.arnsBaseNamesCache.getName(baseName);
+      const baseNameInCache = await this.registryDebounceCache.get(baseName);
 
       if (!baseNameInCache) {
         throw new Error('Base name not found in ArNS names cache');
