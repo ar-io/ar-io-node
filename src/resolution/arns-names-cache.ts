@@ -22,37 +22,32 @@ import {
   AoARIORead,
   AOProcess,
   ARIO,
-  fetchAllArNSRecords,
-  AoArNSNameData,
+  AoArNSNameDataWithName,
+  PaginationResult,
 } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
-
-const DEFAULT_CACHE_TTL = config.ARNS_NAMES_CACHE_TTL_SECONDS * 1000;
-const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_RETRY_DELAY = 5 * 1000; // 5 seconds
+import { KvDebounceStore } from '../store/kv-debounce-store.js';
+import { KVBufferStore } from '../types.js';
 
 const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
 const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS * 1000;
 
+/**
+ * Wraps an ArNS registry cache in a debounce cache that automatically refreshes
+ * the cache after the debounce ttl has expired.
+ */
 export class ArNSNamesCache {
   private log: winston.Logger;
   private networkProcess: AoARIORead;
-  private namesCache: Promise<Map<string, AoArNSNameData>>;
-  private lastSuccessfulNames: Map<string, AoArNSNameData> | null = null;
-  private lastCacheTime = 0;
-  private cacheTtl: number;
-  private maxRetries: number;
-  private retryDelay: number;
-  private cacheMissDebounceTtl: number;
-  private cacheHitDebounceTtl: number;
-  private debounceTimeout: NodeJS.Timeout | null = null;
-  private isDebouncing = false;
+  private arnsRegistryKvCache: KVBufferStore;
+  private arnsDebounceCache: KvDebounceStore;
 
   constructor({
     log,
+    registryCache,
     ao = connect({
       MU_URL: config.AO_MU_URL,
       CU_URL: config.AO_CU_URL,
@@ -65,18 +60,13 @@ export class ArNSNamesCache {
         ao: ao,
       }),
     }),
-    cacheTtl = DEFAULT_CACHE_TTL,
-    maxRetries = DEFAULT_MAX_RETRIES,
-    retryDelay = DEFAULT_RETRY_DELAY,
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
   }: {
     log: winston.Logger;
+    registryCache: KVBufferStore;
     ao?: AoClient;
     networkProcess?: AoARIORead;
-    cacheTtl?: number;
-    maxRetries?: number;
-    retryDelay?: number;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
   }) {
@@ -84,139 +74,79 @@ export class ArNSNamesCache {
       class: 'ArNSNamesCache',
     });
     this.networkProcess = networkProcess;
-    this.cacheTtl = cacheTtl;
-    this.maxRetries = maxRetries;
-    this.retryDelay = retryDelay;
-    this.cacheMissDebounceTtl = cacheMissDebounceTtl;
-    this.cacheHitDebounceTtl = cacheHitDebounceTtl;
-    this.log.info('Initiating cache load');
-    this.namesCache = this.getNames({ forceCacheUpdate: true });
+    this.arnsRegistryKvCache = registryCache;
+    this.arnsDebounceCache = new KvDebounceStore({
+      kvBufferStore: registryCache,
+      cacheMissDebounceTtl,
+      cacheHitDebounceTtl,
+      hydrateImmediately: true,
+      /**
+       * Bind the hydrateArNSNamesCache method to the ArNSNamesCache instance
+       * so that the hydrateFn has access to this instance's properties and methods (e.g. this.log, this.networkProcess, etc.).
+       */
+      hydrateFn: this.hydrateArNSNamesCache.bind(this),
+    });
   }
 
-  async getNames({
-    forceCacheUpdate = false,
-  }: {
-    forceCacheUpdate?: boolean;
-  } = {}): Promise<Map<string, AoArNSNameData>> {
-    const log = this.log.child({ method: 'getNames' });
-
-    const expiredTtl = Date.now() - this.lastCacheTime > this.cacheTtl;
-    const shouldRefresh = forceCacheUpdate || expiredTtl;
-
-    if (shouldRefresh) {
-      this.log.debug('Refreshing names cache promise', {
-        forced: forceCacheUpdate,
-      });
-      this.namesCache = this.getNamesFromContract();
-      this.lastCacheTime = Date.now();
-    } else {
-      log.debug('Using cached names promise', {
-        expiration: this.lastCacheTime + this.cacheTtl,
-      });
-    }
-
-    return this.namesCache;
-  }
-
-  async getName(name: string): Promise<AoArNSNameData | undefined> {
-    const names = await this.getNames();
-    const nameData = names.get(name);
-    // schedule the next debounce based on the cache hit or miss
-    await this.scheduleCacheRefresh(
-      nameData !== undefined
-        ? this.cacheHitDebounceTtl
-        : this.cacheMissDebounceTtl,
-    );
-    return nameData;
-  }
-
-  private async scheduleCacheRefresh(ttl: number): Promise<void> {
-    if (this.isDebouncing) {
-      this.log.debug('Already debouncing, skipping...');
-      return;
-    }
-    if (this.debounceTimeout) {
-      clearTimeout(this.debounceTimeout);
-      this.debounceTimeout = null;
-    }
-    this.log.debug(
-      `Setting cache debounce timeout to refresh cache in ${ttl}ms`,
-    );
-    // set the new timeout to refresh the cache after the debounce interval
-    this.debounceTimeout = setTimeout(async () => {
-      this.log.debug('Debounce timeout triggered, refreshing cache...');
-      this.getNames({ forceCacheUpdate: true });
-      this.debounceTimeout = null;
-      this.isDebouncing = false;
-    }, ttl);
-    this.isDebouncing = true; // set the debouncing flag to true to prevent multiple debounces
-  }
-
-  async getCacheSize(): Promise<number> {
-    const names = await this.namesCache;
-    return names.size;
-  }
-
-  private async getNamesFromContract(): Promise<Map<string, AoArNSNameData>> {
-    const log = this.log.child({ method: 'getNamesFromContract' });
-    log.info('Starting to fetch names from contract');
-
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        const records = await fetchAllArNSRecords({
-          contract: this.networkProcess,
-        });
-
-        // to be safe, we will throw here to force a retry if no names returned
-        if (Object.keys(records).length === 0) {
-          throw new Error('Failed to fetch ArNS names');
-        }
-
-        log.info(
-          `Successfully fetched ${Object.keys(records).length} names from contract on attempt ${attempt}`,
-        );
-
-        this.lastSuccessfulNames = new Map(Object.entries(records));
-
-        return this.lastSuccessfulNames;
-      } catch (error) {
-        lastError = error as Error;
-
-        if (attempt === this.maxRetries) {
-          if (this.lastSuccessfulNames) {
-            log.warn(
-              `Failed to fetch names after ${this.maxRetries} attempts, falling back to last successful cache of ${this.lastSuccessfulNames.size} names`,
-              {
-                error: lastError.message,
-              },
-            );
-            return this.lastSuccessfulNames;
-          }
-
-          log.error(
-            `Failed to fetch names after ${this.maxRetries} attempts and no previous successful cache exists`,
-            {
-              error: lastError.message,
-            },
-          );
-          throw new Error(
-            `Failed to fetch ArNS records after ${this.maxRetries} attempts: ${lastError.message}`,
+  /**
+   * Paginate through all the names in the registry and hydrate the cache
+   * with the names and their associated processId and undernameLimits. The ar-io-sdk
+   * retries requests 3 times with exponential backoff by default.
+   */
+  private async hydrateArNSNamesCache() {
+    try {
+      this.log.info('Hydrating ArNS names cache...');
+      let cursor: string | undefined = undefined;
+      // TODO: add timing metrics
+      do {
+        const {
+          items: records,
+          nextCursor,
+        }: PaginationResult<AoArNSNameDataWithName> =
+          await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
+        for (const record of records) {
+          // do not await, avoid blocking the event loop
+          this.arnsRegistryKvCache.set(
+            record.name,
+            Buffer.from(JSON.stringify(record)),
           );
         }
-
-        log.warn(
-          `Attempt ${attempt}/${this.maxRetries} failed, retrying in ${this.retryDelay}ms`,
-          {
-            error: lastError.message,
-          },
-        );
-
-        await new Promise((resolve) => setTimeout(resolve, this.retryDelay));
-      }
+        cursor = nextCursor;
+      } while (cursor !== undefined);
+      this.log.info('Successfully hydrated ArNS names cache');
+    } catch (error: any) {
+      this.log.error('Error hydrating ArNS names cache', {
+        error: error.message,
+        stack: error.stack,
+      });
     }
+  }
 
-    throw lastError || new Error('Unexpected error in getNamesFromContract');
+  /**
+   * Ignore debounce and hydrate the cache immediately
+   */
+  public async forceRefresh() {
+    // TODO: could add clear() to KvBufferStore to clear out all cached items before hydrating
+    return this.hydrateArNSNamesCache();
+  }
+
+  /**
+   * Get the ArNS name data for a given name. The debounce cache will
+   * automatically refresh the cache after the debounce ttl has expired.
+   * @param name - The name to get the ArNS name data for.
+   * @returns The ArNS name data for the given name, or undefined if the name is not found.
+   */
+  async getCachedArNSBaseName(
+    name: string,
+  ): Promise<AoArNSNameDataWithName | undefined> {
+    const record = await this.arnsDebounceCache.get(name);
+    if (record) {
+      return JSON.parse(record.toString()) as AoArNSNameDataWithName;
+    }
+    return undefined;
+  }
+
+  async close() {
+    await this.arnsDebounceCache.close();
   }
 }
