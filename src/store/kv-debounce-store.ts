@@ -18,7 +18,6 @@
 
 import { KVBufferStore } from '../types';
 import pDebounce from 'p-debounce';
-import winston from 'winston';
 
 /**
  * A wrapper around a KVBufferStore that debounces the hydrate function

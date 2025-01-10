@@ -20,7 +20,13 @@ import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
-import { AoARIORead, AOProcess, ARIO } from '@ar.io/sdk';
+import {
+  AoARIORead,
+  AoArNSNameDataWithName,
+  AOProcess,
+  ARIO,
+  PaginationResult,
+} from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
@@ -77,24 +83,33 @@ export class CompositeArNSResolver implements NameResolver {
       cacheHitDebounceTtl:
         config.ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS,
       hydrateFn: async () => {
+        /**
+         * Paginate through all the names in the registry and hydrate the cache
+         * with the names and their associated processId and undernameLimits. The ar-io-sdk
+         * retries requests 3 times with exponential backoff by default.
+         */
         try {
-          this.log.info('Hydrating registry cache...');
-          let cursor = undefined;
+          this.log.info('Hydrating ArNS names cache...');
+          let cursor: string | undefined = undefined;
+          // TODO: add timing metrics
           do {
-            const { items: records, nextCursor } =
+            const {
+              items: records,
+              nextCursor,
+            }: PaginationResult<AoArNSNameDataWithName> =
               await networkProcess.getArNSRecords({ cursor, limit: 1000 });
-            cursor = nextCursor;
             for (const record of records) {
-              // do not await as we are caching here and will read later
+              // do not await, avoid blocking the event loop
               registryCache.set(
                 record.name,
                 Buffer.from(JSON.stringify(record)),
               );
             }
+            cursor = nextCursor;
           } while (cursor !== undefined);
-          this.log.info('Successfully hydrated registry cache');
+          this.log.info('Successfully hydrated ArNS names cache');
         } catch (error: any) {
-          this.log.error('Error hydrating registry cache', {
+          this.log.error('Error hydrating ArNS names cache', {
             error: error.message,
             stack: error.stack,
           });
