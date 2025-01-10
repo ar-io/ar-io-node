@@ -1,0 +1,140 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2023 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+import { strict as assert } from 'node:assert';
+import { describe, it } from 'node:test';
+
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { KvDebounceStore } from './kv-debounce-store.js';
+import { NodeKvStore } from './node-kv-store.js';
+
+describe('KvDebounceCache', () => {
+  const key = 'key';
+
+  const kvDebounceCache = new KvDebounceStore({
+    kvBufferStore: new NodeKvStore({
+      ttlSeconds: 100,
+      maxKeys: 100,
+    }),
+    cacheMissDebounceTtl: 100,
+    cacheHitDebounceTtl: 100,
+    hydrateFn: async () => {
+      // noop
+    },
+  });
+
+  it('should properly set and get a buffer', async () => {
+    const value = fromB64Url('test');
+    await kvDebounceCache.set(key, value);
+  });
+
+  it('should properly delete buffer', async () => {
+    const value = fromB64Url('test');
+    await kvDebounceCache.set(key, value);
+    await kvDebounceCache.del(key);
+    const result = await kvDebounceCache.get(key);
+    assert.equal(result, undefined);
+  });
+
+  it('should not override existing buffer when key already exists in cache', async () => {
+    const value = Buffer.from('test', 'base64url');
+    await kvDebounceCache.set(key, value);
+    await kvDebounceCache.set(key, Buffer.from('test2', 'base64url'));
+    const result = await kvDebounceCache.get(key);
+    assert.notEqual(result, undefined);
+    assert.equal(toB64Url(result!), 'test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+  });
+
+  describe('hydrateFn', () => {
+    it('should call hydrateFn on cache miss after the cache miss debounce ttl expires', async () => {
+      let callCount = 0;
+      let lastCallTimestamp = 0;
+      const kvBufferStore = new NodeKvStore({
+        ttlSeconds: 10000, // long ttl so we don't collide with debounce ttl's
+        maxKeys: 100,
+      });
+      const kvDebounceStore = new KvDebounceStore({
+        kvBufferStore,
+        cacheHitDebounceTtl: 100,
+        cacheMissDebounceTtl: 10,
+        hydrateImmediately: true,
+        hydrateFn: async () => {
+          lastCallTimestamp = Date.now();
+          // return undefined on first call
+          if (callCount === 0) {
+            callCount++;
+            return;
+          }
+          // add it to the cache as we would in a real implementation (no await)
+          kvBufferStore.set(key, Buffer.from(`${callCount}`));
+          callCount++;
+        },
+      });
+      // it should call hydrate right away by default
+      const initialCallTimestamp = lastCallTimestamp;
+      assert.equal(callCount, 1);
+      assert.equal(initialCallTimestamp, Date.now());
+
+      // request a missing key, should call hydrateFn after the cache miss debounce ttl expires
+      const result = await kvDebounceStore.get(key);
+      assert.equal(callCount, 1); // not called again until the debounce ttl expires
+      assert.equal(result, undefined);
+
+      // // wait the cache miss debounce ttl and confirm hydrateFn was called again
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const result2 = await kvDebounceStore.get(key);
+      assert.equal(callCount, 2);
+      assert.ok(lastCallTimestamp >= Date.now() - 10);
+      assert.equal(result2!.toString('utf-8'), '1'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    });
+
+    it('should call hydrateFn on cache hit after the cache hit debounce ttl expires', async () => {
+      let callCount = 0;
+      let lastCallTimestamp = 0;
+      const kvBufferStore = new NodeKvStore({
+        ttlSeconds: 10000, // long ttl so we don't collide with debounce ttls
+        maxKeys: 100,
+      });
+      // add the key to the
+      const kvDebounceStore = new KvDebounceStore({
+        kvBufferStore,
+        cacheHitDebounceTtl: 100,
+        cacheMissDebounceTtl: 10,
+        hydrateImmediately: true,
+        hydrateFn: async () => {
+          lastCallTimestamp = Date.now();
+          kvBufferStore.set(key, Buffer.from(`test${callCount}`));
+          callCount++;
+        },
+      });
+
+      // should hydrate immediately
+      const initialCallTimestamp = lastCallTimestamp;
+      const result = await kvDebounceStore.get(key);
+      assert.equal(result!.toString('utf-8'), 'test0'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(initialCallTimestamp, Date.now());
+      assert.equal(callCount, 1);
+
+      // it should debounce after the cache hit debounce ttl expires
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(callCount, 2);
+      assert.ok(lastCallTimestamp >= Date.now() - 100);
+      const result2 = await kvDebounceStore.get(key);
+      assert.equal(result2!.toString('utf-8'), 'test1'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    });
+  });
+});
