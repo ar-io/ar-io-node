@@ -302,7 +302,7 @@ describe('ArNSNamesCache', () => {
     assert.equal(missingName2, undefined, 'Name should not be cached');
     assert.equal(callCount, 1);
 
-    // wait cache miss ttl and assert that the hydrateFn was triggered and names were cached
+    // wait cache miss ttl and assert that the debounceFn was triggered and names were cached
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(callCount, 2);
 
