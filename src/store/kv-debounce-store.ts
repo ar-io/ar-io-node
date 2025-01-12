@@ -33,20 +33,20 @@ export class KvDebounceStore implements KVBufferStore {
     cacheMissDebounceTtl,
     cacheHitDebounceTtl,
     hydrateImmediately = true,
-    hydrateFn,
+    debounceFn,
   }: {
     kvBufferStore: KVBufferStore;
     cacheMissDebounceTtl: number;
     cacheHitDebounceTtl: number;
     hydrateImmediately?: boolean;
-    hydrateFn: () => Promise<void>; // caller is responsible for handling errors from hydrateFn, this class will bubble up errors on instantiation if hydrateFn throws
+    debounceFn: () => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
   }) {
     this.kvBufferStore = kvBufferStore;
-    this.debounceHydrateOnMiss = pDebounce(hydrateFn, cacheMissDebounceTtl);
-    this.debounceHydrateOnHit = pDebounce(hydrateFn, cacheHitDebounceTtl);
+    this.debounceHydrateOnMiss = pDebounce(debounceFn, cacheMissDebounceTtl);
+    this.debounceHydrateOnHit = pDebounce(debounceFn, cacheHitDebounceTtl);
     // hydrate the cache immediately when the cache is created
     if (hydrateImmediately) {
-      hydrateFn();
+      debounceFn();
     }
   }
 
