@@ -9,7 +9,7 @@ This document describes the environment variables that can be used to configure 
 | TRUSTED_NODE_URL | String | "https://arweave.net" | Arweave node to use for fetching data |
 | TRUSTED_GATEWAY_URL | String | "https://arweave.net" | Arweave node to use for proxying requests |
 | TRUSTED_GATEWAYS_URLS | String | TRUSTED_GATEWAY_URL | A JSON map of gateways and priority |
-| TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS | String | 10000 | Request timeout in milliseconds for trusted gateways |
+| TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS | String | "10000" | Request timeout in milliseconds for trusted gateways |
 | TRUSTED_ARNS_GATEWAY_URL | String | "https://__NAME__.arweave.dev" | ArNS gateway |
 | INSTANCE_ID | String | "" | Adds an "INSTANCE_ID" field to output logs |
 | LOG_FORMAT | String | "simple" | Sets the format of output logs, accepts "simple" and "json" |
@@ -75,4 +75,6 @@ This document describes the environment variables that can be used to configure 
 | AWS_ENDPOINT | String | undefined | Custom endpoint for AWS services |
 | AWS_S3_CONTIGUOUS_DATA_BUCKET | String | undefined | AWS S3 bucket name used for storing data |
 | AWS_S3_CONTIGUOUS_DATA_PREFIX | String | undefined | Prefix for the S3 bucket to organize data |
-| CHUNK_POST_MIN_SUCCESS_COUNT | String | "3" | minimum count of 200 responses for of a given chunk to be considered properly seeded |
+| CHUNK_POST_MIN_SUCCESS_COUNT | String | "3" | Minimum count of 200 responses for of a given chunk to be considered properly seeded |
+| BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS | String | "300" | Interval in seconds for retrying bundles |
+| BUNDLE_REPAIR_RETRY_BATCH_SIZE | String | "1000" | Batch size for retrying bundles |
