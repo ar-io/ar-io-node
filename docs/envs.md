@@ -9,6 +9,7 @@ This document describes the environment variables that can be used to configure 
 | TRUSTED_NODE_URL | String | "https://arweave.net" | Arweave node to use for fetching data |
 | TRUSTED_GATEWAY_URL | String | "https://arweave.net" | Arweave node to use for proxying requests |
 | TRUSTED_GATEWAYS_URLS | String | TRUSTED_GATEWAY_URL | A JSON map of gateways and priority |
+| TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS | String | 10000 | Request timeout in milliseconds for trusted gateways |
 | TRUSTED_ARNS_GATEWAY_URL | String | "https://__NAME__.arweave.dev" | ArNS gateway |
 | INSTANCE_ID | String | "" | Adds an "INSTANCE_ID" field to output logs |
 | LOG_FORMAT | String | "simple" | Sets the format of output logs, accepts "simple" and "json" |

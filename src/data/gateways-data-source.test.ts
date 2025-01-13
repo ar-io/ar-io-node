@@ -25,6 +25,14 @@ import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { Readable } from 'node:stream';
 
+const axiosMockCommonParams = (config: any) => ({
+  interceptors: {
+    request: { use: () => {} }, // eslint-disable-line @typescript-eslint/no-empty-function
+    response: { use: () => {} }, // eslint-disable-line @typescript-eslint/no-empty-function
+  },
+  defaults: config,
+});
+
 let log: winston.Logger;
 let dataSource: GatewaysDataSource;
 let mockedAxiosInstance: any;
@@ -45,9 +53,7 @@ beforeEach(async () => {
         'X-AR-IO-Origin': 'node-url',
       },
     }),
-    defaults: {
-      baseURL: 'https://gateway.domain',
-    },
+    ...axiosMockCommonParams({ baseURL: 'https://gateway.domain' }),
   };
 
   mock.method(axios, 'create', () => mockedAxiosInstance);
@@ -129,7 +135,7 @@ describe('GatewayDataSource', () => {
             },
           };
         },
-        defaults: config,
+        ...axiosMockCommonParams(config),
       }));
 
       await dataSource.getData({ id: 'test-id' });
@@ -167,7 +173,7 @@ describe('GatewayDataSource', () => {
             },
           };
         },
-        defaults: config,
+        ...axiosMockCommonParams(config),
       }));
 
       await dataSource.getData({ id: 'test-id' });
