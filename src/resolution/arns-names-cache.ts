@@ -29,7 +29,7 @@ import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
-
+import * as metrics from '../metrics.js';
 const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
 const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
@@ -101,7 +101,7 @@ export class ArNSNamesCache {
     try {
       this.log.info('Hydrating ArNS names cache...');
       let cursor: string | undefined = undefined;
-      // TODO: add timing metrics
+      const start = Date.now();
       do {
         const {
           items: records,
@@ -114,6 +114,7 @@ export class ArNSNamesCache {
         }
         cursor = nextCursor;
       } while (cursor !== undefined);
+      metrics.arnsNameCacheDurationSummary.observe(Date.now() - start);
       this.log.info('Successfully hydrated ArNS names cache');
     } catch (error: any) {
       this.log.error('Error hydrating ArNS names cache', {
