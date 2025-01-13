@@ -80,7 +80,6 @@ export class CompositeArNSResolver implements NameResolver {
     }
 
     try {
-      // check if our base name is in our arns names cache, this triggers a debounce with a ttl dependent on if it's in the cache or not
       const baseNameInCache =
         await this.arnsNamesCache.getCachedArNSBaseName(baseName);
 
@@ -95,9 +94,6 @@ export class CompositeArNSResolver implements NameResolver {
           processId: undefined,
         };
       }
-
-      // increment name cache hit counter
-      metrics.arnsNameCacheHitCounter.inc();
 
       // check if our resolution cache contains the FULL name
       const cachedResolutionBuffer = await this.resolutionCache.get(name);
