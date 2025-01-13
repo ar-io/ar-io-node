@@ -38,6 +38,10 @@ const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
 /**
  * Wraps an ArNS registry cache in a debounce cache that automatically refreshes
  * the cache after the debounce ttl has expired.
+ *
+ * The cache is a two-tier cache:
+ * 1. A KVBufferStore that is used to store the ArNS name data.
+ * 2. A KvDebounceStore that is used to debounce cache misses and cache hits.
  */
 export class ArNSNamesCache {
   private log: winston.Logger;
@@ -79,7 +83,7 @@ export class ArNSNamesCache {
       kvBufferStore: registryCache,
       cacheMissDebounceTtl,
       cacheHitDebounceTtl,
-      hydrateImmediately: true,
+      debounceImmediately: true,
       /**
        * Bind the hydrateArNSNamesCache method to the ArNSNamesCache instance
        * so that the debounceFn has access to this instance's properties and methods (e.g. this.log, this.networkProcess, etc.).
@@ -106,10 +110,7 @@ export class ArNSNamesCache {
           await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
         for (const record of records) {
           // do not await, avoid blocking the event loop
-          this.arnsRegistryKvCache.set(
-            record.name,
-            Buffer.from(JSON.stringify(record)),
-          );
+          this.setCachedArNSBaseName(record.name, record);
         }
         cursor = nextCursor;
       } while (cursor !== undefined);
@@ -141,9 +142,21 @@ export class ArNSNamesCache {
   ): Promise<AoArNSNameDataWithName | undefined> {
     const record = await this.arnsDebounceCache.get(name);
     if (record) {
-      return JSON.parse(record.toString()) as AoArNSNameDataWithName;
+      return <AoArNSNameDataWithName>JSON.parse(record.toString());
     }
     return undefined;
+  }
+
+  /**
+   * Set the ArNS name data for a given name.
+   * @param name - The name to set the ArNS name data for.
+   * @param record - The ArNS name data to set.
+   */
+  async setCachedArNSBaseName(name: string, record: AoArNSNameDataWithName) {
+    return this.arnsRegistryKvCache.set(
+      name,
+      Buffer.from(JSON.stringify(record)),
+    );
   }
 
   async close() {

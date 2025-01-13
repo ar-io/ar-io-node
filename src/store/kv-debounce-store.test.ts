@@ -60,6 +60,52 @@ describe('KvDebounceCache', () => {
   });
 
   describe('debounceFn', () => {
+    it('should debounce the cache immediately by default', async () => {
+      let callCount = 0;
+      const kvBufferStore = new NodeKvStore({
+        ttlSeconds: 10000, // long ttl so we don't collide with debounce ttl's
+        maxKeys: 100,
+      });
+      const kvDebounceStore = new KvDebounceStore({
+        kvBufferStore,
+        cacheHitDebounceTtl: 100,
+        cacheMissDebounceTtl: 10,
+        debounceImmediately: true,
+        debounceFn: async () => {
+          callCount++;
+          kvBufferStore.set(key, Buffer.from('test'));
+        },
+      });
+      await kvDebounceStore.get(key);
+      const result = await kvBufferStore.get(key);
+      assert.equal(result!.toString('utf-8'), 'test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(callCount, 1);
+    });
+
+    it('should not debounce the cache if debounceImmediately is false', async () => {
+      const kvBufferStore = new NodeKvStore({
+        ttlSeconds: 10000, // long ttl so we don't collide with debounce ttl's
+        maxKeys: 100,
+      });
+      let callCount = 0;
+      let lastCallTimestamp = 0;
+      const kvDebounceStore = new KvDebounceStore({
+        kvBufferStore,
+        cacheHitDebounceTtl: 100,
+        cacheMissDebounceTtl: 10,
+        debounceImmediately: false,
+        debounceFn: async () => {
+          lastCallTimestamp = Date.now();
+          callCount++;
+          kvBufferStore.set(key, Buffer.from('test'));
+        },
+      });
+      const result = await kvBufferStore.get(key);
+      assert.equal(result, undefined); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(callCount, 0);
+      assert.equal(lastCallTimestamp, 0);
+    });
+
     it('should call debounceFn on cache miss after the cache miss debounce ttl expires', async () => {
       let callCount = 0;
       let lastCallTimestamp = 0;
@@ -71,7 +117,7 @@ describe('KvDebounceCache', () => {
         kvBufferStore,
         cacheHitDebounceTtl: 100,
         cacheMissDebounceTtl: 10,
-        hydrateImmediately: true,
+        debounceImmediately: true,
         debounceFn: async () => {
           lastCallTimestamp = Date.now();
           // return undefined on first call
@@ -88,17 +134,11 @@ describe('KvDebounceCache', () => {
       assert.equal(callCount, 1);
       assert.ok(lastCallTimestamp <= Date.now());
 
-      // request a missing key, should call debounceFn after the cache miss debounce ttl expires
+      // request a missing key, should call debounceFn and await the debounceFn to complete
       const result = await kvDebounceStore.get(key);
-      assert.equal(callCount, 1); // not called again until the debounce ttl expires
-      assert.equal(result, undefined);
-
-      // // wait the cache miss debounce ttl and confirm debounceFn was called again
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      const result2 = await kvDebounceStore.get(key);
       assert.equal(callCount, 2);
       assert.ok(lastCallTimestamp >= Date.now() - 10);
-      assert.equal(result2!.toString('utf-8'), '1'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(result!.toString('utf-8'), '1'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
     });
 
     it('should call debounceFn on cache hit after the cache hit debounce ttl expires', async () => {
@@ -113,7 +153,7 @@ describe('KvDebounceCache', () => {
         kvBufferStore,
         cacheHitDebounceTtl: 100,
         cacheMissDebounceTtl: 10,
-        hydrateImmediately: true,
+        debounceImmediately: true,
         debounceFn: async () => {
           lastCallTimestamp = Date.now();
           kvBufferStore.set(key, Buffer.from(`test${callCount}`));
