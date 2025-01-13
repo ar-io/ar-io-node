@@ -23,7 +23,8 @@ import { AoARIORead } from '@ar.io/sdk';
 import { CompositeArNSResolver } from '../resolution/composite-arns-resolver.js';
 import { RedisKvStore } from '../store/redis-kv-store.js';
 import { NodeKvStore } from '../store/node-kv-store.js';
-import { KvArnsStore } from '../store/kv-arns-store.js';
+import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
+import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
 
 const supportedResolvers = ['on-demand', 'gateway'] as const;
 export type ArNSResolverType = (typeof supportedResolvers)[number];
@@ -66,15 +67,17 @@ export const createArNSKvStore = ({
 
 export const createArNSResolver = ({
   log,
-  cache,
+  resolutionCache,
   resolutionOrder,
+  registryCache,
   trustedGatewayUrl,
   networkProcess,
   overrides,
 }: {
   log: Logger;
-  cache: KvArnsStore;
+  resolutionCache: KvArNSResolutionStore;
   resolutionOrder: (ArNSResolverType | string)[];
+  registryCache: KvArNSRegistryStore;
   trustedGatewayUrl?: string;
   networkProcess?: AoARIORead;
   overrides?: {
@@ -116,7 +119,9 @@ export const createArNSResolver = ({
   return new CompositeArNSResolver({
     log,
     resolvers,
-    cache,
+    resolutionCache,
+    registryCache,
+    networkProcess,
     overrides,
   });
 };

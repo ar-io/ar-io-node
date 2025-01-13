@@ -16,261 +16,327 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import { after, beforeEach, describe, it } from 'node:test';
 import winston from 'winston';
 import { ArNSNamesCache } from './arns-names-cache.js';
-import { AoARIORead } from '@ar.io/sdk';
+import { AoARIORead, Logger as ARIOLogger } from '@ar.io/sdk';
+import { NodeKvStore } from '../store/node-kv-store.js';
 
-const createMockNetworkProcess = () => {
-  let callCount = 0;
-  return {
-    async getArNSRecords() {
-      callCount++;
-      return {
-        items: [
-          {
-            name: `name-${callCount}-1`,
-          },
-          {
-            name: `name-${callCount}-2`,
-          },
-          {
-            name: `name-${callCount}-3`,
-          },
-        ],
-        nextCursor: undefined,
-      };
-    },
-  } as unknown as AoARIORead;
-};
+// disable sdk logging to reduce noise
+ARIOLogger.default.setLogLevel('none');
 
 describe('ArNSNamesCache', () => {
   const log = winston.createLogger({
+    // when debugging, set silent to false
     transports: [new winston.transports.Console({ silent: true })],
+    format: winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.json(),
+    ),
+  });
+
+  let registryCache: NodeKvStore;
+
+  beforeEach(async () => {
+    // new cache for each test
+    registryCache = new NodeKvStore({
+      ttlSeconds: 1,
+      maxKeys: 100,
+    });
+  });
+
+  after(async () => {
+    // exit forcefully due to intentional non-awaited promises in ArNSNamesCache
+    process.exit(0);
   });
 
   it('should fetch and cache names on initialization', async () => {
-    const cache = new ArNSNamesCache({
+    let callCount = 0;
+    const debounceCache = new ArNSNamesCache({
       log,
-      networkProcess: createMockNetworkProcess(),
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
+          return {
+            items: [
+              {
+                name: `name-${callCount}-1`,
+                processId: `process-${callCount}`,
+              },
+            ],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as AoARIORead,
     });
 
-    const names = await cache.getNames();
-    assert.deepEqual(names, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
-    assert.equal(await cache.getCacheSize(), 3);
+    // let the cache hydrate
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // assert names were loaded right away
+    assert.equal(callCount, 1);
+
+    // assert the name was cached
+    const name = await debounceCache.getCachedArNSBaseName('name-1-1');
+    assert.deepEqual(name, { name: 'name-1-1', processId: 'process-1' });
   });
 
-  it('should use cached names within TTL period', async () => {
-    const cacheTtl = 1000;
-    const cache = new ArNSNamesCache({
+  it('should use cached names within TTL period', async (done) => {
+    let callCount = 0;
+    const debounceCache = new ArNSNamesCache({
       log,
-      networkProcess: createMockNetworkProcess(),
-      cacheTtl,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
+          return {
+            items: [
+              {
+                name: `name-${callCount}-1`,
+                processId: `process-${callCount}`,
+              },
+            ],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as AoARIORead,
     });
 
-    const names1 = await cache.getNames();
-    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
-    assert.equal(await cache.getCacheSize(), 3);
+    // let the cache hydrate
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const names2 = await cache.getNames();
-    assert.deepEqual(names2, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
-    assert.equal(await cache.getCacheSize(), 3);
+    // assert the name was cached
+    const name = await debounceCache.getCachedArNSBaseName('name-1-1');
+    assert.deepEqual(name, { name: 'name-1-1', processId: 'process-1' });
+
+    // call it again and assert it's still cached and call count is still 1
+    const name2 = await debounceCache.getCachedArNSBaseName('name-1-1');
+    assert.deepEqual(name2, { name: 'name-1-1', processId: 'process-1' });
+    assert.equal(callCount, 1);
   });
 
   it('should refresh cache when forced', async () => {
-    const cache = new ArNSNamesCache({
-      log,
-      networkProcess: createMockNetworkProcess(),
-    });
-
-    const names1 = await cache.getNames();
-    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
-    assert.equal(await cache.getCacheSize(), 3);
-
-    const names2 = await cache.getNames({ forceCacheUpdate: true });
-    assert.deepEqual(names2, new Set(['name-2-1', 'name-2-2', 'name-2-3']));
-    assert.equal(await cache.getCacheSize(), 3);
-  });
-
-  it('should refresh cache after TTL expires', async () => {
-    const cacheTtl = 100;
-    const cache = new ArNSNamesCache({
-      log,
-      networkProcess: createMockNetworkProcess(),
-      cacheTtl,
-    });
-
-    const names1 = await cache.getNames();
-    assert.deepEqual(names1, new Set(['name-1-1', 'name-1-2', 'name-1-3']));
-    assert.equal(await cache.getCacheSize(), 3);
-
-    // Wait for cache to expire
-    await new Promise((resolve) => setTimeout(resolve, cacheTtl + 10));
-
-    const names2 = await cache.getNames();
-    assert.deepEqual(names2, new Set(['name-2-1', 'name-2-2', 'name-2-3']));
-    assert.equal(await cache.getCacheSize(), 3);
-  });
-
-  it('should retry on failure and succeed within max retries', async () => {
     let callCount = 0;
-    const mockNetworkProcess = {
-      async getArNSRecords() {
-        callCount++;
-        if (callCount <= 2) {
-          throw new Error('Temporary failure');
-        }
-        return {
-          items: [{ name: 'success-after-retry' }],
-          nextCursor: undefined,
-        };
-      },
-    } as unknown as AoARIORead;
-
-    const cache = new ArNSNamesCache({
+    const debounceCache = new ArNSNamesCache({
       log,
-      networkProcess: mockNetworkProcess,
-      maxRetries: 3,
-      retryDelay: 0,
-    });
-
-    const names = await cache.getNames();
-    assert.deepEqual(names, new Set(['success-after-retry']));
-    assert.equal(callCount, 3);
-  });
-
-  it('should fail after exhausting all retry attempts', async () => {
-    let callCount = 0;
-    const mockNetworkProcess = {
-      async getArNSRecords() {
-        callCount++;
-        throw new Error(`Attempt ${callCount} failed`);
-      },
-    } as unknown as AoARIORead;
-
-    const cache = new ArNSNamesCache({
-      log,
-      networkProcess: mockNetworkProcess,
-      maxRetries: 3,
-      retryDelay: 0,
-    });
-
-    await assert.rejects(
-      () => cache.getNames(),
-      /Failed to fetch ArNS records after 3 attempts/,
-    );
-    assert.equal(callCount, 3);
-  });
-
-  it('should respect the retry delay between attempts', async () => {
-    let callCount = 0;
-    const timestamps: number[] = [];
-
-    const mockNetworkProcess = {
-      async getArNSRecords() {
-        callCount++;
-        timestamps.push(Date.now());
-        if (callCount < 3) {
-          throw new Error('Temporary failure');
-        }
-        return {
-          items: [{ name: 'success' }],
-          nextCursor: undefined,
-        };
-      },
-    } as unknown as AoARIORead;
-
-    const retryDelay = 100;
-    const cache = new ArNSNamesCache({
-      log,
-      networkProcess: mockNetworkProcess,
-      maxRetries: 3,
-      retryDelay,
-    });
-
-    await cache.getNames();
-
-    assert.ok(timestamps[1] - timestamps[0] >= retryDelay);
-    assert.ok(timestamps[2] - timestamps[1] >= retryDelay);
-  });
-
-  it('should handle empty results as failures and retry', async () => {
-    let callCount = 0;
-    const mockNetworkProcess = {
-      async getArNSRecords() {
-        callCount++;
-        if (callCount < 2) {
-          return { items: [], nextCursor: undefined };
-        }
-        return {
-          items: [{ name: 'success' }],
-          nextCursor: undefined,
-        };
-      },
-    } as unknown as AoARIORead;
-
-    const cache = new ArNSNamesCache({
-      log,
-      networkProcess: mockNetworkProcess,
-      maxRetries: 3,
-      retryDelay: 0,
-    });
-
-    const names = await cache.getNames();
-    assert.deepEqual(names, new Set(['success']));
-    assert.equal(callCount, 2);
-  });
-
-  it('should return last successful names if all retry attempts fail', async () => {
-    let callCount = 0;
-    const mockNetworkProcess = {
-      async getArNSRecords() {
-        callCount++;
-        if (callCount === 1) {
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
           return {
-            items: [{ name: 'initial-success' }],
+            items: [
+              {
+                name: `name-${callCount}-1`,
+                processId: `process-${callCount}`,
+              },
+            ],
             nextCursor: undefined,
           };
-        }
-        throw new Error('Network error');
-      },
-    } as unknown as AoARIORead;
-
-    const cache = new ArNSNamesCache({
-      log,
-      networkProcess: mockNetworkProcess,
-      maxRetries: 3,
-      retryDelay: 0,
+        },
+      } as unknown as AoARIORead,
     });
 
-    const initialNames = await cache.getNames();
-    assert.deepEqual(initialNames, new Set(['initial-success']));
+    // let the cache hydrate
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const updatedNames = await cache.getNames({ forceCacheUpdate: true });
-    assert.deepEqual(updatedNames, new Set(['initial-success']));
-    assert.equal(callCount, 4); // 1 initial + 3 retry attempts
+    // assert the name was cached
+    const name = await debounceCache.getCachedArNSBaseName('name-1-1');
+    assert.deepEqual(name, { name: 'name-1-1', processId: 'process-1' });
+
+    // force refresh the cache
+    await debounceCache.forceRefresh();
+
+    // let the cache hydrate finish
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // assert call count is 2
+    assert.equal(callCount, 2);
+
+    // assert the cache was refreshed, but bc of the underlying buffer cache the previous name should is still returned
+    const previousCachedName =
+      await debounceCache.getCachedArNSBaseName('name-1-1');
+    assert.deepEqual(previousCachedName, {
+      name: 'name-1-1',
+      processId: 'process-1',
+    });
+
+    // assert the cache size is updated with the new name
+    const newCachedName = await debounceCache.getCachedArNSBaseName('name-2-1');
+    assert.deepEqual(newCachedName, {
+      name: 'name-2-1',
+      processId: 'process-2',
+    });
   });
 
-  it('should throw error if all retries fail and no previous successful cache exists', async () => {
+  it('should return undefined if the name expires from the underlying kv cache and hydrating fails', async () => {
     let callCount = 0;
-    const mockNetworkProcess = {
-      async getArNSRecords() {
-        callCount++;
-        throw new Error(`Attempt ${callCount} failed`);
-      },
-    } as unknown as AoARIORead;
-
-    const cache = new ArNSNamesCache({
+    const debounceCache = new ArNSNamesCache({
       log,
-      networkProcess: mockNetworkProcess,
-      maxRetries: 3,
-      retryDelay: 0,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              items: [
+                {
+                  name: `name-${callCount}`,
+                  processId: `process-${callCount}`,
+                },
+              ],
+              nextCursor: undefined,
+            };
+          }
+          throw new Error('Network error');
+        },
+      } as unknown as AoARIORead,
     });
 
-    await assert.rejects(
-      () => cache.getNames(),
-      /Failed to fetch ArNS records after 3 attempts/,
-    );
-    assert.equal(callCount, 3);
+    // let the cache hydrate
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // on first call, the name is returned from the kv cache but the underlying kv cache expires it
+    const name = await debounceCache.getCachedArNSBaseName('name-1');
+    assert.deepEqual(name, {
+      name: 'name-1',
+      processId: 'process-1',
+    });
+
+    // let the underlying kv cache expire
+    await new Promise((resolve) => setTimeout(resolve, 1000)); // wait the 1 second ttl for the name to expire from the kv cache
+
+    // on second call, the name is not in the kv cache and hydrating fails
+    const name2 = await debounceCache.getCachedArNSBaseName('name-1');
+    assert.equal(name2, undefined);
+  });
+
+  it('should return last successful cached name from kv cache if hydrating fails and within the underlying kv cache ttl', async () => {
+    let callCount = 0;
+    const debounceCache = new ArNSNamesCache({
+      log,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              items: [
+                {
+                  name: `name-${callCount}`,
+                  processId: `process-${callCount}`,
+                },
+              ],
+              nextCursor: undefined,
+            };
+          }
+          throw new Error('Network error');
+        },
+      } as unknown as AoARIORead,
+    });
+
+    // let the cache hydrate
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const name = await debounceCache.getCachedArNSBaseName('name-1');
+    assert.deepEqual(name, { name: 'name-1', processId: 'process-1' });
+
+    // force refresh the cache
+    await debounceCache.forceRefresh();
+
+    // let the cache hydrate finish
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // assert the name was refreshed
+    const previousCachedName =
+      await debounceCache.getCachedArNSBaseName('name-1');
+    // should be undefined, but process-2 is cached
+    assert.deepEqual(previousCachedName, {
+      name: 'name-1',
+      processId: 'process-1',
+    });
+  });
+
+  it('should debounce on a cache miss', async () => {
+    let callCount = 0;
+    let lastCallTimestamp = 0;
+    const debounceCache = new ArNSNamesCache({
+      log,
+      cacheHitDebounceTtl: 10000, // don't refresh the cache on a hit
+      cacheMissDebounceTtl: 10, // cache miss should trigger a refresh within 10ms
+      registryCache,
+      networkProcess: {
+        // on first call, return empty, then return success
+        async getArNSRecords() {
+          callCount++;
+          lastCallTimestamp = Date.now();
+          // on first two calls, return empty, then return success
+          if (callCount === 1) {
+            return {
+              items: [],
+              nextCursor: undefined,
+            };
+          }
+          return {
+            items: [
+              { name: `name-${callCount}`, processId: `process-${callCount}` },
+            ],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as AoARIORead,
+    });
+
+    // let the cache hydrate
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // call count will get incremented on instantiation of the cache
+    assert.equal(callCount, 1);
+
+    // check a missing name, this should instantiate the debounce timeout to refresh the cache in 10ms
+    const missingName = await debounceCache.getCachedArNSBaseName('name-2');
+    assert.deepEqual(missingName, { name: 'name-2', processId: 'process-2' });
+    assert.equal(callCount, 2);
+    assert.ok(lastCallTimestamp >= Date.now() - 10);
+  });
+
+  it('should debounce on a cache hit', async () => {
+    let callCount = 0;
+    const debounceCache = new ArNSNamesCache({
+      log,
+      cacheHitDebounceTtl: 100, // don't refresh the cache on a hit
+      cacheMissDebounceTtl: 1000, // longer cache miss to avoid refreshing on misses and validate cache hit refreshes
+      registryCache,
+      networkProcess: {
+        async getArNSRecords() {
+          callCount++;
+          return {
+            items: [
+              { name: `name-${callCount}`, processId: `process-${callCount}` },
+            ],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as AoARIORead,
+    });
+
+    // call count will get incremented on instantiation of the cache
+    assert.equal(callCount, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // request a hit
+    const cachedName = await debounceCache.getCachedArNSBaseName('name-1');
+    assert.deepEqual(cachedName, { name: 'name-1', processId: 'process-1' });
+    assert.equal(callCount, 1);
+
+    // assert that cached name is returned if requested again within ttl
+    const cachedName2 = await debounceCache.getCachedArNSBaseName('name-1');
+    assert.deepEqual(cachedName2, cachedName);
+    assert.equal(callCount, 1);
+
+    // assert that a missing name is not cached yet
+    const cachedName3 = await debounceCache.getCachedArNSBaseName('name-2');
+    assert.deepEqual(cachedName3, { name: 'name-2', processId: 'process-2' });
+    assert.equal(callCount, 2);
   });
 });

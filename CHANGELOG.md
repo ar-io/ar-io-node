@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added `FS_CLEANUP_WORKER_BATCH_SIZE`,
+  `FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION`, and
+  `FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION` environment variables to allow
+  configuration of number of contiguous data files cleaned up per batch, the
+  pause between each batch, and the pause before restarting the entire cleanup
+  process again.
+- Added `data_items_unbundled_total` Prometheus metric that counts the total
+  number of data items unbundled, including those that did not match the
+  unbundling filter.
+- Added a `parent_type` label that can be one of `transaction` or `data_item`
+  to data item indexing metrics.
+- Added a `files_cleaned_total` total Prometheus metric to enable monitoring of
+  contiguous data cleanup.
+- Added support for specifying the admin API via a file specified by the
+  `ADMIN_API_KEY_FILE` environment variable.
+- Added experimental support for posting chunks in a non-blocking way to
+  secondary nodes specified via a comma separate list in the
+  `SECONDARY_CHUNK_POST_URLS` environment variable.
+
+### Changed
+
+- Renamed the `parent_type` lable to `contiguous_data_type` on bundle metrics
+  to more accurately reflect the meaning of the label.
+- Reduced the maximum time to refresh the ArNS name list to 10 seconds to
+  minimize delays in ArNS availability after a new name is registered.
+- Changed `/ar-io/admin/queue-bundle` to wait for `bundles` rows to be written
+  to the DB before responding to ensure that errors that occur due to DB
+  contention are not silently ignored.
+- Data items are now flushed even when block indexing is stopped. This allows
+  for indexing batches of data items using the admin API with block indexing
+  disabled.
+- Adjust services in `docker-compose` to use `unless-stopped` as their restart
+  policy. This guards against missing restarts in the case where service
+  containers exit with a success status even when they shouldn't.
+
+### Fixed
+
+- Added missing `created_at` field in `blocked_names` table.
+- Fixed broken ArNS undername resolution.
+
 ## [Release 22] - 2024-12-18
 
 ### Added

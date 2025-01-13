@@ -18,15 +18,38 @@
 
 import { KVBufferStore } from '../types.js';
 
-export class KvArnsStore implements KVBufferStore {
+/**
+ * Key-Value stored intended to hold ArNS Name Registry data.
+ *
+ * Example data:
+ *
+ * {
+ *   key: 'ardrive',
+ *   value: {
+ *      processId: AO_PROCESS_ID,
+ *      undernameLimit: UNDERNAME_LIMIT,
+ *      type: 'permabuy' | 'lease',
+ *      startTimestamp: TIMESTAMP,
+ *      endTimestamp?: TIMESTAMP
+ *   }
+ * }
+ */
+export class KvArNSRegistryStore implements KVBufferStore {
   private kvBufferStore: KVBufferStore;
-
-  constructor({ kvBufferStore }: { kvBufferStore: KVBufferStore }) {
+  private hashKeyPrefix: string;
+  constructor({
+    hashKeyPrefix,
+    kvBufferStore,
+  }: {
+    hashKeyPrefix: string;
+    kvBufferStore: KVBufferStore;
+  }) {
     this.kvBufferStore = kvBufferStore;
+    this.hashKeyPrefix = hashKeyPrefix;
   }
 
   private hashKey(key: string): string {
-    return `arns|${key}`;
+    return `${this.hashKeyPrefix}|${key}`;
   }
 
   async get(key: string): Promise<Buffer | undefined> {

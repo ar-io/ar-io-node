@@ -82,11 +82,12 @@ import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
 import { SignatureFetcher } from './data/signature-fetcher.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
-import { KvArnsStore } from './store/kv-arns-store.js';
+import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
 import { parquetExporter } from './routes/ar-io.js';
 import { server } from './app.js';
 import { S3DataStore } from './store/s3-data-store.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
+import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -597,7 +598,20 @@ export const manifestPathResolver = new StreamingManifestPathResolver({
   log,
 });
 
-export const arnsResolverCache = new KvArnsStore({
+export const arnsResolutionCache = new KvArNSResolutionStore({
+  hashKeyPrefix: 'arns', // all arns resolution cache keys start with 'arns'
+  kvBufferStore: createArNSKvStore({
+    log,
+    type: config.ARNS_CACHE_TYPE,
+    redisUrl: config.REDIS_CACHE_URL,
+    ttlSeconds: config.ARNS_CACHE_TTL_SECONDS,
+    maxKeys: config.ARNS_CACHE_MAX_KEYS,
+    useTls: config.REDIS_USE_TLS,
+  }),
+});
+
+export const arnsRegistryCache = new KvArNSRegistryStore({
+  hashKeyPrefix: 'registry', // all arns registry cache keys start with 'registry'
   kvBufferStore: createArNSKvStore({
     log,
     type: config.ARNS_CACHE_TYPE,
@@ -613,7 +627,8 @@ export const nameResolver = createArNSResolver({
   trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
   networkProcess: arIO,
-  cache: arnsResolverCache,
+  resolutionCache: arnsResolutionCache,
+  registryCache: arnsRegistryCache,
   overrides: {
     ttlSeconds: config.ARNS_RESOLVER_OVERRIDE_TTL_SECONDS,
     // TODO: other overrides like fallback txId if not found in resolution
@@ -694,7 +709,8 @@ export const shutdown = async (exitCode = 0) => {
       arIODataSource.stopUpdatingPeers();
       dataSqliteWalCleanupWorker?.stop();
       parquetExporter?.stop();
-      await arnsResolverCache.close();
+      await arnsResolutionCache.close();
+      await arnsRegistryCache.close();
       await mempoolWatcher?.stop();
       await blockImporter.stop();
       await dataItemIndexer.stop();
