@@ -257,17 +257,19 @@ describe('ArNSNamesCache', () => {
     });
   });
 
-  it('should debounce after provided cache miss ttl on a cache miss', async () => {
+  it('should debounce on a cache miss', async () => {
     let callCount = 0;
+    let lastCallTimestamp = 0;
     const debounceCache = new ArNSNamesCache({
       log,
       cacheHitDebounceTtl: 10000, // don't refresh the cache on a hit
-      cacheMissDebounceTtl: 100, // cache miss should trigger a refresh within 100ms
+      cacheMissDebounceTtl: 10, // cache miss should trigger a refresh within 10ms
       registryCache,
       networkProcess: {
         // on first call, return empty, then return success
         async getArNSRecords() {
           callCount++;
+          lastCallTimestamp = Date.now();
           // on first two calls, return empty, then return success
           if (callCount === 1) {
             return {
@@ -287,31 +289,17 @@ describe('ArNSNamesCache', () => {
 
     // let the cache hydrate
     await new Promise((resolve) => setTimeout(resolve, 10));
-
     // call count will get incremented on instantiation of the cache
     assert.equal(callCount, 1);
-    // assert nothing in the underlying kv cache
 
-    // check a missing name, this should instantiate the debounce timeout to refresh the cache in 100ms
-    const missingName = await debounceCache.getCachedArNSBaseName('name-1');
-    assert.equal(missingName, undefined, 'Name should not be cached');
-    assert.equal(callCount, 1);
-
-    // it should not trigger a refresh if the name is requested again within the ttl
-    const missingName2 = await debounceCache.getCachedArNSBaseName('name-1');
-    assert.equal(missingName2, undefined, 'Name should not be cached');
-    assert.equal(callCount, 1);
-
-    // wait cache miss ttl and assert that the debounceFn was triggered and names were cached
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // check a missing name, this should instantiate the debounce timeout to refresh the cache in 10ms
+    const missingName = await debounceCache.getCachedArNSBaseName('name-2');
+    assert.deepEqual(missingName, { name: 'name-2', processId: 'process-2' });
     assert.equal(callCount, 2);
-
-    // assert that the new names are cached in the underlying kv cache
-    const names = await debounceCache.getCachedArNSBaseName('name-2');
-    assert.deepEqual(names, { name: 'name-2', processId: 'process-2' });
+    assert.ok(lastCallTimestamp >= Date.now() - 10);
   });
 
-  it('should debounce after provided cache hit ttl on a cache hit', async () => {
+  it('should debounce on a cache hit', async () => {
     let callCount = 0;
     const debounceCache = new ArNSNamesCache({
       log,
@@ -348,13 +336,7 @@ describe('ArNSNamesCache', () => {
 
     // assert that a missing name is not cached yet
     const cachedName3 = await debounceCache.getCachedArNSBaseName('name-2');
-    assert.deepEqual(cachedName3, undefined);
-    assert.equal(callCount, 1);
-
-    // wait the remainder of the original cache hit ttl and assert that the cache is refreshed with latest names
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const newName = await debounceCache.getCachedArNSBaseName('name-2');
-    assert.deepEqual(newName, { name: 'name-2', processId: 'process-2' });
+    assert.deepEqual(cachedName3, { name: 'name-2', processId: 'process-2' });
     assert.equal(callCount, 2);
   });
 });

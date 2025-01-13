@@ -32,31 +32,34 @@ export class KvDebounceStore implements KVBufferStore {
     kvBufferStore,
     cacheMissDebounceTtl,
     cacheHitDebounceTtl,
-    hydrateImmediately = true,
+    debounceImmediately = true,
     debounceFn,
   }: {
     kvBufferStore: KVBufferStore;
     cacheMissDebounceTtl: number;
     cacheHitDebounceTtl: number;
-    hydrateImmediately?: boolean;
-    debounceFn: () => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
+    debounceImmediately?: boolean;
+    debounceFn: (...args: any[]) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
   }) {
     this.kvBufferStore = kvBufferStore;
     this.debounceHydrateOnMiss = pDebounce(debounceFn, cacheMissDebounceTtl);
     this.debounceHydrateOnHit = pDebounce(debounceFn, cacheHitDebounceTtl);
-    // hydrate the cache immediately when the cache is created
-    if (hydrateImmediately) {
+    // debounce the cache immediately when the cache is created
+    if (debounceImmediately) {
       debounceFn();
     }
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    const value = await this.kvBufferStore.get(key);
+    let value = await this.kvBufferStore.get(key);
     if (value === undefined) {
-      this.debounceHydrateOnMiss();
-      return undefined;
+      // await on a miss, so we don't have to retry after the debounce has completed
+      await this.debounceHydrateOnMiss(key);
+      value = await this.kvBufferStore.get(key);
+    } else {
+      // don't await on a hit, fire and forget
+      this.debounceHydrateOnHit(key);
     }
-    this.debounceHydrateOnHit();
     return value;
   }
 

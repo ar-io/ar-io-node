@@ -85,7 +85,14 @@ export class CompositeArNSResolver implements NameResolver {
         await this.arnsNamesCache.getCachedArNSBaseName(baseName);
 
       if (!baseNameInCache) {
-        throw new Error('Base name not found in ArNS names cache');
+        this.log.warn('Base name not found in ArNS names cache', { name });
+        return {
+          name,
+          resolvedId: undefined,
+          resolvedAt: undefined,
+          ttl: undefined,
+          processId: undefined,
+        };
       }
 
       // check if our resolution cache contains the FULL name
