@@ -4,7 +4,7 @@ services:
     image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-0d3e2a9594f0520a2f374450851fd4ddf1321c09}
     build:
       context: envoy/
-    restart: on-failure
+    restart: unless-stopped
     ports:
       - '3000:3000'
       #- '9901:9901' # don't expose admin port by default
@@ -28,7 +28,7 @@ services:
     image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-cb2f03ea2daf0cc7ed5f2cf14af0fb2c28042cea}
     build:
       context: .
-    restart: on-failure
+    restart: unless-stopped
     ports:
       - 4000:4000
     volumes:
@@ -127,7 +127,7 @@ services:
   redis:
     image: redis:${REDIS_IMAGE_TAG:-7}
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
-    restart: on-failure
+    restart: unless-stopped
     ports:
       - '6379' # don't expose redis externally by default
     volumes:
@@ -160,7 +160,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.clickhouse-auto-import
-    restart: on-failure
+    restart: unless-stopped
     volumes:
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
     environment:
@@ -178,7 +178,7 @@ services:
 
   observer:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-9d9c5868de88cddcc5a9605e7d90bc74d280857a}
-    restart: on-failure
+    restart: unless-stopped
     ports:
       - 5050:5050
     volumes:
