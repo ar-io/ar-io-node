@@ -236,6 +236,11 @@ export const arnsCacheMissCounter = new promClient.Counter({
   help: 'Number of misses in the arns cache',
 });
 
+export const arnsNameCacheDurationSummary = new promClient.Summary({
+  name: 'arns_name_cache_duration_ms',
+  help: 'Time in ms it takes to fetch and cache arns base names',
+});
+
 export const arnsNameCacheHitCounter = new promClient.Counter({
   name: 'arns_name_cache_hit_total',
   help: 'Number of hits in the arns name cache',
