@@ -143,8 +143,10 @@ export class ArNSNamesCache {
   ): Promise<AoArNSNameDataWithName | undefined> {
     const record = await this.arnsDebounceCache.get(name);
     if (record) {
+      metrics.arnsNameCacheHitCounter.inc();
       return <AoArNSNameDataWithName>JSON.parse(record.toString());
     }
+    metrics.arnsNameCacheMissCounter.inc();
     return undefined;
   }
 
