@@ -29,8 +29,7 @@ import {
   RequestAttributes,
 } from '../types.js';
 import * as metrics from '../metrics.js';
-
-const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
+import * as config from '../config.js';
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -40,7 +39,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
   constructor({
     log,
     trustedGatewaysUrls,
-    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, number>;

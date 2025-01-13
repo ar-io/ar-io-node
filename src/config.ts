@@ -87,6 +87,11 @@ Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
   }
 });
 
+export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS',
+  '10000',
+);
+
 // Trusted chunk POST URLs (for posting chunks received at /chunk)
 export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
