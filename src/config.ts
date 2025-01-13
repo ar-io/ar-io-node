@@ -257,6 +257,16 @@ export const MAX_FLUSH_INTERVAL_SECONDS = +env.varOrDefault(
   '600',
 );
 
+export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
+  'BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS',
+  '300', // 5 minutes
+);
+
+export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
+  'BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS',
+  '1000',
+);
+
 //
 // File system cleanup
 //

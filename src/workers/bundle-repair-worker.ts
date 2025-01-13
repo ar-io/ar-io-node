@@ -16,15 +16,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import * as winston from 'winston';
+import * as config from '../config.js';
 
 import { BundleIndex } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
-const DEFAULT_RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_FILTER_REPOCESS_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const DEFAULT_BUNDLES_TO_RETRY = 1000;
 
 export class BundleRepairWorker {
   // Dependencies
@@ -66,7 +65,7 @@ export class BundleRepairWorker {
   async start(): Promise<void> {
     const defaultInterval = setInterval(
       this.retryBundles.bind(this),
-      DEFAULT_RETRY_INTERVAL_MS,
+      config.BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS * 1000,
     );
     this.intervalIds.push(defaultInterval);
     const defaultUpdateInterval = setInterval(
@@ -104,7 +103,7 @@ export class BundleRepairWorker {
   async retryBundles() {
     try {
       const bundleIds = await this.bundleIndex.getFailedBundleIds(
-        DEFAULT_BUNDLES_TO_RETRY,
+        config.BUNDLE_REPAIR_RETRY_BATCH_SIZE,
       );
       for (const bundleId of bundleIds) {
         this.log.info('Retrying failed bundle', { bundleId });
