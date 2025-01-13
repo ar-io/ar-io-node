@@ -104,6 +104,42 @@ export class GatewaysDataSource implements ContiguousDataSource {
             timeout: this.requestTimeoutMs,
           });
 
+          gatewayAxios.interceptors.request.use((config) => {
+            this.log.debug('Axios request initiated', {
+              url: config.url,
+              method: config.method,
+              headers: config.headers,
+              params: config.params,
+              timeout: config.timeout,
+            });
+            return config;
+          });
+
+          gatewayAxios.interceptors.response.use(
+            (response) => {
+              this.log.debug('Axios response received', {
+                url: response.config.url,
+                status: response.status,
+                headers: response.headers,
+              });
+              return response;
+            },
+            (error) => {
+              if (error.response) {
+                this.log.error('Axios response error', {
+                  url: error.response.config.url,
+                  status: error.response.status,
+                  headers: error.response.headers,
+                });
+              } else {
+                this.log.error('Axios network error', {
+                  message: error.message,
+                });
+              }
+              return Promise.reject(error);
+            },
+          );
+
           this.log.debug('Attempting to fetch contiguous data from gateway', {
             id,
             gatewayUrl,
