@@ -412,27 +412,39 @@ const contiguousDataStore =
         baseDir: 'data/contiguous',
       });
 
-export const onDemandContiguousDataSource = new ReadThroughDataCache({
-  log,
-  dataSource: new SequentialDataSource({
-    log,
-    dataSources: onDemandDataSources,
-  }),
-  dataStore: contiguousDataStore,
-  contiguousDataIndex,
-  dataContentAttributeImporter,
-});
+export const onDemandContiguousDataSource =
+  config.DISABLE_READ_THROUGH_DATA_CACHE
+    ? new SequentialDataSource({
+        log,
+        dataSources: onDemandDataSources,
+      })
+    : new ReadThroughDataCache({
+        log,
+        dataSource: new SequentialDataSource({
+          log,
+          dataSources: onDemandDataSources,
+        }),
+        dataStore: contiguousDataStore,
+        contiguousDataIndex,
+        dataContentAttributeImporter,
+      });
 
-export const backgroundContiguousDataSource = new ReadThroughDataCache({
-  log,
-  dataSource: new SequentialDataSource({
-    log,
-    dataSources: backgroundDataSources,
-  }),
-  dataStore: contiguousDataStore,
-  contiguousDataIndex,
-  dataContentAttributeImporter,
-});
+export const backgroundContiguousDataSource =
+  config.DISABLE_READ_THROUGH_DATA_CACHE
+    ? new SequentialDataSource({
+        log,
+        dataSources: backgroundDataSources,
+      })
+    : new ReadThroughDataCache({
+        log,
+        dataSource: new SequentialDataSource({
+          log,
+          dataSources: backgroundDataSources,
+        }),
+        dataStore: contiguousDataStore,
+        contiguousDataIndex,
+        dataContentAttributeImporter,
+      });
 
 export const dataItemIndexer = new DataItemIndexer({
   log,

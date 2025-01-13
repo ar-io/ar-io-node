@@ -562,6 +562,9 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   '500',
 );
 
+export const DISABLE_READ_THROUGH_DATA_CACHE =
+  env.varOrDefault('DISABLE_READ_THROUGH_DATA_CACHE', 'false') === 'true';
+
 //
 // AO
 //
