@@ -15,36 +15,29 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { RedisClientType, commandOptions, createClient } from 'redis';
+
+import { Redis } from 'ioredis';
 import winston from 'winston';
 import * as metrics from '../metrics.js';
 import { KVBufferStore } from '../types.js';
 
 export class RedisKvStore implements KVBufferStore {
-  private client: RedisClientType;
+  private client: Redis;
   private log: winston.Logger;
   private ttlSeconds: number;
 
   constructor({
     log,
     redisUrl,
-    useTls,
     ttlSeconds,
   }: {
     log: winston.Logger;
     redisUrl: string;
-    useTls: boolean;
     ttlSeconds: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.ttlSeconds = ttlSeconds;
-    this.client = createClient({
-      url: redisUrl,
-      socket: {
-        tls: useTls,
-        connectTimeout: 10000,
-      },
-    });
+    this.client = new Redis(redisUrl);
     this.client.on('error', (error: any) => {
       this.log.error(`Redis error`, {
         message: error.message,
@@ -53,21 +46,10 @@ export class RedisKvStore implements KVBufferStore {
       });
       metrics.redisErrorCounter.inc();
     });
-    this.client.connect().catch((error: any) => {
-      this.log.error(`Redis connection error`, {
-        message: error.message,
-        stack: error.stack,
-        url: redisUrl,
-      });
-      metrics.redisConnectionErrorsCounter.inc();
-    });
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    const value = await this.client.get(
-      commandOptions({ returnBuffers: true }),
-      key,
-    );
+    const value = await this.client.getBuffer(key);
     return value ?? undefined;
   }
 
@@ -83,9 +65,7 @@ export class RedisKvStore implements KVBufferStore {
 
   async set(key: string, buffer: Buffer): Promise<void> {
     // set the key with a TTL for every key
-    await this.client.set(key, buffer, {
-      EX: this.ttlSeconds,
-    });
+    await this.client.set(key, buffer, 'EX', this.ttlSeconds);
   }
 
   async close(): Promise<void> {
