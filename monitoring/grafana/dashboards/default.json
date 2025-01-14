@@ -746,7 +746,7 @@
           "datasource": "prometheus",
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(rate(http_request_duration_seconds_sum{job=\"ar-io-node\"}[$__rate_interval])) \n/\nsum(rate(http_request_duration_seconds_count{job=\"ar-io-node\"}[$__rate_interval]))",
+          "expr": "sum(rate(http_request_duration_seconds_sum{job=\"ar-io-node\"}[$__rate_interval])) / sum(rate(http_request_duration_seconds_count{job=\"ar-io-node\"}[$__rate_interval])) * 1000",
           "format": "time_series",
           "instant": false,
           "legendFormat": "Average Response Time (ms)",
