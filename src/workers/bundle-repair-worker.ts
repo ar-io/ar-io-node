@@ -105,6 +105,12 @@ export class BundleRepairWorker {
       const bundleIds = await this.bundleIndex.getFailedBundleIds(
         config.BUNDLE_REPAIR_RETRY_BATCH_SIZE,
       );
+
+      this.log.debug('Bundles to retry', {
+        bundleIds,
+        batchSize: config.BUNDLE_REPAIR_RETRY_BATCH_SIZE,
+      });
+
       for (const bundleId of bundleIds) {
         this.log.info('Retrying failed bundle', { bundleId });
         await this.txFetcher.queueTxId({ txId: bundleId });
