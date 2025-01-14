@@ -810,9 +810,16 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getFailedBundleIds(limit: number) {
+    const reprocessCutoff = currentUnixTimestamp() - BUNDLE_REPROCESS_WAIT_SECS;
+
+    this.log.debug('getFailedBundleIds', {
+      reprocessCutoff,
+      BUNDLE_REPROCESS_WAIT_SECS,
+    });
+
     const rows = this.stmts.bundles.selectFailedBundleIds.all({
       limit,
-      reprocess_cutoff: currentUnixTimestamp() - BUNDLE_REPROCESS_WAIT_SECS,
+      reprocess_cutoff: reprocessCutoff,
     });
 
     return rows.map((row): string => toB64Url(row.id));
