@@ -24,20 +24,19 @@ FROM (
 )
 
 -- updateFullyIndexedAt
-UPDATE bundles
-SET
-  first_fully_indexed_at = IFNULL(first_fully_indexed_at, @fully_indexed_at),
-  last_fully_indexed_at = @fully_indexed_at
-WHERE matched_data_item_count IS NOT NULL
-  AND matched_data_item_count > 0
-  AND EXISTS (
-    SELECT 1
-    FROM bundle_data_items bdi
-    WHERE bdi.parent_id = bundles.id
-      AND bdi.filter_id = bundles.index_filter_id
-    GROUP BY bdi.parent_id
-    HAVING COUNT(*) = bundles.matched_data_item_count
-  ) AND last_fully_indexed_at IS NULL
+  UPDATE bundles
+  SET
+    first_fully_indexed_at = IFNULL(first_fully_indexed_at, @fully_indexed_at),
+    last_fully_indexed_at = @fully_indexed_at
+  WHERE matched_data_item_count IS NOT NULL
+    AND matched_data_item_count > 0
+    AND (
+      SELECT COUNT(*)
+      FROM bundle_data_items bdi
+      WHERE bdi.parent_id = bundles.id
+        AND bdi.filter_id = bundles.index_filter_id
+    ) = bundles.matched_data_item_count
+    AND last_fully_indexed_at IS NULL;
 
 -- updateForFilterChange
 UPDATE bundles
