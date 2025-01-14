@@ -107,6 +107,7 @@ export class BundleRepairWorker {
       );
 
       this.log.debug('Bundles to retry', {
+        idsLength: bundleIds.length,
         bundleIds,
         batchSize: config.BUNDLE_REPAIR_RETRY_BATCH_SIZE,
       });

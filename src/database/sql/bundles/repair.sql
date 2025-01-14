@@ -22,7 +22,6 @@ FROM (
   ORDER BY b.import_attempt_count, b.last_queued_at ASC
   LIMIT @limit
 )
-ORDER BY RANDOM()
 
 -- updateFullyIndexedAt
 UPDATE bundles
