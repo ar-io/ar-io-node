@@ -416,6 +416,11 @@ export const WEBHOOK_BLOCK_FILTER = createFilter(
 // ArNS Resolution
 //
 
+export const AR_IO_SDK_LOG_LEVEL = env.varOrDefault(
+  'AR_IO_SDK_LOG_LEVEL',
+  'none',
+);
+
 export const ARNS_CACHE_TYPE = env.varOrDefault('ARNS_CACHE_TYPE', 'node');
 
 export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(

@@ -18,7 +18,7 @@
 import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
-import { AOProcess, ARIO } from '@ar.io/sdk';
+import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import awsLite from '@aws-lite/client';
 import awsLiteS3 from '@aws-lite/s3';
 
@@ -97,6 +97,8 @@ process.on('uncaughtException', (error) => {
 const arweave = Arweave.init({});
 
 // IO/AO SDK
+
+ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 
 const arIO = ARIO.init({
   process: new AOProcess({
