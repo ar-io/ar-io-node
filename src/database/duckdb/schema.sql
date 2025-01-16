@@ -25,12 +25,12 @@ CREATE TABLE IF NOT EXISTS transactions (
   data_root BLOB,
   parent BLOB,
   "offset" UBIGINT,
-  size UINTEGER,
-  data_offset UINTEGER,
-  owner_offset UINTEGER,
+  size UBIGINT,
+  data_offset UBIGINT,
+  owner_offset UBIGINT,
   owner_size UINTEGER,
   owner BLOB,
-  signature_offset UINTEGER,
+  signature_offset UBIGINT,
   signature_size UINTEGER,
   signature_type UINTEGER,
   root_transaction_id BLOB,
@@ -45,5 +45,5 @@ CREATE TABLE IF NOT EXISTS blocks (
   hash BLOB NOT NULL,
   block_timestamp INTEGER NOT NULL,
   tx_count INTEGER NOT NULL,
-  block_size UINTEGER
+  block_size UBIGINT
 );
