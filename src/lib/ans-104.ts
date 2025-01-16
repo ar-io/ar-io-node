@@ -452,6 +452,8 @@ if (!isMainThread) {
           diLog.warn('Skipping data item with missing data offset.');
         }
 
+        processedDataItemIds.add(dataItem.id);
+
         // compute the hash of the data item data
         const dataItemHash = await hashDataItemData(
           bundlePath,
