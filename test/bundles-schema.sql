@@ -54,7 +54,7 @@ CREATE TABLE bundles (
   last_unbundled_at INTEGER,
   first_fully_indexed_at INTEGER,
   last_fully_indexed_at INTEGER
-, root_transaction_id BLOB, import_attempt_count INTEGER);
+, root_transaction_id BLOB, import_attempt_count INTEGER, dupliocated_data_item_count INTEGER);
 CREATE INDEX bundles_format_id_idx ON bundles (format_id);
 CREATE INDEX bundles_last_queued_at_idx
   ON bundles (last_queued_at);

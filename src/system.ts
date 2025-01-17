@@ -579,6 +579,7 @@ eventEmitter.on(events.ANS104_UNBUNDLE_COMPLETE, async (bundleEvent: any) => {
       format: 'ans-104',
       dataItemCount: bundleEvent.itemCount,
       matchedDataItemCount: bundleEvent.matchedItemCount,
+      duplicatedDataItemCount: bundleEvent.duplicatedItemCount,
       unbundledAt: currentUnixTimestamp(),
     });
   } catch (error: any) {

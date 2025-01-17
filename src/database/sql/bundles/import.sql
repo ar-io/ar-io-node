@@ -7,7 +7,7 @@ INSERT INTO bundles (
   first_skipped_at, last_skipped_at,
   first_unbundled_at, last_unbundled_at,
   first_fully_indexed_at, last_fully_indexed_at,
-  import_attempt_count
+  import_attempt_count, duplicated_data_item_count
 ) VALUES (
   @id, @root_transaction_id, @format_id,
   @unbundle_filter_id, @index_filter_id,
@@ -16,10 +16,12 @@ INSERT INTO bundles (
   @skipped_at, @skipped_at,
   @unbundled_at, @unbundled_at,
   @fully_indexed_at, @fully_indexed_at,
+  @duplicated_data_item_count
   CASE WHEN @queued_at IS NOT NULL THEN 1 ELSE 0 END
 ) ON CONFLICT DO UPDATE SET
   data_item_count = IFNULL(@data_item_count, data_item_count),
   matched_data_item_count = IFNULL(@matched_data_item_count, matched_data_item_count),
+  duplicated_data_item_count = IFNULL(@duplicated_data_item_count, duplicated_data_item_count),
   unbundle_filter_id = IFNULL(@unbundle_filter_id, unbundle_filter_id),
   index_filter_id = IFNULL(@index_filter_id, index_filter_id),
   first_queued_at = IFNULL(first_queued_at, @queued_at),
