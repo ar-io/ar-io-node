@@ -211,6 +211,7 @@ export interface BundleRecord {
   indexFilter?: string;
   dataItemCount?: number;
   matchedDataItemCount?: number;
+  duplicatedDataItemCount?: number;
   queuedAt?: number;
   skippedAt?: number;
   unbundledAt?: number;

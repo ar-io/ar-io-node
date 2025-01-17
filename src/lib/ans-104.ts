@@ -426,6 +426,7 @@ if (!isMainThread) {
       const iterable = await processBundleStream(stream);
       const bundleLength = iterable.length;
       let matchedItemCount = 0;
+      let duplicatedItemCount = 0;
 
       const fnLog = log.child({ rootTxId, parentId, bundleLength });
       fnLog.info('Unbundling ANS-104 bundle stream data items...');
@@ -445,12 +446,16 @@ if (!isMainThread) {
 
         if (processedDataItemIds.has(dataItem.id)) {
           diLog.warn('Skipping duplicate data item ID.');
+          duplicatedItemCount++;
           continue;
         }
 
         if (!dataItem.dataOffset) {
           diLog.warn('Skipping data item with missing data offset.');
+          continue;
         }
+
+        processedDataItemIds.add(dataItem.id);
 
         // compute the hash of the data item data
         const dataItemHash = await hashDataItemData(
@@ -485,6 +490,7 @@ if (!isMainThread) {
         parentId: parentId as string,
         itemCount: bundleLength,
         matchedItemCount,
+        duplicatedItemCount,
       });
     } catch (error: any) {
       log.error('Error unbundling ANS-104 bundle stream', {
