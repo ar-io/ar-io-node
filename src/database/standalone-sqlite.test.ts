@@ -188,6 +188,7 @@ describe('StandaloneSqliteDatabase', () => {
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      tagSelectivity: {},
     });
     dbWorker = new StandaloneSqliteDatabaseWorker({
       log,
@@ -195,6 +196,7 @@ describe('StandaloneSqliteDatabase', () => {
       dataDbPath,
       moderationDbPath,
       bundlesDbPath,
+      tagSelectivity: {},
     });
     chainSource = new ArweaveChainSourceStub();
   });
@@ -1033,7 +1035,12 @@ describe('StandaloneSqliteDatabase', () => {
 
     beforeEach(async () => {
       await db.saveBundle(bundle);
-      await db.saveBundle({ ...bundle, id: id1, queuedAt: 1234567890 });
+      await db.saveBundle({
+        ...bundle,
+        id: id1,
+        queuedAt: 1234567890,
+        duplicatedDataItemCount: 1,
+      });
     });
 
     it('should insert into bundles', async () => {
