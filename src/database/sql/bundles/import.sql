@@ -16,7 +16,7 @@ INSERT INTO bundles (
   @skipped_at, @skipped_at,
   @unbundled_at, @unbundled_at,
   @fully_indexed_at, @fully_indexed_at,
-  @duplicated_data_item_count
+  @duplicated_data_item_count,
   CASE WHEN @queued_at IS NOT NULL THEN 1 ELSE 0 END
 ) ON CONFLICT DO UPDATE SET
   data_item_count = IFNULL(@data_item_count, data_item_count),
