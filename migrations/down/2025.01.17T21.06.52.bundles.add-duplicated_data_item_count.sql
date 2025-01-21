@@ -1,1 +1,1 @@
-ALTER TABLE bundles DROP COLUMN dupliocated_data_item_count;
+ALTER TABLE bundles DROP COLUMN duplicated_data_item_count;

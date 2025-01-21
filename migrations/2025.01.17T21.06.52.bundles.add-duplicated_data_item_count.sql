@@ -1,1 +1,1 @@
-ALTER TABLE bundles ADD COLUMN dupliocated_data_item_count INTEGER;
+ALTER TABLE bundles ADD COLUMN duplicated_data_item_count INTEGER;
