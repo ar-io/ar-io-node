@@ -2,6 +2,7 @@
 SELECT id
 FROM contiguous_data_ids
 WHERE verified = FALSE;
+LIMIT 1000
 
 -- updateDataItemVerificationStatus
 UPDATE contiguous_data_ids
