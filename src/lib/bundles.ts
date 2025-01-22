@@ -28,7 +28,7 @@ import {
   deepHash,
   deserializeTags,
   indexToType,
-} from 'arbundles';
+} from '@dha-team/arbundles';
 
 export const isValidSignatureConfig = (
   value: number,
