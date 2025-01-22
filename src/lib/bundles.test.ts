@@ -15,7 +15,11 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { ArweaveSigner, bundleAndSignData, createData } from 'arbundles';
+import {
+  ArweaveSigner,
+  bundleAndSignData,
+  createData,
+} from '@dha-team/arbundles';
 import Arweave from 'arweave';
 import { strict as assert } from 'node:assert';
 import { Readable } from 'node:stream';

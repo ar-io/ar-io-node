@@ -29,9 +29,9 @@ import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
 import { fromB64Url, sha256B64Url, toB64Url } from '../../src/lib/encoding.js';
 import { Environment } from 'testcontainers/build/types.js';
-import { createData } from 'arbundles';
+import { createData } from '@dha-team/arbundles';
 import Arweave from 'arweave';
-import { ArweaveSigner } from 'arbundles/src/signing/index.js';
+import { ArweaveSigner } from '@dha-team/arbundles/src/signing/index.js';
 import { JWKInterface } from 'arweave/node/lib/wallet.js';
 
 const projectRootPath = process.cwd();
