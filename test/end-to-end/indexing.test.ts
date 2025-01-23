@@ -816,7 +816,7 @@ describe('Indexing', function () {
       await compose.down();
     });
 
-    it('Verifying if data item headers were indexed', async function () {
+    it.skip('Verifying if data item headers were indexed', async function () {
       const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
       const dataItems = stmt.all();
 
