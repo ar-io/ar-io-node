@@ -140,7 +140,7 @@ Now, the CU service will be running alongside the ar.io gateway. Within the dock
 ## Configuration
 
 When running via `docker compose`, it will read a `.env` file in the project root
-directory and use the environment variables set there.
+directory and use the environment variables set there. Refer to [ENVIRONMENT.md](./ENVIRONMENT.md) for a list of all available environment variables and their default values.
 
 ### GraphQL Pass-Through
 
