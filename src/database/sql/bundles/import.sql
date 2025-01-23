@@ -16,7 +16,7 @@ INSERT INTO bundles (
   @skipped_at, @skipped_at,
   @unbundled_at, @unbundled_at,
   @fully_indexed_at, @fully_indexed_at,
-  CASE WHEN @queued_at IS NOT NULL THEN 1 ELSE 0 END,
+  CASE WHEN (@queued_at IS NOT NULL OR @skipped_at IS NOT NULL) THEN 1 ELSE 0 END,
   @duplicated_data_item_count
 ) ON CONFLICT DO UPDATE SET
   data_item_count = IFNULL(@data_item_count, data_item_count),
@@ -33,7 +33,7 @@ INSERT INTO bundles (
   first_fully_indexed_at = IFNULL(first_fully_indexed_at, @fully_indexed_at),
   last_fully_indexed_at = @fully_indexed_at,
   import_attempt_count = CASE
-    WHEN @queued_at IS NOT NULL THEN
+    WHEN (@queued_at IS NOT NULL OR @skipped_at IS NOT NULL) THEN
       COALESCE(bundles.import_attempt_count, 0) + 1
     ELSE
       bundles.import_attempt_count

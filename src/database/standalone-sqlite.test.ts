@@ -1025,6 +1025,7 @@ describe('StandaloneSqliteDatabase', () => {
   describe('saveBundle', () => {
     const id0 = '0000000000000000000000000000000000000000000';
     const id1 = '1111111111111111111111111111111111111111111';
+    const id2 = '2222222222222222222222222222222222222222222';
 
     const bundle: BundleRecord = {
       id: id0,
@@ -1033,6 +1034,12 @@ describe('StandaloneSqliteDatabase', () => {
       matchedDataItemCount: 2,
     };
 
+    const sql = `
+      SELECT *
+      FROM bundles
+      WHERE id = @id
+    `;
+
     beforeEach(async () => {
       await db.saveBundle(bundle);
       await db.saveBundle({
@@ -1040,6 +1047,11 @@ describe('StandaloneSqliteDatabase', () => {
         id: id1,
         queuedAt: 1234567890,
         duplicatedDataItemCount: 1,
+      });
+      await db.saveBundle({
+        ...bundle,
+        id: id2,
+        skippedAt: 1234567890,
       });
     });
 
@@ -1053,13 +1065,7 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(bundlesDb.prepare(sql).get({ id: fromB64Url(id0) }).cnt, 1);
     });
 
-    it('should set import_attempt_count 0 when no queuedAt is provided', async () => {
-      const sql = `
-        SELECT *
-        FROM bundles
-        WHERE id = @id
-      `;
-
+    it('should set import_attempt_count 0 when no queuedAt or skippedAt is provided', async () => {
       assert.equal(
         bundlesDb.prepare(sql).get({ id: fromB64Url(id0) })
           .import_attempt_count,
@@ -1067,17 +1073,65 @@ describe('StandaloneSqliteDatabase', () => {
       );
     });
 
-    it('should set import_attempt_count 1 when queuedAt is provided', async () => {
-      const sql = `
-        SELECT *
-        FROM bundles
-        WHERE id = @id
-      `;
+    it('should set import_attempt_count 1 when queuedAt or skippedAt is provided', async () => {
+      assert.equal(
+        bundlesDb.prepare(sql).get({ id: fromB64Url(id1) })
+          .import_attempt_count,
+        1,
+      );
+
+      assert.equal(
+        bundlesDb.prepare(sql).get({ id: fromB64Url(id2) })
+          .import_attempt_count,
+        1,
+      );
+    });
+
+    it("shouldn't increment import_attempt_count when no queuedAt or skippedAt", async () => {
+      await db.saveBundle({
+        ...bundle,
+        id: id1,
+      });
+      await db.saveBundle({
+        ...bundle,
+        id: id2,
+      });
 
       assert.equal(
         bundlesDb.prepare(sql).get({ id: fromB64Url(id1) })
           .import_attempt_count,
         1,
+      );
+
+      assert.equal(
+        bundlesDb.prepare(sql).get({ id: fromB64Url(id2) })
+          .import_attempt_count,
+        1,
+      );
+    });
+
+    it('should increment import_attempt_count when queuedAt or skippedAt is provided', async () => {
+      await db.saveBundle({
+        ...bundle,
+        id: id1,
+        queuedAt: 1234567890,
+      });
+      await db.saveBundle({
+        ...bundle,
+        id: id2,
+        skippedAt: 1234567890,
+      });
+
+      assert.equal(
+        bundlesDb.prepare(sql).get({ id: fromB64Url(id1) })
+          .import_attempt_count,
+        2,
+      );
+
+      assert.equal(
+        bundlesDb.prepare(sql).get({ id: fromB64Url(id2) })
+          .import_attempt_count,
+        2,
       );
     });
   });
