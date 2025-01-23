@@ -119,14 +119,14 @@
   dependencies:
     xss "^1.0.8"
 
-"@ar.io/sdk@^3.1.0":
-  version "3.1.0"
-  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-3.1.0.tgz#adb95ec64627f73c2b7c76db5e0afbc34ac18361"
-  integrity sha512-ePtvVcffzJcU+LoHqjL0RwJeS/3dCgEolWw7/ywIWwXvzYbbhASdNdBEb6/Liz8baMO/GYsaUGVSpnjmVKC0aw==
+"@ar.io/sdk@^3.3.0-alpha.13":
+  version "3.3.0-alpha.14"
+  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-3.3.0-alpha.14.tgz#d86550c45b9c5e9f8579bbcd2e9a19f31e024f91"
+  integrity sha512-GqSRiZ3cZEnbxuere23nhpF5D1H1kk3qUEZtm32/yVSgYwfzMS6omJcnjeYngO1tQaP5WJB/Jf3v/NoRVfALmw==
   dependencies:
     "@dha-team/arbundles" "^1.0.1"
     "@permaweb/aoconnect" "^0.0.57"
-    arweave "1.14.4"
+    arweave "1.15.5"
     axios "1.7.9"
     axios-retry "^4.3.0"
     commander "^12.1.0"
@@ -3236,10 +3236,10 @@ arweave-stream-tx@^1.1.0:
   dependencies:
     exponential-backoff "^3.1.0"
 
-arweave@1.14.4:
-  version "1.14.4"
-  resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.14.4.tgz#5ba22136aa0e7fd9495258a3931fb770c9d6bf21"
-  integrity sha512-tmqU9fug8XAmFETYwgUhLaD3WKav5DaM4p1vgJpEj/Px2ORPPMikwnSySlFymmL2qgRh2ZBcZsg11+RXPPGLsA==
+arweave@1.15.5, arweave@^1.15.1:
+  version "1.15.5"
+  resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.15.5.tgz#d0fb209de01bfc9dc97d5da70270928a83ecee83"
+  integrity sha512-Zj3b8juz1ZtDaQDPQlzWyk2I4wZPx3RmcGq8pVJeZXl2Tjw0WRy5ueHPelxZtBLqCirGoZxZEAFRs6SZUSCBjg==
   dependencies:
     arconnect "^0.4.2"
     asn1.js "^5.4.1"
@@ -3250,16 +3250,6 @@ arweave@^1.10.13, arweave@^1.13.7, arweave@^1.14.4:
   version "1.15.1"
   resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.15.1.tgz#c6183136b20980c81a8cb77ce6fd9fb333e1a174"
   integrity sha512-rT7FOwqdudd5npqp4xOYdDT2035LtpcqePjwirh4wjRiEtVsz1FZkRiM2Yj+fOAwYzOm/hNG0GDOipDSaiEGGQ==
-  dependencies:
-    arconnect "^0.4.2"
-    asn1.js "^5.4.1"
-    base64-js "^1.5.1"
-    bignumber.js "^9.0.2"
-
-arweave@^1.15.1:
-  version "1.15.5"
-  resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.15.5.tgz#d0fb209de01bfc9dc97d5da70270928a83ecee83"
-  integrity sha512-Zj3b8juz1ZtDaQDPQlzWyk2I4wZPx3RmcGq8pVJeZXl2Tjw0WRy5ueHPelxZtBLqCirGoZxZEAFRs6SZUSCBjg==
   dependencies:
     arconnect "^0.4.2"
     asn1.js "^5.4.1"
