@@ -22,6 +22,7 @@ import { pipeline } from 'node:stream';
 import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import * as winston from 'winston';
 import { generateTransactionChunks } from 'arweave/node/lib/merkle.js';
+import { toB64Url } from '../lib/encoding.js';
 
 import log from '../log.js';
 import { ContiguousData, ContiguousDataSource } from '../types.js';
@@ -159,7 +160,7 @@ export class DataRootComputer {
     });
   }
 
-  async computeDataRoot(id: string): Promise<void> {
+  async computeDataRoot(id: string): Promise<Uint8Array | undefined> {
     const tempPath = 'data/tmp/data-root';
     // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve, reject) => {
@@ -262,10 +263,12 @@ if (!isMainThread) {
       const dataBuffer = fs.readFileSync(dataPath);
       fnLog.debug('Computing data root...');
       const { data_root } = await generateTransactionChunks(dataBuffer);
+      const dataRootB64Url = toB64Url(Buffer.from(data_root));
+      fnLog.debug('Computed data root...', { dataRoot: dataRootB64Url });
 
       parentPort?.postMessage({
         eventName: DATA_ROOT_SUCCESS,
-        compuTedDataRoot: data_root,
+        computedDataRoot: dataRootB64Url,
       });
     } catch (error: any) {
       fnLog.error('Error computing data root', {
