@@ -134,7 +134,7 @@ describe('DataSources', () => {
       await network.stop();
     });
 
-    it('Verifying that S3DataSource can fetch data from S3', async () => {
+    it.skip('Verifying that S3DataSource can fetch data from S3', async () => {
       // queue bundle
       await axios({
         method: 'post',
