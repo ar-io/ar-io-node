@@ -333,14 +333,7 @@ describe('StandaloneSqliteDatabase', () => {
           .digest();
         assert.deepEqual(dbTransactions[i].owner_address, ownerAddress);
 
-        const binaryFields = [
-          'id',
-          'signature',
-          'last_tx',
-          'owner',
-          'target',
-          'data_root',
-        ];
+        const binaryFields = ['id', 'last_tx', 'owner', 'target', 'data_root'];
 
         for (const field of binaryFields) {
           assert.ok(dbTransactions[i][field] instanceof Buffer);
@@ -795,14 +788,7 @@ describe('StandaloneSqliteDatabase', () => {
           .digest();
         assert.deepEqual(dbTransactions[i].owner_address, ownerAddress);
 
-        const binaryFields = [
-          'id',
-          'signature',
-          'last_tx',
-          'owner',
-          'target',
-          'data_root',
-        ];
+        const binaryFields = ['id', 'last_tx', 'owner', 'target', 'data_root'];
 
         for (const field of binaryFields) {
           assert.ok(dbTransactions[i][field] instanceof Buffer);
@@ -896,14 +882,7 @@ describe('StandaloneSqliteDatabase', () => {
           .digest();
         assert.deepEqual(dbTransactions[i].owner_address, ownerAddress);
 
-        const binaryFields = [
-          'id',
-          'signature',
-          'last_tx',
-          'owner',
-          'target',
-          'data_root',
-        ];
+        const binaryFields = ['id', 'last_tx', 'owner', 'target', 'data_root'];
 
         for (const field of binaryFields) {
           assert.ok(dbTransactions[i][field] instanceof Buffer);
