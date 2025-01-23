@@ -29,8 +29,8 @@ This document describes the environment variables that can be used to configure 
 | ANS104_UNBUNDLE_WORKERS | Number | 0, or 1 if filters are set | Sets the number of workers used to handle unbundling |
 | DATA_ITEM_FLUSH_COUNT_THRESHOLD | Number | 1000 | Sets the number of new data items indexed before flushing to to stable data items |
 | MAX_FLUSH_INTERVAL_SECONDS | Number | 600 | Sets the maximum time interval in seconds before flushing to stable data items |
-| WRITE_ANS104_DATA_ITEM_DB_SIGNATURES | Boolean | true | If true, the data item signatures will be written to the database. |
-| WRITE_TRANSACTION_DB_SIGNATURES | Boolean | true | If true, the transactions signatures will be written to the database. |
+| WRITE_ANS104_DATA_ITEM_DB_SIGNATURES | Boolean | false | If true, the data item signatures will be written to the database. |
+| WRITE_TRANSACTION_DB_SIGNATURES | Boolean | false | If true, the transactions signatures will be written to the database. |
 | ENABLE_DATA_DB_WAL_CLEANUP | Boolean | false | If true, the data database WAL cleanup worker will be enabled |
 | ENABLE_BACKGROUND_DATA_VERIFICATION | Boolean | false | If true, unverified data will be verified in background |
 | MAX_DATA_ITEM_QUEUE_SIZE | Number | 100000 | Sets the maximum number of data items to queue for indexing before skipping indexing new data items |
