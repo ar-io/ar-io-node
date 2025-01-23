@@ -33,7 +33,7 @@ export class DataVerificationWorker {
   private dataRootComputer: DataRootComputer;
 
   private workerCount: number;
-  private queue: queueAsPromised<string, void>;
+  private queue: queueAsPromised<string, void | boolean>;
   private interval: number;
   private intervalId?: NodeJS.Timeout;
 
@@ -106,7 +106,7 @@ export class DataVerificationWorker {
     }
   }
 
-  async verifyDataRoot(id: string): Promise<void> {
+  async verifyDataRoot(id: string): Promise<boolean> {
     const log = this.log.child({ method: 'verifyDataRoot', id });
     try {
       const dataAttributes =
@@ -114,7 +114,7 @@ export class DataVerificationWorker {
 
       if (dataAttributes === undefined) {
         log.warn('Data attributes not found.');
-        return;
+        return false;
       }
 
       const indexedDataRoot = dataAttributes.dataRoot;
@@ -125,15 +125,16 @@ export class DataVerificationWorker {
           indexedDataRoot,
           computedDataRoot,
         });
-
-        return;
+        return false;
       }
 
       log.debug('Data root verified successfull.');
       await this.contiguousDataIndex.saveVerificationStatus(id);
       log.debug('Saved verified status successfully.');
+      return true;
     } catch (error) {
       log.error('Error verifying data root', { error });
+      return false;
     }
   }
 
