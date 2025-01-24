@@ -659,7 +659,10 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      compose = await composeUp();
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER:
+          '{"or": [{"attributes": {"owner_address": "another_address"}}, { "isNestedBundle": true }]}',
+      });
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
 
       // queue bundle FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY
@@ -687,7 +690,7 @@ describe('Indexing', function () {
       await compose.down();
     });
 
-    it('Verifying if bundle was unbundled and indexed', async function () {
+    it('Verifying if bundle was unbundled and indexed, ignoring any filter by default', async function () {
       const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
       const dataItems = stmt.all();
 
@@ -763,6 +766,72 @@ describe('Indexing', function () {
         assert.equal(dataItem.data_size, idAndSignatureType[id].data_size);
         assert.equal(dataItem.size, idAndSignatureType[id].size);
       });
+    });
+
+    it('Verifying if request is rejected if byPassFilter is not a boolean', async function () {
+      const res = await axios.post(
+        'http://localhost:4000/ar-io/admin/queue-bundle',
+        {
+          id: 'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY',
+          bypassFilter: 'true',
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer secret',
+          },
+          validateStatus: () => true,
+        },
+      );
+
+      assert.equal(res.status, 400);
+      assert.equal(res.data, "'bypassFilter' must be a boolean");
+    });
+
+    it('Verifying if request is rejected if id is not provided', async function () {
+      const res = await axios.post(
+        'http://localhost:4000/ar-io/admin/queue-bundle',
+        {
+          bypassFilter: true,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer secret',
+          },
+          validateStatus: () => true,
+        },
+      );
+
+      assert.equal(res.status, 400);
+      assert.equal(res.data, "Must provide 'id'");
+    });
+
+    it('Verifying if data item is not bundled if byPassFilter is false and bundle does not match filter', async function () {
+      await axios.post(
+        'http://localhost:4000/ar-io/admin/queue-bundle',
+        {
+          id: '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ',
+          bypassFilter: false,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer secret',
+          },
+        },
+      );
+
+      await waitForIndexing();
+
+      const stmt = bundlesDb.prepare(
+        'SELECT * FROM new_data_items WHERE parent_id = @id',
+      );
+      const dataItems = stmt.all({
+        id: '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ',
+      });
+
+      assert.equal(dataItems.length, 0);
     });
   });
 
@@ -885,6 +954,17 @@ describe('Indexing', function () {
         await axios({
           method: 'post',
           url: 'http://localhost:4000/ar-io/admin/queue-tx',
+          headers: {
+            Authorization: 'Bearer secret',
+            'Content-Type': 'application/json',
+          },
+          data: { id: bundleId },
+        });
+
+        // queue the bundle to index the data items, there should be 79 data items in this bundle, once the root tx is indexed and verified all associated data items should be marked as verified
+        await axios({
+          method: 'post',
+          url: 'http://localhost:4000/ar-io/admin/queue-bundle',
           headers: {
             Authorization: 'Bearer secret',
             'Content-Type': 'application/json',
