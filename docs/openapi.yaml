@@ -730,6 +730,37 @@ paths:
       responses:
         '200':
           description: Successful operation
+        '400':
+          description: Bad Request. Id is required.
+        '401':
+          description: Unauthorized, API key likely incorrect.
+      security:
+        - bearerAuth: []
+  '/ar-io/admin/queue-bundle':
+    post:
+      tags: [Admin]
+      summary: Queue a bundle for indexing, bypassing any filter settings by default.
+      description: Queue a bundle for indexing, bypassing any filter settings by default.
+      operationId: adminQueueBundle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  pattern: '^[0-9a-zA-Z_-]{43}$'
+                  description: TX ID of the bundle you would like to prioritize.
+                byPassFilter:
+                  type: boolean
+                  description: Whether to bypass the filter and index the bundle regardless of the filter settings.
+      responses:
+        '200':
+          description: Successful operation
+        '400':
+          description: Bad Request.
         '401':
           description: Unauthorized, API key likely incorrect.
       security:
