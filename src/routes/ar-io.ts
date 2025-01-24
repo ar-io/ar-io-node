@@ -203,10 +203,15 @@ arIoRouter.post(
   express.json(),
   async (req, res) => {
     try {
-      const { id } = req.body;
+      const { id, bypassFilter = true } = req.body;
 
       if (id === undefined) {
         res.status(400).send("Must provide 'id'");
+        return;
+      }
+
+      if (bypassFilter !== undefined && typeof bypassFilter !== 'boolean') {
+        res.status(400).send("'bypassFilter' must be a boolean");
         return;
       }
 
@@ -218,7 +223,7 @@ arIoRouter.post(
       const queuedBundle = await system.queueBundle(
         { id, root_tx_id: id } as NormalizedDataItem | PartialJsonTransaction,
         true,
-        true,
+        bypassFilter,
       );
 
       if (queuedBundle.error !== undefined) {
