@@ -843,9 +843,10 @@ describe('Indexing', function () {
     });
   });
 
-  describe('Background data verification', function () {
+  describe('Background data verification', { timeout: 120_000 }, function () {
     let dataDb: Database;
     let compose: StartedDockerComposeEnvironment;
+    const bundleId = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
 
     const waitForIndexing = async () => {
       const getAll = () =>
@@ -862,7 +863,10 @@ describe('Indexing', function () {
         dataDb.prepare('SELECT verified FROM contiguous_data_ids').all();
 
       while (getAll().some((row) => row.verified === 0)) {
-        console.log('Waiting for data items to be verified...');
+        console.log('Waiting for data items to be verified...', {
+          verified: getAll().filter((row) => row.verified === 1).length,
+          total: getAll().length,
+        });
 
         await wait(5000);
       }
@@ -871,15 +875,28 @@ describe('Indexing', function () {
     before(async function () {
       compose = await composeUp({
         ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
-        BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '10',
+        BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
         BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
       });
       dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
+      // queue the bundele tx to populate the data root
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: { id: bundleId },
+      });
+
+      // queue the bundle
       await axios.post(
         'http://localhost:4000/ar-io/admin/queue-bundle',
         {
-          id: '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ',
+          // there are 79 data items in this bundle, once the root tx is indexed and verified the data items will be verified
+          id: bundleId,
         },
         {
           headers: {
