@@ -880,7 +880,7 @@ describe('Indexing', function () {
       });
       dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
-      // queue the bundele tx to populate the data root
+      // queue the bundle tx to populate the data root
       await axios({
         method: 'post',
         url: 'http://localhost:4000/ar-io/admin/queue-tx',
@@ -891,11 +891,10 @@ describe('Indexing', function () {
         data: { id: bundleId },
       });
 
-      // queue the bundle
+      // queue the bundle to index the data items, there should be 79 data items in this bundle, once the root tx is indexed and verified all associated data items should be marked as verified
       await axios.post(
         'http://localhost:4000/ar-io/admin/queue-bundle',
         {
-          // there are 79 data items in this bundle, once the root tx is indexed and verified the data items will be verified
           id: bundleId,
         },
         {

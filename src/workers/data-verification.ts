@@ -23,9 +23,6 @@ import { ContiguousDataIndex, ContiguousDataSource } from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
 import * as config from '../config.js';
 
-const DEFAULT_STREAM_TIMEOUT = 1000 * 30; // 30 seconds
-const DEFAULT_WORKER_COUNT = 1;
-
 export class DataVerificationWorker {
   // Dependencies
   private log: winston.Logger;
@@ -41,8 +38,8 @@ export class DataVerificationWorker {
     log,
     contiguousDataIndex,
     contiguousDataSource,
-    workerCount = DEFAULT_WORKER_COUNT,
-    streamTimeout = DEFAULT_STREAM_TIMEOUT,
+    workerCount = config.BACKGROUND_DATA_VERIFICATION_WORKER_COUNT,
+    streamTimeout = config.BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS,
     interval = config.BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS * 1000,
   }: {
     log: winston.Logger;
