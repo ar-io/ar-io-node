@@ -160,7 +160,7 @@ export class DataRootComputer {
     });
   }
 
-  async computeDataRoot(id: string): Promise<Uint8Array | undefined> {
+  async computeDataRoot(id: string): Promise<string | undefined> {
     const tempPath = 'data/tmp/data-root';
     // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve, reject) => {

@@ -117,6 +117,13 @@ export class DataVerificationWorker {
         return false;
       }
 
+      if (dataAttributes.dataRoot === undefined) {
+        log.warn(
+          'Data root not found for id. Transaction must be indexed before it can be verified.',
+        );
+        return false;
+      }
+
       const indexedDataRoot = dataAttributes.dataRoot;
       const computedDataRoot = await this.dataRootComputer.computeDataRoot(id);
 

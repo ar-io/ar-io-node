@@ -302,6 +302,11 @@ export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
   '600', // 10 minutes
 );
 
+export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = +env.varOrDefault(
+  'BACKGROUND_DATA_VERIFICATION_WORKER_COUNT',
+  '1',
+);
+
 //
 // GraphQL
 //
