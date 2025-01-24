@@ -843,7 +843,7 @@ describe('Indexing', function () {
     });
   });
 
-  describe('Background data verification', { timeout: 120_000 }, function () {
+  describe('Background data verification', function () {
     let dataDb: Database;
     let compose: StartedDockerComposeEnvironment;
     const bundleId = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
@@ -872,42 +872,45 @@ describe('Indexing', function () {
       }
     };
 
-    before(async function () {
-      compose = await composeUp({
-        ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
-        BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
-        BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
-      });
-      dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
+    before(
+      async function () {
+        compose = await composeUp({
+          ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
+          BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
+          BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
+        });
+        dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
-      // queue the bundle tx to populate the data root
-      await axios({
-        method: 'post',
-        url: 'http://localhost:4000/ar-io/admin/queue-tx',
-        headers: {
-          Authorization: 'Bearer secret',
-          'Content-Type': 'application/json',
-        },
-        data: { id: bundleId },
-      });
-
-      // queue the bundle to index the data items, there should be 79 data items in this bundle, once the root tx is indexed and verified all associated data items should be marked as verified
-      await axios.post(
-        'http://localhost:4000/ar-io/admin/queue-bundle',
-        {
-          id: bundleId,
-        },
-        {
+        // queue the bundle tx to populate the data root
+        await axios({
+          method: 'post',
+          url: 'http://localhost:4000/ar-io/admin/queue-tx',
           headers: {
-            'Content-Type': 'application/json',
             Authorization: 'Bearer secret',
+            'Content-Type': 'application/json',
           },
-        },
-      );
+          data: { id: bundleId },
+        });
 
-      await waitForIndexing();
-      await waitVerification();
-    });
+        // queue the bundle to index the data items, there should be 79 data items in this bundle, once the root tx is indexed and verified all associated data items should be marked as verified
+        await axios.post(
+          'http://localhost:4000/ar-io/admin/queue-bundle',
+          {
+            id: bundleId,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer secret',
+            },
+          },
+        );
+
+        await waitForIndexing();
+        await waitVerification();
+      },
+      { timeout: 120_000 },
+    );
 
     after(async function () {
       await compose.down();
