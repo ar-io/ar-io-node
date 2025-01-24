@@ -696,7 +696,30 @@ export const blockedNamesCache = new BlockedNamesCache({
   fetchBlockedNames: () => nameBlockListValidator.getBlockedNames(),
 });
 
+const withTimeout = (
+  promise: Promise<any>,
+  timeoutMs: number,
+  description: string,
+) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => {
+        log.error(
+          `Shutdown Promise timed out after ${timeoutMs}ms: ${description}`,
+        );
+        reject(new Error(`Shutdown Timeout: ${description}`));
+      }, timeoutMs),
+    ),
+  ]);
+};
+
 let isShuttingDown = false;
+
+type ShutdownEntry = {
+  fn: (() => any) | undefined;
+  description: string;
+};
 
 export const shutdown = async (exitCode = 0) => {
   if (isShuttingDown) {
@@ -705,30 +728,86 @@ export const shutdown = async (exitCode = 0) => {
     isShuttingDown = true;
     log.info('Shutting down...');
     server.close(async () => {
+      const stopTimeoutMs = 5000;
+
       log.debug('Web server stopped successfully');
       eventEmitter.removeAllListeners();
       arIODataSource.stopUpdatingPeers();
-      dataSqliteWalCleanupWorker?.stop();
-      parquetExporter?.stop();
-      await arnsResolutionCache.close();
-      await arnsRegistryCache.close();
-      await mempoolWatcher?.stop();
-      await blockImporter.stop();
-      await dataItemIndexer.stop();
-      await txRepairWorker.stop();
-      await txImporter.stop();
-      await txFetcher.stop();
-      await txOffsetImporter.stop();
-      await txOffsetRepairWorker.stop();
-      await bundleDataImporter.stop();
-      await bundleRepairWorker.stop();
-      await ans104DataIndexer.stop();
-      await ans104Unbundler.stop();
-      await webhookEmitter.stop();
-      await db.stop();
-      await headerFsCacheCleanupWorker?.stop();
-      await contiguousDataFsCacheCleanupWorker?.stop();
-      await dataVerificationWorker?.stop();
+
+      const shutdownProceadures: ShutdownEntry[] = [
+        {
+          fn: dataSqliteWalCleanupWorker?.stop,
+          description: 'dataSqliteWalCleanupWorker.stop',
+        },
+        { fn: parquetExporter?.stop, description: 'parquetExporter.stop' },
+        {
+          fn: arnsResolutionCache.close,
+          description: 'arnsResolutionCache.close',
+        },
+        {
+          fn: arnsRegistryCache.close,
+          description: 'arnsRegistryCache.close',
+        },
+        { fn: mempoolWatcher?.stop, description: 'mempoolWatcher.stop' },
+        { fn: blockImporter.stop, description: 'blockImporter.stop' },
+        {
+          fn: dataItemIndexer.stop,
+          description: 'dataItemIndexer.stop',
+        },
+        { fn: txRepairWorker.stop, description: 'txRepairWorker.stop' },
+        { fn: txImporter.stop, description: 'txImporter.stop' },
+        { fn: txFetcher.stop, description: 'txFetcher.stop' },
+        {
+          fn: txOffsetImporter.stop,
+          description: 'txOffsetImporter.stop',
+        },
+        {
+          fn: txOffsetRepairWorker.stop,
+          description: 'txOffsetRepairWorker.stop',
+        },
+        {
+          fn: bundleDataImporter.stop,
+          description: 'bundleDataImporter.stop',
+        },
+        {
+          fn: bundleRepairWorker.stop,
+          description: 'bundleRepairWorker.stop',
+        },
+        {
+          fn: ans104DataIndexer.stop,
+          description: 'ans104DataIndexer.stop',
+        },
+        {
+          fn: ans104Unbundler.stop,
+          description: 'ans104Unbundler.stop',
+        },
+        { fn: webhookEmitter.stop, description: 'webhookEmitter.stop' },
+        { fn: db.stop, description: 'db.stop' },
+        {
+          fn: headerFsCacheCleanupWorker?.stop,
+          description: 'headerFsCacheCleanupWorker.stop',
+        },
+        {
+          fn: contiguousDataFsCacheCleanupWorker?.stop,
+          description: 'contiguousDataFsCacheCleanupWorker.stop',
+        },
+        {
+          fn: dataVerificationWorker?.stop,
+          description: 'dataVerificationWorker.stop',
+        },
+      ];
+
+      await Promise.all(
+        shutdownProceadures.map(async ({ fn, description }: ShutdownEntry) => {
+          return withTimeout(
+            typeof fn === 'function' ? fn() : Promise.resolve(),
+            stopTimeoutMs,
+            description,
+          ).catch((err) => {
+            log.error(`Error in ${description}:`, err);
+          });
+        }),
+      );
 
       process.exit(exitCode);
     });
