@@ -65,7 +65,6 @@ describe('DataSources', () => {
 
       localStack = await new LocalstackContainer('localstack/localstack:3')
         .withNetwork(network as any)
-        .withName('localstack')
         .start();
 
       // Create a bucket

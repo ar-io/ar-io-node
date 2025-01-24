@@ -307,6 +307,11 @@ export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = +env.varOrDefault(
   '1',
 );
 
+export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
+  'BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS',
+  '1000 * 30', // 30 seconds
+);
+
 //
 // GraphQL
 //
