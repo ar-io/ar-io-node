@@ -52,6 +52,7 @@ import {
   DataBlockListValidator,
   NameBlockListValidator,
   BundleIndex,
+  BundleFilterIds,
   BundleRecord,
   ChainIndex,
   ChainOffsetIndex,
@@ -923,13 +924,19 @@ export class StandaloneSqliteDatabaseWorker {
     skippedAt,
     unbundledAt,
     fullyIndexedAt,
-  }: BundleRecord) {
+  }: BundleRecord): BundleFilterIds {
     const idBuffer = fromB64Url(id);
     let rootTxId: Buffer | undefined;
     if (rootTransactionId != undefined) {
       rootTxId = fromB64Url(rootTransactionId);
     }
-    this.stmts.bundles.upsertBundle.run({
+
+    const {
+      unbundle_filter_id,
+      index_filter_id,
+      previous_unbundle_filter_id,
+      previous_index_filter_id,
+    } = this.stmts.bundles.upsertBundle.get({
       id: idBuffer,
       root_transaction_id: rootTxId,
       format_id: this.getBundleFormatId(format),
@@ -943,6 +950,13 @@ export class StandaloneSqliteDatabaseWorker {
       unbundled_at: unbundledAt,
       fully_indexed_at: fullyIndexedAt,
     });
+
+    return {
+      unbundleFilterId: unbundle_filter_id,
+      indexFilterId: index_filter_id,
+      previousUnbundleFilterId: previous_unbundle_filter_id,
+      previousIndexFilterId: previous_index_filter_id,
+    };
   }
 
   saveBlockAndTxs(
@@ -2909,7 +2923,7 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'saveDataItem', [item]);
   }
 
-  saveBundle(bundle: BundleRecord): Promise<void> {
+  async saveBundle(bundle: BundleRecord): Promise<BundleFilterIds> {
     return this.queueWrite('bundles', 'saveBundle', [bundle]);
   }
 
@@ -3328,8 +3342,8 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           break;
         case 'saveBundle':
-          worker.saveBundle(args[0]);
-          parentPort?.postMessage(null);
+          const bundle = worker.saveBundle(args[0]);
+          parentPort?.postMessage(bundle);
           break;
         case 'saveBlockAndTxs':
           {
