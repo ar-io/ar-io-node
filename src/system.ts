@@ -537,7 +537,7 @@ export async function queueBundle(
         unbundleFilterId === previousUnbundleFilterId &&
         indexFilterId === previousIndexFilterId
       ) {
-        log.debug('Skipping fully unbundled bundle', {
+        log.info('Skipping fully unbundled bundle', {
           id: item.id,
         });
         return { status: 'skipped' };
