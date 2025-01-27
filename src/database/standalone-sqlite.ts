@@ -3342,8 +3342,10 @@ if (!isMainThread) {
           parentPort?.postMessage(null);
           break;
         case 'saveBundle':
-          const bundle = worker.saveBundle(args[0]);
-          parentPort?.postMessage(bundle);
+          {
+            const bundle = worker.saveBundle(args[0]);
+            parentPort?.postMessage(bundle);
+          }
           break;
         case 'saveBlockAndTxs':
           {
