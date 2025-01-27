@@ -1046,42 +1046,60 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(bundlesDb.prepare(sql).get({ id: fromB64Url(id0) }).cnt, 1);
     });
 
-    it('should update previous_unbundle_filter_id when unbundle_filter_id is not nul', async () => {
-      let previousUnbundleFilterId = bundlesDb
-        .prepare(sql)
-        .get({ id: fromB64Url(id1) }).previous_unbundle_filter_id;
+    it('should update previous_unbundle_filter_id when unbundle_filter_id is not null', async () => {
+      let bundle = bundlesDb.prepare(sql).get({ id: fromB64Url(id1) });
 
-      assert.equal(previousUnbundleFilterId, null);
+      // Verify initial state
+      assert.equal(bundle.unbundle_filter_id, null);
+      assert.equal(bundle.previous_unbundle_filter_id, null);
+
+      await db.saveBundle({
+        ...bundleId1,
+        unbundleFilter: '{"never": true}',
+      });
+
+      bundle = bundlesDb.prepare(sql).get({ id: fromB64Url(id1) });
+
+      assert.equal(bundle.unbundle_filter_id, 1);
+      assert.equal(bundle.previous_unbundle_filter_id, null);
 
       await db.saveBundle({
         ...bundleId1,
         unbundleFilter: '{"always": true}',
       });
 
-      previousUnbundleFilterId = bundlesDb
-        .prepare(sql)
-        .get({ id: fromB64Url(id1) }).previous_unbundle_filter_id;
+      bundle = bundlesDb.prepare(sql).get({ id: fromB64Url(id1) });
 
-      assert.equal(previousUnbundleFilterId, 1);
+      assert.equal(bundle.unbundle_filter_id, 2);
+      assert.equal(bundle.previous_unbundle_filter_id, 1);
     });
 
-    it('should update previous_index_filter_id when index_filter_id is not nul', async () => {
-      let previousIndexFilterId = bundlesDb
-        .prepare(sql)
-        .get({ id: fromB64Url(id1) }).previous_index_filter_id;
+    it('should update previous_index_filter_id when index_filter_id is not null', async () => {
+      let bundle = bundlesDb.prepare(sql).get({ id: fromB64Url(id1) });
 
-      assert.equal(previousIndexFilterId, null);
+      // Verify initial state
+      assert.equal(bundle.index_filter_id, null);
+      assert.equal(bundle.previous_index_filter_id, null);
+
+      await db.saveBundle({
+        ...bundleId1,
+        indexFilter: '{"never": true}',
+      });
+
+      bundle = bundlesDb.prepare(sql).get({ id: fromB64Url(id1) });
+
+      assert.equal(bundle.index_filter_id, 1);
+      assert.equal(bundle.previous_index_filter_id, null);
 
       await db.saveBundle({
         ...bundleId1,
         indexFilter: '{"always": true}',
       });
 
-      previousIndexFilterId = bundlesDb
-        .prepare(sql)
-        .get({ id: fromB64Url(id1) }).previous_index_filter_id;
+      bundle = bundlesDb.prepare(sql).get({ id: fromB64Url(id1) });
 
-      assert.equal(previousIndexFilterId, 1);
+      assert.equal(bundle.index_filter_id, 2);
+      assert.equal(bundle.previous_index_filter_id, 1);
     });
 
     it('should set import_attempt_count 0 when no queuedAt or skippedAt is provided', async () => {
