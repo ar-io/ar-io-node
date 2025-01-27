@@ -2923,7 +2923,7 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'saveDataItem', [item]);
   }
 
-  async saveBundle(bundle: BundleRecord): Promise<BundleFilterIds> {
+  saveBundle(bundle: BundleRecord): Promise<BundleFilterIds> {
     return this.queueWrite('bundles', 'saveBundle', [bundle]);
   }
 
