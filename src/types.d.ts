@@ -218,8 +218,15 @@ export interface BundleRecord {
   fullyIndexedAt?: number;
 }
 
+export interface BundleFilterIds {
+  unbundleFilterId?: string;
+  indexFilterId?: string;
+  previousUnbundleFilterId?: string;
+  previousIndexFilterId?: string;
+}
+
 export interface BundleIndex {
-  saveBundle(bundle: BundleRecord): Promise<void>;
+  saveBundle(bundle: BundleRecord): Promise<BundleFilterIds>;
   getFailedBundleIds(limit: number): Promise<string[]>;
   updateBundlesFullyIndexedAt(): Promise<void>;
   updateBundlesForFilterChange(

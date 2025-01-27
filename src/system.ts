@@ -518,13 +518,31 @@ export async function queueBundle(
 
     if (bypassFilter || (await config.ANS104_UNBUNDLE_FILTER.match(item))) {
       metrics.bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
-      await db.saveBundle({
+      const {
+        unbundleFilterId,
+        indexFilterId,
+        previousUnbundleFilterId,
+        previousIndexFilterId,
+      } = await db.saveBundle({
         id: item.id,
         format: 'ans-104',
         unbundleFilter: config.ANS104_UNBUNDLE_FILTER_STRING,
         indexFilter: config.ANS104_INDEX_FILTER_STRING,
         queuedAt: currentUnixTimestamp(),
       });
+
+      if (
+        unbundleFilterId !== null &&
+        indexFilterId !== null &&
+        unbundleFilterId === previousUnbundleFilterId &&
+        indexFilterId === previousIndexFilterId
+      ) {
+        log.debug('Skipping fully unbundled bundle', {
+          id: item.id,
+        });
+        return { status: 'skipped' };
+      }
+
       bundleDataImporter.queueItem(
         {
           ...item,
