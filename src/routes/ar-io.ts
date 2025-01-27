@@ -241,6 +241,11 @@ arIoRouter.post(
         return;
       }
 
+      if (queuedBundle.status === 'skipped') {
+        res.json({ message: 'Bundle skipped' });
+        return;
+      }
+
       res.json({ message: 'Bundle queued' });
     } catch (error: any) {
       res.status(500).send(error?.message);
