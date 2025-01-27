@@ -1013,6 +1013,13 @@ describe('StandaloneSqliteDatabase', () => {
       matchedDataItemCount: 2,
     };
 
+    const bundleId1 = {
+      ...bundle,
+      id: id1,
+      queuedAt: 1234567890,
+      duplicatedDataItemCount: 1,
+    };
+
     const sql = `
       SELECT *
       FROM bundles
@@ -1021,12 +1028,7 @@ describe('StandaloneSqliteDatabase', () => {
 
     beforeEach(async () => {
       await db.saveBundle(bundle);
-      await db.saveBundle({
-        ...bundle,
-        id: id1,
-        queuedAt: 1234567890,
-        duplicatedDataItemCount: 1,
-      });
+      await db.saveBundle(bundleId1);
       await db.saveBundle({
         ...bundle,
         id: id2,
@@ -1042,6 +1044,44 @@ describe('StandaloneSqliteDatabase', () => {
       `;
 
       assert.equal(bundlesDb.prepare(sql).get({ id: fromB64Url(id0) }).cnt, 1);
+    });
+
+    it('should update previous_unbundle_filter_id when unbundle_filter_id is not nul', async () => {
+      let previousUnbundleFilterId = bundlesDb
+        .prepare(sql)
+        .get({ id: fromB64Url(id1) }).previous_unbundle_filter_id;
+
+      assert.equal(previousUnbundleFilterId, null);
+
+      await db.saveBundle({
+        ...bundleId1,
+        unbundleFilter: '{"always": true}',
+      });
+
+      previousUnbundleFilterId = bundlesDb
+        .prepare(sql)
+        .get({ id: fromB64Url(id1) }).previous_unbundle_filter_id;
+
+      assert.equal(previousUnbundleFilterId, 1);
+    });
+
+    it('should update previous_index_filter_id when index_filter_id is not nul', async () => {
+      let previousIndexFilterId = bundlesDb
+        .prepare(sql)
+        .get({ id: fromB64Url(id1) }).previous_index_filter_id;
+
+      assert.equal(previousIndexFilterId, null);
+
+      await db.saveBundle({
+        ...bundleId1,
+        indexFilter: '{"always": true}',
+      });
+
+      previousIndexFilterId = bundlesDb
+        .prepare(sql)
+        .get({ id: fromB64Url(id1) }).previous_index_filter_id;
+
+      assert.equal(previousIndexFilterId, 1);
     });
 
     it('should set import_attempt_count 0 when no queuedAt or skippedAt is provided', async () => {

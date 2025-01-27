@@ -25,11 +25,11 @@ data_item_count = IFNULL(@data_item_count, data_item_count),
 matched_data_item_count = IFNULL(@matched_data_item_count, matched_data_item_count),
 duplicated_data_item_count = IFNULL(@duplicated_data_item_count, duplicated_data_item_count),
 previous_unbundle_filter_id = CASE
-    WHEN @unbundle_filter_id IS NOT NULL THEN bundles.unbundle_filter_id
+    WHEN @unbundle_filter_id IS NOT NULL THEN @unbundle_filter_id
     ELSE bundles.previous_unbundle_filter_id
 END,
 previous_index_filter_id = CASE
-    WHEN @index_filter_id IS NOT NULL THEN bundles.index_filter_id
+    WHEN @index_filter_id IS NOT NULL THEN @index_filter_id
     ELSE bundles.previous_index_filter_id
 END,
 unbundle_filter_id = IFNULL(@unbundle_filter_id, unbundle_filter_id),
