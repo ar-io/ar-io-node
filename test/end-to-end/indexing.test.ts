@@ -647,6 +647,7 @@ describe('Indexing', function () {
   describe('Queue bundle', function () {
     let bundlesDb: Database;
     let compose: StartedDockerComposeEnvironment;
+    const bundleId = 'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY';
 
     const waitForIndexing = async () => {
       const getAll = () =>
@@ -679,7 +680,7 @@ describe('Indexing', function () {
           'Content-Type': 'application/json',
         },
         data: {
-          id: 'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY',
+          id: bundleId,
         },
       });
 
@@ -832,6 +833,43 @@ describe('Indexing', function () {
       });
 
       assert.equal(dataItems.length, 0);
+    });
+
+    it('Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters', async function () {
+      const response = await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-bundle',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: {
+          id: bundleId,
+        },
+      });
+
+      assert.equal(response.data.message, 'Bundle skipped');
+    });
+
+    it('Verifying if unbundling when trying to unbundle the same bundle using different filters', async function () {
+      await compose.down();
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER:
+          '{ "attributes": { "owner": "8jNb-iG3a3XByFuZnZ_MWMQSZE0zvxPMaMMBNMYegY4" } }',
+      });
+      const response = await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-bundle',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: {
+          id: bundleId,
+        },
+      });
+
+      assert.equal(response.data.message, 'Bundle queued');
     });
   });
 
