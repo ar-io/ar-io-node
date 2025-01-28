@@ -32,7 +32,7 @@ This document describes the environment variables that can be used to configure 
 | WRITE_ANS104_DATA_ITEM_DB_SIGNATURES | Boolean | false | If true, the data item signatures will be written to the database. |
 | WRITE_TRANSACTION_DB_SIGNATURES | Boolean | false | If true, the transactions signatures will be written to the database. |
 | ENABLE_DATA_DB_WAL_CLEANUP | Boolean | false | If true, the data database WAL cleanup worker will be enabled |
-| ENABLE_BACKGROUND_DATA_VERIFICATION | Boolean | false | If true, unverified data will be verified in background |
+| ENABLE_BACKGROUND_DATA_VERIFICATION | Boolean | true | If true, unverified data will be verified in background |
 | MAX_DATA_ITEM_QUEUE_SIZE | Number | 100000 | Sets the maximum number of data items to queue for indexing before skipping indexing new data items |
 | ARNS_ROOT_HOST | String | undefined | Domain name for ArNS host |
 | SANDBOX_PROTOCOL | String | undefined | Protocol setting in process of creating sandbox domain in ArNS (ARNS_ROOT_HOST needs to be set for this env to have any effect) |

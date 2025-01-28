@@ -29,7 +29,7 @@ import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
-import { BundleDataImporter } from './workers/bundle-data-importer.js';
+import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
@@ -472,7 +472,16 @@ metrics.registerQueueLengthGauge('ans104Unbundler', {
   length: () => ans104Unbundler.queueDepth(),
 });
 
-export const bundleDataImporter = new BundleDataImporter({
+export const verificationDataImporter = new DataImporter({
+  log,
+  contiguousDataSource: txChunksDataSource,
+  workerCount: config.ANS104_DOWNLOAD_WORKERS,
+  maxQueueSize: config.VERIFICATION_DATA_IMPORTER_QUEUE_SIZE,
+});
+metrics.registerQueueLengthGauge('verificationDataImporter', {
+  length: () => verificationDataImporter.queueDepth(),
+});
+export const bundleDataImporter = new DataImporter({
   log,
   contiguousDataSource: backgroundContiguousDataSource,
   ans104Unbundler,
@@ -682,6 +691,7 @@ const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
       log,
       contiguousDataIndex,
       contiguousDataSource: gatewaysDataSource,
+      dataImporter: verificationDataImporter,
     })
   : undefined;
 
@@ -720,6 +730,7 @@ export const shutdown = async (exitCode = 0) => {
       await txFetcher.stop();
       await txOffsetImporter.stop();
       await txOffsetRepairWorker.stop();
+      await verificationDataImporter.stop();
       await bundleDataImporter.stop();
       await bundleRepairWorker.stop();
       await ans104DataIndexer.stop();

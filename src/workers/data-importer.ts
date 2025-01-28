@@ -31,25 +31,27 @@ interface IndexProperty {
   index: number;
 }
 
+type AnyContiguousData = { id: string };
 type UnbundleableItem = (NormalizedDataItem | PartialJsonTransaction) &
   IndexProperty;
+type ImportableItem = AnyContiguousData | UnbundleableItem;
 
-interface UnbundlingQueueItem {
-  item: UnbundleableItem;
+interface DataImporterQueueItem {
+  item: ImportableItem;
   prioritized: boolean | undefined;
   bypassFilter: boolean;
 }
 
-export class BundleDataImporter {
+export class DataImporter {
   // Dependencies
   private log: winston.Logger;
   private contiguousDataSource: ContiguousDataSource;
-  private ans104Unbundler: Ans104Unbundler;
+  private ans104Unbundler: Ans104Unbundler | undefined;
 
-  // Unbundling queue
+  // Contiguous data queue
   private workerCount: number;
   private maxQueueSize: number;
-  private queue: queueAsPromised<UnbundlingQueueItem, void>;
+  private queue: queueAsPromised<DataImporterQueueItem, void>;
 
   constructor({
     log,
@@ -60,13 +62,15 @@ export class BundleDataImporter {
   }: {
     log: winston.Logger;
     contiguousDataSource: ContiguousDataSource;
-    ans104Unbundler: Ans104Unbundler;
+    ans104Unbundler?: Ans104Unbundler;
     workerCount: number;
     maxQueueSize?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.contiguousDataSource = contiguousDataSource;
-    this.ans104Unbundler = ans104Unbundler;
+    if (ans104Unbundler) {
+      this.ans104Unbundler = ans104Unbundler;
+    }
     this.workerCount = workerCount;
     this.maxQueueSize = maxQueueSize;
     this.queue = fastq.promise(
@@ -76,26 +80,26 @@ export class BundleDataImporter {
   }
 
   async queueItem(
-    item: UnbundleableItem,
+    item: ImportableItem,
     prioritized: boolean | undefined,
     bypassFilter = false,
   ): Promise<void> {
     const log = this.log.child({ method: 'queueItem', id: item.id });
     if (this.workerCount === 0) {
-      log.debug('Skipping bundle download, no workers.');
+      log.debug('Skipping contiguous-data download, no workers.');
       return;
     }
 
     if (prioritized === true) {
-      log.debug('Queueing prioritized bundle download...');
+      log.debug('Queueing prioritized contiguous data download...');
       this.queue.unshift({ item, prioritized, bypassFilter });
-      log.debug('Prioritized bundle download queued.');
+      log.debug('Prioritized contiguous data download queued.');
     } else if (this.queue.length() < this.maxQueueSize) {
-      log.debug('Queueing bundle download...');
+      log.debug('Queueing contiguous data download...');
       this.queue.push({ item, prioritized, bypassFilter });
-      log.debug('Bundle download queued.');
+      log.debug('Contiguous data download queued.');
     } else {
-      log.debug('Skipping bundle download, queue is full.');
+      log.debug('Skipping contiguous data download, queue is full.');
     }
   }
 
@@ -103,20 +107,29 @@ export class BundleDataImporter {
     item,
     prioritized,
     bypassFilter,
-  }: UnbundlingQueueItem): Promise<void> {
+  }: DataImporterQueueItem): Promise<void> {
     const log = this.log.child({ method: 'download', id: item.id });
 
     const data = await this.contiguousDataSource.getData({ id: item.id });
 
     return new Promise((resolve, reject) => {
       data.stream.on('end', () => {
-        log.debug('Bundle data downloaded complete. Queuing for unbundling..');
-        this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
+        const isUnbundleableItem = this.isUnbundleableItem(item);
+        if (this.ans104Unbundler && isUnbundleableItem) {
+          log.debug('Data download completed. Queuing for unbundling...');
+          this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
+        } else {
+          log.debug(
+            isUnbundleableItem
+              ? 'Data download completed, skipping unbundling because unbundler is not available'
+              : 'Data download completed, marked as any contiguous tx/data-item, skipping unbundling',
+          );
+        }
         resolve();
       });
 
       data.stream.on('error', (error) => {
-        log.error('Error downloading bundle data.', {
+        log.error('Error downloading data.', {
           message: error.message,
           stack: error.stack,
         });
@@ -140,5 +153,9 @@ export class BundleDataImporter {
 
   async isQueueFull(): Promise<boolean> {
     return this.queue.length() >= this.maxQueueSize;
+  }
+
+  isUnbundleableItem(item: ImportableItem): item is UnbundleableItem {
+    return Object.keys(item).length > 1 && 'index' in item;
   }
 }
