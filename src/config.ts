@@ -245,6 +245,12 @@ export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   '1000',
 );
 
+// The maximum number of data imports to queue for verification puroses
+export const VERIFICATION_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
+  'VERIFICATION_DATA_IMPORTER_QUEUE_SIZE',
+  '1000',
+);
+
 // The maximum number of data items indexed to flush stable data items
 export const DATA_ITEM_FLUSH_COUNT_THRESHOLD = +env.varOrDefault(
   'DATA_ITEM_FLUSH_COUNT_THRESHOLD',

@@ -19,6 +19,7 @@
 import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import * as winston from 'winston';
+import { DataImporter } from './data-importer.js';
 import { ContiguousDataIndex, ContiguousDataSource } from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
 import * as config from '../config.js';
@@ -28,6 +29,7 @@ export class DataVerificationWorker {
   private log: winston.Logger;
   private contiguousDataIndex: ContiguousDataIndex;
   private dataRootComputer: DataRootComputer;
+  private dataImporter: DataImporter | undefined;
 
   private workerCount: number;
   private queue: queueAsPromised<string, void | boolean>;
@@ -38,6 +40,7 @@ export class DataVerificationWorker {
     log,
     contiguousDataIndex,
     contiguousDataSource,
+    dataImporter,
     workerCount = config.BACKGROUND_DATA_VERIFICATION_WORKER_COUNT,
     streamTimeout = config.BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS,
     interval = config.BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS * 1000,
@@ -45,6 +48,7 @@ export class DataVerificationWorker {
     log: winston.Logger;
     contiguousDataIndex: ContiguousDataIndex;
     contiguousDataSource: ContiguousDataSource;
+    dataImporter?: DataImporter;
     workerCount?: number;
     streamTimeout?: number;
     interval?: number;
@@ -63,6 +67,8 @@ export class DataVerificationWorker {
       workerCount,
       streamTimeout,
     });
+
+    this.dataImporter = dataImporter;
   }
 
   async start(): Promise<void> {
@@ -129,6 +135,13 @@ export class DataVerificationWorker {
           indexedDataRoot,
           computedDataRoot,
         });
+        if (this.dataImporter) {
+          log.debug(
+            'Because of data-root mismatch, we are queueing data item for reimport.',
+            { id },
+          );
+          await this.dataImporter.queueItem({ id }, true);
+        }
         return false;
       }
 

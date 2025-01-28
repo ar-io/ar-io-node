@@ -28,7 +28,7 @@ import {
 } from 'node:test';
 import winston from 'winston';
 import { ContiguousDataSource } from '../types.js';
-import { BundleDataImporter } from './bundle-data-importer.js';
+import { DataImporter } from './data-importer.js';
 
 class Ans104UnbundlerStub {
   async queueItem(): Promise<void> {
@@ -44,10 +44,10 @@ class Ans104UnbundlerStub {
   }
 }
 
-describe('BundleDataImporter', () => {
+describe('DataImporter', () => {
   let log: winston.Logger;
-  let bundleDataImporter: BundleDataImporter;
-  let bundleDataImporterWithFullQueue: BundleDataImporter;
+  let bundleDataImporter: DataImporter;
+  let bundleDataImporterWithFullQueue: DataImporter;
   let contiguousDataSource: ContiguousDataSource;
   let ans104Unbundler: any;
   let mockItem: any;
@@ -76,14 +76,14 @@ describe('BundleDataImporter', () => {
 
   beforeEach(() => {
     ans104Unbundler = new Ans104UnbundlerStub();
-    bundleDataImporter = new BundleDataImporter({
+    bundleDataImporter = new DataImporter({
       log,
       contiguousDataSource,
       ans104Unbundler,
       workerCount: 1,
       maxQueueSize: 1,
     });
-    bundleDataImporterWithFullQueue = new BundleDataImporter({
+    bundleDataImporterWithFullQueue = new DataImporter({
       log,
       contiguousDataSource,
       ans104Unbundler,
@@ -142,7 +142,7 @@ describe('BundleDataImporter', () => {
   describe('download', () => {
     it('should download and queue the item for unbundling', async () => {
       mock.method(ans104Unbundler, 'queueItem');
-      bundleDataImporter = new BundleDataImporter({
+      bundleDataImporter = new DataImporter({
         log,
         contiguousDataSource,
         ans104Unbundler: ans104Unbundler,
