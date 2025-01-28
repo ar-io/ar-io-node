@@ -215,6 +215,16 @@ arIoRouter.post(
         return;
       }
 
+      // if byPassFilter is false, then queue like queue-tx
+      if (bypassFilter === false) {
+        system.prioritizedTxIds.add(id);
+        system.txFetcher.queueTxId({ txId: id });
+        res.json({ message: 'TX queued' });
+        // TODO: alternatively could be a redirect
+        // res.redirect(307, '/ar-io/admin/queue-tx');
+        return;
+      }
+
       if (await system.bundleDataImporter.isQueueFull()) {
         res.status(429).send('Bundle importer queue is full');
         return;
