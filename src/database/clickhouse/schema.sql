@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS staging_blocks (
   tx_count UInt32 NOT NULL,
   block_size UInt64,
   PRIMARY KEY (height)
-) Engine = MergeTree()
+) Engine = ReplacingMergeTree()
 ORDER BY (height);
 
 CREATE TABLE IF NOT EXISTS staging_transactions (
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS staging_transactions (
   root_transaction_id BLOB,
   root_parent_offset UInt64,
   PRIMARY KEY (height, block_transaction_index, is_data_item, id)
-) Engine = MergeTree()
+) Engine = ReplacingMergeTree()
 ORDER BY (height, block_transaction_index, is_data_item, id);
 
 CREATE TABLE IF NOT EXISTS staging_tags (
@@ -52,8 +52,8 @@ CREATE TABLE IF NOT EXISTS staging_tags (
   is_data_item BOOLEAN NOT NULL,
   inserted_at DateTime DEFAULT now(),
   PRIMARY KEY (height, id)
-) Engine = MergeTree()
-ORDER BY (height, id);
+) Engine = ReplacingMergeTree()
+ORDER BY (height, id, tag_index);
 
 CREATE TABLE IF NOT EXISTS transactions (
   height UInt32 NOT NULL,
