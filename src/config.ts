@@ -97,6 +97,9 @@ export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   '0.1',
 );
 
+export const ARWEAVE_NODE_IGNORE_URLS: string[] =
+  env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
+
 // Trusted chunk POST URLs (for posting chunks received at /chunk)
 export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)

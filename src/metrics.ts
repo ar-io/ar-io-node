@@ -279,6 +279,22 @@ export const getDataStreamSuccessesTotal = new promClient.Counter({
 });
 
 //
+// Chunk source metrics
+//
+
+export const requestChunkTotal = new promClient.Counter({
+  name: 'request_chunk_total',
+  help: 'Count of each individual chunk http request, status can be "error" or "success", source_type can be "trusted" or "peer".',
+  labelNames: ['status', 'class', 'method', 'source', 'source_type'] as const,
+});
+
+export const getChunkTotal = new promClient.Counter({
+  name: 'get_chunk_total',
+  help: 'Higher level count of chunk discovery, counts when the caller request for chunk ends, stores the status of the request',
+  labelNames: ['status', 'class', 'method'] as const,
+});
+
+//
 // Queue length metrics
 //
 
