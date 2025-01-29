@@ -143,12 +143,14 @@ export class S3DataSource implements ContiguousDataSource {
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
+          source: 's3',
         });
       });
 
       stream.on('end', () => {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
+          source: 's3',
         });
       });
 
@@ -163,6 +165,7 @@ export class S3DataSource implements ContiguousDataSource {
     } catch (error: any) {
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
+        source: 's3',
       });
       log.error('Failed to fetch contiguous data from S3', {
         id,

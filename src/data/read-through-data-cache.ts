@@ -161,12 +161,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         cacheData.stream.on('error', () => {
           metrics.getDataStreamErrorsTotal.inc({
             class: this.constructor.name,
+            source: 'cache',
           });
         });
 
         cacheData.stream.on('end', () => {
           metrics.getDataStreamSuccessesTotal.inc({
             class: this.constructor.name,
+            source: 'cache',
           });
         });
 
@@ -249,12 +251,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       data.stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
+          source: 'cache',
         });
       });
 
       data.stream.on('end', () => {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
+          source: 'cache',
         });
       });
 
@@ -264,6 +268,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     } catch (error) {
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
+        source: 'cache',
       });
 
       throw error;

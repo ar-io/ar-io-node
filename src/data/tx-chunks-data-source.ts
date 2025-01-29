@@ -118,12 +118,16 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
 
       stream.on('error', () => {
-        metrics.getDataStreamErrorsTotal.inc({ class: this.constructor.name });
+        metrics.getDataStreamErrorsTotal.inc({
+          class: this.constructor.name,
+          source: 'chunks',
+        });
       });
 
       stream.on('end', () => {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
+          source: 'chunks',
         });
       });
 
@@ -151,7 +155,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
           generateRequestAttributes(requestAttributes)?.attributes,
       };
     } catch (error) {
-      metrics.getDataErrorsTotal.inc({ class: this.constructor.name });
+      metrics.getDataErrorsTotal.inc({
+        class: this.constructor.name,
+        source: 'chunks',
+      });
       throw error;
     }
   }

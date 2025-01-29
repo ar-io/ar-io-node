@@ -11,6 +11,7 @@ This document describes the environment variables that can be used to configure 
 | TRUSTED_GATEWAYS_URLS | String | TRUSTED_GATEWAY_URL | A JSON map of gateways and priority |
 | TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS | String | "10000" | Request timeout in milliseconds for trusted gateways |
 | TRUSTED_ARNS_GATEWAY_URL | String | "https://__NAME__.arweave.dev" | ArNS gateway |
+| WEIGHTED_PEERS_TEMPERATURE_DELTA | Number | 0.1 | Any positive number above 0, best to keep 1 or less. Used to determine the sensivity of which the probability of failing or succeeding peers decreases or increases. |
 | INSTANCE_ID | String | "" | Adds an "INSTANCE_ID" field to output logs |
 | LOG_FORMAT | String | "simple" | Sets the format of output logs, accepts "simple" and "json" |
 | SKIP_CACHE | Boolean | false | If true, skips the local cache and always fetches headers from the node |

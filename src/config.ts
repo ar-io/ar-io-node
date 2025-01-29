@@ -92,6 +92,11 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
+  'WEIGHTED_PEERS_TEMPERATURE_DELTA',
+  '0.1',
+);
+
 // Trusted chunk POST URLs (for posting chunks received at /chunk)
 export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
