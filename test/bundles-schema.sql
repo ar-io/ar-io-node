@@ -54,7 +54,7 @@ CREATE TABLE bundles (
   last_unbundled_at INTEGER,
   first_fully_indexed_at INTEGER,
   last_fully_indexed_at INTEGER
-, root_transaction_id BLOB, import_attempt_count INTEGER, duplicated_data_item_count INTEGER, previous_unbundle_filter_id INTEGER, previous_index_filter_id INTEGER);
+, root_transaction_id BLOB, import_attempt_count INTEGER, duplicated_data_item_count INTEGER, previous_unbundle_filter_id INTEGER, previous_index_filter_id INTEGER, retry_attempt_count INTEGER, first_retried_at INTEGER, last_retried_at INTEGER);
 CREATE INDEX bundles_format_id_idx ON bundles (format_id);
 CREATE INDEX bundles_last_queued_at_idx
   ON bundles (last_queued_at);
@@ -70,7 +70,6 @@ CREATE INDEX bundles_index_filter_id_idx
   ON bundles (index_filter_id);
 CREATE INDEX bundle_data_items_parent_id_filter_id_idx
   ON bundle_data_items (parent_id, filter_id);
-CREATE INDEX import_attempt_last_queued_idx ON bundles (import_attempt_count, last_queued_at);
 CREATE TABLE new_data_item_tags (
   tag_name_hash BLOB NOT NULL,
   tag_value_hash BLOB NOT NULL,
@@ -157,6 +156,8 @@ CREATE INDEX new_data_items_owner_address_id_idx ON new_data_items (owner_addres
 CREATE INDEX new_data_items_height_indexed_at_idx ON new_data_items (height, indexed_at);
 CREATE INDEX bundle_data_items_root_transaction_id_idx ON bundle_data_items (root_transaction_id);
 CREATE INDEX stable_data_items_indexed_at_idx ON stable_data_items (indexed_at);
+CREATE INDEX import_attempt_last_retried_idx ON bundles (import_attempt_count, last_retried_at);
+CREATE INDEX root_transaction_id_idx ON bundles (root_transaction_id);
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bundle_formats (
