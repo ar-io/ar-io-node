@@ -303,17 +303,21 @@ describe('ArIODataSource', () => {
     });
 
     it('should handle errors when fetching data with region', async () => {
+      const retryCount = 2;
       mock.method(axios, 'get', () => {
         throw new Error('Failed to fetch data with region');
       });
 
       const region = { offset: 100, size: 200 };
       await assert.rejects(
-        dataSource.getData({ id: 'dataId', region }),
+        dataSource.getData({ id: 'dataId', region, retryCount }),
         /Failed to fetch contiguous data from ArIO peers/,
       );
 
-      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 2);
+      assert.equal(
+        (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
+        retryCount,
+      );
     });
   });
 });

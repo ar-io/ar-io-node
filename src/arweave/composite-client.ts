@@ -727,12 +727,14 @@ export class ArweaveCompositeClient
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
+          source: dataResponse.config.baseURL,
         });
       });
 
       stream.on('end', () => {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
+          source: dataResponse.config.baseURL,
         });
       });
 

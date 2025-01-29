@@ -187,12 +187,14 @@ export class GatewaysDataSource implements ContiguousDataSource {
             stream.on('error', () => {
               metrics.getDataStreamErrorsTotal.inc({
                 class: this.constructor.name,
+                source: gatewayUrl,
               });
             });
 
             stream.on('end', () => {
               metrics.getDataStreamSuccessesTotal.inc({
                 class: this.constructor.name,
+                source: gatewayUrl,
               });
             });
 

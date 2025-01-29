@@ -263,19 +263,19 @@ export const arnsResolutionTime = new promClient.Summary({
 export const getDataErrorsTotal = new promClient.Counter({
   name: 'get_data_errors_total',
   help: 'Count of requests errors',
-  labelNames: ['class'],
+  labelNames: ['class', 'source'] as const,
 });
 
 export const getDataStreamErrorsTotal = new promClient.Counter({
   name: 'get_data_stream_errors_total',
   help: 'Count of data stream errors',
-  labelNames: ['class'],
+  labelNames: ['class', 'source'] as const,
 });
 
 export const getDataStreamSuccessesTotal = new promClient.Counter({
   name: 'get_data_stream_successes_total',
   help: 'Count of data stream successes',
-  labelNames: ['class'],
+  labelNames: ['class', 'source'] as const,
 });
 
 //

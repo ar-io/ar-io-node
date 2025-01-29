@@ -17,6 +17,10 @@
  */
 import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
+import {
+  WeightedElement,
+  randomWeightedChoices,
+} from '../lib/random-weighted-choices.js';
 import { AoARIORead } from '@ar.io/sdk';
 import { randomInt } from 'node:crypto';
 
@@ -31,6 +35,7 @@ import {
   parseRequestAttributesHeaders,
 } from '../lib/request-attributes.js';
 import * as metrics from '../metrics.js';
+import * as config from '../config.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
@@ -46,6 +51,8 @@ export class ArIODataSource implements ContiguousDataSource {
   private arIO: AoARIORead;
   peers: Record<string, string> = {};
   private intervalId?: NodeJS.Timeout;
+
+  protected weightedPeers: WeightedElement<string>[] = [];
 
   constructor({
     log,
@@ -121,6 +128,15 @@ export class ArIODataSource implements ContiguousDataSource {
       peers: Object.keys(peers),
     });
     this.peers = peers;
+    this.weightedPeers = Object.values(peers).map((id) => {
+      const previousWeight =
+        this.weightedPeers.find((peer) => peer.id === id)?.weight ?? undefined;
+      return {
+        id,
+        // the weight system is a bit arbitrary being between 0 and 100, 50 is the default neutral
+        weight: previousWeight === undefined ? 50 : previousWeight,
+      };
+    });
   }
 
   selectPeer(): string {
@@ -134,6 +150,52 @@ export class ArIODataSource implements ContiguousDataSource {
 
     const randomIndex = randomInt(0, keys.length);
     return this.peers[keys[randomIndex]];
+  }
+
+  selectPeers(peerCount: number): string[] {
+    const log = this.log.child({ method: 'selectPeers' });
+
+    if (this.weightedPeers.length === 0) {
+      log.warn('No weighted peers available');
+      throw new Error('No weighted peers available');
+    }
+
+    return randomWeightedChoices<string>({
+      table: this.weightedPeers,
+      count: peerCount,
+    });
+  }
+
+  handlePeerSuccess(peer: string): void {
+    metrics.getDataStreamSuccessesTotal.inc({
+      class: this.constructor.name,
+      source: peer,
+    });
+    // warm the succeeding peer
+    this.weightedPeers.forEach((weightedPeer) => {
+      if (weightedPeer.id === peer) {
+        weightedPeer.weight = Math.min(
+          weightedPeer.weight + config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+          100,
+        );
+      }
+    });
+  }
+
+  handlePeerFailure(peer: string): void {
+    metrics.getDataStreamErrorsTotal.inc({
+      class: this.constructor.name,
+      source: peer,
+    });
+    // cool the failing peer
+    this.weightedPeers.forEach((weightedPeer) => {
+      if (weightedPeer.id === peer) {
+        weightedPeer.weight = Math.max(
+          weightedPeer.weight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+          1,
+        );
+      }
+    });
   }
 
   private async request({
@@ -167,15 +229,20 @@ export class ArIODataSource implements ContiguousDataSource {
     id,
     requestAttributes,
     region,
+    retryCount,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    retryCount?: number;
   }): Promise<ContiguousData> {
     const log = this.log.child({ method: 'getData' });
+    const totalRetryCount =
+      retryCount ?? Math.min(Math.max(Object.keys(this.peers).length, 1), 3);
 
     log.debug('Fetching contiguous data from ArIO peer', {
       id,
+      totalRetryCount,
     });
 
     if (requestAttributes !== undefined) {
@@ -185,46 +252,23 @@ export class ArIODataSource implements ContiguousDataSource {
       }
     }
 
-    let selectedPeer = this.selectPeer();
+    const randomPeers = this.selectPeers(totalRetryCount);
 
     const requestAttributesHeaders =
       generateRequestAttributes(requestAttributes);
-
-    try {
-      const response = await this.request({
-        peerAddress: selectedPeer,
-        id,
-        headers: {
-          ...(requestAttributesHeaders?.headers || {}),
-          ...(region
-            ? {
-                Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
-              }
-            : {}),
-        },
-      });
-
-      const parsedRequestAttributes = parseRequestAttributesHeaders({
-        headers: response.headers as { [key: string]: string },
-        currentHops: requestAttributesHeaders?.attributes.hops,
-      });
-
-      return this.parseResponse(response, parsedRequestAttributes);
-    } catch (error: any) {
-      metrics.getDataErrorsTotal.inc({
-        class: 'ArIODataSource',
-      });
-      log.error('Failed to fetch contiguous data from first random ArIO peer', {
-        message: error.message,
-        stack: error.stack,
-      });
-
+    for (const currentPeer of randomPeers) {
       try {
-        selectedPeer = this.selectPeer();
         const response = await this.request({
-          peerAddress: selectedPeer,
+          peerAddress: currentPeer,
           id,
-          headers: requestAttributesHeaders?.headers || {},
+          headers: {
+            ...(requestAttributesHeaders?.headers || {}),
+            ...(region
+              ? {
+                  Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
+                }
+              : {}),
+          },
         });
 
         const parsedRequestAttributes = parseRequestAttributesHeaders({
@@ -232,39 +276,44 @@ export class ArIODataSource implements ContiguousDataSource {
           currentHops: requestAttributesHeaders?.attributes.hops,
         });
 
-        return this.parseResponse(response, parsedRequestAttributes);
+        return this.parseResponse({
+          response,
+          requestAttributes: parsedRequestAttributes,
+          peer: currentPeer,
+        });
       } catch (error: any) {
         metrics.getDataErrorsTotal.inc({
           class: this.constructor.name,
+          source: currentPeer,
         });
-        log.error(
-          'Failed to fetch contiguous data from second random ArIO peer',
-          {
-            message: error.message,
-            stack: error.stack,
-          },
-        );
-        throw new Error('Failed to fetch contiguous data from ArIO peers');
+        log.error('Failed to fetch contiguous data from ArIO peer', {
+          currentPeer,
+          message: error.message,
+          stack: error.stack,
+        });
       }
     }
+
+    throw new Error('Failed to fetch contiguous data from ArIO peers');
   }
 
-  private parseResponse(
-    response: AxiosResponse,
-    requestAttributes: RequestAttributes,
-  ): ContiguousData {
+  private parseResponse({
+    response,
+    requestAttributes,
+    peer,
+  }: {
+    response: AxiosResponse;
+    requestAttributes: RequestAttributes;
+    peer: string;
+  }): ContiguousData {
     const stream = response.data;
 
     stream.on('error', () => {
-      metrics.getDataStreamErrorsTotal.inc({
-        class: this.constructor.name,
-      });
+      this.handlePeerFailure(peer);
     });
 
     stream.on('end', () => {
-      metrics.getDataStreamSuccessesTotal.inc({
-        class: this.constructor.name,
-      });
+      this.handlePeerSuccess(peer);
     });
 
     return {
