@@ -163,6 +163,7 @@ export class DataVerificationWorker {
     const log = this.log.child({ method: 'stop' });
     clearInterval(this.intervalId);
     this.queue.kill();
+    await this.queue.drained();
     await this.dataRootComputer.stop();
     log.debug('Stopped successfully.');
   }

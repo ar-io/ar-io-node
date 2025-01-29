@@ -754,10 +754,11 @@ export const shutdown = async (exitCode = 0) => {
       await ans104DataIndexer.stop();
       await ans104Unbundler.stop();
       await webhookEmitter.stop();
+      await db.stop();
       await headerFsCacheCleanupWorker?.stop();
       await contiguousDataFsCacheCleanupWorker?.stop();
       await dataVerificationWorker?.stop();
-      await db.stop();
+
       process.exit(exitCode);
     });
   }
