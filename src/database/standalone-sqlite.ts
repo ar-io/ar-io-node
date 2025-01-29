@@ -2778,26 +2778,34 @@ export class StandaloneSqliteDatabase
   async stop() {
     const log = this.log.child({ method: 'stop' });
     const promises: Promise<void>[] = [];
-    WORKER_POOL_NAMES.forEach((pool) => {
-      WORKER_ROLE_NAMES.forEach((role) => {
-        this.workers[pool][role].forEach(() => {
-          promises.push(
-            new Promise((resolve, reject) => {
-              this.workQueues[pool][role].push({
-                resolve,
-                reject,
-                message: {
-                  method: 'terminate',
-                },
-              });
-              this.drainQueue();
-            }),
-          );
-        });
-      });
-    });
 
+    for (const pool of WORKER_POOL_NAMES) {
+      for (const role of WORKER_ROLE_NAMES) {
+        if (this.workers[pool][role] !== undefined) {
+          for (const worker of this.workers[pool][role]) {
+            if (worker && typeof worker.push === 'function') {
+              log.debug('Creating stop job for worker', { pool, role });
+              promises.push(
+                new Promise((resolve) => {
+                  worker.push({
+                    resolve,
+                    // by always resolving, we prevent shutdown procedure from
+                    // perpetually waiting for a response from the worker
+                    reject: resolve,
+                    message: {
+                      method: 'terminate',
+                    },
+                  });
+                }),
+              );
+              this.drainQueue();
+            }
+          }
+        }
+      }
+    }
     await Promise.all(promises);
+
     log.debug('Stopped successfully.');
   }
 

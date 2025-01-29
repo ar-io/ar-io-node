@@ -153,8 +153,6 @@ describe('WebhookEmitter', () => {
 
       await wait(0);
 
-      await webhookEmitter.emissionQueue.drained();
-
       assert.equal(
         (webhookEmitter.emitWebhookToTargetServer as any).mock.callCount(),
         webhookEmitter.targetServersUrls.length *
