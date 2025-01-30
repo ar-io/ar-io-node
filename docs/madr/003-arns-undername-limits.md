@@ -182,9 +182,9 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 
 We will implement Option #2: **Additional priority attribute in ANT records**
 
-Ultimately, we could choose to implement Option #1 and Option #2. Both require additional changes to the ANT contract, and the [ar-io-node]. Option #1 requires additional changes to the [ar-io-sdk] and [ar-io-node], and in order to manage the ANT will need changes proposed in Option #2 (or similar)
+Ultimately, we could choose to implement Option #1 and Option #2. Both require additional changes to the ANT contract, and the [ar-io-node]. Option #1 however, requires changes suggested in Option #2 AND additional modifications to return the new object type.
 
-Option #2 is the minimal approach we can take for now and allows us to implement Option #1 if we find it materially beneficial post-launch.
+Option #2 requires the least amount of changes, while satisfying the requirements for enforcing undername limits.
 
 Example ANT records state with priority data:
 
