@@ -155,7 +155,6 @@ export class WebhookEmitter {
     this.listenerReferences.clear();
 
     this.emissionQueue.kill();
-    await this.emissionQueue.drained();
     log.debug('Stopped successfully.');
   }
 
