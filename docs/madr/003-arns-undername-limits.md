@@ -9,7 +9,7 @@
 
 ArNS names have a supported undername limit, defined by the ARIO network contract. Increasing this limit requires payment in $ARIO tokens to compensate gateway operators for the additional computational resources needed to serve undername and promote responsible usage of ArNS. AR.IO gateways must enforce this limit when resolving ArNS names to ensure operators are fairly rewarded for their services through fees paid by increasing a names undername limit and providing a consistent experience across the network.
 
-Currently, the `getRecords` API on ANTs return **a table of records** for efficient record lookup. Lua does not guarantee the order of keys in a table, which can cause issues when enforcing undername limits. This creates a need to sort the records by priority order either by modifying or extending the API to return a sorted array of records, or by applying an attribute to the existing records to sort them.
+Currently, the `getRecords` API on ANTs return **a table of records** allowing for efficient undername lookups. Lua does not guarantee the order of keys in a table, making it difficult to know what undernames to enforce. Sorting needs to either 1. be done by the ANT and provided as an array of records, or 2. be done by the ar-io-node using additional information provided by the ANT.
 
 ## Decision Outcome
 
@@ -105,10 +105,10 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
   return a.localeCompare(b);
 });
 
-// enforce undername limit against sorted records, using the priority field, fallback to
+// enforce undername limit against sorted records, using the priority field, fallback to alphabetical
 ```
 
-### Option 3: ANT Handler for Priority with existing ANT records
+### Option 3: ANT provides sort attributes via separate API
 
 ANTs provide a global `sortOrder` and `sortKey` field to determine how names are sorted on existing records keys.
 
@@ -143,6 +143,8 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
   }
   return a.localeCompare(b);
 });
+
+// enforce undername limit against sorted records, using the priority field, fallback to alphabetical
 ```
 
 ## Pros and Cons of Options
@@ -151,37 +153,40 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 
 #### Pros
 
-✅ Sort order is controlled entirely by ANTs
-✅ Fallback to alphabetical sorting when ANT does not contain priority data or ANT not updated
+- Sort order is controlled entirely by ANTs
+- Fallback to alphabetical sorting when ANT does not contain priority data or ANT not updated
 
 #### Cons
 
-❌ Requires ANT to implement a new API correctly
-❌ Requires changes to ANTs, ar-io-nodes and ar-io-sdk's
+- ANT has to implement a new API correctly
+- Requires changes to ANTs, ar-io-nodes and ar-io-sdk's
+- **ar-io-nodes have to compute the sorted array of records**
 
 ### Option 2: Additional priority attribute in ANT records
 
 #### Pros
 
-✅ Honors ANT priority ordering when available
-✅ Simple fallback mechanism when ANT does not contain priority data or ANT not updated
-✅ Minimal changes to ar-io-node & ar-io-sdk
+- Honors ANT priority ordering when available
+- Simple fallback mechanism when ANT does not contain priority data or ANT not updated
+- Minimal changes to ar-io-node & ar-io-sdk
 
 #### Cons
 
-❌ Requires the ar-io-node to fetch full ANT records and sort them by priority order
-❌ Gateways have to validate priority attribute, handle collisions (e.g. same priority)
+- ar-io-nodes must fetch full ANT records and sort them by priority order
+- ar-io-nodes must compute the sorted array of records
 
 ### Option 3: ANT Handler for Priority with existing ANT records
 
 #### Pros
 
-✅ Same pros as above as Option #2
+- Same pros as above as Option #2
 
 #### Cons
 
-❌ Additional state stored on ANTs
-❌ Additional api keys to ANTs when fetching priority attributes
+- Same cons as #2
+- Additional api calls to get sort attributes
+
+---
 
 ## Decision
 
@@ -211,7 +216,7 @@ Example ANT records state with priority data:
 }
 ```
 
-The ar-io-node will sort the records by priority, and fallback to alphabetical sorting when the priority attribute is not present and enforce the undername limit against the sorted records. If ANTs provide invalid priority order (conflicting records with same priority), the ar-io-node will return a 400 error or similar.
+The ar-io-node will sort the records by priority, and fallback to alphabetical sorting when the priority attribute is not present and enforce the undername limit against the sorted records. If ANTs provide invalid priority order (conflicting records with same priority), **the ar-io-node will return a 400 error to notify the ANT owner of invalid priority order.**
 
 ## Links
 
