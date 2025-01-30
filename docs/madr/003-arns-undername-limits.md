@@ -9,7 +9,7 @@
 
 ArNS names have a supported undername limit, defined by the ARIO network contract. Increasing this limit requires payment in $ARIO tokens to compensate gateway operators for the additional computational resources needed to serve undername and promote responsible usage of ArNS. AR.IO gateways must enforce this limit when resolving ArNS names to ensure operators are fairly rewarded for their services through fees paid by increasing a names undername limit and providing a consistent experience across the network.
 
-Currently, the `getRecords` API on ANTs return **a table of records** allowing for efficient undername lookups. Lua does not guarantee the order of keys in a table, making it difficult to know what undernames to enforce. Sorting needs to either 1. be done by the ANT and provided as an array of records, or 2. be done by the ar-io-node using additional information provided by the ANT.
+Currently, the `getRecords` API on ANTs return **a table of records** allowing for efficient undername lookups. Lua does not guarantee the order of keys in a table, making it difficult to know what undernames to enforce. Sorting needs to either 1. be done by the ANT and provided as an array of records, or 2. be done by the [ar-io-node] using additional information provided by the ANT. Additionally, caching within the ar-io-node needs to properly handle these priority order changes.
 
 ## Decision Outcome
 
@@ -43,13 +43,13 @@ sequenceDiagram
 - Honor ANT priority ordering when available
 - Consistent enforcement of undername limits across AR.IO gateways
 - Simple fallback mechanism if ANT does not return or contain priority data
-- Respects existing ANT records object type (minimal changes to ar-io-node & ar-io-sdk)
+- Respects existing ANT records object type (minimal changes to [ar-io-node] & [ar-io-sdk])
 
 ## Considered Options
 
-### Option 1: Modify/update API on ANT to return sorted array of records
+### Option 1: ANTs provide sorted array of records
 
-Lua does not guarantee the order of keys in a table. This raises some issues with the existing `getRecords` API that returns a table of records on an ANT. To circumvent this, we could modify the return type of `getRecords` or introduce a new API to a sorted array of records, based on the ANT priority. This would require a change to the ar-io-sdk and ar-io-node to leverage this updated API.
+Lua does not guarantee the order of keys in a table. This raises some issues with the existing `getRecords` API that returns a table of records on an ANT. To circumvent this, we could modify the return type of `getRecords` or introduce a new API to a sorted array of records, based on the ANT priority. This would require a change to the [ar-io-sdk] and [ar-io-node] to leverage this updated API.
 
 Current `getRecords` API on ANT:
 
@@ -88,13 +88,13 @@ function getSortedRecords(name: string):
 end
 ```
 
-This array of sorted records would then be what the ar-io-node receives and enforces against the undername limit.
+This array of sorted records would then be what the [ar-io-node] receives and enforces against the undername limit.
 
-### Option 2: Additional priority attribute in ANT records
+### Option 2: ANTS provide priority data in records
 
-ANTs store additional information in their state, indicating the priority of each name. The ar-io-node would respect this priority when resolving undernames. If the ANT does not return priority data, the ar-io-node would sort undernames alphabetically.
+ANTs store additional information in their state, indicating the priority of each name. The [ar-io-node] would respect this priority when resolving undernames. If the ANT does not return priority data, the [ar-io-node] would sort undernames alphabetically.
 
-Example (in the ar-io-node):
+Example (in the [ar-io-node]):
 
 ```typescript
 const records = getRecords(name);
@@ -149,7 +149,7 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 
 ## Pros and Cons of Options
 
-### Option 1: Modify/update API on ANT to return sorted array of records
+### Option 1: ANTs provide sorted array of records
 
 #### Pros
 
@@ -159,23 +159,23 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 #### Cons
 
 - ANT has to implement a new API correctly
-- Requires changes to ANTs, ar-io-nodes and ar-io-sdk's
-- **ar-io-nodes have to compute the sorted array of records**
+- Requires changes to ANTs, [ar-io-node] and [ar-io-sdk]
+- **[ar-io-node]s have to compute the sorted array of records**
 
-### Option 2: Additional priority attribute in ANT records
+### Option 2: ANTs provide priority data in records
 
 #### Pros
 
 - Honors ANT priority ordering when available
 - Simple fallback mechanism when ANT does not contain priority data or ANT not updated
-- Minimal changes to ar-io-node & ar-io-sdk
+- Minimal changes to [ar-io-node] & ar-io-sdk
 
 #### Cons
 
-- ar-io-nodes must fetch full ANT records and sort them by priority order
-- ar-io-nodes must compute the sorted array of records
+- [ar-io-node]s must fetch full ANT records and sort them by priority order
+- [ar-io-node]s must compute the sorted array of records
 
-### Option 3: ANT Handler for Priority with existing ANT records
+### Option 3: ANT provides sort attributes via separate API
 
 #### Pros
 
@@ -186,13 +186,11 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 - Same cons as #2
 - Additional api calls to get sort attributes
 
----
-
 ## Decision
 
 We will implement Option 2: **Additional priority attribute in ANT records**
 
-This provides the best balance of honoring ANT priorities while maintaining system availability when the ANT contract is unreachable or outdated. It also respects the existing ANT records object type and limits the amount of changes needed to the ar-io-node and ar-io-sdk.
+This provides the best balance of honoring ANT priorities while maintaining system availability when the ANT contract is unreachable or outdated. It also respects the existing ANT records object type and limits the amount of changes needed to the [ar-io-node] and ar-io-sdk.
 
 Example ANT records state with priority data:
 
@@ -216,15 +214,20 @@ Example ANT records state with priority data:
 }
 ```
 
-The ar-io-node will sort the records by priority, and fallback to alphabetical sorting when the priority attribute is not present and enforce the undername limit against the sorted records. If ANTs provide invalid priority order (conflicting records with same priority), **the ar-io-node will return a 400 error to notify the ANT owner of invalid priority order.**
+The [ar-io-node] will sort the records by priority, and fallback to alphabetical sorting when the priority attribute is not present and enforce the undername limit against the sorted records. If ANTs provide invalid priority order (conflicting records with same priority), **the [ar-io-node] will return a 400 error to notify the ANT owner of invalid priority order.**
+
+In regards to caching - using the existing caching logic defined in [./002-caching-records.md], the [ar-io-node] will cache the sorted records by name and undername for the provided TTLs. If the ANT contract is updated, the [ar-io-node] will fetch the updated records after the provided TTL.
 
 ## Links
 
 - [ANT Contract Documentation](https://ar.io/ant)
 - [ARIO Whitepaper](https://whitepaper.ar.io)
+- [ARIO SDK](https://github.com/ar-io/ar-io-sdk)
 
 [Ariel]: https://github.com/arielmelendez
 [David]: https://github.com/djwhitt
 [Dylan]: https://github.com/dtfiedler
 [Atticus]: https://github.com/atticusofsparta
 [Phil]: https://github.com/vilenarios
+[ar-io-sdk]: https://github.com/ar-io/ar-io-sdk?tab=readme-ov-file#getrecords
+[ar-io-node]: https://github.com/ar-io/ar-io-node/blob/fbbd4112d7024311f775969569ccfd9857bff9fe/src/resolution/composite-arns-resolver.ts#L127-L135
