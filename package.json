@@ -8,13 +8,14 @@
     "url": "https://github.com/ar-io/ar-io-node"
   },
   "dependencies": {
+    "@apollo/server": "^4.11.3",
+    "@apollo/server-plugin-landing-page-graphql-playground": "^4.0.1",
     "@ar.io/sdk": "^3.4.0-alpha.3",
     "@aws-lite/client": "^0.22.4",
     "@aws-lite/s3": "^0.2.6",
     "@clickhouse/client": "^1.10.1",
     "@dha-team/arbundles": "^1.0.1",
     "@permaweb/aoconnect": "^0.0.63",
-    "apollo-server-express": "^3.13.0",
     "arweave": "^1.15.5",
     "axios": "^1.7.9",
     "better-sqlite3": "^9.4.5",
@@ -28,6 +29,7 @@
     "fastq": "^1.18.0",
     "fs-extra": "^11.3.0",
     "graphql": "^16.10.0",
+    "graphql-tag": "^2.12.6",
     "ioredis": "^5.4.2",
     "json-canonicalize": "^1.0.6",
     "lmdb": "^3.2.2",
@@ -62,6 +64,7 @@
     "@testcontainers/localstack": "^10.17.2",
     "@trivago/prettier-plugin-sort-imports": "^5.2.2",
     "@types/better-sqlite3": "7.6.3",
+    "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/express-prometheus-middleware": "^1.2.3",
     "@types/express-serve-static-core": "^5.0.6",
@@ -98,7 +101,8 @@
   },
   "resolutions": {
     "gc-stats/nan": "2.18.0",
-    "express-prometheus-middleware/prometheus-gc-stats/gc-stats": "1.4.1"
+    "express-prometheus-middleware/prometheus-gc-stats/gc-stats": "1.4.1",
+    "lru-cache": "8.x"
   },
   "scripts": {
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json && yarn copy-files",

@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { default as cors } from 'cors';
+import cors from 'cors';
 import express from 'express';
 import { Server } from 'node:http';
 
@@ -26,7 +26,7 @@ import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
 import { dataRouter } from './routes/data/index.js';
 import { arweaveRouter } from './routes/arweave.js';
-import { apolloServer } from './routes/graphql/index.js';
+import { makeApolloServerMiddleware } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import * as system from './system.js';
 
@@ -66,20 +66,12 @@ app.use(dataRouter);
 app.use(arweaveRouter);
 
 // GraphQL
-const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {
-  introspection: true,
-  persistedQueries: false,
+const apolloServerMiddleware = await makeApolloServerMiddleware({
+  db: system.gqlQueryable,
 });
 
-let server: Server;
-apolloServerInstanceGql.start().then(() => {
-  apolloServerInstanceGql.applyMiddleware({
-    app: app as any,
-    path: '/graphql',
-  });
-  server = app.listen(config.PORT, () => {
-    log.info(`Listening on port ${config.PORT}`);
-  });
-});
+app.use(apolloServerMiddleware);
 
-export { server };
+export const server: Server = app.listen(config.PORT, () => {
+  log.info(`Listening on port ${config.PORT}`);
+});

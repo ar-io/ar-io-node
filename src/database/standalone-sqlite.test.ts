@@ -17,7 +17,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { ValidationError } from 'apollo-server-express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
@@ -108,7 +107,7 @@ describe('SQLite GraphQL cursor functions', () => {
           decodeTransactionGqlCursor('123');
         },
         {
-          name: ValidationError.name,
+          name: 'GraphQLError',
           message: 'Invalid transaction cursor',
         },
       );
@@ -140,7 +139,7 @@ describe('SQLite GraphQL cursor functions', () => {
           decodeBlockGqlCursor('123');
         },
         {
-          name: ValidationError.name,
+          name: 'GraphQLError',
           message: 'Invalid block cursor',
         },
       );

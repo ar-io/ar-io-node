@@ -18,7 +18,8 @@
 import * as winston from 'winston';
 import sql from 'sql-bricks';
 import { ClickHouseClient, createClient } from '@clickhouse/client';
-import { ValidationError } from 'apollo-server-express';
+import { ApolloServerErrorCode } from '@apollo/server/errors';
+import { GraphQLError } from 'graphql';
 
 import {
   b64UrlToHex,
@@ -69,7 +70,11 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
 
     return { height, blockTransactionIndex, isDataItem, id, indexedAt };
   } catch (error) {
-    throw new ValidationError('Invalid transaction cursor');
+    throw new GraphQLError('Invalid transaction cursor', {
+      extensions: {
+        code: ApolloServerErrorCode.GRAPHQL_VALIDATION_FAILED,
+      },
+    });
   }
 }
 
@@ -87,7 +92,11 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 
     return { height };
   } catch (error) {
-    throw new ValidationError('Invalid block cursor');
+    throw new GraphQLError('Invalid block cursor', {
+      extensions: {
+        code: ApolloServerErrorCode.GRAPHQL_VALIDATION_FAILED,
+      },
+    });
   }
 }
 
