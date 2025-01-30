@@ -48,7 +48,7 @@ export class KvDebounceStore implements KVBufferStore {
         return this.pendingHydrate;
       }
 
-      this.pendingHydrate = hydrateFn().then(() => {
+      this.pendingHydrate = hydrateFn().finally(() => {
         this.pendingHydrate = undefined;
       });
 
