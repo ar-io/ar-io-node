@@ -46,7 +46,7 @@ if (config.ARNS_ROOT_HOST !== undefined) {
 arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   const { name } = req.params;
   // TODO: replace this with the same request cache used in arns middleware
-  const resolved = await system.nameResolver.resolve(name);
+  const resolved = await system.nameResolver.resolve({ name });
   if (resolved === undefined) {
     sendNotFound(res);
     return;

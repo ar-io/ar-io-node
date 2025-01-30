@@ -39,7 +39,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
     this.trustedGatewayUrl = trustedGatewayUrl;
   }
 
-  async resolve(name: string): Promise<NameResolution> {
+  async resolve({ name }: { name: string }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
       const nameUrl = this.trustedGatewayUrl.replace('__NAME__', name);

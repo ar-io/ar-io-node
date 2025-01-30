@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { Readable, Writable } from 'node:stream';
+import { AoArNSNameDataWithName } from '@ar.io/sdk';
 
 export interface B64uTag {
   name: string;
@@ -645,7 +646,13 @@ type NameResolution =
   | FailedNameResolution;
 
 export interface NameResolver {
-  resolve(name: string): Promise<NameResolution>;
+  resolve({
+    name,
+    baseArNSRecord,
+  }: {
+    name: string;
+    baseArNSRecord?: AoArNSNameDataWithName;
+  }): Promise<NameResolution>;
 }
 
 export interface MatchableItem {
