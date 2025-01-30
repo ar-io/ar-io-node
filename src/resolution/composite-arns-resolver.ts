@@ -104,7 +104,6 @@ export class CompositeArNSResolver implements NameResolver {
         for (const resolver of this.resolvers) {
           try {
             this.log.info('Attempting to resolve name with resolver', {
-              type: resolver.constructor.name,
               name,
             });
             const resolution = await resolver.resolve({
@@ -128,7 +127,6 @@ export class CompositeArNSResolver implements NameResolver {
             });
           }
         }
-
         return undefined;
       };
 

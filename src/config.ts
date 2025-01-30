@@ -525,10 +525,10 @@ export const ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS =
     `${60 * 60}`, // 1 hour
   );
 
-export const ARNS_ANT_STATE_CACHE_HIT_REFRESH_BUFFER_SECONDS =
+export const ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS =
   +env.varOrDefault(
-    'ARNS_ANT_STATE_CACHE_HIT_REFRESH_BUFFER_SECONDS',
-    `${60}`, // 1 minutes
+    'ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS',
+    `${30}`, // 30 seconds
   );
 
 // TODO: support multiple gateway urls
