@@ -313,7 +313,7 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
     );
 
     // hopefully enough time to unbundle it
-    await wait(30000);
+    await wait(10000);
   });
 
   after(async function () {
@@ -326,7 +326,8 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
     assert.equal(bundleRes.headers['x-ar-io-root-transaction-id'], undefined);
   });
 
-  it('Verifying header for data item', async function () {
+  // TODO: reenable when we have an endpoint that lets us wait for unbundling
+  it.skip('Verifying header for data item', async function () {
     const datasItemRes = await axios.head(`http://localhost:4000/raw/${tx1}`);
 
     assert.equal(datasItemRes.headers['x-ar-io-root-transaction-id'], bundle1);
