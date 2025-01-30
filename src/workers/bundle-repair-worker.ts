@@ -68,6 +68,7 @@ export class BundleRepairWorker {
       config.BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS * 1000,
     );
     this.intervalIds.push(defaultInterval);
+
     const defaultUpdateInterval = setInterval(
       this.updateBundleTimestamps.bind(this),
       DEFAULT_UPDATE_INTERVAL_MS,
@@ -107,6 +108,7 @@ export class BundleRepairWorker {
       );
       for (const bundleId of bundleIds) {
         this.log.info('Retrying failed bundle', { bundleId });
+        await this.bundleIndex.saveBundleRetries(bundleId);
         await this.txFetcher.queueTxId({ txId: bundleId });
       }
     } catch (error: any) {
