@@ -51,9 +51,15 @@ sequenceDiagram
 
 Lua does not guarantee the order of keys in a table. This raises some issues with the existing `getRecords` API that returns a table of records on an ANT. To circumvent this, we could modify the return type of `getRecords` or introduce a new API to a sorted array of records, based on the ANT priority. This would require a change to the [ar-io-sdk] and [ar-io-node] to leverage this updated API.
 
-Current `getRecords` API on ANT:
+ANT process with updated logic:
 
 ```lua
+Records = (
+  '@': {
+    transactionId: '0x123',
+    ttlSeconds: 900
+  }
+)
 function getRecords(name: string)
   return {
     -- order of keys is not guaranteed in lua table
@@ -62,22 +68,19 @@ function getRecords(name: string)
     ["undername2"] = { transactionId = "0x123", ttlSeconds = 1000000, priority = 2 }
   }
 end
-```
 
-Proposed `getSortedRecords` API on ANT:
-
-```lua
+--- new logic to sort records based on some sort attributes
 function getSortedRecords(name: string):
   local sortedRecords = {}
   -- ANT decides how to sort records
-  for key, value in pairs(records) do
+  for key, value in pairs(Records) do
     table.insert(sortedRecords, {
       record = key,
       transactionId = value.transactionId,
       ttlSeconds = value.ttlSeconds,
     })
   end
-  -- apply sort based on some attribute of the ANT
+  -- apply sort based on some attribute of the ANT (e.g. alphabetical)
   table.sort(sortedRecords, function(a, b)
     -- '@' record should always be first
     if a.record == "@" then return true end
@@ -92,7 +95,7 @@ This array of sorted records would then be what the [ar-io-node] receives and en
 
 ### Option 2: ANTS provide priority data in records
 
-ANTs store additional information in their state, indicating the priority of each name. The [ar-io-node] would respect this priority when resolving undernames. If the ANT does not return priority data, the [ar-io-node] would sort undernames alphabetically.
+ANTs store additional information in the state for each record, indicating the priority a name. The [ar-io-node] would respect this priority when resolving undernames. If the ANT does not return priority attribute for a, the [ar-io-node] would sort undernames alphabetically.
 
 Example (in the [ar-io-node]):
 
@@ -114,6 +117,8 @@ ANTs provide a global `sortOrder` and `sortKey` field to determine how names are
 
 Example:
 
+ANT process:
+
 ```lua
 UndernamePriorityAttributes = {
   sortOrder = 'desc',
@@ -129,6 +134,8 @@ function getRecords(name: string)
   }
 end
 ```
+
+Gateway enforcement:
 
 ```typescript
 const records = ant.getRecords(name);
