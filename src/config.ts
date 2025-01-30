@@ -510,7 +510,7 @@ export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
 
 export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
   'ARNS_NAMES_CACHE_TTL_SECONDS',
-  `${5 * 60}`, // 5 minutes
+  `${60 * 60}`, // 1 hour
 );
 
 export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
