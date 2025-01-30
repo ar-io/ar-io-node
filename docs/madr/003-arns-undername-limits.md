@@ -90,22 +90,7 @@ end
 
 This array of sorted records would then be what the ar-io-node receives and enforces against the undername limit.
 
-### Option 2: Alphabetical Sorting with existing ANT records
-
-AR.IO nodes sort undernames alphabetically using the existing ANT records.
-
-Example (in the ar-io-node):
-
-```typescript
-const records = getRecords(name);
-const sortedRecords = Object.entries(records).sort(([a], [b]) =>
-  a.localeCompare(b),
-);
-
-// enforce undername limit against sorted records
-```
-
-### Option 3: ANTs Priority & Alphabetical Fallback with existing ANT records
+### Option 2: Additional priority attribute in ANT records
 
 ANTs store additional information in their state, indicating the priority of each name. The ar-io-node would respect this priority when resolving undernames. If the ANT does not return priority data, the ar-io-node would sort undernames alphabetically.
 
@@ -123,7 +108,7 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 // enforce undername limit against sorted records, using the priority field, fallback to
 ```
 
-### Option 4: ANT Handler for Priority with existing ANT records
+### Option 3: ANT Handler for Priority with existing ANT records
 
 ANTs provide a global `sortOrder` and `sortKey` field to determine how names are sorted on existing records keys.
 
@@ -160,9 +145,47 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 });
 ```
 
+## Pros and Cons of Options
+
+### Option 1: Modify/update API on ANT to return sorted array of records
+
+#### Pros
+
+✅ Sort order is controlled entirely by ANTs
+✅ Fallback to alphabetical sorting when ANT does not contain priority data or ANT not updated
+
+#### Cons
+
+❌ Requires ANT to implement a new API correctly
+❌ Requires changes to ANTs, ar-io-nodes and ar-io-sdk's
+
+### Option 2: Additional priority attribute in ANT records
+
+#### Pros
+
+✅ Honors ANT priority ordering when available
+✅ Simple fallback mechanism when ANT does not contain priority data or ANT not updated
+✅ Minimal changes to ar-io-node & ar-io-sdk
+
+#### Cons
+
+❌ Requires the ar-io-node to fetch full ANT records and sort them by priority order
+❌ Gateways have to validate priority attribute, handle collisions (e.g. same priority)
+
+### Option 3: ANT Handler for Priority with existing ANT records
+
+#### Pros
+
+✅ Same pros as above as Option #2
+
+#### Cons
+
+❌ Additional state stored on ANTs
+❌ Additional api keys to ANTs when fetching priority attributes
+
 ## Decision
 
-We will implement Option 4: **ANT Handler for Priority with existing ANT records**
+We will implement Option 2: **Additional priority attribute in ANT records**
 
 This provides the best balance of honoring ANT priorities while maintaining system availability when the ANT contract is unreachable or outdated. It also respects the existing ANT records object type and limits the amount of changes needed to the ar-io-node and ar-io-sdk.
 
@@ -188,20 +211,7 @@ Example ANT records state with priority data:
 }
 ```
 
-### Positive Consequences
-
-- Honors ANT priority ordering when available
-- Provides consistent enforcement across nodes
-- Simple fallback mechanism when ANT does not contain priority data
-
-### Negative Consequences
-
-- Requires the ar-io-node to fetch full ANT records and sort them by priority order
-- Additional complexity in priority resolution logic
-- Need to handle priority changes and ANT modifications in caching layers
-- Additional work for controlling ANT priority in ANT contract (e.g. arns.app)
-
-// TODO - other pro/cons
+The ar-io-node will sort the records by priority, and fallback to alphabetical sorting when the priority attribute is not present and enforce the undername limit against the sorted records. If ANTs provide invalid priority order (conflicting records with same priority), the ar-io-node will return a 400 error or similar.
 
 ## Links
 
