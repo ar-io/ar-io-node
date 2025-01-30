@@ -154,26 +154,26 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 #### Pros
 
 - Sort order is controlled entirely by ANTs
-- Fallback to alphabetical sorting when ANT does not contain priority data or ANT not updated
+- Minimal changes to [ar-io-node] for enforcing undername limits
 
 #### Cons
 
-- ANT has to implement a new API correctly
-- Requires changes to ANTs, [ar-io-node] and [ar-io-sdk]
-- **[ar-io-node]s have to compute the sorted array of records**
+- New API for ANTs to return sorted records as an array
+- Additional changes in ar-io-sdk to support non updated ANTs
+- Requires additional changes to ANTs to _manage_ this sort order (i.e will require Option #2 to be implemented in the ANT)
 
 ### Option 2: ANTs provide priority data in records
 
 #### Pros
 
-- Honors ANT priority ordering when available
-- Simple fallback mechanism when ANT does not contain priority data or ANT not updated
-- Minimal changes to [ar-io-node] & ar-io-sdk
+- Extends existing ANT records object type
+- Minimal changes to [ar-io-node] & [ar-io-sdk] (easy to make backwards compatible since object response type is unchanged)
+- Allows to implement Option #1 at a later time, if desired
 
 #### Cons
 
-- [ar-io-node]s must fetch full ANT records and sort them by priority order
-- [ar-io-node]s must compute the sorted array of records
+- [ar-io-node]'s must fetch full ANT records and sort them by priority order
+- [ar-io-node]'s must compute the sorted array of records
 
 ### Option 3: ANT provides sort attributes via separate API
 
@@ -188,9 +188,11 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 
 ## Decision
 
-We will implement Option 2: **Additional priority attribute in ANT records**
+We will implement Option #2: **Additional priority attribute in ANT records**
 
-This provides the best balance of honoring ANT priorities while maintaining system availability when the ANT contract is unreachable or outdated. It also respects the existing ANT records object type and limits the amount of changes needed to the [ar-io-node] and ar-io-sdk.
+Ultimately, we could choose to implement Option #1 and Option #2. Both require additional changes to the ANT contract, and the [ar-io-node]. Option #1 requires additional changes to the [ar-io-sdk] and [ar-io-node], and in order to manage the ANT will need changes proposed in Option #2 (or similar)
+
+Option #2 is the minimal approach we can take for now and allows us to implement Option #1 if we find it materially beneficial post-launch.
 
 Example ANT records state with priority data:
 
@@ -216,7 +218,7 @@ Example ANT records state with priority data:
 
 The [ar-io-node] will sort the records by priority, and fallback to alphabetical sorting when the priority attribute is not present and enforce the undername limit against the sorted records. If ANTs provide invalid priority order (conflicting records with same priority), **the [ar-io-node] will return a 400 error to notify the ANT owner of invalid priority order.**
 
-In regards to caching - using the existing caching logic defined in [./002-caching-records.md], the [ar-io-node] will cache the sorted records by name and undername for the provided TTLs. If the ANT contract is updated, the [ar-io-node] will fetch the updated records after the provided TTL.
+Gateways will leverage existing caching logic defined in [./002-arns-cache-timing.md]. As such, the [ar-io-node] will cache the records (including priority order) for the provided TTLs. If the ANT contract is updated, the [ar-io-node] will fetch the updated records after the provided TTL and subsequently enforce any changes in priority order against the updated records.
 
 ## Links
 
@@ -231,3 +233,4 @@ In regards to caching - using the existing caching logic defined in [./002-cachi
 [Phil]: https://github.com/vilenarios
 [ar-io-sdk]: https://github.com/ar-io/ar-io-sdk?tab=readme-ov-file#getrecords
 [ar-io-node]: https://github.com/ar-io/ar-io-node/blob/fbbd4112d7024311f775969569ccfd9857bff9fe/src/resolution/composite-arns-resolver.ts#L127-L135
+[./002-arns-cache-timing.md]: ./002-arns-cache-timing.md
