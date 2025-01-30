@@ -1,0 +1,19 @@
+networks:
+  ar-io-network:
+    external: true
+
+services:
+  portainer:
+    image: portainer/portainer-ce
+    restart: unless-stopped
+    networks:
+      - ar-io-network
+    ports:
+      - ${PORTAINER_PORT:-9001}:9000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+volumes:
+  portainer_data:
+
