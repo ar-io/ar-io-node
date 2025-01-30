@@ -80,20 +80,18 @@ export class CompositeArNSResolver implements NameResolver {
     }
 
     try {
-      const baseNameInCache =
-        await this.arnsNamesCache.getCachedArNSBaseName(baseName);
-
-      if (!baseNameInCache) {
-        this.log.warn('Base name not found in ArNS names cache', { name });
-        metrics.arnsNameCacheMissCounter.inc();
-        return {
-          name,
-          resolvedId: undefined,
-          resolvedAt: undefined,
-          ttl: undefined,
-          processId: undefined,
-        };
-      }
+      // start name list request before checking cache so that the name list
+      // stays fresh even when there are cache hits
+      const baseNameInCachePromise = this.arnsNamesCache
+        .getCachedArNSBaseName(baseName)
+        .catch((error: any) => {
+          this.log.error('Error getting base name from cache: ', {
+            message: error.message,
+            stack: error.stack,
+            baseName,
+          });
+          return undefined;
+        });
 
       // check if our resolution cache contains the FULL name
       const cachedResolutionBuffer = await this.resolutionCache.get(name);
@@ -117,6 +115,20 @@ export class CompositeArNSResolver implements NameResolver {
       }
       metrics.arnsCacheMissCounter.inc();
       this.log.info('Cache miss for arns name', { name });
+
+      const baseNameInCache = await baseNameInCachePromise;
+
+      if (!baseNameInCache) {
+        this.log.warn('Base name not found in ArNS names cache', { name });
+        metrics.arnsNameCacheMissCounter.inc();
+        return {
+          name,
+          resolvedId: undefined,
+          resolvedAt: undefined,
+          ttl: undefined,
+          processId: undefined,
+        };
+      }
 
       for (const resolver of this.resolvers) {
         try {
