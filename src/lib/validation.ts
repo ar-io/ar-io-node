@@ -44,7 +44,7 @@ export function sanityCheckBlock(block: PartialJsonBlock) {
     throw new Error("Invalid block: invalid 'indep_hash' format");
   }
 
-  if (!block.height === undefined) {
+  if (!block.height === false) {
     throw new Error("Invalid block: missing 'height'");
   }
 

@@ -84,7 +84,9 @@ export class ArIODataSource implements ContiguousDataSource {
   }
 
   stopUpdatingPeers() {
-    this.intervalId && clearInterval(this.intervalId);
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+    }
   }
 
   async updatePeerList() {
