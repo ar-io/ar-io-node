@@ -19,7 +19,14 @@ import winston from 'winston';
 
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
-import { ANT, AoClient, AoARIORead, AOProcess, ARIO } from '@ar.io/sdk';
+import {
+  ANT,
+  AOProcess,
+  ARIO,
+  AoARIORead,
+  AoArNSNameDataWithName,
+  AoClient,
+} from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
@@ -80,7 +87,13 @@ export class OnDemandArNSResolver implements NameResolver {
     metrics.circuitBreakerMetrics.add(this.aoCircuitBreaker);
   }
 
-  async resolve(name: string): Promise<NameResolution> {
+  async resolve({
+    name,
+    baseArNSRecord,
+  }: {
+    name: string;
+    baseArNSRecord?: AoArNSNameDataWithName;
+  }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
       // get the base name which is the last of the array split by _
@@ -88,8 +101,12 @@ export class OnDemandArNSResolver implements NameResolver {
       if (baseName === undefined) {
         throw new Error('Invalid name');
       }
-      // find that name in the network process, using the circuit breaker if there are persistent AO issues
-      const arnsRecord = await this.aoCircuitBreaker.fire({ name: baseName });
+
+      // if we are not passed the baseArNSRecord find that name in the network
+      // process, using the circuit breaker if there are persistent AO issues
+      const arnsRecord =
+        baseArNSRecord ??
+        (await this.aoCircuitBreaker.fire({ name: baseName }));
 
       if (arnsRecord === undefined) {
         throw new Error('Unexpected undefined from CU');

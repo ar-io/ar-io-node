@@ -22,6 +22,7 @@ import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js
 import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
 import { ArNSNamesCache } from './arns-names-cache.js';
 import { AoARIORead } from '@ar.io/sdk';
+import * as config from '../config.js';
 
 export class CompositeArNSResolver implements NameResolver {
   private log: winston.Logger;
@@ -34,6 +35,7 @@ export class CompositeArNSResolver implements NameResolver {
       }
     | undefined;
   private arnsNamesCache: ArNSNamesCache;
+  private hasPendingResolution: Record<string, boolean> = {};
 
   constructor({
     log,
@@ -63,7 +65,7 @@ export class CompositeArNSResolver implements NameResolver {
     });
   }
 
-  async resolve(name: string): Promise<NameResolution> {
+  async resolve({ name }: { name: string }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name, overrides: this.overrides });
     let resolution: NameResolution | undefined;
 
@@ -93,6 +95,42 @@ export class CompositeArNSResolver implements NameResolver {
           return undefined;
         });
 
+      const resolveName = async () => {
+        this.hasPendingResolution[name] = true;
+
+        for (const resolver of this.resolvers) {
+          try {
+            this.log.info('Attempting to resolve name with resolver', {
+              type: resolver.constructor.name,
+              name,
+            });
+            const resolution = await resolver.resolve({
+              name,
+              baseArNSRecord: baseNameInCache,
+            });
+            if (resolution.resolvedAt !== undefined) {
+              this.resolutionCache.set(
+                name,
+                Buffer.from(JSON.stringify(resolution)),
+              );
+              this.log.info('Resolved name', { name, resolution });
+
+              this.hasPendingResolution[name] = false;
+              return resolution;
+            }
+          } catch (error: any) {
+            this.log.error('Error resolving name with resolver', {
+              resolver,
+              message: error.message,
+              stack: error.stack,
+            });
+          }
+        }
+
+        this.hasPendingResolution[name] = false;
+        return undefined;
+      };
+
       // check if our resolution cache contains the FULL name
       const cachedResolutionBuffer = await this.resolutionCache.get(name);
       if (cachedResolutionBuffer) {
@@ -108,6 +146,19 @@ export class CompositeArNSResolver implements NameResolver {
           ttlSeconds !== undefined &&
           cachedResolution.resolvedAt + ttlSeconds * 1000 > Date.now()
         ) {
+          this.log.debug('Checking if cached ArNS resolution needs refresh', {
+            name,
+            hasPendingResolution: this.hasPendingResolution[name],
+            cacheAge: Date.now() - cachedResolution.resolvedAt! * 1000,
+            refreshInterval: config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_INTERVAL_SECONDS,
+          });
+          if (
+            !this.hasPendingResolution[name] &&
+            Date.now() - cachedResolution.resolvedAt * 1000 >
+              config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_INTERVAL_SECONDS
+          ) {
+            resolveName();
+          }
           metrics.arnsCacheHitCounter.inc();
           this.log.info('Cache hit for arns name', { name });
           return cachedResolution;
@@ -130,30 +181,11 @@ export class CompositeArNSResolver implements NameResolver {
         };
       }
 
-      for (const resolver of this.resolvers) {
-        try {
-          this.log.info('Attempting to resolve name with resolver', {
-            type: resolver.constructor.name,
-            name,
-          });
-          const resolution = await resolver.resolve(name);
-          if (resolution.resolvedAt !== undefined) {
-            this.resolutionCache.set(
-              name,
-              Buffer.from(JSON.stringify(resolution)),
-            );
-            this.log.info('Resolved name', { name, resolution });
-            return resolution;
-          }
-        } catch (error: any) {
-          this.log.error('Error resolving name with resolver', {
-            resolver,
-            message: error.message,
-            stack: error.stack,
-          });
-        }
+      resolution = (await resolveName()) ?? resolution;
+
+      if (!resolution) {
+        this.log.warn('Unable to resolve name against all resolvers', { name });
       }
-      this.log.warn('Unable to resolve name against all resolvers', { name });
     } catch (error: any) {
       this.log.error('Error resolving name:', {
         name,

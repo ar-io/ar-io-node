@@ -93,7 +93,9 @@ export const createArnsMiddleware = ({
           return arnsResolutionPromise;
         }
       }
-      const arnsResolutionPromise = nameResolver.resolve(arnsSubdomain);
+      const arnsResolutionPromise = nameResolver.resolve({
+        name: arnsSubdomain,
+      });
       arnsRequestCache.set(arnsSubdomain, arnsResolutionPromise);
       return arnsResolutionPromise;
     };
