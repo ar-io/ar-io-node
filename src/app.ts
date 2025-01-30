@@ -74,7 +74,7 @@ const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {
 let server: Server;
 apolloServerInstanceGql.start().then(() => {
   apolloServerInstanceGql.applyMiddleware({
-    app,
+    app: app as any,
     path: '/graphql',
   });
   server = app.listen(config.PORT, () => {
