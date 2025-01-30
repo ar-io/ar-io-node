@@ -158,40 +158,25 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 
 ### Option 1: ANTs provide sorted array of records
 
-#### Pros
-
-- Sort order is controlled entirely by ANTs
-- Minimal changes to [ar-io-node] for enforcing undername limits
-
-#### Cons
-
-- New API for ANTs to return sorted records as an array
-- Additional changes in ar-io-sdk to support non updated ANTs
-- Requires additional changes to ANTs to _manage_ this sort order (i.e will require Option #2 to be implemented in the ANT)
+- `+` Sort order is controlled entirely by ANTs
+- `+` Minimal changes to gateways (use new API)
+- `-` Additional changes in ar-io-sdk to support non updated ANTs
+- `-` Managing priority order when updating records (handling collisions)
 
 ### Option 2: ANTs provide priority data in records
 
-#### Pros
-
-- Extends existing ANT records object type
-- Minimal changes to [ar-io-node] & [ar-io-sdk] (easy to make backwards compatible since object response type is unchanged)
-- Allows to implement Option #1 at a later time, if desired
-
-#### Cons
-
-- [ar-io-node]'s must fetch full ANT records and sort them by priority order
-- [ar-io-node]'s must compute the sorted array of records
+- `+` Extends existing ANT records object type
+- `+` Minimal changes to [ar-io-node] & [ar-io-sdk] (easy to make backwards compatible since object response type is unchanged)
+- `+` Allows to implement Option #1 at a later time, if desired
+- `-` Managing priority order when updating records (handling collisions)
+- `-` Gateways must fetch full ANT records and sort them by priority order
+- `-` Gateways must compute the sorted array of records
 
 ### Option 3: ANT provides sort attributes via separate API
 
-#### Pros
-
-- Same pros as above as Option #2
-
-#### Cons
-
-- Same cons as #2
-- Additional api calls to get sort attributes
+- `+` Same pros as above as Option #2
+- `-` Same cons as #2
+- `-` Additional api calls to get sort attributes
 
 ## Decision
 
