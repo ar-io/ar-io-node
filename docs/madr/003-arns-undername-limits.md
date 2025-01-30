@@ -32,7 +32,7 @@ sequenceDiagram
     note over AR.IO Gateway: Sort records by ANT priority, fallback to alphabetical
     note over AR.IO Gateway: Validate undernames against undername limit
     alt Undername limit exceeded
-        AR.IO Gateway->>Client: Return 401
+        AR.IO Gateway->>Client: Return 402 (Payment required)
     else Undername limit not exceeded
         AR.IO Gateway->>Client: Resolve undername
     end
