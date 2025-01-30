@@ -27,26 +27,45 @@ export class KvDebounceStore implements KVBufferStore {
   private kvBufferStore: KVBufferStore;
   private debounceHydrateOnMiss: (...args: any[]) => Promise<void>;
   private debounceHydrateOnHit: (...args: any[]) => Promise<void>;
+  private pendingHydrate: Promise<void> | undefined;
 
   constructor({
     kvBufferStore,
     cacheMissDebounceTtl,
     cacheHitDebounceTtl,
     debounceImmediately = true,
-    debounceFn,
+    hydrateFn: hydrateFn,
   }: {
     kvBufferStore: KVBufferStore;
     cacheMissDebounceTtl: number;
     cacheHitDebounceTtl: number;
     debounceImmediately?: boolean;
-    debounceFn: (...args: any[]) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
+    hydrateFn: (...args: any[]) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
   }) {
     this.kvBufferStore = kvBufferStore;
-    this.debounceHydrateOnMiss = pDebounce(debounceFn, cacheMissDebounceTtl);
-    this.debounceHydrateOnHit = pDebounce(debounceFn, cacheHitDebounceTtl);
+    const syncedHydrateFn = () => {
+      if (this.pendingHydrate !== undefined) {
+        return this.pendingHydrate;
+      }
+
+      this.pendingHydrate = hydrateFn().then(() => {
+        this.pendingHydrate = undefined;
+      });
+
+      return this.pendingHydrate;
+    };
+    this.debounceHydrateOnMiss = pDebounce(
+      syncedHydrateFn,
+      cacheMissDebounceTtl,
+      {
+        before: true,
+      },
+    );
+    this.debounceHydrateOnHit = pDebounce(syncedHydrateFn, cacheHitDebounceTtl);
+
     // debounce the cache immediately when the cache is created
     if (debounceImmediately) {
-      debounceFn();
+      syncedHydrateFn();
     }
   }
 

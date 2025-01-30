@@ -88,7 +88,7 @@ export class ArNSNamesCache {
        * Bind the hydrateArNSNamesCache method to the ArNSNamesCache instance
        * so that the debounceFn has access to this instance's properties and methods (e.g. this.log, this.networkProcess, etc.).
        */
-      debounceFn: this.hydrateArNSNamesCache.bind(this),
+      hydrateFn: this.hydrateArNSNamesCache.bind(this),
     });
   }
 

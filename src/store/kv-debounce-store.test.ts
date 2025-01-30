@@ -32,7 +32,7 @@ describe('KvDebounceCache', () => {
     }),
     cacheMissDebounceTtl: 100,
     cacheHitDebounceTtl: 100,
-    debounceFn: async () => {
+    hydrateFn: async () => {
       // noop
     },
   });
@@ -71,7 +71,7 @@ describe('KvDebounceCache', () => {
         cacheHitDebounceTtl: 100,
         cacheMissDebounceTtl: 10,
         debounceImmediately: true,
-        debounceFn: async () => {
+        hydrateFn: async () => {
           callCount++;
           kvBufferStore.set(key, Buffer.from('test'));
         },
@@ -94,7 +94,7 @@ describe('KvDebounceCache', () => {
         cacheHitDebounceTtl: 100,
         cacheMissDebounceTtl: 10,
         debounceImmediately: false,
-        debounceFn: async () => {
+        hydrateFn: async () => {
           lastCallTimestamp = Date.now();
           callCount++;
           kvBufferStore.set(key, Buffer.from('test'));
@@ -118,7 +118,7 @@ describe('KvDebounceCache', () => {
         cacheHitDebounceTtl: 100,
         cacheMissDebounceTtl: 10,
         debounceImmediately: true,
-        debounceFn: async () => {
+        hydrateFn: async () => {
           lastCallTimestamp = Date.now();
           // return undefined on first call
           if (callCount === 0) {
@@ -154,7 +154,7 @@ describe('KvDebounceCache', () => {
         cacheHitDebounceTtl: 100,
         cacheMissDebounceTtl: 10,
         debounceImmediately: true,
-        debounceFn: async () => {
+        hydrateFn: async () => {
           lastCallTimestamp = Date.now();
           kvBufferStore.set(key, Buffer.from(`test${callCount}`));
           callCount++;
@@ -187,7 +187,7 @@ describe('KvDebounceCache', () => {
           cacheMissDebounceTtl: 10,
           cacheHitDebounceTtl: 100,
           // synchronously throw for testing purposes
-          debounceFn: () => {
+          hydrateFn: () => {
             throw new Error('Test error');
           },
         });
