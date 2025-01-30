@@ -54,7 +54,9 @@ export class TransactionRepairWorker {
   async stop(): Promise<void> {
     const log = this.log.child({ method: 'stop' });
 
-    this.intervalId && clearInterval(this.intervalId);
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+    }
 
     log.debug('Stopped successfully.');
   }

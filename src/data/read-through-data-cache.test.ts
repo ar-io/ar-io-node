@@ -173,7 +173,7 @@ describe('ReadThroughDataCache', function () {
         123,
       );
 
-      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.deepEqual(calledWithArgument!, 'test-hash');
       assert.deepEqual(result?.stream, mockStream);
       assert.deepEqual(result?.size, 123);
     });
@@ -192,7 +192,7 @@ describe('ReadThroughDataCache', function () {
         123,
       );
 
-      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.deepEqual(calledWithArgument!, 'test-hash');
 
       assert.deepEqual(result, undefined);
     });
@@ -227,9 +227,9 @@ describe('ReadThroughDataCache', function () {
         20,
       );
 
-      assert.deepEqual(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.deepEqual(calledWithArgument!, 'test-hash');
 
-      assert.deepEqual(calledWithParentArgument!, 'test-parent-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.deepEqual(calledWithParentArgument!, 'test-parent-hash');
 
       assert.deepEqual(result?.stream, mockStream);
       assert.deepEqual(result?.size, 20);
@@ -278,7 +278,7 @@ describe('ReadThroughDataCache', function () {
           origin: 'node-url',
         },
       });
-      assert.equal(calledWithArgument!, 'test-hash'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(calledWithArgument!, 'test-hash');
 
       let receivedData = '';
 
@@ -381,7 +381,6 @@ describe('ReadThroughDataCache', function () {
         requestAttributes,
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       assert.deepEqual(calledWithArgument!, {
         id: 'test-id',
         dataAttributes: undefined,

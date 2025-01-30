@@ -41,7 +41,7 @@ describe('LmdbKvStore', () => {
     await lmdbKvStore.set(key, value);
     const result = await lmdbKvStore.get(key);
     assert.notEqual(result, undefined);
-    assert.equal(toB64Url(result!), 'test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.equal(toB64Url(result!), 'test');
   });
 
   it('should properly delete buffer', async () => {
@@ -59,9 +59,9 @@ describe('LmdbKvStore', () => {
     await lmdbKvStore.set(key, value);
     await lmdbKvStore.set(key, Buffer.from('test2', 'base64url'));
     const result = await lmdbKvStore.get(key);
-    assert.notEqual(result, undefined); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.notEqual(result, undefined);
 
-    assert.equal(toB64Url(result!), 'test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.equal(toB64Url(result!), 'test');
   });
 
   it('should return a buffer when a Uint8Array is stored in the cache', async () => {
@@ -74,6 +74,6 @@ describe('LmdbKvStore', () => {
     const result = await lmdbKvStore.get(key);
     assert.notEqual(result, undefined);
     assert.equal(Buffer.isBuffer(result), true);
-    assert.equal(toB64Url(result!), 'test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.equal(toB64Url(result!), 'test');
   });
 });

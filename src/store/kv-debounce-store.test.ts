@@ -56,7 +56,7 @@ describe('KvDebounceCache', () => {
     await kvDebounceCache.set(key, Buffer.from('test2', 'base64url'));
     const result = await kvDebounceCache.get(key);
     assert.notEqual(result, undefined);
-    assert.equal(toB64Url(result!), 'test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+    assert.equal(toB64Url(result!), 'test');
   });
 
   describe('debounceFn', () => {
@@ -78,7 +78,7 @@ describe('KvDebounceCache', () => {
       });
       await kvDebounceStore.get(key);
       const result = await kvBufferStore.get(key);
-      assert.equal(result!.toString('utf-8'), 'test'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(result!.toString('utf-8'), 'test');
       assert.equal(callCount, 1);
     });
 
@@ -101,7 +101,7 @@ describe('KvDebounceCache', () => {
         },
       });
       const result = await kvBufferStore.get(key);
-      assert.equal(result, undefined); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(result, undefined);
       assert.equal(callCount, 0);
       assert.equal(lastCallTimestamp, 0);
     });
@@ -138,7 +138,7 @@ describe('KvDebounceCache', () => {
       const result = await kvDebounceStore.get(key);
       assert.equal(callCount, 2);
       assert.ok(lastCallTimestamp >= Date.now() - 10);
-      assert.equal(result!.toString('utf-8'), '1'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(result!.toString('utf-8'), '1');
     });
 
     it('should call debounceFn on cache hit after the cache hit debounce ttl expires', async () => {
@@ -163,7 +163,7 @@ describe('KvDebounceCache', () => {
 
       // should hydrate immediately
       const result = await kvDebounceStore.get(key);
-      assert.equal(result!.toString('utf-8'), 'test0'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(result!.toString('utf-8'), 'test0');
       assert.ok(lastCallTimestamp <= Date.now());
       assert.equal(callCount, 1);
 
@@ -172,7 +172,7 @@ describe('KvDebounceCache', () => {
       assert.equal(callCount, 2);
       assert.ok(lastCallTimestamp >= Date.now() - 100);
       const result2 = await kvDebounceStore.get(key);
-      assert.equal(result2!.toString('utf-8'), 'test1'); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+      assert.equal(result2!.toString('utf-8'), 'test1');
     });
 
     // intentional design choice to bubble up errors from debounceFn and let the caller handle them appropriately

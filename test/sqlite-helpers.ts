@@ -30,7 +30,6 @@ export let dataDb: Sqlite.Database;
 export let moderationDb: Sqlite.Database;
 export let bundlesDb: Sqlite.Database;
 
-/* eslint-disable */
 before(async () => {
   log.transports.forEach((t) => (t.silent = true));
   fs.readdirSync('test/tmp').forEach((file) => {

@@ -27,8 +27,8 @@ import { Readable } from 'node:stream';
 
 const axiosMockCommonParams = (config: any) => ({
   interceptors: {
-    request: { use: () => {} }, // eslint-disable-line @typescript-eslint/no-empty-function
-    response: { use: () => {} }, // eslint-disable-line @typescript-eslint/no-empty-function
+    request: { use: () => {} },
+    response: { use: () => {} },
   },
   defaults: config,
 });
