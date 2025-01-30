@@ -313,7 +313,7 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
     );
 
     // hopefully enough time to unbundle it
-    await wait(10000);
+    await wait(15000);
   });
 
   after(async function () {
