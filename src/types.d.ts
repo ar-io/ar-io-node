@@ -228,6 +228,7 @@ export interface BundleFilterIds {
 
 export interface BundleIndex {
   saveBundle(bundle: BundleRecord): Promise<BundleFilterIds>;
+  saveBundleRetries(rootTransactionId: string): Promise<void>;
   getFailedBundleIds(limit: number): Promise<string[]>;
   updateBundlesFullyIndexedAt(): Promise<void>;
   updateBundlesForFilterChange(

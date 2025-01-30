@@ -911,6 +911,14 @@ export class StandaloneSqliteDatabaseWorker {
     this.insertDataItemFn(item, maybeTxHeight);
   }
 
+  saveBundleRetries(rootTransactionId: string) {
+    const rootTxId = fromB64Url(rootTransactionId);
+    this.stmts.bundles.updateBundleRetry.run({
+      root_transaction_id: rootTxId,
+      current_timestamp: currentUnixTimestamp(),
+    });
+  }
+
   saveBundle({
     id,
     rootTransactionId,
@@ -2934,6 +2942,10 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'saveDataItem', [item]);
   }
 
+  saveBundleRetries(rootTransactionId: string): Promise<void> {
+    return this.queueWrite('bundles', 'saveBundleRetries', [rootTransactionId]);
+  }
+
   saveBundle(bundle: BundleRecord): Promise<BundleFilterIds> {
     return this.queueWrite('bundles', 'saveBundle', [bundle]);
   }
@@ -3350,6 +3362,10 @@ if (!isMainThread) {
           break;
         case 'saveDataItem':
           worker.saveDataItem(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveBundleRetries':
+          worker.saveBundleRetries(args[0]);
           parentPort?.postMessage(null);
           break;
         case 'saveBundle':

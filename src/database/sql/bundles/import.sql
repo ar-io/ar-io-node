@@ -54,6 +54,17 @@ RETURNING
   previous_unbundle_filter_id,
   previous_index_filter_id;
 
+-- updateBundleRetry
+UPDATE bundles
+SET
+  retry_attempt_count = COALESCE(retry_attempt_count, 0) + 1,
+  first_retried_at = CASE
+    WHEN first_retried_at IS NULL THEN @current_timestamp
+    ELSE first_retried_at
+  END,
+  last_retried_at = @current_timestamp
+WHERE root_transaction_id = @root_transaction_id;
+
 -- insertOrIgnoreWallet
 INSERT INTO wallets (address, public_modulus)
 VALUES (@address, @public_modulus)

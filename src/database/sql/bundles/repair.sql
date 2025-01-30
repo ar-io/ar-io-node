@@ -19,7 +19,7 @@ FROM (
       b.matched_data_item_count IS NULL
       OR b.matched_data_item_count > 0
     )
-  ORDER BY b.import_attempt_count, b.last_queued_at ASC
+  ORDER BY b.retry_attempt_count, b.last_retried_at ASC
   LIMIT @limit
 )
 ORDER BY RANDOM()

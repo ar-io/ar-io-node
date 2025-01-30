@@ -46,6 +46,7 @@ import { normalizeAns104DataItem } from '../lib/ans-104.js';
 import log from '../log.js';
 import { BundleRecord } from '../types.js';
 import { processBundleStream } from '../lib/bundles.js';
+import wait from 'wait';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;
@@ -1200,6 +1201,123 @@ describe('StandaloneSqliteDatabase', () => {
           .import_attempt_count,
         2,
       );
+    });
+  });
+
+  describe('saveBundleRetries', () => {
+    const rootTxId1 = '1111111111111111111111111111111111111111111';
+    const rootTxId2 = '2222222222222222222222222222222222222222222';
+    const bundleId1 = '3333333333333333333333333333333333333333333';
+    const bundleId2 = '4444444444444444444444444444444444444444444';
+    const bundleId3 = '5555555555555555555555555555555555555555555';
+
+    const sql = `
+      SELECT *
+      FROM bundles
+      WHERE id = @id
+    `;
+
+    beforeEach(async () => {
+      await db.saveBundle({
+        id: bundleId1,
+        format: 'ans-104',
+        dataItemCount: 2,
+        matchedDataItemCount: 2,
+        rootTransactionId: rootTxId1,
+      });
+
+      await db.saveBundle({
+        id: bundleId2,
+        format: 'ans-104',
+        dataItemCount: 2,
+        matchedDataItemCount: 2,
+        rootTransactionId: rootTxId1,
+      });
+
+      await db.saveBundle({
+        id: bundleId3,
+        format: 'ans-104',
+        dataItemCount: 2,
+        matchedDataItemCount: 2,
+        rootTransactionId: rootTxId2,
+      });
+    });
+
+    it('should update all bundles sharing the same root transaction id', async () => {
+      let bundle1 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId1) });
+      let bundle2 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId2) });
+      let bundle3 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId3) });
+
+      assert.equal(bundle1.retry_attempt_count, null);
+      assert.equal(bundle1.first_retried_at, null);
+      assert.equal(bundle1.last_retried_at, null);
+
+      assert.equal(bundle2.retry_attempt_count, null);
+      assert.equal(bundle2.first_retried_at, null);
+      assert.equal(bundle2.last_retried_at, null);
+
+      assert.equal(bundle3.retry_attempt_count, null);
+      assert.equal(bundle3.first_retried_at, null);
+      assert.equal(bundle3.last_retried_at, null);
+
+      await db.saveBundleRetries(rootTxId1);
+
+      bundle1 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId1) });
+      bundle2 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId2) });
+      bundle3 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId3) });
+
+      assert.equal(bundle1.retry_attempt_count, 1);
+      assert.ok(bundle1.first_retried_at !== null);
+      assert.ok(bundle1.last_retried_at !== null);
+
+      assert.equal(bundle2.retry_attempt_count, 1);
+      assert.ok(bundle2.first_retried_at !== null);
+      assert.ok(bundle2.last_retried_at !== null);
+
+      assert.equal(bundle3.retry_attempt_count, null);
+      assert.equal(bundle3.first_retried_at, null);
+      assert.equal(bundle3.last_retried_at, null);
+
+      await wait(1000);
+
+      await db.saveBundleRetries(rootTxId1);
+
+      bundle1 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId1) });
+      bundle2 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId2) });
+      bundle3 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId3) });
+
+      assert.equal(bundle1.retry_attempt_count, 2);
+      assert.ok(bundle1.last_retried_at > bundle1.first_retried_at);
+
+      assert.equal(bundle2.retry_attempt_count, 2);
+      assert.ok(bundle2.last_retried_at > bundle2.first_retried_at);
+
+      assert.equal(bundle3.retry_attempt_count, null);
+      assert.equal(bundle3.first_retried_at, null);
+      assert.equal(bundle3.last_retried_at, null);
+    });
+
+    it('should update timestamps correctly for multiple bundles', async () => {
+      await db.saveBundleRetries(rootTxId1);
+
+      let bundle1 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId1) });
+      let bundle2 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId2) });
+
+      assert.equal(bundle1.first_retried_at, bundle2.first_retried_at);
+      assert.equal(bundle1.last_retried_at, bundle2.last_retried_at);
+
+      await wait(1000);
+
+      await db.saveBundleRetries(rootTxId1);
+
+      bundle1 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId1) });
+      bundle2 = bundlesDb.prepare(sql).get({ id: fromB64Url(bundleId2) });
+
+      assert.equal(bundle1.first_retried_at, bundle2.first_retried_at);
+
+      assert.equal(bundle1.last_retried_at, bundle2.last_retried_at);
+      assert.ok(bundle1.last_retried_at > bundle1.first_retried_at);
+      assert.ok(bundle2.last_retried_at > bundle2.first_retried_at);
     });
   });
 
