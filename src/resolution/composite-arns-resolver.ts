@@ -151,7 +151,7 @@ export class CompositeArNSResolver implements NameResolver {
             // Ensure only one resolution is in-flight at a time
             !this.pendingResolutions[name] &&
             cachedResolution.resolvedAt + ttlSeconds * 1000 - Date.now() <
-              config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_BUFFER_SECONDS
+              config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS
           ) {
             this.pendingResolutions[name] = resolveName();
           }
