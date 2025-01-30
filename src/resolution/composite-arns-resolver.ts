@@ -35,7 +35,10 @@ export class CompositeArNSResolver implements NameResolver {
       }
     | undefined;
   private arnsNamesCache: ArNSNamesCache;
-  private hasPendingResolution: Record<string, boolean> = {};
+  private pendingResolutions: Record<
+    string,
+    Promise<NameResolution | undefined> | undefined
+  > = {};
 
   constructor({
     log,
@@ -98,8 +101,6 @@ export class CompositeArNSResolver implements NameResolver {
       // Make a resolution function that can be called both on cache hits (when
       // the refresh interval is past) and when we have a cache miss
       const resolveName = async () => {
-        this.hasPendingResolution[name] = true;
-
         for (const resolver of this.resolvers) {
           try {
             this.log.info('Attempting to resolve name with resolver', {
@@ -117,7 +118,6 @@ export class CompositeArNSResolver implements NameResolver {
               );
               this.log.info('Resolved name', { name, resolution });
 
-              this.hasPendingResolution[name] = false;
               return resolution;
             }
           } catch (error: any) {
@@ -129,7 +129,6 @@ export class CompositeArNSResolver implements NameResolver {
           }
         }
 
-        this.hasPendingResolution[name] = false;
         return undefined;
       };
 
@@ -152,11 +151,11 @@ export class CompositeArNSResolver implements NameResolver {
           // refresh interval
           if (
             // Ensure only one resolution is in-flight at a time
-            !this.hasPendingResolution[name] &&
+            !this.pendingResolutions[name] &&
             Date.now() - cachedResolution.resolvedAt >
               config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_INTERVAL_SECONDS
           ) {
-            resolveName();
+            this.pendingResolutions[name] = resolveName();
           }
           metrics.arnsCacheHitCounter.inc();
           this.log.info('Cache hit for arns name', { name });
@@ -178,7 +177,10 @@ export class CompositeArNSResolver implements NameResolver {
         };
       }
 
-      resolution = (await resolveName()) ?? resolution;
+      // Ensure that we always use pending resolutions
+      this.pendingResolutions[name] ||= resolveName();
+      // Fallback to cached resolution if something goes wrong
+      resolution = (await this.pendingResolutions[name]) ?? resolution;
 
       if (!resolution) {
         this.log.warn('Unable to resolve name against all resolvers', { name });
@@ -190,6 +192,9 @@ export class CompositeArNSResolver implements NameResolver {
         stack: error.stack,
       });
     }
+
+    // Ensure the pending resolution is cleaned up
+    this.pendingResolutions[name] = undefined;
 
     // return the resolution if it exists, otherwise return an empty resolution
     return (
