@@ -20,7 +20,7 @@ import { Packr } from 'msgpackr';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { default as Chain } from 'stream-chain';
+import chain from 'stream-chain';
 import parser from 'stream-json';
 import emit from 'stream-json/utils/emit.js';
 
@@ -250,7 +250,7 @@ export function parseManifestStream(stream: Readable): EventEmitter {
   let isManifestV2 = false;
   let pathCount = 0;
 
-  const pipeline = new Chain([stream, parser()]);
+  const pipeline = chain([stream, parser()]);
   emit(pipeline);
 
   pipeline.on('error', (err) => {
