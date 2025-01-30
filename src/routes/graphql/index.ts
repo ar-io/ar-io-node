@@ -15,40 +15,45 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import {
-  ApolloServerPluginLandingPageDisabled,
-  ApolloServerPluginLandingPageGraphQLPlayground,
-} from 'apollo-server-core';
-import {
-  ApolloServer,
-  ApolloServerExpressConfig,
-  gql,
-} from 'apollo-server-express';
+
+import { ApolloServer } from '@apollo/server';
+import { ApolloServerPluginLandingPageGraphQLPlayground } from '@apollo/server-plugin-landing-page-graphql-playground';
+import { expressMiddleware } from '@apollo/server/express4';
+import { DocumentNode } from 'graphql';
+import gql from 'graphql-tag';
+
 import { readFileSync } from 'node:fs';
 
 import { GqlQueryable } from '../../types.js';
 import { resolvers } from './resolvers.js';
 
 const typeDefsUrl = new URL('./schema/types.graphql', import.meta.url);
-const typeDefs = gql(readFileSync(typeDefsUrl, 'utf8'));
+const typeDefs: DocumentNode | undefined = gql(
+  readFileSync(typeDefsUrl, 'utf8'),
+);
 
-const apolloServer = (
-  db: GqlQueryable,
-  opts: ApolloServerExpressConfig = {},
-) => {
-  return new ApolloServer({
+interface ApolloServerContext {
+  db: GqlQueryable;
+}
+
+export const makeApolloServerMiddleware = async (
+  context: ApolloServerContext,
+): Promise<any> => {
+  const apolloServer = new ApolloServer<ApolloServerContext>({
     typeDefs,
     resolvers,
-    debug: false,
-    plugins: [
-      ApolloServerPluginLandingPageDisabled(),
-      ApolloServerPluginLandingPageGraphQLPlayground(),
-    ],
-    context: () => {
-      return { db };
+    plugins: [ApolloServerPluginLandingPageGraphQLPlayground()],
+    introspection: true,
+    persistedQueries: {
+      ttl: 300, // 5 minutes
     },
-    ...opts,
+  });
+
+  await apolloServer.start();
+
+  return expressMiddleware<ApolloServerContext>(apolloServer, {
+    context: async (): Promise<ApolloServerContext> => {
+      return { ...context };
+    },
   });
 };
-
-export { apolloServer };

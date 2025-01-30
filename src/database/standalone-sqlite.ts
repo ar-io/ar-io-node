@@ -15,7 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { ValidationError } from 'apollo-server-express';
+import { ApolloServerErrorCode } from '@apollo/server/errors';
+import { GraphQLError } from 'graphql';
 import Sqlite from 'better-sqlite3';
 import crypto from 'node:crypto';
 import os from 'node:os';
@@ -122,7 +123,11 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
 
     return { height, blockTransactionIndex, dataItemId, indexedAt, id };
   } catch (error) {
-    throw new ValidationError('Invalid transaction cursor');
+    throw new GraphQLError('Invalid transaction cursor', {
+      extensions: {
+        code: ApolloServerErrorCode.GRAPHQL_VALIDATION_FAILED,
+      },
+    });
   }
 }
 
@@ -140,7 +145,11 @@ export function decodeBlockGqlCursor(cursor: string | undefined) {
 
     return { height };
   } catch (error) {
-    throw new ValidationError('Invalid block cursor');
+    throw new GraphQLError('Invalid block cursor', {
+      extensions: {
+        code: ApolloServerErrorCode.GRAPHQL_VALIDATION_FAILED,
+      },
+    });
   }
 }
 
