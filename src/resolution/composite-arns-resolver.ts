@@ -147,13 +147,13 @@ export class CompositeArNSResolver implements NameResolver {
           ttlSeconds !== undefined &&
           cachedResolution.resolvedAt + ttlSeconds * 1000 > Date.now()
         ) {
-          // Resolve again in the background to refresh cache if past the ANT
-          // refresh interval
+          // Resolve again in the background to refresh cache if TTL is close
+          // to expiring
           if (
             // Ensure only one resolution is in-flight at a time
             !this.pendingResolutions[name] &&
-            Date.now() - cachedResolution.resolvedAt >
-              config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_INTERVAL_SECONDS
+            cachedResolution.resolvedAt + ttlSeconds * 1000 - Date.now() <
+              config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_BUFFER_SECONDS
           ) {
             this.pendingResolutions[name] = resolveName();
           }
