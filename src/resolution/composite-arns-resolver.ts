@@ -95,6 +95,8 @@ export class CompositeArNSResolver implements NameResolver {
           return undefined;
         });
 
+      // Make a resolution function that can be called both on cache hits (when
+      // the refresh interval is past) and when we have a cache miss
       const resolveName = async () => {
         this.hasPendingResolution[name] = true;
 
@@ -106,7 +108,7 @@ export class CompositeArNSResolver implements NameResolver {
             });
             const resolution = await resolver.resolve({
               name,
-              baseArNSRecord: baseNameInCache,
+              baseArNSRecord: await baseNameInCachePromise,
             });
             if (resolution.resolvedAt !== undefined) {
               this.resolutionCache.set(
@@ -146,15 +148,12 @@ export class CompositeArNSResolver implements NameResolver {
           ttlSeconds !== undefined &&
           cachedResolution.resolvedAt + ttlSeconds * 1000 > Date.now()
         ) {
-          this.log.debug('Checking if cached ArNS resolution needs refresh', {
-            name,
-            hasPendingResolution: this.hasPendingResolution[name],
-            cacheAge: Date.now() - cachedResolution.resolvedAt! * 1000,
-            refreshInterval: config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_INTERVAL_SECONDS,
-          });
+          // Resolve again in the background to refresh cache if past the ANT
+          // refresh interval
           if (
+            // Ensure only one resolution is in-flight at a time
             !this.hasPendingResolution[name] &&
-            Date.now() - cachedResolution.resolvedAt * 1000 >
+            Date.now() - cachedResolution.resolvedAt >
               config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_INTERVAL_SECONDS
           ) {
             resolveName();
@@ -167,9 +166,7 @@ export class CompositeArNSResolver implements NameResolver {
       metrics.arnsCacheMissCounter.inc();
       this.log.info('Cache miss for arns name', { name });
 
-      const baseNameInCache = await baseNameInCachePromise;
-
-      if (!baseNameInCache) {
+      if (!(await baseNameInCachePromise)) {
         this.log.warn('Base name not found in ArNS names cache', { name });
         metrics.arnsNameCacheMissCounter.inc();
         return {
