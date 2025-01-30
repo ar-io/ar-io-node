@@ -212,11 +212,19 @@ The [ar-io-node] will sort the records by priority, and fallback to alphabetical
 
 Gateways will leverage existing caching logic defined in [./002-arns-cache-timing.md]. As such, the [ar-io-node] will cache the records (including priority order) for the provided TTLs. If the ANT contract is updated, the [ar-io-node] will fetch the updated records after the provided TTL and subsequently enforce any changes in priority order against the updated records.
 
+Next steps:
+
+- Update [ANT source code] to set priority order when updating/appending records
+- Modify [ar-io-sdk] `getRecords()` API return type to return include `priority` as `number | undefined`
+- Update [ar-io-node] to use updated `getRecords()` API, applying sorting logic mentioned above and enforcing undername limits
+- Update arns.app to allow owners to upgrade ANTs to latest source code; add interface for managing priority order of ANTs
+
 ## Links
 
 - [ANT Contract Documentation](https://ar.io/ant)
 - [ARIO Whitepaper](https://whitepaper.ar.io)
 - [ARIO SDK](https://github.com/ar-io/ar-io-sdk)
+- [ANT Source Code]
 
 [Ariel]: https://github.com/arielmelendez
 [David]: https://github.com/djwhitt
@@ -226,3 +234,4 @@ Gateways will leverage existing caching logic defined in [./002-arns-cache-timin
 [ar-io-sdk]: https://github.com/ar-io/ar-io-sdk?tab=readme-ov-file#getrecords
 [ar-io-node]: https://github.com/ar-io/ar-io-node/blob/fbbd4112d7024311f775969569ccfd9857bff9fe/src/resolution/composite-arns-resolver.ts#L127-L135
 [./002-arns-cache-timing.md]: ./002-arns-cache-timing.md
+[ANT Source Code]: https://github.com/search?q=ar-io-ant-process&type=repositories
