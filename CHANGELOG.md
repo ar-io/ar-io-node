@@ -6,6 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added a `ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS` environment
+  variable that determines the number of seconds before the end of the TTL at
+  which to start attempting to refresh the ANT state.
+- Added a `TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS` environment that defaults to
+  10,000 and sets the amount of time to wait before timing out request to
+  trusted gateways.
+- Added `BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS` and
+  `BUNDLE_REPAIR_RETRY_BATCH_SIZE` environment variables to control the time
+  between queuing batches of bundle retries and the number of data items
+  retrieved when constructing batche of bundles to retry.
+- Added support for configuring the ar.io SDK log level via the
+  `AR_IO_SDK_LOG_LEVEL` environment variable.
+- Added a `request_chunk_total` Prometheus counter with `status`, `source` (a
+  URL) and `source_type` ('trusted' or 'peer') labels to track success/failure
+  of chunk retrieval in the Arweave network per source.
+- Added a `get_chunk_total` Prometheus metric to count chunk retrieval
+  success/failure per chunk.
+- Added `arns_cache_hit_total` and `arns_cache_miss_total` Prometheus counter
+  metrics to track ArNS cache hits and misses for individual names
+  respectively.
+- Added `arns_name_cache_hit_total` and `arns_name_cache_miss_total`
+  Prometheus counter metrics to track ArNS name list cache hits and misses
+  respectively.
+- Added a `arns_resolution_duration_ms` Prometheus metric that tracks summary
+  statistics for the amount of time it takes to resolve ArNS names.
+
+### Changed
+
+- In addition to the trusted node, the Arweave network is now searched for
+  chunks by default. All chunk retrieved are verified against data roots
+  indexed from a trusted Arweave node to ensure their validity.
+- Default to a 24 hour cache TTL for the ArNS name cache. Record TTLs still
+  override this, but in cases where resolution via AO CU is slow or fails, the
+  cache will be used. In the case of slow resolution, CU based resolution will
+  proceed in the background and update the cache upon completion.
+- Switched to `ioredis` library for better TLS support.
+- Updated minor dependency minor version (more dependencies will be updated in
+  the next release).
+- Bundles imports will no longer be re-attempted for bundles that have already
+  been fully unbundled using the current filters if they are matched or
+  manually queue again.
+- Replaced references `docker-compose` in the docs with the more modern `docker
+  compose`.
+
+### Fixed
+
+- Ensure duplicate data item IDs are ignored when comparing counts to determine
+  if a bundle has been fully unbundled.
+- Fixed worker threads failing to shut down properly when the main process
+  stopped.
+- Ensure bundle import attempt counts are incremented when bundles are skipped
+  to avoid repeatedly attempting to import skipped bundles.
+
 ## [Release 23] - 2025-01-13
 
 ### Added
