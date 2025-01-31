@@ -95,7 +95,7 @@ This array of sorted records would then be what the [ar-io-node] receives and en
 
 ### Option 2: ANTS provide priority data in records
 
-ANTs store additional information in the state for each record, indicating the priority a name. The [ar-io-node] would respect this priority when resolving undernames. If the ANT does not return priority attribute for a, the [ar-io-node] would sort undernames alphabetically.
+ANTs store additional information in the state for each record, indicating the priority a name. The [ar-io-node] would respect this priority when resolving undernames. If the ANT does not return priority attribute for a record, the [ar-io-node] would sort undernames alphabetically.
 
 Example (in the [ar-io-node]):
 
@@ -167,15 +167,15 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
 
 - `+` Extends existing ANT records object type
 - `+` Minimal changes to [ar-io-node] & [ar-io-sdk] (easy to make backwards compatible since object response type is unchanged)
-- `+` Allows to implement Option #1 at a later time, if desired
+- `+` Supports implementing Option #1 at a later time, if desired
 - `-` Managing priority order when updating records (handling collisions)
 - `-` Gateways must fetch full ANT records and sort them by priority order
 - `-` Gateways must compute the sorted array of records
 
 ### Option 3: ANT provides sort attributes via separate API
 
-- `+` Same pros as above as Option #2
-- `-` Same cons as #2
+- `+` Same pros as Option #2
+- `-` Same cons as Option #2
 - `-` Additional api calls to get sort attributes
 
 ## Decision
