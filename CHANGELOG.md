@@ -12,16 +12,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   variable that determines the number of seconds before the end of the TTL at
   which to start attempting to refresh the ANT state.
 - Added a `TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS` environment that defaults to
-  10,000 and sets the amount of time to wait before timing out request to
-  trusted gateways.
+  10,000 and sets the number of milliseconds to wait before timing out request
+  to trusted gateways.
 - Added `BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS` and
   `BUNDLE_REPAIR_RETRY_BATCH_SIZE` environment variables to control the time
   between queuing batches of bundle retries and the number of data items
-  retrieved when constructing batche of bundles to retry.
+  retrieved when constructing batches of bundles to retry.
 - Added support for configuring the ar.io SDK log level via the
   `AR_IO_SDK_LOG_LEVEL` environment variable.
 - Added a `request_chunk_total` Prometheus counter with `status`, `source` (a
-  URL) and `source_type` ('trusted' or 'peer') labels to track success/failure
+  URL) and `source_type` (`trusted` or `peer`) labels to track success/failure
   of chunk retrieval in the Arweave network per source.
 - Added a `get_chunk_total` Prometheus metric to count chunk retrieval
   success/failure per chunk.
