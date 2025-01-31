@@ -128,9 +128,18 @@ export class DataVerificationWorker {
       }
 
       const indexedDataRoot = dataAttributes.dataRoot;
-      const computedDataRoot = await this.dataRootComputer.computeDataRoot(id);
 
-      if (indexedDataRoot !== computedDataRoot) {
+      const computedDataRoot: string | undefined = await this.dataRootComputer
+        .computeDataRoot(id)
+        .catch((error) => {
+          log.debug('Error computing data root.', { error });
+          return undefined;
+        });
+
+      if (
+        computedDataRoot === undefined ||
+        indexedDataRoot !== computedDataRoot
+      ) {
         log.error('Data root mismatch', {
           indexedDataRoot,
           computedDataRoot,
