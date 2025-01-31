@@ -2472,8 +2472,8 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
-  getUnverifiedDataIds() {
-    const dataIds = this.stmts.data.selectUnverifiedContiguousDataIds.all();
+  getVerifiableDataIds() {
+    const dataIds = this.stmts.data.selectVerifiableContiguousDataIds.all();
     return dataIds.map((row) => toB64Url(row.id));
   }
 
@@ -3237,8 +3237,8 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
-  async getUnverifiedDataIds() {
-    return this.queueRead('data', 'getUnverifiedDataIds', undefined);
+  async getVerifiableDataIds() {
+    return this.queueRead('data', 'getVerifiableDataIds', undefined);
   }
 
   async getRootTxId(id: string) {
@@ -3450,9 +3450,9 @@ if (!isMainThread) {
           worker.saveNestedDataHash(args[0]);
           parentPort?.postMessage(null);
           break;
-        case 'getUnverifiedDataIds':
-          const unverifiedIds = worker.getUnverifiedDataIds();
-          parentPort?.postMessage(unverifiedIds);
+        case 'getVerifiableDataIds':
+          const ids = worker.getVerifiableDataIds();
+          parentPort?.postMessage(ids);
           break;
         case 'getRootTxId':
           const rootTxId = worker.getRootTxId(args[0]);

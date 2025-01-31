@@ -1,7 +1,8 @@
--- selectUnverifiedContiguousDataIds
-SELECT id
-FROM contiguous_data_ids
-WHERE verified = FALSE
+-- selectVerifiableContiguousDataIds
+SELECT cd.id
+FROM contiguous_data_ids cd
+JOIN bundles.bundle_data_items bdi ON bdi.id = cd.id
+WHERE cd.verified = FALSE AND bdi.root_transaction_id IS NOT NULL
 LIMIT 1000;
 
 -- updateDataItemVerificationStatus

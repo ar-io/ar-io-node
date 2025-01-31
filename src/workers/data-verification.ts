@@ -90,7 +90,7 @@ export class DataVerificationWorker {
       return;
     }
 
-    const dataIds = await this.contiguousDataIndex.getUnverifiedDataIds();
+    const dataIds = await this.contiguousDataIndex.getVerifiableDataIds();
     const rootTxIds: string[] = [];
 
     for (const dataId of dataIds) {
