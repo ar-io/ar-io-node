@@ -472,14 +472,13 @@ export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
 // The maximum amount of time to wait for resolution from AO if there is a
 // cached value that can be served. When the timeout occurs, caches will still
 // be refreshed in the background.
-export const ARNS_CACHED_RESOLUTION_TIMEOUT_MS = +env.varOrDefault(
-  'ARNS_CACHED_RESOLUTION_TIMEOUT_MS',
+export const ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS = +env.varOrDefault(
+  'ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS',
   '250',
 );
 
-export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING = env.varOrDefault(
+export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING = env.varOrUndefined(
   'ARNS_RESOLVER_OVERRIDE_TTL_SECONDS',
-  `${10}`,
 );
 
 export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS =

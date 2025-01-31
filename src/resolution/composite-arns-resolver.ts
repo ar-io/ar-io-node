@@ -181,7 +181,7 @@ export class CompositeArNSResolver implements NameResolver {
       // Fallback to cached resolution if something goes wrong
       resolution = await (resolution
         ? pTimeout(this.pendingResolutions[name], {
-            milliseconds: config.ARNS_CACHED_RESOLUTION_TIMEOUT_MS,
+            milliseconds: config.ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS,
             fallback: () => resolution,
           })
         : this.pendingResolutions[name]);
