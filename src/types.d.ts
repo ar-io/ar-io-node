@@ -576,7 +576,7 @@ export interface ContiguousDataIndex {
     cachedAt?: number;
     verified?: boolean;
   }): Promise<void>;
-  getUnverifiedDataIds(): Promise<string[]>;
+  getVerifiableDataIds(): Promise<string[]>;
   getRootTxId(id: string): Promise<string | undefined>;
   saveVerificationStatus(id: string): Promise<void>;
 }

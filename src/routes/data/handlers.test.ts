@@ -46,7 +46,7 @@ describe('Data routes', () => {
         getTransactionAttributes: () => Promise.resolve(undefined),
         getDataParent: () => Promise.resolve(undefined),
         saveDataContentAttributes: () => Promise.resolve(undefined),
-        getUnverifiedDataIds: () => Promise.resolve([]),
+        getVerifiableDataIds: () => Promise.resolve([]),
         getRootTxId: () => Promise.resolve(undefined),
         saveVerificationStatus: () => Promise.resolve(undefined),
       };

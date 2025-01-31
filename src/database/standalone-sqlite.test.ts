@@ -54,6 +54,36 @@ const CURSOR =
   'WzExMzgsNDIsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiLDE2MzAwMDAwMDAsInpvbGpJUnl6RzVocC1SNEVaVjJxOGtGSTQ5T0FveTIzX0I5WUpfeUVFd3MiXQ';
 const INDEXED_AT = 1630000000;
 
+const dataItemRootTxId = '0000000000000000000000000000000000000000000';
+const dataItem = {
+  anchor: 'a',
+  dataOffset: 10,
+  dataSize: 1,
+  id: DATA_ITEM_ID,
+  offset: 10,
+  owner: 'a',
+  ownerOffset: 1,
+  ownerSize: 1,
+  sigName: 'a',
+  signature: 'a',
+  signatureOffset: 1,
+  signatureSize: 1,
+  signatureType: 1,
+  size: 1,
+  tags: [],
+  target: 'a',
+};
+const normalizedDataItem = normalizeAns104DataItem({
+  rootTxId: dataItemRootTxId,
+  parentId: dataItemRootTxId,
+  parentIndex: -1,
+  index: 0,
+  ans104DataItem: dataItem,
+  filter: '',
+  dataHash: '',
+  rootParentOffset: 0,
+});
+
 describe('SQLite helper functions', () => {
   describe('toSqliteParams', () => {
     it('should convert SQL Bricks param values to better-sqlite3 params', () => {
@@ -1173,9 +1203,9 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
-  describe('getUnverifiedDataIds', () => {
-    it("should return an empty list if there's no unverified data ids", async () => {
-      const emptyDbIds = await db.getUnverifiedDataIds();
+  describe('getVerifiableDataIds', () => {
+    it("should return an empty list if there's no verifiable data ids", async () => {
+      const emptyDbIds = await db.getVerifiableDataIds();
       assert.equal(emptyDbIds.length, 0);
 
       // inserting a verified data id
@@ -1186,11 +1216,11 @@ describe('StandaloneSqliteDatabase', () => {
         verified: true,
       });
 
-      const unverifiedIds = await db.getUnverifiedDataIds();
-      assert.equal(unverifiedIds.length, 0);
+      const verifiableIds = await db.getVerifiableDataIds();
+      assert.equal(verifiableIds.length, 0);
     });
 
-    it('should return a list of ids if unverified data ids exists', async () => {
+    it('should return a list of ids if verifiable data ids exists', async () => {
       // inserting a verified data id
       await db.saveDataContentAttributes({
         id: '0000000000000000000000000000000000000000000',
@@ -1201,51 +1231,21 @@ describe('StandaloneSqliteDatabase', () => {
 
       // inserting an unverified data id
       await db.saveDataContentAttributes({
-        id: 'fLxHz2WbpNFL7x1HrOyUlsAVHYaKSyj6IqgCJlFuv9g',
+        id: DATA_ITEM_ID,
         hash: 'hash',
         dataSize: 10,
         verified: false,
       });
 
-      const unverifiedIds = await db.getUnverifiedDataIds();
-      assert.equal(unverifiedIds.length, 1);
-      assert.deepEqual(unverifiedIds, [
-        'fLxHz2WbpNFL7x1HrOyUlsAVHYaKSyj6IqgCJlFuv9g',
-      ]);
+      await db.saveDataItem(normalizedDataItem);
+
+      const verifiableIds = await db.getVerifiableDataIds();
+      assert.equal(verifiableIds.length, 1);
+      assert.deepEqual(verifiableIds, [DATA_ITEM_ID]);
     });
   });
 
   describe('getRootTxId', () => {
-    const dataItemRootTxId = '0000000000000000000000000000000000000000000';
-    const dataItem = {
-      anchor: 'a',
-      dataOffset: 10,
-      dataSize: 1,
-      id: DATA_ITEM_ID,
-      offset: 10,
-      owner: 'a',
-      ownerOffset: 1,
-      ownerSize: 1,
-      sigName: 'a',
-      signature: 'a',
-      signatureOffset: 1,
-      signatureSize: 1,
-      signatureType: 1,
-      size: 1,
-      tags: [],
-      target: 'a',
-    };
-    const normalizedDataItem = normalizeAns104DataItem({
-      rootTxId: dataItemRootTxId,
-      parentId: dataItemRootTxId,
-      parentIndex: -1,
-      index: 0,
-      ans104DataItem: dataItem,
-      filter: '',
-      dataHash: '',
-      rootParentOffset: 0,
-    });
-
     it('should return undefined if id is not found', async () => {
       const rootTxId = await db.getRootTxId(DATA_ITEM_ID);
       assert.equal(rootTxId, undefined);
