@@ -16,6 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import winston from 'winston';
+import pTimeout from 'p-timeout';
 import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
@@ -178,7 +179,12 @@ export class CompositeArNSResolver implements NameResolver {
       // Ensure that we always use pending resolutions
       this.pendingResolutions[name] ||= resolveName();
       // Fallback to cached resolution if something goes wrong
-      resolution = (await this.pendingResolutions[name]) ?? resolution;
+      resolution = await (resolution
+        ? pTimeout(this.pendingResolutions[name], {
+            milliseconds: config.ARNS_CACHED_RESOLUTION_TIMEOUT_MS,
+            fallback: () => resolution,
+          })
+        : this.pendingResolutions[name]);
 
       if (!resolution) {
         this.log.warn('Unable to resolve name against all resolvers', { name });

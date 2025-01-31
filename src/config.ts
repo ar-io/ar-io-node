@@ -462,13 +462,24 @@ export const AR_IO_SDK_LOG_LEVEL = env.varOrDefault(
 
 export const ARNS_CACHE_TYPE = env.varOrDefault('ARNS_CACHE_TYPE', 'node');
 
+// Amount of time that entries stay in the cache (ArNS record TTL still applies
+// on top of this)
 export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
   'ARNS_CACHE_TTL_SECONDS',
-  `${60 * 60}`, // 1 hour
+  `${60 * 60 * 24}`, // 24 hours
 );
 
-export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING = env.varOrUndefined(
+// The maximum amount of time to wait for resolution from AO if there is a
+// cached value that can be served. When the timeout occurs, caches will still
+// be refreshed in the background.
+export const ARNS_CACHED_RESOLUTION_TIMEOUT_MS = +env.varOrDefault(
+  'ARNS_CACHED_RESOLUTION_TIMEOUT_MS',
+  '250',
+);
+
+export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING = env.varOrDefault(
   'ARNS_RESOLVER_OVERRIDE_TTL_SECONDS',
+  `${10}`,
 );
 
 export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS =
