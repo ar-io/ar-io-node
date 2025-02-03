@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 24] - 2025-02-03
 
 ### Added
 
@@ -25,11 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   of chunk retrieval in the Arweave network per source.
 - Added a `get_chunk_total` Prometheus metric to count chunk retrieval
   success/failure per chunk.
-- Added `arns_cache_hit_total` and `arns_cache_miss_total` Prometheus counter
-  metrics to track ArNS cache hits and misses for individual names
-  respectively.
-- Added `arns_name_cache_hit_total` and `arns_name_cache_miss_total`
-  Prometheus counter metrics to track ArNS name list cache hits and misses
+- Added `arns_cache_hit_total` and `arns_cache_miss_total` Prometheus counters
+  to track ArNS cache hits and misses for individual names respectively.
+- Added `arns_name_cache_hit_total` and `arns_name_cache_miss_total` Prometheus
+  counters to track ArNS name list cache hits and misses
   respectively.
 - Added a `arns_resolution_duration_ms` Prometheus metric that tracks summary
   statistics for the amount of time it takes to resolve ArNS names.
@@ -37,18 +36,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - In addition to the trusted node, the Arweave network is now searched for
-  chunks by default. All chunk retrieved are verified against data roots
+  chunks by default. All chunks retrieved are verified against data roots
   indexed from a trusted Arweave node to ensure their validity.
 - Default to a 24 hour cache TTL for the ArNS name cache. Record TTLs still
   override this, but in cases where resolution via AO CU is slow or fails, the
   cache will be used. In the case of slow resolution, CU based resolution will
   proceed in the background and update the cache upon completion.
-- Switched to `ioredis` library for better TLS support.
-- Updated minor dependency minor version (more dependencies will be updated in
+- Switched to the `ioredis` library for better TLS support.
+- Updated minor dependency minor versions (more dependencies will be updated in
   the next release).
 - Bundles imports will no longer be re-attempted for bundles that have already
   been fully unbundled using the current filters if they are matched or
-  manually queue again.
+  manually queued again.
 - Replaced references `docker-compose` in the docs with the more modern `docker
   compose`.
 
@@ -60,6 +59,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   stopped.
 - Ensure bundle import attempt counts are incremented when bundles are skipped
   to avoid repeatedly attempting to import skipped bundles.
+- Use observe that correctly ensure failing gateways are penalized in the AR.IO
+  AO process.
 
 ## [Release 23] - 2025-01-13
 
