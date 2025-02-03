@@ -492,6 +492,34 @@ paths:
                   - processId
                   - supportedManifestVersions
                   - release
+  '/ar-io/__gateway_metrics':
+    get:
+      tags: [Gateway]
+      summary: Get Prometheus metrics
+      description: |
+        Returns metrics in Prometheus format for monitoring the Gateway's performance and status.
+        These metrics include various counters, gauges, and histograms tracking:
+        - HTTP request statistics
+        - Transaction processing metrics
+        - System resource usage
+        - Cache performance
+        - Bundle processing statistics
+      responses:
+        '200':
+          description: Prometheus metrics response
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: Metrics in Prometheus format
+                example: |
+                  # HELP errors_total Total error count
+                  # TYPE errors_total counter
+                  errors_total 0
+
+                  # HELP uncaught_exceptions_total Count of uncaught exceptions
+                  # TYPE uncaught_exceptions_total counter
+                  uncaught_exceptions_total 0
 
   # Network and Node Status
   '/':
