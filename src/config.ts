@@ -94,7 +94,7 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
 
 export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   'WEIGHTED_PEERS_TEMPERATURE_DELTA',
-  '0.1',
+  '2',
 );
 
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
