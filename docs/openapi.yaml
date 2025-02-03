@@ -1,5 +1,5 @@
 ---
-openapi: 3.0.0
+openapi: 3.1.1
 info:
   title: AR.IO Gateway
   version: 0.0.1
@@ -16,13 +16,16 @@ info:
     - indexing and querying layer one and two transactions
     - proxy for Arweave nodes serving the Arweave HTTP API
 
-    # Errors
+    ## Errors
 
     The API uses standard HTTP status codes to indicate the success or failure of the API call.
 
-    # Authentication
+    ## Authentication
 
     All inbound transactions to the Arweave network must contain a valid signature from an Arweave wallet with appropriate amount of AR tokens.  At this time, clients are not required to sign their requests for outbound data from the Arweave network.
+  license:
+    name: GNU Affero General Public License v3.0
+    identifier: AGPL-3.0-only
 tags:
   - name: Network
     description: |
