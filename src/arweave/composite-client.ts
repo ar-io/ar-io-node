@@ -730,8 +730,6 @@ export class ArweaveCompositeClient
         // Fast fail if chunk has the wrong structure
         sanityCheckChunk(jsonChunk);
 
-        this.handlePeerSuccess(randomChunkPeer, 'peerGetChunk', 'peer');
-
         const txPath = fromB64Url(jsonChunk.tx_path);
         const dataRootBuffer = txPath.slice(-64, -32);
         const dataPath = fromB64Url(jsonChunk.data_path);
@@ -753,6 +751,8 @@ export class ArweaveCompositeClient
           fromB64Url(dataRoot),
           relativeOffset,
         );
+
+        this.handlePeerSuccess(randomChunkPeer, 'peerGetChunk', 'peer');
 
         this.chunkCache.set(
           { absoluteOffset },
@@ -822,8 +822,6 @@ export class ArweaveCompositeClient
       // Fast fail if chunk has the wrong structure
       sanityCheckChunk(jsonChunk);
 
-      this.handlePeerSuccess(this.trustedNodeUrl, 'getChunkByAny', 'trusted');
-
       const txPath = fromB64Url(jsonChunk.tx_path);
       const dataRootBuffer = txPath.slice(-64, -32);
       const dataPath = fromB64Url(jsonChunk.data_path);
@@ -840,6 +838,8 @@ export class ArweaveCompositeClient
       };
 
       await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
+
+      this.handlePeerSuccess(this.trustedNodeUrl, 'getChunkByAny', 'trusted');
 
       this.chunkCache.set(
         { absoluteOffset },
