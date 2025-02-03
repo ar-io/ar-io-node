@@ -48,15 +48,18 @@ tags:
   - name: Chunks
     description: |
       Upload Arweave data chunks or get existing chunk offset information
+  - name: ArNS
+    description: |
+      Get data from the AR.IO Gateway Arweave Name System
   - name: Index Querying
     description: |
       Get data from the AR.IO Gateway index using GQL
-  - name: Admin
-    description: |
-      Access several password protected features and functions specific to your AR.IO Gateway.
   - name: Farcaster Frames
     description: |
       Retrieve and interact with Farcaster Frames using Arweave transactions.
+  - name: Admin
+    description: |
+      Access several password protected features and functions specific to your AR.IO Gateway.
 components:
   securitySchemes:
     bearerAuth:
@@ -352,6 +355,24 @@ components:
     Height:
       type: string
       pattern: '^[0-9]{16}$'
+    ArNSResolver:
+      type: object
+      properties:
+        txId:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{43}$'
+        ttlSeconds:
+          type: integer
+        processId:
+          type: string
+          pattern: '^[0-9a-zA-Z_-]{43}$'
+        resolvedAt:
+          type: integer
+      required:
+        - txId
+        - ttlSeconds
+        - processId
+        - resolvedAt
 paths:
   # Network and Node Status
   '/':
@@ -694,6 +715,28 @@ paths:
 
   # Index
   # "/graphql"
+  #
+  # ArNS
+  '/ar-io/resolver/{name}':
+    get:
+      tags: [ArNS]
+      summary: Get ArNS name resolution.
+      description: Get detailed information of a specified ArNS name.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 200 response
+          content:
+            application/json:
+              schema:
+                '$ref': '#/components/schemas/ArNSResolver'
+        '404':
+          description: ArNS name not found.
 
   # Admin
   '/ar-io/admin/debug':
