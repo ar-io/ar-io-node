@@ -27,6 +27,9 @@ info:
     name: GNU Affero General Public License v3.0
     identifier: AGPL-3.0-only
 tags:
+  - name: Gateway
+    description: |
+      Operations related to the AR.IO Gateway server itself, including health checks, metrics, and gateway-specific information
   - name: Network
     description: |
       Get Arweave node info, peers and nework status
@@ -412,6 +415,41 @@ components:
             example: 'Internal Server Error'
 
 paths:
+  # Gateway
+  '/ar-io/healthcheck':
+    get:
+      tags: [Gateway]
+      summary: Health check endpoint
+      description: Get the current health status of the AR.IO Gateway.
+      responses:
+        '200':
+          description: Health check response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, unhealthy]
+                    description: Current health status of the gateway
+                  uptime:
+                    type: number
+                    description: Process uptime in seconds
+                  date:
+                    type: string
+                    format: date-time
+                    description: Current server timestamp
+                  reasons:
+                    type: array
+                    items:
+                      type: string
+                    description: Array of reasons if status is unhealthy
+                required:
+                  - status
+                  - uptime
+                  - date
+
   # Network and Node Status
   '/':
     get:
