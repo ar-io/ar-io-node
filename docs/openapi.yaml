@@ -449,6 +449,49 @@ paths:
                   - status
                   - uptime
                   - date
+  '/ar-io/info':
+    get:
+      tags: [Gateway]
+      summary: Get AR.IO Gateway information
+      description: |
+        Returns information about the AR.IO Gateway, including:
+        - Gateway wallet address
+        - Process ID
+        - ANS-104 filter configurations
+        - Supported manifest versions
+        - Gateway software release version
+      responses:
+        '200':
+          description: Gateway information response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wallet:
+                    $ref: '#/components/schemas/Base64Url43'
+                    description: Gateway wallet address
+                  processId:
+                    $ref: '#/components/schemas/Base64Url43'
+                  ans104UnbundleFilter:
+                    type: object
+                    description: Configuration for ANS-104 unbundling filter
+                  ans104IndexFilter:
+                    type: object
+                    description: Configuration for ANS-104 indexing filter
+                  supportedManifestVersions:
+                    type: array
+                    description: List of supported manifest versions
+                    items:
+                      type: string
+                      enum: ['0.1.0', '0.2.0']
+                  release:
+                    type: string
+                    description: Gateway software release version
+                required:
+                  - processId
+                  - supportedManifestVersions
+                  - release
 
   # Network and Node Status
   '/':
