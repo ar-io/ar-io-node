@@ -68,6 +68,42 @@ components:
       bearerFormat: apiToken
       description: ADMIN_API_KEY set in your .env file.
   schemas:
+    Base64Url:
+      type: string
+      pattern: '^[A-Za-z0-9_-]+$'
+    Base64Url43:
+      type: string
+      pattern: '^[0-9a-zA-Z_-]{43}$'
+    Base64Url64:
+      type: string
+      pattern: '^[0-9a-zA-Z_-]{64}$'
+    Base64Url4364:
+      type: string
+      pattern: '^[0-9a-zA-Z_-]{43}$|^[0-9a-zA-Z_-]{64}$'
+    WinstonAmount:
+      type: string
+      pattern: '^[0-9]{1,21}$'
+    NumericString:
+      type: string
+      pattern: '^[0-9]+$'
+    IntegerOrNumericString:
+      description: A value that can be either an integer or a string representation of an integer
+      anyOf:
+        - type: integer
+        - type: string
+          pattern: '^[0-9]+$'
+    TagList:
+      type: array
+      maxItems: 2048
+      items:
+        type: object
+        properties:
+          name:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+          value:
+            type: string
+            pattern: '^[0-9a-zA-Z_-]{1,2731}$'
     Block:
       type: object
       properties:
@@ -76,115 +112,76 @@ components:
           minItems: 2
           maxItems: 2
           items:
-            type: string
-            pattern: '^[0-9]+$'
+            $ref: '#/components/schemas/Base64Url'
         scheduled_usd_to_ar_rate:
           type: array
           minItems: 2
           maxItems: 2
           items:
-            type: string
-            pattern: '^[0-9]+$'
+            $ref: '#/components/schemas/Base64Url'
         packing_2_5_threshold:
-          type: string
-          pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/Base64Url'
         strict_data_split_threshold:
-          type: string
-          pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/NumericString'
         nonce:
-          type: string
           # TODO restrict length (not sure about max, it depends on height)
-          pattern: '^[0-9a-zA-Z_-]+$'
+          $ref: '#/components/schemas/Base64Url'
         previous_block:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{64}$'
+          $ref: '#/components/schemas/Base64Url64'
         timestamp:
           type: integer
         last_retarget:
           type: integer
         diff:
-          anyOf:
-            - type: integer
-            - type: string
-              pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/IntegerOrNumericString'
         height:
           type: integer
         hash:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{43}$|^[0-9a-zA-Z_-]{64}$'
+          $ref: '#/components/schemas/Base64Url4364'
         txs:
           type: array
           minItems: 0
           maxItems: 1000
           items:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
         tx_root:
-          type: string
-          pattern: '^$|^[0-9a-zA-Z_-]{43}$'
+          $ref: '#/components/schemas/Base64Url43'
         tx_tree:
           type: array
           maxItems: 0
           items:
             type: string
         wallet_list:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{43}$|^[0-9a-zA-Z_-]{64}$'
+          $ref: '#/components/schemas/Base64Url4364'
         reward_addr:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{43}$'
+          $ref: '#/components/schemas/Base64Url43'
         tags:
-          type: array
-          maxItems: 2048
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
-              value:
-                type: string
-                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+          $ref: '#/components/schemas/TagList'
         reward_pool:
-          anyOf:
-            - type: integer
-            - type: string
-              # TODO add length restriction
-              pattern: '^[0-9]+$'
+          # TODO add length restriction
+          $ref: '#/components/schemas/IntegerOrNumericString'
         weave_size:
-          anyOf:
-            - type: integer
-            - type: string
-              pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/IntegerOrNumericString'
         block_size:
-          anyOf:
-            - type: integer
-            - type: string
-              pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/IntegerOrNumericString'
         cumulative_diff:
-          type: string
-          pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/NumericString'
         hash_list_merkle:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{64}$'
+          $ref: '#/components/schemas/Base64Url64'
         poa:
           type: object
           properties:
             option:
-              type: string
-              pattern: '^[0-9]+$'
+              $ref: '#/components/schemas/NumericString'
             tx_path:
-              type: string
               # TODO specify length
-              pattern: '^[0-9a-zA-Z_-]*$'
+              $ref: '#/components/schemas/Base64Url'
             data_path:
-              type: string
               # TODO specify length
-              pattern: '^[0-9a-zA-Z_-]*$'
+              $ref: '#/components/schemas/Base64Url'
             chunk:
-              type: string
               # TODO specify length
-              pattern: '^[0-9a-zA-Z_-]*$'
+              $ref: '#/components/schemas/Base64Url'
       required:
         - nonce
         - previous_block
@@ -207,18 +204,15 @@ components:
       type: object
       properties:
         tx_path:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]+$'
+          $ref: '#/components/schemas/Base64Url'
         packing:
           type: string
           # TODO add all types
           pattern: '^unpacked$'
         data_path:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]+$'
+          $ref: '#/components/schemas/Base64Url'
         chunk:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]+$'
+          $ref: '#/components/schemas/Base64Url'
       required:
         - tx_path
         - packing
@@ -230,47 +224,30 @@ components:
         format:
           type: integer
         id:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{43}$'
+          $ref: '#/components/schemas/Base64Url43'
         last_tx:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{43}|[0-9a-zA-Z_-]{64}$'
+          $ref: '#/components/schemas/Base64Url4364'
         owner:
           type: string
           pattern: '^[0-9a-zA-Z_-]{1,683}$'
         tags:
-          type: array
-          maxItems: 2048
-          items:
-            type: object
-            properties:
-              name:
-                type: string
-                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
-              value:
-                type: string
-                pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+          $ref: '#/components/schemas/TagList'
         target:
-          type: string
-          pattern: '^$|^[0-9a-zA-Z_-]{43}$'
+          $ref: '#/components/schemas/Base64Url43'
         quantity:
-          type: string
-          pattern: '^[0-9]{1,21}$'
+          $ref: '#/components/schemas/WinstonAmount'
         data:
           # TODO determine limit (if any)
-          type: string
-          pattern: '^[0-9a-zA-Z_-]*$'
+          $ref: '#/components/schemas/Base64Url'
         data_tree:
           type: array
           items:
             # TODO determine contents of array (is this just for v1?)
             type: string
         data_root:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]*$'
+          $ref: '#/components/schemas/Base64Url'
         reward:
-          type: string
-          pattern: '^[0-9]{1,21}$'
+          $ref: '#/components/schemas/WinstonAmount'
         signature:
           type: string
           pattern: '^[0-9a-zA-Z_-]{1,683}$'
@@ -291,11 +268,9 @@ components:
       type: object
       properties:
         size:
-          type: string
-          pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/NumericString'
         offset:
-          type: string
-          pattern: '^[0-9]+$'
+          $ref: '#/components/schemas/NumericString'
       required:
         - size
         - offset
@@ -305,8 +280,7 @@ components:
         block_height:
           type: integer
         block_indep_hash:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{64}$'
+          $ref: '#/components/schemas/Base64Url64'
         number_of_confirmations:
           type: integer
       required:
@@ -316,8 +290,7 @@ components:
     Mempool:
       type: array
       items:
-        type: string
-        pattern: '^[0-9a-zA-Z_-]{43}$'
+        $ref: '#/components/schemas/Base64Url43'
     NetworkInfo:
       type: object
       properties:
@@ -328,8 +301,7 @@ components:
         release:
           type: integer
         current:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{64}$'
+          $ref: '#/components/schemas/Base64Url64'
         blocks:
           type: integer
         peers:
@@ -365,8 +337,7 @@ components:
             type: object
             properties:
               id:
-                type: string
-                pattern: '^[0-9a-zA-Z_-]{43}$'
+                $ref: '#/components/schemas/Base64Url43'
                 description: TX ID of the transaction you would like to prioritize.
           examples:
             example1:
@@ -493,8 +464,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9]+$'
+            $ref: '#/components/schemas/NumericString'
       responses:
         '200':
           description: |-
@@ -515,8 +485,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9]+$'
+            $ref: '#/components/schemas/NumericString'
       responses:
         '200':
           description: |-
@@ -537,8 +506,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
@@ -558,8 +526,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
@@ -568,8 +535,7 @@ paths:
             # TODO text/plain ?
             text/html:
               schema:
-                type: string
-                pattern: '^$|^[0-9a-zA-Z_-]{43}$'
+                $ref: '#/components/schemas/Base64Url43'
 
   # Blocks
   '/current_block':
@@ -595,8 +561,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9]+$'
+            $ref: '#/components/schemas/NumericString'
       responses:
         '200':
           description: |-
@@ -615,8 +580,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{64}$'
+            $ref: '#/components/schemas/Base64Url64'
       responses:
         '200':
           description: |-
@@ -664,8 +628,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
@@ -684,8 +647,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
@@ -704,8 +666,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
@@ -728,8 +689,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
@@ -939,8 +899,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
@@ -959,8 +918,7 @@ paths:
           in: path
           required: true
           schema:
-            type: string
-            pattern: '^[0-9a-zA-Z_-]{43}$'
+            $ref: '#/components/schemas/Base64Url43'
       responses:
         '200':
           description: |-
