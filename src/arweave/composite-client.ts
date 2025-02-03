@@ -793,7 +793,7 @@ export class ArweaveCompositeClient
     }
 
     try {
-      const result = this.peerGetChunk({
+      const result = await this.peerGetChunk({
         absoluteOffset,
         retryCount: 3,
         txSize,
