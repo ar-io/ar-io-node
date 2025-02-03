@@ -380,6 +380,19 @@ components:
           schema:
             type: string
             example: "Must provide 'id'"
+    MissingIdOrBypassFilter:
+      description: Bad Request. The request is missing required parameters.
+      content:
+        text/plain:
+          schema:
+            type: string
+          examples:
+            missingId:
+              summary: ID is required
+              value: "Must provide 'id'"
+            missingFilter:
+              summary: bypassFilter must be a boolean
+              value: "'bypassFilter' must be a boolean"
     QueueTxSuccess:
       description: Successful operation
       content:
@@ -812,26 +825,16 @@ paths:
       description: Queue a bundle for indexing, bypassing any filter settings by default.
       operationId: adminQueueBundle
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                id:
-                  type: string
-                  pattern: '^[0-9a-zA-Z_-]{43}$'
-                  description: TX ID of the bundle you would like to prioritize.
-                byPassFilter:
-                  type: boolean
-                  description: Whether to bypass the filter and index the bundle regardless of the filter settings.
+        $ref: '#/components/requestBodies/QueueTxRequest'
       responses:
         '200':
-          description: Successful operation
+          $ref: '#/components/responses/QueueTxSuccess'
         '400':
-          description: Bad Request.
+          $ref: '#/components/responses/MissingIdOrBypassFilter'
         '401':
-          description: Unauthorized, API key likely incorrect.
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
       security:
         - bearerAuth: []
   '/ar-io/admin/block-data':
