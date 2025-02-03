@@ -21,8 +21,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream';
 import { Worker, isMainThread, parentPort } from 'node:worker_threads';
 import * as winston from 'winston';
-import { generateTransactionChunks } from 'arweave/node/lib/merkle.js';
-import { toB64Url } from '../lib/encoding.js';
+import { computeDataRootFromReadable } from './data-root-streaming.js';
 
 import log from '../log.js';
 import { ContiguousData, ContiguousDataSource } from '../types.js';
@@ -260,10 +259,9 @@ if (!isMainThread) {
     const { id, dataPath } = message;
     const fnLog = log.child({ id, worker: true });
     try {
-      const dataBuffer = fs.readFileSync(dataPath);
+      const dataBuffer = fs.createReadStream(dataPath);
       fnLog.debug('Computing data root...');
-      const { data_root } = await generateTransactionChunks(dataBuffer);
-      const dataRootB64Url = toB64Url(Buffer.from(data_root));
+      const dataRootB64Url = await computeDataRootFromReadable(dataBuffer);
       fnLog.debug('Computed data root...', { dataRoot: dataRootB64Url });
 
       parentPort?.postMessage({
