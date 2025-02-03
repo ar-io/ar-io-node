@@ -327,7 +327,27 @@ components:
     Height:
       type: string
       pattern: '^[0-9]{16}$'
-    ArNSResolver:
+    ArNSResolution:
+      type: object
+      description: Response containing ArNS name resolution details
+      properties:
+        txId:
+          $ref: '#/components/schemas/Base64Url43'
+          description: The resolved transaction ID
+        ttlSeconds:
+          type: integer
+          description: Time-to-live in seconds for this resolution
+        processId:
+          type: string
+          description: AO process ID
+        resolvedAt:
+          type: integer
+          description: Unix timestamp when the name was resolved
+      required:
+        - txId
+        - ttlSeconds
+        - processId
+        - resolvedAt
   requestBodies:
     QueueTxRequest:
       required: true
@@ -737,11 +757,28 @@ paths:
             type: string
       responses:
         '200':
-          description: 200 response
+          description: Successful resolution of ArNS name
+          headers:
+            x-arns-resolved-id:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+              description: The resolved transaction ID
+            x-arns-ttl-seconds:
+              schema:
+                type: string
+              description: Time-to-live in seconds for this resolution
+            x-arns-process-id:
+              schema:
+                type: string
+              description: AO process ID
+            x-arns-resolved-at:
+              schema:
+                type: string
+              description: Unix timestamp when the name was resolved
           content:
             application/json:
               schema:
-                '$ref': '#/components/schemas/ArNSResolver'
+                $ref: '#/components/schemas/ArNSResolution'
         '404':
           description: ArNS name not found.
 
