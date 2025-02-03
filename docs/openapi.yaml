@@ -1034,6 +1034,114 @@ paths:
           description: Unauthorized, API key likely incorrect.
       security:
         - bearerAuth: []
+  '/ar-io/admin/export-parquet':
+    post:
+      tags: [Admin]
+      summary: Export data to Parquet format
+      description: |
+        Initiates an export of data to Parquet format files. This process runs in the background
+        and exports data for the specified block height range.
+      operationId: adminExportParquet
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outputDir:
+                  type: string
+                  description: Directory in the server where Parquet files will be saved
+                startHeight:
+                  type: integer
+                  minimum: 0
+                  description: Starting block height for the export
+                endHeight:
+                  type: integer
+                  minimum: 0
+                  description: Ending block height for the export
+                maxFileRows:
+                  type: integer
+                  minimum: 0
+                  description: Maximum number of rows per Parquet file
+              required:
+                - outputDir
+                - startHeight
+                - endHeight
+                - maxFileRows
+      responses:
+        '200':
+          description: Export process started successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: 'Parquet export started'
+        '400':
+          description: Invalid parameters provided
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  '/ar-io/admin/export-parquet/status':
+    get:
+      tags: [Admin]
+      summary: Get Parquet export status
+      description: Returns the current status of the Parquet export process
+      operationId: adminExportParquetStatus
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current export status
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Current status of the export process
+                properties:
+                  status:
+                    type: string
+                    enum: [not_started, running, completed, errored]
+                    description: Current status of the export process
+                  outputDir:
+                    type: string
+                    description: Directory where Parquet files are being saved
+                  startHeight:
+                    type: integer
+                    description: Starting block height of the export
+                  endHeight:
+                    type: integer
+                    description: Ending block height of the export
+                  maxFileRows:
+                    type: integer
+                    description: Maximum number of rows per Parquet file
+                  durationInSeconds:
+                    type: number
+                    description: Duration of the export process in seconds
+                  endTime:
+                    type: string
+                    format: date-time
+                    description: ISO timestamp when the export completed
+                  endTimestamp:
+                    type: integer
+                    description: Unix timestamp when the export completed
+                  error:
+                    type: string
+                    description: Error message if the export failed
+                required:
+                  - status
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  # Farcaster
   '/local/farcaster/frame/{txId}':
     get:
       tags: [Farcaster Frames]
