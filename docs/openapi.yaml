@@ -107,6 +107,12 @@ components:
           value:
             type: string
             pattern: '^[0-9a-zA-Z_-]{1,2731}$'
+    Owner:
+      type: string
+      pattern: '^[0-9a-zA-Z_-]{1,683}$'
+    Signature:
+      type: string
+      pattern: '^[0-9a-zA-Z_-]{1,683}$'
     Block:
       type: object
       properties:
@@ -231,8 +237,7 @@ components:
         last_tx:
           $ref: '#/components/schemas/Base64Url4364'
         owner:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{1,683}$'
+          $ref: '#/components/schemas/Owner'
         tags:
           $ref: '#/components/schemas/TagList'
         target:
@@ -252,8 +257,7 @@ components:
         reward:
           $ref: '#/components/schemas/WinstonAmount'
         signature:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{1,683}$'
+          $ref: '#/components/schemas/Signature'
       required:
         - format
         - id
@@ -943,6 +947,81 @@ paths:
           $ref: '#/components/responses/ServerError'
       security:
         - bearerAuth: []
+  '/ar-io/admin/queue-data-item':
+    post:
+      tags: [Admin]
+      summary: Queue data items for indexing
+      description: |
+        Queue one or more data items for indexing. This endpoint
+        accepts an array of data item headers and prioritizes them for processing.
+      operationId: adminQueueDataItem
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  data_size:
+                    type: integer
+                    description: Size of the data item in bytes
+                  id:
+                    $ref: '#/components/schemas/Base64Url43'
+                    description: Data item ID
+                  owner:
+                    $ref: '#/components/schemas/Owner'
+                    Description: Data item signer's public key
+                  owner_address:
+                    $ref: '#/components/schemas/Base64Url43'
+                    description: Normalized address
+                  signature:
+                    $ref: '#/components/schemas/Signature'
+                    description: Data item signature
+                  tags:
+                    $ref: '#/components/schemas/TagList'
+                    description: Optional tags associated with the data item
+                  content_type:
+                    type: string
+                    description: Optional content type of the data item
+                  target:
+                    $ref: '#/components/schemas/Base64Url43'
+                    description: Optional target address
+                  anchor:
+                    $ref: '#/components/schemas/Base64Url43'
+                    description: Optional anchor
+                required:
+                  - data_size
+                  - id
+                  - owner
+                  - owner_address
+                  - signature
+              minItems: 1
+      responses:
+        '200':
+          description: Data items successfully queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: 'Data item(s) queued'
+        '400':
+          description: Invalid request body
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Must provide array of data item headers'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
   '/ar-io/admin/block-data':
     put:
       tags: [Admin]
