@@ -1219,6 +1219,53 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/ServerError'
+  '/ar-io/admin/prune-stable-data-items':
+    post:
+      tags: [Admin]
+      summary: Prune stable data items
+      description: |
+        Removes stable data items from the database that were indexed before the specified timestamp.
+        This helps manage database size by removing older, stable data items.
+      operationId: adminPruneStableDataItems
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                indexedAtThreshold:
+                  type: integer
+                  minimum: 0
+                  description: Unix timestamp - data items indexed before this time will be pruned
+              required:
+                - indexedAtThreshold
+            example:
+              indexedAtThreshold: 1677721600
+      responses:
+        '200':
+          description: Data items successfully pruned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: 'Stable data items pruned successfully'
+        '400':
+          description: Invalid indexedAtThreshold parameter
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Invalid indexedAtThreshold - must be a positive integer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   # Farcaster
   '/local/farcaster/frame/{txId}':
