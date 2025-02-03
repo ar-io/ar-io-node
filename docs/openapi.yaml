@@ -356,23 +356,57 @@ components:
       type: string
       pattern: '^[0-9]{16}$'
     ArNSResolver:
-      type: object
-      properties:
-        txId:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{43}$'
-        ttlSeconds:
-          type: integer
-        processId:
-          type: string
-          pattern: '^[0-9a-zA-Z_-]{43}$'
-        resolvedAt:
-          type: integer
-      required:
-        - txId
-        - ttlSeconds
-        - processId
-        - resolvedAt
+  requestBodies:
+    QueueTxRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              id:
+                type: string
+                pattern: '^[0-9a-zA-Z_-]{43}$'
+                description: TX ID of the transaction you would like to prioritize.
+          examples:
+            example1:
+              value:
+                id: '3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ'
+  responses:
+    MissingId:
+      description: Bad Request. Id is required.
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Must provide 'id'"
+    QueueTxSuccess:
+      description: Successful operation
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: 'TX queued'
+            required:
+              - message
+    Unauthorized:
+      description: Unauthorized
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: 'Unauthorized'
+    ServerError:
+      description: Internal Server Error
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: 'Internal Server Error'
+
 paths:
   # Network and Node Status
   '/':
@@ -759,27 +793,16 @@ paths:
       description: Stage a specific TX ID as priority for your Gateway to locate and index. This will trigger and queue bundle processing if the transaction is a bundle, and your Gateway is configured to unbundle and index.
       operationId: adminQueueTx
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                id:
-                  type: string
-                  pattern: '^[0-9a-zA-Z_-]{43}$'
-                  description: TX ID of the transaction you would like to prioritize.
-            examples:
-              example1:
-                value:
-                  id: '3lyxgbgEvqNSvJrTX2J7CfRychUD5KClFhhVLyTPNCQ'
+        $ref: '#/components/requestBodies/QueueTxRequest'
       responses:
         '200':
-          description: Successful operation
+          $ref: '#/components/responses/QueueTxSuccess'
         '400':
-          description: Bad Request. Id is required.
+          $ref: '#/components/responses/MissingId'
         '401':
-          description: Unauthorized, API key likely incorrect.
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
       security:
         - bearerAuth: []
   '/ar-io/admin/queue-bundle':
