@@ -11,35 +11,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Install Graphviz
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y graphviz
+      - name: Install Graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
 
-    - name: Build bundle schema docs
-      run: |
-        sqlite3 data/sqlite/bundles.db < test/bundles-schema.sql
-        ./scripts/schemaspy || true
-        mkdir -p _site/schema/sqlite
-        mv docs/sqlite/bundles _site/schema/sqlite
+      - name: Build bundle schema docs
+        run: |
+          sqlite3 data/sqlite/bundles.db < test/bundles-schema.sql
+          ./scripts/schemaspy || true
+          mkdir -p _site/schema/sqlite
+          mv docs/sqlite/bundles _site/schema/sqlite
 
-    - name: Fix permissions
-      run: |
-        chmod -c -R +rX "_site/" | while read line; do
-          echo "::warning title=Invalid file permissions automatically fixed::$line"
-        done
+      - name: Fix permissions
+        run: |
+          chmod -c -R +rX "_site/" | while read line; do
+            echo "::warning title=Invalid file permissions automatically fixed::$line"
+          done
 
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v2
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
 
   deploy:
     needs: build
 
     permissions:
-      pages: write      # to deploy to Pages
-      id-token: write   # to verify the deployment originates from an appropriate source
+      pages: write # to deploy to Pages
+      id-token: write # to verify the deployment originates from an appropriate source
 
     environment:
       name: github-pages
