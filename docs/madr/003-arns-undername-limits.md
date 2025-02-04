@@ -101,24 +101,6 @@ ANTs store additional information in the state for each record, indicating the p
 
 Example (in the [ar-io-node]):
 
-```typescript
-const records = getRecords(name);
-const sortedRecords = Object.entries(records).sort(([a], [b]) => {
-  if ('priority' in a && 'priority' in b) {
-    return a.priority - b.priority;
-  }
-  // if only one record has priority, prefer it
-  if ('priority' in a && !('priority' in b)) {
-    return -1; // a comes first
-  }
-  if (!('priority' in a) && 'priority' in b) {
-    return 1; // b comes first
-  }
-  return a.localeCompare(b);
-});
-
-// enforce undername limit against sorted records, using the priority field, fallback to alphabetical for records without a priority
-```
 
 ### Option 3: ANT provides sort attributes via separate API
 
