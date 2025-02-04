@@ -30,6 +30,11 @@ tags:
   - name: Gateway
     description: |
       Operations related to the AR.IO Gateway server itself, including health checks, metrics, and gateway-specific information
+  - name: Data
+    description: |
+      Core data retrieval operations for accessing transaction and data item content. Supports manifest resolution,
+      range requests, caching, and verification status. These endpoints serve as the primary interface for retrieving
+      data from the Permaweb.
   - name: Network
     description: |
       Get Arweave node info, peers and nework status
@@ -113,6 +118,21 @@ components:
     Signature:
       type: string
       pattern: '^[0-9a-zA-Z_-]{1,683}$'
+    ByteRange:
+      type: string
+      pattern: '^bytes=\d*-\d*(?:,\d*-\d*)*$'
+      description: |
+        HTTP byte range specifying which parts of the data to retrieve.
+        Supports single ranges (e.g. "bytes=0-1023") and multiple ranges (e.g. "bytes=0-50,100-150").
+      example: 'bytes=0-1023'
+    CacheStatus:
+      type: string
+      enum: [HIT, MISS]
+      description: Indicates whether the data was served from cache
+    VerificationStatus:
+      type: string
+      enum: [true, false]
+      description: Indicates whether the data has been verified
     Block:
       type: object
       properties:
@@ -525,6 +545,294 @@ paths:
                   # TYPE uncaught_exceptions_total counter
                   uncaught_exceptions_total 0
 
+  # Data
+  '/{txId}':
+    get:
+      tags: [Data]
+      summary: Get transaction or data item content
+      description: |
+        Get the content of a specified transaction or data item. Supports manifest path resolution,
+        range requests, and returns various informational headers about data verification and caching status.
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Base64Url43'
+        - name: Range
+          in: header
+          required: false
+          schema:
+            $ref: '#/components/schemas/ByteRange'
+          description: Byte range(s) to retrieve
+      responses:
+        '200':
+          description: Successful response
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                example: bytes
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=2592000, immutable
+            Content-Length:
+              schema:
+                type: string
+                example: 1024
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+            X-Cache:
+              schema:
+                $ref: '#/components/schemas/CacheStatus'
+                example: HIT
+            X-AR-IO-Verified:
+              schema:
+                $ref: '#/components/schemas/VerificationStatus'
+                example: true
+            X-AR-IO-Digest:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            ETag:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            X-AR-IO-Root-Transaction-Id:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+                description: For data items, the root transaction ID
+                example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc'
+            X-AR-IO-Hops:
+              schema:
+                type: integer
+                example: 1
+        '206':
+          description: Partial content for range requests
+          headers:
+            Content-Range:
+              schema:
+                type: string
+                example: bytes 0-1023/146515
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+        '301':
+          description: Redirect for manifest paths without trailing slash
+        '404':
+          description: Data not found or blocked
+        '416':
+          description: Range not satisfiable
+    head:
+      tags: [Data]
+      summary: Get transaction or data item headers
+      description: |
+        Get the headers for a specified transaction or data item without the content.
+        Returns the same headers as the GET request.
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Base64Url43'
+        - name: Range
+          in: header
+          required: false
+          schema:
+            $ref: '#/components/schemas/ByteRange'
+          description: Byte range(s) to check
+      responses:
+        '200':
+          description: Successful response
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                example: bytes
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=2592000, immutable
+            Content-Length:
+              schema:
+                type: string
+                example: 1024
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+            X-Cache:
+              schema:
+                $ref: '#/components/schemas/CacheStatus'
+                example: HIT
+            X-AR-IO-Verified:
+              schema:
+                $ref: '#/components/schemas/VerificationStatus'
+                example: true
+            X-AR-IO-Digest:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            ETag:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            X-AR-IO-Root-Transaction-Id:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+                description: For data items, the root transaction ID
+                example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc'
+            X-AR-IO-Hops:
+              schema:
+                type: integer
+                example: 1
+  '/raw/{txId}':
+    get:
+      tags: [Data]
+      summary: Get raw transaction data
+      description: Get the raw content of a specified transaction without manifest resolution
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Base64Url43'
+        - name: Range
+          in: header
+          required: false
+          schema:
+            $ref: '#/components/schemas/ByteRange'
+          description: Byte range(s) to retrieve
+      responses:
+        '200':
+          description: Successful response
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                example: bytes
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=2592000, immutable
+            Content-Length:
+              schema:
+                type: string
+                example: 1024
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+            X-Cache:
+              schema:
+                $ref: '#/components/schemas/CacheStatus'
+                example: HIT
+            X-AR-IO-Verified:
+              schema:
+                $ref: '#/components/schemas/VerificationStatus'
+                example: true
+            X-AR-IO-Digest:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            ETag:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            X-AR-IO-Root-Transaction-Id:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+                description: For data items, the root transaction ID
+                example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc'
+            X-AR-IO-Hops:
+              schema:
+                type: integer
+                example: 1
+        '206':
+          description: Partial content for range requests
+          headers:
+            Content-Range:
+              schema:
+                type: string
+                example: bytes 0-1023/146515
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+        '404':
+          description: Data not found or blocked
+        '416':
+          description: Range not satisfiable
+    head:
+      tags: [Data]
+      summary: Get raw transaction data headers
+      description: Get the headers for raw transaction data without manifest resolution
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Base64Url43'
+        - name: Range
+          in: header
+          required: false
+          schema:
+            $ref: '#/components/schemas/ByteRange'
+          description: Byte range(s) to check
+      responses:
+        '200':
+          description: Successful response
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                example: bytes
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=2592000, immutable
+            Content-Length:
+              schema:
+                type: string
+                example: 1024
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+            X-Cache:
+              schema:
+                $ref: '#/components/schemas/CacheStatus'
+                example: HIT
+            X-AR-IO-Verified:
+              schema:
+                $ref: '#/components/schemas/VerificationStatus'
+                example: true
+            X-AR-IO-Digest:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            ETag:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            X-AR-IO-Root-Transaction-Id:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+                description: For data items, the root transaction ID
+                example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc'
+            X-AR-IO-Hops:
+              schema:
+                type: integer
+                example: 1
+        '404':
+          description: Data not found or blocked
+        '416':
+          description: Range not satisfiable for HEAD request
+
   # Network and Node Status
   '/':
     get:
@@ -810,27 +1118,6 @@ paths:
                 '$ref': '#/components/schemas/TransactionStatus'
   # "/tx/{txId}/field"
   # "/unconfirmed_tx/{txId}"
-
-  # Cache
-  '/{txId}':
-    get:
-      tags: [Cache]
-      summary: Get transaction.
-      description: Get the content of a specified transaction.
-      parameters:
-        - name: txId
-          in: path
-          required: true
-          schema:
-            $ref: '#/components/schemas/Base64Url43'
-      responses:
-        '200':
-          description: |-
-            Successful operation.
-          content:
-            application/json:
-              schema:
-                '$ref': '#/components/schemas/Transaction'
 
   # Chunks
   '/chunk/{offset}':
