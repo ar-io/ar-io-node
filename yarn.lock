@@ -136,6 +136,11 @@
     winston "^3.13.0"
     zod "^3.23.8"
 
+"@arweave/wasm-secp256k1@^0.0.6":
+  version "0.0.6"
+  resolved "https://registry.yarnpkg.com/@arweave/wasm-secp256k1/-/wasm-secp256k1-0.0.6.tgz#51e8006d9c4719c91e2067097100f4566925d0b1"
+  integrity sha512-/KpMkMI7g9wwRy7R95pXae2STZHAlh1mM9m/29Mjj2QgP0lRcFuXtIIJ97Ixb+3TbgMxxAlVoJDCBDt5ubYK4w==
+
 "@aws-crypto/crc32@5.2.0":
   version "5.2.0"
   resolved "https://registry.yarnpkg.com/@aws-crypto/crc32/-/crc32-5.2.0.tgz#cfcc22570949c98c6689cfcbd2d693d36cdae2e1"
@@ -3242,7 +3247,7 @@ arweave-stream-tx@^1.1.0:
   dependencies:
     exponential-backoff "^3.1.0"
 
-arweave@1.15.5, arweave@^1.15.1, arweave@^1.15.5:
+arweave@1.15.5, arweave@^1.15.1:
   version "1.15.5"
   resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.15.5.tgz#d0fb209de01bfc9dc97d5da70270928a83ecee83"
   integrity sha512-Zj3b8juz1ZtDaQDPQlzWyk2I4wZPx3RmcGq8pVJeZXl2Tjw0WRy5ueHPelxZtBLqCirGoZxZEAFRs6SZUSCBjg==
@@ -3257,6 +3262,17 @@ arweave@^1.10.13, arweave@^1.13.7:
   resolved "https://registry.yarnpkg.com/arweave/-/arweave-1.15.1.tgz#c6183136b20980c81a8cb77ce6fd9fb333e1a174"
   integrity sha512-rT7FOwqdudd5npqp4xOYdDT2035LtpcqePjwirh4wjRiEtVsz1FZkRiM2Yj+fOAwYzOm/hNG0GDOipDSaiEGGQ==
   dependencies:
+    arconnect "^0.4.2"
+    asn1.js "^5.4.1"
+    base64-js "^1.5.1"
+    bignumber.js "^9.0.2"
+
+arweave@^2.0.0-ec.0:
+  version "2.0.0-ec.0"
+  resolved "https://registry.yarnpkg.com/arweave/-/arweave-2.0.0-ec.0.tgz#b3fb9e8e8735147da07ed0aec89741ce8ec30c0f"
+  integrity sha512-8pXL703wFp3ilsioGfYBKkJMuhg2KfgnNeed4oiOJNgfVbt0l5c05UCWE8+eitubSzkTG4X3D1JuvVkse6xxgA==
+  dependencies:
+    "@arweave/wasm-secp256k1" "^0.0.6"
     arconnect "^0.4.2"
     asn1.js "^5.4.1"
     base64-js "^1.5.1"
