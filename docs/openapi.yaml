@@ -150,7 +150,6 @@ components:
         strict_data_split_threshold:
           $ref: '#/components/schemas/NumericString'
         nonce:
-          # TODO restrict length (not sure about max, it depends on height)
           $ref: '#/components/schemas/Base64Url'
         previous_block:
           $ref: '#/components/schemas/Base64Url64'
@@ -262,7 +261,6 @@ components:
         quantity:
           $ref: '#/components/schemas/WinstonAmount'
         data:
-          # TODO determine limit (if any)
           $ref: '#/components/schemas/Base64Url'
         data_tree:
           type: array
@@ -883,13 +881,19 @@ paths:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Height'
-  # "/metrics"
-  # "/tx_anchor"
-  # "/hash_list"
-  # "/data_sync_record"
-  # "/data_sync_record/{start}/{limit}""
-  # "/time"
-  # "/sync_buckets"
+  '/tx_anchor':
+    get:
+      tags: [Network]
+      summary: Get the current transaction anchor.
+      description: Get the current transaction anchor of the Arweave network.
+      responses:
+        '200':
+          description: |-
+            200 response
+          content:
+            text/plain:
+              schema:
+                '$ref': '#/components/schemas/Base64Url43'
 
   # Pricing
   '/price/{size}':
@@ -908,8 +912,7 @@ paths:
           description: |-
             Successful operation.
           content:
-            # TODO text/plain ?
-            text/html:
+            text/plain:
               schema:
                 type: integer
   '/price/{size}/target':
@@ -950,8 +953,7 @@ paths:
           description: |-
             Successful operation.
           content:
-            # TODO text/plain ?
-            text/html:
+            text/plain:
               schema:
                 type: integer
   '/wallet/{address}/last_tx':
@@ -970,8 +972,7 @@ paths:
           description: |-
             Successful operation.
           content:
-            # TODO text/plain ?
-            text/html:
+            text/plain:
               schema:
                 $ref: '#/components/schemas/Base64Url43'
 
