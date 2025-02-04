@@ -50,9 +50,6 @@ tags:
   - name: Transactions
     description: |
       Submit a new Arweave transaction or get existing transaction information
-  - name: Cache
-    description: |
-      Get data from the AR.IO Gateway cache
   - name: Chunks
     description: |
       Upload Arweave data chunks or get existing chunk offset information
@@ -1141,8 +1138,103 @@ paths:
                 '$ref': '#/components/schemas/Chunk'
 
   # Index
-  # "/graphql"
-  #
+  '/graphql':
+    post:
+      tags: [Index Querying]
+      summary: Query indexed data using GraphQL
+      description: |
+        GraphQL endpoint for querying indexed transaction and block data. Supports:
+        - Transaction queries by ID, owner, recipient, tags, and bundle
+        - Block queries by ID and height
+        - Pagination and sorting
+        - Rich metadata including sizes, content types, and signatures
+
+        See the GraphQL Playground at `/graphql` for full schema documentation and interactive querying.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: GraphQL query string
+                variables:
+                  type: object
+                  description: Query variables
+              example:
+                query: |
+                  query {
+                    transaction(
+                      id: "D6I-Ke9oLg7sU_PS4oADQmnyFRa1jj2Zs1DP9BltrFs"
+                    ) {
+                      signature
+                      owner {
+                        address
+                      }
+                      bundledIn {
+                        id
+                      }
+                      block {
+                        height
+                      }
+                    }
+                  }
+      responses:
+        '200':
+          description: Successful GraphQL response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                properties:
+                  data:
+                    type: object
+                    description: Query results
+                    example: |
+                      {
+                        "transaction": {
+                          "signature": "4wh6PDJH6eyCKAWZoW26T0qt5NNjnVgyPjLs5HDR7fYgOyzEZF8FyIJiz01IRVvmXC9WZKvy2uLGiIdW4GtUNhs",
+                          "owner": {
+                            "address": "WbE3R_GcAalEP-VonRpL2P5TG30PJRA1-Tj20E_xIK0"
+                          },
+                          "bundledIn": {
+                            "id": "yU5ilscWlDecDhUmNcd24zqe9HmNZ31h31BxC_VcXIM"
+                          },
+                          "block": null
+                        }
+                      }
+                  errors:
+                    type: array
+                    description: Query errors if any
+                    items:
+                      type: object
+                      properties:
+                        message:
+                          type: string
+                        locations:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              line:
+                                type: integer
+                              column:
+                                type: integer
+                        path:
+                          type: array
+                          items:
+                            type: string
+        '400':
+          description: Invalid GraphQL query
+        '500':
+          description: Server error
+
   # ArNS
   '/ar-io/resolver/{name}':
     get:
