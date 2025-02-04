@@ -26,6 +26,8 @@ import {
   AoARIORead,
   AoArNSNameDataWithName,
   AoClient,
+  sortANTRecords,
+  sortedANTRecords,
 } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
@@ -119,6 +121,8 @@ export class OnDemandArNSResolver implements NameResolver {
           resolvedAt: Date.now(),
           ttl: 300,
           processId: undefined,
+          limit: undefined,
+          index: undefined,
         };
       }
 
@@ -136,16 +140,21 @@ export class OnDemandArNSResolver implements NameResolver {
       const undername =
         name === baseName ? '@' : name.replace(`_${baseName}`, '');
 
-      const antRecord = await ant.getRecord({
-        undername,
-      });
+      // enforce the limit of undername resolution, the ant contract is responsible for returning names in the order they should be resolved
+      const antRecords = await ant.getRecords();
+      const antRecord = antRecords[undername];
 
+      // fail quickly if the name is not in the contract
       if (antRecord === undefined) {
         throw new Error('Invalid name, ant record for name not found');
       }
 
-      const resolvedId = antRecord.transactionId;
-      const ttl = antRecord.ttlSeconds;
+      // sort the records by priority
+      const sortedRecords = sortANTRecords(antRecords);
+      const sortedAntRecord = sortedRecords[undername];
+      const resolvedId = sortedAntRecord.transactionId;
+      const ttl = sortedAntRecord.ttlSeconds;
+      const index = sortedAntRecord.index;
 
       if (!isValidDataId(resolvedId)) {
         throw new Error('Invalid resolved data ID');
@@ -156,6 +165,8 @@ export class OnDemandArNSResolver implements NameResolver {
         resolvedAt: Date.now(),
         processId: processId,
         ttl,
+        limit: arnsRecord.undernameLimit,
+        index,
       };
     } catch (error: any) {
       this.log.warn('Unable to resolve name:', {
@@ -171,6 +182,8 @@ export class OnDemandArNSResolver implements NameResolver {
       resolvedAt: undefined,
       ttl: undefined,
       processId: undefined,
+      limit: undefined,
+      index: undefined,
     };
   }
 }

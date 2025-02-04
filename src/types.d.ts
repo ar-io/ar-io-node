@@ -621,6 +621,8 @@ export interface ValidNameResolution {
   resolvedAt: number;
   ttl: number;
   processId: string;
+  limit: number;
+  index: number;
 }
 
 // Name resolved, but is missing
@@ -630,15 +632,19 @@ export interface MissingNameResolution {
   resolvedAt: number;
   ttl: number;
   processId: undefined;
+  limit: undefined;
+  index: undefined;
 }
 
-// An error occured while resolving the name
+// An error occurred while resolving the name
 export interface FailedNameResolution {
   name: string;
   resolvedId: undefined;
   resolvedAt: undefined;
   ttl: undefined;
   processId: undefined;
+  limit: undefined;
+  index: undefined;
 }
 
 type NameResolution =

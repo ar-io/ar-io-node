@@ -30,6 +30,8 @@ export const headerNames = {
   arnsResolvedId: 'X-ArNS-Resolved-Id',
   arnsProcessId: 'X-ArNS-Process-Id',
   arnsResolvedAt: 'X-ArNS-Resolved-At',
+  arnsLimit: 'X-ArNS-Limit',
+  arnsIndex: 'X-ArNS-Index',
 };
 
 export const DATA_PATH_REGEX =

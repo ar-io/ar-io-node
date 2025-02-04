@@ -56,6 +56,10 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       const ttl =
         parseInt(response.headers[headerNames.arnsTtlSeconds.toLowerCase()]) ||
         DEFAULT_ARNS_TTL_SECONDS;
+      const limit =
+        parseInt(response.headers[headerNames.arnsLimit.toLowerCase()]) || 10;
+      const index =
+        parseInt(response.headers[headerNames.arnsIndex.toLowerCase()]) || 0;
       if (isValidDataId(resolvedId)) {
         this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
         return {
@@ -64,6 +68,8 @@ export class TrustedGatewayArNSResolver implements NameResolver {
           resolvedAt: Date.now(),
           processId,
           ttl,
+          limit,
+          index,
         };
       } else {
         this.log.warn('Invalid resolved data ID', {
@@ -71,6 +77,8 @@ export class TrustedGatewayArNSResolver implements NameResolver {
           nameUrl,
           resolvedId,
           ttl,
+          limit,
+          index,
         });
       }
     } catch (error: any) {
@@ -87,6 +95,8 @@ export class TrustedGatewayArNSResolver implements NameResolver {
       resolvedAt: undefined,
       ttl: undefined,
       processId: undefined,
+      limit: undefined,
+      index: undefined,
     };
   }
 }
