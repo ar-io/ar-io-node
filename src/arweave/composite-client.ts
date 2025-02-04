@@ -39,6 +39,7 @@ import {
   sanityCheckTx,
   validateChunk,
 } from '../lib/validation.js';
+import { secp256k1OwnerFromTx } from '../lib/ecdsa-public-key-recover.js';
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
 import {
@@ -574,6 +575,10 @@ export class ArweaveCompositeClient
       // on failure
       if (!tx) {
         throw new Error('Prefetched transaction request failed');
+      }
+
+      if (!tx.owner) {
+        tx.owner = await secp256k1OwnerFromTx(tx);
       }
 
       return tx;

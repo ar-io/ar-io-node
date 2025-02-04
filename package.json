@@ -15,7 +15,7 @@
     "@dha-team/arbundles": "^1.0.1",
     "@permaweb/aoconnect": "^0.0.63",
     "apollo-server-express": "^3.13.0",
-    "arweave": "^1.15.5",
+    "arweave": "^2.0.0-ec.0",
     "axios": "^1.7.9",
     "better-sqlite3": "^9.4.5",
     "cors": "^2.8.5",
