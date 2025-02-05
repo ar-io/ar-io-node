@@ -365,11 +365,19 @@ components:
         resolvedAt:
           type: integer
           description: Unix timestamp when the name was resolved
+        index:
+          type: integer
+          description: Index of the name in the sorted list of names
+        limit:
+          type: integer
+          description: The undername limit for the base ArNS name
       required:
         - txId
         - ttlSeconds
         - processId
         - resolvedAt
+        - index
+        - limit
   requestBodies:
     QueueTxRequest:
       required: true
@@ -1268,6 +1276,14 @@ paths:
               schema:
                 type: string
               description: Unix timestamp when the name was resolved
+            x-arns-index:
+              schema:
+                type: number
+              description: Index of the name in the sorted list of names
+            x-arns-limit:
+              schema:
+                type: number
+              description: The undername limit for the base ArNS name
           content:
             application/json:
               schema:
