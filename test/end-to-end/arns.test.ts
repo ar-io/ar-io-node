@@ -27,6 +27,7 @@ import { rimraf } from 'rimraf';
 
 const projectRootPath = process.cwd();
 let compose: StartedDockerComposeEnvironment;
+let aoCompose: StartedDockerComposeEnvironment;
 
 before(async function () {
   await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
@@ -39,14 +40,29 @@ before(async function () {
       START_HEIGHT: '0',
       STOP_HEIGHT: '0',
       ARNS_ROOT_HOST: 'ar-io.localhost',
+      AO_CU_URL: 'http://localhost:6363',
     })
     .withBuild()
     .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
     .up(['core']);
+
+  aoCompose = await new DockerComposeEnvironment(
+    projectRootPath,
+    'docker-compose.ao.yaml',
+  )
+    .withEnvironment({
+      GRAPHQL_URL: 'https://arweave-search.goldsky.com/graphql',
+      CHECKPOINT_GRAPHQL_URL: 'https://arweave-search.goldsky.com/graphql',
+      DISABLE_PROCESS_CHECKPOINT_CREATION: 'true',
+    })
+    .withBuild()
+    .withWaitStrategy('ao-cu-1', Wait.forHttp('/ar-io/info', 4000))
+    .up(['ao-cu']);
 });
 
 after(async function () {
   await compose.down();
+  await aoCompose.down();
 });
 
 describe('ArNS', function () {
