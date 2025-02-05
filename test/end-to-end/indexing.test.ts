@@ -1133,4 +1133,81 @@ describe('Indexing', function () {
       assert.equal(res.headers['content-encoding'], 'gzip');
     });
   });
+
+  describe('Indexing of different L1 signature types', function () {
+    const secp256k1TxId = 'G59jD7x4Ykz0sC4lf-gtsHzYovzjuc0MORyD-O4aWA0';
+
+    let coreDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+
+    const waitForIndexingOfTxId = async (txIdToWaitFor: string) => {
+      const getSpecificTxId = () =>
+        coreDb
+          .prepare(`SELECT id FROM new_transactions WHERE id = @id`)
+          .all({ id: fromB64Url(txIdToWaitFor) });
+
+      while (getSpecificTxId().length === 0) {
+        console.log('Waiting for layer-1 tx to be indexed...');
+        await wait(5000);
+      }
+    };
+
+    before(async function () {
+      compose = await composeUp({
+        ARNS_ROOT_HOST: '',
+      });
+
+      await axios({
+        method: 'post',
+        url: 'http://localhost:4000/ar-io/admin/queue-tx',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json',
+        },
+        data: { id: secp256k1TxId },
+      });
+
+      coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
+
+      await waitForIndexingOfTxId(secp256k1TxId);
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('Verifying if secp256k1TxId signed tx has correct owner', async function () {
+      // Query to get the owner's public key from the wallet associated with the transaction
+      const walletQuery = `
+        SELECT public_modulus
+        FROM wallets
+          WHERE address = (
+          SELECT owner_address
+          FROM new_transactions
+          WHERE id = @id
+        );`;
+
+      const stmt = coreDb.prepare(walletQuery);
+      const transaction = stmt.get({ id: fromB64Url(secp256k1TxId) });
+      const actualOwnerPublicKey =
+        transaction.public_modulus.toString('base64url');
+      const expectedOwnerPublicKey =
+        'A9jOdCekWyY5pVjSOYBzeSEi-rQ0cIC3XsYbK9gShlgL';
+
+      assert.equal(actualOwnerPublicKey, expectedOwnerPublicKey);
+    });
+
+    it('Verifying if secp256k1TxId signed tx has correct owner_address', async function () {
+      // Query to get the owner's address from the transaction
+      const stmt = coreDb.prepare(
+        'SELECT owner_address FROM new_transactions WHERE id = @id',
+      );
+      const transaction = stmt.get({ id: fromB64Url(secp256k1TxId) });
+      const actualOwnerAddress =
+        transaction.owner_address.toString('base64url');
+      const expectedOwnerAddress =
+        'mtBAWAKk76PTvOvu3cy1H-gvpRkGStmfWYi5Ja-a8y8';
+      assert.equal(actualOwnerAddress, expectedOwnerAddress);
+    });
+  });
 });
