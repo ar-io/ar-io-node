@@ -33,7 +33,7 @@ jobs:
       - run: yarn test:ci
       # Run E2E tests if pushing to develop branch
       - run: yarn test:e2e
-        if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
 
       # Codecov report
       - name: Upload coverage reports to Codecov
