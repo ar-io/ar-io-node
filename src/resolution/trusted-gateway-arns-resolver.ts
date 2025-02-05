@@ -23,6 +23,8 @@ import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
 
 export const DEFAULT_ARNS_TTL_SECONDS = 60 * 15; // 15 minutes
+export const DEFAULT_ARNS_UNDERNAME_LIMIT = 10;
+export const DEFAULT_ARNS_UNDERNAME_INDEX = 0;
 
 export class TrustedGatewayArNSResolver implements NameResolver {
   private log: winston.Logger;
@@ -57,9 +59,11 @@ export class TrustedGatewayArNSResolver implements NameResolver {
         parseInt(response.headers[headerNames.arnsTtlSeconds.toLowerCase()]) ||
         DEFAULT_ARNS_TTL_SECONDS;
       const limit =
-        parseInt(response.headers[headerNames.arnsLimit.toLowerCase()]) || 10;
+        parseInt(response.headers[headerNames.arnsLimit.toLowerCase()]) ||
+        DEFAULT_ARNS_UNDERNAME_LIMIT;
       const index =
-        parseInt(response.headers[headerNames.arnsIndex.toLowerCase()]) || 0;
+        parseInt(response.headers[headerNames.arnsIndex.toLowerCase()]) ||
+        DEFAULT_ARNS_UNDERNAME_INDEX;
       if (isValidDataId(resolvedId)) {
         this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
         return {

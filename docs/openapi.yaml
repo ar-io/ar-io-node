@@ -1276,11 +1276,11 @@ paths:
               schema:
                 type: string
               description: Unix timestamp when the name was resolved
-            x-arns-index:
+            x-arns-record-index:
               schema:
                 type: number
               description: Index of the name in the sorted list of names
-            x-arns-limit:
+            x-arns-undername-limit:
               schema:
                 type: number
               description: The undername limit for the base ArNS name
