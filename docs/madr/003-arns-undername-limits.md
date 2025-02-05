@@ -101,7 +101,6 @@ ANTs store additional information in the state for each record, indicating the p
 
 Example (in the [ar-io-node]):
 
-
 ### Option 3: ANT provides sort attributes via separate API
 
 ANTs provide a global `sortOrder` and `sortKey` field to determine how names are sorted on existing records keys.
@@ -139,7 +138,8 @@ const sortedRecords = Object.entries(records).sort(([a], [b]) => {
       return b[sortKey] - a[sortKey];
     }
   }
-  return a.localeCompare(b);
+  // use a deterministic sort
+  return a < b ? -1 : a > b ? 1 : 0;
 });
 
 // enforce undername limit against sorted records, using the priority field, fallback to alphabetical
