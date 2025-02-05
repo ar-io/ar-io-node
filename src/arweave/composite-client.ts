@@ -578,6 +578,10 @@ export class ArweaveCompositeClient
       }
 
       if (!tx.owner) {
+        // Arweave supports transactions where the owner field is an empty string.
+        // This is possible because the public owner key can be derived from the signature payload.
+        // The derivation is achieved through ECDSA public key recovery using the secp256k1 algorithm.
+        // For more details, see: https://github.com/ArweaveTeam/arweave/releases/tag/N.2.9.1
         tx.owner = await secp256k1OwnerFromTx(tx);
       }
 
