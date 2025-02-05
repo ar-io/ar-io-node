@@ -112,6 +112,24 @@ describe('ArNS', function () {
         // Assert the Location header matches the expected URL
         assert.strictEqual(res.headers['location'], expectedRedirect);
       });
+
+      it('Verifying "ardrive.ar-io.localhost" X-ArNS-Index header', async function () {
+        const res = await axios.get('http://localhost:4000', {
+          headers: { Host: 'ardrive.ar-io.localhost' },
+        });
+
+        assert.strictEqual(typeof res.headers['x-arns-index'], 'number');
+        assert.ok(res.headers['x-arns-index'] === 0);
+      });
+
+      it('Verifying "ardrive.ar-io.localhost" X-ArNS-Limit header', async function () {
+        const res = await axios.get('http://localhost:4000', {
+          headers: { Host: 'ardrive.ar-io.localhost' },
+        });
+
+        assert.strictEqual(typeof res.headers['x-arns-limit'], 'number');
+        assert.ok(res.headers['x-arns-limit'] >= 10);
+      });
     });
 
     describe('Undernames', function () {
@@ -146,6 +164,24 @@ describe('ArNS', function () {
 
         assert.strictEqual(typeof res.headers['x-arns-process-id'], 'string');
       });
+
+      it('Verifying "dapp_ardrive.ar-io.localhost" X-ArNS-Index header', async function () {
+        const res = await axios.get('http://localhost:4000', {
+          headers: { Host: 'dapp_ardrive.ar-io.localhost' },
+        });
+
+        assert.strictEqual(typeof res.headers['x-arns-index'], 'number');
+        assert.ok(res.headers['x-arns-index'] > 0);
+      });
+
+      it('Verifying "dapp_ardrive.ar-io.localhost" X-ArNS-Limit header', async function () {
+        const res = await axios.get('http://localhost:4000', {
+          headers: { Host: 'dapp_ardrive.ar-io.localhost' },
+        });
+
+        assert.strictEqual(typeof res.headers['x-arns-limit'], 'number');
+        assert.ok(res.headers['x-arns-limit'] >= 10);
+      });
     });
   });
 
@@ -163,6 +199,8 @@ describe('ArNS', function () {
       );
       assert.strictEqual(typeof res.data.ttlSeconds, 'number');
       assert.strictEqual(typeof res.data.processId, 'string');
+      assert.strictEqual(typeof res.data.index, 'number');
+      assert.strictEqual(typeof res.data.limit, 'number');
     });
 
     // verify the headers are set correctly on the response
@@ -178,6 +216,8 @@ describe('ArNS', function () {
       );
       assert.strictEqual(typeof res.headers['x-arns-ttl-seconds'], 'string');
       assert.strictEqual(typeof res.headers['x-arns-process-id'], 'string');
+      assert.strictEqual(typeof res.headers['x-arns-index'], 'number');
+      assert.strictEqual(typeof res.headers['x-arns-limit'], 'number');
     });
 
     it('Verifying /ar-io/resolver/dapp_ardrive returns 200 and resolution data for an undername', async function () {
@@ -196,6 +236,8 @@ describe('ArNS', function () {
       );
       assert.strictEqual(typeof res.headers['x-arns-ttl-seconds'], 'string');
       assert.strictEqual(typeof res.headers['x-arns-process-id'], 'string');
+      assert.strictEqual(typeof res.headers['x-arns-index'], 'number');
+      assert.strictEqual(typeof res.headers['x-arns-limit'], 'number');
     });
 
     it('Verifying /ar-io/resolver/<non-existent-name> returns 404 for nonexistent name', async function () {
@@ -208,5 +250,7 @@ describe('ArNS', function () {
 
       assert.strictEqual(res.status, 404);
     });
+
+    // TODO: add a 402 test for undername limit exceeded
   });
 });

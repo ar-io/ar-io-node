@@ -27,7 +27,6 @@ import {
   AoArNSNameDataWithName,
   AoClient,
   sortANTRecords,
-  sortedANTRecords,
 } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
