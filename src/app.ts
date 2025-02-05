@@ -55,6 +55,8 @@ app.use(
       headerNames.arnsTtlSeconds,
       headerNames.arnsProcessId,
       headerNames.arnsResolvedAt,
+      headerNames.arnsIndex,
+      headerNames.arnsLimit,
     ],
   }),
 );
