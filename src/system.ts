@@ -363,7 +363,9 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   switch (sourceName) {
     case 's3':
       return s3DataSource;
+    // ario-peer is for backwards compatibility
     case 'ario-peer':
+    case 'ario-peers':
       return arIODataSource;
     case 'trusted-gateways':
       return gatewaysDataSource;

@@ -160,7 +160,7 @@ export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
-    's3,trusted-gateways,chunks,tx-data',
+    's3,trusted-gateways,chunks,tx-data,ario-peers',
   )
   .split(',');
 
@@ -253,7 +253,7 @@ export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   '1000',
 );
 
-// The maximum number of data imports to queue for verification puroses
+// The maximum number of data imports to queue for verification purposes
 export const VERIFICATION_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   'VERIFICATION_DATA_IMPORTER_QUEUE_SIZE',
   '1000',
