@@ -116,8 +116,9 @@ export const createArnsMiddleware = ({
     res.header(headerNames.arnsTtlSeconds, ttl.toString());
     res.header(headerNames.arnsProcessId, processId);
     res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
-    res.header(headerNames.arnsLimit, limit.toString());
-    res.header(headerNames.arnsIndex, index.toString());
+    // limit and index can be undefined if they come from the cache
+    res.header(headerNames.arnsLimit, limit?.toString());
+    res.header(headerNames.arnsIndex, index?.toString());
 
     // handle undername limit exceeded
     if (config.ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT && index > limit) {
