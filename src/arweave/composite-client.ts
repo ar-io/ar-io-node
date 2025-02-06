@@ -788,39 +788,6 @@ export class ArweaveCompositeClient
   ): Promise<Chunk> {
     this.failureSimulator.maybeFail();
 
-    const cacheEntry = this.chunkCache.get({ absoluteOffset });
-    if (
-      cacheEntry &&
-      cacheEntry.cachedAt > Date.now() - CHUNK_CACHE_TTL_SECONDS * 1000
-    ) {
-      metrics.getChunkTotal.inc({
-        status: 'success',
-        method: 'getChunkByAny',
-        class: this.constructor.name,
-      });
-      return cacheEntry.chunk;
-    }
-
-    try {
-      const result = await this.peerGetChunk({
-        absoluteOffset,
-        retryCount: 3,
-        txSize,
-        dataRoot,
-        relativeOffset,
-      });
-      metrics.getChunkTotal.inc({
-        status: 'success',
-        method: 'getChunkByAny',
-        class: this.constructor.name,
-      });
-      return result;
-    } catch {
-      this.log.debug(
-        'Failed to fetch chunk from peers, moving forward to trusted nodes',
-      );
-    }
-
     try {
       const response = await this.trustedNodeRequestQueue.push({
         method: 'GET',
@@ -865,15 +832,54 @@ export class ArweaveCompositeClient
       });
 
       return chunk;
-    } catch (error) {
+    } catch (error: any) {
       this.handlePeerFailure(this.trustedNodeUrl, 'getChunkByAny', 'trusted');
       metrics.getChunkTotal.inc({
         status: 'error',
         method: 'getChunkByAny',
         class: this.constructor.name,
       });
-      throw error;
+      this.log.warn('Failed to fetch chunk trusted node, attempting peers: ', {
+        messsage: error.message,
+        stack: error.stack,
+      });
     }
+
+    const cacheEntry = this.chunkCache.get({ absoluteOffset });
+    if (
+      cacheEntry &&
+      cacheEntry.cachedAt > Date.now() - CHUNK_CACHE_TTL_SECONDS * 1000
+    ) {
+      metrics.getChunkTotal.inc({
+        status: 'success',
+        method: 'getChunkByAny',
+        class: this.constructor.name,
+      });
+      return cacheEntry.chunk;
+    }
+
+    try {
+      const result = await this.peerGetChunk({
+        absoluteOffset,
+        retryCount: 3,
+        txSize,
+        dataRoot,
+        relativeOffset,
+      });
+      metrics.getChunkTotal.inc({
+        status: 'success',
+        method: 'getChunkByAny',
+        class: this.constructor.name,
+      });
+      return result;
+    } catch (error: any) {
+      this.log.warn('Unable to fetch chunk from peers', {
+        messsage: error.message,
+        stack: error.stack,
+      });
+    }
+
+    throw new Error('Unable to fetch chunk from trusted node or peers');
   }
 
   async getChunkDataByAny(
