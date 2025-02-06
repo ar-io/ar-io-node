@@ -52,7 +52,7 @@ import {
   DataBlockListValidator,
   NameBlockListValidator,
   BundleIndex,
-  BundleFilterIds,
+  BundleSaveResult,
   BundleRecord,
   ChainIndex,
   ChainOffsetIndex,
@@ -932,7 +932,7 @@ export class StandaloneSqliteDatabaseWorker {
     skippedAt,
     unbundledAt,
     fullyIndexedAt,
-  }: BundleRecord): BundleFilterIds {
+  }: BundleRecord): BundleSaveResult {
     const idBuffer = fromB64Url(id);
     let rootTxId: Buffer | undefined;
     if (rootTransactionId != undefined) {
@@ -944,6 +944,7 @@ export class StandaloneSqliteDatabaseWorker {
       index_filter_id,
       previous_unbundle_filter_id,
       previous_index_filter_id,
+      last_fully_indexed_at,
     } = this.stmts.bundles.upsertBundle.get({
       id: idBuffer,
       root_transaction_id: rootTxId,
@@ -964,6 +965,7 @@ export class StandaloneSqliteDatabaseWorker {
       indexFilterId: index_filter_id,
       previousUnbundleFilterId: previous_unbundle_filter_id,
       previousIndexFilterId: previous_index_filter_id,
+      lastFullyIndexedAt: last_fully_indexed_at,
     };
   }
 
@@ -2946,7 +2948,7 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('bundles', 'saveBundleRetries', [rootTransactionId]);
   }
 
-  saveBundle(bundle: BundleRecord): Promise<BundleFilterIds> {
+  saveBundle(bundle: BundleRecord): Promise<BundleSaveResult> {
     return this.queueWrite('bundles', 'saveBundle', [bundle]);
   }
 

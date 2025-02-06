@@ -52,7 +52,8 @@ RETURNING
   unbundle_filter_id,
   index_filter_id,
   previous_unbundle_filter_id,
-  previous_index_filter_id;
+  previous_index_filter_id,
+  last_fully_indexed_at;
 
 -- updateBundleRetry
 UPDATE bundles
