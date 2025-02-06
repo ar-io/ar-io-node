@@ -224,7 +224,7 @@ export interface BundleSaveResult {
   indexFilterId?: string;
   previousUnbundleFilterId?: string;
   previousIndexFilterId?: string;
-  lastFullyUnbundledAt?: number;
+  lastFullyIndexedAt?: number;
 }
 
 export interface BundleIndex {

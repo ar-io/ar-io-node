@@ -525,7 +525,7 @@ export async function queueBundle(
         indexFilterId,
         previousUnbundleFilterId,
         previousIndexFilterId,
-        lastFullyUnbundledAt,
+        lastFullyIndexedAt,
       } = await db.saveBundle({
         id: item.id,
         format: 'ans-104',
@@ -540,7 +540,7 @@ export async function queueBundle(
         unbundleFilterId === previousUnbundleFilterId &&
         indexFilterId === previousIndexFilterId &&
         // Only skip bundles that have been fully unbundled
-        lastFullyUnbundledAt != null
+        lastFullyIndexedAt != null
       ) {
         log.info('Skipping fully unbundled bundle', {
           id: item.id,
