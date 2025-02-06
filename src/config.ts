@@ -160,7 +160,7 @@ export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
-    's3,trusted-gateways,chunks,tx-data,ario-peers',
+    's3,trusted-gateways,chunks,tx-data,ar-io-peers',
   )
   .split(',');
 
