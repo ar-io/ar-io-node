@@ -45,6 +45,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improved reliability of failed bundle indexing retries.
 - Fixed failure to compute data roots for verification for base layer data
   larger than 2GiB.
+- Fixed observer healthcheck by correcting node.js path in healthcheck script.
 
 ## [Release 24] - 2025-02-03
 
