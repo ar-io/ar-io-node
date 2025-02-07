@@ -49,7 +49,9 @@ export class SQLiteWalCleanupWorker {
   }
 
   stop(): void {
-    this.intervalId && clearInterval(this.intervalId);
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+    }
     this.log.info(
       `Stopped SQLite WAL cleanup worker for ${this.dbName} database`,
     );
