@@ -48,8 +48,9 @@ openApiRouter.get('/openapi.json', (_req, res) => {
 const options = {
   explorer: true,
 };
+// FIXME: swagger-ui-express types are not up to date, fix when upgrading to v5
 openApiRouter.use(
   '/api-docs',
-  swaggerUi.serve,
-  swaggerUi.setup(openapiDocument, options),
+  swaggerUi.serve as any,
+  swaggerUi.setup(openapiDocument, options) as any,
 );
