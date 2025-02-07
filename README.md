@@ -153,7 +153,6 @@ GRAPHQL_PORT=443
 ```
 
 ### Unbundling
-
 The ar.io gateway supports unbundling and indexing [ANS-104] bundle data. To
 enable this add the following environment variables to your `.env` file:
 
@@ -194,6 +193,8 @@ Note: ANS-104 indexing support is currently experimental. It has been tested
 successfully with small sets of bundles (using filters), but you may still
 encounter problems with it when indexing larger sets of transactions.
 
+For detailed information about filter types, operators, and advanced examples, see [Filter Documentation](docs/filters.md).
+
 ### Webhook Emission
 
 The ar.io gateway includes a feature to emit webhooks to specified servers when a transaction or data item is indexed and matches a predefined filter. This feature allows for real-time notifications and integrations based on the transaction and data indexing.
@@ -222,6 +223,8 @@ Example: `WEBHOOK_INDEX_FILTER="{ "tags": [{ "name": "App-Name", "value": "MyApp
 After setting up the environment variables, the ar.io gateway will monitor for transactions or data items that match the `WEBHOOK_INDEX_FILTER`. Once a match is found, a webhook will be emitted to all the servers listed in `WEBHOOK_TARGET_SERVERS`.
 
 Ensure that the target servers are configured to receive and process these webhooks appropriately.
+
+For detailed information about filter types, operators, and advanced examples, see [Filter Documentation](docs/filters.md).
 
 ### ArNS
 
