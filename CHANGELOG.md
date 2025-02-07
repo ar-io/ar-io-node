@@ -4,7 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 25] - 2025-02-07
+
+### Added
+
+- Added support for indexing and querying ECDSA signed Arweave transactions.
+- Expanded the OpenAPI specification to cover the entire gateway API and
+  commonly used Arweave node routes.
+- ArNS undername record count limits are now enforced. Undernames are sorted
+  based on their ANT configured priority with a fallback to name comparisons
+  when priorities conflict or are left unspecified. Enforcement is enabled by
+  default but can be disabled by setting the
+  `ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT` to `false`.
+
+### Changed
+
+- Renamed the `ario-peer` data source to `ar-io-peers` for consistency and
+  clarity. `ario-peer` will continue to work for backwards compatibility but is
+  considered deprecated.
+- Use AR.IO gateway peers from the ar.io gateway address registry (GAR) as the
+  last fallback for fetching data when responding to client data requests. This
+  has the benefit of making the network more resilient to trusted gateway
+  disruptions, but it can also result in nodes serving data from less trusted
+  sources if it is not found in the trusted gateway. This can be disabled by
+  using a custom `ON_DEMAND_RETRIEVAL_ORDER` that does not include
+  `ar-io-peers`.
+- Arweave data chunk requests are sent to the trusted node first with a
+  fallback to Arweave peers when chunks are unavailable on the trusted node.
+  This provides good performance by default with a fallback in case there are
+  issues retrieving chunks from the trusted node.
+- Increased the observer socket timeout to 5 seconds to accommodate initial
+  slow responses for uncached ArNS resolutions.
+- Disabled writing base layer Arweave signatures to the SQLite DB by default to
+  save disk space. When signatures are required to satisfy GraphQL requests,
+  they are retrieved from headers on the trusted node.
+
+### Fixed
+
+- Updated dependencies to address security issues.
+- Improved reliability of failed bundle indexing retries.
+- Fixed failure to compute data roots for verification for base layer data
+  larger than 2GiB.
 
 ## [Release 24] - 2025-02-03
 
