@@ -14,8 +14,8 @@ services:
       GATEWAY_URL: ${GATEWAY_URL:-http://envoy:3000}
       UPLOADER_URL: ${UPLOADER_URL:-http://envoy:3000/bundler}
       ARWEAVE_URL: ${ARWEAVE_URL:-}
-      GRAPHQL_URL: ${GRAPHQL_URL:-}
-      CHECKPOINT_GRAPHQL_URL: ${CHECKPOINT_GRAPHQL_URL:-}
+      GRAPHQL_URL: ${GRAPHQL_URL:-https://arweave.net/graphql}
+      CHECKPOINT_GRAPHQL_URL: ${CHECKPOINT_GRAPHQL_URL:-https://arweave.net/graphql}
       PORT: ${CU_PORT:-6363}
       ENABLE_METRICS_ENDPOINT: ${ENABLE_METRICS_ENDPOINT:-}
       DB_MODE: ${DB_MODE:-}
