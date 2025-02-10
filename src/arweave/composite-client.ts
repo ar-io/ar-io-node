@@ -72,6 +72,7 @@ const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
 const CHUNK_CACHE_TTL_SECONDS = 5;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
+const DEFAULT_PEER_INFO_TIMEOUT_MS = 5000;
 
 interface Peer {
   url: string;
@@ -280,6 +281,7 @@ export class ArweaveCompositeClient
                 method: 'GET',
                 url: '/info',
                 baseURL: peerUrl,
+                timeout: DEFAULT_PEER_INFO_TIMEOUT_MS,
               });
               this.peers[peerHost] = {
                 url: peerUrl,
