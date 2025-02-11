@@ -64,6 +64,7 @@ arweaveRouter.post('/chunk', async (req, res) => {
       res.status(500).send(result);
     }
   } catch (error: any) {
+    metrics.arweaveChunkBroadcastCounter.inc({ status: 'fail' });
     log.error('Failed to broadcast chunk', {
       message: error?.message,
       stack: error?.stack,
