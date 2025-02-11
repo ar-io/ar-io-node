@@ -105,6 +105,14 @@ export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
   .split(',');
 
+export const CHUNK_POST_CONCURRENCY_LIMIT_STRING = env.varOrUndefined(
+  'CHUNK_POST_CONCURRENCY_LIMIT',
+);
+export const CHUNK_POST_CONCURRENCY_LIMIT =
+  CHUNK_POST_CONCURRENCY_LIMIT_STRING !== undefined
+    ? +CHUNK_POST_CONCURRENCY_LIMIT_STRING
+    : 2;
+
 const SECONDARY_CHUNK_POST_URLS_STRING = env.varOrUndefined(
   'SECONDARY_CHUNK_POST_URLS',
 );

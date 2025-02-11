@@ -49,6 +49,7 @@ arweaveRouter.post('/chunk', async (req, res) => {
       chunk: req.body,
       abortTimeout: CHUNK_POST_ABORT_TIMEOUT_MS,
       responseTimeout: CHUNK_POST_RESPONSE_TIMEOUT_MS,
+      chunkPostMinSuccessCount: CHUNK_POST_MIN_SUCCESS_COUNT,
       originAndHopsHeaders: headers,
     });
 

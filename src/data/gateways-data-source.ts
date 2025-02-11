@@ -21,7 +21,7 @@ import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
 } from '../lib/request-attributes.js';
-
+import { shuffleArray } from '../lib/random.js';
 import {
   ContiguousData,
   ContiguousDataSource,
@@ -62,15 +62,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
     }
   }
 
-  // Fisher-Yates algorithm
-  private shuffleArray<T>(array: T[]): T[] {
-    for (let i = array.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [array[i], array[j]] = [array[j], array[i]];
-    }
-    return array;
-  }
-
   async getData({
     id,
     requestAttributes,
@@ -95,7 +86,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
       const gatewaysInTier = this.trustedGateways.get(priority);
 
       if (gatewaysInTier) {
-        const shuffledGateways = this.shuffleArray([...gatewaysInTier]);
+        const shuffledGateways = shuffleArray([...gatewaysInTier]);
 
         for (const gatewayUrl of shuffledGateways) {
           const gatewayAxios = axios.create({

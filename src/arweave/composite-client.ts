@@ -29,6 +29,7 @@ import CircuitBreaker from 'opossum';
 
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
+import { shuffleArray } from '../lib/random.js';
 import {
   WeightedElement,
   randomWeightedChoices,
@@ -103,6 +104,7 @@ export class ArweaveCompositeClient
   // Trusted node
   private trustedNodeUrl: string;
   private chunkPostUrls: string[];
+  private chunkPostConcurrency: number;
   private secondaryChunkPostUrls: string[];
   private secondaryChunkPostConcurrency: number;
   private secondaryChunkPostMinSuccessCount: number;
@@ -195,6 +197,7 @@ export class ArweaveCompositeClient
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.chunkPostUrls = chunkPostUrls.map((url) => url.replace(/\/$/, ''));
+    this.chunkPostConcurrency = config.CHUNK_POST_CONCURRENCY_LIMIT;
     this.secondaryChunkPostUrls = config.SECONDARY_CHUNK_POST_URLS.map((url) =>
       url.replace(/\/$/, ''),
     );
@@ -1081,64 +1084,77 @@ export class ArweaveCompositeClient
     abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
     responseTimeout = DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
     originAndHopsHeaders,
+    chunkPostMinSuccessCount,
   }: {
     chunk: JsonChunkPost;
     abortTimeout?: number;
     responseTimeout?: number;
     originAndHopsHeaders: Record<string, string | undefined>;
+    chunkPostMinSuccessCount: number;
   }): Promise<BroadcastChunkResult> {
+    const primaryChunkNodePostLimit = pLimit(this.chunkPostConcurrency);
+
+    const primaryChunkNodeUrls = shuffleArray([...this.chunkPostUrls]);
+    const primaryResults: Promise<BroadcastChunkResponses | undefined>[] = [];
+
     let successCount = 0;
     let failureCount = 0;
 
-    const results = await Promise.all(
-      this.chunkPostUrls.map(async (url) => {
-        const circuitBreaker = this.primaryChunkPostCircuitBreakers[url];
-        const response = await circuitBreaker.fire({
-          url,
-          chunk,
-          abortTimeout,
-          responseTimeout,
-          originAndHopsHeaders,
-        });
+    for (const url of primaryChunkNodeUrls) {
+      const task = primaryChunkNodePostLimit(async () => {
+        if (successCount < chunkPostMinSuccessCount) {
+          const response = await this.primaryChunkPostCircuitBreakers[url].fire(
+            {
+              url,
+              chunk,
+              abortTimeout,
+              responseTimeout,
+              originAndHopsHeaders,
+            },
+          );
 
-        if (response.success) {
-          successCount++;
+          if (response.success) {
+            successCount++;
+            metrics.arweaveChunkPostCounter.inc({
+              endpoint: url,
+              status: 'success',
+              role: 'primary',
+            });
+          } else {
+            failureCount++;
+            metrics.arweaveChunkPostCounter.inc({
+              endpoint: url,
+              status: 'fail',
+              role: 'primary',
+            });
+          }
 
-          metrics.arweaveChunkPostCounter.inc({
-            endpoint: url,
-            status: 'success',
-            role: 'primary',
-          });
-        } else {
-          failureCount++;
-
-          metrics.arweaveChunkPostCounter.inc({
-            endpoint: url,
-            status: 'fail',
-            role: 'primary',
-          });
+          return response;
         }
+        return undefined;
+      });
 
-        return response;
-      }),
-    );
+      primaryResults.push(task);
+    }
 
     let secondarySuccessCount = 0;
 
+    const secondaryResults: Promise<BroadcastChunkResponses>[] = [];
+
     if (this.secondaryChunkPostUrls.length > 0) {
-      const secondaryResults: Promise<BroadcastChunkResponses>[] = [];
+      const shuffledSecondaryChunkPostUrls = shuffleArray([
+        ...this.secondaryChunkPostUrls,
+      ]);
 
-      const shuffledSecondaryChunkPostUrls = this.secondaryChunkPostUrls.sort(
-        () => Math.random() - 0.5,
+      const secondaryChunkNodePostLimit = pLimit(
+        this.secondaryChunkPostConcurrency,
       );
-
-      const limit = pLimit(this.secondaryChunkPostConcurrency);
       for (const url of shuffledSecondaryChunkPostUrls) {
         if (secondarySuccessCount >= this.secondaryChunkPostMinSuccessCount)
           break;
 
         const circuitBreaker = this.secondaryChunkPostCircuitBreakers[url];
-        const task = limit(async () => {
+        const task = secondaryChunkNodePostLimit(async () => {
           const response = await circuitBreaker.fire({
             url,
             chunk,
@@ -1167,9 +1183,12 @@ export class ArweaveCompositeClient
 
         secondaryResults.push(task);
       }
-
       Promise.all(secondaryResults);
     }
+
+    const results = (await Promise.all(primaryResults)).filter(
+      (result) => result !== undefined,
+    );
 
     return {
       successCount,
