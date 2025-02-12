@@ -102,6 +102,14 @@ export const GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS = +env.varOrDefault(
   `${5 * 1000}`, // 5 seconds
 );
 
+// the size of the array from which the avarage performance is calculated
+// this avarage is used to give a weight to the peers. Longer window means
+// a better avarage is calculated, but it shouldn't matter too much.
+export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
+  'GATEWAY_PEERS_REQUEST_WINDOW_COUNT',
+  '20',
+);
+
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 

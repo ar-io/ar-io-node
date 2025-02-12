@@ -18,7 +18,6 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import * as winston from 'winston';
-import axios from 'axios';
 import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes } from '../types.js';
@@ -72,8 +71,6 @@ beforeEach(async () => {
 
   mock.method(ARIO, 'init', () => mockedArIOInstance);
 
-  mock.method(axios, 'get', mockedAxiosGet);
-
   mock.method(metrics.getDataErrorsTotal, 'inc');
   mock.method(metrics.getDataStreamErrorsTotal, 'inc');
   mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
@@ -83,6 +80,8 @@ beforeEach(async () => {
     arIO: ARIO.init(),
     nodeWallet: 'localNode',
   });
+
+  mock.method(dataSource.axiosInstance, 'get', mockedAxiosGet);
 
   requestAttributes = { origin: 'node-url', hops: 0 };
 });
@@ -142,7 +141,7 @@ describe('ArIODataSource', () => {
     it('should retry with a different peer if the first one fails', async () => {
       let firstPeer = true;
       const secondPeerStreamData = Readable.from(['secondPeerData']);
-      mock.method(axios, 'get', async () => {
+      mock.method(dataSource.axiosInstance, 'get', async () => {
         if (firstPeer) {
           firstPeer = false;
           throw new Error('First peer failed');
@@ -198,7 +197,7 @@ describe('ArIODataSource', () => {
     });
 
     it('should increment getDataStreamErrorsTotal', async () => {
-      mock.method(axios, 'get', async () => ({
+      mock.method(dataSource.axiosInstance, 'get', async () => ({
         status: 200,
         data: new TestDestroyedReadable(),
         headers: {
@@ -251,7 +250,7 @@ describe('ArIODataSource', () => {
     });
 
     it('should throw an error if all peers fail', async () => {
-      mock.method(axios, 'get', () => {
+      mock.method(dataSource.axiosInstance, 'get', () => {
         throw new Error('All peers failed');
       });
 
@@ -272,17 +271,21 @@ describe('ArIODataSource', () => {
 
     it('should include Range header when region is provided', async () => {
       let rangeHeader: string | undefined;
-      mock.method(axios, 'get', async (_: string, config: any) => {
-        rangeHeader = config.headers['Range'];
-        return {
-          status: 200,
-          data: axiosStreamData,
-          headers: {
-            'content-length': '50',
-            'content-type': 'application/octet-stream',
-          },
-        };
-      });
+      mock.method(
+        dataSource.axiosInstance,
+        'get',
+        async (_: string, config: any) => {
+          rangeHeader = config.headers['Range'];
+          return {
+            status: 200,
+            data: axiosStreamData,
+            headers: {
+              'content-length': '50',
+              'content-type': 'application/octet-stream',
+            },
+          };
+        },
+      );
 
       const region = { offset: 100, size: 200 };
       await dataSource.getData({ id: 'dataId', region });
@@ -292,7 +295,7 @@ describe('ArIODataSource', () => {
 
     it('should handle errors when fetching data with region', async () => {
       const retryCount = 2;
-      mock.method(axios, 'get', () => {
+      mock.method(dataSource.axiosInstance, 'get', () => {
         throw new Error('Failed to fetch data with region');
       });
 

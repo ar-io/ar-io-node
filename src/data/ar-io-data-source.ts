@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
 import {
   WeightedElement,
@@ -35,6 +34,11 @@ import {
   parseRequestAttributesHeaders,
 } from '../lib/request-attributes.js';
 import { shuffleArray } from '../lib/random.js';
+import {
+  AxiosResponseWithTimings,
+  AxiosInstanceWithTimingsAdapter,
+  makeAxiosInstanceWithTimings,
+} from '../lib/axios-timings-adapter.js';
 
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
@@ -49,10 +53,16 @@ export class ArIODataSource implements ContiguousDataSource {
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
   private updatePeersRefreshIntervalMs: number;
+  private previousGatewayPeerTtfbDurations: number[];
+  private previousGatewayPeerKbpsDownloadRate: number[];
 
   private arIO: AoARIORead;
   peers: Record<string, string> = {};
   private intervalId?: NodeJS.Timeout;
+
+  // it makes typings nicer when we need to mock this in unit tests
+  // try to avoid calling it directly
+  public axiosInstance: AxiosInstanceWithTimingsAdapter;
 
   private getRandomWeightedPeers: (
     table: WeightedElement<string>[],
@@ -81,7 +91,10 @@ export class ArIODataSource implements ContiguousDataSource {
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
     this.updatePeersRefreshIntervalMs = updatePeersRefreshIntervalMs;
+    this.previousGatewayPeerTtfbDurations = [];
+    this.previousGatewayPeerKbpsDownloadRate = [];
     this.arIO = arIO;
+    this.axiosInstance = makeAxiosInstanceWithTimings();
 
     this.updatePeerList();
     this.intervalId = setInterval(
@@ -172,7 +185,47 @@ export class ArIODataSource implements ContiguousDataSource {
     ]);
   }
 
-  handlePeerSuccess(peer: string): void {
+  handlePeerSuccess(peer: string, kbps: number, ttfb: number): void {
+    const log = this.log.child({ method: 'handlePeerSuccess' });
+
+    if (Number.isNaN(kbps) || Number.isNaN(ttfb)) {
+      // we are relying on the axios adapter to provide these values correctly
+      // if the adapter logic changes in future axios versions, it would be
+      // good to catch this error condition.
+      log.warn('Invalid kbps or ttfb value', { kbps, ttfb });
+      return;
+    }
+
+    const currentAvarageTtfb =
+      this.previousGatewayPeerTtfbDurations.reduce(
+        (acc, value) => acc + value,
+        0,
+      ) / this.previousGatewayPeerTtfbDurations.length;
+
+    const currentAverageKbps =
+      this.previousGatewayPeerKbpsDownloadRate.reduce(
+        (acc, value) => acc + value,
+        0,
+      ) / this.previousGatewayPeerKbpsDownloadRate.length;
+
+    this.previousGatewayPeerTtfbDurations.push(ttfb);
+    this.previousGatewayPeerTtfbDurations =
+      this.previousGatewayPeerTtfbDurations.slice(
+        1,
+        config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT + 1,
+      );
+    this.previousGatewayPeerKbpsDownloadRate.push(kbps);
+    this.previousGatewayPeerKbpsDownloadRate =
+      this.previousGatewayPeerKbpsDownloadRate.slice(
+        1,
+        config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT + 1,
+      );
+
+    const additionalWeightFromTtfb =
+      ttfb >= currentAvarageTtfb ? config.WEIGHTED_PEERS_TEMPERATURE_DELTA : 0;
+    const additionalWeightFromKbps =
+      kbps >= currentAverageKbps ? config.WEIGHTED_PEERS_TEMPERATURE_DELTA : 0;
+
     metrics.getDataStreamSuccessesTotal.inc({
       class: this.constructor.name,
       source: peer,
@@ -181,7 +234,10 @@ export class ArIODataSource implements ContiguousDataSource {
     this.weightedPeers.forEach((weightedPeer) => {
       if (weightedPeer.id === peer) {
         weightedPeer.weight = Math.min(
-          weightedPeer.weight + config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+          weightedPeer.weight +
+            config.WEIGHTED_PEERS_TEMPERATURE_DELTA +
+            additionalWeightFromTtfb +
+            additionalWeightFromKbps,
           100,
         );
       }
@@ -212,17 +268,20 @@ export class ArIODataSource implements ContiguousDataSource {
     peerAddress: string;
     id: string;
     headers: { [key: string]: string };
-  }): Promise<AxiosResponse> {
+  }): Promise<AxiosResponseWithTimings> {
     const path = `/raw/${id}`;
 
-    const response = await axios.get(`${peerAddress}${path}`, {
-      headers: {
-        'Accept-Encoding': 'identity',
-        ...headers,
+    const response: AxiosResponseWithTimings = await this.axiosInstance.get(
+      `${peerAddress}${path}`,
+      {
+        headers: {
+          'Accept-Encoding': 'identity',
+          ...headers,
+        },
+        responseType: 'stream',
+        timeout: this.requestTimeoutMs,
       },
-      responseType: 'stream',
-      timeout: this.requestTimeoutMs,
-    });
+    );
 
     if (response.status !== 200) {
       throw new Error(`Unexpected status code from peer: ${response.status}`);
@@ -308,7 +367,7 @@ export class ArIODataSource implements ContiguousDataSource {
     requestAttributes,
     peer,
   }: {
-    response: AxiosResponse;
+    response: AxiosResponseWithTimings;
     requestAttributes: RequestAttributes;
     peer: string;
   }): ContiguousData {
@@ -319,7 +378,7 @@ export class ArIODataSource implements ContiguousDataSource {
     });
 
     stream.on('end', () => {
-      this.handlePeerSuccess(peer);
+      this.handlePeerSuccess(peer, response.kbps, response.ttfb);
     });
 
     return {
