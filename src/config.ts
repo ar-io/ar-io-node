@@ -97,6 +97,11 @@ export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   '2',
 );
 
+export const GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS = +env.varOrDefault(
+  'GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS',
+  `${5 * 1000}`, // 5 seconds
+);
+
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 
