@@ -41,7 +41,12 @@ INSERT INTO bundles (
   first_unbundled_at = IFNULL(first_unbundled_at, @unbundled_at),
   last_unbundled_at = IFNULL(@unbundled_at, last_unbundled_at),
   first_fully_indexed_at = IFNULL(first_fully_indexed_at, @fully_indexed_at),
-  last_fully_indexed_at = @fully_indexed_at,
+  last_fully_indexed_at = CASE
+    WHEN @unbundle_filter_id != unbundle_filter_id OR
+         @index_filter_id != index_filter_id
+    THEN NULL
+    ELSE @fully_indexed_at
+  END,
   import_attempt_count = CASE
     WHEN (@queued_at IS NOT NULL OR @skipped_at IS NOT NULL) THEN
     COALESCE(bundles.import_attempt_count, 0) + 1
