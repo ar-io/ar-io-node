@@ -31,6 +31,7 @@
     "ioredis": "^5.4.2",
     "json-canonicalize": "^1.0.6",
     "lmdb": "^2.9.4",
+    "lru-cache": "^11.0.2",
     "middleware-async": "^1.4.0",
     "msgpackr": "^1.11.2",
     "node-cache": "^5.1.2",
