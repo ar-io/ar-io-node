@@ -558,8 +558,9 @@ export const ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS =
   );
 
 // TODO: support multiple gateway urls
-export const TRUSTED_ARNS_GATEWAY_URL = env.varOrUndefined(
+export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
   'TRUSTED_ARNS_GATEWAY_URL',
+  'https://__NAME__.arweave.net',
 );
 
 //
