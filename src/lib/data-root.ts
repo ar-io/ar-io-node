@@ -197,6 +197,11 @@ export class DataRootComputer {
         // Write data stream to temp file
         const writeStream = fs.createWriteStream(dataPath);
         pipeline(data.stream, writeStream, async (error) => {
+          // 1) Clear the timer
+          clearTimeout(timeout);
+          // 2) Remove the listener on the 'data' event
+          data?.stream.off('data', resetTimeout);
+
           if (error !== undefined) {
             reject(error);
             log.error('Error writing TX stream', error);
