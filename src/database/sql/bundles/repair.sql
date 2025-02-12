@@ -43,7 +43,9 @@ WHERE matched_data_item_count IS NOT NULL
 UPDATE bundles
 SET
   last_queued_at = NULL,
-  last_skipped_at = NULL
+  last_skipped_at = NULL,
+  last_fully_indexed_at = NULL,
+  matched_data_item_count = NULL
 WHERE id IN (
   SELECT b.id
   FROM bundles b
