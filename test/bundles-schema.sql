@@ -156,8 +156,9 @@ CREATE INDEX new_data_items_owner_address_id_idx ON new_data_items (owner_addres
 CREATE INDEX new_data_items_height_indexed_at_idx ON new_data_items (height, indexed_at);
 CREATE INDEX bundle_data_items_root_transaction_id_idx ON bundle_data_items (root_transaction_id);
 CREATE INDEX stable_data_items_indexed_at_idx ON stable_data_items (indexed_at);
-CREATE INDEX import_attempt_last_retried_idx ON bundles (import_attempt_count, last_retried_at);
 CREATE INDEX root_transaction_id_idx ON bundles (root_transaction_id);
+CREATE INDEX import_attempt_last_retried_idx ON bundles (import_attempt_count, last_retried_at)
+WHERE last_fully_indexed_at IS NULL;
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE bundle_formats (
