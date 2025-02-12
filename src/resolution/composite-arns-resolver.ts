@@ -109,18 +109,31 @@ export class CompositeArNSResolver implements NameResolver {
             this.log.info('Attempting to resolve name with resolver', {
               name,
             });
-            const resolution = await resolver.resolve({
-              name,
-              baseArNSRecord: await baseNameInCachePromise,
-            });
-            if (resolution.resolvedAt !== undefined) {
-              this.resolutionCache.set(
-                name,
-                Buffer.from(JSON.stringify(resolution)),
-              );
-              this.log.info('Resolved name', { name, resolution });
 
-              return resolution;
+            const maybeResolution = await pTimeout(
+              resolver
+                .resolve({
+                  name,
+                  baseArNSRecord: await baseNameInCachePromise,
+                })
+                .then((resolution) => {
+                  if (resolution.resolvedAt !== undefined) {
+                    this.resolutionCache.set(
+                      name,
+                      Buffer.from(JSON.stringify(resolution)),
+                    );
+                    this.log.info('Resolved name', { name, resolution });
+
+                    return resolution;
+                  }
+
+                  return undefined;
+                }),
+              { milliseconds: config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS },
+            );
+
+            if (maybeResolution) {
+              return maybeResolution;
             }
           } catch (error: any) {
             this.log.error('Error resolving name with resolver', {
