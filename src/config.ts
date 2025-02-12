@@ -506,6 +506,11 @@ export const ARNS_RESOLVER_PRIORITY_ORDER = env
   .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'on-demand,gateway')
   .split(',');
 
+export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
+  'ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS',
+  '3000',
+);
+
 export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS',
   `${5 * 1000}`, // 5 seconds
