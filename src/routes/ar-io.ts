@@ -26,6 +26,7 @@ import { db, signatureStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
+import { DATA_PATH_REGEX } from '../constants.js';
 
 export const arIoRouter = Router();
 export let parquetExporter: ParquetExporter | null = null;
@@ -338,6 +339,22 @@ arIoRouter.post(
     }
   },
 );
+
+arIoRouter.get('/ar-io/admin/bundle-status/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!DATA_PATH_REGEX.test(id)) {
+    res.status(400).send('Must provide a valid bundle id');
+    return;
+  }
+  const bundle = await db.getBundle(id);
+
+  if (bundle === null) {
+    res.status(404).send('Bundle not found');
+    return;
+  }
+
+  res.json(bundle);
+});
 
 arIoRouter.post(
   '/ar-io/admin/export-parquet',

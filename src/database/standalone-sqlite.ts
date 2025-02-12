@@ -70,6 +70,7 @@ import {
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
+import { camelCase } from 'change-case';
 
 const CPU_COUNT = os.cpus().length;
 const MAX_WORKER_COUNT = 12;
@@ -1241,6 +1242,23 @@ export class StandaloneSqliteDatabaseWorker {
       indexed_at: currentTimestamp,
       cached_at: cachedAt,
     });
+  }
+
+  getBundle(id: string) {
+    const bundle = this.stmts.bundles.selectBundleAttributes.get({
+      id: fromB64Url(id),
+    });
+
+    if (bundle !== undefined) {
+      return Object.fromEntries(
+        Object.entries(bundle).map(([key, value]) => [
+          camelCase(key),
+          Buffer.isBuffer(value) ? toB64Url(value) : value,
+        ]),
+      );
+    }
+
+    return null;
   }
 
   getGqlNewTransactionTags(txId: Buffer) {
@@ -3079,6 +3097,10 @@ export class StandaloneSqliteDatabase
     ]);
   }
 
+  getBundle(id: string) {
+    return this.queueRead('bundles', 'getBundle', [id]);
+  }
+
   getGqlTransactions({
     pageSize,
     cursor,
@@ -3415,6 +3437,10 @@ if (!isMainThread) {
         case 'saveDataContentAttributes':
           worker.saveDataContentAttributes(args[0]);
           parentPort?.postMessage(null);
+          break;
+        case 'getBundle':
+          const bundle = worker.getBundle(args[0]);
+          parentPort?.postMessage(bundle);
           break;
         case 'getGqlTransactions':
           const gqlTransactions = worker.getGqlTransactions(args[0]);

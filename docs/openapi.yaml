@@ -1418,6 +1418,128 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/ServerError'
+  '/ar-io/admin/bundle-status/{id}':
+    get:
+      tags: [Admin]
+      summary: Get bundle processing status
+      description: |
+        Returns detailed status information about a bundle's processing state, including counts of data items,
+        processing timestamps, and retry attempts. This endpoint helps monitor the progress and state of bundle
+        processing through the gateway's pipeline.
+      operationId: adminBundleStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Base64Url43'
+          description: Bundle ID
+      responses:
+        '200':
+          description: Bundle status details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Base64Url43'
+                    description: Bundle transaction ID
+                  formatId:
+                    type: integer
+                    description: Format ID of the bundle
+                  unbundleFilterId:
+                    type: integer
+                    description: ID of the current unbundle filter configuration
+                  indexFilterId:
+                    type: integer
+                    description: ID of the current index filter configuration
+                  dataItemCount:
+                    type: integer
+                    description: Total number of data items in the bundle
+                  matchedDataItemCount:
+                    type: integer
+                    description: Number of data items matching filter criteria
+                  firstQueuedAt:
+                    type: integer
+                    description: Unix timestamp of first queue attempt
+                  lastQueuedAt:
+                    type: integer
+                    description: Unix timestamp of most recent queue attempt
+                  firstSkippedAt:
+                    type: integer
+                    nullable: true
+                    description: Unix timestamp of first skip, if any
+                  lastSkippedAt:
+                    type: integer
+                    nullable: true
+                    description: Unix timestamp of most recent skip, if any
+                  firstUnbundledAt:
+                    type: integer
+                    description: Unix timestamp when unbundling first started
+                  lastUnbundledAt:
+                    type: integer
+                    description: Unix timestamp when unbundling was last performed
+                  firstFullyIndexedAt:
+                    type: integer
+                    description: Unix timestamp when indexing first completed
+                  lastFullyIndexedAt:
+                    type: integer
+                    description: Unix timestamp when indexing was last completed
+                  rootTransactionId:
+                    $ref: '#/components/schemas/Base64Url43'
+                    description: Transaction ID of the root bundle
+                  importAttemptCount:
+                    type: integer
+                    description: Number of times bundle import was attempted
+                  duplicatedDataItemCount:
+                    type: integer
+                    description: Number of duplicate data items found
+                  previousUnbundleFilterId:
+                    type: integer
+                    description: ID of the previous unbundle filter configuration
+                  previousIndexFilterId:
+                    type: integer
+                    description: ID of the previous index filter configuration
+                  retryAttemptCount:
+                    type: integer
+                    description: Number of retry attempts
+                  firstRetriedAt:
+                    type: integer
+                    description: Unix timestamp of first retry attempt
+                  lastRetriedAt:
+                    type: integer
+                    description: Unix timestamp of most recent retry attempt
+                required:
+                  - id
+                  - formatId
+                  - unbundleFilterId
+                  - indexFilterId
+                  - dataItemCount
+                  - matchedDataItemCount
+                  - rootTransactionId
+                  - importAttemptCount
+                  - duplicatedDataItemCount
+        '400':
+          description: Invalid bundle ID format
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Must provide a valid bundle id'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Bundle not found
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 'Bundle not found'
+        '500':
+          $ref: '#/components/responses/ServerError'
   '/ar-io/admin/block-data':
     put:
       tags: [Admin]
