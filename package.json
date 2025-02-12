@@ -98,7 +98,8 @@
   },
   "resolutions": {
     "gc-stats/nan": "2.18.0",
-    "express-prometheus-middleware/prometheus-gc-stats/gc-stats": "1.4.1"
+    "express-prometheus-middleware/prometheus-gc-stats/gc-stats": "1.4.1",
+    "lru-cache": "8.x"
   },
   "scripts": {
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json && yarn copy-files",
