@@ -102,18 +102,6 @@ describe('ArIODataSource', () => {
     });
   });
 
-  describe('selectPeer', () => {
-    it('should return a random peer url', async () => {
-      const peerUrl = dataSource.selectPeer();
-      assert.ok(['http://peer1.com', 'https://peer2.com'].includes(peerUrl));
-    });
-
-    it('should throw an error if no peers are available', async () => {
-      dataSource.peers = {};
-      assert.throws(() => dataSource.selectPeer(), /No peers available/);
-    });
-  });
-
   describe('getData', () => {
     it('should return data from a random peer', async () => {
       const data = await dataSource.getData({ id: 'dataId' });

@@ -22,7 +22,7 @@ import {
   randomWeightedChoices,
 } from '../lib/random-weighted-choices.js';
 import { AoARIORead } from '@ar.io/sdk';
-import { randomInt } from 'node:crypto';
+import memoize from 'memoizee';
 
 import {
   ContiguousData,
@@ -34,6 +34,8 @@ import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
 } from '../lib/request-attributes.js';
+import { shuffleArray } from '../lib/random.js';
+
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
 
@@ -51,6 +53,11 @@ export class ArIODataSource implements ContiguousDataSource {
   private arIO: AoARIORead;
   peers: Record<string, string> = {};
   private intervalId?: NodeJS.Timeout;
+
+  private getRandomWeightedPeers: (
+    table: WeightedElement<string>[],
+    peerCount: number,
+  ) => string[];
 
   protected weightedPeers: WeightedElement<string>[] = [];
 
@@ -80,6 +87,17 @@ export class ArIODataSource implements ContiguousDataSource {
     this.intervalId = setInterval(
       this.updatePeerList.bind(this),
       this.updatePeersRefreshIntervalMs,
+    );
+
+    this.getRandomWeightedPeers = memoize(
+      (table: WeightedElement<string>[], peerCount: number) =>
+        randomWeightedChoices<string>({
+          table,
+          count: peerCount,
+        }),
+      {
+        maxAge: config.GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS,
+      },
     );
   }
 
@@ -141,19 +159,6 @@ export class ArIODataSource implements ContiguousDataSource {
     });
   }
 
-  selectPeer(): string {
-    const log = this.log.child({ method: 'selectPeer' });
-    const keys = Object.keys(this.peers);
-
-    if (keys.length === 0) {
-      log.warn('No peers available');
-      throw new Error('No peers available');
-    }
-
-    const randomIndex = randomInt(0, keys.length);
-    return this.peers[keys[randomIndex]];
-  }
-
   selectPeers(peerCount: number): string[] {
     const log = this.log.child({ method: 'selectPeers' });
 
@@ -162,10 +167,9 @@ export class ArIODataSource implements ContiguousDataSource {
       throw new Error('No weighted peers available');
     }
 
-    return randomWeightedChoices<string>({
-      table: this.weightedPeers,
-      count: peerCount,
-    });
+    return shuffleArray([
+      ...this.getRandomWeightedPeers(this.weightedPeers, peerCount),
+    ]);
   }
 
   handlePeerSuccess(peer: string): void {
