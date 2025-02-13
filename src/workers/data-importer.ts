@@ -32,6 +32,7 @@ interface IndexProperty {
 }
 
 type AnyContiguousData = { id: string };
+// We can only unbundle items with indexes, and they can be either data items or transactions
 type UnbundleableItem = (NormalizedDataItem | PartialJsonTransaction) &
   IndexProperty;
 type ImportableItem = AnyContiguousData | UnbundleableItem;
@@ -114,15 +115,15 @@ export class DataImporter {
 
     return new Promise((resolve, reject) => {
       data.stream.on('end', () => {
-        const isUnbundleableItem = this.isUnbundleableItem(item);
-        if (this.ans104Unbundler && isUnbundleableItem) {
+        const hasIndexProperty = this.hasIndexPropery(item);
+        if (this.ans104Unbundler && hasIndexProperty) {
           log.debug('Data download completed. Queuing for unbundling...');
           this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
         } else {
           log.debug(
-            isUnbundleableItem
+            hasIndexProperty
               ? 'Data download completed, skipping unbundling because unbundler is not available'
-              : 'Data download completed, marked as any contiguous tx/data-item, skipping unbundling',
+              : 'Data download completed, skipping unbundling because no index was provided to the tx/data-item',
           );
         }
         resolve();
@@ -154,7 +155,10 @@ export class DataImporter {
     return this.queue.length() >= this.maxQueueSize;
   }
 
-  isUnbundleableItem(item: ImportableItem): item is UnbundleableItem {
+  // Ans104Parser requires items with indexes. A missing index doesn't always mean
+  // that a tx/data-item is not unbundleable, but it does mean that it can't be unbundled
+  // due to missing index, this (should) only happen when called directly during development.
+  hasIndexPropery(item: ImportableItem): item is UnbundleableItem {
     return Object.keys(item).length > 1 && 'index' in item;
   }
 }
