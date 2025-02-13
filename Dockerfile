@@ -2,7 +2,7 @@ ARG NODE_VERSION=20.11.1
 ARG NODE_VERSION_SHORT=20
 
 # Build
-FROM node:${NODE_VERSION}-bullseye-slim AS builder
+FROM node:${NODE_VERSION}-bookworm-slim AS builder
 
 WORKDIR /app
 RUN apt-get update \
