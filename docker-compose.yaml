@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-0d3e2a9594f0520a2f374450851fd4ddf1321c09}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: unless-stopped
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3ea34c3c116aa80ed186628d810c6af39b43f3c8}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: unless-stopped
@@ -97,7 +97,7 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_S3_CONTIGUOUS_DATA_BUCKET=${AWS_S3_CONTIGUOUS_DATA_BUCKET:-}
       - AWS_S3_CONTIGUOUS_DATA_PREFIX=${AWS_S3_CONTIGUOUS_DATA_PREFIX:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-26}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-27-pre}
       - CHUNK_POST_URLS=${CHUNK_POST_URLS:-}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_CONCURRENCY_LIMIT=${CHUNK_POST_CONCURRENCY_LIMIT:-}
@@ -163,7 +163,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-3ea34c3c116aa80ed186628d810c6af39b43f3c8}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
     profiles:
       - clickhouse
     build:
@@ -206,7 +206,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-26}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-27-pre}
       - AO_CU_URL=${AO_CU_URL:-}
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
@@ -215,7 +215,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
     build:
       context: litestream/
       dockerfile: Dockerfile
