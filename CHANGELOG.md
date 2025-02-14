@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Release 26] - 2025-02-13
+
+### Added
+
+- Added a per resolver timeout in the composite ArNS resolver. When the
+  composite resolver attempts resolution it is applied to each resolution
+  attempt. It is configurable via the `ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS` and
+  defaults to 3 seconds in order to allow a fallback attempt before the default
+  observer timeout of 5 seconds.
+- Added a `TURBO_UPLOAD_SERVICE_URL` environment variable to support
+  configuration of the bundler used by the observer (TurboSDK defaults are
+  used if not set).
+- Added a `REPORT_DATA_SINK` environment variable that enables switching the
+  method used to post observer reports. With the default, `turbo`, it sends
+  data items via a Turbo compatible bundler. Switching it to `arweave` will
+  post base layer transactions directly to Arweave instead.
+- Added a `/ar-io/admin/bundle-status/<id>` endpoint that returns the counters
+  and timestamps from the `bundles` row in `data.db`. This can be used for
+  monitoring unbundling progress and scripting (e.g., to skip requeuing already
+  queued bundles).
+- Added more complete [documentation](docs/filters.md) for filters.
+
+### Changed
+
+- Use arweave.net as the default GraphQL URL for AO CUs since most gateways
+  will not have a complete local AO data item index.
+- Use a default timeout of 5 seconds when refreshing Arweave peers to prevent
+  stalled peer refreshes.
+- Cache selected gateway peer weights for the amount of time specified by the
+  `GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS` environment variable with a default
+  of 5 seconds to avoid expensive peer weight recomputation on each request.
+- Chunk broadcasts to primary nodes occur in parallel with a concurrency limit
+  defaulting to 2 and configurable via the `CHUNK_POST_CONCURRENCY_LIMIT`
+  environment variable.
+- Added circuit breakers for primary chunk node POSTs to avoid overwhelming
+  chunk nodes when they are slow to respond.
+
+### Fixed
+
+- Properly cleanup timeout and event listener when terminating the data
+  root computation worker.
+- Count chunk broadcast exceptions as errors in the
+  `arweave_chunk_broadcast_total` metric.
+
 ## [Release 25] - 2025-02-07
 
 ### Added
