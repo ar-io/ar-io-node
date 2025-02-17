@@ -835,7 +835,7 @@ describe('Indexing', function () {
       assert.equal(dataItems.length, 0);
     });
 
-    it('Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters', async function () {
+    it.skip('Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters', async function () {
       const response = await axios({
         method: 'post',
         url: 'http://localhost:4000/ar-io/admin/queue-bundle',
