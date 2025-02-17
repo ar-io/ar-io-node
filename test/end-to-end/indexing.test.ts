@@ -29,6 +29,7 @@ import Sqlite, { Database } from 'better-sqlite3';
 import crypto from 'node:crypto';
 import { b64UrlToUtf8, toB64Url, fromB64Url } from '../../src/lib/encoding.js';
 import { getMaxHeight, waitForBlocks } from './utils.js';
+import { isTestFiltered } from '../utils.js';
 import { Environment } from 'testcontainers/build/types.js';
 
 const projectRootPath = process.cwd();
@@ -835,21 +836,25 @@ describe('Indexing', function () {
       assert.equal(dataItems.length, 0);
     });
 
-    it.skip('Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters', async function () {
-      const response = await axios({
-        method: 'post',
-        url: 'http://localhost:4000/ar-io/admin/queue-bundle',
-        headers: {
-          Authorization: 'Bearer secret',
-          'Content-Type': 'application/json',
-        },
-        data: {
-          id: bundleId,
-        },
-      });
+    it(
+      'Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        const response = await axios({
+          method: 'post',
+          url: 'http://localhost:4000/ar-io/admin/queue-bundle',
+          headers: {
+            Authorization: 'Bearer secret',
+            'Content-Type': 'application/json',
+          },
+          data: {
+            id: bundleId,
+          },
+        });
 
-      assert.equal(response.data.message, 'Bundle skipped');
-    });
+        assert.equal(response.data.message, 'Bundle skipped');
+      },
+    );
 
     it('Verifying if unbundling when trying to unbundle the same bundle using different filters', async function () {
       await compose.down();
@@ -923,31 +928,35 @@ describe('Indexing', function () {
       await compose.down();
     });
 
-    it.skip('Verifying if data item headers were indexed', async function () {
-      const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
-      const dataItems = stmt.all();
+    it(
+      'Verifying if data item headers were indexed',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
+        const dataItems = stmt.all();
 
-      dataItems.forEach((dataItem) => {
-        assert.equal(
-          toB64Url(dataItem.id),
-          'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
-        );
+        dataItems.forEach((dataItem) => {
+          assert.equal(
+            toB64Url(dataItem.id),
+            'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
+          );
 
-        assert.equal(dataItem.parent_id, null);
-        assert.equal(dataItem.root_transaction_id, null);
-        assert.equal(b64UrlToUtf8(toB64Url(dataItem.signature)), 'signature');
-        assert.equal(b64UrlToUtf8(toB64Url(dataItem.anchor)), 'anchor');
-        assert.equal(b64UrlToUtf8(toB64Url(dataItem.target)), 'target');
-        assert.equal(
-          b64UrlToUtf8(toB64Url(dataItem.owner_address)),
-          'owner_address',
-        );
-        assert.equal(dataItem.data_offset, null);
-        assert.equal(dataItem.data_size, 1234);
-        assert.equal(dataItem.tag_count, 2);
-        assert.equal(dataItem.content_type, 'application/octet-stream');
-      });
-    });
+          assert.equal(dataItem.parent_id, null);
+          assert.equal(dataItem.root_transaction_id, null);
+          assert.equal(b64UrlToUtf8(toB64Url(dataItem.signature)), 'signature');
+          assert.equal(b64UrlToUtf8(toB64Url(dataItem.anchor)), 'anchor');
+          assert.equal(b64UrlToUtf8(toB64Url(dataItem.target)), 'target');
+          assert.equal(
+            b64UrlToUtf8(toB64Url(dataItem.owner_address)),
+            'owner_address',
+          );
+          assert.equal(dataItem.data_offset, null);
+          assert.equal(dataItem.data_size, 1234);
+          assert.equal(dataItem.tag_count, 2);
+          assert.equal(dataItem.content_type, 'application/octet-stream');
+        });
+      },
+    );
   });
 
   describe('Background data verification', function () {
