@@ -36,11 +36,12 @@ import awsLiteS3 from '@aws-lite/s3';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
 import { toB64Url } from '../../src/lib/encoding.js';
+import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 
 describe('DataSources', () => {
-  describe('S3DataSource', () => {
+  describe('S3DataSource', { skip: isTestFiltered(['flaky']) }, () => {
     let bundlesDb: Database;
     let network: StartedNetwork;
     let localStack: StartedLocalStackContainer;
@@ -133,7 +134,7 @@ describe('DataSources', () => {
       await network.stop();
     });
 
-    it.skip('Verifying that S3DataSource can fetch data from S3', async () => {
+    it('Verifying that S3DataSource can fetch data from S3', async () => {
       // queue bundle
       await axios({
         method: 'post',
