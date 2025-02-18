@@ -18,7 +18,6 @@
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { Server } from 'node:http';
-import { rimraf } from 'rimraf';
 import {
   GenericContainer,
   StartedTestContainer,
@@ -28,6 +27,7 @@ import {
 import { createServer } from 'node:http';
 import wait from 'wait';
 import axios from 'axios';
+import { cleanDb } from './utils.js';
 
 const projectRootPath = process.cwd();
 
@@ -43,7 +43,7 @@ describe.skip('WebhookEmitter', () => {
       console.log(
         `Waiting events... ${eventsReceived.length} of ${numberOfEvents}`,
       );
-      await wait(5000);
+      await wait(1000);
     }
   };
 
@@ -74,7 +74,7 @@ describe.skip('WebhookEmitter', () => {
       projectRootPath,
     ).build('core', { deleteOnExit: false });
 
-    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    await cleanDb();
 
     core = await containerBuilder
       .withEnvironment({
