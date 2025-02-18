@@ -50,20 +50,18 @@ WHERE id IN (
   SELECT b.id
   FROM bundles b
   WHERE (
-      last_skipped_at IS NOT NULL
-      AND unbundle_filter_id != (
-        SELECT id
-        FROM filters
-        WHERE filter = @unbundle_filter
-      )
-    ) OR (
-      last_queued_at IS NOT NULL
-      AND index_filter_id != (
-        SELECT id
-        FROM filters
-        WHERE filter = @index_filter
-      )
+    last_skipped_at IS NOT NULL
+    AND (
+      (SELECT id FROM filters WHERE filter = @unbundle_filter) IS NULL
+      OR unbundle_filter_id != (SELECT id FROM filters WHERE filter = @unbundle_filter)
     )
+  ) OR (
+    last_queued_at IS NOT NULL
+    AND (
+      (SELECT id FROM filters WHERE filter = @index_filter) IS NULL
+      OR index_filter_id != (SELECT id FROM filters WHERE filter = @index_filter)
+    )
+  )
   LIMIT 10000
 )
 
