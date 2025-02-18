@@ -34,6 +34,8 @@ jobs:
       # Run E2E tests if pushing to develop branch
       - run: yarn test:e2e
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
+        env:
+          TEST_SKIP_TAGS: flaky
 
       # Codecov report
       - name: Upload coverage reports to Codecov

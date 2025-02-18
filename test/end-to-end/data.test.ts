@@ -31,6 +31,7 @@ import {
 import { createServer } from 'node:http';
 import axios from 'axios';
 import wait from 'wait';
+import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 
@@ -326,12 +327,18 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
     assert.equal(bundleRes.headers['x-ar-io-root-transaction-id'], undefined);
   });
 
-  // TODO: reenable when we have an endpoint that lets us wait for unbundling
-  it.skip('Verifying header for data item', async function () {
-    const datasItemRes = await axios.head(`http://localhost:4000/raw/${tx1}`);
+  it(
+    'Verifying header for data item',
+    { skip: isTestFiltered(['flaky']) },
+    async function () {
+      const datasItemRes = await axios.head(`http://localhost:4000/raw/${tx1}`);
 
-    assert.equal(datasItemRes.headers['x-ar-io-root-transaction-id'], bundle1);
-  });
+      assert.equal(
+        datasItemRes.headers['x-ar-io-root-transaction-id'],
+        bundle1,
+      );
+    },
+  );
 });
 
 describe('X-AR-IO-Data-Item-Data-Offset header', function () {

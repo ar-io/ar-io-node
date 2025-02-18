@@ -24,6 +24,7 @@ import {
 } from 'testcontainers';
 import axios from 'axios';
 import { rimraf } from 'rimraf';
+import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 let compose: StartedDockerComposeEnvironment;
@@ -120,7 +121,7 @@ describe('ArNS', function () {
         assert.ok(res.headers['x-arns-record-index'] === '0');
       });
 
-      it.skip('Verifying "ardrive.ar-io.localhost" X-ArNS-Undername-Limit header', async function () {
+      it('Verifying "ardrive.ar-io.localhost" X-ArNS-Undername-Limit header', async function () {
         const res = await axios.get('http://localhost:4000', {
           headers: { Host: 'ardrive.ar-io.localhost' },
         });

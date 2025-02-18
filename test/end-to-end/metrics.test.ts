@@ -26,6 +26,7 @@ import {
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
 import { waitForBlocks } from './utils.js';
+import { isTestFiltered } from '../utils.js';
 
 type Metric = {
   name: string;
@@ -137,7 +138,7 @@ describe('Metrics', function () {
 
     it(
       'Verifying arweave_tx_fetch_total metrics',
-      { skip: true },
+      { skip: isTestFiltered(['flaky']) },
       async function () {
         const metrics = await getMetrics();
         const txFetchTotal = metrics?.['arweave_tx_fetch_total'];

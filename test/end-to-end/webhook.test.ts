@@ -28,10 +28,11 @@ import {
 import { createServer } from 'node:http';
 import wait from 'wait';
 import axios from 'axios';
+import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 
-describe.skip('WebhookEmitter', () => {
+describe('WebhookEmitter', { skip: isTestFiltered(['flaky']) }, () => {
   let webServer: Server;
   let eventsReceived: string[];
   let containerBuilder: GenericContainer;
