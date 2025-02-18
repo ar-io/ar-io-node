@@ -17,15 +17,10 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
-import { rimraf } from 'rimraf';
-import {
-  DockerComposeEnvironment,
-  StartedDockerComposeEnvironment,
-  Wait,
-} from 'testcontainers';
+import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
-import { waitForBlocks } from './utils.js';
+import { cleanDb, composeUp, waitForBlocks } from './utils.js';
 
 type Metric = {
   name: string;
@@ -112,54 +107,42 @@ describe('Metrics', function () {
     let compose: StartedDockerComposeEnvironment;
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
 
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: START_HEIGHT.toString(),
-          STOP_HEIGHT: STOP_HEIGHT.toString(),
-          ARNS_ROOT_HOST: 'ar-io.localhost',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
+      compose = await composeUp({
+        START_HEIGHT: START_HEIGHT.toString(),
+        STOP_HEIGHT: STOP_HEIGHT.toString(),
+      });
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
-      await waitForBlocks(coreDb, STOP_HEIGHT);
+      await waitForBlocks({ coreDb, stopHeight: STOP_HEIGHT });
     });
 
     after(async function () {
       await compose.down();
     });
 
-    it(
-      'Verifying arweave_tx_fetch_total metrics',
-      { skip: true },
-      async function () {
-        const metrics = await getMetrics();
-        const txFetchTotal = metrics?.['arweave_tx_fetch_total'];
+    it('Verifying arweave_tx_fetch_total metrics', async function () {
+      const metrics = await getMetrics();
+      const txFetchTotal = metrics?.['arweave_tx_fetch_total'];
 
-        assert.ok(txFetchTotal);
+      assert.ok(txFetchTotal);
 
-        const fetchFromPeersMetrics = txFetchTotal?.metrics.filter(
-          (metric) => metric.labels.node_type === 'arweave_peer',
-        );
+      const fetchFromPeersMetrics = txFetchTotal?.metrics.filter(
+        (metric) => metric.labels.node_type === 'arweave_peer',
+      );
 
-        const fetchFromTrustedMetrics = txFetchTotal?.metrics.filter(
-          (metric) => metric.labels.node_type === 'trusted',
-        );
+      const fetchFromTrustedMetrics = txFetchTotal?.metrics.filter(
+        (metric) => metric.labels.node_type === 'trusted',
+      );
 
-        if (fetchFromPeersMetrics.length > 0) {
-          assert.ok(fetchFromTrustedMetrics[0].value > 0);
-        }
+      if (fetchFromPeersMetrics.length > 0) {
+        assert.ok(fetchFromTrustedMetrics[0].value > 0);
+      }
 
-        if (fetchFromTrustedMetrics.length > 0) {
-          assert.ok(fetchFromTrustedMetrics[0].value > 0);
-        }
-      },
-    );
+      if (fetchFromTrustedMetrics.length > 0) {
+        assert.ok(fetchFromTrustedMetrics[0].value > 0);
+      }
+    });
   });
 });
