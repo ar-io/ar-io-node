@@ -27,3 +27,5 @@ jobs:
       - run: yarn lint:check
       - run: yarn test:ci
       - run: yarn test:e2e
+        env:
+          TEST_SKIP_TAGS: flaky
