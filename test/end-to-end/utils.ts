@@ -123,7 +123,9 @@ export const composeUp = async ({
   // disable .env file read
   process.env.COMPOSE_DISABLE_ENV_FILE = 'true';
 
-  await cleanDb();
+  if (ENVIRONMENT.SKIP_CLEAN_DB !== 'true') {
+    await cleanDb();
+  }
   return new DockerComposeEnvironment(process.cwd(), 'docker-compose.yaml')
     .withEnvironment({
       START_HEIGHT,
