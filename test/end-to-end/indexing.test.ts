@@ -820,6 +820,7 @@ describe('Indexing', function () {
       assert.equal(dataItems.length, 0);
     });
 
+    // FIXME: adjust to handle need for bundles to be marked fully unbundled before skipping
     it(
       'Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters',
       { skip: isTestFiltered(['flaky']) },
@@ -1157,6 +1158,121 @@ describe('Indexing', function () {
       const expectedOwnerAddress =
         'mtBAWAKk76PTvOvu3cy1H-gvpRkGStmfWYi5Ja-a8y8';
       assert.equal(actualOwnerAddress, expectedOwnerAddress);
+    });
+  });
+
+  describe('Bundle filter changes and retries', function () {
+    let bundlesDb: Database;
+    let compose: StartedDockerComposeEnvironment;
+    const bundleId = 'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY';
+
+    beforeEach(async function () {
+      await cleanDb();
+
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER: '{"always": true}',
+        ANS104_INDEX_FILTER: '{"always": true}',
+        BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS: '1',
+      });
+
+      bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
+    });
+
+    afterEach(async function () {
+      bundlesDb.close();
+      await compose.down();
+    });
+
+    it('should reset last_fully_indexed_at when filters change', async function () {
+      await axios.post(
+        'http://localhost:4000/ar-io/admin/queue-bundle',
+        { id: bundleId },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer secret',
+          },
+        },
+      );
+
+      await waitForBundleToBeIndexed({ id: bundleId });
+
+      const initialState = bundlesDb
+        .prepare('SELECT * FROM bundles WHERE id = ?')
+        .get(fromB64Url(bundleId));
+      assert.ok(initialState.last_fully_indexed_at !== null);
+      bundlesDb.close();
+
+      // Change filters and trigger update
+      await compose.down();
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER: '{"always": true}',
+        ANS104_INDEX_FILTER:
+          '{"attributes": {"owner_address": "jaxl_dxqJ00gEgQazGASFXVRvO4h-Q0_vnaLtuOUoWU"}}',
+        BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS: '0.5',
+        BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS: '0.5',
+        FILTER_CHANGE_REPROCESS: 'true',
+        SKIP_CLEAN_DB: 'true',
+      });
+
+      await wait(10000);
+      bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
+
+      const afterFilterChange = bundlesDb
+        .prepare('SELECT * FROM bundles WHERE id = ?')
+        .get(fromB64Url(bundleId));
+
+      assert.equal(afterFilterChange.last_fully_indexed_at, null);
+      assert.equal(afterFilterChange.matched_data_item_count, null);
+      assert.equal(afterFilterChange.last_queued_at, null);
+      assert.equal(afterFilterChange.last_skipped_at, null);
+    });
+
+    it('should retry failed bundles after filter changes', async function () {
+      await axios.post(
+        'http://localhost:4000/ar-io/admin/queue-bundle',
+        { id: bundleId },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer secret',
+          },
+        },
+      );
+
+      await waitForBundleToBeIndexed({ id: bundleId });
+
+      // Change filters
+      await compose.down();
+      compose = await composeUp({
+        ANS104_UNBUNDLE_FILTER: '{"attributes": {"owner": "new-owner"}}',
+        ANS104_INDEX_FILTER: '{"attributes": {"owner": "new-owner"}}',
+        BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS: '1',
+        BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS: '0.5',
+        BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS: '0.5',
+        FILTER_CHANGE_REPROCESS: 'true',
+        SKIP_CLEAN_DB: 'true',
+      });
+
+      // Wait for retry mechanism to kick in
+      await wait(5000);
+
+      const bundleState = bundlesDb
+        .prepare(
+          `
+          SELECT
+            import_attempt_count,
+            retry_attempt_count,
+            last_queued_at,
+            last_fully_indexed_at
+          FROM bundles
+          WHERE id = ?
+        `,
+        )
+        .get(fromB64Url(bundleId));
+
+      assert.ok(bundleState.import_attempt_count > 1);
+      assert.ok(bundleState.retry_attempt_count >= 1);
     });
   });
 });
