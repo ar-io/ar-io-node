@@ -53,6 +53,25 @@ const isDataItemIndexed = ({
   return Boolean(result);
 };
 
+const isTxIndexed = ({ coreDb, id }: { coreDb: Database; id: string }) => {
+  const result = coreDb
+    .prepare(
+      `
+      SELECT EXISTS (
+        SELECT 1 FROM stable_transactions
+        WHERE id = @id
+        UNION
+        SELECT 1 FROM new_transactions
+        WHERE id = @id
+      )
+      `,
+    )
+    .pluck()
+    .get({ id: fromB64Url(id) });
+
+  return Boolean(result);
+};
+
 export const getMaxHeight = (coreDb: Database) => {
   return coreDb.prepare('SELECT MAX(height) FROM new_blocks').get();
 };
@@ -246,6 +265,26 @@ export const waitForBundleToBeIndexed = ({
   });
 };
 
+export const waitForTxToBeIndexed = ({
+  id,
+  coreDb = new Sqlite(`${process.cwd()}/data/sqlite/core.db`),
+  timeout,
+  interval,
+}: {
+  id: string;
+  coreDb?: Database;
+  timeout?: number;
+  interval?: number;
+}) => {
+  return waitFor({
+    check: () => isTxIndexed({ id, coreDb }),
+    validate: (result) => result === true,
+    timeout,
+    interval,
+    timeoutMessage: `Transaction ${id} was not indexed within ${timeout}ms`,
+    waitingMessage: `Waiting transaction ${id} to be indexed...`,
+  });
+};
 export const waitForDataItemToBeIndexed = ({
   id,
   bundlesDb = new Sqlite(`${process.cwd()}/data/sqlite/bundles.db`),
