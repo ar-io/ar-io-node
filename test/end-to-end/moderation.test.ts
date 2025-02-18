@@ -18,15 +18,9 @@
 import assert from 'node:assert';
 import axios from 'axios';
 import { describe, before, after, it } from 'node:test';
-import { rimraf } from 'rimraf';
-import {
-  StartedDockerComposeEnvironment,
-  DockerComposeEnvironment,
-  Wait,
-} from 'testcontainers';
+import { StartedDockerComposeEnvironment } from 'testcontainers';
 import { default as wait } from 'wait';
-
-const projectRootPath = process.cwd();
+import { cleanDb, composeUp } from './utils.js';
 
 const adminApiKey = 'admin-api-key';
 
@@ -40,21 +34,13 @@ describe('Moderation', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
-    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    await cleanDb();
 
-    compose = await new DockerComposeEnvironment(
-      projectRootPath,
-      'docker-compose.yaml',
-    )
-      .withEnvironment({
-        START_HEIGHT: '0',
-        STOP_HEIGHT: '0',
-        ADMIN_API_KEY: adminApiKey,
-        ARNS_ROOT_HOST: 'ar-io.localhost',
-      })
-      .withBuild()
-      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-      .up(['core']);
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      ADMIN_API_KEY: adminApiKey,
+      ARNS_ROOT_HOST: 'ar-io.localhost',
+    });
   });
 
   after(async function () {
