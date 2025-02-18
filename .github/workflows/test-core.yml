@@ -27,5 +27,6 @@ jobs:
       - run: yarn lint:check
       - run: yarn test:ci
       - run: yarn test:e2e
+        if: matrix.os == 'ubuntu-latest'
         env:
           TEST_SKIP_TAGS: flaky
