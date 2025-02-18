@@ -18,7 +18,6 @@
 import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { rimraf } from 'rimraf';
 import {
   GenericContainer,
   StartedTestContainer,
@@ -30,14 +29,14 @@ import {
   LocalstackContainer,
   StartedLocalStackContainer,
 } from '@testcontainers/localstack';
-import wait from 'wait';
 import awsLite, { AwsLiteClient } from '@aws-lite/client';
 import awsLiteS3 from '@aws-lite/s3';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
-import { toB64Url } from '../../src/lib/encoding.js';
+import { cleanDb, getBundleStatus, waitForBundleToBeIndexed } from './utils.js';
 
 const projectRootPath = process.cwd();
+const bundleId = 'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA';
 
 describe('DataSources', () => {
   describe('S3DataSource', () => {
@@ -49,22 +48,14 @@ describe('DataSources', () => {
     let corePort: number;
     let awsClient: AwsLiteClient;
 
-    const waitForIndexing = async () => {
-      const getAll = () => bundlesDb.prepare('SELECT * FROM bundles').all();
-
-      while (getAll().length === 0) {
-        console.log('Waiting for pending txs to be indexed...');
-        await wait(5000);
-      }
-    };
-
     before(async () => {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
 
       network = await new Network().start();
 
       localStack = await new LocalstackContainer('localstack/localstack:3')
-        .withNetwork(network as any)
+        .withNetwork(network)
+        .withNetworkAliases('localstack')
         .start();
 
       // Create a bucket
@@ -87,9 +78,9 @@ describe('DataSources', () => {
       // Add R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA to the bucket
       await awsClient.S3.PutObject({
         Bucket: 'ar.io',
-        Key: 'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+        Key: bundleId,
         Body: readFileSync(
-          `${projectRootPath}/test/end-to-end/files/R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA`,
+          `${projectRootPath}/test/end-to-end/files/${bundleId}`,
         ),
       });
 
@@ -99,8 +90,7 @@ describe('DataSources', () => {
 
       core = await containerBuilder
         .withEnvironment({
-          START_HEIGHT: '1',
-          STOP_HEIGHT: '1',
+          START_WRITERS: 'false',
           ADMIN_API_KEY: 'secret',
           ANS104_UNBUNDLE_FILTER: '{"always": true}',
           ANS104_INDEX_FILTER: '{"always": true}',
@@ -133,38 +123,29 @@ describe('DataSources', () => {
       await network.stop();
     });
 
-    it.skip('Verifying that S3DataSource can fetch data from S3', async () => {
+    it('Verifying that S3DataSource can fetch data from S3', async () => {
+      const host = `http://localhost:${corePort}`;
+
       // queue bundle
       await axios({
         method: 'post',
-        url: `http://localhost:${corePort}/ar-io/admin/queue-bundle`,
+        url: `${host}/ar-io/admin/queue-bundle`,
         headers: {
           Authorization: 'Bearer secret',
           'Content-Type': 'application/json',
         },
         data: {
-          id: 'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
+          id: bundleId,
         },
       });
 
-      await waitForIndexing();
+      await waitForBundleToBeIndexed({ id: bundleId, host });
 
-      const stmt = bundlesDb.prepare('SELECT * FROM bundles');
-      const bundles = stmt.all();
+      const bundle = await getBundleStatus({ id: bundleId, host });
 
-      const importedBundle = bundles[0];
-
-      assert.equal(bundles.length, 1);
-      assert.equal(
-        toB64Url(importedBundle.id),
-        'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
-      );
-      assert.equal(
-        toB64Url(importedBundle.root_transaction_id),
-        'R4UyABK-I7bgzJVhsUZ3JdtvHrFYQBtJQFsZK1xNrJA',
-      );
-      assert.equal(importedBundle.data_item_count, 2);
-      assert.equal(importedBundle.import_attempt_count, 1);
+      assert.equal(bundle.rootTransactionId, bundleId);
+      assert.equal(bundle.dataItemCount, 2);
+      assert.equal(bundle.importAttemptCount, 1);
     });
   });
 });
