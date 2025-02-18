@@ -289,6 +289,23 @@ export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
   '300', // 5 minutes
 );
 
+export const BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS =
+  +env.varOrDefault(
+    'BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS',
+    '300', // 5 minutes
+  );
+
+export const BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS = +env.varOrDefault(
+  'BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS',
+  '900', // 15 minutes
+);
+
+export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS =
+  +env.varOrDefault(
+    'BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS',
+    '300', // 15 minutes
+  );
+
 export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
   '1000',

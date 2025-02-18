@@ -21,10 +21,6 @@ import * as config from '../config.js';
 import { BundleIndex } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';
 
-const DEFAULT_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const DEFAULT_FILTER_REPOCESS_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-
 export class BundleRepairWorker {
   // Dependencies
   private log: winston.Logger;
@@ -71,14 +67,14 @@ export class BundleRepairWorker {
 
     const defaultUpdateInterval = setInterval(
       this.updateBundleTimestamps.bind(this),
-      DEFAULT_UPDATE_INTERVAL_MS,
+      config.BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS * 1000,
     );
     this.intervalIds.push(defaultUpdateInterval);
 
     if (this.shouldBackfillBundles) {
       const backFillInterval = setInterval(
         this.backfillBundles.bind(this),
-        DEFAULT_BUNDLE_BACKFILL_INTERVAL_MS,
+        config.BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS * 1000,
       );
       this.intervalIds.push(backFillInterval);
     }
@@ -86,7 +82,7 @@ export class BundleRepairWorker {
     if (this.filtersChanged) {
       const filterInterval = setInterval(
         this.updateForFilterChange.bind(this),
-        DEFAULT_FILTER_REPOCESS_INTERVAL_MS,
+        config.BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS * 1000,
       );
       this.intervalIds.push(filterInterval);
     }
