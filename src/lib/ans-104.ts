@@ -410,7 +410,10 @@ if (!isMainThread) {
     });
   };
 
-  const filter = createFilter(JSON.parse(workerData.dataItemIndexFilterString));
+  const filter = createFilter(
+    JSON.parse(workerData.dataItemIndexFilterString),
+    log,
+  );
 
   parentPort?.on('message', async (message: any) => {
     if (message === 'terminate') {

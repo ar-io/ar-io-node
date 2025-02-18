@@ -33,7 +33,7 @@ import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
-import { MatchTags } from './filters.js';
+import { MatchTags, TagMatch } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
 import {
   makeBlockStore,
@@ -233,10 +233,15 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
     })
   : undefined;
 
-const ans104TxMatcher = new MatchTags([
+const ans104BundleTagMatch: TagMatch[] = [
   { name: 'Bundle-Format', value: 'binary' },
   { name: 'Bundle-Version', valueStartsWith: '2.' },
-]);
+];
+
+const ans104TxMatcher = new MatchTags(
+  ans104BundleTagMatch,
+  log.child({ itemFilter: JSON.stringify({ tags: ans104BundleTagMatch }) }),
+);
 
 export const prioritizedTxIds = new Set<string>();
 
