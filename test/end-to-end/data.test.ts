@@ -19,9 +19,7 @@ import { strict as assert } from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { Server } from 'node:http';
 import crypto from 'node:crypto';
-import { rimraf } from 'rimraf';
 import {
-  DockerComposeEnvironment,
   GenericContainer,
   StartedDockerComposeEnvironment,
   StartedTestContainer,
@@ -30,7 +28,14 @@ import {
 } from 'testcontainers';
 import { createServer } from 'node:http';
 import axios from 'axios';
-import wait from 'wait';
+import {
+  cleanDb,
+  composeUp,
+  waitForBundleToBeIndexed,
+  waitForDataItemToBeIndexed,
+  waitForLogMessage,
+} from './utils.js';
+import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container.js';
 
 const projectRootPath = process.cwd();
 
@@ -52,19 +57,11 @@ describe('Data', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
-    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    await cleanDb();
 
-    compose = await new DockerComposeEnvironment(
-      projectRootPath,
-      'docker-compose.yaml',
-    )
-      .withEnvironment({
-        START_HEIGHT: '0',
-        STOP_HEIGHT: '0',
-      })
-      .withBuild()
-      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-      .up(['core']);
+    compose = await composeUp({
+      START_WRITERS: 'false',
+    });
   });
 
   after(async function () {
@@ -245,20 +242,12 @@ describe('X-Cache header', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
-    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    await cleanDb();
 
-    compose = await new DockerComposeEnvironment(
-      projectRootPath,
-      'docker-compose.yaml',
-    )
-      .withEnvironment({
-        START_HEIGHT: '0',
-        STOP_HEIGHT: '0',
-        GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
-      })
-      .withBuild()
-      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-      .up(['core']);
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
+    });
   });
 
   after(async function () {
@@ -269,7 +258,10 @@ describe('X-Cache header', function () {
     const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
 
     assert.equal(res.headers['x-cache'], 'MISS');
-    await wait(5000);
+    await waitForLogMessage({
+      container: compose.getContainer('core-1'),
+      expectedMessage: 'Successfully cached data',
+    });
   });
 
   it('Verifying x-cache header when cache is available', async function () {
@@ -283,23 +275,12 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
-    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    await cleanDb();
 
-    compose = await new DockerComposeEnvironment(
-      projectRootPath,
-      'docker-compose.yaml',
-    )
-      .withEnvironment({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
-        GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
-        ANS104_UNBUNDLE_FILTER: '{"always": true}',
-        ANS104_INDEX_FILTER: '{"always": true}',
-        ADMIN_API_KEY: 'secret',
-      })
-      .withBuild()
-      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-      .up(['core']);
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
+    });
 
     await axios.post(
       'http://localhost:4000/ar-io/admin/queue-bundle',
@@ -312,8 +293,8 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
       },
     );
 
-    // hopefully enough time to unbundle it
-    await wait(10000);
+    await waitForBundleToBeIndexed({ id: bundle1 });
+    await waitForDataItemToBeIndexed({ id: tx1 });
   });
 
   after(async function () {
@@ -326,8 +307,7 @@ describe('X-AR-IO-Root-Transaction-Id header', function () {
     assert.equal(bundleRes.headers['x-ar-io-root-transaction-id'], undefined);
   });
 
-  // TODO: reenable when we have an endpoint that lets us wait for unbundling
-  it.skip('Verifying header for data item', async function () {
+  it('Verifying header for data item', async function () {
     const datasItemRes = await axios.head(`http://localhost:4000/raw/${tx1}`);
 
     assert.equal(datasItemRes.headers['x-ar-io-root-transaction-id'], bundle1);
@@ -341,26 +321,12 @@ describe('X-AR-IO-Data-Item-Data-Offset header', function () {
   const di = 'Dc-q5iChuRWcsjVBFstEqmLTx4SWkGZxcVO9OTEGjkQ';
 
   before(async function () {
-    await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+    await cleanDb();
 
-    compose = await new DockerComposeEnvironment(
-      projectRootPath,
-      'docker-compose.yaml',
-    )
-      .withEnvironment({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
-        GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
-        ANS104_UNBUNDLE_FILTER: '{"always": true}',
-        ANS104_INDEX_FILTER: '{"always": true}',
-        ADMIN_API_KEY: 'secret',
-        TRUSTED_GATEWAYS_URLS:
-          '{"https://arweave.net": 1, "https://ar-io.dev": 2}',
-        BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
-      })
-      .withBuild()
-      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-      .up(['core']);
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
+    });
 
     await axios.post(
       'http://localhost:4000/ar-io/admin/queue-bundle',
@@ -373,8 +339,7 @@ describe('X-AR-IO-Data-Item-Data-Offset header', function () {
       },
     );
 
-    // hopefully enough time to unbundle it
-    await wait(10000);
+    await waitForDataItemToBeIndexed({ id: di });
   });
 
   after(async function () {
@@ -423,22 +388,16 @@ describe('X-AR-IO-Data-Item-Data-Offset header', function () {
 describe('X-AR-IO headers', function () {
   describe('with ARNS_ROOT_HOST', function () {
     let compose: StartedDockerComposeEnvironment;
+    let coreContainer: StartedGenericContainer;
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
+      compose = await composeUp({
+        START_WRITERS: 'false',
+        ARNS_ROOT_HOST: 'ar-io.localhost',
+      });
 
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: '0',
-          STOP_HEIGHT: '0',
-          ARNS_ROOT_HOST: 'ar-io.localhost',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
+      coreContainer = compose.getContainer('core-1');
     });
 
     after(async function () {
@@ -452,8 +411,10 @@ describe('X-AR-IO headers', function () {
       assert.equal(res.headers['x-ar-io-origin'], undefined);
       assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
-      // Wait for 10 seconds to ensure that the cache is populated
-      await wait(10000);
+      await waitForLogMessage({
+        container: coreContainer,
+        expectedMessage: 'Successfully cached data',
+      });
 
       const resWithHeaders = await axios.get(
         `http://localhost:4000/raw/${tx3}`,
@@ -508,8 +469,10 @@ describe('X-AR-IO headers', function () {
       assert.equal(res.headers['x-ar-io-origin'], undefined);
       assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
-      // Wait for 10 seconds to ensure that the cache is populated
-      await wait(10000);
+      await waitForLogMessage({
+        container: coreContainer,
+        expectedMessage: 'Successfully cached data',
+      });
 
       const resWithHeaders = await axios.get(`http://localhost:4000/${tx2}/`, {
         headers: {
@@ -539,8 +502,10 @@ describe('X-AR-IO headers', function () {
       assert.equal(res.headers['x-ar-io-origin'], undefined);
       assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
-      // Wait for 10 seconds to ensure that the cache is populated
-      await wait(10000);
+      await waitForLogMessage({
+        container: coreContainer,
+        expectedMessage: 'Successfully cached data',
+      });
 
       const resWithHeaders = await axios.get(`http://localhost:4000/${tx3}`, {
         headers: {
@@ -562,21 +527,16 @@ describe('X-AR-IO headers', function () {
 
   describe('without ARNS_ROOT_HOST', function () {
     let compose: StartedDockerComposeEnvironment;
+    let coreContainer: StartedGenericContainer;
 
     before(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
 
-      compose = await new DockerComposeEnvironment(
-        projectRootPath,
-        'docker-compose.yaml',
-      )
-        .withEnvironment({
-          START_HEIGHT: '0',
-          STOP_HEIGHT: '0',
-        })
-        .withBuild()
-        .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-        .up(['core']);
+      compose = await composeUp({
+        START_WRITERS: 'false',
+      });
+
+      coreContainer = compose.getContainer('core-1');
     });
 
     after(async function () {
@@ -590,8 +550,10 @@ describe('X-AR-IO headers', function () {
       assert.equal(res.headers['x-ar-io-origin'], undefined);
       assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
-      // Wait for 10 seconds to ensure that the cache is populated
-      await wait(10000);
+      await waitForLogMessage({
+        container: coreContainer,
+        expectedMessage: 'Successfully cached data',
+      });
 
       const resWithHeaders = await axios.get(
         `http://localhost:4000/raw/${tx3}`,
@@ -640,8 +602,10 @@ describe('X-AR-IO headers', function () {
       assert.equal(res.headers['x-ar-io-origin'], undefined);
       assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
-      // Wait for 10 seconds to ensure that the cache is populated
-      await wait(10000);
+      await waitForLogMessage({
+        container: coreContainer,
+        expectedMessage: 'Successfully cached data',
+      });
 
       const resWithHeaders = await axios.get(`http://localhost:4000/${tx2}/`, {
         headers: {
@@ -668,8 +632,10 @@ describe('X-AR-IO headers', function () {
       assert.equal(res.headers['x-ar-io-origin'], undefined);
       assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
-      // Wait for 10 seconds to ensure that the cache is populated
-      await wait(10000);
+      await waitForLogMessage({
+        container: coreContainer,
+        expectedMessage: 'Successfully cached data',
+      });
 
       const resWithHeaders = await axios.get(`http://localhost:4000/${tx3}`, {
         headers: {
@@ -719,12 +685,11 @@ describe('X-AR-IO headers', function () {
     });
 
     beforeEach(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
 
       core = await containerBuilder
         .withEnvironment({
-          START_HEIGHT: '0',
-          STOP_HEIGHT: '0',
+          START_WRITERS: 'false',
           ARNS_ROOT_HOST: 'ar-io.localhost',
           TRUSTED_GATEWAYS_URLS:
             '{"http://host.testcontainers.internal:4001": 1}',
