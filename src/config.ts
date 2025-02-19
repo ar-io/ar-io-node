@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
 import { release } from './version.js';
+import logger from './log.js';
 
 //
 // HTTP server
@@ -202,6 +203,7 @@ export const ANS104_UNBUNDLE_FILTER_STRING = canonicalize(
 );
 export const ANS104_UNBUNDLE_FILTER = createFilter(
   JSON.parse(ANS104_UNBUNDLE_FILTER_STRING),
+  logger,
 );
 
 // Filter determining which ANS-104 data items to index
@@ -213,6 +215,7 @@ export const ANS104_INDEX_FILTER_STRING = canonicalize(
 );
 export const ANS104_INDEX_FILTER = createFilter(
   JSON.parse(ANS104_INDEX_FILTER_STRING),
+  logger,
 );
 
 // The number of ANS-104 worker threads to run
@@ -449,6 +452,7 @@ export const WEBHOOK_INDEX_FILTER_STRING = canonicalize(
 );
 export const WEBHOOK_INDEX_FILTER = createFilter(
   JSON.parse(WEBHOOK_INDEX_FILTER_STRING),
+  logger,
 );
 
 // Block filter to use for webhooks
@@ -457,6 +461,7 @@ export const WEBHOOK_BLOCK_FILTER_STRING = canonicalize(
 );
 export const WEBHOOK_BLOCK_FILTER = createFilter(
   JSON.parse(WEBHOOK_BLOCK_FILTER_STRING),
+  logger,
 );
 
 //
