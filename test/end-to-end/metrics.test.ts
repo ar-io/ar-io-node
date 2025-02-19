@@ -21,6 +21,7 @@ import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
 import { cleanDb, composeUp, waitForBlocks } from './utils.js';
+import { isTestFiltered } from '../utils.js';
 
 type Metric = {
   name: string;
@@ -98,7 +99,7 @@ async function getMetrics(): Promise<ParsedMetrics | undefined> {
 
 const projectRootPath = process.cwd();
 
-describe('Metrics', function () {
+describe('Metrics', { skip: isTestFiltered(['flaky']) }, function () {
   const START_HEIGHT = 0;
   const STOP_HEIGHT = 1;
 
@@ -126,7 +127,14 @@ describe('Metrics', function () {
       const metrics = await getMetrics();
       const txFetchTotal = metrics?.['arweave_tx_fetch_total'];
 
-      assert.ok(txFetchTotal);
+      assert.ok(
+        txFetchTotal,
+        'Expected arweave_tx_fetch_total metrics to exist',
+      );
+      assert.ok(
+        txFetchTotal.metrics.length > 0,
+        'Expected at least one metric',
+      );
 
       const fetchFromPeersMetrics = txFetchTotal?.metrics.filter(
         (metric) => metric.labels.node_type === 'arweave_peer',
@@ -136,13 +144,23 @@ describe('Metrics', function () {
         (metric) => metric.labels.node_type === 'trusted',
       );
 
-      if (fetchFromPeersMetrics.length > 0) {
-        assert.ok(fetchFromTrustedMetrics[0].value > 0);
-      }
+      assert.ok(
+        fetchFromPeersMetrics.length > 0,
+        'Expected peer metrics to exist',
+      );
+      assert.ok(
+        fetchFromPeersMetrics[0].value > 0,
+        'Expected peer metrics value to be positive',
+      );
 
-      if (fetchFromTrustedMetrics.length > 0) {
-        assert.ok(fetchFromTrustedMetrics[0].value > 0);
-      }
+      assert.ok(
+        fetchFromTrustedMetrics.length > 0,
+        'Expected trusted metrics to exist',
+      );
+      assert.ok(
+        fetchFromTrustedMetrics[0].value > 0,
+        'Expected trusted metrics value to be positive',
+      );
     });
   });
 });
