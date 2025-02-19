@@ -66,8 +66,10 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   );
   res.header(headerNames.arnsProcessId, processId);
   res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
-  res.header(headerNames.arnsIndex, index.toString());
-  res.header(headerNames.arnsLimit, limit.toString());
+  if (index !== undefined && limit !== undefined) {
+    res.header(headerNames.arnsIndex, index.toString());
+    res.header(headerNames.arnsLimit, limit.toString());
+  }
   // add arns headers
   res.json({
     txId: resolvedId,
