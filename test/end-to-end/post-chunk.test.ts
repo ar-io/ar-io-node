@@ -18,35 +18,21 @@
 import { strict as assert } from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { rimraf } from 'rimraf';
-import {
-  Wait,
-  StartedDockerComposeEnvironment,
-  DockerComposeEnvironment,
-} from 'testcontainers';
+import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
-
-const projectRootPath = process.cwd();
+import { cleanDb, composeUp } from './utils.js';
 
 const chunk = readFileSync('test/mock_files/chunks/random-chunk.json', 'utf8');
-
-const startContainerWithEnvs = (envs: Record<string, string>) =>
-  new DockerComposeEnvironment(projectRootPath, 'docker-compose.yaml')
-    .withEnvironment(envs)
-    .withBuild()
-    .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-    .up(['core']);
 
 describe('Post Chunk', () => {
   let compose: StartedDockerComposeEnvironment;
 
   describe('with default timeout and abort settings', () => {
     before(async () => {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
 
-      compose = await startContainerWithEnvs({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
+      compose = await composeUp({
+        START_WRITERS: 'false',
       });
     });
 
@@ -99,7 +85,7 @@ describe('Post Chunk', () => {
 
   describe('with custom timeout and abort settings', () => {
     beforeEach(async function () {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
     });
 
     afterEach(async function () {
@@ -107,11 +93,11 @@ describe('Post Chunk', () => {
     });
 
     it('Verifying that chunk upload aborted', async () => {
-      compose = await startContainerWithEnvs({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
+      compose = await composeUp({
+        START_WRITERS: 'false',
         CHUNK_POST_ABORT_TIMEOUT_MS: '1',
       });
+
       try {
         await axios.post('http://localhost:4000/chunk', chunk, {
           headers: {
@@ -133,11 +119,11 @@ describe('Post Chunk', () => {
     });
 
     it('Verifying that chunk upload timed out', async () => {
-      compose = await startContainerWithEnvs({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
+      compose = await composeUp({
+        START_WRITERS: 'false',
         CHUNK_POST_RESPONSE_TIMEOUT_MS: '1',
       });
+
       try {
         await axios.post('http://localhost:4000/chunk', chunk, {
           headers: {
@@ -161,7 +147,7 @@ describe('Post Chunk', () => {
 
   describe('posting to secondary urls', () => {
     beforeEach(async () => {
-      await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+      await cleanDb();
     });
 
     afterEach(async function () {
@@ -169,16 +155,17 @@ describe('Post Chunk', () => {
     });
 
     it('Verifying that chunk was uploaded successfully', async () => {
-      compose = await startContainerWithEnvs({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
+      compose = await composeUp({
+        START_WRITERS: 'false',
         SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
       });
+
       const response = await axios.post('http://localhost:4000/chunk', chunk, {
         headers: {
           'Content-Type': 'application/json',
         },
       });
+
       assert.equal(response.status, 200);
       assert.equal(response.data.successCount, 1);
       assert.equal(response.data.failureCount, 0);
@@ -191,11 +178,11 @@ describe('Post Chunk', () => {
     });
 
     it('Verifying that invalid chunk fail to upload', async () => {
-      compose = await startContainerWithEnvs({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
+      compose = await composeUp({
+        START_WRITERS: 'false',
         SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
       });
+
       const invalidChunk = JSON.parse(chunk);
       invalidChunk.chunk = '';
 
@@ -221,12 +208,12 @@ describe('Post Chunk', () => {
     });
 
     it('Verifying that chunk upload timed out', async () => {
-      compose = await startContainerWithEnvs({
-        START_HEIGHT: '1',
-        STOP_HEIGHT: '1',
+      compose = await composeUp({
+        START_WRITERS: 'false',
         CHUNK_POST_RESPONSE_TIMEOUT_MS: '1',
         SECONDARY_CHUNK_POST_URLS: 'https://arweave.net/chunk',
       });
+
       try {
         await axios.post('http://localhost:4000/chunk', chunk, {
           headers: {

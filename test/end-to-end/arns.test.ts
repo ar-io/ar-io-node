@@ -17,32 +17,19 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, before, describe, it } from 'node:test';
-import {
-  DockerComposeEnvironment,
-  StartedDockerComposeEnvironment,
-  Wait,
-} from 'testcontainers';
+import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
-import { rimraf } from 'rimraf';
+import { cleanDb, composeUp } from './utils.js';
 
-const projectRootPath = process.cwd();
 let compose: StartedDockerComposeEnvironment;
 
 before(async function () {
-  await rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
+  await cleanDb();
 
-  compose = await new DockerComposeEnvironment(
-    projectRootPath,
-    'docker-compose.yaml',
-  )
-    .withEnvironment({
-      START_HEIGHT: '0',
-      STOP_HEIGHT: '0',
-      ARNS_ROOT_HOST: 'ar-io.localhost',
-    })
-    .withBuild()
-    .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-    .up(['core']);
+  compose = await composeUp({
+    START_WRITERS: 'false',
+    ARNS_ROOT_HOST: 'ar-io.localhost',
+  });
 });
 
 after(async function () {

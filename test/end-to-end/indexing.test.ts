@@ -17,53 +17,25 @@
  */
 import { strict as assert } from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
-import { rimraf } from 'rimraf';
-import {
-  DockerComposeEnvironment,
-  StartedDockerComposeEnvironment,
-  Wait,
-} from 'testcontainers';
+import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
 import { default as wait } from 'wait';
 import Sqlite, { Database } from 'better-sqlite3';
 import crypto from 'node:crypto';
 import { b64UrlToUtf8, toB64Url, fromB64Url } from '../../src/lib/encoding.js';
-import { getMaxHeight, waitForBlocks } from './utils.js';
+import {
+  cleanDb,
+  composeUp,
+  getMaxHeight,
+  waitForBlocks,
+  waitForBundleToBeIndexed,
+  waitForDataItemToBeIndexed,
+  waitForLogMessage,
+  waitForTxToBeIndexed,
+} from './utils.js';
 import { isTestFiltered } from '../utils.js';
-import { Environment } from 'testcontainers/build/types.js';
 
 const projectRootPath = process.cwd();
-
-const cleanDb = () =>
-  rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
-const composeUp = async ({
-  START_HEIGHT = '1',
-  STOP_HEIGHT = '1',
-  ARNS_ROOT_HOST = 'ar-io.localhost',
-  ANS104_UNBUNDLE_FILTER = '{"always": true}',
-  ANS104_INDEX_FILTER = '{"always": true}',
-  ADMIN_API_KEY = 'secret',
-  TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://ar-io.dev": 2}',
-  BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
-  ...ENVIRONMENT
-}: Environment = {}) => {
-  await cleanDb();
-  return new DockerComposeEnvironment(projectRootPath, 'docker-compose.yaml')
-    .withEnvironment({
-      START_HEIGHT,
-      STOP_HEIGHT,
-      ARNS_ROOT_HOST,
-      ANS104_UNBUNDLE_FILTER,
-      ANS104_INDEX_FILTER,
-      ADMIN_API_KEY,
-      TRUSTED_GATEWAYS_URLS,
-      BACKGROUND_RETRIEVAL_ORDER,
-      ...ENVIRONMENT,
-    })
-    .withBuild()
-    .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-    .up(['core']);
-};
 
 const getHashForIdFromChain = async (id: string): Promise<string> => {
   const res = await axios.get(`https://arweave.net/raw/${id}`, {
@@ -119,8 +91,24 @@ async function fetchGqlHeight(): Promise<number | undefined> {
   }
 }
 
+const waitForContiguousDataIds = async ({
+  dataDb,
+  length,
+}: {
+  dataDb: Database;
+  length: number;
+}) => {
+  const getAll = () =>
+    dataDb.prepare('SELECT * FROM contiguous_data_ids').all();
+
+  while (getAll().length !== length) {
+    console.log('Waiting for data items to be indexed...');
+    await wait(1000);
+  }
+};
+
 describe('Indexing', function () {
-  const START_HEIGHT = 0;
+  const START_HEIGHT = 1;
   const STOP_HEIGHT = 1;
 
   describe('Initialization', function () {
@@ -134,7 +122,7 @@ describe('Indexing', function () {
       });
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
-      await waitForBlocks(coreDb, STOP_HEIGHT);
+      await waitForBlocks({ coreDb, stopHeight: STOP_HEIGHT });
     });
 
     after(async function () {
@@ -163,7 +151,7 @@ describe('Indexing', function () {
       });
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
-      await waitForBlocks(coreDb, STOP_HEIGHT);
+      await waitForBlocks({ coreDb, stopHeight: STOP_HEIGHT });
     });
 
     after(async function () {
@@ -185,18 +173,10 @@ describe('Indexing', function () {
     let dataDb: Database;
     let compose: StartedDockerComposeEnvironment;
 
-    const waitForIndexing = async () => {
-      const getAll = () =>
-        dataDb.prepare('SELECT * FROM contiguous_data_parents').all();
-
-      while (getAll().length === 0) {
-        console.log('Waiting for data items to be indexed...');
-        await wait(5000);
-      }
-    };
-
     before(async function () {
-      compose = await composeUp();
+      compose = await composeUp({
+        START_WRITERS: 'false',
+      });
       dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
       // queue bundle kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c
@@ -232,7 +212,7 @@ describe('Indexing', function () {
         },
       });
 
-      await waitForIndexing();
+      await waitForContiguousDataIds({ dataDb, length: 19 });
     });
 
     after(async function () {
@@ -240,7 +220,6 @@ describe('Indexing', function () {
     });
 
     it('Verifying if all DataItems were indexed', async function () {
-      await wait(10000);
       const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
       const idList = [
         'kJA49GtBVUWex2yiRKX1KSDbCE6I2xGicR-62_pnJ_c',
@@ -300,16 +279,6 @@ describe('Indexing', function () {
     let dataDb: Database;
     let compose: StartedDockerComposeEnvironment;
 
-    const waitForIndexing = async () => {
-      const getAll = () =>
-        dataDb.prepare('SELECT * FROM contiguous_data_parents').all();
-
-      while (getAll().length === 0) {
-        console.log('Waiting for data items to be indexed...');
-        await wait(5000);
-      }
-    };
-
     beforeEach(async function () {
       await cleanDb();
     });
@@ -320,6 +289,7 @@ describe('Indexing', function () {
 
     it('Verifying if nested data items are not indexed when isNestedBundles is not set', async function () {
       compose = await composeUp({
+        START_WRITERS: 'false',
         ANS104_UNBUNDLE_FILTER:
           '{"attributes": {"owner_address": "JNC6vBhjHY1EPwV3pEeNmrsgFMxH5d38_LHsZ7jful8"}}',
       });
@@ -358,8 +328,7 @@ describe('Indexing', function () {
         },
       });
 
-      await waitForIndexing();
-      await wait(10000);
+      await waitForContiguousDataIds({ dataDb, length: 12 });
 
       const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
       const idList = [
@@ -385,6 +354,7 @@ describe('Indexing', function () {
 
     it('Verifying if nested data items are indexed when isNestedBundles is true', async function () {
       compose = await composeUp({
+        START_WRITERS: 'false',
         ANS104_UNBUNDLE_FILTER:
           '{"or": [{"attributes": {"owner_address": "JNC6vBhjHY1EPwV3pEeNmrsgFMxH5d38_LHsZ7jful8"}}, { "isNestedBundle": true }]}',
       });
@@ -423,8 +393,7 @@ describe('Indexing', function () {
         },
       });
 
-      await waitForIndexing();
-      await wait(10000);
+      await waitForContiguousDataIds({ dataDb, length: 19 });
 
       const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
       const idList = [
@@ -457,6 +426,7 @@ describe('Indexing', function () {
 
     it("Verifying if nested data items are not indexed when isNestedBundles is true but attributes doesn't match top layer tx", async function () {
       compose = await composeUp({
+        START_WRITERS: 'false',
         ANS104_UNBUNDLE_FILTER:
           '{"or": [{"attributes": {"owner_address": "another_address"}}, { "isNestedBundle": true }]}',
       });
@@ -495,6 +465,12 @@ describe('Indexing', function () {
         },
       });
 
+      await waitForLogMessage({
+        container: compose.getContainer('core-1'),
+        expectedMessage: 'Transaction imported.',
+      });
+
+      // wait 10 seconds after transaction was imported to give it time to be indexed  (not be indexed in this case)
       await wait(10000);
 
       const stmt = dataDb.prepare('SELECT id FROM contiguous_data_ids');
@@ -513,7 +489,7 @@ describe('Indexing', function () {
 
       while (getAll().length === 0) {
         console.log('Waiting for pending txs to be indexed...');
-        await wait(5000);
+        await wait(1000);
       }
     };
 
@@ -521,6 +497,8 @@ describe('Indexing', function () {
       compose = await composeUp({
         ENABLE_MEMPOOL_WATCHER: 'true',
         MEMPOOL_POLLING_INTERVAL_MS: '10000000',
+        ANS104_UNBUNDLE_FILTER: '{"never": true}',
+        ANS104_INDEX_FILTER: '{"never": true}',
       });
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
 
@@ -549,7 +527,7 @@ describe('Indexing', function () {
 
       while (getAll().length === 0) {
         console.log('Waiting for pending txs to be indexed...');
-        await wait(5000);
+        await wait(1000);
       }
     };
 
@@ -590,7 +568,9 @@ describe('Indexing', function () {
     };
 
     before(async function () {
-      compose = await composeUp();
+      compose = await composeUp({
+        START_WRITERS: 'false',
+      });
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
 
       // queue bundle C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk
@@ -650,18 +630,9 @@ describe('Indexing', function () {
     let compose: StartedDockerComposeEnvironment;
     const bundleId = 'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY';
 
-    const waitForIndexing = async () => {
-      const getAll = () =>
-        bundlesDb.prepare('SELECT * FROM new_data_items').all();
-
-      while (getAll().length === 0) {
-        console.log('Waiting for data items to be indexed...');
-        await wait(5000);
-      }
-    };
-
     before(async function () {
       compose = await composeUp({
+        START_WRITERS: 'false',
         ANS104_UNBUNDLE_FILTER:
           '{"or": [{"attributes": {"owner_address": "another_address"}}, { "isNestedBundle": true }]}',
       });
@@ -685,7 +656,18 @@ describe('Indexing', function () {
         },
       });
 
-      await waitForIndexing();
+      await waitForDataItemToBeIndexed({
+        id: 'cMDqJJ4G0DDN-7mduMYyFWL1kHh9_xQuQtH8sChg5Sw',
+        bundlesDb,
+      });
+      await waitForDataItemToBeIndexed({
+        id: 'P1ftTNGa7XT7_xZjX7Zz03fjRg5QjUk7Vs7oIF44MSU',
+        bundlesDb,
+      });
+      await waitForDataItemToBeIndexed({
+        id: 'b8fu8hGUgGyYhpPlBKGJ0X-o3SyDGMfGV24KmN_cL5c',
+        bundlesDb,
+      });
     });
 
     after(async function () {
@@ -774,7 +756,7 @@ describe('Indexing', function () {
       const res = await axios.post(
         'http://localhost:4000/ar-io/admin/queue-bundle',
         {
-          id: 'FcWiW5v28eBf5s9XAKTRiqD7dq9xX_lS5N6Xb2Y89NY',
+          id: bundleId,
           bypassFilter: 'true',
         },
         {
@@ -824,7 +806,9 @@ describe('Indexing', function () {
         },
       );
 
-      await waitForIndexing();
+      await waitForBundleToBeIndexed({
+        id: '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ',
+      });
 
       const stmt = bundlesDb.prepare(
         'SELECT * FROM new_data_items WHERE parent_id = @id',
@@ -881,19 +865,13 @@ describe('Indexing', function () {
   describe('Queue data item', function () {
     let bundlesDb: Database;
     let compose: StartedDockerComposeEnvironment;
-
-    const waitForIndexing = async () => {
-      const getAll = () =>
-        bundlesDb.prepare('SELECT * FROM new_data_items').all();
-
-      while (getAll().length === 0) {
-        console.log('Waiting for data items to be indexed...');
-        await wait(5000);
-      }
-    };
+    const dataItemId = 'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q';
 
     before(async function () {
-      compose = await composeUp();
+      compose = await composeUp({
+        START_WRITERS: 'false',
+        WRITE_ANS104_DATA_ITEM_DB_SIGNATURES: 'true',
+      });
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
 
       await axios({
@@ -905,7 +883,7 @@ describe('Indexing', function () {
         },
         data: [
           {
-            id: 'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
+            id: dataItemId,
             owner: 'b3duZXI=', // `owner` as base64
             owner_address: 'b3duZXJfYWRkcmVzcw==', // `owner_address` as base64
             signature: 'c2lnbmF0dXJl', // `signature` as base64
@@ -921,42 +899,38 @@ describe('Indexing', function () {
         ],
       });
 
-      await waitForIndexing();
+      await waitForDataItemToBeIndexed({ id: dataItemId, bundlesDb });
     });
 
     after(async function () {
       await compose.down();
     });
 
-    it(
-      'Verifying if data item headers were indexed',
-      { skip: isTestFiltered(['flaky']) },
-      async function () {
-        const stmt = bundlesDb.prepare('SELECT * FROM new_data_items');
-        const dataItems = stmt.all();
+    it('Verifying if data item headers were indexed', async function () {
+      const stmt = bundlesDb.prepare(
+        'SELECT * FROM new_data_items WHERE id = @id',
+      );
+      const dataItem = stmt.get({ id: fromB64Url(dataItemId) });
 
-        dataItems.forEach((dataItem) => {
-          assert.equal(
-            toB64Url(dataItem.id),
-            'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
-          );
+      assert.equal(
+        toB64Url(dataItem.id),
+        'cTbz16hHhGW4HF-uMJ5u8RoCg9atYmyMFWGd-kzhF_Q',
+      );
 
-          assert.equal(dataItem.parent_id, null);
-          assert.equal(dataItem.root_transaction_id, null);
-          assert.equal(b64UrlToUtf8(toB64Url(dataItem.signature)), 'signature');
-          assert.equal(b64UrlToUtf8(toB64Url(dataItem.anchor)), 'anchor');
-          assert.equal(b64UrlToUtf8(toB64Url(dataItem.target)), 'target');
-          assert.equal(
-            b64UrlToUtf8(toB64Url(dataItem.owner_address)),
-            'owner_address',
-          );
-          assert.equal(dataItem.data_offset, null);
-          assert.equal(dataItem.data_size, 1234);
-          assert.equal(dataItem.tag_count, 2);
-          assert.equal(dataItem.content_type, 'application/octet-stream');
-        });
-      },
-    );
+      assert.equal(dataItem.parent_id, null);
+      assert.equal(dataItem.root_transaction_id, null);
+      assert.equal(b64UrlToUtf8(toB64Url(dataItem.signature)), 'signature');
+      assert.equal(b64UrlToUtf8(toB64Url(dataItem.anchor)), 'anchor');
+      assert.equal(b64UrlToUtf8(toB64Url(dataItem.target)), 'target');
+      assert.equal(
+        b64UrlToUtf8(toB64Url(dataItem.owner_address)),
+        'owner_address',
+      );
+      assert.equal(dataItem.data_offset, null);
+      assert.equal(dataItem.data_size, 1234);
+      assert.equal(dataItem.tag_count, 2);
+      assert.equal(dataItem.content_type, 'application/octet-stream');
+    });
   });
 
   describe('Background data verification', function () {
@@ -968,9 +942,9 @@ describe('Indexing', function () {
       const getAll = () =>
         dataDb.prepare('SELECT * FROM contiguous_data_ids').all();
 
-      while (getAll().length === 0) {
+      while (getAll().length !== 79) {
         console.log('Waiting for data items to be indexed...');
-        await wait(5000);
+        await wait(1000);
       }
     };
 
@@ -984,13 +958,14 @@ describe('Indexing', function () {
           total: getAll().length,
         });
 
-        await wait(5000);
+        await wait(1000);
       }
     };
 
     before(
       async function () {
         compose = await composeUp({
+          START_WRITERS: 'false',
           ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
           BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
           BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
@@ -1001,17 +976,6 @@ describe('Indexing', function () {
         await axios({
           method: 'post',
           url: 'http://localhost:4000/ar-io/admin/queue-tx',
-          headers: {
-            Authorization: 'Bearer secret',
-            'Content-Type': 'application/json',
-          },
-          data: { id: bundleId },
-        });
-
-        // queue the bundle to index the data items, there should be 79 data items in this bundle, once the root tx is indexed and verified all associated data items should be marked as verified
-        await axios({
-          method: 'post',
-          url: 'http://localhost:4000/ar-io/admin/queue-bundle',
           headers: {
             Authorization: 'Bearer secret',
             'Content-Type': 'application/json',
@@ -1060,22 +1024,9 @@ describe('Indexing', function () {
     let coreDb: Database;
     let compose: StartedDockerComposeEnvironment;
 
-    const waitForIndexing = async () => {
-      const getAllTxs = () =>
-        coreDb.prepare('SELECT * FROM new_transactions').all();
-
-      const getAllDI = () =>
-        bundlesDb.prepare('SELECT * FROM new_data_items').all();
-
-      while (getAllTxs().length === 0 || getAllDI().length === 0) {
-        console.log('Waiting for pending txs and data items to be indexed...');
-        await wait(5000);
-      }
-    };
-
     before(async function () {
       compose = await composeUp({
-        ARNS_ROOT_HOST: '',
+        START_WRITERS: 'false',
       });
 
       await axios({
@@ -1101,7 +1052,8 @@ describe('Indexing', function () {
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
 
-      await waitForIndexing();
+      await waitForTxToBeIndexed({ id: txId, coreDb });
+      await waitForDataItemToBeIndexed({ id: dataItemId, bundlesDb });
     });
 
     after(async function () {
@@ -1149,21 +1101,9 @@ describe('Indexing', function () {
     let coreDb: Database;
     let compose: StartedDockerComposeEnvironment;
 
-    const waitForIndexingOfTxId = async (txIdToWaitFor: string) => {
-      const getSpecificTxId = () =>
-        coreDb
-          .prepare(`SELECT id FROM new_transactions WHERE id = @id`)
-          .all({ id: fromB64Url(txIdToWaitFor) });
-
-      while (getSpecificTxId().length === 0) {
-        console.log('Waiting for layer-1 tx to be indexed...');
-        await wait(5000);
-      }
-    };
-
     before(async function () {
       compose = await composeUp({
-        ARNS_ROOT_HOST: '',
+        START_WRITER: 'false',
       });
 
       await axios({
@@ -1178,7 +1118,7 @@ describe('Indexing', function () {
 
       coreDb = new Sqlite(`${projectRootPath}/data/sqlite/core.db`);
 
-      await waitForIndexingOfTxId(secp256k1TxId);
+      await waitForTxToBeIndexed({ id: secp256k1TxId, coreDb });
     });
 
     after(async function () {
