@@ -36,23 +36,13 @@ const skipTags = process.env.TEST_SKIP_TAGS?.split(',') ?? [];
  */
 export function isTestFiltered(tags: string[]): boolean {
   if (onlyTags.length !== 0) {
-    for (const tag of tags) {
-      // Don't skip if an 'only' tag was found
-      if (onlyTags.includes(tag)) {
-        return false;
-      }
-    }
-    // Skip if no 'only' tags were found
-    return true;
+    // Don't skip if any 'only' tag was found
+    return !tags.some((tag) => onlyTags.includes(tag));
   }
 
   if (skipTags.length !== 0) {
-    for (const tag of tags) {
-      // Skip if a 'skip' tag was found
-      if (skipTags.includes(tag)) {
-        return true;
-      }
-    }
+    // Skip if any 'skip' tag was found
+    return tags.some((tag) => skipTags.includes(tag));
   }
 
   // By default, do not skip
