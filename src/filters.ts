@@ -17,15 +17,55 @@
  */
 import { b64UrlToUtf8, fromB64Url, sha256B64Url } from './lib/encoding.js';
 import { ItemFilter, MatchableItem } from './types.js';
+import { Logger } from 'winston';
+import defaultLogger from './log.js';
+
+const logMatchResult = ({
+  log,
+  item,
+  isMatching,
+}: {
+  log: Logger;
+  item: MatchableItem;
+  isMatching: boolean;
+}) => {
+  if (isMatching) {
+    log.silly('Filter matched', {
+      id: item.id,
+      height: item.height,
+      parent: item.parent_id,
+    });
+  } else {
+    log.silly('Filter did not match', {
+      id: item.id,
+      height: item.height,
+      parent: item.parent_id,
+    });
+  }
+};
 
 export class AlwaysMatch implements ItemFilter {
-  async match(_: MatchableItem): Promise<boolean> {
+  private log: Logger;
+
+  constructor(log: Logger = defaultLogger) {
+    this.log = log.child({ class: this.constructor.name });
+  }
+
+  async match(item: MatchableItem): Promise<boolean> {
+    logMatchResult({ log: this.log, item, isMatching: true });
     return true;
   }
 }
 
 export class NeverMatch implements ItemFilter {
-  async match(_: MatchableItem): Promise<boolean> {
+  private log: Logger;
+
+  constructor(log: Logger = defaultLogger) {
+    this.log = log.child({ class: this.constructor.name });
+  }
+
+  async match(item: MatchableItem): Promise<boolean> {
+    logMatchResult({ log: this.log, item, isMatching: false });
     return false;
   }
 }
@@ -33,20 +73,27 @@ export class NeverMatch implements ItemFilter {
 export class NegateMatch implements ItemFilter {
   private readonly filter: ItemFilter;
 
-  constructor(filter: ItemFilter) {
+  private log: Logger;
+
+  constructor(filter: ItemFilter, log: Logger = defaultLogger) {
     this.filter = filter;
+    this.log = log.child({ class: this.constructor.name });
   }
 
   async match(item: MatchableItem): Promise<boolean> {
-    return !(await this.filter.match(item));
+    const isMatching = !(await this.filter.match(item));
+    logMatchResult({ log: this.log, item, isMatching });
+    return isMatching;
   }
 }
 
 export class MatchAll implements ItemFilter {
   private readonly filters: ItemFilter[];
+  private log: Logger;
 
-  constructor(filters: ItemFilter[]) {
+  constructor(filters: ItemFilter[], log: Logger = defaultLogger) {
     this.filters = filters;
+    this.log = log.child({ class: this.constructor.name });
   }
 
   async match(item: MatchableItem): Promise<boolean> {
@@ -54,15 +101,19 @@ export class MatchAll implements ItemFilter {
       this.filters.map((filter) => filter.match(item)),
     );
 
-    return results.every((result) => result);
+    const isMatching = results.every((result) => result);
+    logMatchResult({ log: this.log, item, isMatching });
+    return isMatching;
   }
 }
 
 export class MatchAny implements ItemFilter {
   private readonly filters: ItemFilter[];
+  private log: Logger;
 
-  constructor(filters: ItemFilter[]) {
+  constructor(filters: ItemFilter[], log: Logger = defaultLogger) {
     this.filters = filters;
+    this.log = log.child({ class: this.constructor.name });
   }
 
   async match(item: MatchableItem): Promise<boolean> {
@@ -70,7 +121,9 @@ export class MatchAny implements ItemFilter {
       this.filters.map((filter) => filter.match(item)),
     );
 
-    return results.some((result) => result);
+    const isMatching = results.some((result) => result);
+    logMatchResult({ log: this.log, item, isMatching });
+    return isMatching;
   }
 }
 
@@ -84,13 +137,15 @@ type TagValueStartsWithMatch = {
   valueStartsWith: string;
 };
 
-type TagMatch = TagValueMatch | TagValueStartsWithMatch;
+export type TagMatch = TagValueMatch | TagValueStartsWithMatch;
 
 export class MatchTags implements ItemFilter {
   private readonly tags: TagMatch[];
+  private log: Logger;
 
-  constructor(tags: TagMatch[]) {
+  constructor(tags: TagMatch[], log: Logger = defaultLogger) {
     this.tags = tags;
+    this.log = log.child({ class: this.constructor.name });
   }
 
   async match(item: MatchableItem): Promise<boolean> {
@@ -119,15 +174,19 @@ export class MatchTags implements ItemFilter {
       }
     }
 
-    return matches.size === this.tags.length;
+    const isMatching = matches.size === this.tags.length;
+    logMatchResult({ log: this.log, item, isMatching });
+    return isMatching;
   }
 }
 
 export class MatchAttributes implements ItemFilter {
   private readonly attributes: Partial<MatchableItem>;
+  private log: Logger;
 
-  constructor(attributes: Partial<MatchableItem>) {
+  constructor(attributes: Partial<MatchableItem>, log: Logger = defaultLogger) {
     this.attributes = attributes;
+    this.log = log.child({ class: this.constructor.name });
   }
 
   async match(item: MatchableItem): Promise<boolean> {
@@ -145,21 +204,27 @@ export class MatchAttributes implements ItemFilter {
       }
     }
 
-    if (matches.size === Object.keys(this.attributes).length) {
-      return true;
-    }
-
-    return false;
+    const isMatching = matches.size === Object.keys(this.attributes).length;
+    logMatchResult({ log: this.log, item, isMatching });
+    return isMatching;
   }
 }
 
 export class MatchNestedBundle implements ItemFilter {
+  private log: Logger;
+
+  constructor(log: Logger = defaultLogger) {
+    this.log = log.child({ class: this.constructor.name });
+  }
+
   async match(item: MatchableItem): Promise<boolean> {
     const hasParentId =
       item.parent_id !== undefined &&
       item.parent_id !== null &&
       item.parent_id !== '';
 
+    const isMatching = hasParentId;
+    logMatchResult({ log: this.log, item, isMatching });
     return hasParentId;
   }
 }
@@ -191,27 +256,105 @@ export class MatchNestedBundle implements ItemFilter {
  *
  *   { never: true }
  */
-export function createFilter(filter: any): ItemFilter {
+export function createFilter(
+  filter: any,
+  logger: Logger = defaultLogger,
+  itemFilterPath: any[] = [],
+): ItemFilter {
+  const log = logger.child({ function: 'createFilter' });
+
   if (filter === undefined || filter === '') {
-    return new NeverMatch();
+    return new NeverMatch(
+      log.child({
+        itemFilterPath: [...itemFilterPath, JSON.stringify({ never: '' })],
+      }),
+    );
   }
 
   if (filter?.tags) {
-    return new MatchTags(filter.tags);
+    return new MatchTags(
+      filter.tags,
+      log.child({
+        itemFilterPath: [
+          ...itemFilterPath,
+          JSON.stringify({ tags: filter.tags }),
+        ],
+      }),
+    );
   } else if (filter?.attributes) {
-    return new MatchAttributes(filter.attributes);
+    return new MatchAttributes(
+      filter.attributes,
+      log.child({
+        itemFilterPath: JSON.stringify([
+          ...itemFilterPath,
+          { attributes: filter.attributes },
+        ]),
+      }),
+    );
   } else if (filter?.isNestedBundle) {
-    return new MatchNestedBundle();
+    return new MatchNestedBundle(
+      log.child({
+        itemFilterPath: JSON.stringify([
+          ...itemFilterPath,
+          { isNestedBundle: filter.isNestedBundle },
+        ]),
+      }),
+    );
   } else if (filter?.not) {
-    return new NegateMatch(createFilter(filter.not));
+    const childLogger = log.child({
+      itemFilterPath: JSON.stringify([...itemFilterPath, { not: filter.not }]),
+    });
+    return new NegateMatch(createFilter(filter.not, childLogger), childLogger);
   } else if (filter?.and) {
-    return new MatchAll(filter.and.map(createFilter));
+    const childLogger = log.child({
+      itemFilterPath: JSON.stringify([...itemFilterPath, { and: filter.and }]),
+    });
+    return new MatchAll(
+      filter.and.map((and: any) =>
+        createFilter(
+          and,
+          log.child({
+            itemFilterPath: JSON.stringify([...itemFilterPath, { and }]),
+          }),
+          [...itemFilterPath, { and }],
+        ),
+      ),
+      childLogger,
+    );
   } else if (filter?.or) {
-    return new MatchAny(filter.or.map(createFilter));
+    const childLogger = log.child({
+      itemFilterPath: JSON.stringify([...itemFilterPath, { or: filter.or }]),
+    });
+    return new MatchAny(
+      filter.or.map((or: any) =>
+        createFilter(
+          or,
+          log.child({
+            itemFilterPath: JSON.stringify([...itemFilterPath, { or }]),
+          }),
+          [...itemFilterPath, { or }],
+        ),
+      ),
+      childLogger,
+    );
   } else if (filter?.never) {
-    return new NeverMatch();
+    return new NeverMatch(
+      log.child({
+        itemFilterPath: JSON.stringify([
+          ...itemFilterPath,
+          { never: filter.never },
+        ]),
+      }),
+    );
   } else if (filter?.always) {
-    return new AlwaysMatch();
+    return new AlwaysMatch(
+      log.child({
+        itemFilterPath: JSON.stringify([
+          ...itemFilterPath,
+          { always: filter.always },
+        ]),
+      }),
+    );
   }
 
   throw new Error(`Invalid filter: ${filter}`);
