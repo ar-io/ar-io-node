@@ -33,6 +33,7 @@ import {
   waitForLogMessage,
   waitForTxToBeIndexed,
 } from './utils.js';
+import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 
@@ -819,21 +820,25 @@ describe('Indexing', function () {
       assert.equal(dataItems.length, 0);
     });
 
-    it.skip('Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters', async function () {
-      const response = await axios({
-        method: 'post',
-        url: 'http://localhost:4000/ar-io/admin/queue-bundle',
-        headers: {
-          Authorization: 'Bearer secret',
-          'Content-Type': 'application/json',
-        },
-        data: {
-          id: bundleId,
-        },
-      });
+    it(
+      'Verifying if unbundling is skipped when trying to unbundle the same bundle twice using the same filters',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        const response = await axios({
+          method: 'post',
+          url: 'http://localhost:4000/ar-io/admin/queue-bundle',
+          headers: {
+            Authorization: 'Bearer secret',
+            'Content-Type': 'application/json',
+          },
+          data: {
+            id: bundleId,
+          },
+        });
 
-      assert.equal(response.data.message, 'Bundle skipped');
-    });
+        assert.equal(response.data.message, 'Bundle skipped');
+      },
+    );
 
     it('Verifying if unbundling when trying to unbundle the same bundle using different filters', async function () {
       await compose.down();

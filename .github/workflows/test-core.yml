@@ -1,0 +1,32 @@
+name: Test core
+
+on: [workflow_dispatch]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Setup
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'yarn'
+
+      # macOS specific setup
+      - run: brew install python-setuptools
+        if: matrix.os == 'macos-latest'
+
+      # Build and test TypeScript
+      - run: yarn --immutable --immutable-cache
+      - run: yarn build
+      - run: yarn lint:check
+      - run: yarn test:ci
+      - run: yarn test:e2e
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          TEST_SKIP_TAGS: flaky

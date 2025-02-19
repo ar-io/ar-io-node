@@ -36,6 +36,7 @@ import {
   waitForLogMessage,
 } from './utils.js';
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container.js';
+import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 
@@ -238,7 +239,7 @@ describe('Data', function () {
   });
 });
 
-describe('X-Cache header', function () {
+describe('X-Cache header', { skip: isTestFiltered(['flaky']) }, function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
