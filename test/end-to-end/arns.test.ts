@@ -24,7 +24,6 @@ import {
 } from 'testcontainers';
 import axios from 'axios';
 import { rimraf } from 'rimraf';
-import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
 let compose: StartedDockerComposeEnvironment;
