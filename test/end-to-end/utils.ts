@@ -120,6 +120,9 @@ export const composeUp = async ({
   BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
   ...ENVIRONMENT
 }: Environment = {}) => {
+  // disable .env file read
+  process.env.COMPOSE_DISABLE_ENV_FILE = 'true';
+
   await cleanDb();
   return new DockerComposeEnvironment(process.cwd(), 'docker-compose.yaml')
     .withEnvironment({
