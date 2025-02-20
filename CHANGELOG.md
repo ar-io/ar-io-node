@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Set process IDs for mainnet.
+- Increase default AO CU WASM memory limit to 17179869184 to support mainnet
+  process.
 
 ## [Release 26] - 2025-02-13
 
