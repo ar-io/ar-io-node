@@ -395,7 +395,7 @@ export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
 
 export const IO_PROCESS_ID = env.varOrDefault(
   'IO_PROCESS_ID',
-  'agYcCFJtrMG6cqMuZfskIkFTGvUPddICmtQSBIoPdiA',
+  'qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE',
 );
 
 export const AR_IO_NODE_RELEASE = env.varOrDefault(
