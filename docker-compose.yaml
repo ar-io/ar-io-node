@@ -24,9 +24,8 @@ services:
       - core
       - observer
 
-  # TODO: update with release 27 image!
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-631f0c7f883c8b0176abf374dd2a81461cabae2b}
     build:
       context: .
     restart: unless-stopped
@@ -186,9 +185,8 @@ services:
       - core
       - clickhouse
 
-  # TODO: update with release 27 image!
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-ef8023bda71fb03b2fe493c84de256199b043b41}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-c6af93b8f2213180b630009fab8b435afaf47395}
     restart: unless-stopped
     ports:
       - 5050:5050
