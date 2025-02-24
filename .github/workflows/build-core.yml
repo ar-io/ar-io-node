@@ -60,62 +60,6 @@ jobs:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: rtCamp/action-slack-notify@v2
 
-  deploy:
-    runs-on: ubuntu-latest
-
-    needs: test
-    if: github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
-
-    permissions:
-      actions: write
-      id-token: write
-      contents: read
-
-    env:
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # Build and push container image to ECR
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_BUILD_INVOCATION_ROLE }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push core container image to ECR
-        uses: docker/build-push-action@v5
-        with:
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/ar-io-core:develop
-            ${{ env.ECR_REGISTRY }}/ar-io-core:${{ github.sha }}
-
-      - name: Build and push envoy container image to ECR
-        uses: docker/build-push-action@v5
-        with:
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-          context: envoy/
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/ar-io-envoy:develop
-            ${{ env.ECR_REGISTRY }}/ar-io-envoy:${{ github.sha }}
-
-      # Start CodePipeline to test and deploy images
-      #- name: Start CodePipeline
-      #  run: |
-      #    aws codepipeline start-pipeline-execution \
-      #      --name ${{ secrets.AWS_CODEPIPELINE_NAME }}
-
   images:
     runs-on: ubuntu-latest
 
