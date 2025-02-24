@@ -1,4 +1,4 @@
-name: Build core
+name: build-core
 
 on: [push, workflow_dispatch]
 
