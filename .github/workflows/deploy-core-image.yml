@@ -27,4 +27,5 @@ jobs:
           aws lambda invoke \
             --function-name ario-dev-deployment-trigger \
             --region ${{ secrets.AWS_REGION }} \
-            --payload '{"image_sha": "${{ github.event.workflow_run.head_sha }}"}'
+            --payload '{"image_sha": "${{ github.event.workflow_run.head_sha }}"}' \
+            /dev/null
