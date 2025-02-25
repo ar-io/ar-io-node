@@ -15,8 +15,14 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import Sqlite, { Database } from 'better-sqlite3';
-import { DockerComposeEnvironment, Wait } from 'testcontainers';
+import {
+  DockerComposeEnvironment,
+  StartedDockerComposeEnvironment,
+  Wait,
+} from 'testcontainers';
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container';
 import { Environment } from 'testcontainers/build/types.js';
 import axios from 'axios';
@@ -110,6 +116,15 @@ export const getBundleStatus = async ({
   }
 };
 
+const fileExists = async (path: string): Promise<boolean> => {
+  try {
+    await fs.access(path);
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
 export const composeUp = async ({
   START_HEIGHT = '1',
   STOP_HEIGHT = '1',
@@ -123,10 +138,44 @@ export const composeUp = async ({
   // disable .env file read
   process.env.COMPOSE_DISABLE_ENV_FILE = 'true';
 
+  const sqlitePath = `${process.cwd()}/data/sqlite`;
+  const dataDbPath = path.join(sqlitePath, 'data.db');
+  const dataDbTmpPath = path.join(sqlitePath, 'data.tmp');
+  let compose: Promise<StartedDockerComposeEnvironment>;
+
   if (ENVIRONMENT.SKIP_CLEAN_DB !== 'true') {
+    try {
+      if (await fileExists(dataDbPath)) {
+        await fs.copyFile(dataDbPath, dataDbTmpPath);
+      }
+    } catch (error) {
+      console.error('Error backing up data.db:', error);
+    }
+
     await cleanDb();
+
+    compose = new DockerComposeEnvironment(process.cwd(), 'docker-compose.yaml')
+      .withEnvironment({
+        START_WRITERS: 'false',
+      })
+      .withBuild()
+      .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
+      .up();
+
+    await (await compose).down();
+
+    try {
+      if (await fileExists(dataDbTmpPath)) {
+        await fs.unlink(dataDbPath).catch(() => {});
+        await fs.copyFile(dataDbTmpPath, dataDbPath);
+        await fs.unlink(dataDbTmpPath);
+      }
+    } catch (error) {
+      console.error('Error restoring data.db:', error);
+    }
   }
-  return new DockerComposeEnvironment(process.cwd(), 'docker-compose.yaml')
+
+  compose = new DockerComposeEnvironment(process.cwd(), 'docker-compose.yaml')
     .withEnvironment({
       START_HEIGHT,
       STOP_HEIGHT,
@@ -139,7 +188,9 @@ export const composeUp = async ({
     })
     .withBuild()
     .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
-    .up(['core']);
+    .up();
+
+  return compose;
 };
 
 const waitFor = <T>({
