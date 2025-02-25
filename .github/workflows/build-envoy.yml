@@ -1,4 +1,4 @@
-name: Build envoy
+name: build-envoy
 
 on:
   workflow_dispatch:

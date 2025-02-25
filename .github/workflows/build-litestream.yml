@@ -1,4 +1,4 @@
-name: Build litestream
+name: build-litestream
 
 on:
   workflow_dispatch:
