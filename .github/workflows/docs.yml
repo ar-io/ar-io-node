@@ -1,4 +1,4 @@
-name: Build docs and deploy as GitHub pages
+name: docs
 
 on:
   workflow_dispatch:

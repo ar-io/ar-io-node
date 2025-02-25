@@ -1,4 +1,4 @@
-name: Test core
+name: test-core
 
 on: [workflow_dispatch]
 

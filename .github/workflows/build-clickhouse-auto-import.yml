@@ -1,4 +1,4 @@
-name: Build ClickHouse auto-import image
+name: build-clickhouse-auto-import
 
 on: [push, workflow_dispatch]
 
