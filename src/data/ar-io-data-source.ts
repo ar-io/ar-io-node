@@ -49,6 +49,8 @@ export class ArIODataSource implements ContiguousDataSource {
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
   private updatePeersRefreshIntervalMs: number;
+  private previousGatewayPeerTtfbDurations: number[];
+  private previousGatewayPeerKbpsDownloadRate: number[];
 
   private arIO: AoARIORead;
   peers: Record<string, string> = {};
@@ -81,6 +83,8 @@ export class ArIODataSource implements ContiguousDataSource {
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
     this.updatePeersRefreshIntervalMs = updatePeersRefreshIntervalMs;
+    this.previousGatewayPeerTtfbDurations = [];
+    this.previousGatewayPeerKbpsDownloadRate = [];
     this.arIO = arIO;
 
     this.updatePeerList();
@@ -172,16 +176,56 @@ export class ArIODataSource implements ContiguousDataSource {
     ]);
   }
 
-  handlePeerSuccess(peer: string): void {
+  handlePeerSuccess(peer: string, kbps: number, ttfb: number): void {
     metrics.getDataStreamSuccessesTotal.inc({
       class: this.constructor.name,
       source: peer,
     });
+
+    this.previousGatewayPeerTtfbDurations.push(ttfb);
+    if (
+      this.previousGatewayPeerTtfbDurations.length >
+      config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT
+    ) {
+      this.previousGatewayPeerTtfbDurations.shift();
+    }
+
+    this.previousGatewayPeerKbpsDownloadRate.push(kbps);
+    if (
+      this.previousGatewayPeerKbpsDownloadRate.length >
+      config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT
+    ) {
+      this.previousGatewayPeerKbpsDownloadRate.shift();
+    }
+    const currentAverageTtfb =
+      this.previousGatewayPeerTtfbDurations.length === 0
+        ? 0
+        : this.previousGatewayPeerTtfbDurations.reduce(
+            (acc, value) => acc + value,
+            0,
+          ) / this.previousGatewayPeerTtfbDurations.length;
+
+    const currentAverageKbps =
+      this.previousGatewayPeerKbpsDownloadRate.length === 0
+        ? 0
+        : this.previousGatewayPeerKbpsDownloadRate.reduce(
+            (acc, value) => acc + value,
+            0,
+          ) / this.previousGatewayPeerKbpsDownloadRate.length;
+
+    const additionalWeightFromTtfb =
+      ttfb > currentAverageTtfb ? 0 : config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
+    const additionalWeightFromKbps =
+      kbps <= currentAverageKbps ? 0 : config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
+
     // warm the succeeding peer
     this.weightedPeers.forEach((weightedPeer) => {
       if (weightedPeer.id === peer) {
         weightedPeer.weight = Math.min(
-          weightedPeer.weight + config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+          weightedPeer.weight +
+            config.WEIGHTED_PEERS_TEMPERATURE_DELTA +
+            additionalWeightFromTtfb +
+            additionalWeightFromKbps,
           100,
         );
       }
@@ -264,6 +308,7 @@ export class ArIODataSource implements ContiguousDataSource {
       generateRequestAttributes(requestAttributes);
     for (const currentPeer of randomPeers) {
       try {
+        const requestStartTime = Date.now();
         const response = await this.request({
           peerAddress: currentPeer,
           id,
@@ -276,6 +321,7 @@ export class ArIODataSource implements ContiguousDataSource {
               : {}),
           },
         });
+        const ttfb = Date.now() - requestStartTime;
 
         const parsedRequestAttributes = parseRequestAttributesHeaders({
           headers: response.headers as { [key: string]: string },
@@ -285,7 +331,9 @@ export class ArIODataSource implements ContiguousDataSource {
         return this.parseResponse({
           response,
           requestAttributes: parsedRequestAttributes,
+          requestStartTime,
           peer: currentPeer,
+          ttfb,
         });
       } catch (error: any) {
         metrics.getDataErrorsTotal.inc({
@@ -306,25 +354,33 @@ export class ArIODataSource implements ContiguousDataSource {
   private parseResponse({
     response,
     requestAttributes,
+    requestStartTime,
     peer,
+    ttfb,
   }: {
     response: AxiosResponse;
     requestAttributes: RequestAttributes;
+    requestStartTime: number;
     peer: string;
+    ttfb: number;
   }): ContiguousData {
     const stream = response.data;
 
+    const contentLength =
+      parseInt(response.headers['content-length'] ?? '0') || 0;
     stream.on('error', () => {
       this.handlePeerFailure(peer);
     });
 
     stream.on('end', () => {
-      this.handlePeerSuccess(peer);
+      const downloadTimeSeconds = (Date.now() - requestStartTime) / 1000;
+      const kbps = contentLength / downloadTimeSeconds / 1024;
+      this.handlePeerSuccess(peer, kbps, ttfb);
     });
 
     return {
       stream,
-      size: parseInt(response.headers['content-length']),
+      size: contentLength,
       verified: false,
       sourceContentType: response.headers['content-type'],
       cached: false,
