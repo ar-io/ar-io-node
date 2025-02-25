@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
 
+    permissions:
+      actions: write
+      id-token: write
+      contents: read
+
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
