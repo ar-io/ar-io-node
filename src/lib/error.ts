@@ -30,8 +30,17 @@ export class DetailedError extends Error {
   }
 
   toJSON() {
+    const { name, message, ...rest } = this;
     return {
-      ...this,
+      message: this.message,
+      stack: this.stack,
+      ...rest,
     };
+  }
+
+  static fromJSON(json: any): DetailedError {
+    const { message, ...options } = json;
+
+    return new DetailedError(message, options);
   }
 }
