@@ -2777,13 +2777,7 @@ export class StandaloneSqliteDatabase
         })
         .on('message', async (result) => {
           if (result && result.stack) {
-            const { message, stack, workerMethod, workerArgs } = result;
-            const error = new DetailedError(message, {
-              stack,
-              workerMethod,
-              workerArgs,
-            });
-            job.reject(error);
+            job.reject(DetailedError.fromJSON(result));
           } else {
             job.resolve(result);
           }
@@ -2875,7 +2869,10 @@ export class StandaloneSqliteDatabase
     role: WorkerRoleName,
     method: WorkerMethodName,
     args: any,
+    retryIfFailed = false,
   ): Promise<any> {
+    const MAX_RETRIES = 3;
+
     metrics.sqliteInFlightOps.inc({
       worker: workerName,
       role,
@@ -2885,17 +2882,52 @@ export class StandaloneSqliteDatabase
       role,
       method,
     });
-    const ret = new Promise((resolve, reject) => {
-      this.workQueues[workerName][role].push({
-        resolve,
-        reject,
-        message: {
-          method,
-          args,
-        },
-      });
-      this.drainQueue();
-    });
+
+    const executeWithRetry = async (retryCount = 0): Promise<any> => {
+      try {
+        return await new Promise((resolve, reject) => {
+          this.workQueues[workerName][role].push({
+            resolve,
+            reject,
+            message: {
+              method,
+              args,
+            },
+          });
+          this.drainQueue();
+        });
+      } catch (error: any) {
+        if (retryIfFailed && error.code === 'SQLITE_BUSY') {
+          this.log.warn('SQLITE_BUSY error detected, retrying...', {
+            worker: workerName,
+            role,
+            method,
+            error: error.message,
+            stack: error.stack,
+            retryCount,
+            maxRetries: MAX_RETRIES,
+          });
+
+          if (retryCount < MAX_RETRIES) {
+            return executeWithRetry(retryCount + 1);
+          } else {
+            this.log.error('Max retries reached for SQLITE_BUSY error', {
+              worker: workerName,
+              role,
+              method,
+              error: error.message,
+              stack: error.stack,
+              maxRetries: MAX_RETRIES,
+            });
+          }
+        }
+
+        throw error;
+      }
+    };
+
+    const ret = executeWithRetry();
+
     ret.finally(() => {
       metrics.sqliteInFlightOps.dec({
         worker: workerName,
@@ -2903,6 +2935,7 @@ export class StandaloneSqliteDatabase
       });
       end();
     });
+
     return ret;
   }
 
@@ -2910,16 +2943,18 @@ export class StandaloneSqliteDatabase
     pool: WorkerPoolName,
     method: WorkerMethodName,
     args: any,
+    retryIfFailed = false,
   ): Promise<any> {
-    return this.queueWork(pool, 'read', method, args);
+    return this.queueWork(pool, 'read', method, args, retryIfFailed);
   }
 
   queueWrite(
     pool: WorkerPoolName,
     method: WorkerMethodName,
     args: any,
+    retryIfFailed = false,
   ): Promise<any> {
-    return this.queueWork(pool, 'write', method, args);
+    return this.queueWork(pool, 'write', method, args, retryIfFailed);
   }
 
   getMaxHeight(): Promise<number> {
@@ -2987,7 +3022,7 @@ export class StandaloneSqliteDatabase
   }
 
   saveBundle(bundle: BundleRecord): Promise<BundleSaveResult> {
-    return this.queueWrite('bundles', 'saveBundle', [bundle]);
+    return this.queueWrite('bundles', 'saveBundle', [bundle], true);
   }
 
   async flushStableDataItems(
@@ -3546,6 +3581,9 @@ if (!isMainThread) {
 
       const error = new DetailedError('Error in StandaloneSqlite worker', {
         stack: e.stack,
+        code: e.code,
+        workerMethod: method,
+        workerArgs: args,
       });
 
       log.error(error.message, {
@@ -3553,14 +3591,11 @@ if (!isMainThread) {
         stack: error.stack,
         workerMethod: method,
         workerArgs: args,
+        code: e.code,
       });
+
       errorCount++;
-      parentPort?.postMessage({
-        message: error.message,
-        stack: error.stack,
-        workerMethod: method,
-        workerArgs: args,
-      });
+      parentPort?.postMessage(error.toJSON());
     }
   });
 }
