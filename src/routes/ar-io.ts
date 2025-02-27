@@ -27,6 +27,7 @@ import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
+import { isEmptyString } from '../lib/string.js';
 
 export const arIoRouter = Router();
 export let parquetExporter: ParquetExporter | null = null;
@@ -138,10 +139,11 @@ arIoRouter.put('/ar-io/admin/block-data', express.json(), async (req, res) => {
 arIoRouter.put('/ar-io/admin/block-name', express.json(), async (req, res) => {
   try {
     const { name, source, notes } = req.body;
-    if (typeof name !== 'string' || name.trim() === '') {
+    if (isEmptyString(name)) {
       res.status(400).send("'name' must be a non-empty string");
       return;
     }
+
     if (name.length > 51) {
       res.status(400).send("'name' exceeds maximum length");
       return;
@@ -163,10 +165,11 @@ arIoRouter.put(
   async (req, res) => {
     try {
       const { name } = req.body;
-      if (typeof name !== 'string' || name.trim() === '') {
+      if (isEmptyString(name)) {
         res.status(400).send("'name' must be a non-empty string");
         return;
       }
+
       if (name.length > 51) {
         res.status(400).send("'name' exceeds maximum length");
         return;
