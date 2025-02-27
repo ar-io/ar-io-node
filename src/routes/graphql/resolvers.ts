@@ -21,6 +21,7 @@ import { winstonToAr } from '../../lib/encoding.js';
 import log from '../../log.js';
 import { signatureFetcher } from '../../system.js';
 import { GqlTransaction } from '../../types.js';
+import { isEmptyString } from '../../lib/string.js';
 
 export const DEFAULT_PAGE_SIZE = 10;
 export const MAX_PAGE_SIZE = 1000;
@@ -103,6 +104,7 @@ export const resolvers: IResolvers = {
         resolver: 'transaction',
         queryParams,
       });
+
       return db.getGqlTransaction({
         id: queryParams.id,
       });
@@ -112,10 +114,13 @@ export const resolvers: IResolvers = {
         resolver: 'transactions',
         queryParams,
       });
+
       return db.getGqlTransactions({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
-        cursor: queryParams.after,
+        cursor: isEmptyString(queryParams.after)
+          ? undefined
+          : queryParams.after,
         ids: queryParams.ids,
         recipients: queryParams.recipients,
         owners: queryParams.owners,
@@ -130,16 +135,20 @@ export const resolvers: IResolvers = {
     },
     block: async (_, queryParams, { db }) => {
       log.info('GraphQL block query', { resolver: 'block', queryParams });
+
       return db.getGqlBlock({
         id: queryParams.id,
       });
     },
     blocks: (_, queryParams, { db }) => {
       log.info('GraphQL blocks query', { resolver: 'blocks', queryParams });
+
       return db.getGqlBlocks({
         pageSize: getPageSize(queryParams),
         sortOrder: queryParams.sort,
-        cursor: queryParams.after,
+        cursor: isEmptyString(queryParams.after)
+          ? undefined
+          : queryParams.after,
         ids: queryParams.ids,
         minHeight: queryParams.height?.min,
         maxHeight: queryParams.height?.max,
