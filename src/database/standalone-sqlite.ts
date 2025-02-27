@@ -2849,10 +2849,8 @@ export class StandaloneSqliteDatabase
     role: WorkerRoleName,
     method: WorkerMethodName,
     args: any,
-    retryIfFailed = false,
+    maxRetries = 0,
   ): Promise<any> {
-    const MAX_RETRIES = 3;
-
     metrics.sqliteInFlightOps.inc({
       worker: workerName,
       role,
@@ -2877,18 +2875,18 @@ export class StandaloneSqliteDatabase
           this.drainQueue();
         });
       } catch (error: any) {
-        if (retryIfFailed && error.code === 'SQLITE_BUSY') {
-          this.log.warn('SQLITE_BUSY error detected, retrying...', {
-            worker: workerName,
-            role,
-            method,
-            error: error.message,
-            stack: error.stack,
-            retryCount,
-            maxRetries: MAX_RETRIES,
-          });
+        if (maxRetries > 0 && error.code === 'SQLITE_BUSY') {
+          if (retryCount < maxRetries) {
+            this.log.warn('SQLITE_BUSY error detected, retrying...', {
+              worker: workerName,
+              role,
+              method,
+              error: error.message,
+              stack: error.stack,
+              retryCount,
+              maxRetries,
+            });
 
-          if (retryCount < MAX_RETRIES) {
             return executeWithRetry(retryCount + 1);
           } else {
             this.log.error('Max retries reached for SQLITE_BUSY error', {
@@ -2897,7 +2895,7 @@ export class StandaloneSqliteDatabase
               method,
               error: error.message,
               stack: error.stack,
-              maxRetries: MAX_RETRIES,
+              maxRetries,
             });
           }
         }
@@ -2923,18 +2921,18 @@ export class StandaloneSqliteDatabase
     pool: WorkerPoolName,
     method: WorkerMethodName,
     args: any,
-    retryIfFailed = false,
+    maxRetries?: number,
   ): Promise<any> {
-    return this.queueWork(pool, 'read', method, args, retryIfFailed);
+    return this.queueWork(pool, 'read', method, args, maxRetries);
   }
 
   queueWrite(
     pool: WorkerPoolName,
     method: WorkerMethodName,
     args: any,
-    retryIfFailed = false,
+    maxRetries?: number,
   ): Promise<any> {
-    return this.queueWork(pool, 'write', method, args, retryIfFailed);
+    return this.queueWork(pool, 'write', method, args, maxRetries);
   }
 
   getMaxHeight(): Promise<number> {
@@ -3002,7 +3000,7 @@ export class StandaloneSqliteDatabase
   }
 
   saveBundle(bundle: BundleRecord): Promise<BundleSaveResult> {
-    return this.queueWrite('bundles', 'saveBundle', [bundle], true);
+    return this.queueWrite('bundles', 'saveBundle', [bundle], 3);
   }
 
   async flushStableDataItems(
