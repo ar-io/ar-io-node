@@ -58,6 +58,12 @@ type ExportData = {
   error?: string;
 };
 
+type HeightRange = {
+  startHeight: bigint;
+  endHeight: bigint;
+  rowCount: bigint;
+};
+
 export class ParquetExporter {
   private log: winston.Logger;
   private worker: Worker | null = null;
@@ -94,7 +100,7 @@ export class ParquetExporter {
     outputDir: string;
     startHeight: number;
     endHeight: number;
-    maxFileRows: number;
+    maxFileRows?: number;
   }): Promise<void> {
     if (this.exportStatus.status === RUNNING) {
       const error = new Error('An export is already in progress');
@@ -488,34 +494,45 @@ const exportToParquet = async ({
   tableName: string;
   startHeight: number;
   endHeight: number;
-  maxFileRows: number;
-}): Promise<void> => {
+  maxFileRows?: number;
+}): Promise<HeightRange[]> => {
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true });
   }
 
+  const heightRanges: HeightRange[] = [];
   let { minHeight, maxHeight } = await getHeightRange(db, tableName);
   minHeight = minHeight > BigInt(startHeight) ? minHeight : BigInt(startHeight);
   maxHeight = maxHeight < BigInt(endHeight) ? maxHeight : BigInt(endHeight);
   let rowCount = 0n;
+  let currentRangeStart = minHeight;
 
   for (let height = minHeight; height <= maxHeight; height++) {
     const heightRowCount = await getRowCountForHeight(db, tableName, height);
     rowCount += heightRowCount;
 
-    if (rowCount >= maxFileRows || height === maxHeight) {
-      const fileName = `${tableName}-minHeight:${minHeight}-maxHeight:${height}-rowCount:${rowCount}.parquet`;
+    if (
+      (maxFileRows !== undefined && rowCount >= maxFileRows) ||
+      height === maxHeight
+    ) {
+      heightRanges.push({
+        startHeight: currentRangeStart,
+        endHeight: height,
+        rowCount,
+      });
+
+      const fileName = `${tableName}-${currentRangeStart}-${height}-rowCount:${rowCount}.parquet`;
       const filePath = `${outputDir}/${fileName}`;
 
       try {
         await db.exec(`
             COPY (
               SELECT * FROM ${tableName}
-              WHERE height >= ${minHeight} AND height <= ${height}
+              WHERE height >= ${currentRangeStart} AND height <= ${height}
             ) TO '${filePath}' (FORMAT PARQUET, COMPRESSION 'zstd')
           `);
 
-        minHeight = height + 1n;
+        currentRangeStart = height + 1n;
         rowCount = 0n;
       } catch (error: any) {
         const newError = new Error(`Error exporting Parquet file ${fileName}`);
@@ -524,6 +541,8 @@ const exportToParquet = async ({
       }
     }
   }
+
+  return heightRanges;
 };
 
 const getHeightRange = async (
@@ -653,16 +672,7 @@ if (!isMainThread) {
         endHeight,
       });
 
-      // Export data to Parquet files
-      await exportToParquet({
-        db: connection,
-        outputDir,
-        tableName: 'blocks',
-        startHeight,
-        endHeight,
-        maxFileRows,
-      });
-      await exportToParquet({
+      const transactionRanges = await exportToParquet({
         db: connection,
         outputDir,
         tableName: 'transactions',
@@ -670,14 +680,24 @@ if (!isMainThread) {
         endHeight,
         maxFileRows,
       });
-      await exportToParquet({
-        db: connection,
-        outputDir,
-        tableName: 'tags',
-        startHeight,
-        endHeight,
-        maxFileRows,
-      });
+
+      for (const range of transactionRanges) {
+        await exportToParquet({
+          db: connection,
+          outputDir,
+          tableName: 'blocks',
+          startHeight: Number(range.startHeight),
+          endHeight: Number(range.endHeight),
+        });
+
+        await exportToParquet({
+          db: connection,
+          outputDir,
+          tableName: 'tags',
+          startHeight: Number(range.startHeight),
+          endHeight: Number(range.endHeight),
+        });
+      }
 
       parentPort?.postMessage({ eventName: EXPORT_COMPLETE });
 
