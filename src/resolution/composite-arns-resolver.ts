@@ -104,33 +104,39 @@ export class CompositeArNSResolver implements NameResolver {
       // Make a resolution function that can be called both on cache hits (when
       // the refresh interval is past) and when we have a cache miss
       const resolveName = async () => {
-        for (const resolver of this.resolvers) {
+        for (let i = 0; i < this.resolvers.length; i++) {
+          const resolver = this.resolvers[i];
+          const isLastResolver = i === this.resolvers.length - 1;
+
           try {
             this.log.info('Attempting to resolve name with resolver', {
               name,
             });
 
-            const maybeResolution = await pTimeout(
-              resolver
-                .resolve({
-                  name,
-                  baseArNSRecord: await baseNameInCachePromise,
-                })
-                .then((resolution) => {
-                  if (resolution.resolvedAt !== undefined) {
-                    this.resolutionCache.set(
-                      name,
-                      Buffer.from(JSON.stringify(resolution)),
-                    );
-                    this.log.info('Resolved name', { name, resolution });
+            const resolutionPromise = resolver
+              .resolve({
+                name,
+                baseArNSRecord: await baseNameInCachePromise,
+              })
+              .then((resolution) => {
+                if (resolution.resolvedAt !== undefined) {
+                  this.resolutionCache.set(
+                    name,
+                    Buffer.from(JSON.stringify(resolution)),
+                  );
+                  this.log.info('Resolved name', { name, resolution });
 
-                    return resolution;
-                  }
+                  return resolution;
+                }
 
-                  return undefined;
-                }),
-              { milliseconds: config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS },
-            );
+                return undefined;
+              });
+
+            const maybeResolution = isLastResolver
+              ? await resolutionPromise
+              : await pTimeout(resolutionPromise, {
+                  milliseconds: config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS,
+                });
 
             if (maybeResolution) {
               return maybeResolution;
@@ -143,6 +149,7 @@ export class CompositeArNSResolver implements NameResolver {
             });
           }
         }
+
         return undefined;
       };
 
