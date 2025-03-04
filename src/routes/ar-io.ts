@@ -373,8 +373,7 @@ arIoRouter.post(
         startHeight < 0 ||
         !Number.isInteger(endHeight) ||
         endHeight < 0 ||
-        !Number.isInteger(maxFileRows) ||
-        maxFileRows < 0
+        (Number.isInteger(maxFileRows) && maxFileRows <= 0)
       ) {
         res.status(400).send('Invalid or missing required parameters');
         return;
