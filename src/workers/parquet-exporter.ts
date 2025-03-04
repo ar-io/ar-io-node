@@ -521,7 +521,7 @@ const exportToParquet = async ({
         rowCount,
       });
 
-      const fileName = `${tableName}-${currentRangeStart}-${height}-rowCount:${rowCount}.parquet`;
+      const fileName = `${tableName}-minHeight:${currentRangeStart}-maxHeight:${height}-rowCount:${rowCount}.parquet`;
       const filePath = `${outputDir}/${fileName}`;
 
       try {
