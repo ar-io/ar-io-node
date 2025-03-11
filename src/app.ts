@@ -62,8 +62,8 @@ app.use(
   }),
 );
 
-app.use(defaultRouter);
 app.use(arnsRouter);
+app.use(defaultRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
 app.use(dataRouter);
