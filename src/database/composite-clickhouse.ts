@@ -420,12 +420,15 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
   }
 
   async getGqlTransaction({ id }: { id: string }) {
-    return (
-      await this.getGqlTransactions({
-        pageSize: 1,
-        ids: [id],
-      })
-    ).edges[0].node;
+    const results = await this.getGqlTransactions({
+      pageSize: 1,
+      ids: [id],
+    });
+    if (!Array.isArray(results.edges) || results.edges.length === 0) {
+      return null;
+    } else {
+      return results.edges[0]?.node ?? null;
+    }
   }
 
   getGqlBlock(args: { id: string }) {

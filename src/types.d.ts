@@ -388,7 +388,7 @@ interface RequestAttributes {
 }
 
 export interface GqlQueryable {
-  getGqlTransaction(args: { id: string }): Promise<GqlTransaction>;
+  getGqlTransaction(args: { id: string }): Promise<GqlTransaction | null>;
 
   getGqlTransactions(args: {
     pageSize: number;
