@@ -443,6 +443,59 @@ components:
 
 paths:
   # Gateway
+  '/':
+    get:
+      tags: [Gateway]
+      summary: Gateway Info or Apex Content
+      description: |
+        Returns either gateway information or serves content based on configuration:
+
+        - If neither APEX_TX_ID nor APEX_ARNS_NAME is set, returns gateway information
+        - If APEX_TX_ID is set, serves that transaction's content
+        - If APEX_ARNS_NAME is set, resolves and serves that ArNS name's content
+
+        The Content-Type of the response will match the content type of the transaction or ArNS-resolved data (e.g., text/html for HTML documents, application/json for JSON documents, application/octet-stream for binary data, etc.).
+      responses:
+        '200':
+          description: |-
+            Either gateway information or transaction/ArNS content
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    description: Gateway information
+                    properties:
+                      wallet:
+                        $ref: '#/components/schemas/Base64Url43'
+                        description: Gateway wallet address
+                      processId:
+                        $ref: '#/components/schemas/Base64Url43'
+                        description: Gateway process ID
+                      ans104UnbundleFilter:
+                        type: object
+                        description: Configuration for ANS-104 unbundling filter
+                      ans104IndexFilter:
+                        type: object
+                        description: Configuration for ANS-104 indexing filter
+                      supportedManifestVersions:
+                        type: array
+                        description: List of supported manifest versions
+                        items:
+                          type: string
+                          enum: ['0.1.0', '0.2.0']
+                      release:
+                        type: string
+                        description: Gateway software release version
+                    required:
+                      - processId
+                      - supportedManifestVersions
+                      - release
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+                description: Transaction or ArNS content when APEX_TX_ID or APEX_ARNS_NAME is set
   '/ar-io/healthcheck':
     get:
       tags: [Gateway]
@@ -837,19 +890,6 @@ paths:
           description: Range not satisfiable for HEAD request
 
   # Network and Node Status
-  '/':
-    get:
-      tags: [Network]
-      summary: Network and Gateway Status.
-      description: Get information about the current status of the Network and your Gateway.
-      responses:
-        '200':
-          description: |-
-            Successful operation.
-          content:
-            application/json:
-              schema:
-                '$ref': '#/components/schemas/NetworkInfo'
   '/info':
     get:
       tags: [Network]
