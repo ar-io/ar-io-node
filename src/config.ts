@@ -434,6 +434,11 @@ export const AR_IO_NODE_RELEASE = env.varOrDefault(
 export const APEX_TX_ID = env.varOrUndefined('APEX_TX_ID');
 
 export const APEX_ARNS_NAME = env.varOrUndefined('APEX_ARNS_NAME');
+if (APEX_TX_ID !== undefined && APEX_ARNS_NAME !== undefined) {
+  throw new Error(
+    'APEX_TX_ID and APEX_ARNS_NAME are mutually exclusive but both are set.',
+  );
+}
 if (APEX_ARNS_NAME !== undefined && ARNS_ROOT_HOST === undefined) {
   throw new Error('ARNS_ROOT_HOST must be defined when APEX_ARNS_NAME is used');
 }
