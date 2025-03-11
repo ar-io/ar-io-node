@@ -34,13 +34,6 @@ static_resources:
                     - name: root_service
                       domains: ['*']
                       routes:
-                        - match: { prefix: '/gateway_metrics' }
-                          route:
-                            cluster: ario_gateways
-                            retry_policy:
-                              retry_on: '5xx,reset,retriable-status-codes'
-                              retriable_status_codes: 404
-                              num_retries: 5
                         - match: { prefix: '/graphql' }
                           route:
                             cluster: graphql_gateways
@@ -70,14 +63,6 @@ static_resources:
                               num_retries: 5
                             prefix_rewrite: '/'
                         - match:
-                            prefix: '/chunk'
-                            headers:
-                              - name: ':method'
-                                exact_match: 'POST'
-                          route:
-                            cluster: ario_gateways
-                            timeout: 30s
-                        - match:
                             prefix: '/ao/cu/'
                           route:
                             cluster: ao_service_cluster
@@ -96,18 +81,6 @@ static_resources:
                               num_retries: 5
                             prefix_rewrite: '/'
 
-                        - match: { prefix: '/api-docs' }
-                          route:
-                            cluster: ario_gateways
-                            retry_policy:
-                              retry_on: '5xx,reset'
-                              num_retries: 5
-                        - match: { prefix: '/openapi.json' }
-                          route:
-                            cluster: ario_gateways
-                            retry_policy:
-                              retry_on: '5xx,reset'
-                              num_retries: 5
                         - match: { prefix: '/ar-io/observer' }
                           route:
                             timeout: 0s
@@ -115,42 +88,45 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
-                        - match: { prefix: '/ar-io' }
+                        - match: { prefix: '/tx/' }
                           route:
-                            timeout: 0s
-                            cluster: ario_gateways
+                            cluster: legacy_gateways
                             retry_policy:
-                              retry_on: '5xx,reset'
+                              retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
                         - match:
-                            safe_regex:
-                              google_re2: { max_program_size: 200 }
-                              regex: '^\/raw\/[a-zA-Z0-9_-]{43}$'
+                            prefix: '/chunk/'
+                            headers:
+                              - name: ':method'
+                                exact_match: 'GET'
                           route:
-                            timeout: 0s
-                            cluster: ario_gateways
+                            cluster: legacy_gateways
                             retry_policy:
-                              retry_on: '5xx,reset'
+                              retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
-                        - match:
-                            safe_regex:
-                              google_re2: { max_program_size: 200 }
-                              regex: '^\/[a-zA-Z0-9_-]{43}\/?$|^\/[a-zA-Z0-9_-]{43}\/.*$'
+                        - match: { prefix: '/block/' }
                           route:
-                            timeout: 0s
-                            cluster: ario_gateways
+                            cluster: legacy_gateways
                             retry_policy:
-                              retry_on: '5xx,reset'
+                              retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
-                        - match:
-                            safe_regex:
-                              google_re2: { max_program_size: 200 }
-                              regex: '^\/local\/farcaster\/frame\/[a-zA-Z0-9_-]{43}$'
+                        - match: { prefix: '/price/' }
                           route:
-                            timeout: 0s
-                            cluster: ario_gateways
+                            cluster: legacy_gateways
                             retry_policy:
-                              retry_on: '5xx,reset'
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                        - match: { prefix: '/tx_anchor' }
+                          route:
+                            cluster: legacy_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                        - match: { prefix: '/wallet/' }
+                          route:
+                            cluster: legacy_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
                         - match: { prefix: '/' }
                           response_headers_to_add:
@@ -158,7 +134,7 @@ static_resources:
                                 key: 'Cache-Control'
                                 value: 'public, max-age=30'
                           route:
-                            cluster: legacy_gateways
+                            cluster: ario_gateways
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5

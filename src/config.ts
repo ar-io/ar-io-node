@@ -431,6 +431,10 @@ export const AR_IO_NODE_RELEASE = env.varOrDefault(
   release,
 );
 
+export const APEX_TX_ID = env.varOrUndefined('APEX_TX_ID');
+
+export const APEX_ARNS_NAME = env.varOrUndefined('APEX_ARNS_NAME');
+
 //
 // Header caching
 //

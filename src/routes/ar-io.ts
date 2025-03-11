@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { Router, default as express } from 'express';
+import { Router, Request, Response, default as express } from 'express';
 import createPrometheusMiddleware from 'express-prometheus-middleware';
 
 import * as config from '../config.js';
@@ -91,7 +91,7 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
 });
 
 // ar.io network info
-arIoRouter.get('/ar-io/info', (_req, res) => {
+export const arIoInfoHandler = (_req: Request, res: Response) => {
   res.status(200).send({
     wallet: config.AR_IO_WALLET,
     processId: config.IO_PROCESS_ID,
@@ -100,7 +100,8 @@ arIoRouter.get('/ar-io/info', (_req, res) => {
     supportedManifestVersions: ['0.1.0', '0.2.0'],
     release,
   });
-});
+};
+arIoRouter.get('/ar-io/info', arIoInfoHandler);
 
 // Only allow access to admin routes if the bearer token matches the admin api key
 arIoRouter.use('/ar-io/admin', (req, res, next) => {

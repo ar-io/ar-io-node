@@ -28,13 +28,13 @@ import { DEFAULT_ARNS_TTL_SECONDS } from '../resolution/trusted-gateway-arns-res
 
 export const arnsRouter = Router();
 
+export const arnsMiddleware = createArnsMiddleware({
+  dataHandler,
+  nameResolver: system.nameResolver,
+});
+
 if (config.ARNS_ROOT_HOST !== undefined) {
-  arnsRouter.use(
-    createArnsMiddleware({
-      dataHandler,
-      nameResolver: system.nameResolver,
-    }),
-  );
+  arnsRouter.use(arnsMiddleware);
 
   arnsRouter.use(
     createSandboxMiddleware({

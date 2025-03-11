@@ -22,6 +22,7 @@ import { Server } from 'node:http';
 import * as config from './config.js';
 import { headerNames } from './constants.js';
 import log from './log.js';
+import { defaultRouter } from './routes/default.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
 import { dataRouter } from './routes/data/index.js';
@@ -29,6 +30,11 @@ import { arweaveRouter } from './routes/arweave.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import * as system from './system.js';
+
+if (config.APEX_TX_ID !== undefined && config.APEX_ARNS_NAME !== undefined) {
+  log.error('Cannot set both APEX_TX_ID and APEX_ARNS_NAME');
+  process.exit(1);
+}
 
 system.arweaveClient.refreshPeers();
 
@@ -61,6 +67,7 @@ app.use(
   }),
 );
 
+app.use(defaultRouter);
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
