@@ -31,11 +31,6 @@ import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import * as system from './system.js';
 
-if (config.APEX_TX_ID !== undefined && config.APEX_ARNS_NAME !== undefined) {
-  log.error('Cannot set both APEX_TX_ID and APEX_ARNS_NAME');
-  process.exit(1);
-}
-
 system.arweaveClient.refreshPeers();
 
 system.headerFsCacheCleanupWorker?.start();
