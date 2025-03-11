@@ -29,10 +29,10 @@ defaultRouter.get('/', async (req, res, next) => {
     return arIoInfoHandler(req, res);
   }
 
-  const modifiedReq = Object.create(req);
-
   if (APEX_TX_ID !== undefined) {
+    const modifiedReq = Object.create(req);
     modifiedReq.params = { 0: APEX_TX_ID, ...req.params };
+
     return dataHandler(modifiedReq, res, next);
   }
 
