@@ -63,11 +63,11 @@ app.use(
 );
 
 app.use(arnsRouter);
-app.use(defaultRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
 app.use(dataRouter);
 app.use(arweaveRouter);
+app.use(defaultRouter);
 
 // GraphQL
 const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {
