@@ -29,6 +29,7 @@ before(async function () {
   compose = await composeUp({
     START_WRITERS: 'false',
     ARNS_ROOT_HOST: 'ar-io.localhost',
+    AO_CU_URL: 'https://cu.ardrive.io', // TODO: replace with local ao-cu
   });
 });
 
@@ -179,7 +180,7 @@ describe('ArNS', function () {
           for (let i = 0; i <= 10; i++) {
             const res = await axios.get('http://localhost:4000', {
               headers: {
-                Host: `${i === 0 ? '@' : i}_undername-limits.ar-io.localhost`,
+                Host: `${i === 0 ? '' : `${i}_`}undername-limits.ar-io.localhost`,
               },
             });
 
