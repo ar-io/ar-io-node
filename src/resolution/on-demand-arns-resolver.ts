@@ -26,7 +26,6 @@ import {
   AoARIORead,
   AoArNSNameDataWithName,
   AoClient,
-  sortANTRecords,
 } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
@@ -139,7 +138,7 @@ export class OnDemandArNSResolver implements NameResolver {
       const undername =
         name === baseName ? '@' : name.replace(`_${baseName}`, '');
 
-      // enforce the limit of undername resolution, the ant contract is responsible for returning names in the order they should be resolved
+      // sdk sorts the records by priority, we will use the undername to get the record
       const antRecords = await ant.getRecords();
       const antRecord = antRecords[undername];
 
@@ -149,11 +148,9 @@ export class OnDemandArNSResolver implements NameResolver {
       }
 
       // sort the records by priority
-      const sortedRecords = sortANTRecords(antRecords);
-      const sortedAntRecord = sortedRecords[undername];
-      const resolvedId = sortedAntRecord.transactionId;
-      const ttl = sortedAntRecord.ttlSeconds;
-      const index = sortedAntRecord.index;
+      const resolvedId = antRecord.transactionId;
+      const ttl = antRecord.ttlSeconds;
+      const index = antRecord.index;
 
       if (!isValidDataId(resolvedId)) {
         throw new Error('Invalid resolved data ID');
