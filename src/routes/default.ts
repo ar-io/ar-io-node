@@ -33,6 +33,12 @@ defaultRouter.get('*', async (req, res, next) => {
     return arIoInfoHandler(req, res);
   }
 
+  // Pass /graphql through since Apollo routes are always last
+  if (req.path === '/graphql') {
+    next();
+    return;
+  }
+
   if (APEX_TX_ID !== undefined) {
     const modifiedReq = Object.create(req);
     modifiedReq.params = {
