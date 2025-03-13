@@ -88,12 +88,39 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset'
                               num_retries: 5
+                        - match: { prefix: '/info' }
+                          route:
+                            cluster: legacy_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
+                        - match: { prefix: '/current_block' }
+                          route:
+                            cluster: legacy_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx/' }
                           route:
                             cluster: legacy_gateways
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match:
                             prefix: '/chunk/'
                             headers:
@@ -104,30 +131,55 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/block/' }
                           route:
                             cluster: legacy_gateways
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/price/' }
                           route:
                             cluster: legacy_gateways
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx_anchor' }
                           route:
                             cluster: legacy_gateways
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/wallet/' }
                           route:
                             cluster: legacy_gateways
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/' }
                           response_headers_to_add:
                             - header:
@@ -138,11 +190,6 @@ static_resources:
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
-                            auto_host_rewrite: true
-                            internal_redirect_policy:
-                              max_internal_redirects: 10
-                              allow_cross_scheme_redirect: true
-                              redirect_response_codes: [301, 302, 303]
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
