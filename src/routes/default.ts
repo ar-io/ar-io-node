@@ -24,20 +24,28 @@ import { arIoInfoHandler } from './ar-io.js';
 
 export const defaultRouter = Router();
 
-defaultRouter.get('/', async (req, res, next) => {
-  if (APEX_TX_ID === undefined && APEX_ARNS_NAME === undefined) {
+defaultRouter.get('*', async (req, res, next) => {
+  if (
+    APEX_TX_ID === undefined &&
+    APEX_ARNS_NAME === undefined &&
+    req.path === '/'
+  ) {
     return arIoInfoHandler(req, res);
   }
 
   if (APEX_TX_ID !== undefined) {
     const modifiedReq = Object.create(req);
-    modifiedReq.params = { 0: APEX_TX_ID, ...req.params };
+    modifiedReq.params = {
+      ...req.params,
+      0: undefined,
+      1: APEX_TX_ID,
+      2: req.path.slice(1),
+    };
 
     return dataHandler(modifiedReq, res, next);
   }
 
   if (APEX_ARNS_NAME !== undefined) {
-    // Use Proxy to modify hostname as it is read only
     const modifiedReq = new Proxy(req, {
       get: (target, prop) => {
         if (prop === 'hostname') {
@@ -52,4 +60,6 @@ defaultRouter.get('/', async (req, res, next) => {
 
     return arnsMiddleware(modifiedReq, res, next);
   }
+
+  return res.status(404).send('Not Found');
 });
