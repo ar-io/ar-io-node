@@ -9,6 +9,11 @@ if [ -f .env ]; then
     set +a
 fi
 
+# If ADMIN_API_KEY_FILE is set, read its contents (trimming any trailing newline) into ADMIN_API_KEY
+if [ -n "${ADMIN_API_KEY_FILE:-}" ]; then
+    ADMIN_API_KEY="$(tr -d '\n' < "${ADMIN_API_KEY_FILE}")"
+fi
+
 # Set local variables with defaults
 ar_io_host=${AR_IO_HOST:-localhost}
 ar_io_port=${AR_IO_PORT:-4000}
@@ -16,7 +21,7 @@ parquet_dir=${PARQUET_DATA_PATH:-./data/parquet}
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-360} # Export every hour by default
 
 if [ -z "${ADMIN_API_KEY:-}" ]; then
-    echo "Error: ADMIN_API_KEY environment variable is not set in .env"
+    echo "Error: Either no ADMIN_API_KEY environment variable set in .env or no ADMIN_API_KEY_FILE path provided"
     exit 1
 fi
 
