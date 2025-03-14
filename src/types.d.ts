@@ -335,6 +335,8 @@ interface GqlTransaction {
   id: string;
   anchor: string | null;
   signature: string | null;
+  signatureSize: string | null;
+  signatureOffset: string | null;
   recipient: string | null;
   ownerAddress: string;
   ownerKey: string | null;

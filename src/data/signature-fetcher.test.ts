@@ -48,6 +48,7 @@ describe('SignatureFetcher', () => {
     } as unknown as ChainSource;
     signatureStore = {
       get: mock.fn(),
+      set: mock.fn(),
     } as unknown as SignatureStore;
 
     signatureFetcher = new SignatureFetcher({

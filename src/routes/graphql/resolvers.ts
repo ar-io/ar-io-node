@@ -85,13 +85,19 @@ export function resolveTxBundledIn(tx: GqlTransaction) {
 }
 
 export async function resolveTxSignature(tx: GqlTransaction) {
+  console.log({ tx });
   if (tx.signature !== null) {
     return tx.signature;
   }
 
   const signature =
     tx.parentId !== null
-      ? await signatureFetcher.getDataItemSignature(tx.id)
+      ? await signatureFetcher.getDataItemSignature(
+          tx.id,
+          tx.parentId,
+          tx.signatureSize,
+          tx.signatureOffset,
+        )
       : await signatureFetcher.getTransactionSignature(tx.id);
 
   return signature ?? '<not-found>';
