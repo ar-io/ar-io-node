@@ -113,6 +113,30 @@ describe('SignatureFetcher', () => {
       assert.strictEqual(result, testSignatureBuffer.toString('base64url'));
     });
 
+    it('should fetch and return signature if parentId, signatureOffset, signatureSize is provided', async () => {
+      const testParentId = 'testParentId';
+      const testSignatureOffset = '100';
+      const testSignatureSize = '512';
+      const testSignatureBuffer = Buffer.from('testSignature');
+
+      mock.method(dataSource, 'getData', async () => ({
+        stream: {
+          [Symbol.asyncIterator]: async function* () {
+            yield testSignatureBuffer;
+          },
+        },
+      }));
+
+      const result = await signatureFetcher.getDataItemSignature(
+        'testId',
+        testParentId,
+        testSignatureOffset,
+        testSignatureSize,
+      );
+
+      assert.strictEqual(result, testSignatureBuffer.toString('base64url'));
+    });
+
     it('should handle errors and return undefined', async () => {
       mock.method(dataIndex, 'getDataItemAttributes', async () => {
         throw new Error('Test error');
@@ -125,14 +149,6 @@ describe('SignatureFetcher', () => {
   });
 
   describe('getTransactionSignature', () => {
-    it('should return undefined if no attributes found', async () => {
-      mock.method(dataIndex, 'getTransactionAttributes', async () => undefined);
-
-      const result = await signatureFetcher.getTransactionSignature('testId');
-
-      assert.strictEqual(result, undefined);
-    });
-
     it('should return signature from signature store if it exists', async () => {
       mock.method(signatureStore, 'get', async () => 'signature-from-store');
 
@@ -150,6 +166,16 @@ describe('SignatureFetcher', () => {
       const result = await signatureFetcher.getTransactionSignature('testId');
 
       assert.strictEqual(result, testSignature);
+    });
+
+    it('should fetch and return signature from chain if no attributes found', async () => {
+      const testChainSignature = 'testChainSignature';
+      mock.method(dataIndex, 'getTransactionAttributes', async () => undefined);
+      mock.method(chainSource, 'getTxField', async () => testChainSignature);
+
+      const result = await signatureFetcher.getTransactionSignature('testId');
+
+      assert.strictEqual(result, testChainSignature);
     });
 
     it('should fetch and return signature from chain if not in attributes', async () => {
