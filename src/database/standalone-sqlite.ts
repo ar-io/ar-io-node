@@ -98,13 +98,7 @@ export function encodeTransactionGqlCursor({
   // We use AA (0x00) to indicate lack of data item ID for layer 1 transactions
   const isDataItem = dataItemId != 'AA';
   return utf8ToB64Url(
-    JSON.stringify([
-      height,
-      blockTransactionIndex,
-      isDataItem,
-      id,
-      indexedAt,
-    ]),
+    JSON.stringify([height, blockTransactionIndex, isDataItem, id, indexedAt]),
   );
 }
 
@@ -120,20 +114,15 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
       };
     }
 
-    const [
-      height,
-      blockTransactionIndex,
-      isDataItem,
-      id,
-      indexedAt,
-    ] = JSON.parse(b64UrlToUtf8(cursor)) as [
-      number | null,
-      number | null,
-      boolean | null,
-      string | null,
-      number | null,
-      string | null,
-    ];
+    const [height, blockTransactionIndex, isDataItem, id, indexedAt] =
+      JSON.parse(b64UrlToUtf8(cursor)) as [
+        number | null,
+        number | null,
+        boolean | null,
+        string | null,
+        number | null,
+        string | null,
+      ];
 
     return {
       height,
@@ -1336,6 +1325,8 @@ export class StandaloneSqliteDatabaseWorker {
         'id',
         'last_tx AS anchor',
         'signature',
+        'CAST(NULL AS TEXT) AS signature_size',
+        'CAST(NULL AS TEXT) AS signature_offset',
         'target',
         'CAST(reward AS TEXT) AS reward',
         'CAST(quantity AS TEXT) AS quantity',
@@ -1371,6 +1362,8 @@ export class StandaloneSqliteDatabaseWorker {
         'id',
         'anchor',
         'signature',
+        'ndi.signature_size AS signature_size',
+        'ndi.signature_offset AS signature_offset',
         'target',
         "'' AS reward",
         "'' AS quantity",
@@ -1406,6 +1399,8 @@ export class StandaloneSqliteDatabaseWorker {
         'id',
         'last_tx AS anchor',
         'signature',
+        'CAST(NULL AS TEXT) AS signature_size',
+        'CAST(NULL AS TEXT) AS signature_offset',
         'target',
         'CAST(reward AS TEXT) AS reward',
         'CAST(quantity AS TEXT) AS quantity',
@@ -1438,6 +1433,8 @@ export class StandaloneSqliteDatabaseWorker {
         'id',
         'anchor',
         'signature',
+        'sdi.signature_size AS signature_size',
+        'sdi.signature_offset AS signature_offset',
         'target',
         "'' AS reward",
         "'' AS quantity",
@@ -1880,6 +1877,8 @@ export class StandaloneSqliteDatabaseWorker {
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: tx.signature !== null ? toB64Url(tx.signature) : null,
+        signatureSize: tx.signature_size,
+        signatureOffset: tx.signature_offset,
         recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
@@ -1997,6 +1996,8 @@ export class StandaloneSqliteDatabaseWorker {
         id: toB64Url(tx.id),
         anchor: toB64Url(tx.anchor),
         signature: tx.signature !== null ? toB64Url(tx.signature) : null,
+        signatureSize: tx.signature_size,
+        signatureOffset: tx.signature_offset,
         recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),

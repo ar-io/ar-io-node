@@ -138,6 +138,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'hex(parent_id) AS parent_id',
         'tags_count',
         'tags',
+        'signature_size',
+        'signature_offset',
       )
       .from('transactions t');
   }
@@ -334,6 +336,8 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       indexedAt: tx.indexed_at as number,
       anchor: tx.anchor ? hexToB64Url(tx.anchor) : null,
       signature: null,
+      signatureSize: tx.signature_size as string,
+      signatureOffset: tx.signature_offset as string,
       recipient: tx.target ? hexToB64Url(tx.target) : null,
       ownerAddress: hexToB64Url(tx.owner_address),
       ownerKey: null,

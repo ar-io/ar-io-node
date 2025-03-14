@@ -25,6 +25,7 @@ import {
 } from '../types.js';
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
+import { Sign } from 'crypto';
 
 export class SignatureFetcher implements SignatureSource {
   private log: winston.Logger;
@@ -53,7 +54,12 @@ export class SignatureFetcher implements SignatureSource {
     this.signatureStore = signatureStore;
   }
 
-  async getDataItemSignature(id: string): Promise<string | undefined> {
+  async getDataItemSignature(
+    id: string,
+    parentId?: string,
+    signatureSize?: string | null,
+    signatureOffset?: string | null,
+  ): Promise<string | undefined> {
     try {
       this.log.debug('Fetching data item signature from store', { id });
       const signatureFromStore = await this.signatureStore.get(id);
@@ -62,29 +68,48 @@ export class SignatureFetcher implements SignatureSource {
         return signatureFromStore;
       }
 
-      this.log.debug('Fetching data item signature', { id });
-      const dataItemAttributes = await this.dataIndex.getDataItemAttributes(id);
+      let dataSignature: string | null = null;
+      let dataParentId = parentId;
+      let dataSignatureOffset =
+        typeof signatureOffset === 'string'
+          ? parseInt(signatureOffset)
+          : undefined;
+      let dataSignatureSize =
+        typeof signatureSize === 'string' ? parseInt(signatureSize) : undefined;
 
-      if (dataItemAttributes === undefined) {
-        this.log.warn('No attributes found for data item', { id });
-        return undefined;
+      this.log.debug('Fetching data item signature', { id });
+
+      if (
+        dataParentId === undefined ||
+        dataSignatureOffset === undefined ||
+        dataSignatureSize === undefined
+      ) {
+        const dataItemAttributes =
+          await this.dataIndex.getDataItemAttributes(id);
+
+        if (dataItemAttributes === undefined) {
+          this.log.warn('No attributes found for data item', { id });
+          return undefined;
+        }
+
+        dataSignature = dataItemAttributes.signature;
+        dataParentId = dataItemAttributes.parentId;
+        dataSignatureOffset = dataItemAttributes.signatureOffset;
+        dataSignatureSize = dataItemAttributes.signatureSize;
       }
 
-      const { parentId, signature, signatureOffset, signatureSize } =
-        dataItemAttributes;
-
-      if (typeof signature === 'string') {
-        return signature;
+      if (typeof dataSignature === 'string') {
+        return dataSignature;
       }
 
       const { stream } = await this.dataSource.getData({
-        id: parentId,
+        id: dataParentId,
         dataAttributes: {
-          size: signatureSize,
+          size: dataSignatureSize,
         } as ContiguousDataAttributes,
         region: {
-          offset: signatureOffset,
-          size: signatureSize,
+          offset: dataSignatureOffset,
+          size: dataSignatureSize,
         },
       });
 
@@ -120,10 +145,9 @@ export class SignatureFetcher implements SignatureSource {
 
       if (transactionAttributes === undefined) {
         this.log.warn('No attributes found for transaction', { id });
-        return undefined;
       }
 
-      const { signature } = transactionAttributes;
+      const signature = transactionAttributes?.signature;
 
       if (typeof signature === 'string') {
         return signature;
@@ -134,7 +158,13 @@ export class SignatureFetcher implements SignatureSource {
         'signature',
       );
 
-      return signatureFromChain ?? undefined;
+      if (typeof signatureFromChain === 'string') {
+        await this.signatureStore.set(id, signatureFromChain);
+
+        return signatureFromChain;
+      }
+
+      return undefined;
     } catch (error) {
       this.log.error('Error fetching transaction signature', {
         id,
