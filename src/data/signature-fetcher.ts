@@ -25,7 +25,6 @@ import {
 } from '../types.js';
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
-import { Sign } from 'crypto';
 
 export class SignatureFetcher implements SignatureSource {
   private log: winston.Logger;
