@@ -589,7 +589,7 @@ export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
 export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
   +env.varOrDefault(
     'ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS',
-    `${10}`, // 10 seconds
+    `${60}`, // 1 minute
   );
 
 export const ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS =

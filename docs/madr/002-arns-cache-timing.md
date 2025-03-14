@@ -64,7 +64,7 @@ flowchart TD
   for names already in the cached name list. Suggested default: 1 hour.
 - **Name list miss debounce interval** - The minimum amount of time between
   name list cache refreshes triggered by names not found in the cache.
-  Suggested default: 10 seconds.
+  Suggested default: 60 seconds.
 - **Name list hit debounce interval** - The maximum amount of time between
   name list cache refreshes triggered by names found in the cache. Suggested
   default: 1 hour.
