@@ -121,6 +121,28 @@ static_resources:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
+                        - match: { prefix: '/tx' }
+                          route:
+                            cluster: legacy_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
+                        - match: { prefix: '/unconfirmed_tx/' }
+                          route:
+                            cluster: legacy_gateways
+                            retry_policy:
+                              retry_on: '5xx,reset,retriable-status-codes'
+                              num_retries: 5
+                            auto_host_rewrite: true
+                            internal_redirect_policy:
+                              max_internal_redirects: 10
+                              allow_cross_scheme_redirect: true
+                              redirect_response_codes: [301, 302, 303]
                         - match:
                             prefix: '/chunk/'
                             headers:
