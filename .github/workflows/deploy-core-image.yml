@@ -37,8 +37,17 @@ jobs:
       - name: Trigger Deployment
         run: |
           aws lambda invoke \
-            --function-name ario-deployment-trigger \
+            --function-name ario-dev-deployment-trigger \
             --region ${{ secrets.AWS_REGION }} \
             --cli-binary-format raw-in-base64-out \
             --payload '{"image_sha": "${{ github.event.workflow_run.head_sha }}", "event_type": "${{ steps.get_target.outputs.TARGET }}"}' \
             /dev/null
+
+      # Failure notification
+      - name: Send Slack failure notification
+        if: failure()
+        env:
+          SLACK_TITLE: Core Image Deployment Failed!
+          SLACK_COLOR: danger
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        uses: rtCamp/action-slack-notify@v2
