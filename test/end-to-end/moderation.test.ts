@@ -93,51 +93,51 @@ describe('Moderation', function () {
       assert.strictEqual(res.status, 404);
     });
 
-    it(
-      'Should return unauthorized if the api key is incorrect for /ar-io/admin/unblock-name',
-      { skip: isTestFiltered(['flaky']) },
-      async function () {
-        const res = await axios.put(
-          'http://localhost:4000/ar-io/admin/unblock-name',
-          { name: arnsName },
-          {
-            headers: { Authorization: `Bearer incorrect-api-key` },
-            validateStatus: () => true,
-          },
-        );
-        assert.strictEqual(res.status, 401);
-      },
-    );
-
-    it('Should unblock an arns name', async function () {
-      // block the name
-      await axios.put(
-        'http://localhost:4000/ar-io/admin/block-name',
-        { name: arnsName },
-        {
-          headers: {
-            Authorization: `Bearer ${adminApiKey}`,
-            'Content-Type': 'application/json',
-          },
-        },
-      );
-      const unblockRes = await axios.put(
+    it('Should return unauthorized if the api key is incorrect for /ar-io/admin/unblock-name', async function () {
+      const res = await axios.put(
         'http://localhost:4000/ar-io/admin/unblock-name',
         { name: arnsName },
         {
-          headers: {
-            Authorization: `Bearer ${adminApiKey}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { Authorization: `Bearer incorrect-api-key` },
+          validateStatus: () => true,
         },
       );
-      assert.strictEqual(unblockRes.status, 200);
-
-      const res = await axios.get('http://localhost:4000', {
-        headers: { Host: 'ardrive.ar-io.localhost' },
-      });
-      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.status, 401);
     });
+
+    it(
+      'Should unblock an arns name',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        // block the name
+        await axios.put(
+          'http://localhost:4000/ar-io/admin/block-name',
+          { name: arnsName },
+          {
+            headers: {
+              Authorization: `Bearer ${adminApiKey}`,
+              'Content-Type': 'application/json',
+            },
+          },
+        );
+        const unblockRes = await axios.put(
+          'http://localhost:4000/ar-io/admin/unblock-name',
+          { name: arnsName },
+          {
+            headers: {
+              Authorization: `Bearer ${adminApiKey}`,
+              'Content-Type': 'application/json',
+            },
+          },
+        );
+        assert.strictEqual(unblockRes.status, 200);
+
+        const res = await axios.get('http://localhost:4000', {
+          headers: { Host: 'ardrive.ar-io.localhost' },
+        });
+        assert.strictEqual(res.status, 200);
+      },
+    );
   });
 
   describe('Block tx', function () {
