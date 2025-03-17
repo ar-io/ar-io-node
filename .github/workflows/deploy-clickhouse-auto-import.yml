@@ -1,0 +1,34 @@
+name: deploy-ar-io-clickhouse-auto-import-image
+
+on:
+  workflow_run:
+    workflows: ['build-clickhouse-auto-import']
+    types: [completed]
+
+jobs:
+  ar-io-clickhouse-auto-import-deployment:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'develop'
+
+    permissions:
+      actions: write
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_BUILD_INVOCATION_ROLE }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Trigger Deployment
+        run: |
+          aws lambda invoke \
+            --function-name ario-deployment-trigger \
+            --region ${{ secrets.AWS_REGION }} \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"image_sha": "${{ github.event.workflow_run.head_sha }}", "event_type": "deploy-ar-io-dev-clickhouse-auto-import"}' \
+            /dev/null
