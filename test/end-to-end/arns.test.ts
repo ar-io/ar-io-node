@@ -29,7 +29,6 @@ before(async function () {
   compose = await composeUp({
     START_WRITERS: 'false',
     ARNS_ROOT_HOST: 'ar-io.localhost',
-    AO_CU_URL: 'https://cu.ardrive.io', // TODO: replace with local ao-cu
   });
 });
 

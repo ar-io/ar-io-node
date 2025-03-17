@@ -118,6 +118,7 @@ export const composeUp = async ({
   ADMIN_API_KEY = 'secret',
   TRUSTED_GATEWAYS_URLS = '{"https://arweave.net": 1, "https://ar-io.dev": 2}',
   BACKGROUND_RETRIEVAL_ORDER = 'trusted-gateways',
+  AO_CU_URL = 'https://cu.ardrive.io', // TODO: replace with local ao-cu
   ...ENVIRONMENT
 }: Environment = {}) => {
   // disable .env file read
