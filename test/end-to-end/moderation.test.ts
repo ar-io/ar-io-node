@@ -21,6 +21,7 @@ import { describe, before, after, it } from 'node:test';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
 import { default as wait } from 'wait';
 import { cleanDb, composeUp } from './utils.js';
+import { isTestFiltered } from '../utils.js';
 
 const adminApiKey = 'admin-api-key';
 
@@ -92,17 +93,21 @@ describe('Moderation', function () {
       assert.strictEqual(res.status, 404);
     });
 
-    it('Should return unauthorized if the api key is incorrect for /ar-io/admin/unblock-name', async function () {
-      const res = await axios.put(
-        'http://localhost:4000/ar-io/admin/unblock-name',
-        { name: arnsName },
-        {
-          headers: { Authorization: `Bearer incorrect-api-key` },
-          validateStatus: () => true,
-        },
-      );
-      assert.strictEqual(res.status, 401);
-    });
+    it(
+      'Should return unauthorized if the api key is incorrect for /ar-io/admin/unblock-name',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        const res = await axios.put(
+          'http://localhost:4000/ar-io/admin/unblock-name',
+          { name: arnsName },
+          {
+            headers: { Authorization: `Bearer incorrect-api-key` },
+            validateStatus: () => true,
+          },
+        );
+        assert.strictEqual(res.status, 401);
+      },
+    );
 
     it('Should unblock an arns name', async function () {
       // block the name
