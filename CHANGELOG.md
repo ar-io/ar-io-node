@@ -4,7 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 28] - 2025-03-17
+
+### Changed
+
+- Raised name not found name list refresh interval to 2 minutes to reduce load
+  on CUs. This increases the maximum amount of time a user may wait for a new
+  name to be available. Future releases will introduce other changes to
+  mitigate this delay.
+- Adjusted composite ArNS resolver to never timeout resolutions from the last
+  ArNS resolver in the resolution list.
+
+### Added
+
+- Added support for serving a given ID or ArNS name from the apex domain of a
+  gateway. If using an ID, set the `APEX_TX_ID` environment variable. If using
+  an ArNS name, set the `APEX_ARNS_NAME` environment variable.
+- Added `BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS`,
+  `BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS`, and
+  `BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS` environment variables to
+  control the interval for retrying failed bundles, backfilling bundle records,
+  and reprocessing bundles after a filter change. Note: the latter two are
+  rairly used. Queuing bundles for reprocessing via the
+  `/ar-io/admin/queue-bundle` endpoint is usually preferrable to automatic
+  reprocessing as it is faster and offers more control over the reprocessing
+  behavior.
+
+### Fixed
+
+- Signatures in GraphQL results are now correctly retrieved from data based on
+  offsets when using ClickHouse.
+- Adjusted exported Parquet file names to align with expectations of ClickHouse
+  import script.
+- Ensured that bundle indexing status is properly reset when bundles are
+  manually queued after an unbundling filture change has been made.
 
 ## [Release 27] - 2025-02-20
 
