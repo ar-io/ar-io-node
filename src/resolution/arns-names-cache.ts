@@ -113,6 +113,8 @@ export class ArNSNamesCache {
        */
       hydrateFn: this.hydrateArNSNamesCache.bind(this),
     });
+    // add circuit breaker metrics
+    metrics.circuitBreakerMetrics.add(this.arnsNamesCircuitBreaker);
   }
 
   /**
