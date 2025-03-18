@@ -586,23 +586,35 @@ export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
   `${60 * 60}`, // 1 hour
 );
 
+// Controls the maximum time allowed for requests to AO for ArNS names. By default, requests for 1000 names
+// and should resolve in less than 3 seconds, but we set to 10 seconds to account for the worst case scenario.
+// If requests exceed this timeout, they will be considered failed and may trigger the circuit breaker if the error threshold is reached.
 export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
   'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_TIMEOUT_MS',
   `${10 * 1000}`, // 10 seconds
 );
 
+// Controls the percentage of failed requests to AO for ArNS names that will trigger
+// the circuit breaker to open. This is set to a relatively low threshold (30%)
+// to compensate for the extended timeout (10 seconds) configured above.
 export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
   +env.varOrDefault(
     'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
     '30', // 30% failure limit before circuit breaker opens
   );
 
+// Defines the time window for tracking errors when retrieving ArNS names from AO
+// The circuit breaker counts failures within this rolling time window to determine
+// if the error threshold percentage has been exceeded
 export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   +env.varOrDefault(
     'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
     `${60 * 1000}`, // 1 minute
   );
 
+// Defines how long the circuit breaker stays in the open state after being triggered
+// During this period, all requests to AO for ArNS names will be rejected immediately
+// After this timeout expires, the circuit breaker transitions to half-open state to test if AO is responsive again
 export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   +env.varOrDefault(
     'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
