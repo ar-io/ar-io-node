@@ -30,6 +30,8 @@ import { connect } from '@permaweb/aoconnect';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
 import * as metrics from '../metrics.js';
+import CircuitBreaker from 'opossum';
+
 const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
 const DEFAULT_CACHE_HIT_DEBOUNCE_TTL =
@@ -48,6 +50,10 @@ export class ArNSNamesCache {
   private networkProcess: AoARIORead;
   private arnsRegistryKvCache: KVBufferStore;
   private arnsDebounceCache: KvDebounceStore;
+  private arnsNamesCircuitBreaker: CircuitBreaker<
+    Parameters<AoARIORead['getArNSRecords']>,
+    Awaited<ReturnType<AoARIORead['getArNSRecords']>>
+  >;
 
   constructor({
     log,
@@ -66,6 +72,14 @@ export class ArNSNamesCache {
     }),
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
+    circuitBreakerOptions = {
+      timeout: config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_TIMEOUT_MS,
+      errorThresholdPercentage:
+        config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+      rollingCountTimeout:
+        config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+      resetTimeout: config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+    },
   }: {
     log: winston.Logger;
     registryCache: KVBufferStore;
@@ -73,12 +87,21 @@ export class ArNSNamesCache {
     networkProcess?: AoARIORead;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
+    circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({
       class: 'ArNSNamesCache',
     });
     this.networkProcess = networkProcess;
     this.arnsRegistryKvCache = registryCache;
+    this.arnsNamesCircuitBreaker = new CircuitBreaker(
+      this.networkProcess.getArNSRecords.bind(this.networkProcess),
+      {
+        ...circuitBreakerOptions,
+        capacity: 1, // only allow one request at a time
+        name: 'getArNSRecords',
+      },
+    );
     this.arnsDebounceCache = new KvDebounceStore({
       kvBufferStore: registryCache,
       cacheMissDebounceTtl,
@@ -107,7 +130,7 @@ export class ArNSNamesCache {
           items: records,
           nextCursor,
         }: PaginationResult<AoArNSNameDataWithName> =
-          await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
+          await this.arnsNamesCircuitBreaker.fire({ cursor, limit: 1000 });
         for (const record of records) {
           // do not await, avoid blocking the event loop
           this.setCachedArNSBaseName(record.name, record);

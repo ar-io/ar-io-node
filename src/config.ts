@@ -586,6 +586,29 @@ export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
   `${60 * 60}`, // 1 hour
 );
 
+export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
+  'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_TIMEOUT_MS',
+  `${10 * 1000}`, // 10 seconds
+);
+
+export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
+  +env.varOrDefault(
+    'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
+    '30', // 30% failure limit before circuit breaker opens
+  );
+
+export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
+  +env.varOrDefault(
+    'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
+    `${60 * 1000}`, // 1 minute
+  );
+
+export const ARNS_NAMES_CACHE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
+  +env.varOrDefault(
+    'ARNS_NAMES_CACHE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
+    `${10 * 60 * 1000}`, // 10 minutes
+  );
+
 export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
   +env.varOrDefault(
     'ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS',
