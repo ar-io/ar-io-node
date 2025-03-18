@@ -13,7 +13,9 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      packages: write
+      actions: write
+      id-token: write
+      contents: read
 
     steps:
       # Setup
@@ -46,6 +48,21 @@ jobs:
           tags: |
             ghcr.io/ar-io/ar-io-envoy:latest
             ghcr.io/ar-io/ar-io-envoy:${{ github.sha }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_BUILD_INVOCATION_ROLE }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Trigger Deployment
+        run: |
+          aws lambda invoke \
+            --function-name ario-dev-deployment-trigger \
+            --region ${{ secrets.AWS_REGION }} \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"image_sha": "${{ github.sha }}", "event_type": "deploy-ar-io-envoy"}' \
+            /dev/null
 
       # Success notification
       - name: Send Slack success notification
