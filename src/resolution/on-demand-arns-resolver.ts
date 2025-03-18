@@ -74,7 +74,6 @@ export class OnDemandArNSResolver implements NameResolver {
     });
     this.networkProcess = networkProcess;
     this.ao = ao;
-    // TODO: use getRecords instead of getArNSRecord
     this.aoCircuitBreaker = new CircuitBreaker(
       ({ name }: { name: string }) => {
         return this.networkProcess.getArNSRecord({ name });
