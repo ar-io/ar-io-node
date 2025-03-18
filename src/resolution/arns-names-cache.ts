@@ -73,12 +73,13 @@ export class ArNSNamesCache {
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
     circuitBreakerOptions = {
-      timeout: config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_TIMEOUT_MS,
+      timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage:
-        config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
       rollingCountTimeout:
-        config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
-      resetTimeout: config.ARNS_NAMES_CACHE_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+      resetTimeout:
+        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
     },
   }: {
     log: winston.Logger;

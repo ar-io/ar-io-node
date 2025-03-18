@@ -80,7 +80,7 @@ beforeEach(async () => {
 
   dataSource = new ArIODataSource({
     log,
-    arIO: ARIO.init(),
+    networkProcess: ARIO.init(),
     nodeWallet: 'localNode',
   });
 
