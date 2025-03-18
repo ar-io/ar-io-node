@@ -53,6 +53,7 @@ const createMocks = (): Mocks => ({
   } as unknown as ContiguousDataIndex,
   chainSource: {
     getTxField: mock.fn(),
+    getTx: mock.fn(),
   } as unknown as ChainSource,
   signatureStore: {
     get: mock.fn(),
@@ -627,7 +628,7 @@ describe('OwnerFetcher', () => {
       assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 1);
     });
 
-    it('should fetch and return owner from chain if no attributes found', async () => {
+    it('should fetch owner from chain field if no attributes found', async () => {
       mock.method(
         ownerFetcher,
         'getTransactionAttributes',
@@ -640,6 +641,64 @@ describe('OwnerFetcher', () => {
       });
 
       assert.strictEqual(result, 'owner');
+      assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 1);
+    });
+
+    it('should fetch owner from chain transaction if chain field is empty', async () => {
+      mock.method(
+        ownerFetcher,
+        'getTransactionAttributes',
+        async () => undefined,
+      );
+      mock.method(mocks.chainSource, 'getTxField', async () => '');
+      mock.method(mocks.chainSource, 'getTx', async () => ({
+        owner: 'owner-from-tx',
+        id: 'id',
+        signature: null,
+        format: 1,
+        last_tx: '',
+        target: '',
+        quantity: '0',
+        reward: '0',
+        data_size: '0',
+        data_root: '',
+        tags: [],
+      }));
+
+      const result = await ownerFetcher.getTransactionOwner({
+        id: 'id',
+      });
+
+      assert.strictEqual(result, 'owner-from-tx');
+      assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 1);
+    });
+
+    it('should fetch owner from chain transaction if chain field is undefined', async () => {
+      mock.method(
+        ownerFetcher,
+        'getTransactionAttributes',
+        async () => undefined,
+      );
+      mock.method(mocks.chainSource, 'getTxField', async () => undefined);
+      mock.method(mocks.chainSource, 'getTx', async () => ({
+        owner: 'owner-from-tx',
+        id: 'id',
+        signature: null,
+        format: 1,
+        last_tx: '',
+        target: '',
+        quantity: '0',
+        reward: '0',
+        data_size: '0',
+        data_root: '',
+        tags: [],
+      }));
+
+      const result = await ownerFetcher.getTransactionOwner({
+        id: 'id',
+      });
+
+      assert.strictEqual(result, 'owner-from-tx');
       assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 1);
     });
 
@@ -659,14 +718,14 @@ describe('OwnerFetcher', () => {
       assert.strictEqual((mocks.ownerStore.set as any).mock.calls.length, 0);
     });
 
-    it('should return undefined if owner not found in attributes or chain', async () => {
+    it('should return undefined if no owner found anywhere', async () => {
       mock.method(
         ownerFetcher,
         'getTransactionAttributes',
         async () => undefined,
       );
-
-      mock.method(mocks.chainSource, 'getTxField', async () => undefined);
+      mock.method(mocks.chainSource, 'getTxField', async () => '');
+      mock.method(mocks.chainSource, 'getTx', async () => ({}));
 
       const result = await ownerFetcher.getTransactionOwner({
         id: 'id',

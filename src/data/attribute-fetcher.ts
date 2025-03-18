@@ -394,18 +394,28 @@ export class OwnerFetcher extends AttributeFetcher {
 
       this.log.warn('No attributes found for transaction', { id });
 
-      const ownerFromChain = await this.chainSource.getTxField(id, 'owner');
+      let ownerFromChain;
+
+      const ownerChainField = await this.chainSource.getTxField(id, 'owner');
 
       if (
-        typeof ownerFromChain === 'string' &&
-        !isEmptyString(ownerFromChain)
+        typeof ownerChainField === 'string' &&
+        !isEmptyString(ownerChainField)
       ) {
-        await this.ownerStore.set(id, ownerFromChain);
-
-        return ownerFromChain;
+        ownerFromChain = ownerChainField;
+      } else {
+        const chainTransaction = await this.chainSource.getTx({ txId: id });
+        ownerFromChain = chainTransaction.owner;
       }
 
-      return undefined;
+      if (ownerFromChain === undefined) {
+        this.log.warn('No owner found for transaction', { id });
+        return undefined;
+      }
+
+      await this.ownerStore.set(id, ownerFromChain);
+
+      return ownerFromChain;
     } catch (error) {
       log.error('Error fetching transaction signature', {
         id,
