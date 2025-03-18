@@ -352,7 +352,7 @@ const gatewaysDataSource = new GatewaysDataSource({
 
 const arIODataSource = new ArIODataSource({
   log,
-  arIO,
+  networkProcess: arIO,
   nodeWallet: config.AR_IO_WALLET,
 });
 
