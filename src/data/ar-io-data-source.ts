@@ -38,6 +38,7 @@ import { shuffleArray } from '../lib/random.js';
 
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
+import CircuitBreaker from 'opossum';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
@@ -52,7 +53,7 @@ export class ArIODataSource implements ContiguousDataSource {
   private previousGatewayPeerTtfbDurations: number[];
   private previousGatewayPeerKbpsDownloadRate: number[];
 
-  private arIO: AoARIORead;
+  private networkProcess: AoARIORead;
   peers: Record<string, string> = {};
   private intervalId?: NodeJS.Timeout;
 
@@ -63,20 +64,36 @@ export class ArIODataSource implements ContiguousDataSource {
 
   protected weightedPeers: WeightedElement<string>[] = [];
 
+  // circuit breaker for getGateways
+  private arioGatewaysCircuitBreaker: CircuitBreaker<
+    Parameters<AoARIORead['getGateways']>,
+    Awaited<ReturnType<AoARIORead['getGateways']>>
+  >;
+
   constructor({
     log,
-    arIO,
+    networkProcess,
     nodeWallet,
     maxHopsAllowed = DEFAULT_MAX_HOPS_ALLOWED,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
+    circuitBreakerOptions = {
+      timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
+      errorThresholdPercentage:
+        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+      rollingCountTimeout:
+        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
+      resetTimeout:
+        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
+    },
   }: {
     log: winston.Logger;
-    arIO: AoARIORead;
+    networkProcess: AoARIORead;
     nodeWallet?: string;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
     updatePeersRefreshIntervalMs?: number;
+    circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.nodeWallet = nodeWallet;
@@ -85,8 +102,15 @@ export class ArIODataSource implements ContiguousDataSource {
     this.updatePeersRefreshIntervalMs = updatePeersRefreshIntervalMs;
     this.previousGatewayPeerTtfbDurations = [];
     this.previousGatewayPeerKbpsDownloadRate = [];
-    this.arIO = arIO;
-
+    this.networkProcess = networkProcess;
+    this.arioGatewaysCircuitBreaker = new CircuitBreaker(
+      this.networkProcess.getGateways.bind(this.networkProcess),
+      {
+        ...circuitBreakerOptions,
+        capacity: 1, // only allow one request at a time
+        name: 'getGateways',
+      },
+    );
     this.updatePeerList();
     this.intervalId = setInterval(
       this.updatePeerList.bind(this),
@@ -103,6 +127,7 @@ export class ArIODataSource implements ContiguousDataSource {
         maxAge: config.GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS,
       },
     );
+    metrics.circuitBreakerMetrics.add(this.arioGatewaysCircuitBreaker);
   }
 
   stopUpdatingPeers() {
@@ -113,16 +138,18 @@ export class ArIODataSource implements ContiguousDataSource {
 
   async updatePeerList() {
     const log = this.log.child({ method: 'updatePeerList' });
-    log.debug('Updating peers from ArIO contract');
+    log.info('Fetching AR.IO network peer list');
 
     const peers: Record<string, string> = {};
     let cursor: string | undefined;
     do {
       try {
         // depending on how often this is called, we may want to add a circuit breaker
-        const { nextCursor, items } = await this.arIO.getGateways({
-          cursor,
-        });
+        const { nextCursor, items } =
+          await this.arioGatewaysCircuitBreaker.fire({
+            cursor,
+            limit: 1000,
+          });
 
         for (const gateway of items) {
           // skip our own node wallet
@@ -148,8 +175,8 @@ export class ArIODataSource implements ContiguousDataSource {
         break;
       }
     } while (cursor !== undefined);
-    log.debug('Updated peer list from ArIO contract', {
-      peers: Object.keys(peers),
+    log.info('Successfully fetched AR.IO network peer list', {
+      count: Object.keys(peers).length,
     });
     this.peers = peers;
     this.weightedPeers = Object.values(peers).map((id) => {
