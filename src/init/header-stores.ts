@@ -26,7 +26,11 @@ import { KvBlockStore } from '../store/kv-block-store.js';
 import { KvTransactionStore } from '../store/kv-transaction-store.js';
 import { FsBlockStore } from '../store/fs-block-store.js';
 import { FsTransactionStore } from '../store/fs-transaction-store.js';
-import { KvSignatureStore } from '../store/kv-signature-store.js';
+import { KvB64UrlStore } from '../store/kv-b64url-store.js';
+import {
+  KvDataItemAttributesStore,
+  KvTransactionAttributesStore,
+} from '../store/kv-attributes-store.js';
 
 const createKvBufferStore = ({
   pathKey,
@@ -122,12 +126,56 @@ export const makeTxStore = ({
   }
 };
 
+export const makeDataItemAttributesStore = ({
+  log,
+}: {
+  log: winston.Logger;
+}) => {
+  return new KvDataItemAttributesStore({
+    log,
+    kvBufferStore: createKvBufferStore({
+      log,
+      pathKey: 'diAttributes',
+      type: config.CHAIN_CACHE_TYPE,
+      redisTtlSeconds: 60 * 60 * 4, // 4 hours
+    }),
+  });
+};
+
+export const makeTransactionAttributesStore = ({
+  log,
+}: {
+  log: winston.Logger;
+}) => {
+  return new KvTransactionAttributesStore({
+    log,
+    kvBufferStore: createKvBufferStore({
+      log,
+      pathKey: 'txAttributes',
+      type: config.CHAIN_CACHE_TYPE,
+      redisTtlSeconds: 60 * 60 * 4, // 4 hours
+    }),
+  });
+};
+
 export const makeSignatureStore = ({ log }: { log: winston.Logger }) => {
-  return new KvSignatureStore({
+  return new KvB64UrlStore({
     log,
     kvBufferStore: createKvBufferStore({
       log,
       pathKey: 'signatures',
+      type: config.CHAIN_CACHE_TYPE,
+      redisTtlSeconds: 60 * 60 * 4, // 4 hours
+    }),
+  });
+};
+
+export const makeOwnerStore = ({ log }: { log: winston.Logger }) => {
+  return new KvB64UrlStore({
+    log,
+    kvBufferStore: createKvBufferStore({
+      log,
+      pathKey: 'owners',
       type: config.CHAIN_CACHE_TYPE,
       redisTtlSeconds: 60 * 60 * 4, // 4 hours
     }),

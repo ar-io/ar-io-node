@@ -1067,6 +1067,8 @@ export class StandaloneSqliteDatabaseWorker {
       signature: row.signature ? toB64Url(row.signature) : null,
       signatureOffset: row.signature_offset,
       signatureSize: row.signature_size,
+      ownerOffset: row.owner_offset,
+      ownerSize: row.owner_size,
     };
   }
 
@@ -1078,9 +1080,9 @@ export class StandaloneSqliteDatabaseWorker {
     if (row === undefined) {
       return undefined;
     }
-
     return {
       signature: row.signature ? toB64Url(row.signature) : null,
+      owner: row.owner_key ? toB64Url(row.owner) : null,
     };
   }
 
@@ -1334,6 +1336,8 @@ export class StandaloneSqliteDatabaseWorker {
         'content_type',
         'owner_address',
         'public_modulus',
+        'CAST(NULL AS TEXT) AS owner_size',
+        'CAST(NULL AS TEXT) AS owner_offset',
         'nb.indep_hash AS block_indep_hash',
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
@@ -1371,6 +1375,8 @@ export class StandaloneSqliteDatabaseWorker {
         'content_type',
         'owner_address',
         'public_modulus',
+        'ndi.owner_size AS owner_size',
+        'ndi.owner_offset AS owner_offset',
         'nb.indep_hash AS block_indep_hash',
         'nb.block_timestamp AS block_timestamp',
         'nb.previous_block AS block_previous_block',
@@ -1408,6 +1414,8 @@ export class StandaloneSqliteDatabaseWorker {
         'content_type',
         'owner_address',
         'public_modulus',
+        'CAST(NULL AS TEXT) AS owner_size',
+        'CAST(NULL AS TEXT) AS owner_offset',
         'sb.indep_hash AS block_indep_hash',
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
@@ -1442,6 +1450,8 @@ export class StandaloneSqliteDatabaseWorker {
         'content_type',
         'owner_address',
         'public_modulus',
+        'sdi.owner_size AS owner_size',
+        'sdi.owner_offset AS owner_offset',
         'sb.indep_hash AS block_indep_hash',
         'sb.block_timestamp AS block_timestamp',
         'sb.previous_block AS block_previous_block',
@@ -1882,6 +1892,8 @@ export class StandaloneSqliteDatabaseWorker {
         recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
+        ownerSize: tx.owner_size,
+        ownerOffset: tx.owner_offset,
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
@@ -2001,6 +2013,8 @@ export class StandaloneSqliteDatabaseWorker {
         recipient: tx.target ? toB64Url(tx.target) : null,
         ownerAddress: toB64Url(tx.owner_address),
         ownerKey: toB64Url(tx.public_modulus),
+        ownerSize: tx.owner_size,
+        ownerOffset: tx.owner_offset,
         fee: tx.reward,
         quantity: tx.quantity,
         dataSize: tx.data_size,
