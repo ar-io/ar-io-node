@@ -83,7 +83,7 @@ import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
-import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetcher.js';
+import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
 import { parquetExporter } from './routes/ar-io.js';

@@ -30,7 +30,7 @@ import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
 
-export class AttributeFetcher {
+export class AttributeFetchers {
   protected log: winston.Logger;
   protected dataSource: ContiguousDataSource;
   protected dataIndex: ContiguousDataIndex;
@@ -130,7 +130,7 @@ export class AttributeFetcher {
   }
 }
 
-export class SignatureFetcher extends AttributeFetcher {
+export class SignatureFetcher extends AttributeFetchers {
   private chainSource: ChainSource;
   private signatureStore: B64UrlStore;
 
@@ -276,7 +276,7 @@ export class SignatureFetcher extends AttributeFetcher {
   }
 }
 
-export class OwnerFetcher extends AttributeFetcher {
+export class OwnerFetcher extends AttributeFetchers {
   private chainSource: ChainSource;
   private ownerStore: B64UrlStore;
 
