@@ -20,10 +20,10 @@ import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, mock } from 'node:test';
 import * as winston from 'winston';
 import {
-  AttributeFetcher,
+  AttributeFetchers,
   OwnerFetcher,
   SignatureFetcher,
-} from './attribute-fetcher.js';
+} from './attribute-fetchers.js';
 import {
   ContiguousDataSource,
   ContiguousDataIndex,
@@ -75,12 +75,12 @@ const createMocks = (): Mocks => ({
 
 describe('AttributeFetcher', () => {
   let mocks: Mocks;
-  let attributeFetcher: AttributeFetcher;
+  let attributeFetcher: AttributeFetchers;
 
   beforeEach(() => {
     mocks = createMocks();
 
-    attributeFetcher = new AttributeFetcher({
+    attributeFetcher = new AttributeFetchers({
       log,
       dataSource: mocks.dataSource,
       dataIndex: mocks.dataIndex,
