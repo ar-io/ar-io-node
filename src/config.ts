@@ -610,7 +610,7 @@ export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
-    `${60 * 1000}`, // 1 minute
+    `${10 * 60 * 1000}`, // 10 minutes
   );
 
 // Defines how long the circuit breaker stays in the open state after being triggered
@@ -619,7 +619,7 @@ export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
   +env.varOrDefault(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
-    `${10 * 60 * 1000}`, // 10 minutes
+    `${20 * 60 * 1000}`, // 20 minutes
   );
 
 export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
