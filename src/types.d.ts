@@ -124,10 +124,24 @@ export interface PartialJsonTransactionStore {
   del(txId: string): Promise<void>;
 }
 
-export interface SignatureStore {
+export interface DataItemAttributesStore {
+  has(key: string): Promise<boolean>;
+  get(id: string): Promise<DataItemAttributes | undefined>;
+  set(id: string, attributes: DataItemAttributes): Promise<void>;
+  del(id: string): Promise<void>;
+}
+
+export interface TransactionAttributesStore {
+  has(key: string): Promise<boolean>;
+  get(id: string): Promise<TransactionAttributes | undefined>;
+  set(id: string, attributes: TransactionAttributes): Promise<void>;
+  del(id: string): Promise<void>;
+}
+
+export interface B64UrlStore {
   has(key: string): Promise<boolean>;
   get(id: string): Promise<string | undefined>;
-  set(id: string, signature: string): Promise<void>;
+  set(id: string, value: string): Promise<void>;
   del(id: string): Promise<void>;
 }
 
@@ -340,6 +354,8 @@ interface GqlTransaction {
   recipient: string | null;
   ownerAddress: string;
   ownerKey: string | null;
+  ownerSize: string | null;
+  ownerOffset: string | null;
   fee: string;
   quantity: string;
   dataSize: string;
@@ -541,10 +557,13 @@ export interface DataItemAttributes {
   signature: string | null;
   signatureOffset: number;
   signatureSize: number;
+  ownerOffset: number;
+  ownerSize: number;
 }
 
 export interface TransactionAttributes {
   signature: string | null;
+  owner: string | null;
 }
 
 export interface ContiguousDataParent {
@@ -690,8 +709,3 @@ export type KVBufferStore = {
   has(key: string): Promise<boolean>;
   close(): Promise<void>;
 };
-
-export interface SignatureSource {
-  getDataItemSignature(id: string): Promise<string | undefined>;
-  getTransactionSignature(id: string): Promise<string | undefined>;
-}

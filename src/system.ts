@@ -39,6 +39,9 @@ import {
   makeBlockStore,
   makeTxStore,
   makeSignatureStore,
+  makeOwnerStore,
+  makeDataItemAttributesStore,
+  makeTransactionAttributesStore,
 } from './init/header-stores.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
@@ -80,7 +83,7 @@ import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
-import { SignatureFetcher } from './data/signature-fetcher.js';
+import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetcher.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
 import { parquetExporter } from './routes/ar-io.js';
@@ -693,13 +696,32 @@ export const mempoolWatcher = config.ENABLE_MEMPOOL_WATCHER
     })
   : undefined;
 
+const transactionAttributesStore = makeTransactionAttributesStore({
+  log,
+});
+const dataItemAttributesStore = makeDataItemAttributesStore({
+  log,
+});
 export const signatureStore = makeSignatureStore({ log });
 export const signatureFetcher = new SignatureFetcher({
   log,
   dataSource: onDemandContiguousDataSource,
   dataIndex: contiguousDataIndex,
+  dataItemAttributesStore,
+  transactionAttributesStore,
   chainSource: arweaveClient,
   signatureStore,
+});
+
+export const ownerStore = makeOwnerStore({ log });
+export const ownerFetcher = new OwnerFetcher({
+  log,
+  dataSource: onDemandContiguousDataSource,
+  dataIndex: contiguousDataIndex,
+  dataItemAttributesStore,
+  transactionAttributesStore,
+  chainSource: arweaveClient,
+  ownerStore: ownerStore,
 });
 
 const dataSqliteWalCleanupWorker = config.ENABLE_DATA_DB_WAL_CLEANUP

@@ -19,12 +19,13 @@ import { IResolvers } from '@graphql-tools/utils';
 
 import { winstonToAr } from '../../lib/encoding.js';
 import log from '../../log.js';
-import { signatureFetcher } from '../../system.js';
+import { ownerFetcher, signatureFetcher } from '../../system.js';
 import { GqlTransaction } from '../../types.js';
 import { isEmptyString } from '../../lib/string.js';
 
 export const DEFAULT_PAGE_SIZE = 10;
 export const MAX_PAGE_SIZE = 1000;
+const NOT_FOUND = '<not-found>';
 
 export function getPageSize({ first }: { first?: number }) {
   return Math.min(first ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
@@ -59,10 +60,41 @@ export function resolveTxFee(tx: GqlTransaction) {
   };
 }
 
-export function resolveTxOwner(tx: GqlTransaction) {
+export async function resolveTxOwner(tx: GqlTransaction) {
+  const address = tx.ownerAddress;
+
+  if (tx.ownerKey !== null) {
+    return {
+      address,
+      key: tx.ownerKey,
+    };
+  }
+
+  if (tx.parentId !== null) {
+    let ownerKey: string | undefined;
+
+    if (tx.ownerSize !== null && tx.ownerOffset !== null) {
+      ownerKey = await ownerFetcher.getDataItemOwner({
+        id: tx.id,
+        parentId: tx.parentId,
+        ownerSize: parseInt(tx.ownerSize),
+        ownerOffset: parseInt(tx.ownerOffset),
+      });
+    } else {
+      ownerKey = NOT_FOUND;
+    }
+
+    return {
+      address,
+      key: ownerKey,
+    };
+  }
+
+  const ownerKey = await ownerFetcher.getTransactionOwner({ id: tx.id });
+
   return {
-    address: tx.ownerAddress,
-    key: tx.ownerKey,
+    address,
+    key: ownerKey !== undefined ? ownerKey : NOT_FOUND,
   };
 }
 
@@ -89,17 +121,26 @@ export async function resolveTxSignature(tx: GqlTransaction) {
     return tx.signature;
   }
 
-  const signature =
-    tx.parentId !== null
-      ? await signatureFetcher.getDataItemSignature(
-          tx.id,
-          tx.parentId,
-          tx.signatureSize,
-          tx.signatureOffset,
-        )
-      : await signatureFetcher.getTransactionSignature(tx.id);
+  if (tx.parentId !== null) {
+    if (tx.signatureSize !== null && tx.signatureOffset !== null) {
+      const signature = await signatureFetcher.getDataItemSignature({
+        id: tx.id,
+        parentId: tx.parentId,
+        signatureSize: parseInt(tx.signatureSize),
+        signatureOffset: parseInt(tx.signatureOffset),
+      });
 
-  return signature ?? '<not-found>';
+      return signature;
+    } else {
+      return NOT_FOUND;
+    }
+  }
+
+  const signature = await signatureFetcher.getTransactionSignature({
+    id: tx.id,
+  });
+
+  return signature ?? NOT_FOUND;
 }
 
 export const resolvers: IResolvers = {

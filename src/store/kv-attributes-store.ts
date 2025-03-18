@@ -17,12 +17,15 @@
  */
 import winston from 'winston';
 
-import { KVBufferStore, SignatureStore } from '../types.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import {
+  KVBufferStore,
+  DataItemAttributesStore,
+  DataItemAttributes,
+  TransactionAttributesStore,
+  TransactionAttributes,
+} from '../types.js';
 
-const getSignatureKey = (id: string) => `sig:${id}`;
-
-export class KvSignatureStore implements SignatureStore {
+export class KvJsonStore<T> {
   private log: winston.Logger;
   private kvBufferStore: KVBufferStore;
 
@@ -43,35 +46,30 @@ export class KvSignatureStore implements SignatureStore {
 
       return exists;
     } catch (error: any) {
-      this.log.error(
-        'Failed to verify if signature exists in key/value store',
-        {
-          key,
-          message: error.message,
-          stack: error.stack,
-        },
-      );
+      this.log.error('Failed to verify if value exists in store', {
+        key,
+        message: error.message,
+        stack: error.stack,
+      });
     }
 
     return false;
   }
 
-  async get(id: string) {
+  async get(key: string): Promise<T | undefined> {
     try {
-      const key = getSignatureKey(id);
-
       if (await this.has(key)) {
-        const signatureBuffer = await this.kvBufferStore.get(key);
+        const buffer = await this.kvBufferStore.get(key);
 
-        if (signatureBuffer === undefined) {
-          throw new Error('Missing signature in key/value store');
+        if (buffer === undefined) {
+          throw new Error('Missing value in store');
         }
 
-        return toB64Url(signatureBuffer);
+        return JSON.parse(buffer.toString('utf-8'));
       }
     } catch (error: any) {
-      this.log.error('Failed to get signature from key/value store', {
-        id,
+      this.log.error('Failed to get value from store', {
+        key,
         message: error.message,
         stack: error.stack,
       });
@@ -80,18 +78,16 @@ export class KvSignatureStore implements SignatureStore {
     return undefined;
   }
 
-  async set(id: string, signature: string) {
+  async set(key: string, value: T) {
     try {
-      const key = getSignatureKey(id);
-
       if (!(await this.has(key))) {
-        const signatureBuffer = fromB64Url(signature);
+        const buffer = Buffer.from(JSON.stringify(value), 'utf-8');
 
-        return this.kvBufferStore.set(key, signatureBuffer);
+        return this.kvBufferStore.set(key, buffer);
       }
     } catch (error: any) {
-      this.log.error('Failed to set signature in key/value store', {
-        id,
+      this.log.error('Failed to set value in key/value store', {
+        key,
         message: error.message,
         stack: error.stack,
       });
@@ -99,19 +95,25 @@ export class KvSignatureStore implements SignatureStore {
   }
 
   // Currenly unused
-  async del(id: string) {
+  async del(key: string) {
     try {
-      const key = getSignatureKey(id);
-
       if (await this.has(key)) {
         return this.kvBufferStore.del(key);
       }
     } catch (error: any) {
-      this.log.error('Failed to delete signature from key/value store', {
-        id,
+      this.log.error('Failed to delete key from store', {
+        key,
         message: error.message,
         stack: error.stack,
       });
     }
   }
 }
+
+export class KvDataItemAttributesStore
+  extends KvJsonStore<DataItemAttributes>
+  implements DataItemAttributesStore {}
+
+export class KvTransactionAttributesStore
+  extends KvJsonStore<TransactionAttributes>
+  implements TransactionAttributesStore {}

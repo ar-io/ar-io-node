@@ -22,7 +22,7 @@ import * as config from '../config.js';
 import * as system from '../system.js';
 import * as metrics from '../metrics.js';
 import { release } from '../version.js';
-import { db, signatureStore } from '../system.js';
+import { db, signatureStore, ownerStore } from '../system.js';
 import log from '../log.js';
 import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
@@ -309,6 +309,7 @@ arIoRouter.post(
         if (config.WRITE_ANS104_DATA_ITEM_DB_SIGNATURES === false) {
           signatureStore.set(dataItemHeader.id, dataItemHeader.signature);
         }
+        ownerStore.set(dataItemHeader.id, dataItemHeader.owner);
 
         system.dataItemIndexer.queueDataItem(
           {
