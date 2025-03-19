@@ -25,22 +25,24 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_BUILD_INVOCATION_ROLE }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Determine Deployment Target
-        id: get_target
-        run: |
-          if [[ "${{ github.event.workflow_run.head_branch }}" == "main" ]]; then
-            echo "TARGET=deploy-ar-io-prod-core" >> $GITHUB_OUTPUT
-          else
-            echo "TARGET=deploy-ar-io-dev-core" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Trigger Deployment
+      - name: Trigger Deployment For ardrive.net
+        if: github.event.workflow_run.head_branch == 'main'
         run: |
           aws lambda invoke \
             --function-name ario-dev-deployment-trigger \
             --region ${{ secrets.AWS_REGION }} \
             --cli-binary-format raw-in-base64-out \
-            --payload '{"image_sha": "${{ github.event.workflow_run.head_sha }}", "event_type": "${{ steps.get_target.outputs.TARGET }}"}' \
+            --payload '{"event_type": "deploy-ar-io-production"}' \
+            /dev/null
+
+      - name: Trigger Deployment ar-io.dev
+        if: github.event.workflow_run.head_branch == 'develop'
+        run: |
+          aws lambda invoke \
+            --function-name ario-dev-deployment-trigger \
+            --region ${{ secrets.AWS_REGION }} \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"image_sha": "${{ github.event.workflow_run.head_sha }}", "event_type": "deploy-ar-io-dev-core"}' \
             /dev/null
 
       # Failure notification
