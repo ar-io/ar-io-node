@@ -26,12 +26,14 @@ import {
   TransactionAttributes,
   SignatureStore,
   OwnerStore,
+  SignatureSource,
+  OwnerSource,
 } from '../types.js';
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
 import { isEmptyString } from '../lib/string.js';
 
-export class AttributeFetchers {
+export abstract class AttributeFetchers {
   protected log: winston.Logger;
   protected dataSource: ContiguousDataSource;
   protected dataIndex: ContiguousDataIndex;
@@ -58,7 +60,7 @@ export class AttributeFetchers {
     this.transactionAttributesStore = transactionAttributesStore;
   }
 
-  async fetchDataFromParent({
+  protected async fetchDataFromParent({
     parentId,
     offset,
     size,
@@ -90,7 +92,7 @@ export class AttributeFetchers {
     return toB64Url(buffer);
   }
 
-  async getDataItemAttributes(
+  protected async getDataItemAttributes(
     id: string,
   ): Promise<DataItemAttributes | undefined> {
     const log = this.log.child({ method: 'getDataItemAttributes' });
@@ -110,7 +112,7 @@ export class AttributeFetchers {
     return attributes;
   }
 
-  async getTransactionAttributes(
+  protected async getTransactionAttributes(
     id: string,
   ): Promise<TransactionAttributes | undefined> {
     const log = this.log.child({ method: 'getTransactionAttributes' });
@@ -131,7 +133,10 @@ export class AttributeFetchers {
   }
 }
 
-export class SignatureFetcher extends AttributeFetchers {
+export class SignatureFetcher
+  extends AttributeFetchers
+  implements SignatureSource
+{
   private chainSource: ChainSource;
   private signatureStore: SignatureStore;
 
@@ -277,7 +282,7 @@ export class SignatureFetcher extends AttributeFetchers {
   }
 }
 
-export class OwnerFetcher extends AttributeFetchers {
+export class OwnerFetcher extends AttributeFetchers implements OwnerSource {
   private chainSource: ChainSource;
   private ownerStore: OwnerStore;
 
