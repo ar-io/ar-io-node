@@ -717,3 +717,35 @@ export type KVBufferStore = {
   has(key: string): Promise<boolean>;
   close(): Promise<void>;
 };
+
+export interface SignatureSource {
+  getDataItemSignature({
+    id,
+    parentId,
+    signatureSize,
+    signatureOffset,
+  }: {
+    id: string;
+    parentId?: string;
+    signatureSize?: number;
+    signatureOffset?: number;
+  }): Promise<string | undefined>;
+
+  getTransactionSignature({ id }: { id: string }): Promise<string | undefined>;
+}
+
+export interface OwnerSource {
+  getDataItemOwner({
+    id,
+    parentId,
+    ownerSize,
+    ownerOffset,
+  }: {
+    id: string;
+    parentId?: string;
+    ownerSize?: number;
+    ownerOffset?: number;
+  }): Promise<string | undefined>;
+
+  getTransactionOwner({ id }: { id: string }): Promise<string | undefined>;
+}
