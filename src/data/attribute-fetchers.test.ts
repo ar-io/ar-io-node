@@ -30,7 +30,8 @@ import {
   DataItemAttributesStore,
   TransactionAttributesStore,
   ChainSource,
-  B64UrlStore,
+  SignatureStore,
+  OwnerStore,
 } from '../types.js';
 
 const log = winston.createLogger({ silent: true });
@@ -38,8 +39,8 @@ interface Mocks {
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;
   chainSource: ChainSource;
-  signatureStore: B64UrlStore;
-  ownerStore: B64UrlStore;
+  signatureStore: SignatureStore;
+  ownerStore: OwnerStore;
   dataItemAttributesStore: DataItemAttributesStore;
   transactionAttributesStore: TransactionAttributesStore;
 }
@@ -58,11 +59,11 @@ const createMocks = (): Mocks => ({
   signatureStore: {
     get: mock.fn(),
     set: mock.fn(),
-  } as unknown as B64UrlStore,
+  } as unknown as SignatureStore,
   ownerStore: {
     get: mock.fn(),
     set: mock.fn(),
-  } as unknown as B64UrlStore,
+  } as unknown as SignatureStore,
   dataItemAttributesStore: {
     get: mock.fn(),
     set: mock.fn(),

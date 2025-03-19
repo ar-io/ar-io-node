@@ -145,6 +145,14 @@ export interface B64UrlStore {
   del(id: string): Promise<void>;
 }
 
+export interface SignatureStore extends B64UrlStore {
+  set(id: string, signature: string): Promise<void>;
+}
+
+export interface OwnerStore extends B64UrlStore {
+  set(id: string, owner: string): Promise<void>;
+}
+
 export interface ChunkDataStore {
   has(dataRoot: string, relativeOffset: number): Promise<boolean>;
   get(dataRoot: string, relativeOffset: number): Promise<ChunkData | undefined>;

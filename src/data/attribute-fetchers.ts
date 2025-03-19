@@ -24,7 +24,8 @@ import {
   DataItemAttributesStore,
   DataItemAttributes,
   TransactionAttributes,
-  B64UrlStore,
+  SignatureStore,
+  OwnerStore,
 } from '../types.js';
 import winston from 'winston';
 import { toB64Url } from '../lib/encoding.js';
@@ -132,7 +133,7 @@ export class AttributeFetchers {
 
 export class SignatureFetcher extends AttributeFetchers {
   private chainSource: ChainSource;
-  private signatureStore: B64UrlStore;
+  private signatureStore: SignatureStore;
 
   constructor({
     log,
@@ -149,7 +150,7 @@ export class SignatureFetcher extends AttributeFetchers {
     chainSource: ChainSource;
     dataItemAttributesStore: DataItemAttributesStore;
     transactionAttributesStore: TransactionAttributesStore;
-    signatureStore: B64UrlStore;
+    signatureStore: SignatureStore;
   }) {
     super({
       log,
@@ -278,7 +279,7 @@ export class SignatureFetcher extends AttributeFetchers {
 
 export class OwnerFetcher extends AttributeFetchers {
   private chainSource: ChainSource;
-  private ownerStore: B64UrlStore;
+  private ownerStore: OwnerStore;
 
   constructor({
     log,
@@ -295,7 +296,7 @@ export class OwnerFetcher extends AttributeFetchers {
     chainSource: ChainSource;
     dataItemAttributesStore: DataItemAttributesStore;
     transactionAttributesStore: TransactionAttributesStore;
-    ownerStore: B64UrlStore;
+    ownerStore: OwnerStore;
   }) {
     super({
       log,
