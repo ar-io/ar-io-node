@@ -398,6 +398,11 @@ export class OwnerFetcher extends AttributeFetchers {
 
       const ownerChainField = await this.chainSource.getTxField(id, 'owner');
 
+      // Arweave supports transactions where the owner field is an empty string.
+      // This is possible because the public owner key can be derived from the signature payload.
+      // The derivation is achieved through ECDSA public key recovery using the secp256k1 algorithm.
+      // getTx handles the retrieval of transaction and owner derivation when the owner field is empty.
+      // For more details, see: https://github.com/ArweaveTeam/arweave/releases/tag/N.2.9.1
       if (
         typeof ownerChainField === 'string' &&
         !isEmptyString(ownerChainField)
