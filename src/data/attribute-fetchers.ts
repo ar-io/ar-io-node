@@ -92,7 +92,7 @@ export class AttributeFetchers {
   async getDataItemAttributes(
     id: string,
   ): Promise<DataItemAttributes | undefined> {
-    const log = this.log.child({ method: 'getDataItemAttribute' });
+    const log = this.log.child({ method: 'getDataItemAttributes' });
 
     let attributes = await this.dataItemAttributesStore.get(id);
     if (attributes !== undefined) {
