@@ -60,7 +60,7 @@ export class ArNSNamesCache {
     registryCache,
     ao = connect({
       MU_URL: config.AO_MU_URL,
-      CU_URL: config.AO_CU_URL,
+      CU_URL: config.NETWORK_AO_CU_URL ?? config.AO_CU_URL,
       GRAPHQL_URL: config.AO_GRAPHQL_URL,
       GATEWAY_URL: config.AO_GATEWAY_URL,
     }),
