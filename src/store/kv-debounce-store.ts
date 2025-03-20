@@ -72,8 +72,13 @@ export class KvDebounceStore implements KVBufferStore {
   async get(key: string): Promise<Buffer | undefined> {
     let value = await this.kvBufferStore.get(key);
     if (value === undefined) {
-      // await on a miss, so we don't have to retry after the debounce has completed
-      await this.debounceHydrateOnMiss(key);
+      // await any actively running hydrates but don't wait for debounces. This
+      // ensures that we don't unnecessarily return a 404 during startup while
+      // avoiding excessive delays waiting for long debounces.
+      if (this.pendingHydrate) {
+        await this.debounceHydrateOnMiss(key);
+      }
+      this.debounceHydrateOnMiss(key);
       value = await this.kvBufferStore.get(key);
     } else {
       // don't await on a hit, fire and forget

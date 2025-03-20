@@ -82,7 +82,7 @@ describe('ArNSNamesCache', () => {
     assert.deepEqual(name, { name: 'name-1-1', processId: 'process-1' });
   });
 
-  it('should use cached names within TTL period', async (done) => {
+  it('should use cached names within TTL period', async () => {
     let callCount = 0;
     const debounceCache = new ArNSNamesCache({
       log,
@@ -288,15 +288,33 @@ describe('ArNSNamesCache', () => {
     });
 
     // let the cache hydrate
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    // call count will get incremented on instantiation of the cache
     assert.equal(callCount, 1);
 
-    // check a missing name, this should instantiate the debounce timeout to refresh the cache in 10ms
-    const missingName = await debounceCache.getCachedArNSBaseName('name-2');
-    assert.deepEqual(missingName, { name: 'name-2', processId: 'process-2' });
+    // check a missing name, this should return not-found instantly since debounce is pending
+    const missingNameAttempt1 =
+      await debounceCache.getCachedArNSBaseName('name-2');
+    assert.deepEqual(missingNameAttempt1, undefined);
+    assert.equal(callCount, 1);
+
+    // part way the through the debounce it should still be missing
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    const missingNameAttempt2 =
+      await debounceCache.getCachedArNSBaseName('name-2');
+    assert.deepEqual(missingNameAttempt2, undefined);
+    assert.equal(callCount, 1);
+
+    // calling again after debounce is finished should hydrate the cache
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await debounceCache.getCachedArNSBaseName('name-2');
+    // a subsequent call should return the name
+    const missingNameAttempt3 =
+      await debounceCache.getCachedArNSBaseName('name-2');
     assert.equal(callCount, 2);
-    assert.ok(lastCallTimestamp >= Date.now() - 10);
+    assert.deepEqual(missingNameAttempt3, {
+      name: 'name-2',
+      processId: 'process-2',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1));
   });
 
   it('should debounce on a cache hit', async () => {
@@ -333,10 +351,5 @@ describe('ArNSNamesCache', () => {
     const cachedName2 = await debounceCache.getCachedArNSBaseName('name-1');
     assert.deepEqual(cachedName2, cachedName);
     assert.equal(callCount, 1);
-
-    // assert that a missing name is not cached yet
-    const cachedName3 = await debounceCache.getCachedArNSBaseName('name-2');
-    assert.deepEqual(cachedName3, { name: 'name-2', processId: 'process-2' });
-    assert.equal(callCount, 2);
   });
 });
