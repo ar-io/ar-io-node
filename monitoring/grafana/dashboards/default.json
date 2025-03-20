@@ -267,7 +267,7 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "100 - (max by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
+          "expr": "100 - (min by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
           "hide": false,
           "instant": false,
           "legendFormat": "Max CPU %",
@@ -277,7 +277,7 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "100 - (min by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
+          "expr": "100 - (max by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
           "hide": false,
           "instant": false,
           "legendFormat": "Min CPU %",
