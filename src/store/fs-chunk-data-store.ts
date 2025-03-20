@@ -115,14 +115,27 @@ export class FsChunkDataStore implements ChunkDataStore {
         `${process.cwd()}/${chunkHashPath}`,
       );
 
-      await fs.promises.symlink(
-        targetPath,
-        this.chunkDataRootPath(dataRoot, relativeOffset),
-      );
-      this.log.info('Successfully cached chunk data', {
-        dataRoot,
-        relativeOffset,
-      });
+      const linkPath = this.chunkDataRootPath(dataRoot, relativeOffset);
+
+      let linkPathExists = false;
+
+      try {
+        await fs.promises.stat(linkPath);
+      } catch {
+        linkPathExists = true;
+        this.log.debug('Chunk data already cached', {
+          dataRoot,
+          relativeOffset,
+        });
+      }
+
+      if (!linkPathExists) {
+        await fs.promises.symlink(targetPath, linkPath);
+        this.log.info('Successfully cached chunk data', {
+          dataRoot,
+          relativeOffset,
+        });
+      }
     } catch (error: any) {
       this.log.error('Failed to set chunk data in cache:', {
         dataRoot,
