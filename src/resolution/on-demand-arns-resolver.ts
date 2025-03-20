@@ -19,27 +19,14 @@ import winston from 'winston';
 
 import { isValidDataId } from '../lib/validation.js';
 import { NameResolution, NameResolver } from '../types.js';
-import {
-  ANT,
-  AOProcess,
-  ARIO,
-  AoARIORead,
-  AoArNSNameDataWithName,
-  AoClient,
-} from '@ar.io/sdk';
+import { ANT, AOProcess, AoArNSNameDataWithName, AoClient } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
-import * as metrics from '../metrics.js';
 
 export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
-  private networkProcess: AoARIORead;
   private ao: AoClient;
-  private aoCircuitBreaker: CircuitBreaker<
-    Parameters<AoARIORead['getArNSRecord']>,
-    Awaited<ReturnType<AoARIORead['getArNSRecord']>>
-  >;
 
   constructor({
     log,
@@ -49,41 +36,15 @@ export class OnDemandArNSResolver implements NameResolver {
       GRAPHQL_URL: config.AO_GRAPHQL_URL,
       GATEWAY_URL: config.AO_GATEWAY_URL,
     }),
-    networkProcess = ARIO.init({
-      process: new AOProcess({
-        processId: config.IO_PROCESS_ID,
-        ao: ao,
-      }),
-    }),
-    circuitBreakerOptions = {
-      timeout: config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS,
-      errorThresholdPercentage:
-        config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
-      rollingCountTimeout:
-        config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
-      resetTimeout: config.ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
-    },
   }: {
     log: winston.Logger;
-    networkProcess?: AoARIORead;
     ao?: AoClient;
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({
       class: 'OnDemandArNSResolver',
     });
-    this.networkProcess = networkProcess;
     this.ao = ao;
-    this.aoCircuitBreaker = new CircuitBreaker(
-      ({ name }: { name: string }) => {
-        return this.networkProcess.getArNSRecord({ name });
-      },
-      {
-        ...circuitBreakerOptions,
-        name: 'getArNSRecord',
-      },
-    );
-    metrics.circuitBreakerMetrics.add(this.aoCircuitBreaker);
   }
 
   async resolve({
@@ -101,17 +62,11 @@ export class OnDemandArNSResolver implements NameResolver {
         throw new Error('Invalid name');
       }
 
-      // if we are not passed the baseArNSRecord find that name in the network
-      // process, using the circuit breaker if there are persistent AO issues
-      const arnsRecord =
-        baseArNSRecord ??
-        (await this.aoCircuitBreaker.fire({ name: baseName }));
-
-      if (arnsRecord === undefined) {
+      if (baseArNSRecord === undefined) {
         throw new Error('Unexpected undefined from CU');
       }
 
-      if (arnsRecord === null || arnsRecord.processId === undefined) {
+      if (baseArNSRecord === null || baseArNSRecord.processId === undefined) {
         return {
           name,
           resolvedId: undefined,
@@ -123,7 +78,7 @@ export class OnDemandArNSResolver implements NameResolver {
         };
       }
 
-      const processId = arnsRecord.processId;
+      const processId = baseArNSRecord.processId;
 
       // now get the ant process from the process id
       const ant = ANT.init({
@@ -160,7 +115,7 @@ export class OnDemandArNSResolver implements NameResolver {
         resolvedAt: Date.now(),
         processId: processId,
         ttl,
-        limit: arnsRecord.undernameLimit,
+        limit: baseArNSRecord.undernameLimit,
         index,
       };
     } catch (error: any) {

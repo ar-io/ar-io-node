@@ -84,7 +84,6 @@ export const createArNSResolver = ({
   const resolverMap: Record<ArNSResolverType, NameResolver | undefined> = {
     'on-demand': new OnDemandArNSResolver({
       log,
-      networkProcess,
     }),
     gateway:
       trustedGatewayUrl !== undefined
