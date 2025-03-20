@@ -23,6 +23,7 @@ import { ANT, AOProcess, AoArNSNameDataWithName, AoClient } from '@ar.io/sdk';
 import * as config from '../config.js';
 import { connect } from '@permaweb/aoconnect';
 import CircuitBreaker from 'opossum';
+import * as metrics from '../metrics.js';
 
 export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
@@ -49,13 +50,28 @@ export class OnDemandArNSResolver implements NameResolver {
 
   async resolve({
     name,
-    baseArNSRecord,
+    baseArNSRecordFn,
   }: {
     name: string;
-    baseArNSRecord?: AoArNSNameDataWithName;
+    baseArNSRecordFn: () => Promise<AoArNSNameDataWithName | undefined>;
   }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
+      const baseArNSRecord = await baseArNSRecordFn();
+      if (!baseArNSRecord) {
+        this.log.warn('Base name not found in ArNS names cache', { name });
+        metrics.arnsNameCacheMissCounter.inc();
+        return {
+          name,
+          resolvedId: undefined,
+          resolvedAt: undefined,
+          ttl: undefined,
+          processId: undefined,
+          limit: undefined,
+          index: undefined,
+        };
+      }
+
       // get the base name which is the last of the array split by _
       const baseName = name.split('_').pop();
       if (baseName === undefined) {

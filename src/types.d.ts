@@ -685,10 +685,10 @@ type NameResolution =
 export interface NameResolver {
   resolve({
     name,
-    baseArNSRecord,
+    baseArNSRecordFn,
   }: {
     name: string;
-    baseArNSRecord?: AoArNSNameDataWithName;
+    baseArNSRecordFn?: () => Promise<AoArNSNameDataWithName | undefined>;
   }): Promise<NameResolution>;
 }
 

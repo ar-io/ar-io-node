@@ -88,18 +88,18 @@ export class CompositeArNSResolver implements NameResolver {
     }
 
     try {
-      // start name list request before checking cache so that the name list
-      // stays fresh even when there are cache hits
-      const baseNameInCachePromise = this.arnsNamesCache
-        .getCachedArNSBaseName(baseName)
-        .catch((error: any) => {
-          this.log.error('Error getting base name from cache: ', {
-            message: error.message,
-            stack: error.stack,
-            baseName,
+      const baseArNSRecordFn = async () => {
+        return this.arnsNamesCache
+          .getCachedArNSBaseName(baseName)
+          .catch((error: any) => {
+            this.log.error('Error getting base name from cache: ', {
+              message: error.message,
+              stack: error.stack,
+              baseName,
+            });
+            return undefined;
           });
-          return undefined;
-        });
+      };
 
       // Make a resolution function that can be called both on cache hits (when
       // the refresh interval is past) and when we have a cache miss
@@ -116,7 +116,7 @@ export class CompositeArNSResolver implements NameResolver {
             const resolutionPromise = resolver
               .resolve({
                 name,
-                baseArNSRecord: await baseNameInCachePromise,
+                baseArNSRecordFn,
               })
               .then((resolution) => {
                 if (resolution.resolvedAt !== undefined) {
@@ -185,20 +185,6 @@ export class CompositeArNSResolver implements NameResolver {
       }
       metrics.arnsCacheMissCounter.inc();
       this.log.info('Cache miss for arns name', { name });
-
-      if (!(await baseNameInCachePromise)) {
-        this.log.warn('Base name not found in ArNS names cache', { name });
-        metrics.arnsNameCacheMissCounter.inc();
-        return {
-          name,
-          resolvedId: undefined,
-          resolvedAt: undefined,
-          ttl: undefined,
-          processId: undefined,
-          limit: undefined,
-          index: undefined,
-        };
-      }
 
       // Ensure that we always use pending resolutions
       this.pendingResolutions[name] ||= resolveName();
