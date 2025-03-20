@@ -22,10 +22,7 @@
   "links": [],
   "panels": [
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "P1809F7CD0C75ACF3"
-      },
+      "datasource": "${datasource}",
       "description": "Request counts for dry-run and state",
       "fieldConfig": {
         "defaults": {
@@ -116,10 +113,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "P1809F7CD0C75ACF3"
-      },
+      "datasource": "${datasource}",
       "description": "Dry-run response times. Ideally, dry-runs evaluate in < 3 seconds.",
       "fieldConfig": {
         "defaults": {
@@ -207,10 +201,7 @@
           "useBackend": false
         },
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "P1809F7CD0C75ACF3"
-          },
+          "datasource": "${datasource}",
           "editorMode": "code",
           "expr": "histogram_quantile(\n  0.95,\n  sum by (le) (\n    rate(ao_cu_http_request_duration_seconds_bucket{\n        method=\"POST\",\n        route=\"/dry-run\"\n    }[5m])\n  )\n)",
           "hide": false,
@@ -220,10 +211,7 @@
           "refId": "B"
         },
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "P1809F7CD0C75ACF3"
-          },
+          "datasource": "${datasource}",
           "editorMode": "code",
           "expr": "histogram_quantile(\n  0.99,\n  sum by (le) (\n    rate(ao_cu_http_request_duration_seconds_bucket{\n        method=\"POST\",\n        route=\"/dry-run\"\n    }[5m])\n  )\n)",
           "hide": false,
@@ -237,10 +225,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "P1809F7CD0C75ACF3"
-      },
+      "datasource": "${datasource}",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -330,10 +315,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "P1809F7CD0C75ACF3"
-      },
+      "datasource": "${datasource}",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -428,12 +410,32 @@
   "schemaVersion": 40,
   "tags": ["compute-unit"],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data Source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "ao-cu-node",
-  "uid": "aefua1eynehogd",
+  "uid": "",
   "version": 9,
   "weekStart": ""
 }
