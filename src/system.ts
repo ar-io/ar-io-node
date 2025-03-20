@@ -103,13 +103,13 @@ const arweave = Arweave.init({});
 
 ARIOLogger.default.setLogLevel(config.AR_IO_SDK_LOG_LEVEL as any);
 
-const arIO = ARIO.init({
+const networkProcess = ARIO.init({
   process: new AOProcess({
     processId: config.IO_PROCESS_ID,
     ao: connect({
       // @permaweb/aoconnect defaults will be used if these are not provided
       MU_URL: config.AO_MU_URL,
-      CU_URL: config.AO_CU_URL,
+      CU_URL: config.NETWORK_AO_CU_URL ?? config.AO_CU_URL,
       GRAPHQL_URL: config.AO_GRAPHQL_URL,
       GATEWAY_URL: config.AO_GATEWAY_URL,
     }),
@@ -352,7 +352,7 @@ const gatewaysDataSource = new GatewaysDataSource({
 
 const arIODataSource = new ArIODataSource({
   log,
-  networkProcess: arIO,
+  networkProcess,
   nodeWallet: config.AR_IO_WALLET,
 });
 
@@ -667,7 +667,7 @@ export const nameResolver = createArNSResolver({
   log,
   trustedGatewayUrl: config.TRUSTED_ARNS_GATEWAY_URL,
   resolutionOrder: config.ARNS_RESOLVER_PRIORITY_ORDER,
-  networkProcess: arIO,
+  networkProcess: networkProcess,
   resolutionCache: arnsResolutionCache,
   registryCache: arnsRegistryCache,
   overrides: {
