@@ -991,12 +991,7 @@ export class StandaloneSqliteDatabaseWorker {
         this.stmts.core.selectMaxStableBlockTimestamp.get();
       const endHeight = block.height - MAX_FORK_DEPTH;
 
-      this.saveCoreStableDataFn(endHeight);
-
-      this.deleteCoreStaleNewDataFn(
-        endHeight,
-        maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
-      );
+      this.flushBlockAndTxs(endHeight, maxStableBlockTimestamp);
 
       return { endHeight, maxStableBlockTimestamp };
     }
@@ -1004,7 +999,20 @@ export class StandaloneSqliteDatabaseWorker {
     return {};
   }
 
+  flushBlockAndTxs(endHeight: number, maxStableBlockTimestamp: number) {
+    this.saveCoreStableDataFn(endHeight);
+
+    this.deleteCoreStaleNewDataFn(
+      endHeight,
+      maxStableBlockTimestamp - NEW_TX_CLEANUP_WAIT_SECS,
+    );
+  }
+
   flushStableDataItems(endHeight: number, maxStableBlockTimestamp: number) {
+    // Ensure that blocks and TXs are flushed before data items so that there
+    // is data in stable_block_transactions to join against.
+    this.flushBlockAndTxs(endHeight, maxStableBlockTimestamp);
+
     this.saveBundlesStableDataFn(endHeight);
 
     this.deleteBundlesStaleNewDataFn(
