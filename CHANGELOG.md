@@ -4,7 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 29] - 2025-03-21
+
+### Changed
+
+- Temporarily default to trusted gateway ArNS resolution to reduce CU load as
+  much possible. On-demand CU resolution is still available as a fallback and
+  the order can be modified by setting `ARNS_RESOLVER_PRIORITY_ORDER`.
+- Remove duplicate network process call in on-demand resolver.
+- Don't wait for network process debounces in the on-demand resolver.
+- Slow network process dry runs no longer block fallback to next resolver.
+
+### Added
+
+- Added support for separate CUs URLs for the network and ANT processes via the
+  `NETWORK_AO_CU_URL` and `ANT_AO_CU_URL` process URLs respectively. If either
+  is missing the `AO_CU_URL` is used instead with a fallback to the SDK default
+  URL if `AO_CU_URL` is also unspecified.
+- Added CU URLs to on-demand ArNS resolver logs.
+- Added circuit breakers for AR.IO network process CU dry runs. By default
+  they use a 1 minute timeout and open after 30% failure over a 10 minute
+  window and reset after 20 minutes.
+
+### Fixed
+
+- Owners in GraphQL results are now correctly retrieved from data based on
+  offsets when using ClickHouse.
+
 
 ## [Release 28] - 2025-03-17
 
