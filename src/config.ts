@@ -550,7 +550,7 @@ export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
 );
 
 export const ARNS_RESOLVER_PRIORITY_ORDER = env
-  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'on-demand,gateway')
+  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'gateway,on-demand')
   .split(',');
 
 export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
