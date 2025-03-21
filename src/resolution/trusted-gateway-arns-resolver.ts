@@ -49,7 +49,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
         method: 'HEAD',
         url: '/',
         baseURL: nameUrl,
-        validateStatus: (status) => status === 200,
+        validateStatus: (status) => [200, 402].includes(status),
       });
       const resolvedId =
         response.headers[headerNames.arnsResolvedId.toLowerCase()];
