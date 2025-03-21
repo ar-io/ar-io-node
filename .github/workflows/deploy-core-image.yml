@@ -4,14 +4,18 @@ on:
   workflow_run:
     workflows: ['build-core']
     types: [completed]
+  push:
+    branches:
+      - main
 
 jobs:
   ar-io-core-deployment:
     runs-on: ubuntu-latest
     if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      (github.event.workflow_run.head_branch == 'develop' ||
-       github.event.workflow_run.head_branch == 'main')
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'develop')
 
     permissions:
       actions: write
