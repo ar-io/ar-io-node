@@ -143,7 +143,7 @@ export class CompositeArNSResolver implements NameResolver {
             }
           } catch (error: any) {
             this.log.error('Error resolving name with resolver', {
-              resolver,
+              resolver: resolver.constructor.name,
               message: error.message,
               stack: error.stack,
             });
