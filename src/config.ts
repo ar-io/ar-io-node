@@ -558,29 +558,6 @@ export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
   '3000',
 );
 
-export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
-  'ARNS_ON_DEMAND_CIRCUIT_BREAKER_TIMEOUT_MS',
-  `${5 * 1000}`, // 5 seconds
-);
-
-export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
-  +env.varOrDefault(
-    'ARNS_ON_DEMAND_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
-    '50',
-  );
-
-export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
-  +env.varOrDefault(
-    'ARNS_ON_DEMAND_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
-    `${60 * 1000}`, // 1 minute
-  );
-
-export const ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
-  +env.varOrDefault(
-    'ARNS_ON_DEMAND_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
-    `${5 * 60 * 1000}`, // 5 minutes
-  );
-
 export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
   'ARNS_NAMES_CACHE_TTL_SECONDS',
   `${60 * 60}`, // 1 hour
