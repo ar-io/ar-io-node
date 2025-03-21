@@ -221,6 +221,7 @@ services:
       - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-29-pre}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
+      - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
       - AO_MU_URL=${AO_MU_URL:-}
       - AO_GATEWAY_URL=${AO_GATEWAY_URL:-}
       - AO_GRAPHQL_URL=${AO_GRAPHQL_URL:-}
