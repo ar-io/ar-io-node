@@ -33,7 +33,7 @@ export class OnDemandArNSResolver implements NameResolver {
     log,
     ao = connect({
       MU_URL: config.AO_MU_URL,
-      CU_URL: config.ANT_AO_CU_URL ?? config.AO_CU_URL,
+      CU_URL: config.ANT_AO_CU_URL,
       GRAPHQL_URL: config.AO_GRAPHQL_URL,
       GATEWAY_URL: config.AO_GATEWAY_URL,
     }),
@@ -44,6 +44,8 @@ export class OnDemandArNSResolver implements NameResolver {
   }) {
     this.log = log.child({
       class: 'OnDemandArNSResolver',
+      networkCuUrl: config.NETWORK_AO_CU_URL ?? '<sdk default>',
+      antCuUrl: config.ANT_AO_CU_URL ?? '<sdk default>',
     });
     this.ao = ao;
   }
@@ -59,7 +61,9 @@ export class OnDemandArNSResolver implements NameResolver {
     try {
       const baseArNSRecord = await baseArNSRecordFn();
       if (!baseArNSRecord) {
-        this.log.warn('Base name not found in ArNS names cache', { name });
+        this.log.warn('Base name not found in ArNS names cache', {
+          name,
+        });
         metrics.arnsNameCacheMissCounter.inc();
         return {
           name,
