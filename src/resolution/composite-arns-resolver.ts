@@ -42,6 +42,7 @@ export class CompositeArNSResolver implements NameResolver {
     Promise<NameResolution | undefined> | undefined
   > = {};
   private limit: ReturnType<typeof pLimit>;
+  private resolverTimeoutMs: number;
 
   constructor({
     log,
@@ -51,6 +52,7 @@ export class CompositeArNSResolver implements NameResolver {
     overrides,
     networkProcess,
     maxConcurrentResolutions = 2,
+    resolverTimeoutMs = config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     resolvers: NameResolver[];
@@ -61,6 +63,7 @@ export class CompositeArNSResolver implements NameResolver {
       ttlSeconds?: number;
     };
     maxConcurrentResolutions?: number;
+    resolverTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.resolvers = resolvers;
@@ -72,6 +75,7 @@ export class CompositeArNSResolver implements NameResolver {
       networkProcess,
     });
     this.limit = pLimit(maxConcurrentResolutions);
+    this.resolverTimeoutMs = resolverTimeoutMs;
   }
 
   private async resolveWithResolver(
@@ -103,7 +107,7 @@ export class CompositeArNSResolver implements NameResolver {
       }
 
       return await pTimeout(resolutionPromise, {
-        milliseconds: config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS,
+        milliseconds: this.resolverTimeoutMs,
       });
     } catch (error: any) {
       this.log.error('Error resolving name with resolver', {

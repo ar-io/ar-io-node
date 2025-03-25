@@ -92,6 +92,7 @@ describe('CompositeArNSResolver', () => {
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
       maxConcurrentResolutions: 2,
+      resolverTimeoutMs: 50,
     });
 
     const result = await compositeResolver.resolve({ name: 'test.ar' });
@@ -127,6 +128,7 @@ describe('CompositeArNSResolver', () => {
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
       maxConcurrentResolutions: 2,
+      resolverTimeoutMs: 50,
     });
 
     const result = await compositeResolver.resolve({ name: 'test.ar' });
@@ -152,6 +154,7 @@ describe('CompositeArNSResolver', () => {
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
       maxConcurrentResolutions: 2,
+      resolverTimeoutMs: 50,
     });
 
     const result = await compositeResolver.resolve({ name: 'test.ar' });
@@ -180,6 +183,7 @@ describe('CompositeArNSResolver', () => {
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
       maxConcurrentResolutions: 2,
+      resolverTimeoutMs: 50,
     });
 
     const result = await compositeResolver.resolve({ name: 'test.ar' });
@@ -235,6 +239,7 @@ describe('CompositeArNSResolver', () => {
       resolutionCache: mockResolutionCache,
       registryCache: mockRegistryCache,
       maxConcurrentResolutions: 2,
+      resolverTimeoutMs: 50,
     });
 
     await compositeResolver.resolve({ name: 'test.ar' });
