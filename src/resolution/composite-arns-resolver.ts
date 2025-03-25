@@ -127,26 +127,25 @@ export class CompositeArNSResolver implements NameResolver {
           name,
           baseArNSRecordFn,
           isLastResolver,
-        ),
+        ).then((resolution) => {
+          // Only consider resolutions with resolvedAt as successful
+          if (resolution?.resolvedAt !== undefined) {
+            return resolution;
+          }
+          throw new Error('No valid resolution');
+        }),
       );
     });
 
     try {
-      // Process resolutions in parallel but maintain priority order
-      for (let i = 0; i < resolutionPromises.length; i++) {
-        const resolution = await resolutionPromises[i];
-        if (resolution?.resolvedAt !== undefined) {
-          return resolution;
-        }
-      }
+      return await Promise.any(resolutionPromises);
     } catch (error: any) {
       this.log.error('Error during parallel resolution:', {
         message: error.message,
         stack: error.stack,
       });
+      return undefined;
     }
-
-    return undefined;
   }
 
   async resolve({ name }: { name: string }): Promise<NameResolution> {
