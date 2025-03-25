@@ -56,7 +56,7 @@ describe('CompositeArNSResolver', () => {
 
     const resolver2: NameResolver = {
       resolve: mock.fn(async () => {
-        throw new Error('Should not be called');
+        throw new Error();
       }),
     };
 
