@@ -17,6 +17,7 @@
  */
 import winston from 'winston';
 import pTimeout from 'p-timeout';
+import pLimit from 'p-limit';
 import { NameResolution, NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
@@ -40,6 +41,7 @@ export class CompositeArNSResolver implements NameResolver {
     string,
     Promise<NameResolution | undefined> | undefined
   > = {};
+  private limit: ReturnType<typeof pLimit>;
 
   constructor({
     log,
@@ -48,6 +50,7 @@ export class CompositeArNSResolver implements NameResolver {
     registryCache,
     overrides,
     networkProcess,
+    maxConcurrentResolutions = 2,
   }: {
     log: winston.Logger;
     resolvers: NameResolver[];
@@ -57,6 +60,7 @@ export class CompositeArNSResolver implements NameResolver {
     overrides?: {
       ttlSeconds?: number;
     };
+    maxConcurrentResolutions?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.resolvers = resolvers;
@@ -67,6 +71,82 @@ export class CompositeArNSResolver implements NameResolver {
       registryCache,
       networkProcess,
     });
+    this.limit = pLimit(maxConcurrentResolutions);
+  }
+
+  private async resolveWithResolver(
+    resolver: NameResolver,
+    name: string,
+    baseArNSRecordFn: () => Promise<any>,
+    isLastResolver: boolean,
+  ): Promise<NameResolution | undefined> {
+    try {
+      const resolutionPromise = resolver
+        .resolve({
+          name,
+          baseArNSRecordFn,
+        })
+        .then((resolution) => {
+          if (resolution.resolvedAt !== undefined) {
+            this.resolutionCache.set(
+              name,
+              Buffer.from(JSON.stringify(resolution)),
+            );
+            this.log.info('Resolved name', { name, resolution });
+            return resolution;
+          }
+          return undefined;
+        });
+
+      if (isLastResolver) {
+        return await resolutionPromise;
+      }
+
+      return await pTimeout(resolutionPromise, {
+        milliseconds: config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS,
+      });
+    } catch (error: any) {
+      this.log.error('Error resolving name with resolver', {
+        resolver: resolver.constructor.name,
+        message: error.message,
+        stack: error.stack,
+      });
+      return undefined;
+    }
+  }
+
+  private async resolveParallel(
+    name: string,
+    baseArNSRecordFn: () => Promise<any>,
+  ): Promise<NameResolution | undefined> {
+    const resolutionPromises = this.resolvers.map((resolver, index) => {
+      const isLastResolver = index === this.resolvers.length - 1;
+      return this.limit(() =>
+        this.resolveWithResolver(
+          resolver,
+          name,
+          baseArNSRecordFn,
+          isLastResolver,
+        ),
+      );
+    });
+
+    try {
+      // Process resolutions in parallel but maintain priority order
+      for (let i = 0; i < resolutionPromises.length; i++) {
+        const resolution = await resolutionPromises[i];
+        if (resolution?.resolvedAt !== undefined) {
+          return resolution;
+        }
+      }
+    } catch (error: any) {
+      this.log.error('Error during parallel resolution:', {
+        message: error.message,
+        stack: error.stack,
+      });
+    }
+
+    return undefined;
   }
 
   async resolve({ name }: { name: string }): Promise<NameResolution> {
@@ -101,58 +181,6 @@ export class CompositeArNSResolver implements NameResolver {
           });
       };
 
-      // Make a resolution function that can be called both on cache hits (when
-      // the refresh interval is past) and when we have a cache miss
-      const resolveName = async () => {
-        for (let i = 0; i < this.resolvers.length; i++) {
-          const resolver = this.resolvers[i];
-          const isLastResolver = i === this.resolvers.length - 1;
-
-          try {
-            this.log.info('Attempting to resolve name with resolver', {
-              name,
-            });
-
-            const resolutionPromise = resolver
-              .resolve({
-                name,
-                baseArNSRecordFn,
-              })
-              .then((resolution) => {
-                if (resolution.resolvedAt !== undefined) {
-                  this.resolutionCache.set(
-                    name,
-                    Buffer.from(JSON.stringify(resolution)),
-                  );
-                  this.log.info('Resolved name', { name, resolution });
-
-                  return resolution;
-                }
-
-                return undefined;
-              });
-
-            const maybeResolution = isLastResolver
-              ? await resolutionPromise
-              : await pTimeout(resolutionPromise, {
-                  milliseconds: config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS,
-                });
-
-            if (maybeResolution) {
-              return maybeResolution;
-            }
-          } catch (error: any) {
-            this.log.error('Error resolving name with resolver', {
-              resolver: resolver.constructor.name,
-              message: error.message,
-              stack: error.stack,
-            });
-          }
-        }
-
-        return undefined;
-      };
-
       // check if our resolution cache contains the FULL name
       const cachedResolutionBuffer = await this.resolutionCache.get(name);
       if (cachedResolutionBuffer) {
@@ -162,6 +190,7 @@ export class CompositeArNSResolver implements NameResolver {
         resolution = cachedResolution; // hold on to this in case we need it
         // use the override ttl if it exists, otherwise use the cached resolution ttl
         const ttlSeconds = this.overrides?.ttlSeconds ?? cachedResolution.ttl;
+
         if (
           cachedResolution !== undefined &&
           cachedResolution.resolvedAt !== undefined &&
@@ -176,7 +205,10 @@ export class CompositeArNSResolver implements NameResolver {
             cachedResolution.resolvedAt + ttlSeconds * 1000 - Date.now() <
               config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS
           ) {
-            this.pendingResolutions[name] = resolveName();
+            this.pendingResolutions[name] = this.resolveParallel(
+              name,
+              baseArNSRecordFn,
+            );
           }
           metrics.arnsCacheHitCounter.inc();
           this.log.info('Cache hit for arns name', { name });
@@ -187,7 +219,10 @@ export class CompositeArNSResolver implements NameResolver {
       this.log.info('Cache miss for arns name', { name });
 
       // Ensure that we always use pending resolutions
-      this.pendingResolutions[name] ||= resolveName();
+      this.pendingResolutions[name] ||= this.resolveParallel(
+        name,
+        baseArNSRecordFn,
+      );
       // Fallback to cached resolution if something goes wrong
       resolution = await (resolution
         ? pTimeout(this.pendingResolutions[name], {
