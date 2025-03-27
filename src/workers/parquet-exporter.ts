@@ -234,12 +234,10 @@ export class ParquetExporter {
 
 const importBlocks = async ({
   db,
-  coreDbPath,
   startHeight,
   endHeight,
 }: {
   db: Connection;
-  coreDbPath: string;
   startHeight: number;
   endHeight: number;
 }) => {
@@ -255,7 +253,7 @@ const importBlocks = async ({
         tx_count,
         block_size
       FROM
-        sqlite_scan('${coreDbPath}', 'stable_blocks')
+        core.stable_blocks
       WHERE
         height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
@@ -273,12 +271,10 @@ const importBlocks = async ({
 
 const importTransactions = async ({
   db,
-  coreDbPath,
   startHeight,
   endHeight,
 }: {
   db: Connection;
-  coreDbPath: string;
   startHeight: number;
   endHeight: number;
 }) => {
@@ -315,9 +311,9 @@ const importTransactions = async ({
         NULL AS root_transaction_id,
         NULL AS root_parent_offset
       FROM
-        sqlite_scan('${coreDbPath}', 'stable_transactions') st
+        core.stable_transactions st
       LEFT JOIN
-        sqlite_scan('${coreDbPath}', 'wallets') w ON st.owner_address = w.address
+        core.wallets w ON st.owner_address = w.address
       WHERE
         st.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
@@ -335,12 +331,10 @@ const importTransactions = async ({
 
 const importDataItems = async ({
   db,
-  bundlesDbPath,
   startHeight,
   endHeight,
 }: {
   db: Connection;
-  bundlesDbPath: string;
   startHeight: number;
   endHeight: number;
 }) => {
@@ -377,9 +371,9 @@ const importDataItems = async ({
         sdi.root_transaction_id,
         sdi.root_parent_offset
       FROM
-        sqlite_scan('${bundlesDbPath}', 'stable_data_items') sdi
+        bundles.stable_data_items sdi
       LEFT JOIN
-        sqlite_scan('${bundlesDbPath}', 'wallets') w ON sdi.owner_address = w.address
+        bundles.wallets w ON sdi.owner_address = w.address
       WHERE
         sdi.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
@@ -397,12 +391,10 @@ const importDataItems = async ({
 
 const importTransactionTags = async ({
   db,
-  coreDbPath,
   startHeight,
   endHeight,
 }: {
   db: Connection;
-  coreDbPath: string;
   startHeight: number;
   endHeight: number;
 }) => {
@@ -417,11 +409,11 @@ const importTransactionTags = async ({
         tv.value AS tag_value,
         0 AS is_data_item
       FROM
-        sqlite_scan('${coreDbPath}', 'stable_transaction_tags') stt
+        core.stable_transaction_tags stt
       JOIN
-        sqlite_scan('${coreDbPath}', 'tag_names') tn ON stt.tag_name_hash = tn.hash
+        core.tag_names tn ON stt.tag_name_hash = tn.hash
       JOIN
-        sqlite_scan('${coreDbPath}', 'tag_values') tv ON stt.tag_value_hash = tv.hash
+        core.tag_values tv ON stt.tag_value_hash = tv.hash
       WHERE
         stt.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
@@ -439,12 +431,10 @@ const importTransactionTags = async ({
 
 const importDataItemTags = async ({
   db,
-  bundlesDbPath,
   startHeight,
   endHeight,
 }: {
   db: Connection;
-  bundlesDbPath: string;
   startHeight: number;
   endHeight: number;
 }) => {
@@ -459,13 +449,13 @@ const importDataItemTags = async ({
         tv.value AS tag_value,
         1 AS is_data_item
       FROM
-        sqlite_scan('${bundlesDbPath}', 'stable_data_item_tags') sdit
+        bundles.stable_data_item_tags sdit
       JOIN
-        sqlite_scan('${bundlesDbPath}', 'tag_names') tn ON sdit.tag_name_hash = tn.hash
+        bundles.tag_names tn ON sdit.tag_name_hash = tn.hash
       JOIN
-        sqlite_scan('${bundlesDbPath}', 'tag_values') tv ON sdit.tag_value_hash = tv.hash
+        bundles.tag_values tv ON sdit.tag_value_hash = tv.hash
       JOIN
-        sqlite_scan('${bundlesDbPath}', 'stable_data_items') sdi ON sdit.data_item_id = sdi.id
+        bundles.stable_data_items sdi ON sdit.data_item_id = sdi.id
       WHERE
         sdit.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
@@ -640,34 +630,43 @@ if (!isMainThread) {
 
       await connection.exec(`INSTALL sqlite; LOAD sqlite;`);
 
+      await db.exec(`
+          ATTACH '${coreDbPath}' AS core (
+            TYPE SQLITE,
+            READONLY,
+            BUSY_TIMEOUT 30000
+          );
+
+          ATTACH '${bundlesDbPath}' AS bundles (
+            TYPE SQLITE,
+            READONLY,
+            BUSY_TIMEOUT 30000
+          );
+        `);
+
       // Import data into DuckDB
       await importBlocks({
         db: connection,
-        coreDbPath,
         startHeight,
         endHeight,
       });
       await importTransactions({
         db: connection,
-        coreDbPath,
         startHeight,
         endHeight,
       });
       await importDataItems({
         db: connection,
-        bundlesDbPath,
         startHeight,
         endHeight,
       });
       await importTransactionTags({
         db: connection,
-        coreDbPath,
         startHeight,
         endHeight,
       });
       await importDataItemTags({
         db: connection,
-        bundlesDbPath,
         startHeight,
         endHeight,
       });
