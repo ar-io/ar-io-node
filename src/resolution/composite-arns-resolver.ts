@@ -51,7 +51,7 @@ export class CompositeArNSResolver implements NameResolver {
     registryCache,
     overrides,
     networkProcess,
-    maxConcurrentResolutions = 2,
+    maxConcurrentResolutions = config.ARNS_MAX_CONCURRENT_RESOLUTIONS,
     resolverTimeoutMs = config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS,
   }: {
     log: winston.Logger;
@@ -74,7 +74,7 @@ export class CompositeArNSResolver implements NameResolver {
       registryCache,
       networkProcess,
     });
-    this.limit = pLimit(maxConcurrentResolutions);
+    this.limit = pLimit(maxConcurrentResolutions ?? this.resolvers.length);
     this.resolverTimeoutMs = resolverTimeoutMs;
   }
 
