@@ -256,6 +256,12 @@ export const arnsResolutionTime = new promClient.Summary({
   help: 'Time in ms it takes to resolve an arns name',
 });
 
+export const arnsResolutionResolverCount = new promClient.Counter({
+  name: 'arns_resolution_resolver_count',
+  help: 'Number of resolution made by the resolver',
+  labelNames: ['resolver'],
+});
+
 //
 // Data source metrics
 //

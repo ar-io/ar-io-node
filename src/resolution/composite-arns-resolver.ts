@@ -96,11 +96,17 @@ export class CompositeArNSResolver implements NameResolver {
               name,
               Buffer.from(JSON.stringify(resolution)),
             );
+
+            metrics.arnsResolutionResolverCount.inc({
+              resolver: resolver.constructor.name,
+            });
+
             this.log.info('Resolved name', {
               name,
               resolution,
               resolvedBy: resolver.constructor.name,
             });
+
             return resolution;
           }
           return undefined;
