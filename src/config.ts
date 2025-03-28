@@ -563,6 +563,14 @@ export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
   `${60 * 60}`, // 1 hour
 );
 
+export const ARNS_MAX_CONCURRENT_RESOLUTIONS_STRING = env.varOrUndefined(
+  'ARNS_MAX_CONCURRENT_RESOLUTIONS',
+);
+export const ARNS_MAX_CONCURRENT_RESOLUTIONS =
+  ARNS_MAX_CONCURRENT_RESOLUTIONS_STRING !== undefined
+    ? parseInt(ARNS_MAX_CONCURRENT_RESOLUTIONS_STRING)
+    : undefined;
+
 // Controls the maximum time allowed for requests to AO for ARIO process state.
 // By default, requests should resolve in less than 3 seconds, but we set to 60
 // seconds to account for the worst case scenario. If requests exceed this
