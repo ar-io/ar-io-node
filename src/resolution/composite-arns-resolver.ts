@@ -96,7 +96,11 @@ export class CompositeArNSResolver implements NameResolver {
               name,
               Buffer.from(JSON.stringify(resolution)),
             );
-            this.log.info('Resolved name', { name, resolution });
+            this.log.info('Resolved name', {
+              name,
+              resolution,
+              resolvedBy: resolver.constructor.name,
+            });
             return resolution;
           }
           return undefined;
@@ -111,6 +115,7 @@ export class CompositeArNSResolver implements NameResolver {
       });
     } catch (error: any) {
       this.log.error('Error resolving name with resolver', {
+        name,
         resolver: resolver.constructor.name,
         message: error.message,
         stack: error.stack,
@@ -145,6 +150,8 @@ export class CompositeArNSResolver implements NameResolver {
       return await Promise.any(resolutionPromises);
     } catch (error: any) {
       this.log.error('Error during parallel resolution:', {
+        name,
+        resolvers: this.resolvers.map((r) => r.constructor.name),
         message: error.message,
         stack: error.stack,
       });
@@ -176,9 +183,9 @@ export class CompositeArNSResolver implements NameResolver {
           .getCachedArNSBaseName(baseName)
           .catch((error: any) => {
             this.log.error('Error getting base name from cache: ', {
+              baseName,
               message: error.message,
               stack: error.stack,
-              baseName,
             });
             return undefined;
           });
