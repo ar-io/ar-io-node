@@ -26,8 +26,8 @@ if [ -z "${ADMIN_API_KEY:-}" ]; then
 fi
 
 imported_dir="$parquet_dir/imported"
-height_interval=10000
-max_rows_per_file=1000000
+height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
+max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
 
 mkdir -p "$parquet_dir" "$imported_dir"
 
