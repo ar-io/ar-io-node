@@ -1,6 +1,14 @@
 name: build-clickhouse-auto-import
 
-on: [push, workflow_dispatch]
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+    paths:
+      - Dockerfile.clickhouse-auto-import
+      - scripts/clickhouse-auto-import
+      - src/database/clickhouse/schema.sql
 
 jobs:
   images:
