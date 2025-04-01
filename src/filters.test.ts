@@ -39,14 +39,14 @@ function getTx(id: string) {
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 const TX = getTx(TX_ID);
 const TX_OWNER_ADDRESS = 'Th825IP80n4i9F3Rc4cBFh767CGqiV4n7S-Oy5lGLjc';
-const ALWAYS_TRUE_MATCH = { match: async () => true };
-const ALWAYS_FALSE_MATCH = { match: async () => false };
+const ALWAYS_TRUE_MATCH = { match: () => true };
+const ALWAYS_FALSE_MATCH = { match: () => false };
 
 describe('AlwaysMatch', () => {
   const alwaysMatch = new AlwaysMatch();
 
-  it('should always return true', async () => {
-    const result = await alwaysMatch.match(TX);
+  it('should always return true', () => {
+    const result = alwaysMatch.match(TX);
     assert.strictEqual(result, true);
   });
 });
@@ -54,26 +54,26 @@ describe('AlwaysMatch', () => {
 describe('NeverMatch', () => {
   const neverMatch = new NeverMatch();
 
-  it('should always return false', async () => {
-    const result = await neverMatch.match(TX);
+  it('should always return false', () => {
+    const result = neverMatch.match(TX);
     assert.strictEqual(result, false);
   });
 });
 
 describe('NegateMatch', () => {
-  it('should return false for a filter that always returns true', async () => {
+  it('should return false for a filter that always returns true', () => {
     const negateMatch = new NegateMatch(ALWAYS_TRUE_MATCH);
-    const result = await negateMatch.match(TX);
+    const result = negateMatch.match(TX);
     assert.strictEqual(result, false);
   });
 
-  it('should return true for a filter that always returns false', async () => {
+  it('should return true for a filter that always returns false', () => {
     const negateMatch = new NegateMatch(ALWAYS_FALSE_MATCH);
-    const result = await negateMatch.match(TX);
+    const result = negateMatch.match(TX);
     assert.strictEqual(result, true);
   });
 
-  it('should negate a more complex filter', async () => {
+  it('should negate a more complex filter', () => {
     const complexFilter = new MatchTags([{ name: 'tag1', value: 'value1' }]);
     const negateMatch = new NegateMatch(complexFilter);
 
@@ -87,42 +87,42 @@ describe('NegateMatch', () => {
       { name: utf8ToB64Url('tag2'), value: utf8ToB64Url('value2') },
     ];
 
-    assert.strictEqual(await negateMatch.match(matchingTx), false);
-    assert.strictEqual(await negateMatch.match(nonMatchingTx), true);
+    assert.strictEqual(negateMatch.match(matchingTx), false);
+    assert.strictEqual(negateMatch.match(nonMatchingTx), true);
   });
 });
 
 describe('MatchAll', () => {
-  it('should return true if all filters match', async () => {
+  it('should return true if all filters match', () => {
     const filters = [ALWAYS_TRUE_MATCH, ALWAYS_TRUE_MATCH];
     const matchAll = new MatchAll(filters);
-    const result = await matchAll.match(TX);
+    const result = matchAll.match(TX);
 
     assert.strictEqual(result, true);
   });
 
-  it('should return false if any filter does not match', async () => {
+  it('should return false if any filter does not match', () => {
     const filters = [ALWAYS_TRUE_MATCH, ALWAYS_FALSE_MATCH];
     const matchAll = new MatchAll(filters);
-    const result = await matchAll.match(TX);
+    const result = matchAll.match(TX);
 
     assert.strictEqual(result, false);
   });
 });
 
 describe('MatchAny', () => {
-  it('should return true if any filters match', async () => {
+  it('should return true if any filters match', () => {
     const filters = [ALWAYS_TRUE_MATCH, ALWAYS_FALSE_MATCH];
     const matchAll = new MatchAny(filters);
-    const result = await matchAll.match(TX);
+    const result = matchAll.match(TX);
 
     assert.strictEqual(result, true);
   });
 
-  it('should return false if none of the filters match', async () => {
+  it('should return false if none of the filters match', () => {
     const filters = [ALWAYS_FALSE_MATCH, ALWAYS_FALSE_MATCH];
     const matchAll = new MatchAny(filters);
-    const result = await matchAll.match(TX);
+    const result = matchAll.match(TX);
 
     assert.strictEqual(result, false);
   });
@@ -138,58 +138,58 @@ describe('MatchTags', () => {
   const tagsWithoutValues = [{ name: 'tag1' }, { name: 'tag2' }];
   const matchTagsWithoutValue = new MatchTags(tagsWithoutValues);
 
-  it('should match all tags', async () => {
+  it('should match all tags', () => {
     const item = getTx(TX_ID);
     item.tags = [
       { name: utf8ToB64Url('tag1'), value: utf8ToB64Url('value1') },
       { name: utf8ToB64Url('tag2'), value: utf8ToB64Url('value2abc') },
     ];
 
-    let result = await matchTags.match(item);
+    let result = matchTags.match(item);
     assert.strictEqual(result, true);
 
     // Testing using only tag name
-    result = await matchTagsWithoutValue.match(item);
+    result = matchTagsWithoutValue.match(item);
     assert.strictEqual(result, true);
   });
 
-  it('should not match if some tags are missing', async () => {
+  it('should not match if some tags are missing', () => {
     const item = getTx(TX_ID);
     item.tags = [{ name: utf8ToB64Url('tag1'), value: utf8ToB64Url('value1') }];
 
-    let result = await matchTags.match(item);
+    let result = matchTags.match(item);
     assert.strictEqual(result, false);
 
     // Testing using only tag name
-    result = await matchTagsWithoutValue.match(item);
+    result = matchTagsWithoutValue.match(item);
     assert.strictEqual(result, false);
   });
 
-  it('should not match if some tag values are incorrect', async () => {
+  it('should not match if some tag values are incorrect', () => {
     const item = getTx(TX_ID);
     item.tags = [
       { name: utf8ToB64Url('tag1'), value: utf8ToB64Url('wrongValue1') },
       { name: utf8ToB64Url('tag2'), value: utf8ToB64Url('value2abc') },
     ];
 
-    const result = await matchTags.match(item);
+    const result = matchTags.match(item);
     assert.strictEqual(result, false);
   });
 
-  it('should not match if some tag value prefixes are incorrect', async () => {
+  it('should not match if some tag value prefixes are incorrect', () => {
     const item = getTx(TX_ID);
     item.tags = [
       { name: utf8ToB64Url('tag1'), value: utf8ToB64Url('value1') },
       { name: utf8ToB64Url('tag2'), value: utf8ToB64Url('wrongValue2abc') },
     ];
 
-    const result = await matchTags.match(item);
+    const result = matchTags.match(item);
     assert.strictEqual(result, false);
   });
 });
 
 describe('MatchAttributes', () => {
-  it('should match all attributes', async () => {
+  it('should match all attributes', () => {
     const attributes = {
       id: TX.id as string,
       owner: TX.owner as string,
@@ -197,12 +197,12 @@ describe('MatchAttributes', () => {
 
     const matchAttributes = new MatchAttributes(attributes);
 
-    const result = await matchAttributes.match(TX);
+    const result = matchAttributes.match(TX);
 
     assert.strictEqual(result, true);
   });
 
-  it('should not match if any attribute is different', async () => {
+  it('should not match if any attribute is different', () => {
     const attributes = {
       id: TX.id as string,
       owner: 'non matching owner',
@@ -210,12 +210,12 @@ describe('MatchAttributes', () => {
 
     const matchAttributes = new MatchAttributes(attributes);
 
-    const result = await matchAttributes.match(TX);
+    const result = matchAttributes.match(TX);
 
     assert.strictEqual(result, false);
   });
 
-  it('should not match if any attribute is missing', async () => {
+  it('should not match if any attribute is missing', () => {
     const attributes = {
       id: TX.id as string,
       owner: TX.owner as string,
@@ -226,19 +226,19 @@ describe('MatchAttributes', () => {
     const tx = JSON.parse(JSON.stringify(TX));
     delete tx.owner;
 
-    const result = await matchAttributes.match(tx);
+    const result = matchAttributes.match(tx);
 
     assert.strictEqual(result, false);
   });
 
-  it('should match owner given an owner address', async () => {
+  it('should match owner given an owner address', () => {
     const attributes = {
       owner_address: TX_OWNER_ADDRESS,
     };
 
     const matchAttributes = new MatchAttributes(attributes);
 
-    const result = await matchAttributes.match(TX);
+    const result = matchAttributes.match(TX);
 
     assert.strictEqual(result, true);
   });
@@ -247,31 +247,31 @@ describe('MatchAttributes', () => {
 describe('MatchNestedBundle', () => {
   const matchNestedBundle = new MatchNestedBundle();
 
-  it('should return true if parent_id is present', async () => {
+  it('should return true if parent_id is present', () => {
     const item = {
       parent_id: 'parent_id',
       tags: [],
     };
-    const result = await matchNestedBundle.match(item);
+    const result = matchNestedBundle.match(item);
 
     assert.strictEqual(result, true);
   });
 
-  it('should return false if parent_id is undefined', async () => {
+  it('should return false if parent_id is undefined', () => {
     const item = {
       tags: [],
     };
-    const result = await matchNestedBundle.match(item);
+    const result = matchNestedBundle.match(item);
 
     assert.strictEqual(result, false);
   });
 
-  it('should return false if parent_id is null', async () => {
+  it('should return false if parent_id is null', () => {
     const item = {
       parent_id: null,
       tags: [],
     };
-    const result = await matchNestedBundle.match(item);
+    const result = matchNestedBundle.match(item);
 
     assert.strictEqual(result, false);
   });
@@ -287,13 +287,13 @@ describe('createFilter', () => {
     );
   });
 
-  it('should handle nested negation correctly', async () => {
+  it('should handle nested negation correctly', () => {
     const filter = { not: { not: { always: true } } };
     const createdFilter = createFilter(filter);
 
     // Double negation should equal an AlwaysMatch filter behavior
     assert.ok(createdFilter instanceof NegateMatch);
-    assert.strictEqual(await createdFilter.match(TX), true);
+    assert.strictEqual(createdFilter.match(TX), true);
   });
 
   it('should return NeverMatch for undefined or empty filter', () => {
