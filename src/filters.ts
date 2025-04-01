@@ -51,7 +51,7 @@ export class AlwaysMatch implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
+  match(item: MatchableItem) {
     logMatchResult({ log: this.log, item, isMatching: true });
     return true;
   }
@@ -64,7 +64,7 @@ export class NeverMatch implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
+  match(item: MatchableItem) {
     logMatchResult({ log: this.log, item, isMatching: false });
     return false;
   }
@@ -80,8 +80,8 @@ export class NegateMatch implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
-    const isMatching = !(await this.filter.match(item));
+  match(item: MatchableItem) {
+    const isMatching = !this.filter.match(item);
     logMatchResult({ log: this.log, item, isMatching });
     return isMatching;
   }
@@ -96,10 +96,8 @@ export class MatchAll implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
-    const results = await Promise.all(
-      this.filters.map((filter) => filter.match(item)),
-    );
+  match(item: MatchableItem) {
+    const results = this.filters.map((filter) => filter.match(item));
 
     const isMatching = results.every((result) => result);
     logMatchResult({ log: this.log, item, isMatching });
@@ -116,11 +114,8 @@ export class MatchAny implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
-    const results = await Promise.all(
-      this.filters.map((filter) => filter.match(item)),
-    );
-
+  match(item: MatchableItem) {
+    const results = this.filters.map((filter) => filter.match(item));
     const isMatching = results.some((result) => result);
     logMatchResult({ log: this.log, item, isMatching });
     return isMatching;
@@ -148,7 +143,7 @@ export class MatchTags implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
+  match(item: MatchableItem) {
     if (!Array.isArray(item.tags) || item.tags.length === 0) {
       return false;
     }
@@ -189,7 +184,7 @@ export class MatchAttributes implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
+  match(item: MatchableItem) {
     const matches: Set<string> = new Set();
 
     for (const [name, value] of Object.entries(this.attributes)) {
@@ -217,7 +212,7 @@ export class MatchNestedBundle implements ItemFilter {
     this.log = log.child({ class: this.constructor.name });
   }
 
-  async match(item: MatchableItem): Promise<boolean> {
+  match(item: MatchableItem) {
     const hasParentId =
       item.parent_id !== undefined &&
       item.parent_id !== null &&

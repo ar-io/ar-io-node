@@ -707,7 +707,7 @@ export interface MatchableItem {
 }
 
 export interface ItemFilter {
-  match(tx: MatchableItem): Promise<boolean>;
+  match(tx: MatchableItem): boolean;
 }
 
 export type KVBufferStore = {
