@@ -8,6 +8,7 @@ on:
     paths:
       - Dockerfile.clickhouse-auto-import
       - scripts/clickhouse-auto-import
+      - scripts/clickhouse-import
       - src/database/clickhouse/schema.sql
 
 jobs:

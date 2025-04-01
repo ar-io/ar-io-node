@@ -7,8 +7,8 @@ clickhouse client --host "$clickhouse_host" --multiquery < src/database/clickhou
 
 for blocks_parquet in "$parquet_path/blocks"*.parquet; do
     height_range=$(basename "$blocks_parquet" | sed 's/blocks-//;s/-rowCount:[0-9]*\.parquet//')
-    txs_parquet=$(ls data/parquet/transactions-"$height_range"-*.parquet)
-    tags_parquet=$(ls data/parquet/tags-"$height_range"-*.parquet)
+    txs_parquet=$(ls "$parquet_path/transactions-$height_range"-*.parquet)
+    tags_parquet=$(ls "$parquet_path/tags-$height_range"-*.parquet)
 
     echo "Importing $blocks_parquet..."
     clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_blocks FROM INFILE '$blocks_parquet' FORMAT Parquet;"
