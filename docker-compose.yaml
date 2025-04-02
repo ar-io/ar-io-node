@@ -43,7 +43,8 @@ services:
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
-      - LOG_FORMAT=${LOG_FORMAT:-simple}
+      - LOG_FORMAT=${CORE_LOG_FORMAT:-simple}
+      - LOG_FILTER=${CORE_LOG_FILTER:-}
       - TRUSTED_NODE_URL=${TRUSTED_NODE_URL:-}
       - TRUSTED_GATEWAY_URL=https://${TRUSTED_GATEWAY_HOST:-arweave.net}
       - TRUSTED_GATEWAYS_URLS=${TRUSTED_GATEWAYS_URLS:-}

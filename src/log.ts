@@ -16,29 +16,48 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { createLogger, format, transports } from 'winston';
-
 import * as env from './lib/env.js';
+import { createObjectFilter } from './filters.js';
 
 const LOG_LEVEL = env.varOrDefault('LOG_LEVEL', 'info').toLowerCase();
+const LOG_FORMAT = env.varOrDefault('LOG_FORMAT', 'simple');
+const LOG_FILTER = env.varOrDefault('LOG_FILTER', '{"always":true}');
 const LOG_ALL_STACKTRACES =
   env.varOrDefault('LOG_ALL_STACKTRACES', 'false') === 'true';
-const LOG_FORMAT = env.varOrDefault('LOG_FORMAT', 'simple');
 const INSTANCE_ID = env.varOrUndefined('INSTANCE_ID');
+
+let filterDefinition: unknown;
+
+try {
+  filterDefinition = JSON.parse(LOG_FILTER);
+} catch (err) {
+  // Fallback to always allowing logs if parsing fails
+  filterDefinition = { always: true };
+}
+
+// Build object filter
+const objectLogFilter = createObjectFilter(filterDefinition);
+
+const filterStackTraces = format((info) => {
+  // Only log stack traces when the log level is error or the
+  // LOG_ALL_STACKTRACES environment variable is set to true
+  if (info.stack && info.level !== 'error' && !LOG_ALL_STACKTRACES) {
+    delete info.stack;
+  }
+  return info;
+});
+
+const filterFormat = format((info) => {
+  const isMatching = objectLogFilter.match(info);
+  return isMatching ? info : false; // Return `false` to discard
+});
 
 const logger = createLogger({
   level: LOG_LEVEL,
-  defaultMeta: {
-    instanceId: INSTANCE_ID,
-  },
+  defaultMeta: { instanceId: INSTANCE_ID },
   format: format.combine(
-    format((info) => {
-      // Only log stack traces when the log level is error or the
-      // LOG_ALL_STACKTRACES environment variable is set to true
-      if (info.stack && info.level !== 'error' && !LOG_ALL_STACKTRACES) {
-        delete info.stack;
-      }
-      return info;
-    })(),
+    filterStackTraces(),
+    filterFormat(),
     format.errors(),
     format.timestamp(),
     LOG_FORMAT === 'json' ? format.json() : format.simple(),

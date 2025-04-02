@@ -30,6 +30,7 @@ import {
   NegateMatch,
   MatchNestedBundle,
 } from './filters.js';
+import defaultLogger from './log.js';
 import { utf8ToB64Url } from './lib/encoding.js';
 
 function getTx(id: string) {
@@ -280,7 +281,7 @@ describe('MatchNestedBundle', () => {
 describe('createFilter', () => {
   it('should create a NegateMatch filter correctly', () => {
     const filter = { not: { always: true } };
-    const createdFilter = createFilter(filter);
+    const createdFilter = createFilter(filter, defaultLogger);
     assert.ok(
       createdFilter instanceof NegateMatch,
       `Expected object to be an instance of NegateMatch, but got ${typeof createFilter}`,
@@ -289,7 +290,7 @@ describe('createFilter', () => {
 
   it('should handle nested negation correctly', () => {
     const filter = { not: { not: { always: true } } };
-    const createdFilter = createFilter(filter);
+    const createdFilter = createFilter(filter, defaultLogger);
 
     // Double negation should equal an AlwaysMatch filter behavior
     assert.ok(createdFilter instanceof NegateMatch);
@@ -297,8 +298,8 @@ describe('createFilter', () => {
   });
 
   it('should return NeverMatch for undefined or empty filter', () => {
-    assert.ok(createFilter(undefined) instanceof NeverMatch);
-    assert.ok(createFilter('') instanceof NeverMatch);
+    assert.ok(createFilter(undefined, defaultLogger) instanceof NeverMatch);
+    assert.ok(createFilter('', defaultLogger) instanceof NeverMatch);
   });
 
   it('should return MatchTags for filter with tags', () => {
@@ -308,7 +309,7 @@ describe('createFilter', () => {
         { name: 'tag2', value: 'value2' },
       ],
     };
-    assert.ok(createFilter(filter) instanceof MatchTags);
+    assert.ok(createFilter(filter, defaultLogger) instanceof MatchTags);
   });
 
   it('should return MatchAttributes for filter with tags', () => {
@@ -317,7 +318,7 @@ describe('createFilter', () => {
         name: 'someowner',
       },
     };
-    assert.ok(createFilter(filter) instanceof MatchAttributes);
+    assert.ok(createFilter(filter, defaultLogger) instanceof MatchAttributes);
   });
 
   it('should return MatchAll for filter with and', () => {
@@ -331,7 +332,7 @@ describe('createFilter', () => {
         },
       ],
     };
-    assert.ok(createFilter(filter) instanceof MatchAll);
+    assert.ok(createFilter(filter, defaultLogger) instanceof MatchAll);
   });
 
   it('should return MatchAny for filter with or', () => {
@@ -345,21 +346,21 @@ describe('createFilter', () => {
         },
       ],
     };
-    assert.ok(createFilter(filter) instanceof MatchAny);
+    assert.ok(createFilter(filter, defaultLogger) instanceof MatchAny);
   });
 
   it('should return NeverMatch for filter with never', () => {
     const filter = { never: true };
-    assert.ok(createFilter(filter) instanceof NeverMatch);
+    assert.ok(createFilter(filter, defaultLogger) instanceof NeverMatch);
   });
 
   it('should return AlwaysMatch for filter with always', () => {
     const filter = { always: true };
-    assert.ok(createFilter(filter) instanceof AlwaysMatch);
+    assert.ok(createFilter(filter, defaultLogger) instanceof AlwaysMatch);
   });
 
   it('should throw an error for invalid filter', () => {
     const filter = { invalid: true };
-    assert.throws(() => createFilter(filter));
+    assert.throws(() => createFilter(filter, defaultLogger));
   });
 });

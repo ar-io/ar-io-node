@@ -692,7 +692,7 @@ export interface NameResolver {
   }): Promise<NameResolution>;
 }
 
-export interface MatchableItem {
+export interface MatchableTxLike {
   id?: string;
   signature?: string | null;
   owner?: string;
@@ -706,8 +706,12 @@ export interface MatchableItem {
   parent_id?: string | null;
 }
 
+export type MatchableObject = Record<string, unknown>;
+
+export type MatchableItem = MatchableTxLike | MatchableObject;
+
 export interface ItemFilter {
-  match(tx: MatchableItem): boolean;
+  match(item: MatchableItem): boolean;
 }
 
 export type KVBufferStore = {
