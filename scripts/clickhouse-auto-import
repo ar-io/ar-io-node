@@ -18,36 +18,61 @@ fi
 ar_io_host=${AR_IO_HOST:-localhost}
 ar_io_port=${AR_IO_PORT:-4000}
 parquet_dir=${PARQUET_DATA_PATH:-./data/parquet}
-sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-360} # Export every hour by default
+sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
+height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
+max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
 
+# Check critical preconditions
 if [ -z "${ADMIN_API_KEY:-}" ]; then
     echo "Error: Either no ADMIN_API_KEY environment variable set in .env or no ADMIN_API_KEY_FILE path provided"
     exit 1
 fi
 
+# Create directories
 imported_dir="$parquet_dir/imported"
-height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
-max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
-
 mkdir -p "$parquet_dir" "$imported_dir"
 
-while true; do
-    # Get stable height range from admin debug endpoint
-    debug_info=$(curl -s -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")
-    min_height=$(echo "$debug_info" | jq -r '.db.heights.minStableDataItem')
-    max_height=$(echo "$debug_info" | jq -r '.db.heights.maxStableDataItem')
-    max_indexed_at=$(echo "$debug_info" | jq -r '.db.timestamps.maxStableDataItemIndexedAt')
+# ------------------------------------------------------------------------------
+# SWITCH OFF 'exit on error' so the script doesn't die in the main loop
+# ------------------------------------------------------------------------------
+set +e
 
-    # Align to inverals of 10,000
+while true; do
+
+    echo "Attempting to fetch debug info from admin endpoint..."
+    debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
+
+    # If curl fails or returns non-200, skip this iteration
+    if [ $? -ne 0 ] || [ -z "$debug_info" ]; then
+        echo "Warning: Failed to get debug info or received empty response. Skipping this iteration."
+        sleep 10
+        continue
+    fi
+
+    # Parse debug info
+    min_height="$(echo "$debug_info" | jq -r '.db.heights.minStableDataItem' 2>/dev/null)"
+    max_height="$(echo "$debug_info" | jq -r '.db.heights.maxStableDataItem' 2>/dev/null)"
+    max_indexed_at="$(echo "$debug_info" | jq -r '.db.timestamps.maxStableDataItemIndexedAt' 2>/dev/null)"
+
+    # If jq parsing failed or the fields are empty, skip this iteration
+    if [ -z "$min_height" ] || [ -z "$max_height" ] || [ -z "$max_indexed_at" ] || [ "$min_height" = "null" ] || [ "$max_height" = "null" ]; then
+        echo "Warning: Debug info missing expected fields or invalid JSON. Skipping this iteration."
+        sleep 10
+        continue
+    fi
+
+    # Align to intervals of 10,000
     current_height=$(((min_height / height_interval) * height_interval))
 
+    # Inner loop for heights
     while [ "$current_height" -le "$max_height" ]; do
         end_height=$((current_height + height_interval))
 
         echo "Processing heights $current_height to $end_height..."
 
-        # Export to Parquet files using API
-        curl -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet" \
+        # Step 1: Export to Parquet
+        echo "Sending export request..."
+        curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet" \
             -H "Authorization: Bearer $ADMIN_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{
@@ -57,40 +82,63 @@ while true; do
                 \"maxFileRows\": $max_rows_per_file
             }"
 
-        # Wait for the export to complete
+        # If curl failed, break out of the height loop and move on
+        if [ $? -ne 0 ]; then
+            echo "Warning: Export request failed, skipping this range."
+            break
+        fi
+
+        # Step 2: Wait for export to complete
+        echo "Waiting for export to complete..."
         while true; do
-            if ! status=$(curl -s -f -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet/status"); then
-                echo "Failed to get export status"
+            status="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" \
+                "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet/status")"
+
+            if [ $? -ne 0 ] || [ -z "$status" ]; then
+                echo "Warning: Failed to get export status. Cleaning partial files and moving on..."
                 rm -f "$parquet_dir"/*.parquet
-                exit 1
+                break  # break out of waiting loop
             fi
 
-            export_status=$(echo "$status" | jq -r '.status')
+            export_status="$(echo "$status" | jq -r '.status' 2>/dev/null)"
             if [ "$export_status" = "completed" ]; then
+                echo "Export completed."
                 break
             elif [ "$export_status" = "errored" ]; then
-                error=$(echo "$status" | jq -r '.error')
-                echo "Export failed: $error"
+                error_msg="$(echo "$status" | jq -r '.error' 2>/dev/null)"
+                echo "Warning: Export failed: $error_msg"
                 rm -f "$parquet_dir"/*.parquet
-                exit 1
+                break
             fi
 
-            echo "Waiting for export to complete..."
+            echo "Export in progress. Waiting 10s..."
             sleep 10
         done
 
-        # Import Parquet files
-        ./scripts/clickhouse-import
+        # Step 3: Attempt to import Parquet files
+        if compgen -G "$parquet_dir/*.parquet" > /dev/null; then
+            echo "Importing Parquet files..."
+            if ! ./scripts/clickhouse-import; then
+                echo "Warning: Clickhouse import failed. Moving on but preserving Parquet files in 'imported' folder..."
+            fi
 
-        # Move processed files to imported directory
-        mv "$parquet_dir"/*.parquet "$imported_dir/"
+            # Step 4: Move processed files to imported directory
+            mv "$parquet_dir"/*.parquet "$imported_dir/" 2>/dev/null
+        else
+            echo "No Parquet files to import for this batch."
+        fi
 
-        # Prune stable data items
-        curl -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
+        # Step 5: Prune stable data items
+        echo "Pruning stable data items..."
+        curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
             -H "Authorization: Bearer $ADMIN_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{\"indexedAtThreshold\": $max_indexed_at}"
+        if [ $? -ne 0 ]; then
+            echo "Warning: Prune request failed. Continuing to next batch."
+        fi
 
+        # Bump current_height
         current_height=$end_height
     done
 
