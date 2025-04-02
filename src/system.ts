@@ -59,10 +59,10 @@ import {
   ContiguousDataSource,
   DataItemIndexWriter,
   GqlQueryable,
-  MatchableItem,
   NestedDataIndexWriter,
   NormalizedDataItem,
   PartialJsonTransaction,
+  MatchableTxLike,
 } from './types.js';
 import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
@@ -248,7 +248,7 @@ const ans104TxMatcher = new MatchTags(
 
 export const prioritizedTxIds = new Set<string>();
 
-eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
+eventEmitter.on(events.TX_INDEXED, async (tx: MatchableTxLike) => {
   if (await ans104TxMatcher.match(tx)) {
     metrics.bundlesCounter.inc({
       bundle_format: 'ans-104',
@@ -261,7 +261,7 @@ eventEmitter.on(events.TX_INDEXED, async (tx: MatchableItem) => {
 
 eventEmitter.on(
   events.ANS104_DATA_ITEM_DATA_INDEXED,
-  async (item: MatchableItem) => {
+  async (item: MatchableTxLike) => {
     if (await ans104TxMatcher.match(item)) {
       metrics.bundlesCounter.inc({
         bundle_format: 'ans-104',

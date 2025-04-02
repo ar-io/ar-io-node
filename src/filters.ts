@@ -16,9 +16,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { b64UrlToUtf8, fromB64Url, sha256B64Url } from './lib/encoding.js';
-import { ItemFilter, MatchableItem } from './types.js';
+import {
+  ItemFilter,
+  MatchableItem,
+  MatchableObject,
+  MatchableTxLike,
+} from './types.js';
 import { Logger } from 'winston';
-import defaultLogger from './log.js';
 
 const logMatchResult = ({
   log,
@@ -45,27 +49,27 @@ const logMatchResult = ({
 };
 
 export class AlwaysMatch implements ItemFilter {
-  private log: Logger;
+  private log: Logger | undefined;
 
-  constructor(log: Logger = defaultLogger) {
-    this.log = log.child({ class: this.constructor.name });
+  constructor(log?: Logger) {
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
   match(item: MatchableItem) {
-    logMatchResult({ log: this.log, item, isMatching: true });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching: true });
     return true;
   }
 }
 
 export class NeverMatch implements ItemFilter {
-  private log: Logger;
+  private log: Logger | undefined;
 
-  constructor(log: Logger = defaultLogger) {
-    this.log = log.child({ class: this.constructor.name });
+  constructor(log?: Logger) {
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
   match(item: MatchableItem) {
-    logMatchResult({ log: this.log, item, isMatching: false });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching: false });
     return false;
   }
 }
@@ -73,51 +77,51 @@ export class NeverMatch implements ItemFilter {
 export class NegateMatch implements ItemFilter {
   private readonly filter: ItemFilter;
 
-  private log: Logger;
+  private log: Logger | undefined;
 
-  constructor(filter: ItemFilter, log: Logger = defaultLogger) {
+  constructor(filter: ItemFilter, log?: Logger) {
     this.filter = filter;
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
   match(item: MatchableItem) {
     const isMatching = !this.filter.match(item);
-    logMatchResult({ log: this.log, item, isMatching });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching });
     return isMatching;
   }
 }
 
 export class MatchAll implements ItemFilter {
   private readonly filters: ItemFilter[];
-  private log: Logger;
+  private log: Logger | undefined;
 
-  constructor(filters: ItemFilter[], log: Logger = defaultLogger) {
+  constructor(filters: ItemFilter[], log?: Logger) {
     this.filters = filters;
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
   match(item: MatchableItem) {
     const results = this.filters.map((filter) => filter.match(item));
 
     const isMatching = results.every((result) => result);
-    logMatchResult({ log: this.log, item, isMatching });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching });
     return isMatching;
   }
 }
 
 export class MatchAny implements ItemFilter {
   private readonly filters: ItemFilter[];
-  private log: Logger;
+  private log: Logger | undefined;
 
-  constructor(filters: ItemFilter[], log: Logger = defaultLogger) {
+  constructor(filters: ItemFilter[], log?: Logger) {
     this.filters = filters;
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
   match(item: MatchableItem) {
     const results = this.filters.map((filter) => filter.match(item));
     const isMatching = results.some((result) => result);
-    logMatchResult({ log: this.log, item, isMatching });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching });
     return isMatching;
   }
 }
@@ -136,14 +140,14 @@ export type TagMatch = TagValueMatch | TagValueStartsWithMatch;
 
 export class MatchTags implements ItemFilter {
   private readonly tags: TagMatch[];
-  private log: Logger;
+  private log: Logger | undefined;
 
-  constructor(tags: TagMatch[], log: Logger = defaultLogger) {
+  constructor(tags: TagMatch[], log?: Logger) {
     this.tags = tags;
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
-  match(item: MatchableItem) {
+  match(item: MatchableTxLike) {
     if (!Array.isArray(item.tags) || item.tags.length === 0) {
       return false;
     }
@@ -170,25 +174,45 @@ export class MatchTags implements ItemFilter {
     }
 
     const isMatching = matches.size === this.tags.length;
-    logMatchResult({ log: this.log, item, isMatching });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching });
+    return isMatching;
+  }
+}
+
+export class MatchObjectAttributes implements ItemFilter {
+  private readonly attributes: Partial<MatchableObject>;
+
+  constructor(attributes: Partial<MatchableObject>) {
+    this.attributes = attributes;
+  }
+
+  match(item: MatchableObject) {
+    const matches: Set<string> = new Set();
+    for (const [name, value] of Object.entries(this.attributes)) {
+      if (item?.[name] === value) {
+        matches.add(name);
+      }
+    }
+
+    const isMatching = matches.size === Object.keys(this.attributes).length;
     return isMatching;
   }
 }
 
 export class MatchAttributes implements ItemFilter {
-  private readonly attributes: Partial<MatchableItem>;
-  private log: Logger;
+  private readonly attributes: Partial<MatchableTxLike>;
+  private log: Logger | undefined;
 
-  constructor(attributes: Partial<MatchableItem>, log: Logger = defaultLogger) {
+  constructor(attributes: Partial<MatchableItem>, log?: Logger) {
     this.attributes = attributes;
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
-  match(item: MatchableItem) {
+  match(item: MatchableTxLike) {
     const matches: Set<string> = new Set();
 
     for (const [name, value] of Object.entries(this.attributes)) {
-      if (item?.[name as keyof MatchableItem] === value) {
+      if (item?.[name as keyof MatchableTxLike] === value) {
         matches.add(name);
       } else if (name === 'owner_address' && item['owner'] !== undefined) {
         const ownerBuffer = fromB64Url(item['owner']);
@@ -200,26 +224,26 @@ export class MatchAttributes implements ItemFilter {
     }
 
     const isMatching = matches.size === Object.keys(this.attributes).length;
-    logMatchResult({ log: this.log, item, isMatching });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching });
     return isMatching;
   }
 }
 
 export class MatchNestedBundle implements ItemFilter {
-  private log: Logger;
+  private log: Logger | undefined;
 
-  constructor(log: Logger = defaultLogger) {
-    this.log = log.child({ class: this.constructor.name });
+  constructor(log?: Logger) {
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
   }
 
-  match(item: MatchableItem) {
+  match(item: MatchableTxLike) {
     const hasParentId =
       item.parent_id !== undefined &&
       item.parent_id !== null &&
       item.parent_id !== '';
 
     const isMatching = hasParentId;
-    logMatchResult({ log: this.log, item, isMatching });
+    if (this.log) logMatchResult({ log: this.log, item, isMatching });
     return hasParentId;
   }
 }
@@ -253,7 +277,7 @@ export class MatchNestedBundle implements ItemFilter {
  */
 export function createFilter(
   filter: any,
-  logger: Logger = defaultLogger,
+  logger: Logger,
   itemFilterPath: any[] = [],
 ): ItemFilter {
   const log = logger.child({ function: 'createFilter' });
@@ -353,4 +377,27 @@ export function createFilter(
   }
 
   throw new Error(`Invalid filter: ${filter}`);
+}
+
+// Generic filter for any sort of objects
+export function createObjectFilter(filter: any): ItemFilter {
+  if (filter === undefined || filter === '') {
+    return new NeverMatch();
+  }
+
+  if (filter?.attributes) {
+    return new MatchObjectAttributes(filter.attributes);
+  } else if (filter?.not) {
+    return new NegateMatch(createObjectFilter(filter.not));
+  } else if (filter?.and) {
+    return new MatchAll(filter.and.map((and: any) => createObjectFilter(and)));
+  } else if (filter?.or) {
+    return new MatchAny(filter.or.map((or: any) => createObjectFilter(or)));
+  } else if (filter?.never) {
+    return new NeverMatch();
+  } else if (filter?.always) {
+    return new AlwaysMatch();
+  }
+
+  throw new Error(`Invalid Object filter: ${JSON.stringify(filter)}`);
 }
