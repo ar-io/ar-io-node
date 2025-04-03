@@ -491,11 +491,10 @@ const exportToParquet = async ({
   }
 
   const heightRanges: HeightRange[] = [];
-  let { minHeight, maxHeight } = await getHeightRange(db, tableName);
-  minHeight = minHeight > BigInt(startHeight) ? minHeight : BigInt(startHeight);
-  maxHeight = maxHeight < BigInt(endHeight) ? maxHeight : BigInt(endHeight);
+  const minHeight = BigInt(startHeight);
+  const maxHeight = BigInt(endHeight);
   let rowCount = 0n;
-  let currentRangeStart = minHeight;
+  let currentRangeStart = BigInt(startHeight);
 
   for (let height = minHeight; height <= maxHeight; height++) {
     const heightRowCount = await getRowCountForHeight(db, tableName, height);
@@ -533,29 +532,6 @@ const exportToParquet = async ({
   }
 
   return heightRanges;
-};
-
-const getHeightRange = async (
-  db: Connection,
-  tableName: string,
-): Promise<{ minHeight: bigint; maxHeight: bigint }> => {
-  const query = `
-      SELECT MIN(height) as min_height, MAX(height) as max_height
-      FROM ${tableName}
-    `;
-
-  try {
-    const result = await db.all(query);
-
-    return {
-      minHeight: result[0].min_height,
-      maxHeight: result[0].max_height,
-    };
-  } catch (error: any) {
-    const newError = new Error(`Error getting height range for ${tableName}`);
-    newError.stack = error.stack;
-    throw newError;
-  }
 };
 
 const getRowCountForHeight = async (
