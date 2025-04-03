@@ -116,9 +116,12 @@ while true; do
         done
 
         # Step 3: Attempt to import Parquet files
+        import_success=false
         if compgen -G "$parquet_dir/*.parquet" > /dev/null; then
             echo "Importing Parquet files..."
-            if ! ./scripts/clickhouse-import; then
+            if ./scripts/clickhouse-import; then
+                import_success=true
+            else
                 echo "Warning: Clickhouse import failed. Moving on but preserving Parquet files in 'imported' folder..."
             fi
 
@@ -128,14 +131,18 @@ while true; do
             echo "No Parquet files to import for this batch."
         fi
 
-        # Step 5: Prune stable data items
-        echo "Pruning stable data items..."
-        curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
-            -H "Authorization: Bearer $ADMIN_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"indexedAtThreshold\": $max_indexed_at}"
-        if [ $? -ne 0 ]; then
-            echo "Warning: Prune request failed. Continuing to next batch."
+        # Step 5: Prune stable data items only if import was successful
+        if [ "$import_success" = true ]; then
+            echo "Pruning stable data items..."
+            curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
+                -H "Authorization: Bearer $ADMIN_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"indexedAtThreshold\": $max_indexed_at}"
+            if [ $? -ne 0 ]; then
+                echo "Warning: Prune request failed. Continuing to next batch."
+            fi
+        else
+            echo "Skipping pruning because import failed."
         fi
 
         # Bump current_height
