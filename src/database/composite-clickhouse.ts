@@ -120,7 +120,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.gqlQueryable = gqlQueryable;
   }
 
-  getGqlTransactionsBaseSql() {
+  getGqlTransactionsBaseSql({ ids = [] }: { ids?: string[] }) {
     return sql
       .select()
       .distinct(
@@ -143,7 +143,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'signature_size',
         'signature_offset',
       )
-      .from('transactions t');
+      .from(ids?.length > 0 ? 'id_transactions t' : 'transactions t');
   }
 
   addGqlTransactionFilters({
@@ -216,72 +216,92 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     } = decodeTransactionGqlCursor(cursor);
 
     let orderBy = '';
-    if (sortOrder === 'HEIGHT_DESC') {
-      if (cursorHeight != null) {
-        query.where(
-          sql.lte('t.height', cursorHeight),
-          sql.or(
-            sql.lt('t.height', cursorHeight),
-            sql.and(
-              sql.eq('t.height', cursorHeight),
-              sql.lt('t.block_transaction_index', cursorBlockTransactionIndex),
-            ),
-            sql.and(
-              sql.eq('t.height', cursorHeight),
-              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
-              sql.lt('t.is_data_item', cursorIsDataItem),
-            ),
-            sql.and(
-              sql.eq('t.height', cursorHeight),
-              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
-              sql.eq('t.is_data_item', cursorIsDataItem),
-              sql.lt(
-                't.id',
-                sql(`unhex('${sql(b64UrlToHex(cursorId ?? ''))}')`),
+    if (ids?.length === 0) {
+      if (sortOrder === 'HEIGHT_DESC') {
+        if (cursorHeight != null) {
+          query.where(
+            sql.lte('t.height', cursorHeight),
+            sql.or(
+              sql.lt('t.height', cursorHeight),
+              sql.and(
+                sql.eq('t.height', cursorHeight),
+                sql.lt(
+                  't.block_transaction_index',
+                  cursorBlockTransactionIndex,
+                ),
+              ),
+              sql.and(
+                sql.eq('t.height', cursorHeight),
+                sql.eq(
+                  't.block_transaction_index',
+                  cursorBlockTransactionIndex,
+                ),
+                sql.lt('t.is_data_item', cursorIsDataItem),
+              ),
+              sql.and(
+                sql.eq('t.height', cursorHeight),
+                sql.eq(
+                  't.block_transaction_index',
+                  cursorBlockTransactionIndex,
+                ),
+                sql.eq('t.is_data_item', cursorIsDataItem),
+                sql.lt(
+                  't.id',
+                  sql(`unhex('${sql(b64UrlToHex(cursorId ?? ''))}')`),
+                ),
               ),
             ),
-          ),
-        );
-      }
+          );
+        }
 
-      orderBy = 't.height DESC, ';
-      orderBy += 't.block_transaction_index DESC, ';
-      orderBy += 't.is_data_item DESC, ';
-      orderBy += 't.id DESC';
-    } else {
-      if (cursorHeight != null) {
-        query.where(
-          sql.gte('t.height', cursorHeight),
-          sql.or(
-            sql.gt('t.height', cursorHeight),
-            sql.and(
-              sql.eq('t.height', cursorHeight),
-              sql.gt('t.block_transaction_index', cursorBlockTransactionIndex),
-            ),
-            sql.and(
-              sql.eq('t.height', cursorHeight),
-              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
-              sql.gt('t.is_data_item', cursorIsDataItem),
-            ),
-            sql.and(
-              sql.eq('t.height', cursorHeight),
-              sql.eq('t.block_transaction_index', cursorBlockTransactionIndex),
-              sql.eq('t.is_data_item', cursorIsDataItem),
-              sql.gt(
-                't.id',
-                sql(`unhex('${sql(b64UrlToHex(cursorId ?? ''))}')`),
+        orderBy = 't.height DESC, ';
+        orderBy += 't.block_transaction_index DESC, ';
+        orderBy += 't.is_data_item DESC, ';
+        orderBy += 't.id DESC';
+      } else {
+        if (cursorHeight != null) {
+          query.where(
+            sql.gte('t.height', cursorHeight),
+            sql.or(
+              sql.gt('t.height', cursorHeight),
+              sql.and(
+                sql.eq('t.height', cursorHeight),
+                sql.gt(
+                  't.block_transaction_index',
+                  cursorBlockTransactionIndex,
+                ),
+              ),
+              sql.and(
+                sql.eq('t.height', cursorHeight),
+                sql.eq(
+                  't.block_transaction_index',
+                  cursorBlockTransactionIndex,
+                ),
+                sql.gt('t.is_data_item', cursorIsDataItem),
+              ),
+              sql.and(
+                sql.eq('t.height', cursorHeight),
+                sql.eq(
+                  't.block_transaction_index',
+                  cursorBlockTransactionIndex,
+                ),
+                sql.eq('t.is_data_item', cursorIsDataItem),
+                sql.gt(
+                  't.id',
+                  sql(`unhex('${sql(b64UrlToHex(cursorId ?? ''))}')`),
+                ),
               ),
             ),
-          ),
-        );
-      }
+          );
+        }
 
-      orderBy = 't.height ASC, ';
-      orderBy += 't.block_transaction_index ASC, ';
-      orderBy += 't.is_data_item ASC, ';
-      orderBy += 't.id ASC';
+        orderBy = 't.height ASC, ';
+        orderBy += 't.block_transaction_index ASC, ';
+        orderBy += 't.is_data_item ASC, ';
+        orderBy += 't.id ASC';
+      }
+      query.orderBy(orderBy);
     }
-    query.orderBy(orderBy);
   }
 
   async getGqlTransactions({
@@ -307,7 +327,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult> {
-    const txsQuery = this.getGqlTransactionsBaseSql();
+    const txsQuery = this.getGqlTransactionsBaseSql({ ids });
 
     this.addGqlTransactionFilters({
       query: txsQuery,

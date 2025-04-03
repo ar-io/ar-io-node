@@ -19,7 +19,7 @@ for blocks_parquet in "$parquet_path/blocks"*.parquet; do
     echo "Importing $tags_parquet"
     clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_tags FROM INFILE '$tags_parquet' FORMAT Parquet;"
 
-    for prefix in "" "owner_" "target_"; do
+    for prefix in "" "id_" "owner_" "target_"; do
       cat <<EOF | clickhouse client --host "$clickhouse_host"
 INSERT INTO ${prefix}transactions
 SELECT
