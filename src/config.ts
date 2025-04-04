@@ -705,5 +705,5 @@ export const NETWORK_AO_CU_URL = sanitizeUrl(
 export const ANT_AO_CU_URL = sanitizeUrl(
   env.varOrUndefined('ANT_AO_CU_URL') ?? AO_CU_URL,
 );
-export const AO_GRAPHQL_URL = sanitizeUrl(env.varOrUndefined('AO_GRAPHQL_URL'));
-export const AO_GATEWAY_URL = sanitizeUrl(env.varOrUndefined('AO_GATEWAY_URL'));
+export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
+export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
