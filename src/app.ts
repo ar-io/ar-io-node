@@ -25,6 +25,7 @@ import log from './log.js';
 import { defaultRouter } from './routes/default.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
+import { chunkRouter } from './routes/chunk/index.js';
 import { dataRouter } from './routes/data/index.js';
 import { arweaveRouter } from './routes/arweave.js';
 import { apolloServer } from './routes/graphql/index.js';
@@ -65,6 +66,7 @@ app.use(
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
+app.use(chunkRouter);
 app.use(dataRouter);
 app.use(arweaveRouter);
 app.use(defaultRouter);

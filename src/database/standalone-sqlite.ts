@@ -67,6 +67,7 @@ import {
   PartialJsonBlock,
   PartialJsonTransaction,
   TransactionAttributes,
+  TxByOffsetResult,
 } from '../types.js';
 import * as config from '../config.js';
 import { DetailedError } from '../lib/error.js';
@@ -878,6 +879,26 @@ export class StandaloneSqliteDatabaseWorker {
       id: fromB64Url(id),
       offset,
     });
+  }
+
+  getTxByOffset(offset: number): TxByOffsetResult {
+    const result = this.stmts.core.selectStableTransactionOffsetById.get({
+      offset,
+    });
+    if (result === undefined) {
+      return {
+        data_root: undefined,
+        id: undefined,
+        offset: undefined,
+        data_size: undefined,
+      };
+    }
+    return {
+      data_root: result.data_root ? toB64Url(result.data_root) : undefined,
+      id: result.id ? toB64Url(result.id) : undefined,
+      offset: result.offset,
+      data_size: result.data_size,
+    };
   }
 
   getBundleFormatId(format: string | undefined) {
@@ -3017,6 +3038,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getTxIdsMissingOffsets', [limit]);
   }
 
+  getTxByOffset(offset: number): Promise<TxByOffsetResult> {
+    return this.queueRead('core', 'getTxByOffset', [offset]);
+  }
+
   saveTxOffset(id: string, offset: number) {
     return this.queueWrite('core', 'saveTxOffset', [id, offset]);
   }
@@ -3447,6 +3472,10 @@ if (!isMainThread) {
         case 'getTxIdsMissingOffsets':
           const txIdsMissingOffsets = worker.getTxIdsMissingOffsets(args[0]);
           parentPort?.postMessage(txIdsMissingOffsets);
+          break;
+        case 'getTxByOffset':
+          const tx = worker.getTxByOffset(args[0]);
+          parentPort?.postMessage(tx);
           break;
         case 'saveTxOffset':
           worker.saveTxOffset(args[0], args[1]);

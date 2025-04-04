@@ -333,7 +333,7 @@ export const bundleRepairWorker = new BundleRepairWorker({
 });
 
 // Configure contiguous data source
-const chunkDataSource = new ReadThroughChunkDataCache({
+export const chunkDataSource = new ReadThroughChunkDataCache({
   log,
   chunkSource: arweaveClient,
   chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),

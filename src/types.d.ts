@@ -450,6 +450,13 @@ export interface NameBlockListValidator {
   getBlockedNames(): Promise<string[]>;
 }
 
+export interface TxByOffsetResult {
+  data_root: string | undefined;
+  id: string | undefined;
+  offset: number | undefined;
+  data_size: number | undefined;
+}
+
 export interface JsonChunk {
   tx_path: string;
   data_path: string;
