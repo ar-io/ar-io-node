@@ -4,7 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 30] - 2025-04-04
+
+### Added
+
+- Added support for filtering Winston logs with a new `LOG_FILTER` environment
+  variable.
+  - Example filter: `{"attributes":{"class":"ArweaveCompositeClient"}}` to only
+    show logs from that class.
+  - Use `CORE_LOG_FILTER` environment variable when running with
+    docker-compose.
+- Made logging filters available for synchronous use, enabling programmatic
+  filtering of different objects.
+- Added parallel ArNS resolution capability.
+  - Configured via `ARNS_MAX_CONCURRENT_RESOLUTIONS` (default: 1).
+  - This foundation enables future enhancements to ArNS resolution and should
+    generally not be adjusted at present.
+
+### Changed
+
+- Improved ClickHouse auto-import script with better error handling and
+  continuous operation through errors.
+- Reduced maximum header request rate per second to trusted node.
+- Optimized single owner and recipient queries on ClickHouse with specialized
+  sorted tables.
+- Used ID sorted ClickHouse table for ID queries to improve performance.
+
+### Fixed
+
+- Fixed data alignment in Parquet file name height boundaries to ensure
+  consistent import boundaries.
+- Removed trailing slashes from AO URLs to prevent issues when passing them to
+  the SDK.
+- Only prune SQLite data when ClickHouse import succeeds to prevent data loss
+  during exports.
 
 ## [Release 29] - 2025-03-21
 
