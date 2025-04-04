@@ -14,8 +14,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     show logs from that class.
   - Use `CORE_LOG_FILTER` environment variable when running with
     docker-compose.
-- Made logging filters available for synchronous use, enabling programmatic
-  filtering of different objects.
 - Added parallel ArNS resolution capability.
   - Configured via `ARNS_MAX_CONCURRENT_RESOLUTIONS` (default: 1).
   - This foundation enables future enhancements to ArNS resolution and should
@@ -25,7 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Improved ClickHouse auto-import script with better error handling and
   continuous operation through errors.
-- Reduced maximum header request rate per second to trusted node.
+- Reduced maximum header request rate per second to trusted node to load on
+  trusted gateways.
 - Optimized single owner and recipient queries on ClickHouse with specialized
   sorted tables.
 - Used ID sorted ClickHouse table for ID queries to improve performance.
