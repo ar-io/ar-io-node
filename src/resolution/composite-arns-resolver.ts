@@ -134,10 +134,14 @@ export class CompositeArNSResolver implements NameResolver {
     name: string,
     baseArNSRecordFn: () => Promise<any>,
   ): Promise<NameResolution | undefined> {
+    let resolved = false;
     const resolutionPromises = this.resolvers.map((resolver, index) => {
       const isLastResolver = index === this.resolvers.length - 1;
-      return this.limit(() =>
-        this.resolveWithResolver(
+      return this.limit(async () => {
+        // Skip if the name was already resolved
+        if (resolved) return undefined;
+
+        return this.resolveWithResolver(
           resolver,
           name,
           baseArNSRecordFn,
@@ -145,11 +149,12 @@ export class CompositeArNSResolver implements NameResolver {
         ).then((resolution) => {
           // Only consider resolutions with resolvedAt as successful
           if (resolution?.resolvedAt !== undefined) {
+            resolved = true;
             return resolution;
           }
           throw new Error('No valid resolution');
-        }),
-      );
+        });
+      });
     });
 
     try {
