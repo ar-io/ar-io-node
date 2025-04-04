@@ -308,6 +308,30 @@ fit your needs by editing the `dashboard.json` file. Refer to the [Grafana
 documentation] to learn more about how to create and modify Grafana dashboards
 using JSON model files.
 
+### Log Filtering
+
+The AR.IO Node supports filtering Winston logs with the `LOG_FILTER`
+environment variable (or `CORE_LOG_FILTER` when using docker-compose). This
+helps reduce log noise by showing only logs that match specific criteria.
+
+Filter logs using the same JSON-based filtering syntax used for bundle filters,
+with the filter logic applying to log attributes instead of bundle attributes:
+
+```
+# Only show logs from ArNS resolvers
+LOG_FILTER={"attributes":{"class":"CompositeArNSResolver"}}
+
+# Only show logs from the on-demand ArNS resolver
+LOG_FILTER={"attributes":{"class":"OnDemandArNSResolver"}}
+
+# Show logs from multiple ArNS components using logical operators
+LOG_FILTER={"or":[{"attributes":{"class":"CompositeArNSResolver"}},{"attributes":{"class":"OnDemandArNSResolver"}}]}
+```
+
+For more details on filter syntax, see the [filter
+documentation](docs/filters.md) - while this documentation focuses on bundle
+filters, the filter structure and logic apply to log filtering as well.
+
 ## Principles and Practices
 
 ### Architecture
