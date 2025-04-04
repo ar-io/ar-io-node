@@ -120,7 +120,24 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.gqlQueryable = gqlQueryable;
   }
 
-  getGqlTransactionsBaseSql({ ids = [] }: { ids?: string[] }) {
+  getGqlTransactionsBaseSql({
+    ids = [],
+    recipients = [],
+    owners = [],
+  }: {
+    ids?: string[];
+    recipients?: string[];
+    owners?: string[];
+  }) {
+    let tableName = 'transactions';
+    if (ids?.length > 0) {
+      tableName = 'id_transactions';
+    } else if (recipients.length === 1) {
+      tableName = 'target_transactions';
+    } else if (owners.length === 1) {
+      tableName = 'owner_transactions';
+    }
+
     return sql
       .select()
       .distinct(
@@ -143,7 +160,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         'signature_size',
         'signature_offset',
       )
-      .from(ids?.length > 0 ? 'id_transactions t' : 'transactions t');
+      .from(`${tableName} t`);
   }
 
   addGqlTransactionFilters({
@@ -254,7 +271,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           );
         }
 
-        orderBy = 't.height DESC, ';
+        orderBy = '';
+        if (recipients?.length === 1) {
+          orderBy += 't.target DESC, ';
+        } else if (owners?.length === 1) {
+          orderBy += 't.owner_address DESC, ';
+        }
+        orderBy += 't.height DESC, ';
         orderBy += 't.block_transaction_index DESC, ';
         orderBy += 't.is_data_item DESC, ';
         orderBy += 't.id DESC';
@@ -295,7 +318,13 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
           );
         }
 
-        orderBy = 't.height ASC, ';
+        orderBy = '';
+        if (recipients?.length === 1) {
+          orderBy += 't.target ASC, ';
+        } else if (owners?.length === 1) {
+          orderBy += 't.owner_address ASC, ';
+        }
+        orderBy += 't.height ASC, ';
         orderBy += 't.block_transaction_index ASC, ';
         orderBy += 't.is_data_item ASC, ';
         orderBy += 't.id ASC';
@@ -327,7 +356,11 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     bundledIn?: string[] | null;
     tags?: { name: string; values: string[] }[];
   }): Promise<GqlTransactionsResult> {
-    const txsQuery = this.getGqlTransactionsBaseSql({ ids });
+    const txsQuery = this.getGqlTransactionsBaseSql({
+      ids,
+      recipients,
+      owners,
+    });
 
     this.addGqlTransactionFilters({
       query: txsQuery,
