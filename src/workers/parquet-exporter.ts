@@ -401,23 +401,25 @@ const importTransactionTags = async ({
   const query = `
       INSERT INTO tags
       SELECT
-        stt.height,
-        stt.transaction_id AS id,
+        st.height,
+        st.id,
         stt.transaction_tag_index AS tag_index,
         NULL AS indexed_at,
         tn.name AS tag_name,
         tv.value AS tag_value,
         0 AS is_data_item
       FROM
-        core.stable_transaction_tags stt
-      JOIN
+        core.stable_transactions st
+      CROSS JOIN
+        core.stable_transaction_tags stt ON st.transaction_id = stt.id
+      CROSS JOIN
         core.tag_names tn ON stt.tag_name_hash = tn.hash
-      JOIN
+      CROSS JOIN
         core.tag_values tv ON stt.tag_value_hash = tv.hash
       WHERE
-        stt.height BETWEEN ${startHeight} AND ${endHeight}
+        st.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
-        stt.height ASC;
+        st.height ASC;
     `;
 
   try {
@@ -441,25 +443,25 @@ const importDataItemTags = async ({
   const query = `
       INSERT INTO tags
       SELECT
-        sdit.height,
-        sdit.data_item_id AS id,
+        sdi.height,
+        sdi.id,
         sdit.data_item_tag_index AS tag_index,
         sdi.indexed_at,
         tn.name AS tag_name,
         tv.value AS tag_value,
         1 AS is_data_item
       FROM
-        bundles.stable_data_item_tags sdit
-      JOIN
+        bundles.stable_data_items sdi
+      CROSS JOIN
+        bundles.stable_data_item_tags sdit ON sdi.id = sdit.data_item_id
+      CROSS JOIN
         bundles.tag_names tn ON sdit.tag_name_hash = tn.hash
-      JOIN
+      CROSS JOIN
         bundles.tag_values tv ON sdit.tag_value_hash = tv.hash
-      JOIN
-        bundles.stable_data_items sdi ON sdit.data_item_id = sdi.id
       WHERE
-        sdit.height BETWEEN ${startHeight} AND ${endHeight}
+        sdi.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
-        sdit.height ASC;
+        sdi.height ASC;
     `;
 
   try {
