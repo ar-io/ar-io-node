@@ -411,7 +411,7 @@ const importTransactionTags = async ({
       FROM
         core.stable_transactions st
       CROSS JOIN
-        core.stable_transaction_tags stt ON st.transaction_id = stt.id
+        core.stable_transaction_tags stt ON st.id = stt.transaction_id
       CROSS JOIN
         core.tag_names tn ON stt.tag_name_hash = tn.hash
       CROSS JOIN
