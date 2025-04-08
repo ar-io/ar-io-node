@@ -37,10 +37,6 @@ import {
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 
-// To add a GET route for /chunk/:offset where :offset is restricted to a positive integer,
-// we can use a regular expression in your route path to constrain :offset.
-export const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
-
 export const createChunkOffsetHandler = ({
   chunkDataSource,
   chunkMetaDataSource,
