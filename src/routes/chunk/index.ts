@@ -18,7 +18,6 @@
 import { Router, json } from 'express';
 
 import {
-  CHUNK_OFFSET_PATH,
   createChunkOffsetHandler,
   createChunkPostHandler,
 } from './handlers.js';
@@ -29,6 +28,10 @@ import {
   chunkMetaDataSource,
   db,
 } from '../../system.js';
+
+// To add a GET route for /chunk/:offset where :offset is restricted to a positive integer,
+// we can use a regular expression in your route path to constrain :offset.
+const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
 
 const MAX_CHUNK_SIZE = 1024 * 256 * 1.4; // 256KiB + 40% overhead for b64u encoding
 

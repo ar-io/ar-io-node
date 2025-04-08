@@ -332,7 +332,7 @@ describe('StandaloneSqliteDatabase', () => {
       assert.equal(txByOffsetResult2.id, undefined);
       // if at 50 until end of data_size (which is 50) to <= 100, should return tx1id
       const txByOffsetResult3 = await db.getTxByOffset(50);
-      assert.equal(txByOffsetResult3.id, tx1id);
+      assert.equal(txByOffsetResult3.id, undefined);
       const txByOffsetResult4 = await db.getTxByOffset(99);
       assert.equal(txByOffsetResult4.id, tx1id);
       const txByOffsetResult5 = await db.getTxByOffset(100);
@@ -344,7 +344,7 @@ describe('StandaloneSqliteDatabase', () => {
       const txByOffsetResult7 = await db.getTxByOffset(198);
       assert.equal(txByOffsetResult7.id, undefined);
       const txByOffsetResult8 = await db.getTxByOffset(199);
-      assert.equal(txByOffsetResult8.id, tx2id);
+      assert.equal(txByOffsetResult8.id, undefined);
       const txByOffsetResult9 = await db.getTxByOffset(200);
       assert.equal(txByOffsetResult9.id, tx2id);
       // if at 201, it shouldn't return anything

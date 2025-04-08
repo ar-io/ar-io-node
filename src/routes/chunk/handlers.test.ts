@@ -20,8 +20,10 @@ import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import express from 'express';
 import { default as request } from 'supertest';
-import { CHUNK_OFFSET_PATH, createChunkOffsetHandler } from './handlers.js';
+import { createChunkOffsetHandler } from './handlers.js';
 import log from '../../log.js';
+
+const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
 
 describe('Chunk routes', () => {
   let app: express.Express;
