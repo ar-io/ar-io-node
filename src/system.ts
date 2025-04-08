@@ -25,7 +25,9 @@ import awsLiteS3 from '@aws-lite/s3';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
+import { FsChunkMetadataStore } from './store/fs-chunk-metadata-store.js';
 import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.js';
+import { ReadThroughChunkMetadataCache } from './data/read-through-chunk-metadata-cache.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
@@ -331,9 +333,19 @@ export const bundleRepairWorker = new BundleRepairWorker({
   shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
   filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
+const txChunkMetaDataStore = new FsChunkMetadataStore({
+  log,
+  baseDir: 'data/chunks',
+});
+
+export const chunkMetaDataSource = new ReadThroughChunkMetadataCache({
+  log,
+  chunkSource: arweaveClient,
+  chunkMetadataStore: txChunkMetaDataStore,
+});
 
 // Configure contiguous data source
-const chunkDataSource = new ReadThroughChunkDataCache({
+export const chunkDataSource = new ReadThroughChunkDataCache({
   log,
   chunkSource: arweaveClient,
   chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),

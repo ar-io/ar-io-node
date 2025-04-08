@@ -126,7 +126,7 @@ describe('ReadThroughDataCache', function () {
       }) => {
         return Promise.resolve();
       },
-    };
+    } as unknown as ContiguousDataIndex;
 
     mockDataContentAttributeImporter = {
       queueDataContentAttributes: (_: DataContentAttributeProperties) => {
