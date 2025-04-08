@@ -411,13 +411,16 @@ const importTransactionTags = async ({
       FROM
         core.stable_transactions st
       CROSS JOIN
-        core.stable_transaction_tags stt ON st.id = stt.transaction_id
+        core.stable_transaction_tags stt
       CROSS JOIN
-        core.tag_names tn ON stt.tag_name_hash = tn.hash
+        core.tag_names tn
       CROSS JOIN
-        core.tag_values tv ON stt.tag_value_hash = tv.hash
+        core.tag_values tv
       WHERE
-        st.height BETWEEN ${startHeight} AND ${endHeight}
+        st.id = stt.transaction_id
+        AND stt.tag_name_hash = tn.hash
+        AND stt.tag_value_hash = tv.hash
+        AND st.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
         st.height ASC;
     `;
@@ -453,13 +456,16 @@ const importDataItemTags = async ({
       FROM
         bundles.stable_data_items sdi
       CROSS JOIN
-        bundles.stable_data_item_tags sdit ON sdi.id = sdit.data_item_id
+        bundles.stable_data_item_tags sdit
       CROSS JOIN
-        bundles.tag_names tn ON sdit.tag_name_hash = tn.hash
+        bundles.tag_names tn
       CROSS JOIN
-        bundles.tag_values tv ON sdit.tag_value_hash = tv.hash
+        bundles.tag_values tv
       WHERE
-        sdi.height BETWEEN ${startHeight} AND ${endHeight}
+        sdi.id = sdit.data_item_id
+        AND sdit.tag_name_hash = tn.hash
+        AND sdit.tag_value_hash = tv.hash
+        AND sdi.height BETWEEN ${startHeight} AND ${endHeight}
       ORDER BY
         sdi.height ASC;
     `;
