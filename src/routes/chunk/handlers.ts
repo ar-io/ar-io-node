@@ -135,6 +135,8 @@ export const createChunkOffsetHandler = ({
       ...(dataPath !== undefined && {
         data_path: dataPath,
       }),
+      // as of today, ar-io-node doesn't pack chunks
+      packing: 'unpacked',
     });
   });
 };
