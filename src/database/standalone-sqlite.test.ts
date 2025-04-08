@@ -255,6 +255,104 @@ describe('StandaloneSqliteDatabase', () => {
     db.stop();
   });
 
+  describe('offsets', () => {
+    it('should save offsets into the database and then be discoverable via getTxByOffset', async () => {
+      const tx1id = '_H6KgmI_ZfSdSlf9r2xzDh_ebJnvQtTYLUBQlnRjIdM';
+      const tx2id = 'UTjG9QyeQ8dJgghq_7JRYb3iTAvlc0IgVN3OfJFGwNk';
+
+      const tx1values = {
+        id: fromB64Url(tx1id),
+        height: 123,
+        block_transaction_index: 0,
+        format: 2,
+        last_tx: Buffer.alloc(32), // or a random Buffer of 32 bytes
+        owner_address: Buffer.alloc(32), // also 32 bytes typically
+        quantity: '0',
+        reward: '0',
+        tag_count: 0,
+        offset: 100,
+        data_size: 50,
+      };
+      const tx2values = {
+        ...tx1values,
+        id: fromB64Url(tx2id),
+        offset: 200,
+        last_tx: Buffer.alloc(32),
+        owner_address: Buffer.alloc(32),
+        data_size: 1,
+      };
+
+      const sqlQ = `
+        INSERT INTO stable_transactions (
+          id,
+          height,
+          block_transaction_index,
+          format,
+          last_tx,
+          owner_address,
+          quantity,
+          reward,
+          tag_count,
+          offset,
+          data_size
+        )
+        VALUES (
+          @id,
+          @height,
+          @block_transaction_index,
+          @format,
+          @last_tx,
+          @owner_address,
+          @quantity,
+          @reward,
+          @tag_count,
+          @offset,
+          @data_size
+        )
+      `;
+
+      coreDb.prepare(sqlQ).run(tx1values);
+      coreDb.prepare(sqlQ).run(tx2values);
+
+      const tx1 = coreDb
+        .prepare(`SELECT * FROM stable_transactions WHERE id = @transaction_id`)
+        .get({ transaction_id: fromB64Url(tx1id) });
+      assert.equal(tx1.offset, 100);
+
+      const tx2 = coreDb
+        .prepare(`SELECT * FROM stable_transactions WHERE id = @transaction_id`)
+        .get({ transaction_id: fromB64Url(tx2id) });
+
+      assert.equal(tx2.offset, 200);
+
+      // if under offset - data_size, or < 50, it should return nothing
+      const txByOffsetResult1 = await db.getTxByOffset(0);
+      assert.equal(txByOffsetResult1.id, undefined);
+      const txByOffsetResult2 = await db.getTxByOffset(49);
+      assert.equal(txByOffsetResult2.id, undefined);
+      // if at 50 until end of data_size (which is 50) to <= 100, should return tx1id
+      const txByOffsetResult3 = await db.getTxByOffset(50);
+      assert.equal(txByOffsetResult3.id, tx1id);
+      const txByOffsetResult4 = await db.getTxByOffset(99);
+      assert.equal(txByOffsetResult4.id, tx1id);
+      const txByOffsetResult5 = await db.getTxByOffset(100);
+      assert.equal(txByOffsetResult5.id, tx1id);
+      // if at 101, it shouldn't return anything
+      const txByOffsetResult6 = await db.getTxByOffset(101);
+      assert.equal(txByOffsetResult6.id, undefined);
+      // tx2 is 1 byte length, starting at 199
+      const txByOffsetResult7 = await db.getTxByOffset(198);
+      assert.equal(txByOffsetResult7.id, undefined);
+      const txByOffsetResult8 = await db.getTxByOffset(199);
+      assert.equal(txByOffsetResult8.id, tx2id);
+      const txByOffsetResult9 = await db.getTxByOffset(200);
+      assert.equal(txByOffsetResult9.id, tx2id);
+      // if at 201, it shouldn't return anything
+      const txByOffsetResult10 = await db.getTxByOffset(201);
+      assert.equal(txByOffsetResult10.id, undefined);
+    });
+  });
+
   describe('saveBlockAndTxs', () => {
     it('should insert the block in the new_blocks table', async () => {
       const height = 982575;
