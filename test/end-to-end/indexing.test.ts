@@ -1183,50 +1183,54 @@ describe('Indexing', function () {
       await compose.down();
     });
 
-    it('should reset last_fully_indexed_at when filters change', async function () {
-      await axios.post(
-        'http://localhost:4000/ar-io/admin/queue-bundle',
-        { id: bundleId },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer secret',
+    it(
+      'should reset last_fully_indexed_at when filters change',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        await axios.post(
+          'http://localhost:4000/ar-io/admin/queue-bundle',
+          { id: bundleId },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer secret',
+            },
           },
-        },
-      );
+        );
 
-      await waitForBundleToBeIndexed({ id: bundleId });
+        await waitForBundleToBeIndexed({ id: bundleId });
 
-      const initialState = bundlesDb
-        .prepare('SELECT * FROM bundles WHERE id = ?')
-        .get(fromB64Url(bundleId));
-      assert.ok(initialState.last_fully_indexed_at !== null);
-      bundlesDb.close();
+        const initialState = bundlesDb
+          .prepare('SELECT * FROM bundles WHERE id = ?')
+          .get(fromB64Url(bundleId));
+        assert.ok(initialState.last_fully_indexed_at !== null);
+        bundlesDb.close();
 
-      // Change filters and trigger update
-      await compose.down();
-      compose = await composeUp({
-        ANS104_UNBUNDLE_FILTER: '{"always": true}',
-        ANS104_INDEX_FILTER:
-          '{"attributes": {"owner_address": "jaxl_dxqJ00gEgQazGASFXVRvO4h-Q0_vnaLtuOUoWU"}}',
-        BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS: '0.5',
-        BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS: '0.5',
-        FILTER_CHANGE_REPROCESS: 'true',
-        SKIP_CLEAN_DB: 'true',
-      });
+        // Change filters and trigger update
+        await compose.down();
+        compose = await composeUp({
+          ANS104_UNBUNDLE_FILTER: '{"always": true}',
+          ANS104_INDEX_FILTER:
+            '{"attributes": {"owner_address": "jaxl_dxqJ00gEgQazGASFXVRvO4h-Q0_vnaLtuOUoWU"}}',
+          BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS: '0.5',
+          BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS: '0.5',
+          FILTER_CHANGE_REPROCESS: 'true',
+          SKIP_CLEAN_DB: 'true',
+        });
 
-      await wait(10000);
-      bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
+        await wait(10000);
+        bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);
 
-      const afterFilterChange = bundlesDb
-        .prepare('SELECT * FROM bundles WHERE id = ?')
-        .get(fromB64Url(bundleId));
+        const afterFilterChange = bundlesDb
+          .prepare('SELECT * FROM bundles WHERE id = ?')
+          .get(fromB64Url(bundleId));
 
-      assert.equal(afterFilterChange.last_fully_indexed_at, null);
-      assert.equal(afterFilterChange.matched_data_item_count, null);
-      assert.equal(afterFilterChange.last_queued_at, null);
-      assert.equal(afterFilterChange.last_skipped_at, null);
-    });
+        assert.equal(afterFilterChange.last_fully_indexed_at, null);
+        assert.equal(afterFilterChange.matched_data_item_count, null);
+        assert.equal(afterFilterChange.last_queued_at, null);
+        assert.equal(afterFilterChange.last_skipped_at, null);
+      },
+    );
 
     it('should retry failed bundles after filter changes', async function () {
       await axios.post(
