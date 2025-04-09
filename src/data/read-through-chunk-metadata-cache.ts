@@ -19,6 +19,7 @@ import winston from 'winston';
 
 import {
   ChunkByAnySource,
+  ChunkDataByAnySourceParams,
   ChunkMetadata,
   ChunkMetadataByAnySource,
   ChunkMetadataStore,
@@ -43,12 +44,12 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
     this.chunkMetadataStore = chunkMetadataStore;
   }
 
-  async getChunkMetadataByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<ChunkMetadata> {
+  async getChunkMetadataByAny({
+    txSize,
+    absoluteOffset,
+    dataRoot,
+    relativeOffset,
+  }: ChunkDataByAnySourceParams): Promise<ChunkMetadata> {
     const chunkMetadataPromise = this.chunkMetadataStore
       .get(dataRoot, relativeOffset)
       .then(async (cachedChunkMetadata) => {
@@ -62,12 +63,12 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
         }
 
         // Fetch from ChunkSource
-        const chunk = await this.chunkSource.getChunkByAny(
+        const chunk = await this.chunkSource.getChunkByAny({
           txSize,
           absoluteOffset,
           dataRoot,
           relativeOffset,
-        );
+        });
 
         // TODO use an assertion to compare the data root passed in with the
         // extracted value

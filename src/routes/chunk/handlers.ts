@@ -82,12 +82,12 @@ export const createChunkOffsetHandler = ({
 
     // actually fetch the chunk data
     try {
-      chunkData = await chunkDataSource.getChunkDataByAny(
-        data_size,
-        offset,
-        data_root,
+      chunkData = await chunkDataSource.getChunkDataByAny({
+        txSize: data_size,
+        absoluteOffset: offset,
+        dataRoot: data_root,
         relativeOffset,
-      );
+      });
     } catch (error) {
       response.sendStatus(404);
       return;
@@ -111,12 +111,12 @@ export const createChunkOffsetHandler = ({
     let dataPath: string | undefined = undefined;
 
     try {
-      chunkMetadata = await chunkMetaDataSource.getChunkMetadataByAny(
-        data_size,
-        offset,
-        data_root,
+      chunkMetadata = await chunkMetaDataSource.getChunkMetadataByAny({
+        txSize: data_size,
+        absoluteOffset: offset,
+        dataRoot: data_root,
         relativeOffset,
-      );
+      });
     } catch (error) {
       log.error('Error fetching chunk metadata', { error });
     }

@@ -61,6 +61,7 @@ import {
   PartialJsonTransaction,
   PartialJsonTransactionStore,
   Region,
+  ChunkDataByAnySourceParams,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -832,12 +833,12 @@ export class ArweaveCompositeClient
     throw new Error('Failed to fetch chunk from any peer');
   }
 
-  async getChunkByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<Chunk> {
+  async getChunkByAny({
+    txSize,
+    absoluteOffset,
+    dataRoot,
+    relativeOffset,
+  }: ChunkDataByAnySourceParams): Promise<Chunk> {
     this.failureSimulator.maybeFail();
 
     try {
@@ -934,18 +935,18 @@ export class ArweaveCompositeClient
     throw new Error('Unable to fetch chunk from trusted node or peers');
   }
 
-  async getChunkDataByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<ChunkData> {
-    const { hash, chunk } = await this.getChunkByAny(
+  async getChunkDataByAny({
+    txSize,
+    absoluteOffset,
+    dataRoot,
+    relativeOffset,
+  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
+    const { hash, chunk } = await this.getChunkByAny({
       txSize,
       absoluteOffset,
       dataRoot,
       relativeOffset,
-    );
+    });
     return {
       hash,
       chunk,
