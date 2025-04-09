@@ -427,22 +427,32 @@ arIoRouter.post(
           .send('Invalid indexedAtThreshold - must be a positive integer');
         return;
       }
-      
+
       if (!Number.isInteger(startHeight) || startHeight < 0) {
         res
           .status(400)
           .send('Invalid startHeight - must be a positive integer');
         return;
       }
-      
-      if (!Number.isInteger(endHeight) || endHeight < 0 || endHeight < startHeight) {
+
+      if (
+        !Number.isInteger(endHeight) ||
+        endHeight < 0 ||
+        endHeight < startHeight
+      ) {
         res
           .status(400)
-          .send('Invalid endHeight - must be a positive integer greater than or equal to startHeight');
+          .send(
+            'Invalid endHeight - must be a positive integer greater than or equal to startHeight',
+          );
         return;
       }
 
-      await db.pruneStableDataItems({ indexedAtThreshold, startHeight, endHeight });
+      await db.pruneStableDataItems({
+        indexedAtThreshold,
+        startHeight,
+        endHeight,
+      });
       res.json({ message: 'Stable data items pruned successfully' });
     } catch (error: any) {
       res.status(500).send(error?.message);
