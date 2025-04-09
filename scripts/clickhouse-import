@@ -1,24 +1,52 @@
 #!/usr/bin/env bash
 
+# Function to log timing information
+log_timing() {
+    local step_name=$1
+    local start_time=$2
+    local end_time=$3
+    local duration_s=$(( end_time - start_time ))
+    local duration_min=$(( duration_s / 60 ))
+    local duration_sec=$(( duration_s % 60 ))
+    
+    echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
+}
+
 clickhouse_host=${CLICKHOUSE_HOST:-localhost}
 parquet_path=${PARQUET_PATH:-data/parquet}
 
+import_start_time=$(date +%s)
+
+schema_start_time=$(date +%s)
 clickhouse client --host "$clickhouse_host" --multiquery < src/database/clickhouse/schema.sql
+schema_end_time=$(date +%s)
+log_timing "Initialize schema" "$schema_start_time" "$schema_end_time"
 
 for blocks_parquet in "$parquet_path/blocks"*.parquet; do
+    batch_start_time=$(date +%s)
     height_range=$(basename "$blocks_parquet" | sed 's/blocks-//;s/-rowCount:[0-9]*\.parquet//')
     txs_parquet=$(ls "$parquet_path/transactions-$height_range"-*.parquet)
     tags_parquet=$(ls "$parquet_path/tags-$height_range"-*.parquet)
 
     echo "Importing $blocks_parquet..."
+    blocks_start_time=$(date +%s)
     clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_blocks FROM INFILE '$blocks_parquet' FORMAT Parquet;"
+    blocks_end_time=$(date +%s)
+    log_timing "Import blocks parquet ($height_range)" "$blocks_start_time" "$blocks_end_time"
 
     echo "Importing $txs_parquet..."
+    txs_start_time=$(date +%s)
     clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_transactions FROM INFILE '$txs_parquet' FORMAT Parquet;"
+    txs_end_time=$(date +%s)
+    log_timing "Import transactions parquet ($height_range)" "$txs_start_time" "$txs_end_time"
 
     echo "Importing $tags_parquet"
+    tags_start_time=$(date +%s)
     clickhouse client --host "$clickhouse_host" --query="INSERT INTO staging_tags FROM INFILE '$tags_parquet' FORMAT Parquet;"
+    tags_end_time=$(date +%s)
+    log_timing "Import tags parquet ($height_range)" "$tags_start_time" "$tags_end_time"
 
+    data_transfer_start_time=$(date +%s)
     for prefix in "" "id_" "owner_" "target_"; do
       cat <<EOF | clickhouse client --host "$clickhouse_host"
 INSERT INTO ${prefix}transactions
@@ -68,8 +96,20 @@ JOIN staging_blocks blocks ON txs.height = blocks.height
 GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, tags.id
 EOF
     done
+    data_transfer_end_time=$(date +%s)
+    log_timing "Data transfer to final tables ($height_range)" "$data_transfer_start_time" "$data_transfer_end_time"
 
+    truncate_start_time=$(date +%s)
     clickhouse client --host "$clickhouse_host" --query="TRUNCATE TABLE staging_blocks"
     clickhouse client --host "$clickhouse_host" --query="TRUNCATE TABLE staging_transactions"
     clickhouse client --host "$clickhouse_host" --query="TRUNCATE TABLE staging_tags"
+    truncate_end_time=$(date +%s)
+    log_timing "Truncate staging tables ($height_range)" "$truncate_start_time" "$truncate_end_time"
+    
+    batch_end_time=$(date +%s)
+    log_timing "Full batch import ($height_range)" "$batch_start_time" "$batch_end_time"
 done
+
+# Log overall import timing
+import_end_time=$(date +%s)
+log_timing "Complete Clickhouse import process" "$import_start_time" "$import_end_time"

@@ -27,16 +27,21 @@ import * as winston from 'winston';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
-type EventName = 'export-complete' | 'export-error' | 'start';
+type EventName = 'export-complete' | 'export-error' | 'start' | 'timing-log';
 
 const EXPORT_COMPLETE: EventName = 'export-complete';
 const EXPORT_ERROR: EventName = 'export-error';
 const START: EventName = 'start';
+const TIMING_LOG: EventName = 'timing-log';
 
 type Message = {
   eventName: EventName;
   error?: string;
   stack?: string;
+  timingKey?: string;
+  startTime?: number;
+  endTime?: number;
+  durationMs?: number;
 };
 
 type ExportStatus = 'not_started' | 'running' | 'completed' | 'errored';
@@ -183,6 +188,23 @@ export class ParquetExporter {
           });
 
           reject(new Error(message.error));
+        } else if (message.eventName === TIMING_LOG) {
+          this.log.info(`Parquet export timing: ${message.timingKey}`, {
+            exportStep: message.timingKey,
+            startTime:
+              typeof message.startTime === 'number'
+                ? new Date(message.startTime as number).toISOString()
+                : undefined,
+            endTime:
+              typeof message.endTime === 'number'
+                ? new Date(message.endTime as number).toISOString()
+                : undefined,
+            durationMs: message.durationMs,
+            durationSeconds:
+              typeof message.durationMs === 'number'
+                ? message.durationMs / 1000
+                : undefined,
+          });
         }
       });
 
@@ -522,12 +544,23 @@ const exportToParquet = async ({
       const filePath = `${outputDir}/${fileName}`;
 
       try {
+        const fileExportStartTime = Date.now();
         await db.exec(`
             COPY (
               SELECT * FROM ${tableName}
               WHERE height >= ${currentRangeStart} AND height <= ${height}
             ) TO '${filePath}' (FORMAT PARQUET, COMPRESSION 'zstd')
           `);
+        const fileExportEndTime = Date.now();
+        const fileExportDurationMs = fileExportEndTime - fileExportStartTime;
+
+        parentPort?.postMessage({
+          eventName: TIMING_LOG,
+          timingKey: `file-export-${tableName}-${currentRangeStart}-${height}`,
+          startTime: fileExportStartTime,
+          endTime: fileExportEndTime,
+          durationMs: fileExportDurationMs,
+        });
 
         currentRangeStart = height + 1n;
         rowCount = 0n;
@@ -567,6 +600,26 @@ const getRowCountForHeight = async (
 };
 
 if (!isMainThread) {
+  const logTiming = async <T>(
+    operation: string,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    const startTime = Date.now();
+    try {
+      return await fn();
+    } finally {
+      const endTime = Date.now();
+      const durationMs = endTime - startTime;
+      parentPort?.postMessage({
+        eventName: TIMING_LOG,
+        timingKey: operation,
+        startTime,
+        endTime,
+        durationMs,
+      });
+    }
+  };
+
   const gracefulExit = async ({
     connection,
     db,
@@ -589,6 +642,8 @@ if (!isMainThread) {
   };
 
   const runExport = async (data: any) => {
+    const totalStartTime = Date.now();
+
     const {
       outputDir,
       startHeight,
@@ -606,15 +661,17 @@ if (!isMainThread) {
     const __dirname = dirname(__filename);
 
     try {
-      const duckDbSchema = readFileSync(
-        `${__dirname}/../database/duckdb/schema.sql`,
-        'utf8',
-      );
-      await connection.exec(duckDbSchema);
+      await logTiming('init-schema', async () => {
+        const duckDbSchema = readFileSync(
+          `${__dirname}/../database/duckdb/schema.sql`,
+          'utf8',
+        );
+        await connection.exec(duckDbSchema);
+        await connection.exec(`INSTALL sqlite; LOAD sqlite;`);
+      });
 
-      await connection.exec(`INSTALL sqlite; LOAD sqlite;`);
-
-      await db.exec(`
+      await logTiming('attach-databases', async () => {
+        await db.exec(`
           ATTACH '${coreDbPath}' AS core (
             TYPE SQLITE,
             READONLY,
@@ -627,60 +684,101 @@ if (!isMainThread) {
             BUSY_TIMEOUT 30000
           );
         `);
+      });
 
       // Import data into DuckDB
-      await importBlocks({
-        db: connection,
-        startHeight,
-        endHeight,
-      });
-      await importTransactions({
-        db: connection,
-        startHeight,
-        endHeight,
-      });
-      await importDataItems({
-        db: connection,
-        startHeight,
-        endHeight,
-      });
-      await importTransactionTags({
-        db: connection,
-        startHeight,
-        endHeight,
-      });
-      await importDataItemTags({
-        db: connection,
-        startHeight,
-        endHeight,
+      await logTiming('import-blocks', async () => {
+        await importBlocks({
+          db: connection,
+          startHeight,
+          endHeight,
+        });
       });
 
-      const transactionRanges = await exportToParquet({
-        db: connection,
-        outputDir,
-        tableName: 'transactions',
-        startHeight,
-        endHeight,
-        maxFileRows,
+      await logTiming('import-transactions', async () => {
+        await importTransactions({
+          db: connection,
+          startHeight,
+          endHeight,
+        });
       });
 
+      await logTiming('import-data-items', async () => {
+        await importDataItems({
+          db: connection,
+          startHeight,
+          endHeight,
+        });
+      });
+
+      await logTiming('import-transaction-tags', async () => {
+        await importTransactionTags({
+          db: connection,
+          startHeight,
+          endHeight,
+        });
+      });
+
+      await logTiming('import-data-item-tags', async () => {
+        await importDataItemTags({
+          db: connection,
+          startHeight,
+          endHeight,
+        });
+      });
+
+      const transactionRanges = await logTiming(
+        'export-transactions-parquet',
+        async () => {
+          return exportToParquet({
+            db: connection,
+            outputDir,
+            tableName: 'transactions',
+            startHeight,
+            endHeight,
+            maxFileRows,
+          });
+        },
+      );
+
+      let rangeIndex = 0;
       for (const range of transactionRanges) {
-        await exportToParquet({
-          db: connection,
-          outputDir,
-          tableName: 'blocks',
-          startHeight: Number(range.startHeight),
-          endHeight: Number(range.endHeight),
+        await logTiming(
+          `export-blocks-parquet-range-${rangeIndex}`,
+          async () => {
+            await exportToParquet({
+              db: connection,
+              outputDir,
+              tableName: 'blocks',
+              startHeight: Number(range.startHeight),
+              endHeight: Number(range.endHeight),
+            });
+          },
+        );
+
+        await logTiming(`export-tags-parquet-range-${rangeIndex}`, async () => {
+          await exportToParquet({
+            db: connection,
+            outputDir,
+            tableName: 'tags',
+            startHeight: Number(range.startHeight),
+            endHeight: Number(range.endHeight),
+          });
         });
 
-        await exportToParquet({
-          db: connection,
-          outputDir,
-          tableName: 'tags',
-          startHeight: Number(range.startHeight),
-          endHeight: Number(range.endHeight),
-        });
+        rangeIndex++;
       }
+
+      const totalEndTime = Date.now();
+      const totalDurationMs = totalEndTime - totalStartTime;
+
+      parentPort?.postMessage({
+        eventName: TIMING_LOG,
+        timingKey: 'total-export-process',
+        startTime: totalStartTime,
+        endTime: totalEndTime,
+        durationMs: totalDurationMs,
+      });
 
       parentPort?.postMessage({ eventName: EXPORT_COMPLETE });
 
