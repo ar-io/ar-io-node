@@ -10,7 +10,7 @@ log_timing() {
     local duration_s=$(( end_time - start_time ))
     local duration_min=$(( duration_s / 60 ))
     local duration_sec=$(( duration_s % 60 ))
-    
+
     echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
 }
 
@@ -52,7 +52,7 @@ set +e
 while true; do
     loop_start_time=$(date +%s)
     echo "Starting new import cycle at $(date)"
-    
+
     echo "Attempting to fetch debug info from admin endpoint..."
     fetch_debug_start_time=$(date +%s)
     debug_info="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" "http://${ar_io_host}:${ar_io_port}/ar-io/admin/debug")"
@@ -140,7 +140,7 @@ while true; do
             echo "Export in progress. Waiting 10s..."
             sleep 10
         done
-        
+
         export_complete_time=$(date +%s)
         if [ "$export_status" = "completed" ]; then
             log_timing "Export to parquet" "$export_start_time" "$export_complete_time"
@@ -171,12 +171,16 @@ while true; do
 
         # Step 5: Prune stable data items only if import was successful
         if [ "$import_success" = true ]; then
-            echo "Pruning stable data items..."
+            echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
             curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/prune-stable-data-items" \
                 -H "Authorization: Bearer $ADMIN_API_KEY" \
                 -H "Content-Type: application/json" \
-                -d "{\"indexedAtThreshold\": $max_indexed_at}"
+                -d "{
+                    \"indexedAtThreshold\": $max_indexed_at, 
+                    \"startHeight\": $current_height, 
+                    \"endHeight\": $end_height
+                }"
             prune_end_time=$(date +%s)
             if [ $? -ne 0 ]; then
                 log_timing "Prune stable data items (failed)" "$prune_start_time" "$prune_end_time"
@@ -187,7 +191,7 @@ while true; do
         else
             echo "Skipping pruning because import failed."
         fi
-        
+
         # Log batch timing
         batch_end_time=$(date +%s)
         log_timing "Batch processing (heights $current_height to $end_height)" "$batch_start_time" "$batch_end_time"
@@ -195,15 +199,15 @@ while true; do
         # Bump current_height
         current_height=$end_height
     done
-    
+
     # Log timing for the heights processing
     height_process_end_time=$(date +%s)
     log_timing "All heights processing" "$height_process_start_time" "$height_process_end_time"
-    
+
     # Log timing for the entire cycle
     loop_end_time=$(date +%s)
     log_timing "Complete import cycle" "$loop_start_time" "$loop_end_time"
-    
+
     echo "Sleeping for $sleep_interval seconds..."
     sleep "$sleep_interval"
 done

@@ -413,13 +413,13 @@ arIoRouter.get(
   },
 );
 
-// Prune stable data items before a given timestamp
+// Prune stable data items before a given timestamp and within a height range
 arIoRouter.post(
   '/ar-io/admin/prune-stable-data-items',
   express.json(),
   async (req, res) => {
     try {
-      const { indexedAtThreshold } = req.body;
+      const { indexedAtThreshold, startHeight, endHeight } = req.body;
 
       if (!Number.isInteger(indexedAtThreshold) || indexedAtThreshold < 0) {
         res
@@ -427,8 +427,22 @@ arIoRouter.post(
           .send('Invalid indexedAtThreshold - must be a positive integer');
         return;
       }
+      
+      if (!Number.isInteger(startHeight) || startHeight < 0) {
+        res
+          .status(400)
+          .send('Invalid startHeight - must be a positive integer');
+        return;
+      }
+      
+      if (!Number.isInteger(endHeight) || endHeight < 0 || endHeight < startHeight) {
+        res
+          .status(400)
+          .send('Invalid endHeight - must be a positive integer greater than or equal to startHeight');
+        return;
+      }
 
-      await db.pruneStableDataItems(indexedAtThreshold);
+      await db.pruneStableDataItems({ indexedAtThreshold, startHeight, endHeight });
       res.json({ message: 'Stable data items pruned successfully' });
     } catch (error: any) {
       res.status(500).send(error?.message);

@@ -440,6 +440,7 @@ export class StandaloneSqliteDatabaseWorker {
   saveBundlesStableDataFn: Sqlite.Transaction;
   deleteCoreStaleNewDataFn: Sqlite.Transaction;
   deleteBundlesStaleNewDataFn: Sqlite.Transaction;
+  deleteStableDataItemsWithHeightAndIndexedAtFn: Sqlite.Transaction;
 
   constructor({
     log,
@@ -789,6 +790,28 @@ export class StandaloneSqliteDatabaseWorker {
         });
       },
     );
+
+    this.deleteStableDataItemsWithHeightAndIndexedAtFn =
+      this.dbs.bundles.transaction(
+        ({ indexedAtThreshold, startHeight, endHeight }: {
+          indexedAtThreshold: number;
+          startHeight: number;
+          endHeight: number;
+        }) => {
+          // Delete the tags which reference data items first
+          this.stmts.bundles.deleteStableDataItemTagsWithHeightAndIndexedAt.run({
+            indexed_at_threshold: indexedAtThreshold,
+            start_height: startHeight,
+            end_height: endHeight,
+          });
+
+          this.stmts.bundles.deleteStableDataItemsWithHeightAndIndexedAt.run({
+            indexed_at_threshold: indexedAtThreshold,
+            start_height: startHeight,
+            end_height: endHeight,
+          });
+        },
+      );
 
     this.insertDataHashCache = new NodeCache({
       stdTTL: 60 * 7, // 7 minutes
@@ -2597,9 +2620,19 @@ export class StandaloneSqliteDatabaseWorker {
     return walCheckpoint[0];
   }
 
-  pruneStableDataItems(indexedAtThreshold: number) {
-    this.stmts.bundles.deleteStableDataItemsLessThanIndexedAt.run({
-      indexed_at_threshold: indexedAtThreshold,
+  pruneStableDataItems({
+    indexedAtThreshold,
+    startHeight,
+    endHeight,
+  }: {
+    indexedAtThreshold: number;
+    startHeight: number;
+    endHeight: number;
+  }) {
+    this.deleteStableDataItemsWithHeightAndIndexedAtFn({
+      indexedAtThreshold,
+      startHeight,
+      endHeight
     });
   }
 }
@@ -3392,10 +3425,12 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveVerificationStatus', [id]);
   }
 
-  async pruneStableDataItems(indexedAtThreshold: number): Promise<void> {
-    return this.queueWrite('bundles', 'pruneStableDataItems', [
-      indexedAtThreshold,
-    ]);
+  async pruneStableDataItems(params: {
+    indexedAtThreshold: number;
+    startHeight: number;
+    endHeight: number;
+  }): Promise<void> {
+    return this.queueWrite('bundles', 'pruneStableDataItems', [params]);
   }
 
   async cleanupWal(dbName: WorkerPoolName): Promise<void> {
