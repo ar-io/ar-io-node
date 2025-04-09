@@ -27,6 +27,7 @@ import {
   ChunkByAnySource,
   ChunkData,
   ChunkDataByAnySource,
+  ChunkDataByAnySourceParams,
   JsonTransactionOffset,
   PartialJsonBlock,
   PartialJsonTransaction,
@@ -172,12 +173,12 @@ export class ArweaveChunkSourceStub
   implements ChunkByAnySource, ChunkDataByAnySource
 {
   stubData: string = 'abcdefghijklmnopqrstuvwxyz'.repeat(10);
-  async getChunkByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<Chunk> {
+  async getChunkByAny({
+    txSize,
+    absoluteOffset,
+    dataRoot,
+    relativeOffset,
+  }: ChunkDataByAnySourceParams): Promise<Chunk> {
     if (fs.existsSync(`test/mock_files/chunks/${absoluteOffset}.json`)) {
       const jsonChunk = JSON.parse(
         fs.readFileSync(
@@ -209,18 +210,18 @@ export class ArweaveChunkSourceStub
     }
   }
 
-  async getChunkDataByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<ChunkData> {
-    const { hash, chunk } = await this.getChunkByAny(
+  async getChunkDataByAny({
+    txSize,
+    absoluteOffset,
+    dataRoot,
+    relativeOffset,
+  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
+    const { hash, chunk } = await this.getChunkByAny({
       txSize,
       absoluteOffset,
       dataRoot,
       relativeOffset,
-    );
+    });
     return {
       hash,
       chunk,

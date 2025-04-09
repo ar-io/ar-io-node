@@ -17,7 +17,12 @@
  */
 import winston from 'winston';
 
-import { ChunkData, ChunkDataByAnySource, ChunkDataStore } from '../types.js';
+import {
+  ChunkData,
+  ChunkDataByAnySource,
+  ChunkDataByAnySourceParams,
+  ChunkDataStore,
+} from '../types.js';
 
 export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
   private log: winston.Logger;
@@ -38,12 +43,12 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
     this.chunkStore = chunkDataStore;
   }
 
-  async getChunkDataByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<ChunkData> {
+  async getChunkDataByAny({
+    txSize,
+    absoluteOffset,
+    dataRoot,
+    relativeOffset,
+  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
     const chunkDataPromise = this.chunkStore
       .get(dataRoot, relativeOffset)
       .then(async (cachedChunkData) => {
@@ -57,12 +62,12 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
         }
 
         // Fetch from ChunkSource
-        const chunkData = await this.chunkSource.getChunkDataByAny(
+        const chunkData = await this.chunkSource.getChunkDataByAny({
           txSize,
           absoluteOffset,
           dataRoot,
           relativeOffset,
-        );
+        });
 
         await this.chunkStore.set(dataRoot, relativeOffset, chunkData);
 

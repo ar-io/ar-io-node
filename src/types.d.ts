@@ -481,31 +481,25 @@ export interface Chunk extends ChunkMetadata, ChunkData {
   tx_path: Buffer;
 }
 
+export interface ChunkDataByAnySourceParams {
+  txSize: number;
+  absoluteOffset: number;
+  dataRoot: string;
+  relativeOffset: number;
+}
+
 export interface ChunkByAnySource {
-  getChunkByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<Chunk>;
+  getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk>;
 }
 
 export interface ChunkMetadataByAnySource {
   getChunkMetadataByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
+    params: ChunkDataByAnySourceParams,
   ): Promise<ChunkMetadata>;
 }
 
 export interface ChunkDataByAnySource {
-  getChunkDataByAny(
-    txSize: number,
-    absoluteOffset: number,
-    dataRoot: string,
-    relativeOffset: number,
-  ): Promise<ChunkData>;
+  getChunkDataByAny(params: ChunkDataByAnySourceParams): Promise<ChunkData>;
 }
 
 type BroadcastChunkResponses = {

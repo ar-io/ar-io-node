@@ -77,12 +77,12 @@ export class TxChunksDataSource implements ContiguousDataSource {
         dataRoot: string,
         relativeOffset: number,
       ) =>
-        this.chunkSource.getChunkDataByAny(
-          size,
+        this.chunkSource.getChunkDataByAny({
+          txSize: size,
           absoluteOffset,
           dataRoot,
           relativeOffset,
-        );
+        });
       let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
         startOffset,
         txDataRoot,

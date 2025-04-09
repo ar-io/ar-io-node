@@ -93,12 +93,12 @@ describe('ReadThroughChunkDataCache', () => {
       mock.method(chunkDataStore, 'get', async () => mockedChunkData);
       mock.method(chunkSource, 'getChunkByAny');
 
-      await chunkCache.getChunkDataByAny(
-        TX_SIZE,
-        ABSOLUTE_OFFSET,
-        B64_DATA_ROOT,
-        0,
-      );
+      await chunkCache.getChunkDataByAny({
+        txSize: TX_SIZE,
+        absoluteOffset: ABSOLUTE_OFFSET,
+        dataRoot: B64_DATA_ROOT,
+        relativeOffset: 0,
+      });
 
       assert.deepEqual((chunkSource.getChunkByAny as any).mock.callCount(), 0);
       assert.deepEqual((chunkDataStore.get as any).mock.callCount(), 1);
@@ -116,12 +116,12 @@ describe('ReadThroughChunkDataCache', () => {
         'getChunkByAny',
         async () => mockedChunk,
       );
-      await chunkCache.getChunkDataByAny(
-        TX_SIZE,
-        ABSOLUTE_OFFSET,
-        B64_DATA_ROOT,
-        0,
-      );
+      await chunkCache.getChunkDataByAny({
+        txSize: TX_SIZE,
+        absoluteOffset: ABSOLUTE_OFFSET,
+        dataRoot: B64_DATA_ROOT,
+        relativeOffset: 0,
+      });
       assert.deepEqual(chunkDataStoreGetSpy.mock.callCount(), 1);
       assert.deepEqual(chuunkDataStoreHasSpy.mock.callCount(), 1);
       assert.deepEqual(networkSpy.mock.callCount(), 1);
@@ -137,12 +137,12 @@ describe('ReadThroughChunkDataCache', () => {
         'getChunkByAny',
         async () => mockedChunk,
       );
-      await chunkCache.getChunkDataByAny(
-        TX_SIZE,
-        ABSOLUTE_OFFSET,
-        B64_DATA_ROOT,
-        0,
-      );
+      await chunkCache.getChunkDataByAny({
+        txSize: TX_SIZE,
+        absoluteOffset: ABSOLUTE_OFFSET,
+        dataRoot: B64_DATA_ROOT,
+        relativeOffset: 0,
+      });
 
       assert.deepEqual(storeGetSpy.mock.callCount(), 1);
       assert.deepEqual(storeHasSpy.mock.callCount(), 1);
