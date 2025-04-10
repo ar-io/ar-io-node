@@ -278,8 +278,6 @@ const importBlocks = async ({
         core.stable_blocks
       WHERE
         height BETWEEN ${startHeight} AND ${endHeight}
-      ORDER BY
-        height ASC;
     `;
 
   try {
@@ -338,8 +336,6 @@ const importTransactions = async ({
         core.wallets w ON st.owner_address = w.address
       WHERE
         st.height BETWEEN ${startHeight} AND ${endHeight}
-      ORDER BY
-        st.height ASC;
     `;
 
   try {
@@ -398,8 +394,6 @@ const importDataItems = async ({
         bundles.wallets w ON sdi.owner_address = w.address
       WHERE
         sdi.height BETWEEN ${startHeight} AND ${endHeight}
-      ORDER BY
-        sdi.height ASC;
     `;
 
   try {
@@ -443,8 +437,6 @@ const importTransactionTags = async ({
         AND stt.tag_name_hash = tn.hash
         AND stt.tag_value_hash = tv.hash
         AND st.height BETWEEN ${startHeight} AND ${endHeight}
-      ORDER BY
-        st.height ASC;
     `;
 
   try {
@@ -488,8 +480,6 @@ const importDataItemTags = async ({
         AND sdit.tag_name_hash = tn.hash
         AND sdit.tag_value_hash = tv.hash
         AND sdi.height BETWEEN ${startHeight} AND ${endHeight}
-      ORDER BY
-        sdi.height ASC;
     `;
 
   try {
