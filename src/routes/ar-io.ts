@@ -366,7 +366,14 @@ arIoRouter.post(
   express.json(),
   async (req, res) => {
     try {
-      const { outputDir, startHeight, endHeight, maxFileRows } = req.body;
+      const {
+        outputDir,
+        startHeight,
+        endHeight,
+        maxFileRows,
+        skipL1Transactions,
+        skipL1Tags,
+      } = req.body;
 
       if (
         typeof outputDir !== 'string' ||
@@ -375,7 +382,10 @@ arIoRouter.post(
         startHeight < 0 ||
         !Number.isInteger(endHeight) ||
         endHeight < 0 ||
-        (Number.isInteger(maxFileRows) && maxFileRows <= 0)
+        (Number.isInteger(maxFileRows) && maxFileRows <= 0) ||
+        (skipL1Transactions !== undefined &&
+          typeof skipL1Transactions !== 'boolean') ||
+        (skipL1Tags !== undefined && typeof skipL1Tags !== 'boolean')
       ) {
         res.status(400).send('Invalid or missing required parameters');
         return;
@@ -388,6 +398,9 @@ arIoRouter.post(
         startHeight,
         endHeight,
         maxFileRows,
+        skipL1Transactions:
+          skipL1Transactions === undefined ? true : skipL1Transactions,
+        skipL1Tags: skipL1Tags === undefined ? true : skipL1Tags,
       });
 
       res.json({ message: 'Parquet export started' });

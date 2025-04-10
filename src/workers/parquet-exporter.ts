@@ -57,6 +57,8 @@ type ExportData = {
   startHeight?: number;
   endHeight?: number;
   maxFileRows?: number;
+  skipL1Transactions?: boolean;
+  skipL1Tags?: boolean;
   durationInSeconds?: number;
   endTime?: string;
   endTimestamp?: number;
@@ -101,11 +103,15 @@ export class ParquetExporter {
     startHeight,
     endHeight,
     maxFileRows,
+    skipL1Transactions = true,
+    skipL1Tags = true,
   }: {
     outputDir: string;
     startHeight: number;
     endHeight: number;
     maxFileRows?: number;
+    skipL1Transactions?: boolean;
+    skipL1Tags?: boolean;
   }): Promise<void> {
     if (this.exportStatus.status === RUNNING) {
       const error = new Error('An export is already in progress');
@@ -123,6 +129,8 @@ export class ParquetExporter {
           startHeight,
           endHeight,
           maxFileRows,
+          skipL1Transactions,
+          skipL1Tags,
           duckDbPath: this.duckDbPath,
           bundlesDbPath: this.bundlesDbPath,
           coreDbPath: this.coreDbPath,
@@ -139,6 +147,8 @@ export class ParquetExporter {
           startHeight,
           endHeight,
           maxFileRows,
+          skipL1Transactions,
+          skipL1Tags,
         });
 
         this.worker?.postMessage({ eventName: START });
@@ -154,6 +164,8 @@ export class ParquetExporter {
             startHeight,
             endHeight,
             maxFileRows,
+            skipL1Transactions,
+            skipL1Tags,
             durationInSeconds,
           });
 
@@ -163,6 +175,8 @@ export class ParquetExporter {
             startHeight,
             endHeight,
             maxFileRows,
+            skipL1Transactions,
+            skipL1Tags,
             endTime: endTime.toISOString(),
             endTimestamp: endTime.getTime(),
             durationInSeconds,
@@ -639,6 +653,8 @@ if (!isMainThread) {
       startHeight,
       endHeight,
       maxFileRows,
+      skipL1Transactions,
+      skipL1Tags,
       duckDbPath,
       bundlesDbPath,
       coreDbPath,
@@ -685,13 +701,15 @@ if (!isMainThread) {
         });
       });
 
-      await logTiming('import-transactions', async () => {
-        await importTransactions({
-          db: connection,
-          startHeight,
-          endHeight,
+      if (!skipL1Transactions) {
+        await logTiming('import-transactions', async () => {
+          await importTransactions({
+            db: connection,
+            startHeight,
+            endHeight,
+          });
         });
-      });
+      }
 
       await logTiming('import-data-items', async () => {
         await importDataItems({
@@ -701,13 +719,15 @@ if (!isMainThread) {
         });
       });
 
-      await logTiming('import-transaction-tags', async () => {
-        await importTransactionTags({
-          db: connection,
-          startHeight,
-          endHeight,
+      if (!skipL1Tags) {
+        await logTiming('import-transaction-tags', async () => {
+          await importTransactionTags({
+            db: connection,
+            startHeight,
+            endHeight,
+          });
         });
-      });
+      }
 
       await logTiming('import-data-item-tags', async () => {
         await importDataItemTags({

@@ -28,6 +28,8 @@ let OUTPUT_DIR = path.join(__dirname, 'parquet');
 let MAX_FILE_ROWS = 1_000_000;
 let MIN_BLOCK_HEIGHT = 0;
 let MAX_BLOCK_HEIGHT: number | undefined;
+let SKIP_L1_TRANSACTIONS = true;
+let SKIP_L1_TAGS = true;
 
 args.forEach((arg, index) => {
   switch (arg) {
@@ -71,7 +73,6 @@ args.forEach((arg, index) => {
         process.exit(1);
       }
       break;
-
     case '--maxFileRows':
       if (args[index + 1]) {
         MAX_FILE_ROWS = parseInt(args[index + 1], 10);
@@ -79,6 +80,12 @@ args.forEach((arg, index) => {
         console.error('Missing value for --maxFileRows');
         process.exit(1);
       }
+      break;
+    case '--includeL1Transactions':
+      SKIP_L1_TRANSACTIONS = false;
+      break;
+    case '--includeL1Tags':
+      SKIP_L1_TAGS = false;
       break;
     default:
       break;
@@ -105,11 +112,17 @@ args.forEach((arg, index) => {
       startHeight: MIN_BLOCK_HEIGHT,
       endHeight: MAX_BLOCK_HEIGHT,
       maxFileRows: MAX_FILE_ROWS,
+      skipL1Transactions: SKIP_L1_TRANSACTIONS,
+      skipL1Tags: SKIP_L1_TAGS,
     }),
   });
 
   console.log(
     `Parquet export started from block ${MIN_BLOCK_HEIGHT} to ${MAX_BLOCK_HEIGHT}`,
+    {
+      skipL1Transactions: SKIP_L1_TRANSACTIONS,
+      skipL1Tags: SKIP_L1_TAGS,
+    },
   );
 
   let isComplete = false;
