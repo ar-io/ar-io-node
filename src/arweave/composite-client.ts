@@ -83,6 +83,8 @@ interface Peer {
   lastSeen: number;
 }
 
+type WeightedPeerListName = 'weightedChainPeers' | 'weightedChunkPeers';
+
 export class ArweaveCompositeClient
   implements
     ChainSource,
@@ -129,6 +131,7 @@ export class ArweaveCompositeClient
   // Peers
   private peers: Record<string, Peer> = {};
   private preferredPeers: Set<Peer> = new Set();
+  private weightedChainPeers: WeightedElement<string>[] = [];
   private weightedChunkPeers: WeightedElement<string>[] = [];
 
   // Block and TX promise caches used for prefetching
@@ -351,30 +354,35 @@ export class ArweaveCompositeClient
           }
         }),
       );
-      this.weightedChunkPeers = Object.values(this.peers).map((peerObject) => {
-        const previousWeight =
-          this.weightedChunkPeers.find((peer) => peer.id === peerObject.url)
-            ?.weight ?? undefined;
-        return {
-          id: peerObject.url,
-          weight: previousWeight === undefined ? 50 : previousWeight,
-        };
-      });
+      for (const peerListName of [
+        'weightedChainPeers',
+        'weightedChunkPeers',
+      ] as WeightedPeerListName[]) {
+        this[peerListName] = Object.values(this.peers).map((peerObject) => {
+          const previousWeight =
+            this[peerListName].find((peer) => peer.id === peerObject.url)
+              ?.weight ?? undefined;
+          return {
+            id: peerObject.url,
+            weight: previousWeight === undefined ? 50 : previousWeight,
+          };
+        });
+      }
     } catch (error) {
       metrics.arweavePeerRefreshErrorCounter.inc();
     }
   }
 
-  selectChunkPeers(peerCount: number): string[] {
-    const log = this.log.child({ method: 'selectChunkPeers' });
+  selectPeers(peerCount: number, peerListName: WeightedPeerListName): string[] {
+    const log = this.log.child({ method: 'selectPeers', peerListName });
 
-    if (this.weightedChunkPeers.length === 0) {
-      log.warn('No weighted chunk peers available');
-      throw new Error('No weighted chunk peers available');
+    if (this[peerListName].length === 0) {
+      log.debug('No weighted peers available');
+      return [];
     }
 
     return randomWeightedChoices<string>({
-      table: this.weightedChunkPeers,
+      table: this[peerListName],
       count: peerCount,
     });
   }
@@ -442,9 +450,11 @@ export class ArweaveCompositeClient
 
             // Prefetch transactions
             if (prefetchTxs) {
-              block.txs.forEach(async (txId: string) => {
+              for (const txId of block.txs) {
+                // await intentionally left out here to allow multiple
+                // "fire-and-forget" prefetches to run in parallel
                 this.prefetchTx({ txId });
-              });
+              }
             }
 
             return block;
@@ -515,27 +525,60 @@ export class ArweaveCompositeClient
     }
   }
 
-  async peerGetTx(url: string) {
-    const peersToTry = Array.from(this.preferredPeers);
-    const randomPeer =
-      peersToTry[Math.floor(Math.random() * peersToTry.length)];
+  async peerGetTx(url: string, retryCount = 3) {
+    const peersToTry = this.selectPeers(retryCount, 'weightedChainPeers');
 
-    return axios({
-      method: 'GET',
-      url,
-      baseURL: randomPeer.url,
-      timeout: 500,
-    }).then(async (response) => {
-      const tx = this.arweave.transactions.fromRaw(response.data);
-      const isValid = await this.arweave.transactions.verify(tx);
-      if (!isValid) {
-        throw new Error('Invalid peer fetched transaction');
-      }
-      return response;
+    return Promise.any(
+      peersToTry.map((peerUrl) => {
+        return (async () => {
+          try {
+            const response = await axios({
+              method: 'GET',
+              url,
+              baseURL: peerUrl,
+              timeout: 1000,
+            });
+
+            const tx = this.arweave.transactions.fromRaw(response.data);
+            const isValid = await this.arweave.transactions.verify(tx);
+            if (!isValid) {
+              // If TX is invalid, mark this peer as failed and reject.
+              this.handlePeerFailure(
+                peerUrl,
+                'peerGetTx',
+                'peer',
+                'weightedChainPeers',
+              );
+              throw new Error(`Invalid TX from peer: ${peerUrl}`);
+            }
+
+            // If successful, mark peer success and return.
+            this.handlePeerSuccess(
+              peerUrl,
+              'peerGetTx',
+              'peer',
+              'weightedChainPeers',
+            );
+            return response;
+          } catch (err) {
+            // On error, mark this peer as failed and reject the promise for this peer.
+            this.handlePeerFailure(
+              peerUrl,
+              'peerGetTx',
+              'peer',
+              'weightedChainPeers',
+            );
+            throw err;
+          }
+        })();
+      }),
+    ).catch((errors) => {
+      // Handle the scenario where all peers have failed
+      throw new Error(`All peer requests failed: ${errors}`);
     });
   }
 
-  prefetchTx({
+  async prefetchTx({
     txId,
     isPendingTx = false,
   }: {
@@ -555,62 +598,63 @@ export class ArweaveCompositeClient
     const url = `/${transactionType}/${txId}`;
     let downloadedFromPeer = true;
 
-    const responsePromise = this.txStore
-      .get(txId)
-      .then((tx) => {
+    const responsePromise = (async () => {
+      try {
+        // Check if it's already in the store
+        const storedTx = await this.txStore.get(txId);
+
         this.failureSimulator.maybeFail();
 
-        // Return cached TX if it exists
-        if (!this.skipCache && tx) {
-          return tx;
+        if (!this.skipCache && storedTx) {
+          return storedTx;
         }
 
-        return this.peerGetTx(url)
-          .catch(async () => {
-            downloadedFromPeer = false;
+        // Attempt to fetch from peer
+        let response;
 
-            // Request TX from trusted node if peer fetch failed
-            return this.trustedNodeRequestQueue.push({
-              method: 'GET',
-              url,
-            });
-          })
-          .then((response) => {
-            // Delete TX data to reduce response cache size
-            if (response?.data?.data) {
-              delete response.data.data;
-            }
-
-            return response.data;
-          });
-      })
-      .then(async (tx) => {
         try {
-          metrics.arweaveTxFetchCounter.inc({
-            node_type: downloadedFromPeer ? 'arweave_peer' : 'trusted',
+          response = await this.peerGetTx(url, 3);
+        } catch {
+          // If peer fails, fall back to trusted node
+          downloadedFromPeer = false;
+          response = await this.trustedNodeRequestQueue.push({
+            method: 'GET',
+            url,
           });
-          // Sanity check to guard against accidental bad data from both
-          // cache and trusted node
-          sanityCheckTx(tx);
-
-          await this.txStore.set(tx);
-
-          return tx;
-        } catch (error) {
-          this.txStore.del(txId);
         }
-      })
-      .catch((error) => {
+
+        // Delete the TX data payload (if present) to minimize memory/cache usage
+        if (response?.data?.data) {
+          delete response.data.data;
+        }
+
+        // Sanity-check the result
+        metrics.arweaveTxFetchCounter.inc({
+          node_type: downloadedFromPeer ? 'arweave_peer' : 'trusted',
+        });
+        sanityCheckTx(response.data);
+
+        // Store to our TX cache
+        await this.txStore.set(response.data);
+
+        return response.data;
+      } catch (errorUnknown: unknown) {
+        // If something goes wrong, remove it from the store (in case partially cached)
+        this.txStore.del(txId);
+        const error = errorUnknown as Error;
         this.log.warn('Transaction prefetch failed:', {
-          txId: txId,
+          txId,
           message: error.message,
           stack: error.stack,
         });
-      });
+        return undefined; // Return undefined on failure
+      }
+    })();
 
+    // Store our in-flight promise in the cache
     this.txPromiseCache.set(txId, responsePromise);
 
-    return responsePromise as Promise<PartialJsonTransaction | undefined>;
+    return responsePromise;
   }
 
   async getTx({
@@ -719,6 +763,7 @@ export class ArweaveCompositeClient
     peer: string,
     method: string,
     sourceType: 'trusted' | 'peer',
+    peerListName: WeightedPeerListName,
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'success',
@@ -729,10 +774,10 @@ export class ArweaveCompositeClient
     });
     if (sourceType === 'peer') {
       // warm the succeeding peer
-      this.weightedChunkPeers.forEach((weightedChunkPeer) => {
-        if (weightedChunkPeer.id === peer) {
-          weightedChunkPeer.weight = Math.min(
-            weightedChunkPeer.weight + config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+      this[peerListName].forEach((weightedPeer) => {
+        if (weightedPeer.id === peer) {
+          weightedPeer.weight = Math.min(
+            weightedPeer.weight + config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
             100,
           );
         }
@@ -744,6 +789,7 @@ export class ArweaveCompositeClient
     peer: string,
     method: string,
     sourceType: 'trusted' | 'peer',
+    peerListName: WeightedPeerListName,
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'error',
@@ -754,10 +800,10 @@ export class ArweaveCompositeClient
     });
     if (sourceType === 'peer') {
       // cool the failing peer
-      this.weightedChunkPeers.forEach((weightedChunkPeer) => {
-        if (weightedChunkPeer.id === peer) {
-          weightedChunkPeer.weight = Math.max(
-            weightedChunkPeer.weight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+      this[peerListName].forEach((weightedPeer) => {
+        if (weightedPeer.id === peer) {
+          weightedPeer.weight = Math.max(
+            weightedPeer.weight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
             1,
           );
         }
@@ -778,13 +824,13 @@ export class ArweaveCompositeClient
     relativeOffset: number;
     retryCount: number;
   }): Promise<Chunk> {
-    const randomChunkPeers = this.selectChunkPeers(retryCount);
-    for (const randomChunkPeer of randomChunkPeers) {
+    const randomPeers = this.selectPeers(retryCount, 'weightedChunkPeers');
+    for (const randomPeer of randomPeers) {
       try {
         const response = await axios({
           method: 'GET',
           url: `/chunk/${absoluteOffset}`,
-          baseURL: randomChunkPeer,
+          baseURL: randomPeer,
           timeout: 500,
         });
         const jsonChunk = response.data;
@@ -814,7 +860,12 @@ export class ArweaveCompositeClient
           relativeOffset,
         );
 
-        this.handlePeerSuccess(randomChunkPeer, 'peerGetChunk', 'peer');
+        this.handlePeerSuccess(
+          randomPeer,
+          'peerGetChunk',
+          'peer',
+          'weightedChunkPeers',
+        );
 
         this.chunkCache.set(
           { absoluteOffset },
@@ -826,7 +877,12 @@ export class ArweaveCompositeClient
 
         return chunk;
       } catch {
-        this.handlePeerFailure(randomChunkPeer, 'peerGetChunk', 'peer');
+        this.handlePeerFailure(
+          randomPeer,
+          'peerGetChunk',
+          'peer',
+          'weightedChunkPeers',
+        );
       }
     }
 
@@ -868,7 +924,12 @@ export class ArweaveCompositeClient
 
       await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
 
-      this.handlePeerSuccess(this.trustedNodeUrl, 'getChunkByAny', 'trusted');
+      this.handlePeerSuccess(
+        this.trustedNodeUrl,
+        'getChunkByAny',
+        'trusted',
+        'weightedChunkPeers',
+      );
 
       this.chunkCache.set(
         { absoluteOffset },
@@ -886,7 +947,12 @@ export class ArweaveCompositeClient
 
       return chunk;
     } catch (error: any) {
-      this.handlePeerFailure(this.trustedNodeUrl, 'getChunkByAny', 'trusted');
+      this.handlePeerFailure(
+        this.trustedNodeUrl,
+        'getChunkByAny',
+        'trusted',
+        'weightedChunkPeers',
+      );
       metrics.getChunkTotal.inc({
         status: 'error',
         method: 'getChunkByAny',
