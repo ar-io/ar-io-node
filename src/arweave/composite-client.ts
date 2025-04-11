@@ -75,6 +75,7 @@ const CHUNK_CACHE_TTL_SECONDS = 5;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_INFO_TIMEOUT_MS = 5000;
+const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
 
 interface Peer {
   url: string;
@@ -536,7 +537,7 @@ export class ArweaveCompositeClient
               method: 'GET',
               url,
               baseURL: peerUrl,
-              timeout: 1000,
+              timeout: DEFAULT_PEER_TX_TIMEOUT_MS,
             });
 
             const tx = this.arweave.transactions.fromRaw(response.data);
