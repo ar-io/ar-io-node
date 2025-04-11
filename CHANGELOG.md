@@ -4,7 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 31] - 2025-04-11
+
+### Changed
+
+- Improved peer TX header fetching by fetching from a wider range of peers and
+  up/down weighting peers based on success/failure.
+
+### Fixed
+
+- Rolled back parallel ArNS resolution changes that were causing ArNS
+  resolution to slow down over time.
 
 ## [Release 30] - 2025-04-04
 
