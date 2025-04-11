@@ -470,6 +470,7 @@ export interface ChunkData {
 }
 
 export interface ChunkMetadata {
+  chunk_size?: number;
   data_root: Buffer;
   data_size: number;
   data_path: Buffer;

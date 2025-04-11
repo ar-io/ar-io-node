@@ -58,7 +58,9 @@ export class S3ChunkSource implements ChunkDataByAnySource {
         'S3ChunkSource.getChunkDataByAny called without dataRoot or relativeOffset',
       );
     }
-    const key = `${this.s3Prefix}/${dataRoot}/${relativeOffset}`;
+    const key = this.s3Prefix
+      ? `${this.s3Prefix}/${dataRoot}/${relativeOffset}`
+      : `${dataRoot}/${relativeOffset}`;
     this.log.debug('Fetching chunk from S3', {
       bucket: this.s3Bucket,
       key,
