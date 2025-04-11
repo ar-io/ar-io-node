@@ -41,7 +41,7 @@ export class CompositeArNSResolver implements NameResolver {
     string,
     Promise<NameResolution | undefined> | undefined
   > = {};
-  private limit: ReturnType<typeof pLimit>;
+  private maxConcurrentResolutions: number;
   private resolverTimeoutMs: number;
 
   constructor({
@@ -74,7 +74,7 @@ export class CompositeArNSResolver implements NameResolver {
       registryCache,
       networkProcess,
     });
-    this.limit = pLimit(maxConcurrentResolutions ?? this.resolvers.length);
+    this.maxConcurrentResolutions = maxConcurrentResolutions;
     this.resolverTimeoutMs = resolverTimeoutMs;
   }
 
@@ -137,7 +137,7 @@ export class CompositeArNSResolver implements NameResolver {
     let resolved = false;
     const resolutionPromises = this.resolvers.map((resolver, index) => {
       const isLastResolver = index === this.resolvers.length - 1;
-      return this.limit(async () => {
+      return pLimit(this.maxConcurrentResolutions)(async () => {
         // Skip if the name was already resolved
         if (resolved) return undefined;
 
