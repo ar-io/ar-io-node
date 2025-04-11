@@ -540,26 +540,25 @@ export class ArweaveCompositeClient
               timeout: DEFAULT_PEER_TX_TIMEOUT_MS,
             });
 
-            const tx = this.arweave.transactions.fromRaw(response.data);
-            const isValid = await this.arweave.transactions.verify(tx);
-            if (!isValid) {
-              // If TX is invalid, mark this peer as failed and reject.
-              this.handlePeerFailure(
-                peerUrl,
-                'peerGetTx',
-                'peer',
-                'weightedChainPeers',
-              );
-              throw new Error(`Invalid TX from peer: ${peerUrl}`);
-            }
-
-            // If successful, mark peer success and return.
+            // The arweave JS library will fail to validate some valid
+            // transactions, so as long as we can retrieve the TX we count it
+            // as a success and increment the weights. If the TX is invalid we
+            // also decement the weight so it's a wash and a flood of invalid
+            // TXs will still be counted against the peer.
             this.handlePeerSuccess(
               peerUrl,
               'peerGetTx',
               'peer',
               'weightedChainPeers',
             );
+
+            const tx = this.arweave.transactions.fromRaw(response.data);
+            const isValid = await this.arweave.transactions.verify(tx);
+            if (!isValid) {
+              // If TX is invalid, mark this peer as failed and reject.
+              throw new Error(`Invalid TX from peer: ${peerUrl}`);
+            }
+
             return response;
           } catch (err) {
             // On error, mark this peer as failed and reject the promise for this peer.
