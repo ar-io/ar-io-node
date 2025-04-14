@@ -286,7 +286,7 @@ export function isDataItemHeaders(
   );
 }
 
-// Queue a bundle for processing
+// Queue a bundle data item for processing
 arIoRouter.post(
   '/ar-io/admin/queue-data-item',
   express.json(),
