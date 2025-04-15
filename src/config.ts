@@ -174,6 +174,35 @@ export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
   '3',
 );
 
+// Arweave Network peer post success goal
+// default value of 0 means this behaviour is disabled.
+export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+  'ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
+  '3',
+);
+
+// The maximum number of peers to attempt to post to before giving up
+export const ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT = +env.varOrDefault(
+  'ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT',
+  '5',
+);
+
+if (
+  ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT <
+  ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT
+) {
+  throw new Error(
+    'ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT must be greater than or equal to ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
+  );
+}
+
+// If ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT is set non-zero, this
+// value defines how many chunks to post to peers in parallel.
+export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
+  'ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT',
+  '3',
+);
+
 //
 // Data
 //

@@ -84,7 +84,10 @@ interface Peer {
   lastSeen: number;
 }
 
-type WeightedPeerListName = 'weightedChainPeers' | 'weightedChunkPeers';
+type WeightedPeerListName =
+  | 'weightedChainPeers'
+  | 'weightedGetChunkPeers'
+  | 'weightedPostChunkPeers';
 
 export class ArweaveCompositeClient
   implements
@@ -133,7 +136,8 @@ export class ArweaveCompositeClient
   private peers: Record<string, Peer> = {};
   private preferredPeers: Set<Peer> = new Set();
   private weightedChainPeers: WeightedElement<string>[] = [];
-  private weightedChunkPeers: WeightedElement<string>[] = [];
+  private weightedGetChunkPeers: WeightedElement<string>[] = [];
+  private weightedPostChunkPeers: WeightedElement<string>[] = [];
 
   // Block and TX promise caches used for prefetching
   private blockByHeightPromiseCache = new NodeCache({
@@ -357,7 +361,8 @@ export class ArweaveCompositeClient
       );
       for (const peerListName of [
         'weightedChainPeers',
-        'weightedChunkPeers',
+        'weightedGetChunkPeers',
+        'weightedPostChunkPeers',
       ] as WeightedPeerListName[]) {
         this[peerListName] = Object.values(this.peers).map((peerObject) => {
           const previousWeight =
@@ -824,7 +829,7 @@ export class ArweaveCompositeClient
     relativeOffset: number;
     retryCount: number;
   }): Promise<Chunk> {
-    const randomPeers = this.selectPeers(retryCount, 'weightedChunkPeers');
+    const randomPeers = this.selectPeers(retryCount, 'weightedGetChunkPeers');
     for (const randomPeer of randomPeers) {
       try {
         const response = await axios({
@@ -864,7 +869,7 @@ export class ArweaveCompositeClient
           randomPeer,
           'peerGetChunk',
           'peer',
-          'weightedChunkPeers',
+          'weightedGetChunkPeers',
         );
 
         this.chunkCache.set(
@@ -881,7 +886,7 @@ export class ArweaveCompositeClient
           randomPeer,
           'peerGetChunk',
           'peer',
-          'weightedChunkPeers',
+          'weightedGetChunkPeers',
         );
       }
     }
@@ -928,7 +933,7 @@ export class ArweaveCompositeClient
         this.trustedNodeUrl,
         'getChunkByAny',
         'trusted',
-        'weightedChunkPeers',
+        'weightedGetChunkPeers',
       );
 
       this.chunkCache.set(
@@ -951,7 +956,7 @@ export class ArweaveCompositeClient
         this.trustedNodeUrl,
         'getChunkByAny',
         'trusted',
-        'weightedChunkPeers',
+        'weightedGetChunkPeers',
       );
       metrics.getChunkTotal.inc({
         status: 'error',
@@ -1251,6 +1256,80 @@ export class ArweaveCompositeClient
         secondaryResults.push(task);
       }
       Promise.all(secondaryResults);
+    }
+
+    if (config.ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT > 0) {
+      const peerUrls = this.selectPeers(
+        config.ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT,
+        'weightedPostChunkPeers',
+      );
+
+      const peerPostLimit = pLimit(
+        config.ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT,
+      );
+      let peerSuccessCount = 0;
+
+      await Promise.all(
+        peerUrls.map((peerUrl) =>
+          peerPostLimit(async () => {
+            if (
+              peerSuccessCount >=
+              config.ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT
+            ) {
+              // mission accomplished
+              return;
+            }
+            try {
+              // if it's not a 200 response, the axios call will throw
+              await axios({
+                method: 'POST',
+                url: `${peerUrl}/chunk`,
+                data: chunk,
+                timeout: DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
+                signal: AbortSignal.timeout(
+                  DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
+                ),
+                headers: originAndHopsHeaders,
+                validateStatus: (status) => status === 200,
+              });
+              peerSuccessCount++;
+              metrics.arweaveChunkPostCounter.inc({
+                endpoint: peerUrl,
+                status: 'success',
+                role: 'peer',
+              });
+              this.handlePeerSuccess(
+                peerUrl,
+                'broadcastChunk',
+                'peer',
+                'weightedPostChunkPeers',
+              );
+            } catch (errorUnknown: unknown) {
+              const error = errorUnknown as Error;
+              metrics.arweaveChunkPostCounter.inc({
+                endpoint: peerUrl,
+                status: 'fail',
+                role: 'peer',
+              });
+              this.handlePeerFailure(
+                peerUrl,
+                'broadcastChunk',
+                'peer',
+                'weightedPostChunkPeers',
+              );
+              this.log.debug('Failed to POST chunk to peer:', {
+                peerUrl,
+                error: error.message,
+              });
+            }
+          }),
+        ),
+      );
+
+      this.log.debug('Peer broadcast complete', {
+        successCount: peerSuccessCount,
+        peerUrls,
+      });
     }
 
     const results = (await Promise.all(primaryResults)).filter(
