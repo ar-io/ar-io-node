@@ -793,17 +793,23 @@ export class StandaloneSqliteDatabaseWorker {
 
     this.deleteStableDataItemsWithHeightAndIndexedAtFn =
       this.dbs.bundles.transaction(
-        ({ indexedAtThreshold, startHeight, endHeight }: {
+        ({
+          indexedAtThreshold,
+          startHeight,
+          endHeight,
+        }: {
           indexedAtThreshold: number;
           startHeight: number;
           endHeight: number;
         }) => {
           // Delete the tags which reference data items first
-          this.stmts.bundles.deleteStableDataItemTagsWithHeightAndIndexedAt.run({
-            indexed_at_threshold: indexedAtThreshold,
-            start_height: startHeight,
-            end_height: endHeight,
-          });
+          this.stmts.bundles.deleteStableDataItemTagsWithHeightAndIndexedAt.run(
+            {
+              indexed_at_threshold: indexedAtThreshold,
+              start_height: startHeight,
+              end_height: endHeight,
+            },
+          );
 
           this.stmts.bundles.deleteStableDataItemsWithHeightAndIndexedAt.run({
             indexed_at_threshold: indexedAtThreshold,
@@ -824,6 +830,10 @@ export class StandaloneSqliteDatabaseWorker {
 
   getMaxHeight() {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
+  }
+
+  getMaxStableHeight() {
+    return this.stmts.core.selectMaxStableHeight.get().height ?? -1;
   }
 
   getMaxStableBlockTimestamp() {
@@ -2632,7 +2642,7 @@ export class StandaloneSqliteDatabaseWorker {
     this.deleteStableDataItemsWithHeightAndIndexedAtFn({
       indexedAtThreshold,
       startHeight,
-      endHeight
+      endHeight,
     });
   }
 }
@@ -3042,6 +3052,10 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getMaxHeight', undefined);
   }
 
+  getMaxStableHeight(): Promise<number> {
+    return this.queueRead('core', 'getMaxStableHeight', undefined);
+  }
+
   getMaxStableBlockTimestamp(): Promise<number> {
     return this.queueRead('core', 'getMaxStableBlockTimestamp', undefined);
   }
@@ -3117,7 +3131,7 @@ export class StandaloneSqliteDatabase
     this.newDataItemsCount = 0;
     this.lastFlushDataItemsTime = Date.now();
 
-    endHeight = endHeight || (await this.getMaxHeight());
+    endHeight = endHeight || (await this.getMaxStableHeight());
     maxStableBlockTimestamp =
       maxStableBlockTimestamp || (await this.getMaxStableBlockTimestamp());
 
@@ -3481,6 +3495,10 @@ if (!isMainThread) {
         case 'getMaxHeight':
           const maxHeight = worker.getMaxHeight();
           parentPort?.postMessage(maxHeight);
+          break;
+        case 'getMaxStableHeight':
+          const maxStableHeight = worker.getMaxStableHeight();
+          parentPort?.postMessage(maxStableHeight);
           break;
         case 'getMaxStableBlockTimestamp':
           const maxStableBlockTimestamp = worker.getMaxStableBlockTimestamp();
