@@ -223,6 +223,23 @@ export const BACKGROUND_RETRIEVAL_ORDER = env
   )
   .split(',');
 
+// By default it looks for chunk from the filesystem's dataDir
+// but it can be configured to use an s3 bucket that assumes a
+// specific kind of layout of /{dataRoot}/{relativeOffset}
+export const CHUNK_DATA_SOURCE_TYPE = env.varOrDefault(
+  'CHUNK_DATA_SOURCE_TYPE',
+  'fs',
+) as 'fs' | 'legacy-s3';
+
+// By default is uses FsChunkMetadataStore marked here as 'fs'
+// but it can be configured to use a "legacy" PostgreSQL database
+// that has a specific table "chunks" with specific columns. This
+// is designed for legacy arweave gateway support.
+export const CHUNK_METADATA_SOURCE_TYPE = env.varOrDefault(
+  'CHUNK_METADATA_SOURCE_TYPE',
+  'fs',
+) as 'fs' | 'legacy-psql';
+
 //
 // Indexing
 //
@@ -350,6 +367,30 @@ export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
   '1000',
 );
+
+//
+// PostgreSQL
+//
+
+// A URL format of: postgres://username:password@host:port/database
+// the password can be omitted and passed in as filesystem path
+export const LEGACY_PSQL_CONNECTION_STRING = env.varOrUndefined(
+  'LEGACY_PSQL_CONNECTION_STRING',
+);
+
+// The path to the file containing the password for the PostgreSQL connection
+// this enhances security by not exposing the password in the connection string.
+// This is ar-io specific environment variable,
+// note that postgres.js also respects built-in env-vars like PGHOST, PGPORT etc.
+// see more: https://github.com/porsager/postgres?tab=readme-ov-file#environmental-variables
+export const LEGACY_PSQL_PASSWORD_FILE = env.varOrUndefined(
+  'LEGACY_PSQL_PASSWORD_FILE',
+);
+
+// very common workaround needed for various cloud providers
+// see more: https://github.com/porsager/postgres?tab=readme-ov-file#ssl
+export const LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED =
+  env.varOrDefault('LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED', 'true') === 'true';
 
 //
 // File system cleanup
@@ -689,6 +730,18 @@ export const AWS_S3_CONTIGUOUS_DATA_BUCKET = env.varOrUndefined(
 );
 export const AWS_S3_CONTIGUOUS_DATA_PREFIX = env.varOrUndefined(
   'AWS_S3_CONTIGUOUS_DATA_PREFIX',
+);
+
+// Chunk data source speficially set-up for interoperability with
+// the legacy arweave gateways
+export const LEGACY_AWS_S3_CHUNK_DATA_BUCKET = env.varOrUndefined(
+  'LEGACY_AWS_S3_CHUNK_DATA_BUCKET',
+);
+
+// Optional prefix for chunk data in the legacy S3 bucket, if omitted,
+// the root of the bucket will be /{dataRoot}/{relativeOffset}
+export const LEGACY_AWS_S3_CHUNK_DATA_PREFIX = env.varOrUndefined(
+  'LEGACY_AWS_S3_CHUNK_DATA_PREFIX',
 );
 
 //

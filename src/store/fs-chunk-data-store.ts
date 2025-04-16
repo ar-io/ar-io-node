@@ -103,7 +103,6 @@ export class FsChunkDataStore implements ChunkDataStore {
     try {
       const chunkDataRootDir = this.chunkDataRootDir(dataRoot);
       await fs.promises.mkdir(chunkDataRootDir, { recursive: true });
-
       await fs.promises.mkdir(this.chunkHashDir(chunkData.hash), {
         recursive: true,
       });
