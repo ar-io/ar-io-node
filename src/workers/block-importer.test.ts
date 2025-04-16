@@ -159,6 +159,31 @@ describe('BlockImporter', () => {
       });
     });
 
+    describe('attempting to import a block with a gap before it after a data item flush', () => {
+      beforeEach(async () => {
+        blockImporter = createBlockImporter({ startHeight: 1 });
+        await blockImporter.importBlock(1);
+        await blockImporter.importBlock(2);
+        await db.flushStableDataItems();
+        await blockImporter.importBlock(6);
+      });
+
+      it('should not flush unstable blocks', async () => {
+        const stats = await db.getDebugInfo();
+        assert.equal(stats.counts.stableBlocks, 0);
+      });
+
+      it('should import the first block at the start of the gap', async () => {
+        const stats = await db.getDebugInfo();
+        assert.equal(stats.counts.newBlocks, 3);
+      });
+
+      it('should import only 1 block', async () => {
+        const maxHeight = await db.getMaxHeight();
+        assert.equal(maxHeight, 3);
+      });
+    });
+
     describe('attempting to import a block after a fork', () => {
       beforeEach(async () => {
         blockImporter = createBlockImporter({ startHeight: 1 });

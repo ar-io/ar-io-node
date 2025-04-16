@@ -832,10 +832,6 @@ export class StandaloneSqliteDatabaseWorker {
     return this.stmts.core.selectMaxHeight.get().height ?? -1;
   }
 
-  getMaxStableHeight() {
-    return this.stmts.core.selectMaxStableHeight.get().height ?? -1;
-  }
-
   getMaxStableBlockTimestamp() {
     return (
       this.stmts.core.selectMaxStableBlockTimestamp.get().block_timestamp ?? -1
@@ -1069,10 +1065,6 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   flushStableDataItems(endHeight: number, maxStableBlockTimestamp: number) {
-    // Ensure that blocks and TXs are flushed before data items so that there
-    // is data in stable_block_transactions to join against.
-    this.flushBlockAndTxs(endHeight, maxStableBlockTimestamp);
-
     this.saveBundlesStableDataFn(endHeight);
 
     this.deleteBundlesStaleNewDataFn(
@@ -3052,10 +3044,6 @@ export class StandaloneSqliteDatabase
     return this.queueRead('core', 'getMaxHeight', undefined);
   }
 
-  getMaxStableHeight(): Promise<number> {
-    return this.queueRead('core', 'getMaxStableHeight', undefined);
-  }
-
   getMaxStableBlockTimestamp(): Promise<number> {
     return this.queueRead('core', 'getMaxStableBlockTimestamp', undefined);
   }
@@ -3131,9 +3119,20 @@ export class StandaloneSqliteDatabase
     this.newDataItemsCount = 0;
     this.lastFlushDataItemsTime = Date.now();
 
-    endHeight = endHeight || (await this.getMaxStableHeight());
+    endHeight = endHeight ?? (await this.getMaxHeight()) - MAX_FORK_DEPTH;
     maxStableBlockTimestamp =
-      maxStableBlockTimestamp || (await this.getMaxStableBlockTimestamp());
+      maxStableBlockTimestamp ?? (await this.getMaxStableBlockTimestamp());
+
+    // When flushStableDataItems is called we need to ensure that stable chain
+    // data has been flushed so that the join to stable_block_transactions in
+    // the data item flushing queries have data available. When called from
+    // saveBlockAndTxs this may have already occured. However, optimizing
+    // futher to avoid repeat calls would introduce significant complexity to
+    // gain a very small performance improvement.
+    await this.queueWrite('core', 'flushBlockAndTxs', [
+      endHeight,
+      maxStableBlockTimestamp,
+    ]);
 
     return this.queueWrite('bundles', 'flushStableDataItems', [
       endHeight,
@@ -3166,6 +3165,7 @@ export class StandaloneSqliteDatabase
       endHeight !== undefined && maxStableBlockTimestamp !== undefined;
 
     if (heightAndMaxStableExists || this.shouldFlushDataItems()) {
+      // Called here rather than in the worker since it crosses a DB boundary.
       await this.flushStableDataItems(endHeight, maxStableBlockTimestamp);
     }
   }
@@ -3496,10 +3496,6 @@ if (!isMainThread) {
           const maxHeight = worker.getMaxHeight();
           parentPort?.postMessage(maxHeight);
           break;
-        case 'getMaxStableHeight':
-          const maxStableHeight = worker.getMaxStableHeight();
-          parentPort?.postMessage(maxStableHeight);
-          break;
         case 'getMaxStableBlockTimestamp':
           const maxStableBlockTimestamp = worker.getMaxStableBlockTimestamp();
           parentPort?.postMessage(maxStableBlockTimestamp);
@@ -3567,6 +3563,13 @@ if (!isMainThread) {
             const [block, txs, missingTxIds] = args;
             const ret = worker.saveBlockAndTxs(block, txs, missingTxIds);
             parentPort?.postMessage(ret);
+          }
+          break;
+        case 'flushBlockAndTxs':
+          {
+            const [endHeight, maxStableBlockTimestamp] = args;
+            worker.flushBlockAndTxs(endHeight, maxStableBlockTimestamp);
+            parentPort?.postMessage(null);
           }
           break;
         case 'flushStableDataItems':
