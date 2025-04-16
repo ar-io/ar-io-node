@@ -45,7 +45,8 @@ if (config.ARNS_ROOT_HOST !== undefined) {
 
 arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   const { name } = req.params;
-  // TODO: replace this with the same request cache used in arns middleware
+  // NOTE: Errors and request deduplication are expected to be handled by the
+  // resolver
   const resolved = await system.nameResolver.resolve({ name });
   if (resolved === undefined) {
     sendNotFound(res);
@@ -70,7 +71,6 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     res.header(headerNames.arnsIndex, index.toString());
     res.header(headerNames.arnsLimit, limit.toString());
   }
-  // add arns headers
   res.json({
     txId: resolvedId,
     ttlSeconds: ttl,
