@@ -21,15 +21,18 @@ import fs from 'node:fs';
 import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import awsLite from '@aws-lite/client';
 import awsLiteS3 from '@aws-lite/s3';
+import postgres from 'postgres';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { FsChunkMetadataStore } from './store/fs-chunk-metadata-store.js';
+import { LegacyPostgresChunkMetadataSource } from './data/legacy-psql-chunk-metadata-cache.js';
 import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.js';
 import { ReadThroughChunkMetadataCache } from './data/read-through-chunk-metadata-cache.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
+import { S3ChunkSource } from './data/s3-chunk-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
@@ -181,6 +184,32 @@ export const gqlQueryable: GqlQueryable = (() => {
 
   return db;
 })();
+
+export type PostgreSQL = postgres.Sql;
+
+export let legacyPsql: PostgreSQL | undefined = undefined;
+
+if (config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql') {
+  if (config.LEGACY_PSQL_CONNECTION_STRING !== undefined) {
+    legacyPsql = postgres(config.LEGACY_PSQL_CONNECTION_STRING, {
+      ...(config.LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED && {
+        ssl: {
+          rejectUnauthorized: false,
+        },
+      }),
+      ...(config.LEGACY_PSQL_PASSWORD_FILE !== undefined && {
+        password: fs
+          .readFileSync(config.LEGACY_PSQL_PASSWORD_FILE!, 'utf8')
+          .trim(),
+      }),
+    });
+  } else {
+    // by throwing here we can make assumptions about legacyPsql being defined
+    throw new Error(
+      'LEGACY_PSQL_CONNECTION_STRING is required for legacy-psql chunk metadata source',
+    );
+  }
+}
 
 // Workers
 export const eventEmitter = new EventEmitter();
@@ -338,18 +367,49 @@ const txChunkMetaDataStore = new FsChunkMetadataStore({
   baseDir: 'data/chunks',
 });
 
-export const chunkMetaDataSource = new ReadThroughChunkMetadataCache({
-  log,
-  chunkSource: arweaveClient,
-  chunkMetadataStore: txChunkMetaDataStore,
-});
+export const chunkMetaDataSource =
+  config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql'
+    ? new LegacyPostgresChunkMetadataSource({
+        log,
+        legacyPsql: legacyPsql!,
+      })
+    : new ReadThroughChunkMetadataCache({
+        log,
+        chunkSource: arweaveClient,
+        chunkMetadataStore: txChunkMetaDataStore,
+      });
+
+if (
+  config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql' &&
+  config.LEGACY_AWS_S3_CHUNK_DATA_BUCKET === undefined
+) {
+  throw new Error(
+    'LEGACY_AWS_S3_CHUNK_DATA_BUCKET is required for legacy-psql chunk metadata source',
+  );
+}
+
+if (config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3' && awsClient === undefined) {
+  throw new Error(
+    'AWS Credentials are required for legacy-s3 chunk data source',
+  );
+}
 
 // Configure contiguous data source
-export const chunkDataSource = new ReadThroughChunkDataCache({
-  log,
-  chunkSource: arweaveClient,
-  chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
-});
+export const chunkDataSource =
+  config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3'
+    ? new S3ChunkSource({
+        log,
+        s3Client: awsClient!.S3,
+        s3Bucket: config.LEGACY_AWS_S3_CHUNK_DATA_BUCKET!,
+        ...(config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX !== undefined && {
+          s3Prefix: config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX,
+        }),
+      })
+    : new ReadThroughChunkDataCache({
+        log,
+        chunkSource: arweaveClient,
+        chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
+      });
 
 const txChunksDataSource = new TxChunksDataSource({
   log,
