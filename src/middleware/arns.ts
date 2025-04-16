@@ -22,20 +22,12 @@ import * as config from '../config.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound, sendPaymentRequired } from '../routes/data/handlers.js';
 import { DATA_PATH_REGEX } from '../constants.js';
-import { NameResolution, NameResolver } from '../types.js';
+import { NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import * as system from '../system.js';
-import NodeCache from 'node-cache';
 
 const EXCLUDED_SUBDOMAINS = new Set('www');
 const MAX_ARNS_NAME_LENGTH = 51;
-
-// simple cache that stores the arns resolution promises to avoid duplicate requests to the name resolver
-const arnsRequestCache = new NodeCache({
-  stdTTL: 60, // short cache in case we forget to delete
-  checkperiod: 60,
-  useClones: false, // cloning promises is unsafe
-});
 
 export const createArnsMiddleware = ({
   dataHandler,
@@ -85,28 +77,14 @@ export const createArnsMiddleware = ({
       return;
     }
 
-    const getArnsResolutionPromise = async (): Promise<NameResolution> => {
-      if (arnsRequestCache.has(arnsSubdomain)) {
-        const arnsResolutionPromise =
-          arnsRequestCache.get<Promise<NameResolution>>(arnsSubdomain);
-        if (arnsResolutionPromise) {
-          return arnsResolutionPromise;
-        }
-      }
-      const arnsResolutionPromise = nameResolver.resolve({
+    // NOTE: Errors and request deduplication are expected to be handled by the
+    // resolver
+    const end = metrics.arnsResolutionTime.startTimer();
+    const { resolvedId, ttl, processId, resolvedAt, limit, index } =
+      await nameResolver.resolve({
         name: arnsSubdomain,
       });
-      arnsRequestCache.set(arnsSubdomain, arnsResolutionPromise);
-      return arnsResolutionPromise;
-    };
-
-    const start = Date.now();
-    const { resolvedId, ttl, processId, resolvedAt, limit, index } =
-      await getArnsResolutionPromise().finally(() => {
-        // remove from cache after resolution
-        arnsRequestCache.del(arnsSubdomain);
-      });
-    metrics.arnsResolutionTime.observe(Date.now() - start);
+    end();
     if (resolvedId === undefined) {
       sendNotFound(res);
       return;
