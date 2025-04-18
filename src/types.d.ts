@@ -681,9 +681,11 @@ export interface NameResolver {
   resolve({
     name,
     baseArNSRecordFn,
+    signal,
   }: {
     name: string;
     baseArNSRecordFn?: () => Promise<AoArNSNameDataWithName | undefined>;
+    signal?: AbortSignal;
   }): Promise<NameResolution>;
 }
 

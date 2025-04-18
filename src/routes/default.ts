@@ -24,6 +24,7 @@ import { arIoInfoHandler } from './ar-io.js';
 
 export const defaultRouter = Router();
 
+// TODO: explain this
 defaultRouter.get('*', async (req, res, next) => {
   if (
     APEX_TX_ID === undefined &&
