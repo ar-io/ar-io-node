@@ -52,13 +52,20 @@ defaultRouter.get('*', async (req, res, next) => {
   }
 
   if (APEX_ARNS_NAME !== undefined) {
+    // Modify the request to add APEX_ARNS_NAME as a subdomain
     const modifiedReq = new Proxy(req, {
       get: (target, prop) => {
         if (prop === 'hostname') {
           return `${APEX_ARNS_NAME}.${ARNS_ROOT_HOST}`;
         }
         if (prop === 'subdomains') {
-          return [APEX_ARNS_NAME];
+          // Extract existing subdomains from ARNS_ROOT_HOST if any
+          const rootHostParts = (ARNS_ROOT_HOST ?? '').split('.');
+          const existingSubdomains =
+            rootHostParts.length > 2 ? rootHostParts.slice(0, -2) : [];
+
+          // Add APEX_ARNS_NAME as the first subdomain
+          return [...existingSubdomains, APEX_ARNS_NAME];
         }
         return target[prop as keyof typeof target];
       },
