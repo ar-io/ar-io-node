@@ -6,8 +6,6 @@ jobs:
   images:
     runs-on: ubuntu-latest
 
-    if: github.ref == 'refs/heads/develop'
-
     permissions:
       contents: read
       packages: write
@@ -34,5 +32,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/ar-io/ar-io-core:latest
+            ${{ github.ref == 'refs/heads/develop' && 'ghcr.io/ar-io/ar-io-core:latest' || '' }}
             ghcr.io/ar-io/ar-io-core:${{ github.sha }}
