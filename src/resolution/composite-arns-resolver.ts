@@ -202,9 +202,6 @@ export class CompositeArNSResolver implements NameResolver {
     const resolutionPromises = this.resolvers.map((resolver, index) => {
       const isLastResolver = index === this.resolvers.length - 1;
       return limit(async () => {
-        // Check if already aborted
-        if (alreadyResolvedAbort.signal.aborted) return undefined;
-
         const resolution = await this.resolveWithResolver({
           resolver,
           name,
@@ -215,7 +212,9 @@ export class CompositeArNSResolver implements NameResolver {
         });
 
         if (resolution) {
-          // Signal other resolvers to abort when we find a valid resolution
+          // Clear limit queue and signal running resolvers to abort when we
+          // find a valid resolution
+          limit.clearQueue();
           alreadyResolvedAbort.abort();
           return resolution;
         }
