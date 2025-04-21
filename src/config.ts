@@ -628,6 +628,11 @@ export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
   '3000',
 );
 
+export const ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
+  'ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS',
+  '30000',
+);
+
 export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
   'ARNS_NAMES_CACHE_TTL_SECONDS',
   `${60 * 60}`, // 1 hour

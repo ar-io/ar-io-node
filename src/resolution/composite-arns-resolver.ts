@@ -46,6 +46,7 @@ export class CompositeArNSResolver implements NameResolver {
   > = {};
   private maxConcurrentResolutions: number;
   private resolverTimeoutMs: number;
+  private lastResolverTimeoutMs: number;
   private arnsAntStateCacheHitRefreshWindowSeconds: number;
   private arnsCachedResolutionFallbackTimeoutMs: number;
 
@@ -59,6 +60,8 @@ export class CompositeArNSResolver implements NameResolver {
     arnsNamesCache,
     maxConcurrentResolutions = config.ARNS_MAX_CONCURRENT_RESOLUTIONS,
     resolverTimeoutMs = config.ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS,
+    lastResolverTimeoutMs:
+      lastResolverTimeoutMs = config.ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS,
     arnsAntStateCacheHitRefreshWindowSeconds = config.ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS,
     arnsCachedResolutionFallbackTimeoutMs = config.ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS,
   }: {
@@ -73,6 +76,7 @@ export class CompositeArNSResolver implements NameResolver {
     arnsNamesCache?: ArNSNamesCache;
     maxConcurrentResolutions?: number;
     resolverTimeoutMs?: number;
+    lastResolverTimeoutMs?: number;
     arnsAntStateCacheHitRefreshWindowSeconds?: number;
     arnsCachedResolutionFallbackTimeoutMs?: number;
   }) {
@@ -91,6 +95,7 @@ export class CompositeArNSResolver implements NameResolver {
       ? Math.min(maxConcurrentResolutions, this.resolvers.length)
       : this.resolvers.length;
     this.resolverTimeoutMs = resolverTimeoutMs;
+    this.lastResolverTimeoutMs = lastResolverTimeoutMs;
     this.arnsAntStateCacheHitRefreshWindowSeconds =
       arnsAntStateCacheHitRefreshWindowSeconds;
     this.arnsCachedResolutionFallbackTimeoutMs =
@@ -166,12 +171,10 @@ export class CompositeArNSResolver implements NameResolver {
       }
     })();
 
-    if (isLastResolver) {
-      return resolutionPromise;
-    }
-
     return pTimeout(resolutionPromise, {
-      milliseconds: this.resolverTimeoutMs,
+      milliseconds: isLastResolver
+        ? this.lastResolverTimeoutMs
+        : this.resolverTimeoutMs,
       signal,
     });
   }
