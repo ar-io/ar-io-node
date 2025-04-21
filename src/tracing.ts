@@ -17,7 +17,7 @@
  */
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import opentelemetry from '@opentelemetry/sdk-node';
+import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { trace } from '@opentelemetry/api';
 import { TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-node';
@@ -58,13 +58,10 @@ const sdk: NodeSDK = new NodeSDK({
     SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
   }),
   traceExporter: new OTLPTraceExporter(),
-  logRecordProcessor: new opentelemetry.logs.BatchLogRecordProcessor(
-    new OTLPLogExporter(),
-    {
-      scheduledDelayMillis: OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS,
-      maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
-    },
-  ),
+  logRecordProcessor: new BatchLogRecordProcessor(new OTLPLogExporter(), {
+    scheduledDelayMillis: OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS,
+    maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
+  }),
   // TODO: decide what auto instrumentation to enable
   // TODO: enable logging instrumentation once log levels have been adjusted
   instrumentations: [
