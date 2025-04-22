@@ -4,16 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 32] - 2025-04-22
 
 ### Changed
 
 - Reenabled parallel ArNS resolution with removal of misplaced global limit.
   Refer to release 30 notes for more details on configuration and rationale.
-- Added a timeout for the last ArNS resolver in
-  `ARNS_RESOLVER_PRIORITY_ORDER`. It defaults to 30 seconds and is
-  configurable using `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS`. This helps
-  prevent promise build up if resolution stalls.
+- Added a timeout for the last ArNS resolver in `ARNS_RESOLVER_PRIORITY_ORDER`.
+  It defaults to 30 seconds and is configurable using
+  `ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS`. This helps prevent promise build
+  up if the last resolver stalls.
 
 ### Fixed
 
@@ -21,8 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `ARNS_ROOT_HOST`.
 - Fixed a case where fork recovery could stall due to early flushing of
   unstable chain data.
-- Restored observer logs by removing accidental default log level override in
-  `docker-compose.yaml`.
+- Restored observer logs by removing unintentional default log level override
+  in `docker-compose.yaml`.
 
 ## [Release 31] - 2025-04-11
 
