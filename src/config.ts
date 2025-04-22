@@ -174,21 +174,21 @@ export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
   '3',
 );
 
-// Arweave Network peer post success goal
-// default value of 0 means this behaviour is disabled.
+// Arweave network peer post success goal
+// setting to 0 means this behaviour is disabled.
 export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
   'ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
-  '3',
+  '2',
 );
 
-// The maximum number of peers to attempt to post to before giving up
-export const ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT = +env.varOrDefault(
-  'ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT',
+// The maximum number of peers to attempt to POST to before giving up
+export const ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT = +env.varOrDefault(
+  'ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT',
   '5',
 );
 
 if (
-  ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT <
+  ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT <
   ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT
 ) {
   throw new Error(
