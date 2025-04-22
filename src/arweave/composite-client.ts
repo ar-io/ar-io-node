@@ -110,31 +110,10 @@ export class ArweaveCompositeClient
 
   // Trusted node
   private trustedNodeUrl: string;
-  private chunkPostUrls: string[];
-  private chunkPostConcurrency: number;
-  private secondaryChunkPostUrls: string[];
-  private secondaryChunkPostConcurrency: number;
-  private secondaryChunkPostMinSuccessCount: number;
   private trustedNodeAxios;
-  private primaryChunkPostCircuitBreakers: Record<
-    string,
-    CircuitBreaker<
-      Parameters<ArweaveCompositeClient['postChunk']>,
-      Awaited<ReturnType<ArweaveCompositeClient['postChunk']>>
-    >
-  > = {};
-
-  private secondaryChunkPostCircuitBreakers: Record<
-    string,
-    CircuitBreaker<
-      Parameters<ArweaveCompositeClient['postChunk']>,
-      Awaited<ReturnType<ArweaveCompositeClient['postChunk']>>
-    >
-  > = {};
 
   // Peers
   private peers: Record<string, Peer> = {};
-  private preferredPeers: Set<Peer> = new Set();
   private weightedChainPeers: WeightedElement<string>[] = [];
   private weightedGetChunkPeers: WeightedElement<string>[] = [];
   private weightedPostChunkPeers: WeightedElement<string>[] = [];
@@ -164,6 +143,36 @@ export class ArweaveCompositeClient
   private blockPrefetchCount;
   private blockTxPrefetchCount;
   private maxPrefetchHeight = -1;
+
+  // Chunk POST configuration
+  private chunkPostUrls: string[];
+  private chunkPostConcurrency: number;
+  private secondaryChunkPostUrls: string[];
+  private secondaryChunkPostConcurrency: number;
+  private secondaryChunkPostMinSuccessCount: number;
+  private peerChunkPostMinSuccessCount: number;
+  private peerChunkPostMaxAttempts: number;
+  private peerChunkPostConcurrency: number;
+
+  // Chunk POST circuit breakers
+  private primaryChunkPostCircuitBreakers: Record<
+    string,
+    CircuitBreaker<
+      Parameters<ArweaveCompositeClient['postChunk']>,
+      Awaited<ReturnType<ArweaveCompositeClient['postChunk']>>
+    >
+  > = {};
+  private secondaryChunkPostCircuitBreakers: Record<
+    string,
+    CircuitBreaker<
+      Parameters<ArweaveCompositeClient['postChunk']>,
+      Awaited<ReturnType<ArweaveCompositeClient['postChunk']>>
+    >
+  > = {};
+  private peerChunkPostCircuitBreaker: CircuitBreaker<
+    Parameters<ArweaveCompositeClient['peerPostChunk']>,
+    Awaited<ReturnType<ArweaveCompositeClient['peerPostChunk']>>
+  >;
 
   constructor({
     log,
@@ -205,8 +214,14 @@ export class ArweaveCompositeClient
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
+
+    // TODO: use defaults in constructor instead of referencing config here
+
+    // Primary chunk POST configuration
     this.chunkPostUrls = chunkPostUrls.map((url) => url.replace(/\/$/, ''));
     this.chunkPostConcurrency = config.CHUNK_POST_CONCURRENCY_LIMIT;
+
+    // Secondary chunk POST configuration
     this.secondaryChunkPostUrls = config.SECONDARY_CHUNK_POST_URLS.map((url) =>
       url.replace(/\/$/, ''),
     );
@@ -215,9 +230,19 @@ export class ArweaveCompositeClient
     this.secondaryChunkPostMinSuccessCount =
       config.SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT;
 
+    // Secondary chunk POST configuration
+    this.peerChunkPostMinSuccessCount =
+      config.ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT;
+    this.peerChunkPostMaxAttempts =
+      config.ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT;
+    this.peerChunkPostConcurrency =
+      config.ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT;
+
     const commonCircuitBreakerOptions = {
       errorThresholdPercentage: 50,
     };
+
+    // TODO: make circuit breakers settings configurable
 
     // Initialize circuit breakers for primary chunk post nodes
     this.chunkPostUrls.forEach((url) => {
@@ -278,6 +303,24 @@ export class ArweaveCompositeClient
       this.secondaryChunkPostCircuitBreakers[url] = circuitBreaker;
       metrics.circuitBreakerMetrics.add(circuitBreaker);
     });
+
+    // Initialize circuit breaker for peer chunk posts
+    this.peerChunkPostCircuitBreaker = new CircuitBreaker(
+      ({ chunk, abortTimeout, responseTimeout, originAndHopsHeaders }) => {
+        return this.peerPostChunk({
+          chunk,
+          abortTimeout,
+          responseTimeout,
+          originAndHopsHeaders,
+        });
+      },
+      {
+        name: `peerBroadcastChunk`,
+        capacity: 10,
+        resetTimeout: 10000,
+        ...commonCircuitBreakerOptions,
+      },
+    );
 
     this.failureSimulator = failureSimulator;
     this.txStore = txStore;
@@ -348,9 +391,6 @@ export class ArweaveCompositeClient
                 height: response.data.height,
                 lastSeen: new Date().getTime(),
               };
-              if (response.data.blocks / response.data.height > 0.9) {
-                this.preferredPeers.add(this.peers[peerHost]);
-              }
             } catch (error) {
               metrics.arweavePeerInfoErrorCounter.inc();
             }
@@ -1151,6 +1191,85 @@ export class ArweaveCompositeClient
     }
   }
 
+  async peerPostChunk({
+    chunk,
+    abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
+    responseTimeout = DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
+    originAndHopsHeaders,
+  }: {
+    chunk: JsonChunkPost;
+    abortTimeout?: number;
+    responseTimeout?: number;
+    originAndHopsHeaders: Record<string, string | undefined>;
+  }) {
+    this.failureSimulator.maybeFail();
+
+    const peerUrls = this.selectPeers(
+      this.peerChunkPostMaxAttempts,
+      'weightedPostChunkPeers',
+    );
+
+    const peerPostLimit = pLimit(this.peerChunkPostConcurrency);
+    let peerSuccessCount = 0;
+
+    await Promise.all(
+      peerUrls.map((peerUrl) =>
+        peerPostLimit(async () => {
+          if (peerSuccessCount >= this.peerChunkPostMinSuccessCount) {
+            // Stop when the minimum success count has been reached
+            return;
+          }
+          try {
+            // if it's not a 200 response, the axios call will throw
+            await axios({
+              method: 'POST',
+              url: `${peerUrl}/chunk`,
+              data: chunk,
+              signal: AbortSignal.timeout(abortTimeout),
+              timeout: responseTimeout,
+              headers: originAndHopsHeaders,
+              validateStatus: (status) => status === 200,
+            });
+            peerSuccessCount++;
+            metrics.arweaveChunkPostCounter.inc({
+              endpoint: peerUrl,
+              status: 'success',
+              role: 'peer',
+            });
+            this.handlePeerSuccess(
+              peerUrl,
+              'broadcastChunk',
+              'peer',
+              'weightedPostChunkPeers',
+            );
+          } catch (e: unknown) {
+            const error = e as Error;
+            metrics.arweaveChunkPostCounter.inc({
+              endpoint: peerUrl,
+              status: 'fail',
+              role: 'peer',
+            });
+            this.handlePeerFailure(
+              peerUrl,
+              'broadcastChunk',
+              'peer',
+              'weightedPostChunkPeers',
+            );
+            this.log.debug('Failed to POST chunk to peer:', {
+              peerUrl,
+              error: error.message,
+            });
+          }
+        }),
+      ),
+    );
+
+    this.log.debug('Peer broadcast complete', {
+      successCount: peerSuccessCount,
+      peerUrls,
+    });
+  }
+
   async broadcastChunk({
     chunk,
     abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
@@ -1259,76 +1378,11 @@ export class ArweaveCompositeClient
     }
 
     if (config.ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT > 0) {
-      const peerUrls = this.selectPeers(
-        config.ARWEAVE_PEER_CHUNK_POST_MAX_ATTEMPT_PEER_COUNT,
-        'weightedPostChunkPeers',
-      );
-
-      const peerPostLimit = pLimit(
-        config.ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT,
-      );
-      let peerSuccessCount = 0;
-
-      await Promise.all(
-        peerUrls.map((peerUrl) =>
-          peerPostLimit(async () => {
-            if (
-              peerSuccessCount >=
-              config.ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT
-            ) {
-              // mission accomplished
-              return;
-            }
-            try {
-              // if it's not a 200 response, the axios call will throw
-              await axios({
-                method: 'POST',
-                url: `${peerUrl}/chunk`,
-                data: chunk,
-                timeout: DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS,
-                signal: AbortSignal.timeout(
-                  DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
-                ),
-                headers: originAndHopsHeaders,
-                validateStatus: (status) => status === 200,
-              });
-              peerSuccessCount++;
-              metrics.arweaveChunkPostCounter.inc({
-                endpoint: peerUrl,
-                status: 'success',
-                role: 'peer',
-              });
-              this.handlePeerSuccess(
-                peerUrl,
-                'broadcastChunk',
-                'peer',
-                'weightedPostChunkPeers',
-              );
-            } catch (errorUnknown: unknown) {
-              const error = errorUnknown as Error;
-              metrics.arweaveChunkPostCounter.inc({
-                endpoint: peerUrl,
-                status: 'fail',
-                role: 'peer',
-              });
-              this.handlePeerFailure(
-                peerUrl,
-                'broadcastChunk',
-                'peer',
-                'weightedPostChunkPeers',
-              );
-              this.log.debug('Failed to POST chunk to peer:', {
-                peerUrl,
-                error: error.message,
-              });
-            }
-          }),
-        ),
-      );
-
-      this.log.debug('Peer broadcast complete', {
-        successCount: peerSuccessCount,
-        peerUrls,
+      await this.peerChunkPostCircuitBreaker.fire({
+        chunk,
+        abortTimeout,
+        responseTimeout,
+        originAndHopsHeaders,
       });
     }
 
