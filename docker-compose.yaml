@@ -173,6 +173,8 @@ services:
     volumes:
       - ${CLICKHOUSE_DATA_PATH:-./data/clickhouse}:/var/lib/clickhouse
       - ${CLICKHOUSE_LOGS_PATH:-./logs/clickhouse}:/var/log/clickhouse-server
+    environment:
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-changeme}
     networks:
       - ar-io-network
 
@@ -187,11 +189,12 @@ services:
     volumes:
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
     environment:
-      - PARQUET_DATA_PATH=${PARQUET_DATA_PATH:-./data/parquet}
-      - CLICKHOUSE_HOST=clickhouse
       - AR_IO_HOST=core
       - AR_IO_PORT=4000
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+      - PARQUET_DATA_PATH=${PARQUET_DATA_PATH:-./data/parquet}
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-clickhouse} # defaults to localhost in scripts
+      - CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-} # defaults to 9000 in scripts
       - CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-}
       - CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-}
       - CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-}
