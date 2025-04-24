@@ -203,7 +203,7 @@ export class ParquetExporter {
 
           reject(new Error(message.error));
         } else if (message.eventName === TIMING_LOG) {
-          this.log.info(`Parquet export timing: ${message.timingKey}`, {
+          this.log.debug(`Parquet export timing: ${message.timingKey}`, {
             exportStep: message.timingKey,
             startTime:
               typeof message.startTime === 'number'
