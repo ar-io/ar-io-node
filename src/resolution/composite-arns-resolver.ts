@@ -183,19 +183,28 @@ export class CompositeArNSResolver implements NameResolver {
     name,
     baseArNSRecordFn,
     signal,
+    parentSpan,
   }: {
     name: string;
     baseArNSRecordFn: () => Promise<any>;
     signal: AbortSignal;
+    parentSpan: Span;
   }): Promise<NameResolution | undefined> {
-    const span = tracer.startSpan('CompositeArNSResolver.resolverParallel', {
-      attributes: {
-        arnsName: name,
+    const span = tracer.startSpan(
+      'CompositeArNSResolver.resolverParallel',
+      {
+        attributes: {
+          arnsName: name,
+        },
       },
-    });
+      trace.setSpan(context.active(), parentSpan),
+    );
 
     // Return the pending resolution for the name if it exists
-    if (this.pendingResolutions[name]) return this.pendingResolutions[name];
+    if (this.pendingResolutions[name]) {
+      span.addEvent('Using pending resolution');
+      return this.pendingResolutions[name];
+    }
 
     const limit = pLimit(this.maxConcurrentResolutions);
     const alreadyResolvedAbort = new AbortController();
@@ -251,9 +260,13 @@ export class CompositeArNSResolver implements NameResolver {
     signal = new AbortController().signal,
   }: {
     name: string;
-    // TODO: pass AbortController instead of signal
     signal?: AbortSignal;
   }): Promise<NameResolution> {
+    const span = tracer.startSpan('CompositeArNSResolver.resolve', {
+      attributes: {
+        arnsName: name,
+      },
+    });
     this.log.info('Resolving name...', { name, overrides: this.overrides });
 
     // parse out base arns name, if undername
@@ -292,6 +305,7 @@ export class CompositeArNSResolver implements NameResolver {
           ? (JSON.parse(cachedResolutionBuffer.toString()) as NameResolution)
           : undefined;
       if (cachedResolution) {
+        span.addEvent('Cached resolution found');
         // Use the override TTL if it exists, otherwise use the cached
         // resolution TTL
         const ttlSeconds = this.overrides?.ttlSeconds ?? cachedResolution.ttl;
@@ -306,16 +320,18 @@ export class CompositeArNSResolver implements NameResolver {
           // to expiring
           if (
             cachedResolution.resolvedAt + ttlSeconds * 1000 - Date.now() <
-            // TODO: check this
             this.arnsAntStateCacheHitRefreshWindowSeconds * 1000
           ) {
+            span.addEvent('Background refresh');
             this.resolveParallel({
               name,
               baseArNSRecordFn,
               signal,
+              parentSpan: span,
             });
           }
           metrics.arnsCacheHitCounter.inc();
+          span.addEvent('Resolution cache hit');
           this.log.verbose('Resolution cache hit for ArNS name', { name });
           return cachedResolution;
         }
@@ -332,27 +348,42 @@ export class CompositeArNSResolver implements NameResolver {
               name,
               baseArNSRecordFn,
               signal: signal,
+              parentSpan: span,
             }),
             {
               milliseconds: this.arnsCachedResolutionFallbackTimeoutMs,
               fallback: () => {
+                span.addEvent('Cached resolution fallback');
                 return cachedResolution;
               },
               signal,
             },
           )
         : // No cached resolution exists
-          this.resolveParallel({ name, baseArNSRecordFn, signal }));
+          this.resolveParallel({
+            name,
+            baseArNSRecordFn,
+            signal,
+            parentSpan: span,
+          }));
 
-      if (resolution) return resolution;
+      if (resolution) {
+        span.addEvent('Successful resolution');
+        return resolution;
+      }
 
+      span.addEvent('Failed resolution');
       this.log.warn('Unable to resolve name against all resolvers', { name });
-    } catch (error: any) {
+    } catch (e: any) {
+      const error = e as Error;
       this.log.error('Error resolving name:', {
         name,
         message: error.message,
         stack: error.stack,
       });
+      span.recordException(error as Error);
+    } finally {
+      span.end();
     }
 
     // No resolution found
