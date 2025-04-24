@@ -457,8 +457,10 @@ export const TAG_SELECTIVITY = JSON.parse(
   ),
 ) as Record<string, number>;
 
-// ClickHouse URL
+// ClickHouse
 export const CLICKHOUSE_URL = env.varOrUndefined('CLICKHOUSE_URL');
+export const CLICKHOUSE_USER = env.varOrUndefined('CLICKHOUSE_USER');
+export const CLICKHOUSE_PASSWORD = env.varOrUndefined('CLICKHOUSE_PASSWORD');
 
 //
 // Healthchecks
