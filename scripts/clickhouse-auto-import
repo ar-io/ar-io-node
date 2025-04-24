@@ -14,9 +14,9 @@ log_timing() {
     echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
 }
 
-# Load environment variables from .env if it exists
+# Export environment variables from .env if it exists
 if [ -f .env ]; then
-    set -a
+    set -a # automatically export all variables
     source .env
     set +a
 fi
@@ -177,8 +177,8 @@ while true; do
                 -H "Authorization: Bearer $ADMIN_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{
-                    \"indexedAtThreshold\": $max_indexed_at, 
-                    \"startHeight\": $current_height, 
+                    \"indexedAtThreshold\": $max_indexed_at,
+                    \"startHeight\": $current_height,
                     \"endHeight\": $end_height
                 }"
             prune_end_time=$(date +%s)

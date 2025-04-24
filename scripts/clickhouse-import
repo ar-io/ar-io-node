@@ -12,6 +12,13 @@ log_timing() {
     echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
 }
 
+# Export environment variables from .env if it exists
+if [ -f .env ]; then
+  set -a  # automatically export all variables
+  . ./.env
+  set +a
+fi
+
 clickhouse_host=${CLICKHOUSE_HOST:-localhost}
 parquet_path=${PARQUET_PATH:-data/parquet}
 
