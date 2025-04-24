@@ -306,6 +306,7 @@ export class CompositeArNSResolver implements NameResolver {
           // to expiring
           if (
             cachedResolution.resolvedAt + ttlSeconds * 1000 - Date.now() <
+            // TODO: check this
             this.arnsAntStateCacheHitRefreshWindowSeconds * 1000
           ) {
             this.resolveParallel({
@@ -324,19 +325,17 @@ export class CompositeArNSResolver implements NameResolver {
 
       // If there is a cached resolution, fall back to it if either an error
       // occurs or we exceed the cached resolution fallback timeout
-      const resolutionTimeoutAbort = new AbortController();
       const resolution = await (cachedResolution
         ? // Cached resultion exists
           pTimeout(
             this.resolveParallel({
               name,
               baseArNSRecordFn,
-              signal: anySignal([signal, resolutionTimeoutAbort.signal]),
+              signal: signal,
             }),
             {
               milliseconds: this.arnsCachedResolutionFallbackTimeoutMs,
               fallback: () => {
-                resolutionTimeoutAbort.abort();
                 return cachedResolution;
               },
               signal,
