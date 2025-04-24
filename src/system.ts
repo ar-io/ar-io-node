@@ -179,6 +179,8 @@ export const gqlQueryable: GqlQueryable = (() => {
       log,
       gqlQueryable: db,
       url: config.CLICKHOUSE_URL,
+      username: config.CLICKHOUSE_USER,
+      password: config.CLICKHOUSE_PASSWORD,
     });
   }
 

@@ -106,15 +106,21 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     log,
     gqlQueryable,
     url,
+    username,
+    password,
   }: {
     log: winston.Logger;
     gqlQueryable: GqlQueryable;
     url: string;
+    username?: string;
+    password?: string;
   }) {
     this.log = log;
 
     this.clickhouseClient = createClient({
       url,
+      username,
+      password,
     });
 
     this.gqlQueryable = gqlQueryable;
