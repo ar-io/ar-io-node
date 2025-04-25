@@ -336,7 +336,7 @@ export class CompositeArNSResolver implements NameResolver {
               name,
               baseArNSRecordFn,
               signal,
-              parentSpan: span,
+              parentSpan: innerSpan,
             }).finally(() => {
               innerSpan.end();
             });
