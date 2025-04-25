@@ -141,6 +141,7 @@ export class CompositeArNSResolver implements NameResolver {
             name,
             Buffer.from(JSON.stringify(resolution)),
           );
+          span.addEvent('Saved resolution to cache');
 
           metrics.arnsResolutionResolverCount.inc({
             resolver: resolver.constructor.name,
@@ -305,10 +306,14 @@ export class CompositeArNSResolver implements NameResolver {
           ? (JSON.parse(cachedResolutionBuffer.toString()) as NameResolution)
           : undefined;
       if (cachedResolution) {
-        span.addEvent('Cached resolution found');
         // Use the override TTL if it exists, otherwise use the cached
         // resolution TTL
         const ttlSeconds = this.overrides?.ttlSeconds ?? cachedResolution.ttl;
+        span.addEvent('Found cached resolution', {
+          resolvedAt: cachedResolution.resolvedAt,
+          ttl: cachedResolution.ttl,
+          effectiveTtl: ttlSeconds,
+        });
 
         // Use the cached resolution if its fresh enough
         if (
@@ -322,16 +327,22 @@ export class CompositeArNSResolver implements NameResolver {
             cachedResolution.resolvedAt + ttlSeconds * 1000 - Date.now() <
             this.arnsAntStateCacheHitRefreshWindowSeconds * 1000
           ) {
-            span.addEvent('Background refresh');
+            const innerSpan = tracer.startSpan(
+              'CompositeArNSResolver.backgroundRefresh',
+              { attributes: { arnsName: name } },
+              trace.setSpan(context.active(), span),
+            );
             this.resolveParallel({
               name,
               baseArNSRecordFn,
               signal,
               parentSpan: span,
+            }).finally(() => {
+              innerSpan.end();
             });
           }
           metrics.arnsCacheHitCounter.inc();
-          span.addEvent('Resolution cache hit');
+          span.addEvent('Using cached resolution within TTL');
           this.log.verbose('Resolution cache hit for ArNS name', { name });
           return cachedResolution;
         }
@@ -341,6 +352,7 @@ export class CompositeArNSResolver implements NameResolver {
 
       // If there is a cached resolution, fall back to it if either an error
       // occurs or we exceed the cached resolution fallback timeout
+      let usedCachedFallback = false;
       const resolution = await (cachedResolution
         ? // Cached resultion exists
           pTimeout(
@@ -353,7 +365,10 @@ export class CompositeArNSResolver implements NameResolver {
             {
               milliseconds: this.arnsCachedResolutionFallbackTimeoutMs,
               fallback: () => {
-                span.addEvent('Cached resolution fallback');
+                usedCachedFallback = true;
+                span.addEvent(
+                  'Using cached resolution due to fallback timeout',
+                );
                 return cachedResolution;
               },
               signal,
@@ -368,11 +383,15 @@ export class CompositeArNSResolver implements NameResolver {
           }));
 
       if (resolution) {
-        span.addEvent('Successful resolution');
+        if (usedCachedFallback) {
+          span.addEvent('Resolved by cache fallback');
+        } else {
+          span.addEvent('Resolved by fresh resolution');
+        }
         return resolution;
       }
 
-      span.addEvent('Failed resolution');
+      span.addEvent('Unable to resolve name');
       this.log.warn('Unable to resolve name against all resolvers', { name });
     } catch (e: any) {
       const error = e as Error;
