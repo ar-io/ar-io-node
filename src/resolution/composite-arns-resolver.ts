@@ -193,17 +193,14 @@ export class CompositeArNSResolver implements NameResolver {
   }): Promise<NameResolution | undefined> {
     const span = tracer.startSpan(
       'CompositeArNSResolver.resolverParallel',
-      {
-        attributes: {
-          arnsName: name,
-        },
-      },
+      { attributes: { arnsName: name } },
       trace.setSpan(context.active(), parentSpan),
     );
 
     // Return the pending resolution for the name if it exists
     if (this.pendingResolutions[name]) {
       span.addEvent('Using pending resolution');
+      span.end();
       return this.pendingResolutions[name];
     }
 
