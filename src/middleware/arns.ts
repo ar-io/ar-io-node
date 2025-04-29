@@ -17,6 +17,7 @@
  */
 import { Handler } from 'express';
 import { asyncMiddleware } from 'middleware-async';
+import { URL } from 'node:url';
 
 import * as config from '../config.js';
 import { headerNames } from '../constants.js';
@@ -37,11 +38,35 @@ export const createArnsMiddleware = ({
   nameResolver: NameResolver;
 }): Handler =>
   asyncMiddleware(async (req, res, next) => {
+    // Skip all ArNS processing if the root ArNS host is not set.
+    if (config.ARNS_ROOT_HOST === undefined || config.ARNS_ROOT_HOST === '') {
+      next();
+      return;
+    }
+
+    const hostNameIsArNSRoot = req.hostname === config.ARNS_ROOT_HOST;
+
     if (
-      // Ignore requests that do end with the ArNS root hostname.
-      (config.ARNS_ROOT_HOST !== undefined &&
-        config.ARNS_ROOT_HOST !== '' &&
-        !req.hostname.endsWith('.' + config.ARNS_ROOT_HOST)) ||
+      // Use apex ID as ArNS root data if it's set.
+      config.APEX_TX_ID !== undefined &&
+      hostNameIsArNSRoot
+    ) {
+      res.header(headerNames.arnsResolvedId, config.APEX_TX_ID);
+      dataHandler(req, res, next);
+      return;
+    }
+
+    let arnsSubdomain: string | undefined;
+    if (
+      // If apex ArNS name is set and hostname matches root use the apex ArNS
+      // name as the ArNS subdomain.
+      config.APEX_ARNS_NAME !== undefined &&
+      hostNameIsArNSRoot
+    ) {
+      arnsSubdomain = config.APEX_ARNS_NAME;
+    } else if (
+      // Ignore requests that do not end with the ArNS root hostname.
+      !req.hostname.endsWith('.' + config.ARNS_ROOT_HOST) ||
       // Ignore requests that do not include subdomains since ArNS always
       // requires a subdomain.
       !Array.isArray(req.subdomains) ||
@@ -51,22 +76,22 @@ export const createArnsMiddleware = ({
     ) {
       next();
       return;
+    } else {
+      arnsSubdomain = req.subdomains[req.subdomains.length - 1];
     }
-
-    const arnsSubdomain = req.subdomains[req.subdomains.length - 1];
 
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
-      // Avoid collisions with sandbox URLs by ensuring the subdomain length
-      // is below the minimum length of a sandbox subdomain. Undernames are
-      // are an exception because they can be longer and '_' cannot appear in
-      // base32.
+      // Avoid collisions with sandbox URLs by ensuring the subdomain length is
+      // below the minimum length of a sandbox subdomain. Undernames are are an
+      // exception because they can be longer and '_' cannot appear in base32.
       (arnsSubdomain.length > MAX_ARNS_NAME_LENGTH && !arnsSubdomain.match(/_/))
     ) {
       next();
       return;
     }
 
+    // TODO: add comment explaining this behavior
     if (DATA_PATH_REGEX.test(req.path)) {
       next();
       return;
@@ -77,34 +102,71 @@ export const createArnsMiddleware = ({
       return;
     }
 
-    // NOTE: Errors and request deduplication are expected to be handled by the
-    // resolver
+    // NOTE: Errors and in-flight resolution deduplication are expected to be
+    // handled by the resolver.
     const end = metrics.arnsResolutionTime.startTimer();
-    const { resolvedId, ttl, processId, resolvedAt, limit, index } =
+    let { resolvedId, ttl, processId, resolvedAt, limit, index } =
       await nameResolver.resolve({
         name: arnsSubdomain,
       });
     end();
     if (resolvedId === undefined) {
-      sendNotFound(res);
-      return;
+      // Extract host from referer if available
+      let refererHost;
+      if (req.headers.referer !== undefined) {
+        try {
+          const refererUrl = new URL(req.headers.referer);
+          refererHost = refererUrl.host;
+        } catch (e) {
+          // Invalid URL, ignore
+        }
+      }
+      if (req.path === '' || req.path === '/') {
+        res.status(404);
+      } else if (req.headers.host !== refererHost) {
+        res.redirect('/');
+        return;
+      }
+      if (
+        // ArNS undername should not use custom 404 pages.
+        // TODO: expand this explanation
+        arnsSubdomain?.match(/_/) ||
+        // Custom 404s should not be used for Apex ArNS.
+        hostNameIsArNSRoot
+      ) {
+        sendNotFound(res);
+        return;
+      } else if (config.ARNS_NOT_FOUND_TX_ID !== undefined) {
+        resolvedId = config.ARNS_NOT_FOUND_TX_ID;
+      } else if (config.ARNS_NOT_FOUND_ARNS_NAME !== undefined) {
+        ({ resolvedId, ttl, processId, resolvedAt, limit, index } =
+          await nameResolver.resolve({
+            name: config.ARNS_NOT_FOUND_ARNS_NAME,
+          }));
+      } else {
+        sendNotFound(res);
+        return;
+      }
     }
 
     res.header(headerNames.arnsResolvedId, resolvedId);
-    res.header(headerNames.arnsTtlSeconds, ttl.toString());
+    res.header(headerNames.arnsTtlSeconds, ttl?.toString());
     res.header(headerNames.arnsProcessId, processId);
-    res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
-    // limit and index can be undefined if they come from the cache
-    res.header(headerNames.arnsLimit, limit?.toString());
-    res.header(headerNames.arnsIndex, index?.toString());
+    res.header(headerNames.arnsResolvedAt, resolvedAt?.toString());
+    // Limit and index can be undefined if they come from a cache that existed
+    // before they were added.
+    if (limit !== undefined && index !== undefined) {
+      res.header(headerNames.arnsLimit, limit.toString());
+      res.header(headerNames.arnsIndex, index.toString());
 
-    // handle undername limit exceeded
-    if (config.ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT && index > limit) {
-      sendPaymentRequired(
-        res,
-        'ArNS undername limit exceeded. Purchase additional undernames to continue.',
-      );
-      return;
+      // handle undername limit exceeded
+      if (config.ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT && index > limit) {
+        sendPaymentRequired(
+          res,
+          'ArNS undername limit exceeded. Purchase additional undernames to continue.',
+        );
+        return;
+      }
     }
 
     // TODO: add a header for arns cache status

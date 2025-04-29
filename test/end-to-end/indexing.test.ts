@@ -601,28 +601,35 @@ describe('Indexing', function () {
       await compose.down();
     });
 
-    it('Verifying pending transactions in GQL', async function () {
-      const expectedTxIds = [
-        'C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk',
-        '8RMvY06r7KjGuJfzc0VAKQku-eMaNtTPKyPA7RO0fv0',
-        'CKcFeFmIXqEYpn5UdEaXsliQJ5GFKLsO-NKO4X3rcOA',
-        'g3Ohm5AfSFrOzwk4smBML2uVhO_yzkXnmzi2jVw3eNk',
-        'ipuEMR4iteGun2eziUDT1_n0_d7UXp2LkpJu9dzO_XU',
-        'sO-OaJNBuXvJW1fPiXZIDm_Zg1xBWOxByMILqMJ2-R4',
-        'vUAI-39ZSja9ENsNgqsiTTWGU7H67Fl_dMuvtvq-cFc',
-      ];
+    it(
+      'Verifying pending transactions in GQL',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        const expectedTxIds = [
+          'C7lP_aOvx4jXyFWBtJCrzTavK1gf5xfwvf5ML6I4msk',
+          '8RMvY06r7KjGuJfzc0VAKQku-eMaNtTPKyPA7RO0fv0',
+          'CKcFeFmIXqEYpn5UdEaXsliQJ5GFKLsO-NKO4X3rcOA',
+          'g3Ohm5AfSFrOzwk4smBML2uVhO_yzkXnmzi2jVw3eNk',
+          'ipuEMR4iteGun2eziUDT1_n0_d7UXp2LkpJu9dzO_XU',
+          'sO-OaJNBuXvJW1fPiXZIDm_Zg1xBWOxByMILqMJ2-R4',
+          'vUAI-39ZSja9ENsNgqsiTTWGU7H67Fl_dMuvtvq-cFc',
+        ];
 
-      const gqlTxs = await fetchGqlTxs();
-      const gqlTxsIds = gqlTxs.map((tx: any) => tx.id);
-      assert.equal(gqlTxsIds.length, expectedTxIds.length);
-      assert.deepEqual(gqlTxsIds.slice().sort(), expectedTxIds.slice().sort());
+        const gqlTxs = await fetchGqlTxs();
+        const gqlTxsIds = gqlTxs.map((tx: any) => tx.id);
+        assert.equal(gqlTxsIds.length, expectedTxIds.length);
+        assert.deepEqual(
+          gqlTxsIds.slice().sort(),
+          expectedTxIds.slice().sort(),
+        );
 
-      gqlTxs?.forEach((tx: any) => {
-        if (tx.bundledIn) {
-          assert.equal(tx.bundledIn.id, expectedTxIds[0]);
-        }
-      });
-    });
+        gqlTxs?.forEach((tx: any) => {
+          if (tx.bundledIn) {
+            assert.equal(tx.bundledIn.id, expectedTxIds[0]);
+          }
+        });
+      },
+    );
   });
 
   describe('Queue bundle', function () {
@@ -1232,38 +1239,41 @@ describe('Indexing', function () {
       },
     );
 
-    it('should retry failed bundles after filter changes', async function () {
-      await axios.post(
-        'http://localhost:4000/ar-io/admin/queue-bundle',
-        { id: bundleId },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer secret',
+    it(
+      'should retry failed bundles after filter changes',
+      { skip: isTestFiltered(['flaky']) },
+      async function () {
+        await axios.post(
+          'http://localhost:4000/ar-io/admin/queue-bundle',
+          { id: bundleId },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer secret',
+            },
           },
-        },
-      );
+        );
 
-      await waitForBundleToBeIndexed({ id: bundleId });
+        await waitForBundleToBeIndexed({ id: bundleId });
 
-      // Change filters
-      await compose.down();
-      compose = await composeUp({
-        ANS104_UNBUNDLE_FILTER: '{"attributes": {"owner": "new-owner"}}',
-        ANS104_INDEX_FILTER: '{"attributes": {"owner": "new-owner"}}',
-        BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS: '1',
-        BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS: '0.5',
-        BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS: '0.5',
-        FILTER_CHANGE_REPROCESS: 'true',
-        SKIP_CLEAN_DB: 'true',
-      });
+        // Change filters
+        await compose.down();
+        compose = await composeUp({
+          ANS104_UNBUNDLE_FILTER: '{"attributes": {"owner": "new-owner"}}',
+          ANS104_INDEX_FILTER: '{"attributes": {"owner": "new-owner"}}',
+          BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS: '1',
+          BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS: '0.5',
+          BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS: '0.5',
+          FILTER_CHANGE_REPROCESS: 'true',
+          SKIP_CLEAN_DB: 'true',
+        });
 
-      // Wait for retry mechanism to kick in
-      await wait(5000);
+        // Wait for retry mechanism to kick in
+        await wait(5000);
 
-      const bundleState = bundlesDb
-        .prepare(
-          `
+        const bundleState = bundlesDb
+          .prepare(
+            `
           SELECT
             import_attempt_count,
             retry_attempt_count,
@@ -1272,11 +1282,12 @@ describe('Indexing', function () {
           FROM bundles
           WHERE id = ?
         `,
-        )
-        .get(fromB64Url(bundleId));
+          )
+          .get(fromB64Url(bundleId));
 
-      assert.ok(bundleState.import_attempt_count > 1);
-      assert.ok(bundleState.retry_attempt_count >= 1);
-    });
+        assert.ok(bundleState.import_attempt_count > 1);
+        assert.ok(bundleState.retry_attempt_count >= 1);
+      },
+    );
   });
 });

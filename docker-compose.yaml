@@ -142,6 +142,8 @@ services:
       - GATEWAY_PEERS_REQUEST_WINDOW_COUNT=${GATEWAY_PEERS_REQUEST_WINDOW_COUNT:-}
       - APEX_TX_ID=${APEX_TX_ID:-}
       - APEX_ARNS_NAME=${APEX_ARNS_NAME:-}
+      - ARNS_NOT_FOUND_TX_ID=${ARNS_NOT_FOUND_TX_ID:-}
+      - ARNS_NOT_FOUND_ARNS_NAME=${ARNS_NOT_FOUND_ARNS_NAME:-}
     networks:
       - ar-io-network
     depends_on:

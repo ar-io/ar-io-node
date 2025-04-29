@@ -515,6 +515,13 @@ if (APEX_ARNS_NAME !== undefined && ARNS_ROOT_HOST === undefined) {
   throw new Error('ARNS_ROOT_HOST must be defined when APEX_ARNS_NAME is used');
 }
 
+export const ARNS_NOT_FOUND_TX_ID = env.varOrUndefined('ARNS_NOT_FOUND_TX_ID');
+
+export const ARNS_NOT_FOUND_ARNS_NAME = env.varOrDefault(
+  'ARNS_NOT_FOUND_ARNS_NAME',
+  'unregistered_arns',
+);
+
 //
 // Header caching
 //

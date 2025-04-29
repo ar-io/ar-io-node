@@ -23,20 +23,20 @@ import { cleanDb, composeUp } from './utils.js';
 
 let compose: StartedDockerComposeEnvironment;
 
-before(async function () {
-  await cleanDb();
-
-  compose = await composeUp({
-    START_WRITERS: 'false',
-    ARNS_ROOT_HOST: 'ar-io.localhost',
-  });
-});
-
-after(async function () {
-  await compose.down();
-});
-
 describe('ArNS', function () {
+  before(async function () {
+    await cleanDb();
+
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      ARNS_ROOT_HOST: 'ar-io.localhost',
+    });
+  });
+
+  after(async function () {
+    await compose.down();
+  });
+
   describe('Subdomain resolution', function () {
     describe('Base names', function () {
       it('Verifying "__unknown__.ar-io.localhost" returns 404', async function () {
@@ -297,6 +297,101 @@ describe('ArNS', function () {
       );
 
       assert.strictEqual(res.status, 404);
+    });
+  });
+});
+
+describe('ArNS 404s', function () {
+  describe('Using a TX ID', function () {
+    before(async function () {
+      await cleanDb();
+
+      compose = await composeUp({
+        START_WRITERS: 'false',
+        ARNS_ROOT_HOST: 'ar-io.localhost',
+        ARNS_NOT_FOUND_TX_ID: 'kvhEUsIY5bXe0Wu2-YUFz20O078uYFzmQIO-7brv8qw',
+      });
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('GET "unknownname.ar-io.localhost" returns an HTTP 404 with the expected transaction ID data', async function () {
+      const res = await axios.get('http://localhost:4000/', {
+        headers: { Host: 'unknownname.ar-io.localhost' },
+        validateStatus: () => true,
+      });
+
+      assert.strictEqual(res.status, 404);
+      assert.ok(
+        res.data && res.data.length > 0,
+        'Response body should not be empty',
+      );
+      assert.ok(res.data !== 'Not found');
+    });
+
+    it('GET of a path on "unknownname.ar-io.localhost" returns an HTTP redirect to "/"', async function () {
+      const res = await axios.get('http://localhost:4000/js/arconnect.js', {
+        headers: { Host: 'unknownname.ar-io.localhost' },
+        validateStatus: () => true,
+      });
+
+      assert.strictEqual(res.request.path, '/');
+      assert.strictEqual(res.status, 404);
+      assert.ok(
+        res.data && res.data.length > 0,
+        'Response body should not be empty',
+      );
+      assert.ok(res.data !== 'Not found');
+    });
+
+    it('GET of a path on "unknownname.ar-io.localhost" returns an HTTP 200 if the referer is from the same domain', async function () {
+      const res = await axios.get('http://localhost:4000/js/arconnect.js', {
+        headers: {
+          Host: 'unknownname.ar-io.localhost',
+          Referer: 'http://unknownname.ar-io.localhost/',
+        },
+        validateStatus: () => true,
+      });
+
+      assert.strictEqual(res.request.path, '/js/arconnect.js');
+      assert.strictEqual(res.status, 200);
+      assert.ok(
+        res.data && res.data.length > 0,
+        'Response body should not be empty',
+      );
+      assert.ok(res.data !== 'Not found');
+    });
+  });
+
+  describe('Using an ArNS name', function () {
+    before(async function () {
+      await cleanDb();
+
+      compose = await composeUp({
+        START_WRITERS: 'false',
+        ARNS_ROOT_HOST: 'ar-io.localhost',
+        ARNS_NOT_FOUND_ARNS_NAME: 'unregistered_arns',
+      });
+    });
+
+    after(async function () {
+      await compose.down();
+    });
+
+    it('GET "unknownname.ar-io.localhost" returns an HTTP 404 with the expected transaction ID data', async function () {
+      const res = await axios.get('http://localhost:4000/', {
+        headers: { Host: 'unknownname.ar-io.localhost' },
+        validateStatus: () => true,
+      });
+
+      assert.strictEqual(res.status, 404);
+      assert.ok(
+        res.data && res.data.length > 0,
+        'Response body should not be empty',
+      );
+      assert.ok(res.data !== 'Not found');
     });
   });
 });
