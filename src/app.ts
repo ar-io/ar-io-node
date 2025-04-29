@@ -51,14 +51,7 @@ const app = express();
 
 app.use(
   cors({
-    exposedHeaders: [
-      headerNames.arnsResolvedId,
-      headerNames.arnsTtlSeconds,
-      headerNames.arnsProcessId,
-      headerNames.arnsResolvedAt,
-      headerNames.arnsIndex,
-      headerNames.arnsLimit,
-    ],
+    exposedHeaders: Object.values(headerNames),
   }),
 );
 
