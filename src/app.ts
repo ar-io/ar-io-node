@@ -22,7 +22,7 @@ import { Server } from 'node:http';
 import * as config from './config.js';
 import { headerNames } from './constants.js';
 import log from './log.js';
-import { defaultRouter } from './routes/default.js';
+import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
 import { chunkRouter } from './routes/chunk/index.js';
@@ -60,7 +60,7 @@ app.use(openApiRouter);
 app.use(arIoRouter);
 app.use(chunkRouter);
 app.use(dataRouter);
-app.use(defaultRouter);
+app.use(rootRouter);
 
 // GraphQL
 const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {

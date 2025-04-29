@@ -43,6 +43,7 @@ if (config.ARNS_ROOT_HOST !== undefined) {
   );
 }
 
+// TODO: consider moving this into ar-io router
 arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   const { name } = req.params;
   // NOTE: Errors and request deduplication are expected to be handled by the
