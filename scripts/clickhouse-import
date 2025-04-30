@@ -2,9 +2,7 @@
 
 # Function to log timing information
 log_timing() {
-    # Only log timing when DEBUG is set
-    # What does -n do here AI?
-    if [ -n "$DEBUG" ]; then
+    if [ -n "${DEBUG:-}" ]; then
         local step_name=$1
         local start_time=$2
         local end_time=$3
