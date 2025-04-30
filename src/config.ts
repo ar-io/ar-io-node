@@ -729,6 +729,8 @@ export const AWS_ACCESS_KEY_ID = env.varOrUndefined('AWS_ACCESS_KEY_ID');
 export const AWS_SECRET_ACCESS_KEY = env.varOrUndefined(
   'AWS_SECRET_ACCESS_KEY',
 );
+// The session token is optional, but if it is set, it must be used
+export const AWS_SESSION_TOKEN = env.varOrUndefined('AWS_SESSION_TOKEN');
 export const AWS_REGION = env.varOrUndefined('AWS_REGION');
 export const AWS_ENDPOINT = env.varOrUndefined('AWS_ENDPOINT');
 

@@ -28,23 +28,16 @@ import {
 } from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { toB64Url } from '../../lib/encoding.js';
-import {
-  ChunkData,
-  ChunkDataByAnySource,
-  ChunkMetadata,
-  ChunkMetadataByAnySource,
-} from '../../types.js';
+import { Chunk, ChunkByAnySource } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 
 export const createChunkOffsetHandler = ({
-  chunkDataSource,
-  chunkMetaDataSource,
+  chunkSource,
   db,
   log,
 }: {
-  chunkDataSource: ChunkDataByAnySource;
-  chunkMetaDataSource: ChunkMetadataByAnySource;
+  chunkSource: ChunkByAnySource;
   db: StandaloneSqliteDatabase;
   log: Logger;
 }) => {
@@ -78,11 +71,12 @@ export const createChunkOffsetHandler = ({
     const contiguousDataStartDelimiter = weaveOffset - data_size + 1;
     const relativeOffset = offset - contiguousDataStartDelimiter;
 
-    let chunkData: ChunkData | undefined = undefined;
+    // composite-chunk-source returns chunk metadata and chunk data
+    let chunk: Chunk | undefined = undefined;
 
     // actually fetch the chunk data
     try {
-      chunkData = await chunkDataSource.getChunkDataByAny({
+      chunk = await chunkSource.getChunkByAny({
         txSize: data_size,
         absoluteOffset: offset,
         dataRoot: data_root,
@@ -93,36 +87,28 @@ export const createChunkOffsetHandler = ({
       return;
     }
 
-    if (chunkData === undefined) {
+    if (chunk === undefined) {
       response.sendStatus(404);
       return;
     }
 
     let chunkBase64Url: string | undefined = undefined;
+    let dataPath: string | undefined = undefined;
+
     try {
-      chunkBase64Url = toB64Url(chunkData.chunk);
+      chunkBase64Url = toB64Url(chunk.chunk);
     } catch (error) {
       log.error('Error converting chunk to base64url', { error });
       response.status(500).send('Error converting chunk to base64url');
       return;
     }
 
-    let chunkMetadata: ChunkMetadata | undefined = undefined;
-    let dataPath: string | undefined = undefined;
-
     try {
-      chunkMetadata = await chunkMetaDataSource.getChunkMetadataByAny({
-        txSize: data_size,
-        absoluteOffset: offset,
-        dataRoot: data_root,
-        relativeOffset,
-      });
+      dataPath = toB64Url(chunk.data_path);
     } catch (error) {
-      log.error('Error fetching chunk metadata', { error });
-    }
-
-    if (chunkMetadata) {
-      dataPath = toB64Url(chunkMetadata.data_path);
+      log.error('Error getting data path from chunk', { error });
+      response.status(500).send('Error converting data path to base64url');
+      return;
     }
 
     // this is a very limited interface of the node network chunk response

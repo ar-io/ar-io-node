@@ -479,7 +479,7 @@ export interface ChunkMetadata {
 }
 
 export interface Chunk extends ChunkMetadata, ChunkData {
-  tx_path: Buffer;
+  tx_path: Buffer | undefined;
 }
 
 export interface ChunkDataByAnySourceParams {
