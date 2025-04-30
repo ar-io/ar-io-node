@@ -96,6 +96,7 @@ import { server } from './app.js';
 import { S3DataStore } from './store/s3-data-store.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
+import { CompositeChunkSource } from './data/composite-chunk-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -130,6 +131,9 @@ export const awsClient =
         secretAccessKey: config.AWS_SECRET_ACCESS_KEY,
         endpoint: config.AWS_ENDPOINT,
         region: config.AWS_REGION,
+        ...(config.AWS_SESSION_TOKEN !== undefined && {
+          sessionToken: config.AWS_SESSION_TOKEN,
+        }),
         plugins: [awsLiteS3],
       })
     : undefined;
@@ -395,7 +399,7 @@ if (config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3' && awsClient === undefined) {
 }
 
 // Configure contiguous data source
-export const chunkDataSource =
+const chunkDataSource =
   config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3'
     ? new S3ChunkSource({
         log,
@@ -410,6 +414,11 @@ export const chunkDataSource =
         chunkSource: arweaveClient,
         chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
       });
+
+export const chunkSource = new CompositeChunkSource(
+  chunkMetaDataSource,
+  chunkDataSource,
+);
 
 const txChunksDataSource = new TxChunksDataSource({
   log,

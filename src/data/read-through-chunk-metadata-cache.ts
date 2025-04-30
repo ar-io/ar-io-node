@@ -74,7 +74,10 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
         // extracted value
 
         const chunkMetadata = {
-          data_root: chunk.tx_path.slice(-64, -32),
+          data_root:
+            chunk.tx_path === undefined
+              ? chunk.data_root
+              : chunk.tx_path.slice(-64, -32),
           data_size: chunk.chunk.length,
           offset: relativeOffset,
           data_path: chunk.data_path,

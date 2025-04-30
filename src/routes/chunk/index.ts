@@ -22,12 +22,7 @@ import {
   createChunkPostHandler,
 } from './handlers.js';
 import log from '../../log.js';
-import {
-  arweaveClient,
-  chunkDataSource,
-  chunkMetaDataSource,
-  db,
-} from '../../system.js';
+import { arweaveClient, chunkSource, db } from '../../system.js';
 
 // To add a GET route for /chunk/:offset where :offset is restricted to a positive integer,
 // we can use a regular expression in your route path to constrain :offset.
@@ -42,8 +37,7 @@ chunkRouter.use(json({ limit: MAX_CHUNK_SIZE }));
 chunkRouter.get(
   CHUNK_OFFSET_PATH,
   createChunkOffsetHandler({
-    chunkDataSource,
-    chunkMetaDataSource,
+    chunkSource,
     db,
     log: log.child({ class: 'ChunkGetOffsetHandler' }),
   }),

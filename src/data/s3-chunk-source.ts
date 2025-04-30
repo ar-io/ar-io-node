@@ -61,6 +61,7 @@ export class S3ChunkSource implements ChunkDataByAnySource {
     const key = this.s3Prefix
       ? `${this.s3Prefix}/${dataRoot}/${relativeOffset}`
       : `${dataRoot}/${relativeOffset}`;
+
     this.log.debug('Fetching chunk from S3', {
       bucket: this.s3Bucket,
       key,
@@ -69,13 +70,16 @@ export class S3ChunkSource implements ChunkDataByAnySource {
     const response = await this.s3Client.GetObject({
       Bucket: this.s3Bucket,
       Key: key,
+      rawResponsePayload: true,
+      streamResponsePayload: false,
     });
 
-    if (!response.Body) {
+    if (!response.Body || !Buffer.isBuffer(response.Body)) {
       throw new Error(`Failed to fetch chunk data from S3: ${key}`);
     }
-    const chunk = Buffer.from(await response.Body.transformToByteArray());
 
+    // with rawResponsePayload: true, the Body is a Buffer
+    const chunk = response.Body as unknown as Buffer;
     const hash = crypto.createHash('sha256').update(chunk).digest();
 
     return {
