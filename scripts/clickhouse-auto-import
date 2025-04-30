@@ -4,14 +4,17 @@ set -euo pipefail
 
 # Function to log timing information
 log_timing() {
-    local step_name=$1
-    local start_time=$2
-    local end_time=$3
-    local duration_s=$(( end_time - start_time ))
-    local duration_min=$(( duration_s / 60 ))
-    local duration_sec=$(( duration_s % 60 ))
+    # Only log timing when DEBUG is set
+    if [ -n "$DEBUG" ]; then
+        local step_name=$1
+        local start_time=$2
+        local end_time=$3
+        local duration_s=$(( end_time - start_time ))
+        local duration_min=$(( duration_s / 60 ))
+        local duration_sec=$(( duration_s % 60 ))
 
-    echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
+        echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
+    fi
 }
 
 # Export environment variables from .env if it exists
