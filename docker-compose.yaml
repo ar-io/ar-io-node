@@ -192,6 +192,7 @@ services:
     volumes:
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
     environment:
+      - DEBUG=${CLICKHOUSE_DEBUG:-}
       - AR_IO_HOST=core
       - AR_IO_PORT=4000
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
