@@ -106,11 +106,11 @@ arIoRouter.get('/ar-io/info', arIoInfoHandler);
 // peer list
 arIoRouter.get('/ar-io/peers', async (_req, res) => {
   try {
-    const [gateways, nodes] = await Promise.all([
+    const [gateways, arweaveNodes] = await Promise.all([
       system.arIODataSource.getPeers(),
       system.arweaveClient.getPeers(),
     ]);
-    res.json({ gateways, nodes });
+    res.json({ gateways, arweaveNodes });
   } catch (error: any) {
     res.status(500).send(error?.message);
   }
