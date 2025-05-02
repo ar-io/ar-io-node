@@ -46,7 +46,7 @@ describe('ArIO', function () {
 
   it('should return a list of peers', async function () {
     const res = await axios.get('http://localhost:4000/ar-io/peers');
-    assert.ok(res.data.nodes);
+    assert.ok(res.data.arweaveNodes);
     assert.ok(res.data.gateways);
   });
 });
