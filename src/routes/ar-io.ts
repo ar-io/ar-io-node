@@ -105,9 +105,15 @@ arIoRouter.get('/ar-io/info', arIoInfoHandler);
 
 // peer list
 arIoRouter.get('/ar-io/peers', async (_req, res) => {
-  const gateways = await system.arIODataSource.getPeers();
-  const nodes = await system.arweaveClient.getPeers();
-  res.json({ gateways, nodes });
+  try {
+    const [gateways, nodes] = await Promise.all([
+      system.arIODataSource.getPeers(),
+      system.arweaveClient.getPeers(),
+    ]);
+    res.json({ gateways, nodes });
+  } catch (error: any) {
+    res.status(500).send(error?.message);
+  }
 });
 
 // Only allow access to admin routes if the bearer token matches the admin api key
