@@ -29,6 +29,7 @@ import {
   ContiguousDataSource,
   Region,
   RequestAttributes,
+  WithPeers,
 } from '../types.js';
 import {
   generateRequestAttributes,
@@ -44,7 +45,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
 const DEFAULT_MAX_HOPS_ALLOWED = 3;
 
-export class ArIODataSource implements ContiguousDataSource {
+export class ArIODataSource
+  implements ContiguousDataSource, WithPeers<WeightedElement<string>>
+{
   private log: winston.Logger;
   private nodeWallet: string | undefined;
   private maxHopsAllowed: number;
@@ -134,6 +137,14 @@ export class ArIODataSource implements ContiguousDataSource {
     if (this.intervalId) {
       clearInterval(this.intervalId);
     }
+  }
+
+  getPeers(): Record<string, WeightedElement<string>> {
+    const peers: Record<string, WeightedElement<string>> = {};
+    for (const peer of this.weightedPeers) {
+      peers[peer.id] = peer;
+    }
+    return peers;
   }
 
   async updatePeerList() {

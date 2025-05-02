@@ -433,7 +433,7 @@ const gatewaysDataSource = new GatewaysDataSource({
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
 });
 
-const arIODataSource = new ArIODataSource({
+export const arIODataSource = new ArIODataSource({
   log,
   networkProcess,
   nodeWallet: config.AR_IO_WALLET,
