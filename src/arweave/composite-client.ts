@@ -62,6 +62,7 @@ import {
   PartialJsonTransactionStore,
   Region,
   ChunkDataByAnySourceParams,
+  WithPeers,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -95,7 +96,8 @@ export class ArweaveCompositeClient
     ChunkBroadcaster,
     ChunkByAnySource,
     ChunkDataByAnySource,
-    ContiguousDataSource
+    ContiguousDataSource,
+    WithPeers<Peer>
 {
   private arweave: Arweave;
   private log: winston.Logger;
@@ -417,6 +419,10 @@ export class ArweaveCompositeClient
     } catch (error) {
       metrics.arweavePeerRefreshErrorCounter.inc();
     }
+  }
+
+  getPeers(): Record<string, Peer> {
+    return this.peers;
   }
 
   selectPeers(peerCount: number, peerListName: WeightedPeerListName): string[] {

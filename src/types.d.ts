@@ -750,3 +750,7 @@ export interface OwnerSource {
 
   getTransactionOwner({ id }: { id: string }): Promise<string | undefined>;
 }
+
+export interface WithPeers<T> {
+  getPeers(): Record<string, T>;
+}
