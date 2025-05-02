@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added support for configurable ArNS 404 pages using either:
+  - `ARNS_NOT_FOUND_TX_ID`: Transaction ID for custom 404 content
+  - `ARNS_NOT_FOUND_ARNS_NAME`: ArNS name to resolve for 404 content
+- Added experimental `/chunk/<offset>` GET route for serving chunk data by
+  absolute offset either the local cache.
+- Added support for `AWS_SESSION_TOKEN` in the S3 client configuration.
+- Expanded ArNS OTEL tracing to improve resolution behavior observability.
+- Added support for setting a ClickHouse username and password via the
+  `CLICKHOUSE_USERNAME` and `CLICKHOUSE_PASSWORD` environment variable. When
+  using ClickHouse, `CLICKHOUSE_PASSWORD` should always be set. However,
+  `CLICKHOUSE_USERNAME` can be left unset. The username `default` will be used
+  in that case.
+- Added support for configuring the port used to connect to ClickHouse via
+  the `CLICKHOUSE_PORT` environment variable.
+
+### Changed
+
+- Disabled ClickHouse import timing logging by default. It can be enabled via
+  environment variable - `DEBUG` when running the service standalone or
+  `CLICKHOUSE_DEBUG` when using Docker Compose
+- Upgraded to ClickHouse 25.4.
+
+### Fixed
+
+- Ensure `.env` is read in `clickhouse-import` script.
+
 ## [Release 32] - 2025-04-22
 
 ### Changed
