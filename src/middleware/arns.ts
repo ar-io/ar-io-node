@@ -22,7 +22,7 @@ import { URL } from 'node:url';
 import * as config from '../config.js';
 import { headerNames } from '../constants.js';
 import { sendNotFound, sendPaymentRequired } from '../routes/data/handlers.js';
-import { DATA_PATH_REGEX } from '../constants.js';
+import { RAW_DATA_PATH_REGEX, DATA_PATH_REGEX } from '../constants.js';
 import { NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import * as system from '../system.js';
@@ -44,26 +44,35 @@ export const createArnsMiddleware = ({
       return;
     }
 
-    const hostNameIsArNSRoot = req.hostname === config.ARNS_ROOT_HOST;
-
-    if (
-      // Use apex ID as ArNS root data if it's set.
-      config.APEX_TX_ID !== undefined &&
-      hostNameIsArNSRoot
-    ) {
-      res.header(headerNames.arnsResolvedId, config.APEX_TX_ID);
-      dataHandler(req, res, next);
-      return;
-    }
-
     let arnsSubdomain: string | undefined;
-    if (
+    const hostNameIsArNSRoot = req.hostname === config.ARNS_ROOT_HOST;
+    if (hostNameIsArNSRoot) {
+      // Ensure certain paths pass through even if an apex ID or ArNS name is
+      // set.
+      if (
+        req.path.match(DATA_PATH_REGEX) ||
+        req.path.match(RAW_DATA_PATH_REGEX) ||
+        req.path.match(/^\/local\//) ||
+        req.path.match(/^\/ar-io\//) ||
+        req.path.match(/^\/chunk\//) ||
+        req.path === '/graphql'
+      ) {
+        next();
+        return;
+      }
+
+      // Use apex ID as ArNS root data if it's set.
+      if (config.APEX_TX_ID !== undefined) {
+        res.header(headerNames.arnsResolvedId, config.APEX_TX_ID);
+        dataHandler(req, res, next);
+        return;
+      }
+
       // If apex ArNS name is set and hostname matches root use the apex ArNS
       // name as the ArNS subdomain.
-      config.APEX_ARNS_NAME !== undefined &&
-      hostNameIsArNSRoot
-    ) {
-      arnsSubdomain = config.APEX_ARNS_NAME;
+      if (config.APEX_ARNS_NAME !== undefined) {
+        arnsSubdomain = config.APEX_ARNS_NAME;
+      }
     } else if (
       // Ignore requests that do not end with the ArNS root hostname.
       !req.hostname.endsWith('.' + config.ARNS_ROOT_HOST) ||
@@ -76,9 +85,8 @@ export const createArnsMiddleware = ({
     ) {
       next();
       return;
-    } else {
-      arnsSubdomain = req.subdomains[req.subdomains.length - 1];
     }
+    arnsSubdomain ??= req.subdomains[req.subdomains.length - 1];
 
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
