@@ -46,7 +46,10 @@ export const createArnsMiddleware = ({
 
     let arnsSubdomain: string | undefined;
     const hostNameIsArNSRoot = req.hostname === config.ARNS_ROOT_HOST;
-    if (hostNameIsArNSRoot) {
+    if (
+      hostNameIsArNSRoot &&
+      (config.APEX_TX_ID !== undefined || config.APEX_ARNS_NAME !== undefined)
+    ) {
       // Ensure certain paths pass through even if an apex ID or ArNS name is
       // set.
       if (
@@ -75,9 +78,7 @@ export const createArnsMiddleware = ({
       if (config.APEX_ARNS_NAME !== undefined) {
         arnsSubdomain = config.APEX_ARNS_NAME;
       }
-    }
-
-    if (
+    } else if (
       // Ignore requests that do not end with the ArNS root hostname.
       !req.hostname.endsWith('.' + config.ARNS_ROOT_HOST) ||
       // Ignore requests that do not include subdomains since ArNS always
@@ -89,9 +90,8 @@ export const createArnsMiddleware = ({
     ) {
       next();
       return;
-    } else {
-      arnsSubdomain = req.subdomains[req.subdomains.length - 1];
     }
+    arnsSubdomain ??= req.subdomains[req.subdomains.length - 1];
 
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
