@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added a [Parquet and ClickHouse usage guide]. Using ArDrive as an example, it
+  provides step by step instructions about how to bulk load Parquet and
+  configure continuous ingest of bundled data items into ClickHouse. This
+  allows the ar-io-node to support performant GraphQL queries on larger data
+  sets and fascilitates sharing indexing work across gateways via distribution
+  of Parquet files.
 - Added support for configurable ArNS 404 pages using either:
   - `ARNS_NOT_FOUND_TX_ID`: Transaction ID for custom 404 content
   - `ARNS_NOT_FOUND_ARNS_NAME`: ArNS name to resolve for 404 content
@@ -954,6 +960,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Correct GraphQL pagination for transactions with duplicate tags.
 
+[Parquet and ClickHouse usage guide]: ./docs/parquet-and-clickhouse-usage.md
 [PR 68]: https://github.com/ar-io/ar-io-node/pull/68
 [PR 65]: https://github.com/ar-io/ar-io-node/pull/65
 [PR 64]: https://github.com/ar-io/ar-io-node/pull/64
