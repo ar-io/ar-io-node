@@ -55,6 +55,8 @@ export const createArnsMiddleware = ({
         req.path.match(/^\/local\//) ||
         req.path.match(/^\/ar-io\//) ||
         req.path.match(/^\/chunk\//) ||
+        req.path === '/openapi.json' ||
+        req.path === '/api-docs' ||
         req.path === '/graphql'
       ) {
         next();
