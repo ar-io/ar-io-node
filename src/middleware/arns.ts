@@ -56,7 +56,7 @@ export const createArnsMiddleware = ({
         req.path.match(/^\/ar-io\//) ||
         req.path.match(/^\/chunk\//) ||
         req.path === '/openapi.json' ||
-        req.path === '/api-docs' ||
+        req.path === '/api-docs/' ||
         req.path === '/graphql'
       ) {
         next();
@@ -75,7 +75,9 @@ export const createArnsMiddleware = ({
       if (config.APEX_ARNS_NAME !== undefined) {
         arnsSubdomain = config.APEX_ARNS_NAME;
       }
-    } else if (
+    }
+
+    if (
       // Ignore requests that do not end with the ArNS root hostname.
       !req.hostname.endsWith('.' + config.ARNS_ROOT_HOST) ||
       // Ignore requests that do not include subdomains since ArNS always
@@ -87,8 +89,9 @@ export const createArnsMiddleware = ({
     ) {
       next();
       return;
+    } else {
+      arnsSubdomain = req.subdomains[req.subdomains.length - 1];
     }
-    arnsSubdomain ??= req.subdomains[req.subdomains.length - 1];
 
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
