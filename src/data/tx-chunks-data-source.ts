@@ -71,7 +71,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
       const startOffset = offset - size + 1;
       let bytes = 0;
 
-      // we lose scope in the readable, so set to internal function
+      // Rebind getChunkDataByAny to preserve access to it in the stream read
+      // function since 'this' is assigned to the stream as opposed to the
+      // TxChunksDataSource instance there.
       const getChunkDataByAny = (
         absoluteOffset: number,
         dataRoot: string,
@@ -130,6 +132,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
           source: 'chunks',
         });
       });
+
+      // await the first chunk promise so that it throws and returns 404 if no
+      // chunk data is found.
+      await chunkDataPromise;
 
       if (region) {
         const byteRangeStream = new ByteRangeTransform(
