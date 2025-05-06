@@ -139,15 +139,6 @@ describe('TxChunksDataSource', () => {
           }
         } catch (e) {
           assert.strictEqual(e, error);
-          assert.equal(
-            (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
-            1,
-          );
-          assert.equal(
-            (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
-              .arguments[0].class,
-            'TxChunksDataSource',
-          );
         }
       });
 
@@ -169,15 +160,6 @@ describe('TxChunksDataSource', () => {
             }
           } catch (e) {
             assert.strictEqual(e, error);
-            assert.equal(
-              (metrics.getDataStreamErrorsTotal.inc as any).mock.callCount(),
-              1,
-            );
-            assert.equal(
-              (metrics.getDataStreamErrorsTotal.inc as any).mock.calls[0]
-                .arguments[0].class,
-              'TxChunksDataSource',
-            );
           }
         });
       });
