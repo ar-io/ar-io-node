@@ -34,6 +34,7 @@ import {
   DataContentAttributeImporter,
   DataContentAttributeProperties,
 } from '../workers/data-content-attribute-importer.js';
+import { makeContiguousMetadataStore } from '../init/metadata-store.js';
 
 describe('ReadThroughDataCache', function () {
   let log: winston.Logger;
@@ -142,6 +143,7 @@ describe('ReadThroughDataCache', function () {
       log,
       dataSource: mockContiguousDataSource,
       dataStore: mockContiguousDataStore,
+      metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
       contiguousDataIndex: mockContiguousDataIndex,
       dataContentAttributeImporter: mockDataContentAttributeImporter,
     });

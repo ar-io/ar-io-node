@@ -49,6 +49,25 @@ if (ADMIN_API_KEY_FILE !== undefined) {
 }
 
 //
+// Redis
+//
+
+// Redis URL
+export const REDIS_CACHE_URL = env.varOrDefault(
+  'REDIS_CACHE_URL',
+  'redis://localhost:6379',
+);
+
+export const REDIS_USE_TLS =
+  env.varOrDefault('REDIS_USE_TLS', 'false') === 'true';
+
+// Default Redis TTL
+export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
+  'REDIS_CACHE_TTL_SECONDS',
+  `${60 * 60 * 8}`, // 8 hours by default
+);
+
+//
 // Nodes
 //
 
@@ -210,6 +229,13 @@ export const BACKGROUND_RETRIEVAL_ORDER = env
     'chunks,s3,trusted-gateways,tx-data',
   )
   .split(',');
+
+// Cache type for contigous metadata (access time, etc.). Defaults to 'node'
+// here for development but is set to 'redis' in 'docker-compose.yaml'.
+export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
+  'CHUNK_METADATA_CACHE_TYPE',
+  'node',
+);
 
 // By default it looks for chunk from the filesystem's dataDir
 // but it can be configured to use an s3 bucket that assumes a
@@ -491,6 +517,10 @@ export const AR_IO_NODE_RELEASE = env.varOrDefault(
   release,
 );
 
+//
+// Apex domain customization
+//
+
 export const APEX_TX_ID = env.varOrUndefined('APEX_TX_ID');
 
 export const APEX_ARNS_NAME = env.varOrUndefined('APEX_ARNS_NAME');
@@ -503,6 +533,10 @@ if (APEX_ARNS_NAME !== undefined && ARNS_ROOT_HOST === undefined) {
   throw new Error('ARNS_ROOT_HOST must be defined when APEX_ARNS_NAME is used');
 }
 
+//
+// ArNS 404 customization
+//
+
 export const ARNS_NOT_FOUND_TX_ID = env.varOrUndefined('ARNS_NOT_FOUND_TX_ID');
 
 export const ARNS_NOT_FOUND_ARNS_NAME = env.varOrDefault(
@@ -514,23 +548,8 @@ export const ARNS_NOT_FOUND_ARNS_NAME = env.varOrDefault(
 // Header caching
 //
 
-// Cache type (lmdb, fs, or redis)
+// Cache type (lmdb, fs, or redis - defaults to redis in docker-compose.yaml)
 export const CHAIN_CACHE_TYPE = env.varOrDefault('CHAIN_CACHE_TYPE', 'lmdb');
-
-// Redis URL
-export const REDIS_CACHE_URL = env.varOrDefault(
-  'REDIS_CACHE_URL',
-  'redis://localhost:6379',
-);
-
-export const REDIS_USE_TLS =
-  env.varOrDefault('REDIS_USE_TLS', 'false') === 'true';
-
-// Default Redis TTL
-export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
-  'REDIS_CACHE_TTL_SECONDS',
-  `${60 * 60 * 8}`, // 8 hours by default
-);
 
 // Whether or not to cleanup filesystem header cache files
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =

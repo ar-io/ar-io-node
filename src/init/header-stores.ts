@@ -38,12 +38,14 @@ const createKvBufferStore = ({
   log,
   redisUrl = config.REDIS_CACHE_URL,
   redisTtlSeconds = config.REDIS_CACHE_TTL_SECONDS,
+  redisKeyPrefix,
 }: {
   pathKey: string;
   type: string;
   log: winston.Logger;
   redisUrl?: string;
   redisTtlSeconds?: number;
+  redisKeyPrefix?: string;
 }): KVBufferStore => {
   log.info(`Using ${type} for KVBufferStore for ${pathKey}`);
   switch (type) {
@@ -57,6 +59,7 @@ const createKvBufferStore = ({
         redisUrl,
         ttlSeconds: redisTtlSeconds,
         log,
+        keyPrefix: redisKeyPrefix,
       });
     }
     case 'fs': {
@@ -88,6 +91,7 @@ export const makeBlockStore = ({
       tmpDir: `data/tmp/${pathKey}`,
     });
   } else {
+    // NOTE: KvBlockStore handles its own key prefixing
     return new KvBlockStore({
       log,
       kvBufferStore: createKvBufferStore({
@@ -121,6 +125,7 @@ export const makeTxStore = ({
         log,
         pathKey,
         type: config.CHAIN_CACHE_TYPE,
+        redisKeyPrefix: 'TH',
       }),
     });
   }
@@ -138,6 +143,7 @@ export const makeDataItemAttributesStore = ({
       pathKey: 'diAttributes',
       type: config.CHAIN_CACHE_TYPE,
       redisTtlSeconds: 60 * 60 * 4, // 4 hours
+      redisKeyPrefix: 'DIA',
     }),
   });
 };
@@ -154,6 +160,7 @@ export const makeTransactionAttributesStore = ({
       pathKey: 'txAttributes',
       type: config.CHAIN_CACHE_TYPE,
       redisTtlSeconds: 60 * 60 * 4, // 4 hours
+      redisKeyPrefix: 'TXA',
     }),
   });
 };
@@ -166,6 +173,7 @@ export const makeSignatureStore = ({ log }: { log: winston.Logger }) => {
       pathKey: 'signatures',
       type: config.CHAIN_CACHE_TYPE,
       redisTtlSeconds: 60 * 60 * 4, // 4 hours
+      redisKeyPrefix: 'SIG',
     }),
   });
 };
@@ -178,6 +186,7 @@ export const makeOwnerStore = ({ log }: { log: winston.Logger }) => {
       pathKey: 'owners',
       type: config.CHAIN_CACHE_TYPE,
       redisTtlSeconds: 60 * 60 * 4, // 4 hours
+      redisKeyPrefix: 'OWN',
     }),
   });
 };
