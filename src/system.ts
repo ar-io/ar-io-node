@@ -48,6 +48,7 @@ import {
   makeDataItemAttributesStore,
   makeTransactionAttributesStore,
 } from './init/header-stores.js';
+import { makeContiguousMetadataStore } from './init/metadata-store.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';
@@ -241,6 +242,11 @@ export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
     })
   : undefined;
 
+const contiguousMetadataStore = makeContiguousMetadataStore({
+  log,
+  type: config.CONTIGUOUS_METADATA_CACHE_TYPE,
+});
+
 const contiguousDataCacheCleanupThresholdInSeconds = parseInt(
   config.CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD,
 );
@@ -254,8 +260,12 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       shouldDelete: async (path) => {
         try {
           const stats = await fs.promises.stat(path);
+          const hash = path.split('/').pop() ?? '';
+          const metadata = await contiguousMetadataStore.get(hash);
+
           const mostRecentTime =
-            stats.atime > stats.mtime ? stats.atime : stats.mtime;
+            metadata?.accessTimestampMs ??
+            (stats.atime > stats.mtime ? stats.atime : stats.mtime);
 
           const currentTimestamp = Date.now();
 
@@ -513,6 +523,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
     log,
     dataSources: onDemandDataSources,
   }),
+  metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
   dataContentAttributeImporter,
@@ -524,6 +535,7 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
     log,
     dataSources: backgroundDataSources,
   }),
+  metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
   dataContentAttributeImporter,

@@ -18,9 +18,10 @@
 import crypto from 'node:crypto';
 import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
-import { generateRequestAttributes } from '../lib/request-attributes.js';
 
 import { currentUnixTimestamp } from '../lib/time.js';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { KvJsonStore } from '../store/kv-attributes-store.js';
 import {
   ContiguousData,
   ContiguousDataAttributes,
@@ -28,6 +29,7 @@ import {
   ContiguousDataSource,
   ContiguousDataStore,
   RequestAttributes,
+  ContiguousMetadata,
 } from '../types.js';
 import * as metrics from '../metrics.js';
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
@@ -35,6 +37,7 @@ import { DataContentAttributeImporter } from '../workers/data-content-attribute-
 export class ReadThroughDataCache implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
+  private metadataStore: KvJsonStore<ContiguousMetadata>;
   private dataStore: ContiguousDataStore;
   private contiguousDataIndex: ContiguousDataIndex;
   private dataContentAttributeImporter: DataContentAttributeImporter;
@@ -42,18 +45,21 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   constructor({
     log,
     dataSource,
+    metadataStore,
     dataStore,
     contiguousDataIndex,
     dataContentAttributeImporter,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
+    metadataStore: KvJsonStore<ContiguousMetadata>;
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
     dataContentAttributeImporter: DataContentAttributeImporter;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
+    this.metadataStore = metadataStore;
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
@@ -149,6 +155,12 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       const attributes =
         dataAttributes ??
         (await this.contiguousDataIndex.getDataAttributes(id));
+
+      if (attributes?.hash !== undefined) {
+        this.metadataStore.set(attributes.hash, {
+          accessTimestampMs: Date.now(),
+        });
+      }
 
       const cacheData = await this.getCacheData(
         id,

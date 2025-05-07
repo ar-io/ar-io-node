@@ -540,6 +540,10 @@ export interface ContiguousData {
   requestAttributes?: RequestAttributes;
 }
 
+interface ContiguousMetadata {
+  accessTimestampMs: number;
+}
+
 export interface ContiguousDataAttributes {
   hash?: string;
   dataRoot?: string;

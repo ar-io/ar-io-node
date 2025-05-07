@@ -25,18 +25,22 @@ export class RedisKvStore implements KVBufferStore {
   private client: Redis;
   private log: winston.Logger;
   private ttlSeconds: number;
+  private keyPrefix: string | undefined;
 
   constructor({
     log,
     redisUrl,
     ttlSeconds,
+    keyPrefix,
   }: {
     log: winston.Logger;
     redisUrl: string;
     ttlSeconds: number;
+    keyPrefix?: string;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.ttlSeconds = ttlSeconds;
+    this.keyPrefix = keyPrefix;
     this.client = new Redis(redisUrl);
     this.client.on('error', (error: any) => {
       this.log.error(`Redis error`, {
@@ -48,24 +52,32 @@ export class RedisKvStore implements KVBufferStore {
     });
   }
 
+  private key(key: string): string {
+    return this.keyPrefix !== undefined ? `${this.keyPrefix}|${key}` : key;
+  }
+
   async get(key: string): Promise<Buffer | undefined> {
-    const value = await this.client.getBuffer(key);
+    const prefixedKey = this.key(key);
+    const value = await this.client.getBuffer(prefixedKey);
     return value ?? undefined;
   }
 
   async has(key: string): Promise<boolean> {
-    return (await this.client.exists(key)) === 1;
+    const prefixedKey = this.key(key);
+    return (await this.client.exists(prefixedKey)) === 1;
   }
 
   async del(key: string): Promise<void> {
     if (await this.has(key)) {
-      await this.client.del(key);
+      const prefixedKey = this.key(key);
+      await this.client.del(prefixedKey);
     }
   }
 
   async set(key: string, buffer: Buffer): Promise<void> {
     // set the key with a TTL for every key
-    await this.client.set(key, buffer, 'EX', this.ttlSeconds);
+    const prefixedKey = this.key(key);
+    await this.client.set(prefixedKey, buffer, 'EX', this.ttlSeconds);
   }
 
   async close(): Promise<void> {

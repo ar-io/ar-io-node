@@ -28,16 +28,20 @@ import {
 export class KvJsonStore<T> {
   private log: winston.Logger;
   private kvBufferStore: KVBufferStore;
+  private allowOverwrite: boolean;
 
   constructor({
     log,
     kvBufferStore,
+    allowOverwrite = false,
   }: {
     log: winston.Logger;
     kvBufferStore: KVBufferStore;
+    allowOverwrite?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.kvBufferStore = kvBufferStore;
+    this.allowOverwrite = allowOverwrite;
   }
 
   async has(key: string) {
@@ -80,7 +84,7 @@ export class KvJsonStore<T> {
 
   async set(key: string, value: T) {
     try {
-      if (!(await this.has(key))) {
+      if (!(await this.has(key)) || this.allowOverwrite) {
         const buffer = Buffer.from(JSON.stringify(value), 'utf-8');
 
         return this.kvBufferStore.set(key, buffer);

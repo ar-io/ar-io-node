@@ -43,11 +43,13 @@ export class KvBlockStore implements PartialJsonBlockStore {
   }
 
   private hashKey(hash: string) {
-    return `#|${hash}`;
+    // B# for Block Hash (#)
+    return `B#|${hash}`;
   }
 
   private heightKey(height: number) {
-    return `H|${height}`;
+    // BH for Block Height
+    return `BH|${height}`;
   }
 
   async hasHash(hash: string): Promise<boolean> {
