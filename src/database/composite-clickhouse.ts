@@ -148,7 +148,9 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       .select()
       .distinct(
         'height AS height',
-        'block_transaction_index AS block_transaction_index',
+        'block_transaction_index',
+        'hex(block_indep_hash) AS block_indep_hash',
+        'block_timestamp',
         'is_data_item',
         'hex(id) AS id',
         'hex(anchor)',
@@ -387,6 +389,7 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.log.debug('Querying ClickHouse transactions...', { sql });
 
     const row = await this.clickhouseClient.query({ query: sql });
+    console.log();
     const jsonRow = await row.json();
     const txs = jsonRow.data.map((tx: any) => ({
       height: tx.height as number,
@@ -418,7 +421,9 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       blockIndepHash: tx.block_indep_hash
         ? hexToB64Url(tx.block_indep_hash)
         : null,
-      blockTimestamp: tx.block_timestamp as number,
+      blockTimestamp: tx.block_timestamp
+        ? (tx.block_timestamp as number)
+        : null,
       blockPreviousBlock: tx.block_previous_block
         ? hexToB64Url(tx.block_previous_block)
         : null,
