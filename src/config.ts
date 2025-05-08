@@ -55,22 +55,19 @@ if (ADMIN_API_KEY_FILE !== undefined) {
 // Trusted Arweave node URL (for syncing the chain and retrieving chunks)
 export const TRUSTED_NODE_URL = env.varOrDefault(
   'TRUSTED_NODE_URL',
-  'https://arweave.net',
+  'https://ar-io.net',
 );
 
 // Trusted gateway URL (for retrieving contiguous data)
-export const TRUSTED_GATEWAY_URL = env.varOrDefault(
-  'TRUSTED_GATEWAY_URL',
-  'https://arweave.net',
-);
+export const TRUSTED_GATEWAY_URL = env.varOrUndefined('TRUSTED_GATEWAY_URL');
 
 // Trusted gateway URLs (for retrieving contiguous data)
 export const TRUSTED_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
     'TRUSTED_GATEWAYS_URLS',
-    JSON.stringify({
-      [TRUSTED_GATEWAY_URL]: 1,
-    }),
+    TRUSTED_GATEWAY_URL !== undefined
+      ? JSON.stringify({ [TRUSTED_GATEWAY_URL]: 1 })
+      : '{ "https://arweave.net": 1, "https://ar-io.net": 2}',
   ),
 ) as Record<string, number>;
 
@@ -713,7 +710,7 @@ export const ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS =
 // TODO: support multiple gateway urls
 export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
   'TRUSTED_ARNS_GATEWAY_URL',
-  'https://__NAME__.arweave.net',
+  'https://__NAME__.ar-io.net',
 );
 
 //
