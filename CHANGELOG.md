@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added peer list endpoints for retrieving information about Arweave peers and
+  ar.io gateway peers.
+- Added ar-io.net as a secondary trusted gateway to increase data retrieval
+  resilience by eliminating a single point of failure.
+- Added circuit breaker for Arweave peer chunk posting.
+
+### Changed
+
+- Created directories for DuckDB and Parquet to avoid permission issues in
+  containerized environments.
+
+### Fixed
+
+- Fixed GraphQL ClickHouse error when returning block ID and timestamp.
+- Fixed the tx-chunks-data-source to throw a proper error (resulting in a 404)
+  when the first chunk is missing rather than streaming a partial response.
+
 ## [Release 33] - 2025-05-05
 
 ### Added
