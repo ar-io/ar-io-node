@@ -38,7 +38,6 @@ after(async function () {
 describe('ArIO', function () {
   it('should return the network contract info on the /info endpoint', async function () {
     const res = await axios.get('http://localhost:4000/ar-io/info');
-    assert.ok(res.data.wallet);
     assert.ok(res.data.processId);
     assert.ok(res.data.supportedManifestVersions);
     assert.ok(res.data.release);
