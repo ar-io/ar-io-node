@@ -45,8 +45,13 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
 const DEFAULT_MAX_HOPS_ALLOWED = 3;
 
+export type PeerWeight = {
+  url: string;
+  dataWeight: number;
+};
+
 export class ArIODataSource
-  implements ContiguousDataSource, WithPeers<WeightedElement<string>>
+  implements ContiguousDataSource, WithPeers<PeerWeight>
 {
   private log: winston.Logger;
   private nodeWallet: string | undefined;
@@ -139,10 +144,19 @@ export class ArIODataSource
     }
   }
 
-  getPeers(): Record<string, WeightedElement<string>> {
-    const peers: Record<string, WeightedElement<string>> = {};
+  getPeers(): Record<string, PeerWeight> {
+    const peers: Record<string, PeerWeight> = {};
     for (const peer of this.weightedPeers) {
-      peers[peer.id] = peer;
+      try {
+        const url = new URL(peer.id);
+        const key = url.hostname + (url.port ? `:${url.port}` : ':443');
+        peers[key] = {
+          url: peer.id,
+          dataWeight: peer.weight,
+        };
+      } catch (error) {
+        // Skip if URL parsing fails
+      }
     }
     return peers;
   }
