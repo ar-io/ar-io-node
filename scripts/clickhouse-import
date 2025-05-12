@@ -24,7 +24,7 @@ fi
 clickhouse_host=${CLICKHOUSE_HOST:-localhost}
 clickhouse_port=${CLICKHOUSE_PORT:-9000}
 clickhouse_user=${CLICKHOUSE_USER:-default}
-clickhouse_password=${CLICKHOUSE_PASSWORD:-changeme}
+clickhouse_password=${CLICKHOUSE_PASSWORD:-}
 parquet_path=${PARQUET_PATH:-data/parquet}
 
 import_start_time=$(date +%s)
