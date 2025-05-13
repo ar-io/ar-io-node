@@ -52,7 +52,7 @@ const app = express();
 app.use(
   cors({
     exposedHeaders: [
-      'content-type',
+      // these are not exposed by default and must be added manually to be used on browsers
       'content-length',
       'content-encoding',
       ...Object.values(headerNames),
