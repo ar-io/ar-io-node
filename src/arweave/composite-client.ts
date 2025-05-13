@@ -361,6 +361,9 @@ export class ArweaveCompositeClient
       }
     }, 1000);
 
+    // Refresh Arweave peers every 10 minutes
+    setInterval(() => this.refreshPeers(), 10 * 60 * 1000);
+
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
