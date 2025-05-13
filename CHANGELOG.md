@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 34] - 2025-05-05
 
+Given the resilience provided by adding a second trusted gateway URL, it is
+recommended that everyone upgrade to this release.
+
 ### Added
 
 - Added peer list endpoints for retrieving information about Arweave peers and
