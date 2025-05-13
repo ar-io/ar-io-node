@@ -51,7 +51,12 @@ const app = express();
 
 app.use(
   cors({
-    exposedHeaders: Object.values(headerNames),
+    exposedHeaders: [
+      'content-type',
+      'content-length',
+      'content-encoding',
+      ...Object.values(headerNames),
+    ],
   }),
 );
 
