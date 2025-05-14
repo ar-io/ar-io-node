@@ -116,13 +116,10 @@ export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
   .split(',');
 
-export const CHUNK_POST_CONCURRENCY_LIMIT_STRING = env.varOrUndefined(
+export const CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
   'CHUNK_POST_CONCURRENCY_LIMIT',
+  '2',
 );
-export const CHUNK_POST_CONCURRENCY_LIMIT =
-  CHUNK_POST_CONCURRENCY_LIMIT_STRING !== undefined
-    ? +CHUNK_POST_CONCURRENCY_LIMIT_STRING
-    : 2;
 
 const SECONDARY_CHUNK_POST_URLS_STRING = env.varOrUndefined(
   'SECONDARY_CHUNK_POST_URLS',
@@ -132,21 +129,15 @@ export const SECONDARY_CHUNK_POST_URLS =
     ? SECONDARY_CHUNK_POST_URLS_STRING.split(',')
     : [];
 
-const SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT_STRING = env.varOrUndefined(
+export const SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
   'SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT',
+  '2',
 );
-export const SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT =
-  SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT_STRING !== undefined
-    ? +SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT_STRING
-    : 2;
 
-const SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT_STRING = env.varOrUndefined(
+export const SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
   'SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT',
+  '1',
 );
-export const SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT =
-  SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT_STRING !== undefined
-    ? +SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT_STRING
-    : 1;
 
 // Chunk POST response timeout in milliseconds
 const CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING = env.varOrUndefined(
@@ -780,6 +771,7 @@ export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
 // AO
 //
 
+// TODO: move this
 /**
  * Removes trailing slashes from URLs
  * @param url The URL to sanitize
