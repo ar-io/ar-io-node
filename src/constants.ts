@@ -32,6 +32,8 @@ export const headerNames = {
   arnsResolvedAt: 'X-ArNS-Resolved-At',
   arnsLimit: 'X-ArNS-Undername-Limit',
   arnsIndex: 'X-ArNS-Record-Index',
+  arnsType: 'X-ArNS-Name-Type',
+  arnsOwner: 'X-ArNS-Name-Owner',
 };
 
 export const DATA_PATH_REGEX =

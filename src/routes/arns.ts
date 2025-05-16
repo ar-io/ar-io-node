@@ -54,7 +54,8 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     return;
   }
 
-  const { resolvedId, ttl, processId, resolvedAt, index, limit } = resolved;
+  const { resolvedId, ttl, processId, resolvedAt, index, limit, type, owner } =
+    resolved;
 
   if (resolvedId === undefined) {
     sendNotFound(res);
@@ -68,6 +69,8 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   );
   res.header(headerNames.arnsProcessId, processId);
   res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
+  res.header(headerNames.arnsType, type);
+  res.header(headerNames.arnsOwner, owner);
   if (index !== undefined && limit !== undefined) {
     res.header(headerNames.arnsIndex, index.toString());
     res.header(headerNames.arnsLimit, limit.toString());
@@ -79,5 +82,7 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     resolvedAt,
     index,
     limit,
+    type,
+    owner,
   });
 });

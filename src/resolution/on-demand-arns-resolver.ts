@@ -73,6 +73,8 @@ export class OnDemandArNSResolver implements NameResolver {
           processId: undefined,
           limit: undefined,
           index: undefined,
+          type: undefined,
+          owner: undefined,
         };
       }
 
@@ -95,6 +97,8 @@ export class OnDemandArNSResolver implements NameResolver {
           processId: undefined,
           limit: undefined,
           index: undefined,
+          type: undefined,
+          owner: undefined,
         };
       }
 
@@ -113,7 +117,10 @@ export class OnDemandArNSResolver implements NameResolver {
         name === baseName ? '@' : name.replace(`_${baseName}`, '');
 
       // sdk sorts the records by priority, we will use the undername to get the record
-      const antRecords = await ant.getRecords();
+      const [owner, antRecords] = await Promise.all([
+        ant.getOwner(),
+        ant.getRecords(),
+      ]);
       const antRecord = antRecords[undername];
 
       // fail quickly if the name is not in the contract
@@ -134,6 +141,8 @@ export class OnDemandArNSResolver implements NameResolver {
         resolvedId,
         resolvedAt: Date.now(),
         processId: processId,
+        type: baseArNSRecord.type,
+        owner,
         ttl,
         limit: baseArNSRecord.undernameLimit,
         index,
@@ -154,6 +163,8 @@ export class OnDemandArNSResolver implements NameResolver {
       processId: undefined,
       limit: undefined,
       index: undefined,
+      type: undefined,
+      owner: undefined,
     };
   }
 }

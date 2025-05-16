@@ -646,6 +646,8 @@ export interface ManifestPathResolver {
 
 export interface ValidNameResolution {
   name: string;
+  type: 'lease' | 'permabuy';
+  owner: string;
   resolvedId: string;
   resolvedAt: number;
   ttl: number;
@@ -663,6 +665,8 @@ export interface MissingNameResolution {
   processId: undefined;
   limit: undefined;
   index: undefined;
+  type: undefined;
+  owner: undefined;
 }
 
 // An error occurred while resolving the name
@@ -672,6 +676,8 @@ export interface FailedNameResolution {
   resolvedAt: undefined;
   ttl: undefined;
   processId: undefined;
+  type: undefined;
+  owner: undefined;
   limit: undefined;
   index: undefined;
 }
