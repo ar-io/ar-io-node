@@ -10,6 +10,9 @@ on:
       - scripts/clickhouse-auto-import
       - scripts/clickhouse-import
       - src/database/clickhouse/schema.sql
+  push:
+    tags:
+      - 'r[0-9]*'
 
 jobs:
   images:

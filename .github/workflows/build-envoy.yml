@@ -7,6 +7,9 @@ on:
       - develop
     paths:
       - 'envoy/**'
+  push:
+    tags:
+      - 'r[0-9]*'
 
 jobs:
   build:
