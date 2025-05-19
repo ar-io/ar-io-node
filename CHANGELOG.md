@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
 ## [Release 35] - 2025-05-19
 
 This is a low upgrade priority release. It contains a small caching improvement
