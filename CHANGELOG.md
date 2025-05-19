@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 35] - 2025-05-19
 
+This is a low upgrade priority release. It contains a small caching improvement
+and routing fix. Upgrading to help test it is appreciated but not essential.
+
 ### Changed
 
 - Adjusted filesystem data expiration to be based on last request times rather
