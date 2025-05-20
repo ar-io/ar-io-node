@@ -88,19 +88,22 @@ describe('Data', function () {
       hasher.update(data);
     });
 
-    stream.on('end', () => {
-      assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(
-        res.headers['content-type'],
-        'application/x.arweave-manifest+json',
-      );
-      assert.equal(res.headers['content-length'], '7424');
-      assert.equal(res.status, 200);
-      assert.equal(
-        hasher.digest('base64url'),
-        'ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8',
-      );
+    await new Promise<void>((resolve, reject) => {
+      stream.on('end', resolve);
+      stream.on('error', reject);
     });
+
+    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.equal(
+      res.headers['content-type'],
+      'application/x.arweave-manifest+json',
+    );
+    assert.equal(res.headers['content-length'], '7424');
+    assert.equal(res.status, 200);
+    assert.equal(
+      hasher.digest('base64url'),
+      'ta_6L_z8TOmthittUmGpYjcAbvOzPRVhcw36m-oYsQ8',
+    );
   });
 
   it('Verifying that /<id> for a manifest with a missing index returns 404', async function () {
@@ -136,16 +139,19 @@ describe('Data', function () {
       hasher.update(data);
     });
 
-    stream.on('end', () => {
-      assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(res.headers['content-type'], 'text/html; charset=utf-8');
-      assert.equal(res.headers['content-length'], '3922');
-      assert.equal(res.status, 200);
-      assert.equal(
-        hasher.digest('base64url'),
-        'R5xJqIIKrqxuUJy5ig0_zqKBoDzyORnxAJ0Ayve3Ig0',
-      );
+    await new Promise<void>((resolve, reject) => {
+      stream.on('end', resolve);
+      stream.on('error', reject);
     });
+
+    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.equal(res.headers['content-type'], 'text/html; charset=utf-8');
+    assert.equal(res.headers['content-length'], '3922');
+    assert.equal(res.status, 200);
+    assert.equal(
+      hasher.digest('base64url'),
+      'R5xJqIIKrqxuUJy5ig0_zqKBoDzyORnxAJ0Ayve3Ig0',
+    );
   });
 
   it('Verifying that /<id>/<path> for a valid manifest path returns expected response', async function () {
@@ -166,19 +172,22 @@ describe('Data', function () {
       hasher.update(data);
     });
 
-    stream.on('end', () => {
-      assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(
-        res.headers['content-type'],
-        'application/json; charset=utf-8',
-      );
-      assert.equal(res.headers['content-length'], '130');
-      assert.equal(res.status, 200);
-      assert.equal(
-        hasher.digest('base64url'),
-        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
-      );
+    await new Promise<void>((resolve, reject) => {
+      stream.on('end', resolve);
+      stream.on('error', reject);
     });
+
+    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.equal(
+      res.headers['content-type'],
+      'application/json; charset=utf-8',
+    );
+    assert.equal(res.headers['content-length'], '130');
+    assert.equal(res.status, 200);
+    assert.equal(
+      hasher.digest('base64url'),
+      'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+    );
   });
 
   it('Verifying that /<id> for a non-manifest returns expected response', async function () {
@@ -199,19 +208,22 @@ describe('Data', function () {
       hasher.update(data);
     });
 
-    stream.on('end', () => {
-      assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(
-        res.headers['content-type'],
-        'application/json; charset=utf-8',
-      );
-      assert.equal(res.headers['content-length'], '130');
-      assert.equal(res.status, 200);
-      assert.equal(
-        hasher.digest('base64url'),
-        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
-      );
+    await new Promise<void>((resolve, reject) => {
+      stream.on('end', resolve);
+      stream.on('error', reject);
     });
+
+    assert.equal(res.headers['x-ar-io-hops'], '1');
+    assert.equal(
+      res.headers['content-type'],
+      'application/json; charset=utf-8',
+    );
+    assert.equal(res.headers['content-length'], '130');
+    assert.equal(res.status, 200);
+    assert.equal(
+      hasher.digest('base64url'),
+      'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+    );
   });
 
   it('Verifying that /<id>/<path> for a manifest path with a trailing slash returns expected response', async function () {
