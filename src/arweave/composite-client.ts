@@ -1387,12 +1387,19 @@ export class ArweaveCompositeClient
     }
 
     if (config.ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT > 0) {
-      await this.peerChunkPostCircuitBreaker.fire({
-        chunk,
-        abortTimeout,
-        responseTimeout,
-        originAndHopsHeaders,
-      });
+      this.peerChunkPostCircuitBreaker
+        .fire({
+          chunk,
+          abortTimeout,
+          responseTimeout,
+          originAndHopsHeaders,
+        })
+        .catch((error: Error) => {
+          this.log.debug('Peer chunk post circuit breaker fire failed:', {
+            message: error.message,
+            stack: error.stack,
+          });
+        });
     }
 
     const results = (await Promise.all(primaryResults)).filter(
