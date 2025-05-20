@@ -350,16 +350,6 @@ export function parseManifestStream(stream: Readable): EventEmitter {
       fallbackId = data;
     }
 
-    // Fallback - { "fallback": { "id": "<data-id>" } }
-    if (
-      keyPath.length === 1 &&
-      keyPath[0] === 'fallback' &&
-      isManifestV2 &&
-      currentKey === 'id'
-    ) {
-      fallbackId = data;
-    }
-
     // Paths - { "paths": { "some/path/file.html": { "id": "<data-id>" } }
     if (
       keyPath.length === 2 &&
