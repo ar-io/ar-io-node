@@ -27,7 +27,7 @@ import { NameResolver } from '../types.js';
 import * as metrics from '../metrics.js';
 import * as system from '../system.js';
 
-const EXCLUDED_SUBDOMAINS = new Set('www');
+const EXCLUDED_SUBDOMAINS = new Set(['www']);
 const MAX_ARNS_NAME_LENGTH = 51;
 
 export const createArnsMiddleware = ({
