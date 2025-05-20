@@ -154,7 +154,7 @@ export class DataVerificationWorker {
         return false;
       }
 
-      log.debug('Data root verified successfull.');
+      log.debug('Data root verified successfully.');
       await this.contiguousDataIndex.saveVerificationStatus(id);
       log.debug('Saved verified status successfully.');
       return true;
