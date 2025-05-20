@@ -247,12 +247,13 @@ const contiguousMetadataStore = makeContiguousMetadataStore({
   type: config.CONTIGUOUS_METADATA_CACHE_TYPE,
 });
 
-const contiguousDataCacheCleanupThresholdInSeconds = parseInt(
+const contiguousDataCacheCleanupThresholdSeconds = parseInt(
   config.CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD,
 );
 
+// Only perform cleanup if the cleanup threshold is set
 export const contiguousDataFsCacheCleanupWorker = !isNaN(
-  contiguousDataCacheCleanupThresholdInSeconds,
+  contiguousDataCacheCleanupThresholdSeconds,
 )
   ? new FsCleanupWorker({
       log,
@@ -263,18 +264,44 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
           const hash = path.split('/').pop() ?? '';
           const metadata = await contiguousMetadataStore.get(hash);
 
-          const mostRecentTime =
+          // Determine whether data is associated with a preferred name by
+          // checking the list of most recently used names in the metadata
+          // cache.
+          let isPreferredArnsName = false;
+          if (
+            metadata?.mruArNSNames !== undefined &&
+            Array.isArray(metadata.mruArNSNames)
+          ) {
+            isPreferredArnsName = metadata.mruArNSNames.some((name) =>
+              config.PREFERRED_ARNS_NAMES.has(name),
+            );
+          }
+
+          // If not found in mruArNSNames, check mruArNSBaseNames
+          if (
+            !isPreferredArnsName &&
+            metadata?.mruArNSBaseNames !== undefined &&
+            Array.isArray(metadata.mruArNSBaseNames)
+          ) {
+            isPreferredArnsName = metadata.mruArNSBaseNames.some((baseName) =>
+              config.PREFERRED_ARNS_BASE_NAMES.has(baseName),
+            );
+          }
+
+          // Preferred ArNS names have a different cleanup threshold
+          const cleanupThresholdMs =
+            (isPreferredArnsName
+              ? config.PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD
+              : contiguousDataCacheCleanupThresholdSeconds) * 1000;
+
+          const mostRecentTimeMs =
             metadata?.accessTimestampMs ??
             (stats.atime > stats.mtime ? stats.atime : stats.mtime);
 
-          const currentTimestamp = Date.now();
+          const cleanupBeforeMs = new Date(Date.now() - cleanupThresholdMs);
+          const shouldDeleteFile = mostRecentTimeMs <= cleanupBeforeMs;
 
-          const thresholdDate = new Date(
-            currentTimestamp -
-              contiguousDataCacheCleanupThresholdInSeconds * 1000,
-          );
-
-          return mostRecentTime <= thresholdDate;
+          return shouldDeleteFile;
         } catch (err) {
           log.error(`Error getting file stats for ${path}`, err);
           return false;
