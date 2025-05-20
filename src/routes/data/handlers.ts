@@ -137,11 +137,17 @@ const setDataHeaders = ({
   setDigestStableVerifiedHeaders({ res, dataAttributes, data });
 };
 
-const getRequestAttributes = (req: Request): RequestAttributes => {
+const getRequestAttributes = (
+  req: Request,
+  res: Response,
+): RequestAttributes => {
   const hopsHeader = req.headers[headerNames.hops.toLowerCase()] as string;
   const hops = parseInt(hopsHeader) || 0;
   return {
     hops,
+    arnsName: res.get(headerNames.arnsName?.toLowerCase()),
+    arnsBasename: res.get(headerNames.arnsBasename?.toLowerCase()),
+    arnsUndername: res.get(headerNames.arnsUndername?.toLowerCase()),
     origin: req.headers[headerNames.origin.toLowerCase()] as string | undefined,
     originNodeRelease: req.headers[
       headerNames.originNodeRelease.toLowerCase()
@@ -351,7 +357,7 @@ export const createRawDataHandler = ({
   dataBlockListValidator: DataBlockListValidator;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
-    const requestAttributes = getRequestAttributes(req);
+    const requestAttributes = getRequestAttributes(req, res);
     const id = req.params[0];
 
     // Return 404 if the data is blocked by ID
@@ -569,10 +575,11 @@ export const createDataHandler = ({
   manifestPathResolver: ManifestPathResolver;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
-    const requestAttributes = getRequestAttributes(req);
+    const requestAttributes = getRequestAttributes(req, res);
     const arnsResolvedId = res.getHeader(headerNames.arnsResolvedId);
     let id: string | undefined;
     let manifestPath: string | undefined;
+    // TODO: add comment explaining this
     if (typeof arnsResolvedId === 'string') {
       id = arnsResolvedId;
       manifestPath = req.path.slice(1);

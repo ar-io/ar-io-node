@@ -34,6 +34,33 @@ import {
 import * as metrics from '../metrics.js';
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
 
+const MAX_MRU_ARNS_NAMES_LENGTH = 10;
+
+function updateMruList(
+  currentMruList: string[] | string | undefined,
+  newItem: string | undefined,
+  maxLength: number,
+): string[] {
+  let updatedList: string[] = [];
+  if (currentMruList !== undefined) {
+    if (Array.isArray(currentMruList)) {
+      updatedList = [...currentMruList];
+    } else if (typeof currentMruList === 'string') {
+      updatedList = [currentMruList];
+    }
+  }
+
+  if (newItem !== undefined) {
+    updatedList = updatedList.filter((name) => name !== newItem);
+    updatedList.unshift(newItem);
+
+    if (updatedList.length > maxLength) {
+      updatedList = updatedList.slice(0, maxLength);
+    }
+  }
+  return updatedList;
+}
+
 export class ReadThroughDataCache implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
@@ -63,6 +90,55 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
+  }
+
+  private async updateMetadataCache({
+    hash,
+    arnsName,
+    arnsBasename,
+  }: {
+    hash: string;
+    arnsName?: string;
+    arnsBasename?: string;
+  }): Promise<void> {
+    const existingMetadata = await this.metadataStore.get(hash);
+
+    // Prepare the metadata object for storage. Start with existing fields (if
+    // any) to preserve them.
+    const metadataToSet: ContiguousMetadata = {
+      ...(existingMetadata ?? {}),
+      accessTimestampMs: Date.now(), // Update the access timestamp
+    };
+
+    if (arnsName !== undefined) {
+      const updatedMruArnsNames = updateMruList(
+        existingMetadata?.mruArNSNames,
+        arnsName,
+        MAX_MRU_ARNS_NAMES_LENGTH,
+      );
+
+      const updatedMruArnsBaseNames = updateMruList(
+        existingMetadata?.mruArNSBaseNames,
+        arnsBasename,
+        MAX_MRU_ARNS_NAMES_LENGTH,
+      );
+
+      if (updatedMruArnsNames.length > 0) {
+        metadataToSet.mruArNSNames = updatedMruArnsNames;
+      } else {
+        // If the list is empty, remove the field to keep the stored object
+        // clean, aligning with how optional fields are typically handled.
+        delete metadataToSet.mruArNSNames;
+      }
+
+      if (updatedMruArnsBaseNames.length > 0) {
+        metadataToSet.mruArNSBaseNames = updatedMruArnsBaseNames;
+      } else {
+        delete metadataToSet.mruArNSBaseNames;
+      }
+    }
+
+    this.metadataStore.set(hash, metadataToSet as ContiguousMetadata);
   }
 
   async getCacheData(
@@ -157,8 +233,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         (await this.contiguousDataIndex.getDataAttributes(id));
 
       if (attributes?.hash !== undefined) {
-        this.metadataStore.set(attributes.hash, {
-          accessTimestampMs: Date.now(),
+        const { arnsName, arnsBasename } = requestAttributes ?? {};
+        await this.updateMetadataCache({
+          hash: attributes.hash,
+          arnsName,
+          arnsBasename,
         });
       }
 

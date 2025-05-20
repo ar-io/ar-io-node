@@ -123,7 +123,21 @@ export const createArnsMiddleware = ({
         name: arnsSubdomain,
       });
     end();
-    if (resolvedId === undefined) {
+    if (resolvedId !== undefined) {
+      // Populate the ArNS name headers if resolution was successful
+      res.header(headerNames.arnsName, arnsSubdomain);
+      if (arnsSubdomain) {
+        const parts = arnsSubdomain.split('_');
+        const basename = parts.pop(); // last part is basename
+        const undername = parts.join('_'); // everything else is undername
+        if (basename !== undefined && basename !== '') {
+          res.header(headerNames.arnsBasename, basename);
+        }
+        if (undername !== undefined && undername !== '') {
+          res.header(headerNames.arnsUndername, undername);
+        }
+      }
+    } else {
       // Extract host from referer if available
       let refererHost;
       if (req.headers.referer !== undefined) {

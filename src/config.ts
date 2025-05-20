@@ -555,10 +555,32 @@ export const CHAIN_CACHE_TYPE = env.varOrDefault('CHAIN_CACHE_TYPE', 'lmdb');
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =
   env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
 
+//
+// Contiguous data caching
+//
+
 // The threshold in seconds to cleanup the filesystem contiguous data cache
 export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
   'CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
   '',
+);
+
+// The threshold in seconds to cleanup data associated with prefered ArNS from
+// the filesystem contiguous data cache
+export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =
+  +env.varOrDefault(
+    'PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
+    `${60 * 60 * 24 * 30}`, // 30 days
+  );
+
+// The set of full (not base or undernames) ArNS names to preferentially cache
+export const PREFERRED_ARNS_NAMES = new Set(
+  env.varOrDefault('PREFERRED_ARNS_NAMES', '').split(','),
+);
+
+// The set of base ArNS names to preferentially cache
+export const PREFERRED_ARNS_BASE_NAMES = new Set(
+  env.varOrDefault('PREFERRED_ARNS_BASE_NAMES', '').split(','),
 );
 
 //

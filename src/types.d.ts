@@ -409,6 +409,9 @@ interface GqlBlocksResult {
 
 interface RequestAttributes {
   hops: number;
+  arnsName?: string;
+  arnsBasename?: string;
+  arnsUndername?: string;
   origin?: string;
   originNodeRelease?: string;
 }
@@ -541,6 +544,8 @@ export interface ContiguousData {
 }
 
 interface ContiguousMetadata {
+  mruArNSNames?: string[];
+  mruArNSBaseNames?: string[];
   accessTimestampMs: number;
 }
 
