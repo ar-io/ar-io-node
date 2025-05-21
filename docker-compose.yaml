@@ -6,14 +6,14 @@ services:
       context: envoy/
     restart: unless-stopped
     ports:
-      - '3000:3000'
+      - '${ENVOY_PORT:-3000}:3000'
       #- '9901:9901' # don't expose admin port by default
     environment:
       - LOG_LEVEL=${ENVOY_LOG_LEVEL:-info}
       - TVAL_AR_IO_HOST=core
-      - TVAL_AR_IO_PORT=4000
+      - TVAL_AR_IO_PORT=${CORE_PORT:-4000}
       - TVAL_OBSERVER_HOST=observer
-      - TVAL_OBSERVER_PORT=5050
+      - TVAL_OBSERVER_PORT=${OBSERVER_PORT:-5050}
       - TVAL_GATEWAY_HOST=${TRUSTED_GATEWAY_HOST:-arweave.net}
       - TVAL_GRAPHQL_HOST=${GRAPHQL_HOST:-core}
       - TVAL_GRAPHQL_PORT=${GRAPHQL_PORT:-4000}
@@ -30,7 +30,7 @@ services:
       context: .
     restart: unless-stopped
     ports:
-      - 4000:4000
+      - ${CORE_PORT:-4000}:${CORE_PORT:-4000}
     volumes:
       - ${CHUNKS_DATA_PATH:-./data/chunks}:/app/data/chunks
       - ${CONTIGUOUS_DATA_PATH:-./data/contiguous}:/app/data/contiguous
@@ -41,6 +41,7 @@ services:
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
     environment:
+      - PORT=${CORE_PORT:-4000}
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
       - LOG_FORMAT=${CORE_LOG_FORMAT:-simple}
@@ -157,7 +158,7 @@ services:
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: unless-stopped
     ports:
-      - '6379' # don't expose redis externally by default
+      - '${REDIS_PORT:-6379}:6379' # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
     networks:
@@ -168,9 +169,9 @@ services:
     profiles:
       - clickhouse
     ports:
-      - 8123:8123
-      - 8443:8443
-      - 9000:9000
+      - ${CLICKHOUSE_PORT_2:-8123}:8123
+      - ${CLICKHOUSE_PORT_3:-8443}:8443
+      - ${CLICKHOUSE_PORT:-9000}:${CLICKHOUSE_PORT:-9000}
     ulimits:
       nofile:
         soft: 262144
@@ -179,6 +180,7 @@ services:
       - ${CLICKHOUSE_DATA_PATH:-./data/clickhouse}:/var/lib/clickhouse
       - ${CLICKHOUSE_LOGS_PATH:-./logs/clickhouse}:/var/log/clickhouse-server
     environment:
+      - CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-9000}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
     networks:
@@ -197,7 +199,7 @@ services:
     environment:
       - DEBUG=${CLICKHOUSE_DEBUG:-}
       - AR_IO_HOST=core
-      - AR_IO_PORT=4000
+      - AR_IO_PORT=${CORE_PORT:-4000}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - PARQUET_DATA_PATH=${PARQUET_DATA_PATH:-./data/parquet}
       - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-clickhouse} # defaults to localhost in scripts
@@ -217,13 +219,13 @@ services:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-69a9de5e15f0fc82921bda237c50553069578f89}
     restart: unless-stopped
     ports:
-      - 5050:5050
+      - ${OBSERVER_PORT:-5050}:${OBSERVER_PORT:-5050}
     volumes:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
       - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
-      - PORT=5050
+      - PORT=${OBSERVER_PORT:-5050}
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-}
       - IO_PROCESS_ID=${IO_PROCESS_ID:-}
