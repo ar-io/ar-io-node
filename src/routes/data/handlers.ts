@@ -17,7 +17,7 @@
  */
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
-import { PassThrough, Transform } from 'node:stream';
+import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
@@ -149,14 +149,29 @@ const getRequestAttributes = (req: Request): RequestAttributes => {
   };
 };
 
-const handleRangeRequest = (
-  log: Logger,
-  rangeHeader: string,
-  res: Response,
-  req: Request,
-  data: ContiguousData,
-  dataAttributes: ContiguousDataAttributes | undefined,
-) => {
+interface HandleRangeRequestArgs {
+  log: Logger;
+  dataSource: ContiguousDataSource;
+  rangeHeader: string;
+  res: Response;
+  req: Request;
+  data: ContiguousData;
+  id: string;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  requestAttributes: RequestAttributes;
+}
+
+const handleRangeRequest = async ({
+  log,
+  dataSource,
+  rangeHeader,
+  res,
+  req,
+  data,
+  id,
+  dataAttributes,
+  requestAttributes,
+}: HandleRangeRequestArgs) => {
   const ranges = rangeParser(data.size, rangeHeader);
 
   // Malformed range header
@@ -197,40 +212,20 @@ const handleRangeRequest = (
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
-      data.stream.destroy();
       return;
     }
 
-    // Create a custom Transform stream to filter the range
-    let position = 0;
-    const rangeStream = new Transform({
-      transform(chunk, _, callback) {
-        // Calculate the byte range for this chunk relative to the global start
-        // position
-        const chunkStart = position;
-        const chunkEnd = chunkStart + chunk.length - 1;
-
-        // Determine the intersection between the global range and the chunk's
-        // range
-        const intersectionStart = Math.max(start, chunkStart);
-        const intersectionEnd = Math.min(end, chunkEnd);
-
-        if (intersectionStart <= intersectionEnd) {
-          // There is an intersection, so slice and push the relevant part of
-          // the chunk
-          const slicedData = chunk.slice(
-            intersectionStart - chunkStart,
-            intersectionEnd - chunkStart + 1,
-          );
-          this.push(slicedData);
-        }
-
-        position += chunk.length;
-        callback();
+    const rangeData = await dataSource.getData({
+      id,
+      dataAttributes,
+      requestAttributes,
+      region: {
+        offset: start,
+        size: end - start + 1,
       },
     });
 
-    data.stream.pipe(rangeStream).pipe(res);
+    rangeData.stream.pipe(res);
   } else {
     const generateBoundary = () => {
       // This generates a 50 character boundary similar to those used by Firefox.
@@ -250,76 +245,43 @@ const handleRangeRequest = (
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
-      data.stream.destroy();
       return;
     }
 
-    const rangeStreams: { range: rangeParser.Range; stream: PassThrough }[] =
-      [];
+    const rangeStreams: { range: rangeParser.Range; stream: Readable }[] = [];
 
-    ranges.forEach((range) => {
+    for (const range of ranges) {
       const start = range.start;
       const end = range.end;
 
-      const rangeStream = new PassThrough();
-
-      rangeStreams.push({ range, stream: rangeStream });
-
-      const transformStream = new Transform({
-        transform(chunk, _, callback) {
-          let position = 0; // Position tracking for each Transform stream
-
-          // Calculate the byte range for this chunk relative to the global start
-          // position
-          const chunkStart = position;
-          const chunkEnd = chunkStart + chunk.length - 1;
-
-          // Determine the intersection between the global range and the chunk's
-          // range
-          const intersectionStart = Math.max(start, chunkStart);
-          const intersectionEnd = Math.min(end, chunkEnd);
-
-          if (intersectionStart <= intersectionEnd) {
-            // There is an intersection, so slice and push the relevant part of
-            // the chunk
-            const slicedData = chunk.slice(
-              intersectionStart - chunkStart,
-              intersectionEnd - chunkStart + 1,
-            );
-            rangeStream.write(slicedData);
-          }
-
-          position += chunk.length;
-          callback();
+      const rangeData = await dataSource.getData({
+        id,
+        dataAttributes,
+        requestAttributes,
+        region: {
+          offset: start,
+          size: end - start + 1,
         },
       });
 
-      data.stream.pipe(transformStream).pipe(rangeStream);
-    });
+      rangeStreams.push({ range, stream: rangeData.stream });
+    }
 
-    data.stream.on('end', () => {
-      rangeStreams.forEach(({ range, stream }) => {
-        res.write(`--${boundary}\r\n`);
-        res.write(`Content-Type: ${contentType}\r\n`);
-        res.write(
-          `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
-        );
-        res.write('\r\n');
-        const streamData = stream.read();
-        if (streamData) {
-          res.write(streamData);
-        }
-        res.write('\r\n');
-        stream.end();
-      });
-      res.write(`--${boundary}--\r\n`);
-      res.end();
+    rangeStreams.forEach(({ range, stream }) => {
+      res.write(`--${boundary}\r\n`);
+      res.write(`Content-Type: ${contentType}\r\n`);
+      res.write(
+        `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
+      );
+      res.write('\r\n');
+      const streamData = stream.read();
+      if (streamData) {
+        res.write(streamData);
+      }
+      res.write('\r\n');
     });
-
-    data.stream.on('error', (err) => {
-      log.error(`Data stream error: ${err.message}`);
-      res.status(500).end();
-    });
+    res.write(`--${boundary}--\r\n`);
+    res.end();
   }
 };
 
@@ -409,7 +371,21 @@ export const createRawDataHandler = ({
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
-        handleRangeRequest(log, rangeHeader, res, req, data, dataAttributes);
+        // Range requests create new streams so the original is no longer
+        // needed
+        data.stream.destroy();
+
+        await handleRangeRequest({
+          log,
+          dataSource,
+          rangeHeader,
+          res,
+          req,
+          data,
+          id,
+          dataAttributes,
+          requestAttributes,
+        });
       } else {
         // Set headers and stream data
         setDataHeaders({ res, dataAttributes, data });
@@ -505,12 +481,26 @@ const sendManifestResponse = async ({
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
+        // Range requests create new streams so the original is no longer
+        // needed
+        data.stream.destroy();
+
         setDataHeaders({
           res,
           dataAttributes,
           data,
         });
-        handleRangeRequest(log, rangeHeader, res, req, data, dataAttributes);
+        await handleRangeRequest({
+          log,
+          dataSource,
+          rangeHeader,
+          res,
+          req,
+          data,
+          id: resolvedId,
+          dataAttributes,
+          requestAttributes,
+        });
       } else {
         // Set headers and stream data
         setDataHeaders({
@@ -694,7 +684,21 @@ export const createDataHandler = ({
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined && data !== undefined) {
-        handleRangeRequest(log, rangeHeader, res, req, data, dataAttributes);
+        // Range requests create new streams so the original is no longer
+        // needed
+        data.stream.destroy();
+
+        await handleRangeRequest({
+          log,
+          dataSource,
+          rangeHeader,
+          res,
+          req,
+          data,
+          id,
+          dataAttributes,
+          requestAttributes,
+        });
       } else {
         // Set headers and stream data
         setDataHeaders({
