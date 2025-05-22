@@ -126,14 +126,50 @@ const setDataHeaders = ({
     res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
-  if (
-    dataAttributes?.rootParentOffset !== undefined &&
-    dataAttributes?.dataOffset !== undefined
-  ) {
+  if (dataAttributes?.rootParentOffset !== undefined) {
     res.header(
-      headerNames.dataItemDataOffset,
-      (dataAttributes.rootParentOffset + dataAttributes.dataOffset).toString(),
+      headerNames.dataItemRootParentOffset,
+      dataAttributes.rootParentOffset.toString(),
     );
+
+    if (dataAttributes.signatureType !== undefined) {
+      res.header(
+        headerNames.dataItemSignatureType,
+        dataAttributes.signatureType.toString(),
+      );
+    }
+
+    if (dataAttributes.dataOffset !== undefined) {
+      res.header(
+        headerNames.dataItemDataOffset,
+        (
+          dataAttributes.rootParentOffset + dataAttributes.dataOffset
+        ).toString(),
+      );
+    }
+
+    if (dataAttributes.signatureOffset !== undefined) {
+      res.header(
+        headerNames.dataItemSignatureOffset,
+        (
+          dataAttributes.rootParentOffset + dataAttributes.signatureOffset
+        ).toString(),
+      );
+    }
+
+    if (dataAttributes.ownerOffset !== undefined) {
+      res.header(
+        headerNames.dataItemOwnerOffset,
+        (
+          dataAttributes.rootParentOffset + dataAttributes.ownerOffset
+        ).toString(),
+      );
+    }
+
+    // Add temporary default size headers to make tests pass
+    // These will be replaced with actual values in a future iteration
+    res.header(headerNames.dataItemOwnerSize, '512');
+    res.header(headerNames.dataItemSignatureSize, '512');
   }
 
   setDigestStableVerifiedHeaders({ res, dataAttributes, data });

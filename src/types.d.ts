@@ -559,6 +559,9 @@ export interface ContiguousDataAttributes {
   rootTransactionId?: string;
   rootParentOffset?: number;
   dataOffset?: number;
+  signatureType?: number;
+  signatureOffset?: number;
+  ownerOffset?: number;
   isManifest: boolean;
   stable: boolean;
   verified: boolean;
