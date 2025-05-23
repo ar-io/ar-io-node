@@ -234,7 +234,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
       if (attributes?.hash !== undefined) {
         const { arnsName, arnsBasename } = requestAttributes ?? {};
-        await this.updateMetadataCache({
+        // Intentionally not awaiting
+        this.updateMetadataCache({
           hash: attributes.hash,
           arnsName,
           arnsBasename,
