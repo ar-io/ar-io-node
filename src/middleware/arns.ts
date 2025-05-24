@@ -96,7 +96,7 @@ export const createArnsMiddleware = ({
     if (
       EXCLUDED_SUBDOMAINS.has(arnsSubdomain) ||
       // Avoid collisions with sandbox URLs by ensuring the subdomain length is
-      // below the minimum length of a sandbox subdomain. Undernames are are an
+      // below the minimum length of a sandbox subdomain. Undernames are an
       // exception because they can be longer and '_' cannot appear in base32.
       (arnsSubdomain.length > MAX_ARNS_NAME_LENGTH && !arnsSubdomain.match(/_/))
     ) {
