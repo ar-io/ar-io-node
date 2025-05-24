@@ -51,9 +51,18 @@ describe('Data routes', () => {
         saveVerificationStatus: () => Promise.resolve(undefined),
       };
       dataSource = {
-        getData: () =>
-          Promise.resolve({
-            stream: Readable.from(Buffer.from('testing...')),
+        getData: (params?: any) => {
+          const fullData = Buffer.from('testing...');
+          let data = fullData;
+
+          // Handle range requests
+          if (params?.region) {
+            const { offset, size } = params.region;
+            data = fullData.slice(offset, offset + size);
+          }
+
+          return Promise.resolve({
+            stream: Readable.from(data),
             size: 10,
             verified: false,
             cached: false,
@@ -61,7 +70,8 @@ describe('Data routes', () => {
               origin: 'node-url',
               hops: 0,
             },
-          }),
+          });
+        },
       };
       dataBlockListValidator = {
         isIdBlocked: () => Promise.resolve(false),
@@ -471,9 +481,18 @@ st
               signature: null,
             });
 
-          dataSource.getData = () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('testing...')),
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
               size: 10,
               verified: false,
               cached: true,
@@ -482,6 +501,7 @@ st
                 hops: 0,
               },
             });
+          };
 
           app.get(
             '/:id',
@@ -545,9 +565,18 @@ st
               signature: null,
             });
 
-          dataSource.getData = () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('testing...')),
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
               size: 10,
               verified: false,
               cached: true,
@@ -556,6 +585,7 @@ st
                 hops: 0,
               },
             });
+          };
 
           app.get(
             '/:id',
@@ -644,9 +674,18 @@ st
               signature: null,
             });
 
-          dataSource.getData = () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('testing...')),
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
               size: 10,
               verified: false,
               cached: true,
@@ -655,6 +694,7 @@ st
                 hops: 0,
               },
             });
+          };
 
           app.get(
             '/:id',
