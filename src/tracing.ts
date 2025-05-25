@@ -29,20 +29,20 @@ import * as version from './version.js';
 
 // NOTE: These are declared here instead of config.ts because tracing needs to
 // be setup before logging and we may start logging in config.ts in the future.
-const OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS = +env.varOrDefault(
+const OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS = env.number(
   'OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS',
-  '2000', // 2 seconds
+  2000, // 2 seconds
 );
-const OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE = +env.varOrDefault(
+const OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE = env.number(
   'OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE',
-  '10000',
+  10000,
 );
 
-const OTEL_SERVICE_NAME = env.varOrDefault('OTEL_SERVICE_NAME', 'ar-io-node');
+const OTEL_SERVICE_NAME = env.string('OTEL_SERVICE_NAME', 'ar-io-node');
 
-const OTEL_TRACING_SAMPLING_RATE_DENOMINATOR = +env.varOrDefault(
+const OTEL_TRACING_SAMPLING_RATE_DENOMINATOR = env.number(
   'OTEL_TRACING_SAMPLING_RATE_DENOMINATOR',
-  '1',
+  1,
 );
 
 const headersFile = process.env.OTEL_EXPORTER_OTLP_HEADERS_FILE;

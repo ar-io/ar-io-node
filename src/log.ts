@@ -19,12 +19,11 @@ import { createLogger, format, transports } from 'winston';
 import * as env from './lib/env.js';
 import { createObjectFilter } from './filters.js';
 
-const LOG_LEVEL = env.varOrDefault('LOG_LEVEL', 'info').toLowerCase();
-const LOG_FORMAT = env.varOrDefault('LOG_FORMAT', 'simple');
-const LOG_FILTER = env.varOrDefault('LOG_FILTER', '{"always":true}');
-const LOG_ALL_STACKTRACES =
-  env.varOrDefault('LOG_ALL_STACKTRACES', 'false') === 'true';
-const INSTANCE_ID = env.varOrUndefined('INSTANCE_ID');
+const LOG_LEVEL = env.string('LOG_LEVEL', 'info').toLowerCase();
+const LOG_FORMAT = env.string('LOG_FORMAT', 'simple');
+const LOG_FILTER = env.string('LOG_FILTER', '{"always":true}');
+const LOG_ALL_STACKTRACES = env.boolean('LOG_ALL_STACKTRACES');
+const INSTANCE_ID = env.stringOrUndefined('INSTANCE_ID');
 
 let filterDefinition: unknown;
 

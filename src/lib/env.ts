@@ -19,17 +19,17 @@ import crypto from 'node:crypto';
 
 import log from '../log.js';
 
-export function varOrDefault(envVarName: string, defaultValue: string): string {
+export function string(envVarName: string, defaultValue: string): string {
   const value = process.env[envVarName];
   return value !== undefined && value.trim() !== '' ? value : defaultValue;
 }
 
-export function varOrUndefined(envVarName: string): string | undefined {
+export function stringOrUndefined(envVarName: string): string | undefined {
   const value = process.env[envVarName];
   return value !== undefined && value.trim() !== '' ? value : undefined;
 }
 
-export function varOrRandom(envVarName: string): string {
+export function stringOrRandom(envVarName: string): string {
   const value = process.env[envVarName];
   if (value === undefined) {
     const value = crypto.randomBytes(32).toString('base64url');
@@ -37,4 +37,48 @@ export function varOrRandom(envVarName: string): string {
     return value;
   }
   return value;
+}
+
+export function boolean(
+  envVarName: string,
+  defaultValue = false,
+): boolean {
+  const value = process.env[envVarName];
+  if (value === undefined || value.trim() === '') return defaultValue;
+  return value === 'true';
+}
+
+export function number(envVarName: string, defaultValue: number): number {
+  const value = process.env[envVarName];
+  return value !== undefined && value.trim() !== ''
+    ? +value
+    : defaultValue;
+}
+
+export function numberOrUndefined(
+  envVarName: string,
+): number | undefined {
+  const value = process.env[envVarName];
+  return value !== undefined && value.trim() !== '' ? +value : undefined;
+}
+
+export function csv(envVarName: string, defaultValue = ''): string[] {
+  const value = process.env[envVarName];
+  const str = value !== undefined && value.trim() !== '' ? value : defaultValue;
+  return str === '' ? [] : str.split(',');
+}
+
+import { canonicalize } from 'json-canonicalize';
+import { createFilter } from '../filters.js';
+import { Logger } from 'winston';
+import { ItemFilter } from '../types.js';
+
+export function filter(
+  envVarName: string,
+  defaultJson: string,
+  logger: Logger,
+): ItemFilter {
+  const raw = string(envVarName, defaultJson);
+  const canonical = canonicalize(JSON.parse(raw));
+  return createFilter(JSON.parse(canonical), logger);
 }

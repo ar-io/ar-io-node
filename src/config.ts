@@ -29,16 +29,16 @@ import logger from './log.js';
 //
 
 // HTTP server port
-export const PORT = +env.varOrDefault('PORT', '4000');
+export const PORT = env.number('PORT', 4000);
 
 // API key for accessing admin HTTP endpoints
 // It's set once in the main thread
 export let ADMIN_API_KEY = isMainThread
-  ? env.varOrRandom('ADMIN_API_KEY')
+  ? env.stringOrRandom('ADMIN_API_KEY')
   : undefined;
 
 const ADMIN_API_KEY_FILE = isMainThread
-  ? env.varOrUndefined('ADMIN_API_KEY_FILE')
+  ? env.stringOrUndefined('ADMIN_API_KEY_FILE')
   : undefined;
 
 if (ADMIN_API_KEY_FILE !== undefined) {
@@ -53,16 +53,15 @@ if (ADMIN_API_KEY_FILE !== undefined) {
 //
 
 // Redis URL
-export const REDIS_CACHE_URL = env.varOrDefault(
+export const REDIS_CACHE_URL = env.string(
   'REDIS_CACHE_URL',
   'redis://localhost:6379',
 );
 
-export const REDIS_USE_TLS =
-  env.varOrDefault('REDIS_USE_TLS', 'false') === 'true';
+export const REDIS_USE_TLS = env.boolean('REDIS_USE_TLS');
 
 // Default Redis TTL
-export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
+export const REDIS_CACHE_TTL_SECONDS = env.number(
   'REDIS_CACHE_TTL_SECONDS',
   `${60 * 60 * 8}`, // 8 hours by default
 );
@@ -72,17 +71,17 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
 //
 
 // Trusted Arweave node URL (for syncing the chain and retrieving chunks)
-export const TRUSTED_NODE_URL = env.varOrDefault(
+export const TRUSTED_NODE_URL = env.string(
   'TRUSTED_NODE_URL',
   'https://ar-io.net',
 );
 
 // Trusted gateway URL (for retrieving contiguous data)
-export const TRUSTED_GATEWAY_URL = env.varOrUndefined('TRUSTED_GATEWAY_URL');
+export const TRUSTED_GATEWAY_URL = env.stringOrUndefined('TRUSTED_GATEWAY_URL');
 
 // Trusted gateway URLs (for retrieving contiguous data)
 export const TRUSTED_GATEWAYS_URLS = JSON.parse(
-  env.varOrDefault(
+  env.string(
     'TRUSTED_GATEWAYS_URLS',
     TRUSTED_GATEWAY_URL !== undefined
       ? JSON.stringify({ [TRUSTED_GATEWAY_URL]: 1 })
@@ -104,94 +103,81 @@ Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
   }
 });
 
-export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = env.number(
   'TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS',
-  '10000',
+  10000,
 );
 
-export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
+export const WEIGHTED_PEERS_TEMPERATURE_DELTA = env.number(
   'WEIGHTED_PEERS_TEMPERATURE_DELTA',
-  '2',
+  2,
 );
 
-export const GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS = +env.varOrDefault(
+export const GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS = env.number(
   'GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS',
-  `${5 * 1000}`, // 5 seconds
+  5 * 1000, // 5 seconds
 );
 
 // the size of the array from which the average performance is calculated
 // this average is used to give a weight to the peers. Longer window means
 // a better average is calculated, but it shouldn't matter too much.
-export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
+export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = env.number(
   'GATEWAY_PEERS_REQUEST_WINDOW_COUNT',
-  '20',
+  20,
 );
 
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
-  env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
+  env.csv('ARWEAVE_NODE_IGNORE_URLS');
 
 // Trusted chunk POST URLs (for posting chunks received at /chunk)
-export const CHUNK_POST_URLS = env
-  .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
-  .split(',');
+export const CHUNK_POST_URLS = env.csv(
+  'CHUNK_POST_URLS',
+  `${TRUSTED_NODE_URL}/chunk`,
+);
 
-export const CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
+export const CHUNK_POST_CONCURRENCY_LIMIT = env.number(
   'CHUNK_POST_CONCURRENCY_LIMIT',
-  '2',
+  2,
 );
 
-const SECONDARY_CHUNK_POST_URLS_STRING = env.varOrUndefined(
-  'SECONDARY_CHUNK_POST_URLS',
-);
-export const SECONDARY_CHUNK_POST_URLS =
-  SECONDARY_CHUNK_POST_URLS_STRING !== undefined
-    ? SECONDARY_CHUNK_POST_URLS_STRING.split(',')
-    : [];
+export const SECONDARY_CHUNK_POST_URLS = env.csv('SECONDARY_CHUNK_POST_URLS');
 
-export const SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
+export const SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT = env.number(
   'SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT',
-  '2',
+  2,
 );
 
-export const SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+export const SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT = env.number(
   'SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT',
-  '1',
+  1,
 );
 
 // Chunk POST response timeout in milliseconds
-const CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING = env.varOrUndefined(
+export const CHUNK_POST_RESPONSE_TIMEOUT_MS = env.numberOrUndefined(
   'CHUNK_POST_RESPONSE_TIMEOUT_MS',
 );
-export const CHUNK_POST_RESPONSE_TIMEOUT_MS =
-  CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING !== undefined
-    ? +CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING
-    : undefined;
 
 // Chunk POST abort timeout in milliseconds
-const CHUNK_POST_ABORT_TIMEOUT_MS_STRING = env.varOrUndefined(
+export const CHUNK_POST_ABORT_TIMEOUT_MS = env.numberOrUndefined(
   'CHUNK_POST_ABORT_TIMEOUT_MS',
 );
-export const CHUNK_POST_ABORT_TIMEOUT_MS =
-  CHUNK_POST_ABORT_TIMEOUT_MS_STRING !== undefined
-    ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
-    : undefined;
 
-export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+export const CHUNK_POST_MIN_SUCCESS_COUNT = env.number(
   'CHUNK_POST_MIN_SUCCESS_COUNT',
-  '3',
+  3,
 );
 
 // Arweave network peer post success goal
 // setting to 0 means this behaviour is disabled.
-export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = env.number(
   'ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT',
-  '2',
+  2,
 );
 
 // The maximum number of peers to attempt to POST to before giving up
-export const ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT = +env.varOrDefault(
+export const ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT = env.number(
   'ARWEAVE_PEER_CHUNK_POST_MAX_PEER_ATTEMPT_COUNT',
-  '5',
+  5,
 );
 
 if (
@@ -205,9 +191,9 @@ if (
 
 // If ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT is set non-zero, this
 // value defines how many chunks to post to peers in parallel.
-export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
+export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = env.number(
   'ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT',
-  '3',
+  3,
 );
 
 //
@@ -215,24 +201,20 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 //
 
 // On-demand data retrieval priority order
-export const ON_DEMAND_RETRIEVAL_ORDER = env
-  .varOrDefault(
-    'ON_DEMAND_RETRIEVAL_ORDER',
-    's3,trusted-gateways,chunks,tx-data',
-  )
-  .split(',');
+export const ON_DEMAND_RETRIEVAL_ORDER = env.csv(
+  'ON_DEMAND_RETRIEVAL_ORDER',
+  's3,trusted-gateways,chunks,tx-data',
+);
 
 // Background data retrieval priority order
-export const BACKGROUND_RETRIEVAL_ORDER = env
-  .varOrDefault(
-    'BACKGROUND_RETRIEVAL_ORDER',
-    'chunks,s3,trusted-gateways,tx-data',
-  )
-  .split(',');
+export const BACKGROUND_RETRIEVAL_ORDER = env.csv(
+  'BACKGROUND_RETRIEVAL_ORDER',
+  'chunks,s3,trusted-gateways,tx-data',
+);
 
 // Cache type for contigous metadata (access time, etc.). Defaults to 'node'
 // here for development but is set to 'redis' in 'docker-compose.yaml'.
-export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
+export const CONTIGUOUS_METADATA_CACHE_TYPE = env.string(
   'CHUNK_METADATA_CACHE_TYPE',
   'node',
 );
@@ -240,7 +222,7 @@ export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
 // By default it looks for chunk from the filesystem's dataDir
 // but it can be configured to use an s3 bucket that assumes a
 // specific kind of layout of /{dataRoot}/{relativeOffset}
-export const CHUNK_DATA_SOURCE_TYPE = env.varOrDefault(
+export const CHUNK_DATA_SOURCE_TYPE = env.string(
   'CHUNK_DATA_SOURCE_TYPE',
   'fs',
 ) as 'fs' | 'legacy-s3';
@@ -249,7 +231,7 @@ export const CHUNK_DATA_SOURCE_TYPE = env.varOrDefault(
 // but it can be configured to use a "legacy" PostgreSQL database
 // that has a specific table "chunks" with specific columns. This
 // is designed for legacy arweave gateway support.
-export const CHUNK_METADATA_SOURCE_TYPE = env.varOrDefault(
+export const CHUNK_METADATA_SOURCE_TYPE = env.string(
   'CHUNK_METADATA_SOURCE_TYPE',
   'fs',
 ) as 'fs' | 'legacy-psql';
@@ -261,125 +243,124 @@ export const CHUNK_METADATA_SOURCE_TYPE = env.varOrDefault(
 // Whether or not to run indexing processes (used on readers when running with
 // replication)
 export const START_WRITERS =
-  env.varOrDefault('START_WRITERS', 'true') === 'true';
+  env.boolean('START_WRITERS', true);
 
 // Indexing range
-export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
-export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
+export const START_HEIGHT = env.number('START_HEIGHT', 0);
+export const STOP_HEIGHT = env.number('STOP_HEIGHT', Infinity);
 
 // Filter determining which ANS-104 bundles to unbundle
 export const ANS104_UNBUNDLE_FILTER_PARSED = JSON.parse(
-  env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}'),
+  env.string('ANS104_UNBUNDLE_FILTER', '{"never": true}'),
 );
 export const ANS104_UNBUNDLE_FILTER_STRING = canonicalize(
   ANS104_UNBUNDLE_FILTER_PARSED,
 );
-export const ANS104_UNBUNDLE_FILTER = createFilter(
-  JSON.parse(ANS104_UNBUNDLE_FILTER_STRING),
+export const ANS104_UNBUNDLE_FILTER = env.filter(
+  'ANS104_UNBUNDLE_FILTER',
+  '{"never": true}',
   logger,
 );
 
 // Filter determining which ANS-104 data items to index
 export const ANS104_INDEX_FILTER_PARSED = JSON.parse(
-  env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}'),
+  env.string('ANS104_INDEX_FILTER', '{"never": true}'),
 );
 export const ANS104_INDEX_FILTER_STRING = canonicalize(
   ANS104_INDEX_FILTER_PARSED,
 );
-export const ANS104_INDEX_FILTER = createFilter(
-  JSON.parse(ANS104_INDEX_FILTER_STRING),
+export const ANS104_INDEX_FILTER = env.filter(
+  'ANS104_INDEX_FILTER',
+  '{"never": true}',
   logger,
 );
 
 // The number of ANS-104 worker threads to run
-export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
+export const ANS104_UNBUNDLE_WORKERS = env.number(
   'ANS104_UNBUNDLE_WORKERS',
-  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '1',
+  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? 0 : 1,
 );
 
 // The number of ANS-104 bundle downloads to attempt in parallel
-export const ANS104_DOWNLOAD_WORKERS = +env.varOrDefault(
+export const ANS104_DOWNLOAD_WORKERS = env.number(
   'ANS104_DOWNLOAD_WORKERS',
-  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '5',
+  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? 0 : 5,
 );
 
 // Whether or not to attempt to rematch old bundles using the current filter
-export const FILTER_CHANGE_REPROCESS =
-  env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';
+export const FILTER_CHANGE_REPROCESS = env.boolean('FILTER_CHANGE_REPROCESS');
 
 // Whether or not to backfill bundle records (only needed for DBs that existed
 // before unbundling was implemented)
 export const BACKFILL_BUNDLE_RECORDS =
-  env.varOrDefault('BACKFILL_BUNDLE_RECORDS', 'false') === 'true';
+  env.boolean('BACKFILL_BUNDLE_RECORDS');
 
 // Whether or not to write the data item signatures to the database
 export const WRITE_ANS104_DATA_ITEM_DB_SIGNATURES =
-  env.varOrDefault('WRITE_ANS104_DATA_ITEM_DB_SIGNATURES', 'false') === 'true';
+  env.boolean('WRITE_ANS104_DATA_ITEM_DB_SIGNATURES');
 
 // Whether or not to write the transaction signatures to the database
 export const WRITE_TRANSACTION_DB_SIGNATURES =
-  env.varOrDefault('WRITE_TRANSACTION_DB_SIGNATURES', 'false') === 'true';
+  env.boolean('WRITE_TRANSACTION_DB_SIGNATURES');
 
 // Whether or not to enable the data database WAL cleanup worker
 export const ENABLE_DATA_DB_WAL_CLEANUP =
-  env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';
+  env.boolean('ENABLE_DATA_DB_WAL_CLEANUP');
 
 // The maximum number of data items to queue for indexing before skipping
 // indexing new data items
-export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
+export const MAX_DATA_ITEM_QUEUE_SIZE = env.number(
   'MAX_DATA_ITEM_QUEUE_SIZE',
-  '100000',
+  100000,
 );
 
 // The maximum number of bundles to queue for unbundling before skipping
-export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
+export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = env.number(
   'BUNDLE_DATA_IMPORTER_QUEUE_SIZE',
-  '1000',
+  1000,
 );
 
 // The maximum number of data imports to queue for verification purposes
-export const VERIFICATION_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
+export const VERIFICATION_DATA_IMPORTER_QUEUE_SIZE = env.number(
   'VERIFICATION_DATA_IMPORTER_QUEUE_SIZE',
-  '1000',
+  1000,
 );
 
 // The maximum number of data items indexed to flush stable data items
-export const DATA_ITEM_FLUSH_COUNT_THRESHOLD = +env.varOrDefault(
+export const DATA_ITEM_FLUSH_COUNT_THRESHOLD = env.number(
   'DATA_ITEM_FLUSH_COUNT_THRESHOLD',
-  '1000',
+  1000,
 );
 
 // The interval in seconds to flush stable data items
-export const MAX_FLUSH_INTERVAL_SECONDS = +env.varOrDefault(
+export const MAX_FLUSH_INTERVAL_SECONDS = env.number(
   'MAX_FLUSH_INTERVAL_SECONDS',
-  '600',
+  600,
 );
 
-export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
+export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = env.number(
   'BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS',
-  '300', // 5 minutes
+  300, // 5 minutes
 );
 
-export const BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS =
-  +env.varOrDefault(
-    'BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS',
-    '300', // 5 minutes
-  );
+export const BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS = env.number(
+  'BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS',
+  300, // 5 minutes
+);
 
-export const BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS = +env.varOrDefault(
+export const BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS = env.number(
   'BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS',
-  '900', // 15 minutes
+  900, // 15 minutes
 );
 
-export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS =
-  +env.varOrDefault(
-    'BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS',
-    '300', // 15 minutes
-  );
+export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS = env.number(
+  'BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS',
+  300, // 15 minutes
+);
 
-export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
+export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = env.number(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
-  '5000',
+  5000,
 );
 
 //
@@ -388,7 +369,7 @@ export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
 
 // A URL format of: postgres://username:password@host:port/database
 // the password can be omitted and passed in as filesystem path
-export const LEGACY_PSQL_CONNECTION_STRING = env.varOrUndefined(
+export const LEGACY_PSQL_CONNECTION_STRING = env.stringOrUndefined(
   'LEGACY_PSQL_CONNECTION_STRING',
 );
 
@@ -397,35 +378,35 @@ export const LEGACY_PSQL_CONNECTION_STRING = env.varOrUndefined(
 // This is ar-io specific environment variable,
 // note that postgres.js also respects built-in env-vars like PGHOST, PGPORT etc.
 // see more: https://github.com/porsager/postgres?tab=readme-ov-file#environmental-variables
-export const LEGACY_PSQL_PASSWORD_FILE = env.varOrUndefined(
+export const LEGACY_PSQL_PASSWORD_FILE = env.stringOrUndefined(
   'LEGACY_PSQL_PASSWORD_FILE',
 );
 
 // very common workaround needed for various cloud providers
 // see more: https://github.com/porsager/postgres?tab=readme-ov-file#ssl
 export const LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED =
-  env.varOrDefault('LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED', 'true') === 'true';
+  env.boolean('LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED', true);
 
 //
 // File system cleanup
 //
 
 // The number of files to process in each batch during cleanup
-export const FS_CLEANUP_WORKER_BATCH_SIZE = +env.varOrDefault(
+export const FS_CLEANUP_WORKER_BATCH_SIZE = env.number(
   'FS_CLEANUP_WORKER_BATCH_SIZE',
-  '2000',
+  2000,
 );
 
 // The pause duration between cleanup batches in milliseconds
-export const FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION = +env.varOrDefault(
+export const FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION = env.number(
   'FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION',
-  '5000',
+  5000,
 );
 
 // The pause duration before restarting cleanup from the beginning in milliseconds
-export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
+export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = env.number(
   'FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION',
-  `${1000 * 60 * 60 * 4}`, // every 4 hours
+  1000 * 60 * 60 * 4, // every 4 hours
 );
 
 //
@@ -434,21 +415,21 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
 
 // Whether or not to enable the background data verification worker
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
-  env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'false') === 'true';
+  env.boolean('ENABLE_BACKGROUND_DATA_VERIFICATION');
 
-export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
+export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = env.number(
   'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
-  '600', // 10 minutes
+  600, // 10 minutes
 );
 
-export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = +env.varOrDefault(
+export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = env.number(
   'BACKGROUND_DATA_VERIFICATION_WORKER_COUNT',
-  '1',
+  1,
 );
 
-export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
+export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = env.number(
   'BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS',
-  `${1000 * 30}`, // 30 seconds
+  1000 * 30, // 30 seconds
 );
 
 //
@@ -456,7 +437,7 @@ export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
 //
 
 export const TAG_SELECTIVITY = JSON.parse(
-  env.varOrDefault(
+  env.string(
     'TAG_SELECTIVITY',
     JSON.stringify({
       'Parent-Folder-Id': 20,
@@ -472,47 +453,42 @@ export const TAG_SELECTIVITY = JSON.parse(
 ) as Record<string, number>;
 
 // ClickHouse
-export const CLICKHOUSE_URL = env.varOrUndefined('CLICKHOUSE_URL');
-export const CLICKHOUSE_USER = env.varOrUndefined('CLICKHOUSE_USER');
-export const CLICKHOUSE_PASSWORD = env.varOrUndefined('CLICKHOUSE_PASSWORD');
+export const CLICKHOUSE_URL = env.stringOrUndefined('CLICKHOUSE_URL');
+export const CLICKHOUSE_USER = env.stringOrUndefined('CLICKHOUSE_USER');
+export const CLICKHOUSE_PASSWORD = env.stringOrUndefined('CLICKHOUSE_PASSWORD');
 
 //
 // Healthchecks
 //
 
-export const MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS_STRING =
-  env.varOrUndefined('MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS');
-
 export const MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS =
-  MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS_STRING !== undefined
-    ? +MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS_STRING
-    : undefined;
+  env.numberOrUndefined('MAX_EXPECTED_DATA_ITEM_INDEXING_INTERVAL_SECONDS');
 
 //
 // ArNS and sandboxing
 //
 
 // The root host name to use for ArNS
-export const ARNS_ROOT_HOST = env.varOrUndefined('ARNS_ROOT_HOST');
+export const ARNS_ROOT_HOST = env.stringOrUndefined('ARNS_ROOT_HOST');
 export const ROOT_HOST_SUBDOMAIN_LENGTH =
   ARNS_ROOT_HOST !== undefined ? ARNS_ROOT_HOST.split('.').length - 2 : 0;
 
 // The protocol to use for sandboxing redirects (defaults to https)
-export const SANDBOX_PROTOCOL = env.varOrUndefined('SANDBOX_PROTOCOL');
+export const SANDBOX_PROTOCOL = env.stringOrUndefined('SANDBOX_PROTOCOL');
 
 //
 // AR.IO network
 //
 
 // The wallet for this gateway
-export const AR_IO_WALLET = env.varOrUndefined('AR_IO_WALLET');
+export const AR_IO_WALLET = env.stringOrUndefined('AR_IO_WALLET');
 
-export const IO_PROCESS_ID = env.varOrDefault(
+export const IO_PROCESS_ID = env.string(
   'IO_PROCESS_ID',
   'qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE',
 );
 
-export const AR_IO_NODE_RELEASE = env.varOrDefault(
+export const AR_IO_NODE_RELEASE = env.string(
   'AR_IO_NODE_RELEASE',
   release,
 );
@@ -521,9 +497,9 @@ export const AR_IO_NODE_RELEASE = env.varOrDefault(
 // Apex domain customization
 //
 
-export const APEX_TX_ID = env.varOrUndefined('APEX_TX_ID');
+export const APEX_TX_ID = env.stringOrUndefined('APEX_TX_ID');
 
-export const APEX_ARNS_NAME = env.varOrUndefined('APEX_ARNS_NAME');
+export const APEX_ARNS_NAME = env.stringOrUndefined('APEX_ARNS_NAME');
 if (APEX_TX_ID !== undefined && APEX_ARNS_NAME !== undefined) {
   throw new Error(
     'APEX_TX_ID and APEX_ARNS_NAME are mutually exclusive but both are set.',
@@ -537,9 +513,9 @@ if (APEX_ARNS_NAME !== undefined && ARNS_ROOT_HOST === undefined) {
 // ArNS 404 customization
 //
 
-export const ARNS_NOT_FOUND_TX_ID = env.varOrUndefined('ARNS_NOT_FOUND_TX_ID');
+export const ARNS_NOT_FOUND_TX_ID = env.stringOrUndefined('ARNS_NOT_FOUND_TX_ID');
 
-export const ARNS_NOT_FOUND_ARNS_NAME = env.varOrDefault(
+export const ARNS_NOT_FOUND_ARNS_NAME = env.string(
   'ARNS_NOT_FOUND_ARNS_NAME',
   'unregistered_arns',
 );
@@ -549,18 +525,18 @@ export const ARNS_NOT_FOUND_ARNS_NAME = env.varOrDefault(
 //
 
 // Cache type (lmdb, fs, or redis - defaults to redis in docker-compose.yaml)
-export const CHAIN_CACHE_TYPE = env.varOrDefault('CHAIN_CACHE_TYPE', 'lmdb');
+export const CHAIN_CACHE_TYPE = env.string('CHAIN_CACHE_TYPE', 'lmdb');
 
 // Whether or not to cleanup filesystem header cache files
 export const ENABLE_FS_HEADER_CACHE_CLEANUP =
-  env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
+  env.boolean('ENABLE_FS_HEADER_CACHE_CLEANUP');
 
 //
 // Contiguous data caching
 //
 
 // The threshold in seconds to cleanup the filesystem contiguous data cache
-export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
+export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.string(
   'CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
   '',
 );
@@ -568,19 +544,19 @@ export const CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD = env.varOrDefault(
 // The threshold in seconds to cleanup data associated with prefered ArNS from
 // the filesystem contiguous data cache
 export const PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD =
-  +env.varOrDefault(
+  env.number(
     'PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD',
-    `${60 * 60 * 24 * 30}`, // 30 days
+    60 * 60 * 24 * 30, // 30 days
   );
 
 // The set of full (not base or undernames) ArNS names to preferentially cache
 export const PREFERRED_ARNS_NAMES = new Set(
-  env.varOrDefault('PREFERRED_ARNS_NAMES', '').split(','),
+  env.csv('PREFERRED_ARNS_NAMES'),
 );
 
 // The set of base ArNS names to preferentially cache
 export const PREFERRED_ARNS_BASE_NAMES = new Set(
-  env.varOrDefault('PREFERRED_ARNS_BASE_NAMES', '').split(','),
+  env.csv('PREFERRED_ARNS_BASE_NAMES'),
 );
 
 //
@@ -588,29 +564,25 @@ export const PREFERRED_ARNS_BASE_NAMES = new Set(
 //
 
 // The webhook target servers
-export const WEBHOOK_TARGET_SERVERS_VALUE = env.varOrUndefined(
-  'WEBHOOK_TARGET_SERVERS',
-);
-export const WEBHOOK_TARGET_SERVERS =
-  WEBHOOK_TARGET_SERVERS_VALUE !== undefined
-    ? WEBHOOK_TARGET_SERVERS_VALUE.split(',')
-    : [];
+export const WEBHOOK_TARGET_SERVERS = env.csv('WEBHOOK_TARGET_SERVERS');
 
 // The index filter to use for webhooks
 export const WEBHOOK_INDEX_FILTER_STRING = canonicalize(
-  JSON.parse(env.varOrDefault('WEBHOOK_INDEX_FILTER', '{"never": true}')),
+  JSON.parse(env.string('WEBHOOK_INDEX_FILTER', '{"never": true}')),
 );
-export const WEBHOOK_INDEX_FILTER = createFilter(
-  JSON.parse(WEBHOOK_INDEX_FILTER_STRING),
+export const WEBHOOK_INDEX_FILTER = env.filter(
+  'WEBHOOK_INDEX_FILTER',
+  '{"never": true}',
   logger,
 );
 
 // Block filter to use for webhooks
 export const WEBHOOK_BLOCK_FILTER_STRING = canonicalize(
-  JSON.parse(env.varOrDefault('WEBHOOK_BLOCK_FILTER', '{"never": true}')),
+  JSON.parse(env.string('WEBHOOK_BLOCK_FILTER', '{"never": true}')),
 );
-export const WEBHOOK_BLOCK_FILTER = createFilter(
-  JSON.parse(WEBHOOK_BLOCK_FILTER_STRING),
+export const WEBHOOK_BLOCK_FILTER = env.filter(
+  'WEBHOOK_BLOCK_FILTER',
+  '{"never": true}',
   logger,
 );
 
@@ -618,67 +590,63 @@ export const WEBHOOK_BLOCK_FILTER = createFilter(
 // ArNS Resolution
 //
 
-export const AR_IO_SDK_LOG_LEVEL = env.varOrDefault(
+export const AR_IO_SDK_LOG_LEVEL = env.string(
   'AR_IO_SDK_LOG_LEVEL',
   'none',
 );
 
-export const ARNS_CACHE_TYPE = env.varOrDefault('ARNS_CACHE_TYPE', 'node');
+export const ARNS_CACHE_TYPE = env.string('ARNS_CACHE_TYPE', 'node');
 
 // Amount of time that entries stay in the cache (ArNS record TTL still applies
 // on top of this)
-export const ARNS_CACHE_TTL_SECONDS = +env.varOrDefault(
+export const ARNS_CACHE_TTL_SECONDS = env.number(
   'ARNS_CACHE_TTL_SECONDS',
-  `${60 * 60 * 24}`, // 24 hours
+  60 * 60 * 24, // 24 hours
 );
 
 // The maximum amount of time to wait for resolution from AO if there is a
 // cached value that can be served. When the timeout occurs, caches will still
 // be refreshed in the background.
-export const ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS = +env.varOrDefault(
+export const ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS = env.number(
   'ARNS_CACHED_RESOLUTION_FALLBACK_TIMEOUT_MS',
-  '250',
-);
-
-export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING = env.varOrUndefined(
-  'ARNS_RESOLVER_OVERRIDE_TTL_SECONDS',
+  250,
 );
 
 export const ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT =
-  env.varOrDefault('ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT', 'true') === 'true';
+  env.boolean('ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT', true);
 
-export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS =
-  ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING !== undefined
-    ? +ARNS_RESOLVER_OVERRIDE_TTL_SECONDS_STRING
-    : undefined;
+export const ARNS_RESOLVER_OVERRIDE_TTL_SECONDS = env.numberOrUndefined(
+  'ARNS_RESOLVER_OVERRIDE_TTL_SECONDS',
+);
 
-export const ARNS_CACHE_MAX_KEYS = +env.varOrDefault(
+export const ARNS_CACHE_MAX_KEYS = env.number(
   'ARNS_CACHE_MAX_KEYS',
-  '10000',
+  10000,
 );
 
-export const ARNS_RESOLVER_PRIORITY_ORDER = env
-  .varOrDefault('ARNS_RESOLVER_PRIORITY_ORDER', 'gateway,on-demand')
-  .split(',');
+export const ARNS_RESOLVER_PRIORITY_ORDER = env.csv(
+  'ARNS_RESOLVER_PRIORITY_ORDER',
+  'gateway,on-demand',
+);
 
-export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
+export const ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS = env.number(
   'ARNS_COMPOSITE_RESOLVER_TIMEOUT_MS',
-  '3000',
+  3000,
 );
 
-export const ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS = +env.varOrDefault(
+export const ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS = env.number(
   'ARNS_COMPOSITE_LAST_RESOLVER_TIMEOUT_MS',
-  '30000',
+  30000,
 );
 
-export const ARNS_NAMES_CACHE_TTL_SECONDS = +env.varOrDefault(
+export const ARNS_NAMES_CACHE_TTL_SECONDS = env.number(
   'ARNS_NAMES_CACHE_TTL_SECONDS',
-  `${60 * 60}`, // 1 hour
+  60 * 60, // 1 hour
 );
 
-export const ARNS_MAX_CONCURRENT_RESOLUTIONS = +env.varOrDefault(
+export const ARNS_MAX_CONCURRENT_RESOLUTIONS = env.number(
   'ARNS_MAX_CONCURRENT_RESOLUTIONS',
-  '1',
+  1,
 );
 
 // Controls the maximum time allowed for requests to AO for ARIO process state.
@@ -687,9 +655,9 @@ export const ARNS_MAX_CONCURRENT_RESOLUTIONS = +env.varOrDefault(
 // timeout, they will be considered failed and may trigger the circuit breaker
 // if the error threshold is reached.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS =
-  +env.varOrDefault(
+  env.number(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS',
-    `${60 * 1000}`, // 60 seconds
+    60 * 1000, // 60 seconds
   );
 
 // Controls the percentage of failed requests to AO for ARIO process state that
@@ -697,18 +665,18 @@ export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS =
 // threshold (30%) to compensate for the extended timeout (10 seconds)
 // configured above.
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE =
-  +env.varOrDefault(
+  env.number(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
-    '30', // 30% failure limit before circuit breaker opens
+    30, // 30% failure limit before circuit breaker opens
   );
 
 // Defines the time window for tracking errors when retrieving ARIO process
 // state from AO The circuit breaker counts failures within this rolling time
 // window to determine if the error threshold percentage has been exceeded
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
-  +env.varOrDefault(
+  env.number(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS',
-    `${10 * 60 * 1000}`, // 10 minutes
+    10 * 60 * 1000, // 10 minutes
   );
 
 // Defines how long the circuit breaker stays in the open state after being
@@ -716,31 +684,31 @@ export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS =
 // be rejected immediately After this timeout expires, the circuit breaker
 // transitions to half-open state to test if AO is responsive again
 export const ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS =
-  +env.varOrDefault(
+  env.number(
     'ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
-    `${20 * 60 * 1000}`, // 20 minutes
+    20 * 60 * 1000, // 20 minutes
   );
 
 export const ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS =
-  +env.varOrDefault(
+  env.number(
     'ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS',
-    `${2 * 60}`, // 2 minutes
+    2 * 60, // 2 minutes
   );
 
 export const ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS =
-  +env.varOrDefault(
+  env.number(
     'ARNS_NAME_LIST_CACHE_HIT_REFRESH_INTERVAL_SECONDS',
-    `${60 * 60}`, // 1 hour
+    60 * 60, // 1 hour
   );
 
 export const ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS =
-  +env.varOrDefault(
+  env.number(
     'ARNS_ANT_STATE_CACHE_HIT_REFRESH_WINDOW_SECONDS',
-    `${30}`, // 30 seconds
+    30, // 30 seconds
   );
 
 // TODO: support multiple gateway urls
-export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
+export const TRUSTED_ARNS_GATEWAY_URL = env.string(
   'TRUSTED_ARNS_GATEWAY_URL',
   'https://__NAME__.ar-io.net',
 );
@@ -750,42 +718,42 @@ export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
 //
 
 export const ENABLE_MEMPOOL_WATCHER =
-  env.varOrDefault('ENABLE_MEMPOOL_WATCHER', 'false') === 'true';
+  env.boolean('ENABLE_MEMPOOL_WATCHER');
 
-export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
+export const MEMPOOL_POLLING_INTERVAL_MS = env.number(
   'MEMPOOL_POLLING_INTERVAL_MS',
-  '30000', // 30 seconds
+  30000, // 30 seconds
 );
 
 //
 // AWS settings
 //
 
-export const AWS_ACCESS_KEY_ID = env.varOrUndefined('AWS_ACCESS_KEY_ID');
-export const AWS_SECRET_ACCESS_KEY = env.varOrUndefined(
+export const AWS_ACCESS_KEY_ID = env.stringOrUndefined('AWS_ACCESS_KEY_ID');
+export const AWS_SECRET_ACCESS_KEY = env.stringOrUndefined(
   'AWS_SECRET_ACCESS_KEY',
 );
 // The session token is optional, but if it is set, it must be used
-export const AWS_SESSION_TOKEN = env.varOrUndefined('AWS_SESSION_TOKEN');
-export const AWS_REGION = env.varOrUndefined('AWS_REGION');
-export const AWS_ENDPOINT = env.varOrUndefined('AWS_ENDPOINT');
+export const AWS_SESSION_TOKEN = env.stringOrUndefined('AWS_SESSION_TOKEN');
+export const AWS_REGION = env.stringOrUndefined('AWS_REGION');
+export const AWS_ENDPOINT = env.stringOrUndefined('AWS_ENDPOINT');
 
-export const AWS_S3_CONTIGUOUS_DATA_BUCKET = env.varOrUndefined(
+export const AWS_S3_CONTIGUOUS_DATA_BUCKET = env.stringOrUndefined(
   'AWS_S3_CONTIGUOUS_DATA_BUCKET',
 );
-export const AWS_S3_CONTIGUOUS_DATA_PREFIX = env.varOrUndefined(
+export const AWS_S3_CONTIGUOUS_DATA_PREFIX = env.stringOrUndefined(
   'AWS_S3_CONTIGUOUS_DATA_PREFIX',
 );
 
 // Chunk data source speficially set-up for interoperability with
 // the legacy arweave gateways
-export const LEGACY_AWS_S3_CHUNK_DATA_BUCKET = env.varOrUndefined(
+export const LEGACY_AWS_S3_CHUNK_DATA_BUCKET = env.stringOrUndefined(
   'LEGACY_AWS_S3_CHUNK_DATA_BUCKET',
 );
 
 // Optional prefix for chunk data in the legacy S3 bucket, if omitted,
 // the root of the bucket will be /{dataRoot}/{relativeOffset}
-export const LEGACY_AWS_S3_CHUNK_DATA_PREFIX = env.varOrUndefined(
+export const LEGACY_AWS_S3_CHUNK_DATA_PREFIX = env.stringOrUndefined(
   'LEGACY_AWS_S3_CHUNK_DATA_PREFIX',
 );
 
@@ -794,18 +762,18 @@ export const LEGACY_AWS_S3_CHUNK_DATA_PREFIX = env.varOrUndefined(
 //
 
 // Whether or not to bypass the header cache
-export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
+export const SKIP_CACHE = env.boolean('SKIP_CACHE');
 
 // The rate (0 - 1) at which to simulate request failures
-export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
+export const SIMULATED_REQUEST_FAILURE_RATE = env.number(
   'SIMULATED_REQUEST_FAILURE_RATE',
-  '0',
+  0,
 );
 
 // Circuit breaker timeout for getDataParentCircuitBreaker and getDataAttributesCircuitBreaker
-export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
+export const GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS = env.number(
   'GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS',
-  '500',
+  500,
 );
 
 //
@@ -825,13 +793,13 @@ function sanitizeUrl(url: string | undefined): string | undefined {
   return url.replace(/\/+$/, '');
 }
 
-export const AO_MU_URL = sanitizeUrl(env.varOrUndefined('AO_MU_URL'));
-export const AO_CU_URL = sanitizeUrl(env.varOrUndefined('AO_CU_URL'));
+export const AO_MU_URL = sanitizeUrl(env.stringOrUndefined('AO_MU_URL'));
+export const AO_CU_URL = sanitizeUrl(env.stringOrUndefined('AO_CU_URL'));
 export const NETWORK_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('NETWORK_AO_CU_URL') ?? AO_CU_URL,
+  env.stringOrUndefined('NETWORK_AO_CU_URL') ?? AO_CU_URL,
 );
 export const ANT_AO_CU_URL = sanitizeUrl(
-  env.varOrUndefined('ANT_AO_CU_URL') ?? AO_CU_URL,
+  env.stringOrUndefined('ANT_AO_CU_URL') ?? AO_CU_URL,
 );
-export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
-export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
+export const AO_GRAPHQL_URL = env.stringOrUndefined('AO_GRAPHQL_URL');
+export const AO_GATEWAY_URL = env.stringOrUndefined('AO_GATEWAY_URL');
