@@ -282,6 +282,15 @@ describe('X-Cache header', { skip: isTestFiltered(['flaky']) }, function () {
 
     assert.equal(res.headers['x-cache'], 'HIT');
   });
+
+  it('Verifying x-cache header for range request', async function () {
+    const res = await axios.get(`http://localhost:4000/raw/${tx1}`, {
+      headers: { Range: 'bytes=0-0' },
+      validateStatus: (status) => status === 206,
+    });
+
+    assert.equal(res.headers['x-cache'], 'HIT');
+  });
 });
 
 describe('X-AR-IO-Root-Transaction-Id header', function () {

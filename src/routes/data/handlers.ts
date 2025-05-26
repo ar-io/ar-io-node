@@ -206,6 +206,8 @@ const handleRangeRequest = async ({
 
   setDigestStableVerifiedHeaders({ res, dataAttributes, data });
 
+  // FIXME: calculate Content-Length appropriately
+
   if (isSingleRange) {
     const totalSize = data.size;
     const start = ranges[0].start;
@@ -381,6 +383,7 @@ export const createRawDataHandler = ({
         // Range requests create new streams so the original is no longer
         // needed
         data.stream.destroy();
+        setDataHeaders({ res, dataAttributes, data });
 
         await handleRangeRequest({
           log,
@@ -695,6 +698,12 @@ export const createDataHandler = ({
         // Range requests create new streams so the original is no longer
         // needed
         data.stream.destroy();
+
+        setDataHeaders({
+          res,
+          dataAttributes,
+          data,
+        });
 
         await handleRangeRequest({
           log,

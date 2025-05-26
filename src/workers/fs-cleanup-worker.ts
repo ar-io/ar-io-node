@@ -65,6 +65,7 @@ export class FsCleanupWorker {
   }
 
   async start(): Promise<void> {
+    // TODO: delay first cleanup to allow metadata cache to populate?
     this.log.info('Starting worker');
     while (this.shouldRun) {
       try {

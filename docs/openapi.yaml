@@ -669,6 +669,14 @@ paths:
         '206':
           description: Partial content for range requests
           headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                example: bytes
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=2592000, immutable
             Content-Range:
               schema:
                 type: string
@@ -677,6 +685,31 @@ paths:
               schema:
                 type: string
                 example: application/octet-stream
+            X-Cache:
+              schema:
+                $ref: '#/components/schemas/CacheStatus'
+                example: HIT
+            X-AR-IO-Verified:
+              schema:
+                $ref: '#/components/schemas/VerificationStatus'
+                example: true
+            X-AR-IO-Digest:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            ETag:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            X-AR-IO-Root-Transaction-Id:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+                description: For data items, the root transaction ID
+                example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc'
+            X-AR-IO-Hops:
+              schema:
+                type: integer
+                example: 1
         '301':
           description: Redirect for manifest paths without trailing slash
         '404':
@@ -811,6 +844,14 @@ paths:
         '206':
           description: Partial content for range requests
           headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                example: bytes
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=2592000, immutable
             Content-Range:
               schema:
                 type: string
@@ -819,6 +860,31 @@ paths:
               schema:
                 type: string
                 example: application/octet-stream
+            X-Cache:
+              schema:
+                $ref: '#/components/schemas/CacheStatus'
+                example: HIT
+            X-AR-IO-Verified:
+              schema:
+                $ref: '#/components/schemas/VerificationStatus'
+                example: true
+            X-AR-IO-Digest:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            ETag:
+              schema:
+                type: string
+                example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            X-AR-IO-Root-Transaction-Id:
+              schema:
+                $ref: '#/components/schemas/Base64Url43'
+                description: For data items, the root transaction ID
+                example: '283VjqeZG65tPI6V0e-gucoHCaEBPL41_cI8rXVRbMc'
+            X-AR-IO-Hops:
+              schema:
+                type: integer
+                example: 1
         '404':
           description: Data not found or blocked
         '416':
