@@ -273,19 +273,20 @@ const handleRangeRequest = async ({
       rangeStreams.push({ range, stream: rangeData.stream });
     }
 
-    rangeStreams.forEach(({ range, stream }) => {
+    for (const { range, stream } of rangeStreams) {
       res.write(`--${boundary}\r\n`);
       res.write(`Content-Type: ${contentType}\r\n`);
       res.write(
         `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
       );
       res.write('\r\n');
-      const streamData = stream.read();
-      if (streamData) {
-        res.write(streamData);
+
+      for await (const chunk of stream) {
+        res.write(chunk);
       }
+
       res.write('\r\n');
-    });
+    }
     res.write(`--${boundary}--\r\n`);
     res.end();
   }
