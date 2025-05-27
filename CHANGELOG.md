@@ -4,7 +4,56 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 36] - 2025-05-27
+
+This is a recommended but not essential upgrade. The most important changes are
+the preferred ArNS caching feature for improved performance on frequently
+accessed content and the observer's 80% failure threshold to prevent invalid
+reports during network issues.
+
+### Added
+
+- Added preferred ArNS caching functionality that allows configuring lists of
+  ArNS names to be cached longer via `PREFERRED_ARNS_NAMES` and
+  `PREFERRED_ARNS_BASE_NAMES` environment variables. When configured, these names
+  will be cleaned from the filesystem cache after
+  `PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD` instead of the
+  standard cleanup threshold. This is accomplished by maintaining an MRU (Most
+  Recently Used) list of ArNS names in the contiguous metadata cache. When
+  filesystem cleanup runs, it checks this list to determine which cleanup
+  threshold to apply. This feature enables gateway operators to ensure popular
+  or important ArNS names remain cached longer, improving performance for
+  frequently accessed content.
+- Added ArNS headers to responses: `X-ArNS-Name`, `X-ArNS-Basename`, and
+  `X-ArNS-Record` to help identify which ArNS names were used in the resolution.
+
+### Changed
+
+- Updated observer to prevent report submission when failure rate exceeds 80%.
+  This threshold helps guard against both poorly operated observers and
+  widespread network issues. In the case of a widespread network issue, the
+  assumption is that most gateway operators are well intentioned and will work
+  together to troubleshoot and restore both observations and network stability,
+  rather than submitting reports that would penalize functioning gateways.
+- Updated default trusted gateway in docker-compose Envoy configuration to
+  ar-io.net for improved robustness and alignment with core service
+  configuration.
+- Improved range request performance by passing ranges directly to getData
+  implementations rather than streaming all data and extracting ranges.
+
+### Fixed
+
+- Fixed missing cache headers (`X-Cache` and other data headers) in range
+  request responses to ensure consistent cache header behavior across all request
+  types.
+- Fixed async streaming for multipart range requests by using async iteration
+  instead of synchronous reads, preventing potential data loss.
+- Fixed ArNS resolution to properly exclude www subdomain from resolution
+  logic.
+- Fixed test reliability issues by properly awaiting stream completion before
+  making assertions.
+- Fixed chunk broadcasting to not await peer broadcasts, as they are
+  best-effort operations.
 
 ## [Release 35] - 2025-05-19
 
@@ -349,7 +398,7 @@ recommended that everyone upgrade to this release.
   been fully unbundled using the current filters if they are matched or
   manually queued again.
 - Replaced references `docker-compose` in the docs with the more modern `docker
-  compose`.
+compose`.
 
 ### Fixed
 
@@ -453,7 +502,7 @@ recommended that everyone upgrade to this release.
   Data verification can be enabled by setting the
   `ENABLE_BACKGROUND_DATA_VERIFICATION` environment variable to true. The
   interval between attempts to verify batches of bundles is configurable using
-  the  `BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS` environment variable.
+  the `BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS` environment variable.
 - Added a `CHUNK_POST_MIN_SUCCESS_COUNT` environment variable to configure how
   many Arweave nodes must accept a chunk before a chunk broadcast is considered
   successful.
@@ -897,7 +946,7 @@ recommended that everyone upgrade to this release.
 
 ### Fixed
 
-- Fix data caching failure caused by incorrect method name in getData* circuit
+- Fix data caching failure caused by incorrect method name in getData\* circuit
   breakers.
 - Fix healthcheck when ARNS_ROOT_HOST includes a subdomain.
 
