@@ -143,6 +143,8 @@ describe('Data routes', () => {
         .get('/not-a-real-id')
         .set('Range', 'bytes=2-3')
         .expect(206)
+        .expect('Content-Range', 'bytes 2-3/10')
+        .expect('Content-Length', '2')
         .then((res: any) => {
           assert.equal(res.body.toString(), 'st');
         });
@@ -164,6 +166,8 @@ describe('Data routes', () => {
         .head('/not-a-real-id')
         .set('Range', 'bytes=2-3')
         .expect(206)
+        .expect('Content-Range', 'bytes 2-3/10')
+        .expect('Content-Length', '2')
         .then((res: any) => {
           assert.deepEqual(res.body, {});
         });
@@ -185,8 +189,38 @@ describe('Data routes', () => {
         .get('/not-a-real-id')
         .set('Range', 'bytes=12-30')
         .expect(416)
+        .expect('Content-Range', 'bytes */10')
+        .expect(
+          'Content-Length',
+          Buffer.byteLength('Range not satisfiable').toString(),
+        )
+        .expect('Accept-Ranges', 'bytes') // RFC 7233: SHOULD include Accept-Ranges on 416
+        .expect('Content-Type', 'text/plain; charset=utf-8') // RFC 7233: proper Content-Type for error
         .then((res: any) => {
           assert.equal(res.text, 'Range not satisfiable');
+        });
+    });
+
+    it('should return 400 for malformed range header', async () => {
+      app.get(
+        '/:id',
+        createDataHandler({
+          log,
+          dataIndex,
+          dataSource,
+          dataBlockListValidator,
+          manifestPathResolver,
+        }),
+      );
+
+      return request(app)
+        .get('/not-a-real-id')
+        .set('Range', 'invalid-range-header')
+        .expect(400)
+        .expect('Accept-Ranges', 'bytes') // Should include Accept-Ranges even on errors
+        .expect('Content-Type', 'text/plain; charset=utf-8') // Proper Content-Type for error
+        .then((res: any) => {
+          assert.equal(res.text, "Malformed 'range' header");
         });
     });
 
@@ -205,6 +239,7 @@ describe('Data routes', () => {
         .get('/not-a-real-id')
         .set('Range', 'bytes=1-2,4-5')
         .expect(206)
+        // .expect('Content-Length', calculated based on boundary and parts) // Will add this manually after boundary capture
         .buffer()
         .parse((res: any, callback: any) => {
           res.setEncoding('binary');
@@ -221,6 +256,33 @@ describe('Data routes', () => {
           assert.equal(
             res.get('Content-Type'),
             `multipart/byteranges; boundary=${boundary}`,
+          );
+
+          // Calculate expected Content-Length
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [
+            { start: 1, end: 2 },
+            { start: 4, end: 5 },
+          ]; // bytes=1-2,4-5
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Type: ${contentType}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += range.end - range.start + 1;
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(
+            res.get('Content-Length'),
+            expectedTotalLength.toString(),
           );
 
           // binary response data is in res.body as a buffer
@@ -260,6 +322,7 @@ in
         .get('/not-a-real-id')
         .set('Range', 'bytes=4-5,1-2')
         .expect(206)
+        // .expect('Content-Length', calculated based on boundary and parts) // Will add this manually after boundary capture
         .buffer()
         .parse((res: any, callback: any) => {
           res.setEncoding('binary');
@@ -276,6 +339,33 @@ in
           assert.equal(
             res.get('Content-Type'),
             `multipart/byteranges; boundary=${boundary}`,
+          );
+
+          // Calculate expected Content-Length
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [
+            { start: 4, end: 5 },
+            { start: 1, end: 2 },
+          ]; // bytes=4-5,1-2
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Type: ${contentType}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += range.end - range.start + 1;
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(
+            res.get('Content-Length'),
+            expectedTotalLength.toString(),
           );
 
           // binary response data is in res.body as a buffer
@@ -315,6 +405,7 @@ es
         .get('/not-a-real-id')
         .set('Range', 'bytes=1-2,2-3')
         .expect(206)
+        // .expect('Content-Length', calculated based on boundary and parts) // Will add this manually after boundary capture
         .buffer()
         .parse((res: any, callback: any) => {
           res.setEncoding('binary');
@@ -331,6 +422,33 @@ es
           assert.equal(
             res.get('Content-Type'),
             `multipart/byteranges; boundary=${boundary}`,
+          );
+
+          // Calculate expected Content-Length
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+          ]; // bytes=1-2,2-3
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Type: ${contentType}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += range.end - range.start + 1;
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(
+            res.get('Content-Length'),
+            expectedTotalLength.toString(),
           );
 
           // binary response data is in res.body as a buffer
@@ -368,11 +486,12 @@ st
       );
       const get = request(app)
         .get('/not-a-real-id')
-        .set('Range', 'bytes=5-20')
+        .set('Range', 'bytes=5-20') // data 'testing...' (10 bytes) -> range 5-9 ('ng...')
         .expect(206)
+        .expect('Content-Range', 'bytes 5-9/10')
+        .expect('Content-Length', '5') // 9 - 5 + 1 = 5
         .then((res: any) => {
           assert.equal(res.get('Content-Type'), 'application/octet-stream');
-
           assert.equal(res.body.toString(), 'ng...');
         });
 
@@ -396,10 +515,39 @@ st
         .expect(206)
         .expect('Accept-Ranges', 'bytes')
         .then((res: any) => {
+          const boundary = res.boundary;
           assert.equal(
             res.get('Content-Type'),
-            `multipart/byteranges; boundary=${res.boundary}`,
+            `multipart/byteranges; boundary=${boundary}`,
           );
+
+          // Calculate expected Content-Length for HEAD multipart
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [
+            { start: 1, end: 2 },
+            { start: 4, end: 5 },
+          ]; // bytes=1-2,4-5
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Type: ${contentType}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength(
+              `Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`,
+            );
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += range.end - range.start + 1;
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(
+            res.get('Content-Length'),
+            expectedTotalLength.toString(),
+          );
+
           assert.deepEqual(res.body, {});
         });
 
@@ -422,8 +570,8 @@ st
         Promise.resolve(true),
       );
 
-      const get = request(app).get('/not-a-real-id-id').expect(404);
-      const head = request(app).head('/not-a-real-id-id').expect(404);
+      const get = request(app).get('/not-a-real-id').expect(404);
+      const head = request(app).head('/not-a-real-id').expect(404);
       await Promise.all([get, head]);
     });
 
@@ -819,6 +967,11 @@ st
             .then((res: any) => {
               assert.equal(res.headers['etag'], '"test-hash"');
               assert.deepEqual(res.body, {});
+              // 304 responses must not have entity headers per RFC 7232
+              assert.equal(res.headers['content-length'], undefined);
+              assert.equal(res.headers['content-encoding'], undefined);
+              assert.equal(res.headers['content-range'], undefined);
+              assert.equal(res.headers['content-type'], undefined);
             });
         });
 
@@ -930,6 +1083,11 @@ st
               assert.equal(res.headers['etag'], '"test-hash"');
               // 304 responses should have empty body
               assert.equal(res.text || '', '');
+              // 304 responses must not have entity headers per RFC 7232
+              assert.equal(res.headers['content-length'], undefined);
+              assert.equal(res.headers['content-encoding'], undefined);
+              assert.equal(res.headers['content-range'], undefined);
+              assert.equal(res.headers['content-type'], undefined);
             });
         });
 
@@ -1074,6 +1232,11 @@ st
             .then((res: any) => {
               assert.equal(res.headers['etag'], '"test-hash"');
               assert.equal(res.text || '', '');
+              // 304 responses must not have entity headers per RFC 7232
+              assert.equal(res.headers['content-length'], undefined);
+              assert.equal(res.headers['content-encoding'], undefined);
+              assert.equal(res.headers['content-range'], undefined);
+              assert.equal(res.headers['content-type'], undefined);
             });
         });
       });
