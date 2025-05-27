@@ -18,12 +18,12 @@ reports during network issues.
   `PREFERRED_ARNS_BASE_NAMES` environment variables. When configured, these names
   will be cleaned from the filesystem cache after
   `PREFERRED_ARNS_CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD` instead of the
-  standard cleanup threshold. This is accomplished by maintaining an MRU (Most
-  Recently Used) list of ArNS names in the contiguous metadata cache. When
-  filesystem cleanup runs, it checks this list to determine which cleanup
-  threshold to apply. This feature enables gateway operators to ensure popular
-  or important ArNS names remain cached longer, improving performance for
-  frequently accessed content.
+  standard cleanup threshold (`CONTIGUOUS_DATA_CACHE_CLEANUP_THRESHOLD`). This
+  is accomplished by maintaining an MRU (Most Recently Used) list of ArNS names
+  in the contiguous metadata cache. When filesystem cleanup runs, it checks
+  this list to determine which cleanup threshold to apply. This feature enables
+  gateway operators to ensure popular or important ArNS names remain cached
+  longer, improving performance for frequently accessed content.
 - Added ArNS headers to responses: `X-ArNS-Name`, `X-ArNS-Basename`, and
   `X-ArNS-Record` to help identify which ArNS names were used in the resolution.
 
