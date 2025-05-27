@@ -147,7 +147,7 @@ const getRequestAttributes = (
     hops,
     arnsName: res.get(headerNames.arnsName?.toLowerCase()),
     arnsBasename: res.get(headerNames.arnsBasename?.toLowerCase()),
-    arnsUndername: res.get(headerNames.arnsUndername?.toLowerCase()),
+    arnsRecord: res.get(headerNames.arnsRecord?.toLowerCase()),
     origin: req.headers[headerNames.origin.toLowerCase()] as string | undefined,
     originNodeRelease: req.headers[
       headerNames.originNodeRelease.toLowerCase()

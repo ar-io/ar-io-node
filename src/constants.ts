@@ -29,7 +29,7 @@ export const headerNames = {
   arnsTtlSeconds: 'X-ArNS-TTL-Seconds',
   arnsName: 'X-ArNS-Name',
   arnsBasename: 'X-ArNS-Basename',
-  arnsUndername: 'X-ArNS-Undername',
+  arnsRecord: 'X-ArNS-Record',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
   arnsProcessId: 'X-ArNS-Process-Id',
   arnsResolvedAt: 'X-ArNS-Resolved-At',

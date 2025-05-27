@@ -127,6 +127,7 @@ export const createArnsMiddleware = ({
       // Populate the ArNS name headers if resolution was successful
       res.header(headerNames.arnsName, arnsSubdomain);
       if (arnsSubdomain) {
+        // FIXME: move this into the resolver
         const parts = arnsSubdomain.split('_');
         const basename = parts.pop(); // last part is basename
         const undername = parts.join('_'); // everything else is undername
@@ -134,7 +135,9 @@ export const createArnsMiddleware = ({
           res.header(headerNames.arnsBasename, basename);
         }
         if (undername !== undefined && undername !== '') {
-          res.header(headerNames.arnsUndername, undername);
+          res.header(headerNames.arnsRecord, undername);
+        } else {
+          res.header(headerNames.arnsRecord, '@');
         }
       }
     } else {

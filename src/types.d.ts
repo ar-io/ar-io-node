@@ -411,7 +411,7 @@ interface RequestAttributes {
   hops: number;
   arnsName?: string;
   arnsBasename?: string;
-  arnsUndername?: string;
+  arnsRecord?: string;
   origin?: string;
   originNodeRelease?: string;
 }
