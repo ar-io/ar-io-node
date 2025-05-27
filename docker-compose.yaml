@@ -202,7 +202,6 @@ services:
       - AR_IO_HOST=core
       - AR_IO_PORT=4000
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
-      - PARQUET_DATA_PATH=${PARQUET_DATA_PATH:-./data/parquet}
       - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-clickhouse} # defaults to localhost in scripts
       - CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-} # defaults to 9000 in scripts
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-} # defaults to 'default' in scripts
