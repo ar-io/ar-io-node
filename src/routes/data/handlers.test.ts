@@ -153,6 +153,8 @@ describe('Data routes', () => {
         .get('/not-a-real-id')
         .set('Range', 'bytes=2-3')
         .expect(206)
+        .expect('Content-Range', 'bytes 2-3/10')
+        .expect('Content-Length', '2')
         .then((res: any) => {
           assert.equal(res.body.toString(), 'st');
         });
@@ -174,6 +176,8 @@ describe('Data routes', () => {
         .head('/not-a-real-id')
         .set('Range', 'bytes=2-3')
         .expect(206)
+        .expect('Content-Range', 'bytes 2-3/10')
+        .expect('Content-Length', '2')
         .then((res: any) => {
           assert.deepEqual(res.body, {});
         });
@@ -195,6 +199,8 @@ describe('Data routes', () => {
         .get('/not-a-real-id')
         .set('Range', 'bytes=12-30')
         .expect(416)
+        .expect('Content-Range', 'bytes */10')
+        .expect('Content-Length', Buffer.byteLength('Range not satisfiable').toString())
         .then((res: any) => {
           assert.equal(res.text, 'Range not satisfiable');
         });
@@ -215,6 +221,7 @@ describe('Data routes', () => {
         .get('/not-a-real-id')
         .set('Range', 'bytes=1-2,4-5')
         .expect(206)
+        // .expect('Content-Length', calculated based on boundary and parts) // Will add this manually after boundary capture
         .buffer()
         .parse((res: any, callback: any) => {
           res.setEncoding('binary');
@@ -232,6 +239,23 @@ describe('Data routes', () => {
             res.get('Content-Type'),
             `multipart/byteranges; boundary=${boundary}`,
           );
+
+          // Calculate expected Content-Length
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [{start: 1, end: 2}, {start: 4, end: 5}]; // bytes=1-2,4-5
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Type: ${contentType}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += (range.end - range.start + 1);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(res.get('Content-Length'), expectedTotalLength.toString());
 
           // binary response data is in res.body as a buffer
           assert.ok(Buffer.isBuffer(res.body));
@@ -270,6 +294,7 @@ in
         .get('/not-a-real-id')
         .set('Range', 'bytes=4-5,1-2')
         .expect(206)
+        // .expect('Content-Length', calculated based on boundary and parts) // Will add this manually after boundary capture
         .buffer()
         .parse((res: any, callback: any) => {
           res.setEncoding('binary');
@@ -287,6 +312,23 @@ in
             res.get('Content-Type'),
             `multipart/byteranges; boundary=${boundary}`,
           );
+
+          // Calculate expected Content-Length
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [{start: 4, end: 5}, {start: 1, end: 2}]; // bytes=4-5,1-2
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Type: ${contentType}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += (range.end - range.start + 1);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(res.get('Content-Length'), expectedTotalLength.toString());
 
           // binary response data is in res.body as a buffer
           assert.ok(Buffer.isBuffer(res.body));
@@ -325,6 +367,7 @@ es
         .get('/not-a-real-id')
         .set('Range', 'bytes=1-2,2-3')
         .expect(206)
+        // .expect('Content-Length', calculated based on boundary and parts) // Will add this manually after boundary capture
         .buffer()
         .parse((res: any, callback: any) => {
           res.setEncoding('binary');
@@ -342,6 +385,23 @@ es
             res.get('Content-Type'),
             `multipart/byteranges; boundary=${boundary}`,
           );
+
+          // Calculate expected Content-Length
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [{start: 1, end: 2}, {start: 2, end: 3}]; // bytes=1-2,2-3
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Type: ${contentType}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += (range.end - range.start + 1);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(res.get('Content-Length'), expectedTotalLength.toString());
 
           // binary response data is in res.body as a buffer
           assert.ok(Buffer.isBuffer(res.body));
@@ -378,11 +438,12 @@ st
       );
       const get = request(app)
         .get('/not-a-real-id')
-        .set('Range', 'bytes=5-20')
+        .set('Range', 'bytes=5-20') // data 'testing...' (10 bytes) -> range 5-9 ('ng...')
         .expect(206)
+        .expect('Content-Range', 'bytes 5-9/10')
+        .expect('Content-Length', '5') // 9 - 5 + 1 = 5
         .then((res: any) => {
           assert.equal(res.get('Content-Type'), 'application/octet-stream');
-
           assert.equal(res.body.toString(), 'ng...');
         });
 
@@ -406,10 +467,29 @@ st
         .expect(206)
         .expect('Accept-Ranges', 'bytes')
         .then((res: any) => {
+          const boundary = res.boundary;
           assert.equal(
             res.get('Content-Type'),
-            `multipart/byteranges; boundary=${res.boundary}`,
+            `multipart/byteranges; boundary=${boundary}`,
           );
+
+          // Calculate expected Content-Length for HEAD multipart
+          const contentType = 'application/octet-stream';
+          const dataSize = 10;
+          let expectedTotalLength = 0;
+          const ranges = [{start: 1, end: 2}, {start: 4, end: 5}]; // bytes=1-2,4-5
+
+          for (const range of ranges) {
+            expectedTotalLength += Buffer.byteLength(`--${boundary}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Type: ${contentType}\r\n`);
+            expectedTotalLength += Buffer.byteLength(`Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+            expectedTotalLength += (range.end - range.start + 1);
+            expectedTotalLength += Buffer.byteLength('\r\n');
+          }
+          expectedTotalLength += Buffer.byteLength(`--${boundary}--\r\n`);
+          assert.equal(res.get('Content-Length'), expectedTotalLength.toString());
+
           assert.deepEqual(res.body, {});
         });
 
