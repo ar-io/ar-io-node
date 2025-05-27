@@ -36,6 +36,11 @@ const handleIfNoneMatch = (req: Request, res: Response): boolean => {
 
   if (ifNoneMatch !== undefined && etag !== undefined && ifNoneMatch === etag) {
     res.status(304);
+    // Remove entity headers per RFC 7232 Section 4.1
+    res.removeHeader('Content-Length');
+    res.removeHeader('Content-Encoding');
+    res.removeHeader('Content-Range');
+    res.removeHeader('Content-Type');
     return true;
   }
   return false;
@@ -250,6 +255,7 @@ const handleRangeRequest = async ({
     res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.contentType(contentType);
+    res.setHeader('Content-Length', (end - start + 1).toString());
 
     // Handle If-None-Match for both HEAD and GET requests
     if (handleIfNoneMatch(req, res)) {
@@ -290,6 +296,39 @@ const handleRangeRequest = async ({
     res.setHeader('Content-Type', `multipart/byteranges; boundary=${boundary}`);
     res.setHeader('Accept-Ranges', 'bytes');
 
+    // Pre-build all multipart response parts
+    const partBoundary = `--${boundary}\r\n`;
+    const finalBoundary = `--${boundary}--\r\n`;
+    const contentTypeHeader = `Content-Type: ${contentType}\r\n`;
+    const blankLine = '\r\n';
+
+    type ResponsePart = string | { type: 'data'; range: rangeParser.Range };
+    const responseParts: ResponsePart[] = [];
+
+    for (const range of ranges) {
+      responseParts.push(partBoundary);
+      responseParts.push(contentTypeHeader);
+      responseParts.push(
+        `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
+      );
+      responseParts.push(blankLine);
+      responseParts.push({ type: 'data', range });
+      responseParts.push(blankLine);
+    }
+    responseParts.push(finalBoundary);
+
+    // Calculate Content-Length from pre-built parts
+    let totalLength = 0;
+    for (const part of responseParts) {
+      if (typeof part === 'string') {
+        totalLength += Buffer.byteLength(part);
+      } else if (part.type === 'data') {
+        totalLength += part.range.end - part.range.start + 1;
+      }
+    }
+
+    res.setHeader('Content-Length', totalLength.toString());
+
     // Handle If-None-Match for both HEAD and GET requests
     if (handleIfNoneMatch(req, res)) {
       res.end();
@@ -301,6 +340,7 @@ const handleRangeRequest = async ({
       return;
     }
 
+    // Get data streams for all ranges
     const rangeStreams: { range: rangeParser.Range; stream: Readable }[] = [];
 
     for (const range of ranges) {
@@ -320,21 +360,19 @@ const handleRangeRequest = async ({
       rangeStreams.push({ range, stream: rangeData.stream });
     }
 
-    for (const { range, stream } of rangeStreams) {
-      res.write(`--${boundary}\r\n`);
-      res.write(`Content-Type: ${contentType}\r\n`);
-      res.write(
-        `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
-      );
-      res.write('\r\n');
-
-      for await (const chunk of stream) {
-        res.write(chunk);
+    // Write response using pre-built parts
+    let rangeIndex = 0;
+    for (const part of responseParts) {
+      if (typeof part === 'string') {
+        res.write(part);
+      } else if (part.type === 'data') {
+        const { stream } = rangeStreams[rangeIndex];
+        for await (const chunk of stream) {
+          res.write(chunk);
+        }
+        rangeIndex++;
       }
-
-      res.write('\r\n');
     }
-    res.write(`--${boundary}--\r\n`);
     res.end();
   }
 };
