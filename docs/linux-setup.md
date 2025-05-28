@@ -33,7 +33,7 @@ If you would like to quickly install all required and suggested packages, you ca
 
 
 ```bash
-sudo apt update -y && sudo apt upgrade -y && sudo apt install -y curl openssh-server git certbot nginx sqlite3 build-essential && sudo systemctl enable ssh && curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list && sudo apt-get update -y && sudo apt-get install -y yarn && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && source ~/.bashrc && sudo ufw allow 22 80 443 && sudo ufw enable
+sudo apt update -y && sudo apt upgrade -y && sudo apt install -y curl openssh-server git certbot nginx sqlite3 build-essential && sudo systemctl enable ssh && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && source ~/.bashrc && sudo ufw allow 22 80 443 && sudo ufw enable
 ```
 
 ```bash
@@ -57,7 +57,7 @@ sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin 
 ```
 
 ```bash
-nvm install 20.11.1 && nvm use 20.11.1
+nvm install 20.11.1 && nvm use 20.11.1 && npm install -g yarn@1.22.22
 ```
 
 ### Required packages
@@ -139,30 +139,23 @@ These packages are not required to run a node in its basic form. However, they w
     ```
 
 
-8. Install Yarn:
+8. Install NVM (Node Version Manager):
     ```
-    curl -sSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
-
-    echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
-
-    sudo apt-get update -y
-
-    sudo apt-get install yarn -y
-    ```
-
-
-9. Install NVM (Node Version Manager):
-    ```
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
     source ~/.bashrc
     ```
 
 
-10. Install Node.js:
+9. Install Node.js:
     ```
-    nvm install 16.15.1
+    nvm install 20.11.1
     ```
 
+
+10. Install Yarn:
+    ```
+    npm install -g yarn@1.22.22
+    ```
 
 11. Install build tools:
     ```
