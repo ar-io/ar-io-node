@@ -7,8 +7,18 @@
 
 - Create new migrations with: `yarn db:migrate create --folder migrations --name <schema>.description.sql`
 - Apply migrations with: `yarn db:migrate up`
+- Apply specific migration: `yarn db:migrate up --name <migration-filename>`
+- Revert migrations with: `yarn db:migrate down --step N` or `yarn db:migrate down --name <migration-filename>`
+- Check migration status: Query `migrations` table in `data/sqlite/core.db`
 - After applying migrations, update test schemas with: `./test/dump-test-schemas`
 - Down migrations go in `migrations/down/` with the same filename
+
+### SQLite Migration Notes
+
+- SQLite requires separate `ALTER TABLE` statements for each column addition/removal (no comma-separated columns)
+- When dropping columns with associated indexes, drop the indexes first
+- Use `DROP INDEX IF EXISTS` to avoid errors if index doesn't exist
+- When consolidating multiple migrations, ensure old migration files are removed to avoid duplicate execution
 
 ## Data Verification System
 
