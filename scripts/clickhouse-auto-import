@@ -132,8 +132,9 @@ while true; do
             export_status="$(echo "$status" | jq -r '.status' 2>/dev/null)"
             if [ "$export_status" = "completed" ]; then
                 echo "Export completed."
+                break
             elif [ "$export_status" = "not_started" ]; then
-                echo "Export not started, the node may have restarted during the export."
+                echo "Warning: Export not started, the node may have restarted during the export."
                 break
             elif [ "$export_status" = "errored" ]; then
                 error_msg="$(echo "$status" | jq -r '.error' 2>/dev/null)"
