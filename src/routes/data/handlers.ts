@@ -217,6 +217,7 @@ const handleRangeRequest = async ({
     res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.contentType(contentType);
+    res.setHeader('Content-Length', (end - start + 1).toString());
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
@@ -250,6 +251,20 @@ const handleRangeRequest = async ({
     res.status(206); // Partial Content
     res.setHeader('Content-Type', `multipart/byteranges; boundary=${boundary}`);
     res.setHeader('Accept-Ranges', 'bytes');
+
+    // Calculate Content-Length for multipart response
+    let totalLength = 0;
+    for (const range of ranges) {
+      totalLength += `--${boundary}\r\n`.length;
+      totalLength += `Content-Type: ${contentType}\r\n`.length;
+      totalLength += `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`.length;
+      totalLength += '\r\n'.length; // Blank line before data part
+      totalLength += range.end - range.start + 1; // Data part
+      totalLength += '\r\n'.length; // Blank line after data part
+    }
+    totalLength += `--${boundary}--\r\n`.length; // Final boundary
+
+    res.setHeader('Content-Length', totalLength.toString());
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
