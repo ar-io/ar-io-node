@@ -614,6 +614,8 @@ export interface ContiguousDataIndex {
   getVerifiableDataIds(): Promise<string[]>;
   getRootTxId(id: string): Promise<string | undefined>;
   saveVerificationStatus(id: string): Promise<void>;
+  incrementVerificationRetryCount(id: string): Promise<void>;
+  saveVerificationPriority(id: string, priority: number): Promise<void>;
 }
 
 export interface ContiguousDataSource {

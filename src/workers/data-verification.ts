@@ -144,6 +144,8 @@ export class DataVerificationWorker {
           indexedDataRoot,
           computedDataRoot,
         });
+        // Increment the retry count for this verification attempt
+        await this.contiguousDataIndex.incrementVerificationRetryCount(id);
         if (this.dataImporter) {
           log.debug(
             'Because of data-root mismatch, we are queueing data item for reimport.',
@@ -160,6 +162,12 @@ export class DataVerificationWorker {
       return true;
     } catch (error) {
       log.error('Error verifying data root', { error });
+      // Increment the retry count for this verification attempt
+      try {
+        await this.contiguousDataIndex.incrementVerificationRetryCount(id);
+      } catch (retryError) {
+        log.error('Error incrementing retry count', { retryError });
+      }
       return false;
     }
   }
