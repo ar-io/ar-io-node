@@ -1862,10 +1862,22 @@
   resolved "https://registry.yarnpkg.com/@opentelemetry/context-async-hooks/-/context-async-hooks-2.0.0.tgz#c98a727238ca199cda943780acf6124af8d8cd80"
   integrity sha512-IEkJGzK1A9v3/EHjXh3s2IiFc6L4jfK+lNgKVgUjeUJQRRhnVFMIO3TAvKwonm9O1HebCuoOt98v8bZW7oVQHA==
 
+"@opentelemetry/context-async-hooks@2.0.1":
+  version "2.0.1"
+  resolved "https://registry.yarnpkg.com/@opentelemetry/context-async-hooks/-/context-async-hooks-2.0.1.tgz#4416bc2df780c1dda1129afb9392d55831dd861d"
+  integrity sha512-XuY23lSI3d4PEqKA+7SLtAgwqIfc6E/E9eAQWLN1vlpC53ybO3o6jW4BsXo1xvz9lYyyWItfQDDLzezER01mCw==
+
 "@opentelemetry/core@2.0.0", "@opentelemetry/core@^2.0.0":
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/@opentelemetry/core/-/core-2.0.0.tgz#37e9f0e9ddec4479b267aca6f32d88757c941b3a"
   integrity sha512-SLX36allrcnVaPYG3R78F/UZZsBsvbc7lMCLx37LyH5MJ1KAAZ2E3mW9OAD3zGz0G8q/BtoS5VUrjzDydhD6LQ==
+  dependencies:
+    "@opentelemetry/semantic-conventions" "^1.29.0"
+
+"@opentelemetry/core@2.0.1":
+  version "2.0.1"
+  resolved "https://registry.yarnpkg.com/@opentelemetry/core/-/core-2.0.1.tgz#44e1149d5666a4743cde943ef89841db3ce0f8bc"
+  integrity sha512-MaZk9SJIDgo1peKevlbhP6+IwIiNPNmswNL4AF0WaQJLbHXjr9SrZMgS12+iqr9ToV4ZVosCcc0f8Rg67LXjxw==
   dependencies:
     "@opentelemetry/semantic-conventions" "^1.29.0"
 
@@ -2457,6 +2469,14 @@
     "@opentelemetry/core" "2.0.0"
     "@opentelemetry/semantic-conventions" "^1.29.0"
 
+"@opentelemetry/resources@2.0.1":
+  version "2.0.1"
+  resolved "https://registry.yarnpkg.com/@opentelemetry/resources/-/resources-2.0.1.tgz#0365d134291c0ed18d96444a1e21d0e6a481c840"
+  integrity sha512-dZOB3R6zvBwDKnHDTB4X1xtMArB/d324VsbiPkX/Yu0Q8T2xceRthoIVFhJdvgVM2QhGVUyX9tzwiNxGtoBJUw==
+  dependencies:
+    "@opentelemetry/core" "2.0.1"
+    "@opentelemetry/semantic-conventions" "^1.29.0"
+
 "@opentelemetry/sdk-logs@0.200.0", "@opentelemetry/sdk-logs@^0.200.0":
   version "0.200.0"
   resolved "https://registry.yarnpkg.com/@opentelemetry/sdk-logs/-/sdk-logs-0.200.0.tgz#893d86cefa6f2c02a7cd03d5cb4a959eed3653d1"
@@ -2511,7 +2531,16 @@
     "@opentelemetry/resources" "2.0.0"
     "@opentelemetry/semantic-conventions" "^1.29.0"
 
-"@opentelemetry/sdk-trace-node@2.0.0", "@opentelemetry/sdk-trace-node@^2.00.0":
+"@opentelemetry/sdk-trace-base@2.0.1":
+  version "2.0.1"
+  resolved "https://registry.yarnpkg.com/@opentelemetry/sdk-trace-base/-/sdk-trace-base-2.0.1.tgz#25808bb6a3d08a501ad840249e4d43d3493eb6e5"
+  integrity sha512-xYLlvk/xdScGx1aEqvxLwf6sXQLXCjk3/1SQT9X9AoN5rXRhkdvIFShuNNmtTEPRBqcsMbS4p/gJLNI2wXaDuQ==
+  dependencies:
+    "@opentelemetry/core" "2.0.1"
+    "@opentelemetry/resources" "2.0.1"
+    "@opentelemetry/semantic-conventions" "^1.29.0"
+
+"@opentelemetry/sdk-trace-node@2.0.0":
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/@opentelemetry/sdk-trace-node/-/sdk-trace-node-2.0.0.tgz#ef9f8ab77ccb41a9c9ff272f6bf4bb6999491f5b"
   integrity sha512-omdilCZozUjQwY3uZRBwbaRMJ3p09l4t187Lsdf0dGMye9WKD4NGcpgZRvqhI1dwcH6og+YXQEtoO9Wx3ykilg==
@@ -2519,6 +2548,15 @@
     "@opentelemetry/context-async-hooks" "2.0.0"
     "@opentelemetry/core" "2.0.0"
     "@opentelemetry/sdk-trace-base" "2.0.0"
+
+"@opentelemetry/sdk-trace-node@^2.0.0":
+  version "2.0.1"
+  resolved "https://registry.yarnpkg.com/@opentelemetry/sdk-trace-node/-/sdk-trace-node-2.0.1.tgz#bbb9bdb4985d7930941b3d4023e1661ba46f60c1"
+  integrity sha512-UhdbPF19pMpBtCWYP5lHbTogLWx9N0EBxtdagvkn5YtsAnCBZzL7SjktG+ZmupRgifsHMjwUaCCaVmqGfSADmA==
+  dependencies:
+    "@opentelemetry/context-async-hooks" "2.0.1"
+    "@opentelemetry/core" "2.0.1"
+    "@opentelemetry/sdk-trace-base" "2.0.1"
 
 "@opentelemetry/semantic-conventions@^1.27.0", "@opentelemetry/semantic-conventions@^1.29.0", "@opentelemetry/semantic-conventions@^1.30.0":
   version "1.32.0"
@@ -5221,7 +5259,7 @@ denque@^2.1.0:
   resolved "https://registry.yarnpkg.com/denque/-/denque-2.1.0.tgz#e93e1a6569fb5e66f16a3c2a2964617d349d6ab1"
   integrity sha512-HVQE3AAb/pxF8fQAoiqpvg9i3evqug3hoiwakOyZAwJm+6vZehbkYXZ0l4JxS+I3QxM97v5aaRNhj8v5oBhekw==
 
-depd@2.0.0, depd@~2.0.0:
+depd@2.0.0:
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/depd/-/depd-2.0.0.tgz#b696163cc757560d09cf22cc8fad1571b79e76df"
   integrity sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==
@@ -5715,17 +5753,17 @@ express-openapi-validator@^5.4.2:
     ono "^7.1.3"
     path-to-regexp "^8.2.0"
 
-express-prometheus-middleware@^1.2.0:
-  version "1.2.0"
-  resolved "https://registry.yarnpkg.com/express-prometheus-middleware/-/express-prometheus-middleware-1.2.0.tgz#ce913ffe4282411ab0d3d2db095771292801cb18"
-  integrity sha512-efSwft67rdtiW40D0im1f7Rz1TCGHGzPj6lfK0MxZDcPj6z4f/Ab5VNkWPYZEjvLqZiZ7fbS00CYzpigO8tS+g==
+express-prom-bundle@^7.0.0:
+  version "7.0.2"
+  resolved "https://registry.yarnpkg.com/express-prom-bundle/-/express-prom-bundle-7.0.2.tgz#73a83b9033639dae81c78906a9df78844f3c93fa"
+  integrity sha512-ffFV4HGHvCKnkNJFqm42sYztRJE5mLgOj8MpGey1HOatuFhtcwXoBD2m5gca7ZbcyjkIf7lOH5ZdrhlrBf0sGw==
   dependencies:
-    response-time "^2.3.2"
+    "@types/express" "^4.17.21"
+    express "^4.18.2"
+    on-finished "^2.3.0"
     url-value-parser "^2.0.0"
-  optionalDependencies:
-    prometheus-gc-stats "^0.6.2"
 
-express@^4.21.2:
+express@^4.18.2, express@^4.21.2:
   version "4.21.2"
   resolved "https://registry.yarnpkg.com/express/-/express-4.21.2.tgz#cf250e48362174ead6cea4a566abef0162c1ec32"
   integrity sha512-28HqgMZAmih1Czt9ny7qr6ek2qddF4FclbMzwhCREB6OFfH+rXAnuNCwo1/wFvrtbgsQDb4kSbX9de9lFbrXnA==
@@ -6069,14 +6107,6 @@ gaxios@^6.1.1:
     is-stream "^2.0.0"
     node-fetch "^2.6.9"
     uuid "^9.0.1"
-
-gc-stats@1.4.1, gc-stats@^1.4.0:
-  version "1.4.1"
-  resolved "https://registry.yarnpkg.com/gc-stats/-/gc-stats-1.4.1.tgz#c9142dc54d02af9e93472b0bd972e6bacecc7be5"
-  integrity sha512-eAvDBpI6UjVIYwLxshPCJJIkPyfamIrJzBtW/103+ooJWkISS+chVnHNnsZ+ubaw2607rFeiRDNWHkNUA+ioqg==
-  dependencies:
-    nan "^2.18.0"
-    node-gyp-build "^4.8.0"
 
 gcp-metadata@^6.0.0:
   version "6.1.1"
@@ -7470,11 +7500,6 @@ mz@^2.7.0:
     object-assign "^4.0.1"
     thenify-all "^1.0.0"
 
-nan@2.18.0, nan@^2.18.0:
-  version "2.18.0"
-  resolved "https://registry.yarnpkg.com/nan/-/nan-2.18.0.tgz#26a6faae7ffbeb293a39660e88a76b82e30b7554"
-  integrity sha512-W7tfG7vMOGtD30sHoZSSc/JVYiyDPEyQVso/Zz+/uQd0B0L46gtC+pHha5FFMRpil6fm/AoEcRWyOVi4+E/f8w==
-
 nan@^2.19.0, nan@^2.20.0:
   version "2.22.0"
   resolved "https://registry.yarnpkg.com/nan/-/nan-2.22.0.tgz#31bc433fc33213c97bad36404bb68063de604de3"
@@ -7573,7 +7598,7 @@ node-gyp-build-optional-packages@5.2.2:
   dependencies:
     detect-libc "^2.0.1"
 
-node-gyp-build@^4.2.0, node-gyp-build@^4.8.0:
+node-gyp-build@^4.2.0:
   version "4.8.4"
   resolved "https://registry.yarnpkg.com/node-gyp-build/-/node-gyp-build-4.8.4.tgz#8a70ee85464ae52327772a90d66c6077a900cfc8"
   integrity sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==
@@ -7815,17 +7840,12 @@ obuf@~1.1.2:
   resolved "https://registry.yarnpkg.com/obuf/-/obuf-1.1.2.tgz#09bea3343d41859ebd446292d11c9d4db619084e"
   integrity sha512-PX1wu0AmAdPqOL1mWhqmlOd8kOIZQwGZw6rh7uby9fTc5lhaOWFLX3I6R1hrF9k3zUY40e6igsLGkDXK92LJNg==
 
-on-finished@2.4.1:
+on-finished@2.4.1, on-finished@^2.3.0:
   version "2.4.1"
   resolved "https://registry.yarnpkg.com/on-finished/-/on-finished-2.4.1.tgz#58c8c44116e54845ad57f14ab10b03533184ac3f"
   integrity sha512-oVlzkg3ENAhCk2zdv7IJwd/QUD4z2RxRwpkcGY8psCVcCYZNq4wYnVWALHM+brtuJjePWiYF/ClmuDr8Ch5+kg==
   dependencies:
     ee-first "1.1.1"
-
-on-headers@~1.0.1:
-  version "1.0.2"
-  resolved "https://registry.yarnpkg.com/on-headers/-/on-headers-1.0.2.tgz#772b0ae6aaa525c399e489adfad90c403eb3c28f"
-  integrity sha512-pZAE+FJLoyITytdqK0U5s+FIpjN0JP3OzFi/u8Rx+EV5/W+JTWGXG8xFzevE7AjBfDqHv/8vL8qQsIhHnqRkrA==
 
 once@^1.3.0, once@^1.3.1, once@^1.4.0:
   version "1.4.0"
@@ -7859,11 +7879,6 @@ opossum@^8.4.0:
   version "8.4.0"
   resolved "https://registry.yarnpkg.com/opossum/-/opossum-8.4.0.tgz#d4f5a3a326ed841e9e5288148886d94048bacc30"
   integrity sha512-YYamqKu48bZCSTJKSWLLO4SSk8tKN2Gg2z1sJZVzHJYVObMO/xQpIzAh6re9HCMHRdB1dJvBjJH18DW7xYOicg==
-
-optional@^0.1.3:
-  version "0.1.4"
-  resolved "https://registry.yarnpkg.com/optional/-/optional-0.1.4.tgz#cdb1a9bedc737d2025f690ceeb50e049444fd5b3"
-  integrity sha512-gtvrrCfkE08wKcgXaVwQVgwEQ8vel2dc5DDBn9RLQZ3YtmtkBss6A2HY6BnJH4N/4Ku97Ri/SF8sNWE2225WJw==
 
 optionator@^0.9.3:
   version "0.9.4"
@@ -8244,29 +8259,13 @@ progress@^2.0.3:
   resolved "https://registry.yarnpkg.com/progress/-/progress-2.0.3.tgz#7e8cf8d8f5b8f239c1bc68beb4eb78567d572ef8"
   integrity sha512-7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==
 
-prom-client@^14.2.0:
-  version "14.2.0"
-  resolved "https://registry.yarnpkg.com/prom-client/-/prom-client-14.2.0.tgz#ca94504e64156f6506574c25fb1c34df7812cf11"
-  integrity sha512-sF308EhTenb/pDRPakm+WgiN+VdM/T1RaHj1x+MvAuT8UiQP8JmOEbxVqtkbfR4LrvOg5n7ic01kRBDGXjYikA==
-  dependencies:
-    tdigest "^0.1.1"
-
-prom-client@^15.1.0:
+prom-client@^15.1.0, prom-client@^15.1.3:
   version "15.1.3"
   resolved "https://registry.yarnpkg.com/prom-client/-/prom-client-15.1.3.tgz#69fa8de93a88bc9783173db5f758dc1c69fa8fc2"
   integrity sha512-6ZiOBfCywsD4k1BN9IX0uZhF+tJkV8q8llP64G5Hajs4JOeVLPCwpPVcpXy3BwYiUGgyJzsJJQeOIv7+hDSq8g==
   dependencies:
     "@opentelemetry/api" "^1.4.0"
     tdigest "^0.1.1"
-
-prometheus-gc-stats@^0.6.2:
-  version "0.6.5"
-  resolved "https://registry.yarnpkg.com/prometheus-gc-stats/-/prometheus-gc-stats-0.6.5.tgz#c24309f586f4483b67438f0464cd7e3074e023a0"
-  integrity sha512-VsmpEGHt9mMZqlhL+96gz2LsaXEgu2SXQ/tiEqIBLPoUTyPORDNsEiH9DPPZHChdkTTBw3GRV1wGvqdIg4EktQ==
-  dependencies:
-    optional "^0.1.3"
-  optionalDependencies:
-    gc-stats "^1.4.0"
 
 promise-inflight@^1.0.1:
   version "1.0.1"
@@ -8676,14 +8675,6 @@ resolve@^1.10.0, resolve@^1.22.8, resolve@~1.22.1:
     is-core-module "^2.16.0"
     path-parse "^1.0.7"
     supports-preserve-symlinks-flag "^1.0.0"
-
-response-time@^2.3.2:
-  version "2.3.3"
-  resolved "https://registry.yarnpkg.com/response-time/-/response-time-2.3.3.tgz#cfec433ea1b286943a2b48b01c67a051a536b130"
-  integrity sha512-SsjjOPHl/FfrTQNgmc5oen8Hr1Jxpn6LlHNXxCIFdYMHuK1kMeYMobb9XN3mvxaGQm3dbegqYFMX4+GDORfbWg==
-  dependencies:
-    depd "~2.0.0"
-    on-headers "~1.0.1"
 
 responselike@^3.0.0:
   version "3.0.0"

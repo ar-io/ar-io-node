@@ -16,7 +16,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 import { Router, Request, Response, default as express } from 'express';
-import createPrometheusMiddleware from 'express-prometheus-middleware';
+import promBundle from 'express-prom-bundle';
 
 import * as config from '../config.js';
 import * as system from '../system.js';
@@ -46,14 +46,50 @@ const getParquetExporter = () => {
 };
 
 arIoRouter.use(
-  createPrometheusMiddleware({
+  promBundle({
     metricsPath: '/ar-io/__gateway_metrics',
-    extraMasks: [
-      // Mask all paths except for the ones below
-      /^(?!api-docs)(?!ar-io)(?!graphql)(?!openapi\.json)(?!raw).+$/,
-      // Mask Arweave TX IDs
-      /[a-zA-Z0-9_-]{43}/,
-    ],
+    includeMethod: true,
+    includePath: true,
+    normalizePath: (req) => {
+      const path = req.path || req.url || '';
+
+      // Root
+      if (path === '/') return '/';
+
+      // AR.IO routes
+      if (path.startsWith('/ar-io/')) {
+        if (path === '/ar-io/healthcheck') return path;
+        if (path === '/ar-io/info') return path;
+        if (path === '/ar-io/peers') return path;
+        if (path.match(/^\/ar-io\/resolver\/[^/]+$/))
+          return '/ar-io/resolver/:name';
+        if (path.match(/^\/ar-io\/admin\/bundle-status\/[a-zA-Z0-9_-]{43}$/))
+          return '/ar-io/admin/bundle-status/:id';
+        if (path.startsWith('/ar-io/admin/')) return path; // Keep other admin routes as-is
+        if (path.startsWith('/ar-io/')) return path; // Keep other ar-io routes as-is
+      }
+
+      // GraphQL
+      if (path === '/graphql') return '/graphql';
+
+      // OpenAPI
+      if (path === '/openapi.json') return '/openapi.json';
+      if (path.startsWith('/api-docs')) return '/api-docs';
+
+      // Chunk routes
+      if (path.match(/^\/chunk\/\d+$/)) return '/chunk/:offset';
+      if (path === '/chunk') return '/chunk';
+
+      // Data routes
+      if (path.match(/^\/raw\/[a-zA-Z0-9_-]{43}\/?$/)) return '/raw/:id';
+      if (path.match(/^\/local\/farcaster\/frame\/[a-zA-Z0-9_-]{43}\/?$/))
+        return '/local/farcaster/frame/:id';
+      if (path.match(/^\/[a-zA-Z0-9_-]{43}\/?$/)) return '/:id';
+      if (path.match(/^\/[a-zA-Z0-9_-]{43}\/.+$/)) return '/:id/*path';
+
+      // Everything else (ArNS routes, unknown paths)
+      return '#other';
+    },
   }),
 );
 
