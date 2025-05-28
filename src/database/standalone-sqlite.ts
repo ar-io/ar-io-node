@@ -2616,6 +2616,20 @@ export class StandaloneSqliteDatabaseWorker {
     });
   }
 
+  async incrementVerificationRetryCount(id: string) {
+    this.stmts.data.incrementVerificationRetryCount.run({
+      id: fromB64Url(id),
+      current_timestamp: currentUnixTimestamp(),
+    });
+  }
+
+  async saveVerificationPriority(id: string, priority: number) {
+    this.stmts.data.updateVerificationPriority.run({
+      id: fromB64Url(id),
+      priority,
+    });
+  }
+
   cleanupWal(dbName: 'core' | 'bundles' | 'data' | 'moderation') {
     const walCheckpoint = this.dbs[dbName].pragma('wal_checkpoint(TRUNCATE)');
 
@@ -3439,6 +3453,14 @@ export class StandaloneSqliteDatabase
     return this.queueWrite('data', 'saveVerificationStatus', [id]);
   }
 
+  async incrementVerificationRetryCount(id: string) {
+    return this.queueWrite('data', 'incrementVerificationRetryCount', [id]);
+  }
+
+  async saveVerificationPriority(id: string, priority: number) {
+    return this.queueWrite('data', 'saveVerificationPriority', [id, priority]);
+  }
+
   async pruneStableDataItems(params: {
     indexedAtThreshold: number;
     startHeight: number;
@@ -3671,6 +3693,14 @@ if (!isMainThread) {
           break;
         case 'saveVerificationStatus':
           worker.saveVerificationStatus(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'incrementVerificationRetryCount':
+          worker.incrementVerificationRetryCount(args[0]);
+          parentPort?.postMessage(null);
+          break;
+        case 'saveVerificationPriority':
+          worker.saveVerificationPriority(args[0], args[1]);
           parentPort?.postMessage(null);
           break;
         case 'pruneStableDataItems':

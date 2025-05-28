@@ -19,6 +19,8 @@
 - When dropping columns with associated indexes, drop the indexes first
 - Use `DROP INDEX IF EXISTS` to avoid errors if index doesn't exist
 - When consolidating multiple migrations, ensure old migration files are removed to avoid duplicate execution
+- Avoid DEFAULT values in ALTER TABLE ADD COLUMN as they require rewriting the entire table
+- Use NULLS FIRST/LAST in ORDER BY instead of COALESCE to preserve index usage
 
 ## Data Verification System
 
@@ -30,8 +32,7 @@
 - Verification order: priority DESC, retry_count ASC, id ASC
 - On successful verification:
   - `verified` is set to true
-  - `verification_retry_count` is reset to 0
-  - Timestamp fields are cleared (set to NULL)
+  - Retry count and timestamp fields are preserved for historical tracking
 - The retry pattern follows the same approach used for bundle retries
 
 ## SQL Statement Organization
@@ -39,6 +40,9 @@
 - SQL statements are organized in `src/database/sql/<schema>/` directories
 - Each SQL file contains named statements as comments (e.g., `-- statementName`)
 - Statements are automatically loaded and prepared by the database module
+- SQL statement names should be descriptive about the operation (e.g., `updateVerificationPriority` for UPDATE)
+- Method names at the interface level should hide implementation details (e.g., `saveVerificationPriority` for insert/update/upsert)
+- Exception: When the operation itself is the interface (e.g., `incrementVerificationRetryCount`), use the same name at both levels
 
 ## Adding Database Methods
 
@@ -63,3 +67,12 @@ When adding a new database method:
 - Bundles schema shows good patterns for retry tracking with timestamps
 - Use `currentUnixTimestamp()` helper for timestamp fields
 - When implementing similar features, check existing patterns (e.g., bundles retry system for verification retries)
+
+## Git Workflow
+
+- Never use `git commit -A`. Add the individual files you want instead.
+
+## Linting
+
+- After making changes be sure to run 'yarn lint:check'.
+- If lint issues are found, run 'yarn lint:fix' to fix them.

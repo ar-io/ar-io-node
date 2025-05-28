@@ -11,7 +11,7 @@ CREATE TABLE contiguous_data_ids (
   verified BOOLEAN NOT NULL DEFAULT FALSE,
   indexed_at INTEGER NOT NULL,
   verified_at INTEGER
-);
+, verification_retry_count INTEGER, verification_priority INTEGER, first_verification_attempted_at INTEGER, last_verification_attempted_at INTEGER);
 CREATE INDEX contiguous_data_ids_contiguous_data_hash_idx ON contiguous_data_ids (contiguous_data_hash);
 CREATE TABLE data_roots (
   data_root BLOB PRIMARY KEY,
@@ -36,4 +36,6 @@ CREATE TABLE contiguous_data_id_parents (
   indexed_at INTEGER NOT NULL,
   PRIMARY KEY (id, parent_id)
 );
-CREATE INDEX contiguous_data_ids_verified ON contiguous_data_ids (id) WHERE verified = FALSE;
+CREATE INDEX contiguous_data_ids_verification_priority_retry_idx 
+ON contiguous_data_ids (verification_priority DESC, verification_retry_count ASC, id ASC) 
+WHERE verified = FALSE;

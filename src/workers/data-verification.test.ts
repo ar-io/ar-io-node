@@ -36,10 +36,13 @@ describe('DataVerificationWorker', () => {
   let log: winston.Logger;
   let dataVerificationWorker: DataVerificationWorker;
   let contiguousDataIndex: ContiguousDataIndex;
+  let incrementVerificationRetryCountMock: any;
   let contiguousDataSource: ContiguousDataSource;
 
   before(() => {
     log = winston.createLogger({ silent: true });
+
+    incrementVerificationRetryCountMock = mock.fn(() => Promise.resolve());
 
     contiguousDataIndex = {
       getDataAttributes: async () => {
@@ -50,6 +53,7 @@ describe('DataVerificationWorker', () => {
       saveVerificationStatus: async () => {
         return true;
       },
+      incrementVerificationRetryCount: incrementVerificationRetryCountMock,
     } as any;
 
     contiguousDataSource = {
@@ -71,6 +75,7 @@ describe('DataVerificationWorker', () => {
 
   afterEach(async () => {
     mock.restoreAll();
+    incrementVerificationRetryCountMock.mock.resetCalls();
   });
 
   after(async () => {
@@ -89,5 +94,21 @@ describe('DataVerificationWorker', () => {
     };
 
     assert.equal(await dataVerificationWorker.verifyDataRoot(''), false);
+  });
+
+  it('should increment retry count on verification failure', async () => {
+    (contiguousDataIndex as any).getDataAttributes = async () => {
+      return {
+        dataRoot: 'nomatch',
+      };
+    };
+
+    await dataVerificationWorker.verifyDataRoot('test-id');
+
+    assert.equal(incrementVerificationRetryCountMock.mock.calls.length, 1);
+    assert.equal(
+      incrementVerificationRetryCountMock.mock.calls[0].arguments[0],
+      'test-id',
+    );
   });
 });
