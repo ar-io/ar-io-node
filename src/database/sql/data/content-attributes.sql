@@ -30,7 +30,8 @@ INSERT OR REPLACE INTO contiguous_data_ids (
   contiguous_data_hash,
   verified,
   indexed_at,
-  verified_at
+  verified_at,
+  verification_priority
 )
 SELECT
   :id,
@@ -40,7 +41,8 @@ SELECT
   CASE
     WHEN verified_status = 1 THEN :verified_at
     ELSE NULL
-  END
+  END,
+  :verification_priority
 FROM ParentStatus
 WHERE
   NOT EXISTS (

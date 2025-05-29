@@ -48,6 +48,7 @@ import {
   makeDataItemAttributesStore,
   makeTransactionAttributesStore,
 } from './init/header-stores.js';
+import { CompositeRootTxIndex, GraphQLRootTxIndex } from './discovery/index.js';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
@@ -858,10 +859,24 @@ if (dataSqliteWalCleanupWorker !== undefined) {
   dataSqliteWalCleanupWorker.start();
 }
 
+// Create composite root TX index that tries local DB first, then falls back to GraphQL
+const rootTxIndex = new CompositeRootTxIndex({
+  log,
+  indexes: [
+    db, // Try local database first (fast)
+    new GraphQLRootTxIndex({
+      // Fall back to GraphQL if not in DB
+      log,
+      trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+    }),
+  ],
+});
+
 const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
   ? new DataVerificationWorker({
       log,
       contiguousDataIndex,
+      dataItemRootTxIndex: rootTxIndex,
       contiguousDataSource: gatewaysDataSource,
       dataImporter: verificationDataImporter,
     })

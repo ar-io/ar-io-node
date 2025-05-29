@@ -1470,6 +1470,7 @@ describe('StandaloneSqliteDatabase', () => {
         hash: 'hash',
         dataSize: 10,
         verified: false,
+        verificationPriority: 100, // Set priority above MIN_DATA_VERIFICATION_PRIORITY
       });
 
       await db.saveDataItem(normalizedDataItem);

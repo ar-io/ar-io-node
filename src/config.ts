@@ -434,7 +434,7 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
 
 // Whether or not to enable the background data verification worker
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
-  env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'false') === 'true';
+  env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'true') === 'true';
 
 export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
@@ -449,6 +449,11 @@ export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = +env.varOrDefault(
 export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS',
   `${1000 * 30}`, // 30 seconds
+);
+
+export const MIN_DATA_VERIFICATION_PRIORITY = +env.varOrDefault(
+  'MIN_DATA_VERIFICATION_PRIORITY',
+  '80', // Only verify data with priority 80 or higher
 );
 
 //

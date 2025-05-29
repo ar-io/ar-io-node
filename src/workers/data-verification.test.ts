@@ -69,6 +69,7 @@ describe('DataVerificationWorker', () => {
     dataVerificationWorker = new DataVerificationWorker({
       log,
       contiguousDataIndex,
+      dataItemRootTxIndex: contiguousDataIndex,
       contiguousDataSource,
     });
   });

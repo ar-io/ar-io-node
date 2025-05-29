@@ -1,0 +1,193 @@
+/**
+ * AR.IO Gateway
+ * Copyright (C) 2022-2023 Permanent Data Solutions, Inc. All Rights Reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+import { default as axios } from 'axios';
+import winston from 'winston';
+import { DataItemRootTxIndex } from '../types.js';
+import { shuffleArray } from '../lib/random.js';
+import * as config from '../config.js';
+
+const GRAPHQL_QUERY = `
+  query getRootTxId($id: ID!) {
+    transaction(id: $id) {
+      id
+      bundledIn {
+        id
+      }
+    }
+  }
+`;
+
+export class GraphQLRootTxIndex implements DataItemRootTxIndex {
+  private log: winston.Logger;
+  private trustedGateways: Map<number, string[]>;
+  private readonly requestTimeoutMs: number;
+
+  constructor({
+    log,
+    trustedGatewaysUrls,
+    requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
+  }: {
+    log: winston.Logger;
+    trustedGatewaysUrls: Record<string, number>;
+    requestTimeoutMs?: number;
+  }) {
+    this.log = log.child({ class: this.constructor.name });
+    this.requestTimeoutMs = requestTimeoutMs;
+
+    if (Object.keys(trustedGatewaysUrls).length === 0) {
+      throw new Error('At least one gateway URL must be provided');
+    }
+
+    // lower number = higher priority
+    this.trustedGateways = new Map();
+    for (const [url, priority] of Object.entries(trustedGatewaysUrls)) {
+      if (!this.trustedGateways.has(priority)) {
+        this.trustedGateways.set(priority, []);
+      }
+      this.trustedGateways.get(priority)?.push(url);
+    }
+  }
+
+  async getRootTxId(id: string): Promise<string | undefined> {
+    const log = this.log.child({ method: 'getRootTxId', id });
+
+    // Keep track of visited IDs to prevent infinite loops
+    const visited = new Set<string>();
+    let currentId = id;
+    let depth = 0;
+    const MAX_DEPTH = 10; // Reasonable limit for nested bundles
+
+    while (currentId && !visited.has(currentId) && depth < MAX_DEPTH) {
+      visited.add(currentId);
+      depth++;
+
+      const bundleId = await this.queryBundleId(currentId, log);
+
+      if (bundleId === undefined) {
+        // Transaction not found
+        return undefined;
+      }
+
+      if (bundleId === null) {
+        // No more parents, currentId is the root
+        log.debug('Found root transaction', {
+          originalId: id,
+          rootTxId: currentId,
+          depth: depth - 1,
+        });
+        return currentId;
+      }
+
+      // Continue following the chain
+      currentId = bundleId;
+    }
+
+    if (depth >= MAX_DEPTH) {
+      log.warn('Maximum nesting depth reached', {
+        id,
+        depth,
+        visited: Array.from(visited),
+      });
+    }
+
+    if (visited.has(currentId)) {
+      log.warn('Circular reference detected in bundle chain', {
+        id,
+        circularId: currentId,
+        visited: Array.from(visited),
+      });
+    }
+
+    return currentId;
+  }
+
+  private async queryBundleId(
+    id: string,
+    log: winston.Logger,
+  ): Promise<string | null | undefined> {
+    // lower number = higher priority
+    const priorities = Array.from(this.trustedGateways.keys()).sort(
+      (a, b) => a - b,
+    );
+
+    let lastError: Error | null = null;
+
+    for (const priority of priorities) {
+      const gatewaysInTier = this.trustedGateways.get(priority);
+
+      if (gatewaysInTier) {
+        const shuffledGateways = shuffleArray([...gatewaysInTier]);
+
+        for (const gatewayUrl of shuffledGateways) {
+          try {
+            const response = await axios.post(
+              `${gatewayUrl}/graphql`,
+              {
+                query: GRAPHQL_QUERY,
+                variables: { id },
+              },
+              {
+                timeout: this.requestTimeoutMs,
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              },
+            );
+
+            if (response.data?.data?.transaction) {
+              const transaction = response.data.data.transaction;
+
+              // Return the bundle ID if exists, null if not bundled
+              const bundleId = transaction.bundledIn?.id || null;
+
+              log.debug('Transaction query result', {
+                id,
+                bundledIn: bundleId,
+                gateway: gatewayUrl,
+              });
+
+              return bundleId;
+            }
+
+            // Transaction not found
+            log.debug('Transaction not found', {
+              id,
+              gateway: gatewayUrl,
+            });
+            return undefined;
+          } catch (error: any) {
+            lastError = error;
+            log.debug('Failed to query gateway', {
+              gateway: gatewayUrl,
+              error: error.message,
+            });
+            // Continue to next gateway
+          }
+        }
+      }
+    }
+
+    // All gateways failed
+    log.warn('Failed to query transaction from all gateways', {
+      id,
+      error: lastError?.message,
+    });
+
+    return undefined;
+  }
+}

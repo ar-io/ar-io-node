@@ -977,6 +977,7 @@ describe('Indexing', function () {
           ENABLE_BACKGROUND_DATA_VERIFICATION: 'true',
           BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS: '1',
           BACKGROUND_RETRIEVAL_ORDER: 'trusted-gateways',
+          MIN_DATA_VERIFICATION_PRIORITY: '0',
         });
         dataDb = new Sqlite(`${projectRootPath}/data/sqlite/data.db`);
 
