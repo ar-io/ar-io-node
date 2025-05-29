@@ -38,3 +38,34 @@ export function varOrRandom(envVarName: string): string {
   }
   return value;
 }
+
+export function boolVar(envVarName: string, defaultValue: boolean): boolean {
+  return varOrDefault(envVarName, defaultValue ? 'true' : 'false') === 'true';
+}
+
+export function intVar(envVarName: string, defaultValue: number): number {
+  return parseInt(varOrDefault(envVarName, String(defaultValue)), 10);
+}
+
+export function optionalIntVar(envVarName: string): number | undefined {
+  const value = varOrUndefined(envVarName);
+  return value !== undefined ? parseInt(value, 10) : undefined;
+}
+
+export function listVar(envVarName: string, defaultValue: string): string[] {
+  return varOrDefault(envVarName, defaultValue).split(',').filter(Boolean);
+}
+
+export function optionalListVar(envVarName: string): string[] {
+  const value = varOrUndefined(envVarName);
+  return value !== undefined ? value.split(',').filter(Boolean) : [];
+}
+
+export function jsonVar<T>(envVarName: string, defaultValue: T): T {
+  return JSON.parse(varOrDefault(envVarName, JSON.stringify(defaultValue)));
+}
+
+export function urlVar(envVarName: string): string | undefined {
+  const url = varOrUndefined(envVarName);
+  return url?.replace(/\/+$/, '');
+}
