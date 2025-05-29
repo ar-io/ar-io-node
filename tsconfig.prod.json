@@ -4,5 +4,5 @@
     "sourceMap": false
   },
   "include": ["src"],
-  "exclude": ["tests", "**/*.test.ts"]
+  "exclude": ["test", "**/*.test.ts"]
 }
