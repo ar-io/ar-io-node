@@ -6,7 +6,8 @@ INSERT INTO stable_data_items (
   data_offset, data_size, content_type,
   tag_count, indexed_at, signature_type,
   offset, size, owner_offset, owner_size,
-  signature_offset, signature_size, content_encoding
+  signature_offset, signature_size, content_encoding,
+  root_parent_offset
 ) SELECT
   ndi.id, ndi.parent_id, ndi.root_transaction_id,
   ndi.height, sbt.block_transaction_index,
@@ -14,7 +15,8 @@ INSERT INTO stable_data_items (
   ndi.data_offset, ndi.data_size, ndi.content_type,
   ndi.tag_count, ndi.indexed_at, ndi.signature_type,
   ndi.offset, ndi.size, ndi.owner_offset, ndi.owner_size,
-  ndi.signature_offset, ndi.signature_size, ndi.content_encoding
+  ndi.signature_offset, ndi.signature_size, ndi.content_encoding,
+  ndi.root_parent_offset
 FROM new_data_items ndi
 JOIN core.stable_block_transactions sbt
   ON ndi.root_transaction_id = sbt.transaction_id
