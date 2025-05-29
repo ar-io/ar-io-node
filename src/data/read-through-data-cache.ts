@@ -33,6 +33,7 @@ import {
 } from '../types.js';
 import * as metrics from '../metrics.js';
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
+import { PREFERRED_ARNS_NAMES, PREFERRED_ARNS_BASE_NAMES } from '../config.js';
 
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
 
@@ -90,6 +91,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
+  }
+
+  private calculateVerificationPriority(
+    requestAttributes?: RequestAttributes,
+  ): number | undefined {
+    // Check if the ArNS name is preferred
+    const { arnsName, arnsBasename } = requestAttributes ?? {};
+    const isPreferredName =
+      arnsName !== undefined && PREFERRED_ARNS_NAMES.has(arnsName);
+    const isPreferredBasename =
+      arnsBasename !== undefined && PREFERRED_ARNS_BASE_NAMES.has(arnsBasename);
+    return isPreferredName || isPreferredBasename ? 80 : undefined;
   }
 
   private async updateMetadataCache({
@@ -315,6 +328,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
               this.log.info('Successfully cached data', { id, hash });
               try {
+                const verificationPriority =
+                  this.calculateVerificationPriority(requestAttributes);
+
                 this.dataContentAttributeImporter.queueDataContentAttributes({
                   id,
                   dataRoot: attributes?.dataRoot,
@@ -323,6 +339,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   contentType: data.sourceContentType,
                   cachedAt: currentUnixTimestamp(),
                   verified: data.verified,
+                  verificationPriority,
                 });
               } catch (error: any) {
                 this.log.error('Error saving data content attributes:', {

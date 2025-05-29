@@ -32,6 +32,7 @@ export type DataContentAttributeProperties = {
   contentType?: string;
   cachedAt?: number;
   verified?: boolean;
+  verificationPriority?: number;
 };
 
 export class DataContentAttributeImporter {

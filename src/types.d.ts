@@ -601,6 +601,7 @@ export interface ContiguousDataIndex {
     contentType,
     cachedAt,
     verified,
+    verificationPriority,
   }: {
     id: string;
     parentId?: string;
@@ -610,12 +611,19 @@ export interface ContiguousDataIndex {
     contentType?: string;
     cachedAt?: number;
     verified?: boolean;
+    verificationPriority?: number;
   }): Promise<void>;
-  getVerifiableDataIds(): Promise<string[]>;
+  getVerifiableDataIds(options?: {
+    minVerificationPriority?: number;
+  }): Promise<string[]>;
   getRootTxId(id: string): Promise<string | undefined>;
   saveVerificationStatus(id: string): Promise<void>;
   incrementVerificationRetryCount(id: string): Promise<void>;
   saveVerificationPriority(id: string, priority: number): Promise<void>;
+}
+
+export interface DataItemRootTxIndex {
+  getRootTxId(id: string): Promise<string | undefined>;
 }
 
 export interface ContiguousDataSource {

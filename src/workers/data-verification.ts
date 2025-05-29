@@ -20,7 +20,11 @@ import { default as fastq } from 'fastq';
 import type { queueAsPromised } from 'fastq';
 import * as winston from 'winston';
 import { DataImporter } from './data-importer.js';
-import { ContiguousDataIndex, ContiguousDataSource } from '../types.js';
+import {
+  ContiguousDataIndex,
+  ContiguousDataSource,
+  DataItemRootTxIndex,
+} from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
 import * as config from '../config.js';
 
@@ -28,6 +32,7 @@ export class DataVerificationWorker {
   // Dependencies
   private log: winston.Logger;
   private contiguousDataIndex: ContiguousDataIndex;
+  private dataItemRootTxIndex: DataItemRootTxIndex;
   private dataRootComputer: DataRootComputer;
   private dataImporter: DataImporter | undefined;
 
@@ -39,6 +44,7 @@ export class DataVerificationWorker {
   constructor({
     log,
     contiguousDataIndex,
+    dataItemRootTxIndex,
     contiguousDataSource,
     dataImporter,
     workerCount = config.BACKGROUND_DATA_VERIFICATION_WORKER_COUNT,
@@ -47,6 +53,7 @@ export class DataVerificationWorker {
   }: {
     log: winston.Logger;
     contiguousDataIndex: ContiguousDataIndex;
+    dataItemRootTxIndex: DataItemRootTxIndex;
     contiguousDataSource: ContiguousDataSource;
     dataImporter?: DataImporter;
     workerCount?: number;
@@ -55,6 +62,7 @@ export class DataVerificationWorker {
   }) {
     this.log = log.child({ class: 'DataVerification' });
     this.contiguousDataIndex = contiguousDataIndex;
+    this.dataItemRootTxIndex = dataItemRootTxIndex;
     this.workerCount = workerCount;
     this.interval = interval;
     this.queue = fastq.promise(
@@ -94,7 +102,7 @@ export class DataVerificationWorker {
     const rootTxIds: string[] = [];
 
     for (const dataId of dataIds) {
-      const rootTxId = await this.contiguousDataIndex.getRootTxId(dataId);
+      const rootTxId = await this.dataItemRootTxIndex.getRootTxId(dataId);
 
       if (rootTxId !== undefined && !rootTxIds.includes(rootTxId)) {
         rootTxIds.push(rootTxId);

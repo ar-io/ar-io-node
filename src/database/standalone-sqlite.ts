@@ -60,6 +60,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataParent,
   DataItemAttributes,
+  DataItemRootTxIndex,
   GqlQueryable,
   GqlTransaction,
   NestedDataIndexWriter,
@@ -1268,6 +1269,7 @@ export class StandaloneSqliteDatabaseWorker {
     contentType,
     cachedAt,
     verified,
+    verificationPriority,
   }: {
     id: string;
     parentId?: string;
@@ -1277,6 +1279,7 @@ export class StandaloneSqliteDatabaseWorker {
     contentType?: string;
     cachedAt?: number;
     verified?: boolean;
+    verificationPriority?: number;
   }) {
     const hashBuffer = fromB64Url(hash);
     const currentTimestamp = currentUnixTimestamp();
@@ -1289,6 +1292,7 @@ export class StandaloneSqliteDatabaseWorker {
       indexed_at: currentTimestamp,
       verified: isVerified,
       verified_at: currentTimestamp,
+      verification_priority: verificationPriority ?? null,
     });
 
     if (dataRoot !== undefined) {
@@ -2596,7 +2600,11 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getVerifiableDataIds() {
-    const dataIds = this.stmts.data.selectVerifiableContiguousDataIds.all();
+    // TODO: make this a parameter (method or constructor) with a default
+    const minVerificationPriority = config.MIN_DATA_VERIFICATION_PRIORITY;
+    const dataIds = this.stmts.data.selectVerifiableContiguousDataIds.all({
+      min_verification_priority: minVerificationPriority,
+    });
     return dataIds.map((row) => toB64Url(row.id));
   }
 
@@ -2694,6 +2702,7 @@ export class StandaloneSqliteDatabase
     ChainIndex,
     ChainOffsetIndex,
     ContiguousDataIndex,
+    DataItemRootTxIndex,
     GqlQueryable,
     NestedDataIndexWriter
 {
@@ -3234,6 +3243,7 @@ export class StandaloneSqliteDatabase
     dataSize,
     contentType,
     verified,
+    verificationPriority,
   }: {
     id: string;
     parentId?: string;
@@ -3242,6 +3252,7 @@ export class StandaloneSqliteDatabase
     dataSize: number;
     contentType?: string;
     verified?: boolean;
+    verificationPriority?: number;
   }) {
     if (this.saveDataContentAttributesCache.get(id)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
@@ -3261,6 +3272,7 @@ export class StandaloneSqliteDatabase
         dataSize,
         contentType,
         verified,
+        verificationPriority,
       },
     ]);
   }
