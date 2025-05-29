@@ -389,7 +389,6 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
     this.log.debug('Querying ClickHouse transactions...', { sql });
 
     const row = await this.clickhouseClient.query({ query: sql });
-    console.log();
     const jsonRow = await row.json();
     const txs = jsonRow.data.map((tx: any) => ({
       height: tx.height as number,
