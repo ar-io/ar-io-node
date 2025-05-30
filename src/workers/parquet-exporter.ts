@@ -375,7 +375,7 @@ const importDataItems = async ({
       SELECT
         sdi.id,
         sdi.indexed_at,
-        NULL AS block_transaction_index,
+        block_transaction_index,
         1 AS is_data_item,
         sdi.target,
         NULL AS quantity,
