@@ -28,15 +28,19 @@ import logger from './log.js';
 // HTTP server
 //
 
-// HTTP server port
+// The port number for the HTTP server.
 export const PORT = +env.varOrDefault('PORT', '4000');
 
-// API key for accessing admin HTTP endpoints
-// It's set once in the main thread
+// API key for accessing admin HTTP endpoints.
+// It is set once in the main thread.
+// This key can also be loaded from a file specified by ADMIN_API_KEY_FILE.
 export let ADMIN_API_KEY = isMainThread
   ? env.varOrRandom('ADMIN_API_KEY')
   : undefined;
 
+// Path to a file containing the API key for admin HTTP endpoints.
+// If this is set, it takes precedence over ADMIN_API_KEY.
+// This is set once in the main thread.
 const ADMIN_API_KEY_FILE = isMainThread
   ? env.varOrUndefined('ADMIN_API_KEY_FILE')
   : undefined;
@@ -52,16 +56,17 @@ if (ADMIN_API_KEY_FILE !== undefined) {
 // Redis
 //
 
-// Redis URL
+// The URL for the Redis server used for caching.
 export const REDIS_CACHE_URL = env.varOrDefault(
   'REDIS_CACHE_URL',
   'redis://localhost:6379',
 );
 
+// Whether to use TLS for connecting to the Redis server.
 export const REDIS_USE_TLS =
   env.varOrDefault('REDIS_USE_TLS', 'false') === 'true';
 
-// Default Redis TTL
+// The default Time To Live (TTL) for entries in the Redis cache, in seconds.
 export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
   'REDIS_CACHE_TTL_SECONDS',
   `${60 * 60 * 8}`, // 8 hours by default
@@ -77,10 +82,10 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://ar-io.net',
 );
 
-// Trusted gateway URL (for retrieving contiguous data)
+// A single trusted gateway URL for retrieving contiguous data. If TRUSTED_GATEWAYS_URLS is not set, this URL will be used with a default weight of 1.
 export const TRUSTED_GATEWAY_URL = env.varOrUndefined('TRUSTED_GATEWAY_URL');
 
-// Trusted gateway URLs (for retrieving contiguous data)
+// A JSON string mapping trusted gateway URLs to their integer weights for retrieving contiguous data. Higher weights are tried first. Example: '{ "https://arweave.net": 1, "https://ar-io.net": 2 }'
 export const TRUSTED_GATEWAYS_URLS = JSON.parse(
   env.varOrDefault(
     'TRUSTED_GATEWAYS_URLS',
@@ -104,16 +109,19 @@ Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
   }
 });
 
+// Timeout in milliseconds for requests made to trusted gateways.
 export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS',
   '10000',
 );
 
+// Adjusts the sensitivity of the weighted peer selection algorithm. It's added to or subtracted from a peer's weight based on performance, influencing how quickly a peer's probability of being selected changes.
 export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   'WEIGHTED_PEERS_TEMPERATURE_DELTA',
   '2',
 );
 
+// Duration in milliseconds for which gateway peer weights are cached.
 export const GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS = +env.varOrDefault(
   'GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS',
   `${5 * 1000}`, // 5 seconds
@@ -127,19 +135,22 @@ export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
   '20',
 );
 
+// A comma-separated list of Arweave node URLs to ignore during peer discovery or other operations.
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 
-// Trusted chunk POST URLs (for posting chunks received at /chunk)
+// Comma-separated list of primary URLs where received chunks are posted (e.g., to trusted Arweave nodes).
 export const CHUNK_POST_URLS = env
   .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
   .split(',');
 
+// The maximum number of concurrent chunk posts to the primary CHUNK_POST_URLS.
 export const CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
   'CHUNK_POST_CONCURRENCY_LIMIT',
   '2',
 );
 
+// Comma-separated list of secondary URLs for posting chunks, used if primary posts fail or for redundancy.
 const SECONDARY_CHUNK_POST_URLS_STRING = env.varOrUndefined(
   'SECONDARY_CHUNK_POST_URLS',
 );
@@ -148,34 +159,37 @@ export const SECONDARY_CHUNK_POST_URLS =
     ? SECONDARY_CHUNK_POST_URLS_STRING.split(',')
     : [];
 
+// The maximum number of concurrent chunk posts to the SECONDARY_CHUNK_POST_URLS.
 export const SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
   'SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT',
   '2',
 );
 
+// The minimum number of successful posts to SECONDARY_CHUNK_POST_URLS required for a secondary post operation to be considered successful.
 export const SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
   'SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT',
   '1',
 );
 
-// Chunk POST response timeout in milliseconds
 const CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING = env.varOrUndefined(
   'CHUNK_POST_RESPONSE_TIMEOUT_MS',
 );
+// Chunk POST response timeout in milliseconds.
 export const CHUNK_POST_RESPONSE_TIMEOUT_MS =
   CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING !== undefined
     ? +CHUNK_POST_RESPONSE_TIMEOUT_MS_STRING
     : undefined;
 
-// Chunk POST abort timeout in milliseconds
 const CHUNK_POST_ABORT_TIMEOUT_MS_STRING = env.varOrUndefined(
   'CHUNK_POST_ABORT_TIMEOUT_MS',
 );
+// Chunk POST abort timeout in milliseconds.
 export const CHUNK_POST_ABORT_TIMEOUT_MS =
   CHUNK_POST_ABORT_TIMEOUT_MS_STRING !== undefined
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
 
+// The minimum number of successful (e.g., HTTP 200) responses required from CHUNK_POST_URLS for a chunk to be considered properly posted/seeded.
 export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
   'CHUNK_POST_MIN_SUCCESS_COUNT',
   '3',
@@ -214,7 +228,7 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 // Data
 //
 
-// On-demand data retrieval priority order
+// Comma-separated list defining the priority of data sources for on-demand data retrieval (e.g., when a user requests data directly). Sources are tried in the order listed. Valid sources include: 's3', 'trusted-gateways', 'chunks', 'tx-data', 'ario-peer'.
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
@@ -222,7 +236,7 @@ export const ON_DEMAND_RETRIEVAL_ORDER = env
   )
   .split(',');
 
-// Background data retrieval priority order
+// Comma-separated list defining the priority of data sources for background data retrieval (e.g., during indexing or unbundling). Sources are tried in the order listed. Valid sources include: 's3', 'trusted-gateways', 'chunks', 'tx-data', 'ario-peer'.
 export const BACKGROUND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'BACKGROUND_RETRIEVAL_ORDER',
@@ -237,18 +251,13 @@ export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
   'node',
 );
 
-// By default it looks for chunk from the filesystem's dataDir
-// but it can be configured to use an s3 bucket that assumes a
-// specific kind of layout of /{dataRoot}/{relativeOffset}
+// Specifies the type of data source for chunks. Common values are 'fs' (filesystem, looking in dataDir) or 'legacy-s3' (S3 bucket with a specific layout like /{dataRoot}/{relativeOffset}).
 export const CHUNK_DATA_SOURCE_TYPE = env.varOrDefault(
   'CHUNK_DATA_SOURCE_TYPE',
   'fs',
 ) as 'fs' | 'legacy-s3';
 
-// By default is uses FsChunkMetadataStore marked here as 'fs'
-// but it can be configured to use a "legacy" PostgreSQL database
-// that has a specific table "chunks" with specific columns. This
-// is designed for legacy arweave gateway support.
+// Specifies the type of metadata source for chunks. Common values are 'fs' (using FsChunkMetadataStore) or 'legacy-psql' (for compatibility with legacy Arweave gateways using a PostgreSQL database with a specific 'chunks' table schema).
 export const CHUNK_METADATA_SOURCE_TYPE = env.varOrDefault(
   'CHUNK_METADATA_SOURCE_TYPE',
   'fs',
@@ -258,125 +267,134 @@ export const CHUNK_METADATA_SOURCE_TYPE = env.varOrDefault(
 // Indexing
 //
 
-// Whether or not to run indexing processes (used on readers when running with
-// replication)
+// Boolean flag to determine whether to run indexing processes (writers). This is often set to false for reader nodes in a replication setup.
 export const START_WRITERS =
   env.varOrDefault('START_WRITERS', 'true') === 'true';
 
-// Indexing range
+// The block height from which the gateway will start indexing the Arweave blockchain.
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
+// The block height at which the gateway will stop indexing the Arweave blockchain. Can be set to 'Infinity' to sync indefinitely.
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
 
-// Filter determining which ANS-104 bundles to unbundle
+// The parsed JSON object for the ANS-104 unbundle filter, derived from the ANS104_UNBUNDLE_FILTER environment variable. For internal use.
 export const ANS104_UNBUNDLE_FILTER_PARSED = JSON.parse(
   env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}'),
 );
+// The canonical string representation of the ANS-104 unbundle filter. For internal use.
 export const ANS104_UNBUNDLE_FILTER_STRING = canonicalize(
   ANS104_UNBUNDLE_FILTER_PARSED,
 );
+// The filter object used to determine which ANS-104 bundles to unbundle, created from the ANS104_UNBUNDLE_FILTER environment variable.
 export const ANS104_UNBUNDLE_FILTER = createFilter(
   JSON.parse(ANS104_UNBUNDLE_FILTER_STRING),
   logger,
 );
 
-// Filter determining which ANS-104 data items to index
+// The parsed JSON object for the ANS-104 data item index filter, derived from the ANS104_INDEX_FILTER environment variable. For internal use.
 export const ANS104_INDEX_FILTER_PARSED = JSON.parse(
   env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}'),
 );
+// The canonical string representation of the ANS-104 index filter. For internal use.
 export const ANS104_INDEX_FILTER_STRING = canonicalize(
   ANS104_INDEX_FILTER_PARSED,
 );
+// The filter object used to determine which ANS-104 data items to index, created from the ANS104_INDEX_FILTER environment variable.
 export const ANS104_INDEX_FILTER = createFilter(
   JSON.parse(ANS104_INDEX_FILTER_STRING),
   logger,
 );
 
-// The number of ANS-104 worker threads to run
+// The number of ANS-104 worker threads to run for unbundling. Defaults to 0 if ANS104_UNBUNDLE_FILTER is "never", otherwise 1.
 export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
   'ANS104_UNBUNDLE_WORKERS',
   ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '1',
 );
 
-// The number of ANS-104 bundle downloads to attempt in parallel
+// The number of ANS-104 bundle downloads to attempt in parallel. Defaults to 0 if ANS104_UNBUNDLE_FILTER is "never", otherwise 5.
 export const ANS104_DOWNLOAD_WORKERS = +env.varOrDefault(
   'ANS104_DOWNLOAD_WORKERS',
   ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '5',
 );
 
-// Whether or not to attempt to rematch old bundles using the current filter
+// Whether or not to attempt to rematch old bundles using the current filter.
 export const FILTER_CHANGE_REPROCESS =
   env.varOrDefault('FILTER_CHANGE_REPROCESS', 'false') === 'true';
 
 // Whether or not to backfill bundle records (only needed for DBs that existed
-// before unbundling was implemented)
+// before unbundling was implemented).
 export const BACKFILL_BUNDLE_RECORDS =
   env.varOrDefault('BACKFILL_BUNDLE_RECORDS', 'false') === 'true';
 
-// Whether or not to write the data item signatures to the database
+// Whether or not to write the data item signatures to the database.
 export const WRITE_ANS104_DATA_ITEM_DB_SIGNATURES =
   env.varOrDefault('WRITE_ANS104_DATA_ITEM_DB_SIGNATURES', 'false') === 'true';
 
-// Whether or not to write the transaction signatures to the database
+// Whether or not to write Arweave transaction signatures to the database. Defaults to false.
 export const WRITE_TRANSACTION_DB_SIGNATURES =
   env.varOrDefault('WRITE_TRANSACTION_DB_SIGNATURES', 'false') === 'true';
 
-// Whether or not to enable the data database WAL cleanup worker
+// Whether or not to enable the data database WAL cleanup worker.
 export const ENABLE_DATA_DB_WAL_CLEANUP =
   env.varOrDefault('ENABLE_DATA_DB_WAL_CLEANUP', 'false') === 'true';
 
 // The maximum number of data items to queue for indexing before skipping
-// indexing new data items
+// indexing new data items.
 export const MAX_DATA_ITEM_QUEUE_SIZE = +env.varOrDefault(
   'MAX_DATA_ITEM_QUEUE_SIZE',
   '100000',
 );
 
-// The maximum number of bundles to queue for unbundling before skipping
+// The maximum number of bundles to queue for unbundling before skipping additional bundles.
 export const BUNDLE_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   'BUNDLE_DATA_IMPORTER_QUEUE_SIZE',
   '1000',
 );
 
-// The maximum number of data imports to queue for verification purposes
+// The maximum number of data imports to queue for verification purposes.
 export const VERIFICATION_DATA_IMPORTER_QUEUE_SIZE = +env.varOrDefault(
   'VERIFICATION_DATA_IMPORTER_QUEUE_SIZE',
   '1000',
 );
 
-// The maximum number of data items indexed to flush stable data items
+// The number of newly indexed data items that triggers a flush of cached data items to stable storage.
 export const DATA_ITEM_FLUSH_COUNT_THRESHOLD = +env.varOrDefault(
   'DATA_ITEM_FLUSH_COUNT_THRESHOLD',
   '1000',
 );
 
-// The interval in seconds to flush stable data items
+// The interval in seconds to flush stable data items.
 export const MAX_FLUSH_INTERVAL_SECONDS = +env.varOrDefault(
   'MAX_FLUSH_INTERVAL_SECONDS',
   '600',
 );
 
+// Interval in seconds after which the bundle repair worker attempts to retry processing failed or pending bundles.
 export const BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_INTERVAL_SECONDS',
   '300', // 5 minutes
 );
 
+// Interval in seconds for the bundle repair worker to update timestamps of processed bundles, potentially re-triggering retries or other actions.
 export const BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS =
   +env.varOrDefault(
     'BUNDLE_REPAIR_UPDATE_TIMESTAMPS_INTERVAL_SECONDS',
     '300', // 5 minutes
   );
 
+// Interval in seconds for the bundle repair worker to perform backfill operations, checking for and processing older bundles that might have been missed.
 export const BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS = +env.varOrDefault(
   'BUNDLE_REPAIR_BACKFILL_INTERVAL_SECONDS',
   '900', // 15 minutes
 );
 
+// Interval in seconds for the bundle repair worker to reprocess bundles against current filters, especially if filters have changed.
 export const BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS =
   +env.varOrDefault(
     'BUNDLE_REPAIR_FILTER_REPROCESS_INTERVAL_SECONDS',
     '300', // 15 minutes
   );
 
+// The number of bundles to process in a single batch during bundle repair retry attempts.
 export const BUNDLE_REPAIR_RETRY_BATCH_SIZE = +env.varOrDefault(
   'BUNDLE_REPAIR_RETRY_BATCH_SIZE',
   '5000',
@@ -401,8 +419,9 @@ export const LEGACY_PSQL_PASSWORD_FILE = env.varOrUndefined(
   'LEGACY_PSQL_PASSWORD_FILE',
 );
 
-// very common workaround needed for various cloud providers
-// see more: https://github.com/porsager/postgres?tab=readme-ov-file#ssl
+// Determines whether to reject unauthorized SSL connections to the legacy PostgreSQL database.
+// Setting to 'false' can be a workaround for some cloud provider SSL configurations.
+// See more: https://github.com/porsager/postgres?tab=readme-ov-file#ssl
 export const LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED =
   env.varOrDefault('LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED', 'true') === 'true';
 
@@ -432,25 +451,29 @@ export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
 // Verification
 //
 
-// Whether or not to enable the background data verification worker
+// Boolean flag to enable or disable the background data verification worker. Defaults to true.
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
   env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'true') === 'true';
 
+// The interval, in seconds, at which the background data verification worker checks for data to verify.
 export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
   '600', // 10 minutes
 );
 
+// The number of worker threads to use for background data verification.
 export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_WORKER_COUNT',
   '1',
 );
 
+// Timeout in milliseconds for individual data streams during background data verification.
 export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS',
   `${1000 * 30}`, // 30 seconds
 );
 
+// The minimum priority level a data item must have to be included in background data verification. Data items with priority below this value will be skipped.
 export const MIN_DATA_VERIFICATION_PRIORITY = +env.varOrDefault(
   'MIN_DATA_VERIFICATION_PRIORITY',
   '80', // Only verify data with priority 80 or higher
@@ -460,6 +483,7 @@ export const MIN_DATA_VERIFICATION_PRIORITY = +env.varOrDefault(
 // GraphQL
 //
 
+// A JSON object mapping GraphQL tag names to selectivity scores. These scores are used to optimize the order of tag-based joins in database queries, improving GraphQL query performance. Higher scores might indicate higher selectivity (fewer matching items).
 export const TAG_SELECTIVITY = JSON.parse(
   env.varOrDefault(
     'TAG_SELECTIVITY',
@@ -477,8 +501,11 @@ export const TAG_SELECTIVITY = JSON.parse(
 ) as Record<string, number>;
 
 // ClickHouse
+// The URL of the ClickHouse server, if used for analytics or querying.
 export const CLICKHOUSE_URL = env.varOrUndefined('CLICKHOUSE_URL');
+// The username for connecting to the ClickHouse server. Defaults to 'default' in some operational scripts if not specified.
 export const CLICKHOUSE_USER = env.varOrUndefined('CLICKHOUSE_USER');
+// The password for connecting to the ClickHouse server. This should be set if ClickHouse is being used.
 export const CLICKHOUSE_PASSWORD = env.varOrUndefined('CLICKHOUSE_PASSWORD');
 
 //
