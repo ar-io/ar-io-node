@@ -24,9 +24,16 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   DataItemRootTxIndex,
+  NormalizedDataItem,
+  PartialJsonTransaction,
 } from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
 import * as config from '../config.js';
+
+export type QueueBundleResponse = {
+  status: 'skipped' | 'queued' | 'error';
+  error?: string;
+};
 
 export class DataVerificationWorker {
   // Dependencies
@@ -35,6 +42,13 @@ export class DataVerificationWorker {
   private dataItemRootTxIndex: DataItemRootTxIndex;
   private dataRootComputer: DataRootComputer;
   private dataImporter: DataImporter | undefined;
+  private queueBundle:
+    | ((
+        item: NormalizedDataItem | PartialJsonTransaction,
+        isPrioritized: boolean,
+        bypassFilter: boolean,
+      ) => Promise<QueueBundleResponse>)
+    | undefined;
 
   private workerCount: number;
   private queue: queueAsPromised<string, void | boolean>;
@@ -47,6 +61,7 @@ export class DataVerificationWorker {
     dataItemRootTxIndex,
     contiguousDataSource,
     dataImporter,
+    queueBundle,
     workerCount = config.BACKGROUND_DATA_VERIFICATION_WORKER_COUNT,
     streamTimeout = config.BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS,
     interval = config.BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS * 1000,
@@ -56,6 +71,11 @@ export class DataVerificationWorker {
     dataItemRootTxIndex: DataItemRootTxIndex;
     contiguousDataSource: ContiguousDataSource;
     dataImporter?: DataImporter;
+    queueBundle?: (
+      item: NormalizedDataItem | PartialJsonTransaction,
+      isPrioritized: boolean,
+      bypassFilter: boolean,
+    ) => Promise<QueueBundleResponse>;
     workerCount?: number;
     streamTimeout?: number;
     interval?: number;
@@ -77,6 +97,7 @@ export class DataVerificationWorker {
     });
 
     this.dataImporter = dataImporter;
+    this.queueBundle = queueBundle;
   }
 
   async start(): Promise<void> {
@@ -123,44 +144,54 @@ export class DataVerificationWorker {
       const dataAttributes =
         await this.contiguousDataIndex.getDataAttributes(id);
 
-      if (dataAttributes === undefined) {
-        log.warn('Data attributes not found.');
-        return false;
-      }
-
-      if (dataAttributes.dataRoot === undefined) {
-        log.warn(
-          'Data root not found for id. Transaction must be indexed before it can be verified.',
+      const indexedDataRoot = dataAttributes?.dataRoot;
+      let computedDataRoot: string | undefined = undefined;
+      if (indexedDataRoot === undefined) {
+        log.verbose(
+          'No indexed transaction data root found for ID. Skipping data root computation.',
         );
-        return false;
+
+        // TODO: consider using bundle index to make this determination
+        if (this.queueBundle && dataAttributes?.hash === undefined) {
+          log.verbose('Root bundle has not been unbundled, queuing...');
+          await this.queueBundle(
+            { id, root_tx_id: id } as
+              | NormalizedDataItem
+              | PartialJsonTransaction,
+            true,
+            true,
+          ); // isPrioritized: true, bypassFilter: true
+        } else {
+          return false;
+        }
+      } else {
+        log.verbose('Computing data root...');
+
+        computedDataRoot = await this.dataRootComputer
+          .computeDataRoot(id)
+          .catch((error) => {
+            log.debug('Error computing data root.', { error });
+            return undefined;
+          });
       }
 
-      const indexedDataRoot = dataAttributes.dataRoot;
-
-      const computedDataRoot: string | undefined = await this.dataRootComputer
-        .computeDataRoot(id)
-        .catch((error) => {
-          log.debug('Error computing data root.', { error });
-          return undefined;
-        });
-
+      // TODO: consider how to handle downloaded, but never unbundled bundles
       if (
-        computedDataRoot === undefined ||
+        indexedDataRoot === undefined ||
         indexedDataRoot !== computedDataRoot
       ) {
-        log.error('Data root mismatch', {
-          indexedDataRoot,
-          computedDataRoot,
+        log.verbose('Data root mismatch', {
+          indexedDataRoot: indexedDataRoot ?? null,
+          computedDataRoot: computedDataRoot ?? null,
         });
-        // Increment the retry count for this verification attempt
-        await this.contiguousDataIndex.incrementVerificationRetryCount(id);
-        if (this.dataImporter) {
-          log.debug(
-            'Because of data-root mismatch, we are queueing data item for reimport.',
-            { id },
+
+        if (this.dataImporter && indexedDataRoot !== undefined) {
+          log.verbose(
+            'Computed data root mismatch, queueing for root bundle download from chunks....',
           );
           await this.dataImporter.queueItem({ id }, true);
         }
+
         return false;
       }
 
@@ -170,13 +201,13 @@ export class DataVerificationWorker {
       return true;
     } catch (error) {
       log.error('Error verifying data root', { error });
-      // Increment the retry count for this verification attempt
+      return false;
+    } finally {
       try {
         await this.contiguousDataIndex.incrementVerificationRetryCount(id);
       } catch (retryError) {
         log.error('Error incrementing retry count', { retryError });
       }
-      return false;
     }
   }
 

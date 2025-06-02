@@ -25,7 +25,7 @@ WITH ParentStatus AS (
     ELSE :verified
   END AS verified_status
 )
-INSERT OR REPLACE INTO contiguous_data_ids (
+INSERT INTO contiguous_data_ids (
   id,
   contiguous_data_hash,
   verified,
@@ -49,7 +49,14 @@ WHERE
     SELECT 1
     FROM contiguous_data_ids
     WHERE id = :id AND verified = 1
-  );
+  )
+ON CONFLICT(id) DO UPDATE SET
+  contiguous_data_hash = excluded.contiguous_data_hash,
+  verified = excluded.verified,
+  indexed_at = excluded.indexed_at,
+  verified_at = excluded.verified_at,
+  verification_priority = COALESCE(:verification_priority, contiguous_data_ids.verification_priority)
+WHERE contiguous_data_ids.verified != 1;
 
 -- insertDataRoot
 INSERT OR REPLACE INTO data_roots (
