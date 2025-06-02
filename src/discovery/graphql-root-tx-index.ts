@@ -15,7 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-import { default as axios } from 'axios';
+import { default as axios, AxiosInstance } from 'axios';
+import * as rax from 'retry-axios';
 import winston from 'winston';
 import { DataItemRootTxIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
@@ -32,22 +33,25 @@ const GRAPHQL_QUERY = `
   }
 `;
 
+const DEFAULT_REQUEST_RETRY_COUNT = 3;
+
 export class GraphQLRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
-  private readonly requestTimeoutMs: number;
+  private readonly axiosInstance: AxiosInstance;
 
   constructor({
     log,
     trustedGatewaysUrls,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
+    requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, number>;
     requestTimeoutMs?: number;
+    requestRetryCount?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
-    this.requestTimeoutMs = requestTimeoutMs;
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -61,6 +65,39 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       }
       this.trustedGateways.get(priority)?.push(url);
     }
+
+    // Initialize axios instance with retry configuration
+    this.axiosInstance = axios.create({
+      timeout: requestTimeoutMs,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    // Configure retry-axios for 429 handling with exponential backoff
+    this.axiosInstance.defaults.raxConfig = {
+      retry: requestRetryCount,
+      instance: this.axiosInstance,
+      statusCodesToRetry: [
+        [100, 199],
+        [429, 429],
+        [500, 599],
+      ],
+      onRetryAttempt: (error: any) => {
+        const cfg = rax.getConfig(error);
+        const attempt = cfg?.currentRetryAttempt ?? 1;
+        const status = error?.response?.status;
+
+        log.debug('Retrying GraphQL request', {
+          attempt,
+          status,
+          maxRetries: requestRetryCount,
+          url: error?.config?.url,
+        });
+      },
+    };
+
+    rax.attach(this.axiosInstance);
   }
 
   async getRootTxId(id: string): Promise<string | undefined> {
@@ -135,17 +172,11 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
 
         for (const gatewayUrl of shuffledGateways) {
           try {
-            const response = await axios.post(
+            const response = await this.axiosInstance.post(
               `${gatewayUrl}/graphql`,
               {
                 query: GRAPHQL_QUERY,
                 variables: { id },
-              },
-              {
-                timeout: this.requestTimeoutMs,
-                headers: {
-                  'Content-Type': 'application/json',
-                },
               },
             );
 
