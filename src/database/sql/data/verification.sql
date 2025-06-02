@@ -1,7 +1,9 @@
 -- selectVerifiableContiguousDataIds
 SELECT cd.id
 FROM contiguous_data_ids cd
-WHERE cd.verified = FALSE AND COALESCE(cd.verification_priority, 0) >= @min_verification_priority
+WHERE cd.verified = FALSE 
+  AND COALESCE(cd.verification_priority, 0) >= @min_verification_priority
+  AND COALESCE(cd.verification_retry_count, 0) < @max_verification_retries
 ORDER BY cd.verification_priority DESC NULLS LAST, cd.verification_retry_count ASC NULLS FIRST, cd.id ASC
 LIMIT 1000;
 

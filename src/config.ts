@@ -456,6 +456,11 @@ export const MIN_DATA_VERIFICATION_PRIORITY = +env.varOrDefault(
   '80', // Only verify data with priority 80 or higher
 );
 
+export const MAX_VERIFICATION_RETRIES = +env.varOrDefault(
+  'MAX_VERIFICATION_RETRIES',
+  '5', // Maximum number of verification retry attempts
+);
+
 //
 // GraphQL
 //

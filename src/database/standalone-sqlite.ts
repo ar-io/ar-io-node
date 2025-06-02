@@ -2602,8 +2602,10 @@ export class StandaloneSqliteDatabaseWorker {
   getVerifiableDataIds() {
     // TODO: make this a parameter (method or constructor) with a default
     const minVerificationPriority = config.MIN_DATA_VERIFICATION_PRIORITY;
+    const maxVerificationRetries = config.MAX_VERIFICATION_RETRIES;
     const dataIds = this.stmts.data.selectVerifiableContiguousDataIds.all({
       min_verification_priority: minVerificationPriority,
+      max_verification_retries: maxVerificationRetries,
     });
     return dataIds.map((row) => toB64Url(row.id));
   }
