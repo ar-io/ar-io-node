@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added prioritized data verification system for preferred ArNS names,
+  focusing computational resources on high-priority content while enabling
+  flexible root transaction discovery through GraphQL fallback support.
+- Added verification retry prioritization system with tracking of retry counts,
+  priority levels, and attempt timestamps to ensure bundles do not get stuck
+  retrying forever.
+- Added improved observer functionality with best-of-2 observations and higher
+  compression for more reliable network monitoring.
+
+### Changed
+
+- Updated dependencies: replaced deprecated express-prometheus-middleware with
+  the actively maintained express-prom-bundle library and updated prom-client
+  to v15.1.3 for better compatibility and security.
+- Updated Linux setup documentation to use modern package installation methods,
+  replacing apt-key yarn installation with npm global install and updating
+  Node.js/nvm versions.
+- Improved route metrics normalization with explicit whitelist function for
+  better granularity and proper handling of dynamic segments.
+
+### Fixed
+
+- Fixed docker-compose configuration to use correct NODE_MAX_OLD_SPACE_SIZE
+  environment variable name.
+- Fixed production TypeScript build configuration to exclude correct "test"
+  directory path.
+- Fixed Parquet exporter to properly handle data item block_transaction_index
+  exports, preventing NULL value issues.
+- Fixed bundles system to copy root_parent_offset when flushing data items to
+  maintain data integrity.
+- Fixed ClickHouse auto-import script to handle Parquet export not_started
+  status properly.
+- Fixed docker-compose ClickHouse configuration to not pass conflicting
+  PARQUET_PATH environment variable to container scripts.
+
 ## [Release 36] - 2025-05-27
 
 This is a recommended but not essential upgrade. The most important changes are
