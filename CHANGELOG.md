@@ -19,6 +19,10 @@ preferred names. If you don't know the filter, use `{"always": true}`, but be
 aware this will index the entire bundle for the IDs related to your preferred
 names.
 
+Note: this release contains migrations to `data.db`. If your node appears
+unresponsive please check `core` service logs to determine whether migrations
+are running and wait for them to finish.
+
 ### Added
 
 - Added prioritized data verification system for preferred ArNS names,
