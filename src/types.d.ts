@@ -554,14 +554,17 @@ export interface ContiguousDataAttributes {
   hash?: string;
   dataRoot?: string;
   size: number;
+  offset: number;
   contentEncoding?: string;
   contentType?: string;
   rootTransactionId?: string;
   rootParentOffset?: number;
   dataOffset?: number;
-  signatureType?: number;
+  itemSize?: number;
+  signatureSize?: number;
   signatureOffset?: number;
   ownerOffset?: number;
+  ownerSize?: number;
   isManifest: boolean;
   stable: boolean;
   verified: boolean;

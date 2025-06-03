@@ -5,7 +5,9 @@ SELECT
   signature_offset,
   signature_size,
   owner_offset,
-  owner_size
+  owner_size,
+  offset,
+  size
 FROM new_data_items
 WHERE id = @id
 UNION
@@ -15,7 +17,9 @@ SELECT
   signature_offset,
   signature_size,
   owner_offset,
-  owner_size
+  owner_size,
+  offset,
+  size
 FROM stable_data_items
 WHERE id = @id
 LIMIT 1

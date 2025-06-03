@@ -132,11 +132,12 @@ const setDataHeaders = ({
       dataAttributes.rootParentOffset.toString(),
     );
 
-    if (dataAttributes.signatureType !== undefined) {
-      res.header(
-        headerNames.dataItemSignatureType,
-        dataAttributes.signatureType.toString(),
-      );
+    if (dataAttributes.offset !== undefined) {
+      res.header(headerNames.dataItemOffset, dataAttributes.offset.toString());
+    }
+
+    if (dataAttributes.itemSize !== undefined) {
+      res.header(headerNames.dataItemSize, dataAttributes.itemSize.toString());
     }
 
     if (dataAttributes.dataOffset !== undefined) {
@@ -157,6 +158,13 @@ const setDataHeaders = ({
       );
     }
 
+    if (dataAttributes.signatureSize !== undefined) {
+      res.header(
+        headerNames.dataItemSignatureSize,
+        dataAttributes.signatureSize.toString(),
+      );
+    }
+
     if (dataAttributes.ownerOffset !== undefined) {
       res.header(
         headerNames.dataItemOwnerOffset,
@@ -166,10 +174,12 @@ const setDataHeaders = ({
       );
     }
 
-    // Add temporary default size headers to make tests pass
-    // These will be replaced with actual values in a future iteration
-    res.header(headerNames.dataItemOwnerSize, '512');
-    res.header(headerNames.dataItemSignatureSize, '512');
+    if (dataAttributes.ownerSize !== undefined) {
+      res.header(
+        headerNames.dataItemOwnerSize,
+        dataAttributes.ownerSize.toString(),
+      );
+    }
   }
 
   setDigestStableVerifiedHeaders({ res, dataAttributes, data });
@@ -391,6 +401,8 @@ export const createRawDataHandler = ({
       sendNotFound(res);
       return;
     }
+
+    console.log('dataAttributes', dataAttributes);
 
     // Return 404 if the data is blocked by hash
     try {
