@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-4789af164fcd3029a65a1d6739f2d9026567206e}
     build:
       context: envoy/
     restart: unless-stopped
@@ -25,7 +25,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-de07a2d5d7d88c4209d1c2fd461db41d1eccda79}
     build:
       context: .
     restart: unless-stopped
@@ -104,7 +104,7 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_S3_CONTIGUOUS_DATA_BUCKET=${AWS_S3_CONTIGUOUS_DATA_BUCKET:-}
       - AWS_S3_CONTIGUOUS_DATA_PREFIX=${AWS_S3_CONTIGUOUS_DATA_PREFIX:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-37-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-37}
       - CHUNK_POST_URLS=${CHUNK_POST_URLS:-}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_CONCURRENCY_LIMIT=${CHUNK_POST_CONCURRENCY_LIMIT:-}
@@ -189,7 +189,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-e81d7c646318f8db6fec597c9653fcc673665202}
     profiles:
       - clickhouse
     build:
@@ -237,7 +237,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-37-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-37}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
       - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
@@ -248,7 +248,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
     build:
       context: litestream/
       dockerfile: Dockerfile
