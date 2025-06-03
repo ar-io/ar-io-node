@@ -4,7 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 37] - 2025-06-03
+
+This is a *recommended release* due to the included observer robustness
+improvements. It also adds an important new feature - data verification for
+preferred ArNS names. When preferred ArNS names are set, the bundles containing
+the data they point to will be locally unbundled (verifying data item
+signatures), and the data root for the bundle will be compared to the data root
+in the Arweave chain (establishing that the data is on Arweave). To enable this
+feature, set your preferred ArNS names, turn on unbundling by setting
+`ANS104_DOWNLOAD_WORKERS` and `ANS104_UNBUNDLE_WORKERS` both to 1, and set your
+`ANS104_INDEX_FILTER` to a filter that will match the data items for your
+preferred names. If you don't know the filter, use `{"always": true}`, but be
+aware this will index the entire bundle for the IDs related to your preferred
+names.
 
 ### Added
 
@@ -16,6 +29,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   retrying forever.
 - Added improved observer functionality with best-of-2 observations and higher
   compression for more reliable network monitoring.
+- Added `MAX_VERIFICATION_RETRIES` environment variable (default: 5) to limit
+  verification retry attempts and prevent infinite loops for consistently
+  failing data items.
+- Added retry logic with exponential backoff for GraphQL queries to handle rate
+  limiting (429) and server errors with improved resilience when querying
+  trusted gateways for root bundle IDs.
 
 ### Changed
 
@@ -42,6 +61,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   status properly.
 - Fixed docker-compose ClickHouse configuration to not pass conflicting
   PARQUET_PATH environment variable to container scripts.
+- Fixed verification process for data items that have not been unbundled by
+  adding queue bundle support and removing bundle join constraint to ensure
+  proper verification of data items without indexed root parents.
 
 ## [Release 36] - 2025-05-27
 
