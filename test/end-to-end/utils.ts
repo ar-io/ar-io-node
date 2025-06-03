@@ -248,6 +248,27 @@ export const waitForLogMessage = ({
   });
 };
 
+export const queueBundle = async ({
+  id,
+  host = 'http://localhost:4000',
+  secret = 'secret',
+}: {
+  id: string;
+  host?: string;
+  secret?: string;
+}) => {
+  await axios.post(
+    `${host}/ar-io/admin/queue-bundle`,
+    { id },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${secret}`,
+      },
+    },
+  );
+};
+
 export const waitForBundleToBeIndexed = ({
   id,
   host = 'http://localhost:4000',
