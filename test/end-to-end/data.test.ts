@@ -31,12 +31,14 @@ import axios from 'axios';
 import {
   cleanDb,
   composeUp,
+  queueBundle,
   waitForBundleToBeIndexed,
   waitForDataItemToBeIndexed,
   waitForLogMessage,
 } from './utils.js';
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container.js';
 import { isTestFiltered } from '../utils.js';
+import { DataItem } from '@dha-team/arbundles';
 
 const projectRootPath = process.cwd();
 
@@ -58,7 +60,7 @@ const tx4 = 'sYaO7sklQ8FyObQNLy7kDbEvwUNKKes7mUnv-_Ri9bE';
 // data item in bundle1
 const di = '0UETuOLU5UChDwcBx3V10g-gdl2K4S6pLnuiEhjXMtA';
 
-describe.skip('Data', function () {
+describe('Data', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
@@ -255,53 +257,49 @@ describe.skip('Data', function () {
   });
 });
 
-describe.skip(
-  'X-Cache header',
-  { skip: isTestFiltered(['flaky']) },
-  function () {
-    let compose: StartedDockerComposeEnvironment;
+describe('X-Cache header', { skip: isTestFiltered(['flaky']) }, function () {
+  let compose: StartedDockerComposeEnvironment;
 
-    before(async function () {
-      await cleanDb();
+  before(async function () {
+    await cleanDb();
 
-      compose = await composeUp({
-        START_WRITERS: 'false',
-        GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
-      });
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
+    });
+  });
+
+  after(async function () {
+    await compose.down();
+  });
+
+  it('Verifying x-cache header when no cache available', async function () {
+    const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
+
+    assert.equal(res.headers['x-cache'], 'MISS');
+    await waitForLogMessage({
+      container: compose.getContainer('core-1'),
+      expectedMessage: 'Successfully cached data',
+    });
+  });
+
+  it('Verifying x-cache header when cache is available', async function () {
+    const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
+
+    assert.equal(res.headers['x-cache'], 'HIT');
+  });
+
+  it('Verifying x-cache header for range request', async function () {
+    const res = await axios.get(`http://localhost:4000/raw/${tx1}`, {
+      headers: { Range: 'bytes=0-0' },
+      validateStatus: (status) => status === 206,
     });
 
-    after(async function () {
-      await compose.down();
-    });
+    assert.equal(res.headers['x-cache'], 'HIT');
+  });
+});
 
-    it('Verifying x-cache header when no cache available', async function () {
-      const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
-
-      assert.equal(res.headers['x-cache'], 'MISS');
-      await waitForLogMessage({
-        container: compose.getContainer('core-1'),
-        expectedMessage: 'Successfully cached data',
-      });
-    });
-
-    it('Verifying x-cache header when cache is available', async function () {
-      const res = await axios.get(`http://localhost:4000/raw/${tx1}`);
-
-      assert.equal(res.headers['x-cache'], 'HIT');
-    });
-
-    it('Verifying x-cache header for range request', async function () {
-      const res = await axios.get(`http://localhost:4000/raw/${tx1}`, {
-        headers: { Range: 'bytes=0-0' },
-        validateStatus: (status) => status === 206,
-      });
-
-      assert.equal(res.headers['x-cache'], 'HIT');
-    });
-  },
-);
-
-describe('Layer 1 Bundle', function () {
+describe('ANS-104 Bundles', function () {
   let compose: StartedDockerComposeEnvironment;
 
   before(async function () {
@@ -312,17 +310,7 @@ describe('Layer 1 Bundle', function () {
       GET_DATA_CIRCUIT_BREAKER_TIMEOUT_MS: '100000',
     });
 
-    await axios.post(
-      'http://localhost:4000/ar-io/admin/queue-bundle',
-      { id: bundle1 },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer secret',
-        },
-      },
-    );
-
+    await queueBundle({ id: bundle1 });
     await waitForBundleToBeIndexed({ id: bundle1 });
     await waitForDataItemToBeIndexed({ id: tx1 });
   });
@@ -351,16 +339,8 @@ describe('Layer 1 Bundle', function () {
   });
 
   describe('Data Item Offset Headers', function () {
-    // const bundle = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
-    // const bdi = 'fLxHz2WbpNFL7x1HrOyUlsAVHYaKSyj6IqgCJlFuv9g';
-    // const di = 'Dc-q5iChuRWcsjVBFstEqmLTx4SWkGZxcVO9OTEGjkQ';
-
     before(async function () {
       await waitForDataItemToBeIndexed({ id: di });
-    });
-
-    after(async function () {
-      await compose.down();
     });
 
     it('Verifying offset headers are not present for L1 bundle', async function () {
@@ -382,12 +362,19 @@ describe('Layer 1 Bundle', function () {
     });
 
     it('Verifying all offset headers for are provided for an unbundled data item', async function () {
-      const res = await axios.head(`http://localhost:4000/raw/${di}`);
-
-      console.log(res.headers);
+      const res = await axios.head(`http://localhost:4000/${di}`);
 
       // Verify all offset headers exist and have expected values
-      assert.equal(res.headers['x-ar-io-data-item-data-offset'], '27282');
+      assert.equal(
+        res.headers['x-ar-io-root-transaction-id'],
+        bundle1,
+        'x-ar-io-root-transaction-id does not match bundle tx id',
+      );
+      assert.equal(
+        res.headers['x-ar-io-data-item-data-offset'] !== undefined,
+        true,
+        'missing x-ar-io-data-item-data-offset',
+      );
       assert.equal(
         res.headers['x-ar-io-data-item-signature-offset'] !== undefined,
         true,
@@ -404,133 +391,89 @@ describe('Layer 1 Bundle', function () {
         'missing x-ar-io-data-item-root-parent-offset',
       );
 
-      // TODO: verify sizes
+      const dataItemOffset = +res.headers['x-ar-io-data-item-offset'];
+      const dataItemSize = +res.headers['x-ar-io-data-item-size'];
 
-      // Verify root transaction ID is set correctly
-      assert.equal(res.headers['x-ar-io-root-transaction-id'], bundle1);
+      // fetch the full data item including the headers to verify the data item is valid
+      const fetchedFullDataItem = await axios.get(
+        `http://localhost:4000/${bundle1}`,
+        {
+          responseType: 'arraybuffer',
+          headers: {
+            Range: `bytes=${dataItemOffset}-${dataItemOffset + dataItemSize - 1}`,
+          },
+        },
+      );
+
+      const dataItem = new DataItem(fetchedFullDataItem.data);
+      const signatureLength = dataItem.signatureLength;
+      const ownerLength = dataItem.ownerLength;
+
+      assert.equal(
+        signatureLength,
+        +res.headers['x-ar-io-data-item-signature-size'],
+        'x-ar-io-data-item-signature-size does not match',
+      );
+      assert.equal(
+        ownerLength,
+        +res.headers['x-ar-io-data-item-owner-size'],
+        'x-ar-io-data-item-owner-size does not match',
+      );
+      assert.equal(
+        dataItemSize,
+        +res.headers['x-ar-io-data-item-size'],
+        'x-ar-io-data-item-size does not match',
+      );
+      const isValid = await dataItem.isValid();
+      assert.equal(
+        isValid,
+        true,
+        'Data returned from byte range request on bundle id is not valid data item',
+      );
     });
 
-    // it('Verifying all offset headers are returned for a nested data item', async function () {
-    //   const res = await axios.head(`http://localhost:4000/raw/${di}`);
+    // skip for now as it takes a while
+    describe.skip('Nested Data Item', function () {
+      const bundleWithBdi = '-H3KW7RKTXMg5Miq2jHx36OHSVsXBSYuE2kxgsFj6OQ';
+      const bdi = 'fLxHz2WbpNFL7x1HrOyUlsAVHYaKSyj6IqgCJlFuv9g';
+      const nestedDataItem = 'Dc-q5iChuRWcsjVBFstEqmLTx4SWkGZxcVO9OTEGjkQ';
 
-    //   // Verify all offset headers exist and have expected values
-    //   assert.equal(res.headers['x-ar-io-data-item-data-offset'], '5783');
-    //   assert.equal(
-    //     res.headers['x-ar-io-data-item-signature-offset'] !== undefined,
-    //     true,
-    //   );
-    //   assert.equal(
-    //     res.headers['x-ar-io-data-item-owner-offset'] !== undefined,
-    //     true,
-    //   );
-    //   assert.equal(
-    //     res.headers['x-ar-io-data-item-root-parent-offset'] !== undefined,
-    //     true,
-    //   );
-
-    //   // Verify size headers exist
-    //   assert.equal(
-    //     Number.isInteger(
-    //       parseInt(res.headers['x-ar-io-data-item-owner-size'], 10),
-    //     ),
-    //     true,
-    //   );
-    //   assert.equal(
-    //     Number.isInteger(
-    //       parseInt(res.headers['x-ar-io-data-item-signature-size'], 10),
-    //     ),
-    //     true,
-    //   );
-
-    //   // Verify root transaction ID is set correctly
-    //   assert.equal(res.headers['x-ar-io-root-transaction-id'], bundle1);
-    // });
-
-    it('Retrieving full data item using range requests with offsets', async function () {
-      const dataItem = await axios.head(`http://localhost:4000/raw/${di}`);
-
-      // Get the necessary offset information
-      const rootTxId = dataItem.headers['x-ar-io-root-transaction-id'];
-      const dataOffset = parseInt(
-        dataItem.headers['x-ar-io-data-item-data-offset'],
-        10,
-      );
-      const signatureOffset = parseInt(
-        dataItem.headers['x-ar-io-data-item-signature-offset'],
-        10,
-      );
-      const ownerOffset = parseInt(
-        dataItem.headers['x-ar-io-data-item-owner-offset'],
-        10,
-      );
-      const signatureSize = parseInt(
-        dataItem.headers['x-ar-io-data-item-signature-size'],
-        10,
-      );
-      const ownerSize = parseInt(
-        dataItem.headers['x-ar-io-data-item-owner-size'],
-        10,
-      );
-
-      // Make range requests to get the data, signature, and owner
-      const dataRequest = await axios.get(`http://localhost:4000/${rootTxId}`, {
-        headers: {
-          Range: `bytes=${dataOffset}-${dataOffset + 100}`, // Just get the first 100 bytes of data
-        },
-        responseType: 'arraybuffer',
+      before(async function () {
+        await queueBundle({ id: bundleWithBdi });
+        await waitForBundleToBeIndexed({ id: bundleWithBdi });
+        await waitForDataItemToBeIndexed({ id: bdi });
+        await waitForDataItemToBeIndexed({ id: nestedDataItem });
       });
 
-      const signatureRequest = await axios.get(
-        `http://localhost:4000/${rootTxId}`,
-        {
-          headers: {
-            Range: `bytes=${signatureOffset}-${signatureOffset + signatureSize - 1}`,
-          },
-          responseType: 'arraybuffer',
-        },
-      );
+      it('Verifying all offset headers are returned for a nested data item', async function () {
+        const res = await axios.head(`http://localhost:4000/raw/${di}`);
 
-      const ownerRequest = await axios.get(
-        `http://localhost:4000/${rootTxId}`,
-        {
-          headers: {
-            Range: `bytes=${ownerOffset}-${ownerOffset + ownerSize - 1}`,
-          },
-          responseType: 'arraybuffer',
-        },
-      );
+        // Verify all offset headers exist and have expected values
+        assert.equal(
+          res.headers['x-ar-io-data-item-data-offset'] !== undefined,
+          true,
+        );
+        assert.equal(
+          res.headers['x-ar-io-data-item-signature-offset'] !== undefined,
+          true,
+        );
+        assert.equal(
+          res.headers['x-ar-io-data-item-owner-offset'] !== undefined,
+          true,
+        );
+        assert.equal(
+          res.headers['x-ar-io-data-item-root-parent-offset'] !== undefined,
+          true,
+        );
 
-      // Verify we received data for each request
-      assert.ok(dataRequest.data.byteLength > 0);
-      assert.ok(signatureRequest.data.byteLength > 0);
-      assert.ok(ownerRequest.data.byteLength > 0);
-
-      // Additional verification: compare the complete data item to the data obtained from the range request
-      const completeDataItem = await axios.get(`http://localhost:4000/${di}`, {
-        responseType: 'arraybuffer',
+        // Verify root transaction ID is set correctly
+        assert.equal(res.headers['x-ar-io-root-transaction-id'], bundleWithBdi);
       });
-
-      // Get full data via range request (using content-length from the complete request)
-      const fullDataSize = parseInt(
-        completeDataItem.headers['content-length'],
-        10,
-      );
-      const fullDataRange = await axios.get(
-        `http://localhost:4000/${rootTxId}`,
-        {
-          headers: {
-            Range: `bytes=${dataOffset}-${dataOffset + fullDataSize - 1}`,
-          },
-          responseType: 'arraybuffer',
-        },
-      );
-
-      assert.deepEqual(fullDataRange.data, completeDataItem.data);
     });
   });
 });
 
-describe.skip('X-AR-IO headers', function () {
+describe('X-AR-IO headers', function () {
   describe('with ARNS_ROOT_HOST', function () {
     let compose: StartedDockerComposeEnvironment;
     let coreContainer: StartedGenericContainer;
