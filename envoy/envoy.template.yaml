@@ -90,7 +90,7 @@ static_resources:
                               num_retries: 5
                         - match: { prefix: '/info' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -101,7 +101,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/current_block' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -112,7 +112,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/height' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -123,7 +123,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx/' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -134,7 +134,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -145,7 +145,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/unconfirmed_tx/' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -160,7 +160,7 @@ static_resources:
                               - name: ':method'
                                 exact_match: 'GET'
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -171,7 +171,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/block/' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -182,7 +182,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/price/' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -193,7 +193,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/tx_anchor' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -204,7 +204,7 @@ static_resources:
                               redirect_response_codes: [301, 302, 303]
                         - match: { prefix: '/wallet/' }
                           route:
-                            cluster: legacy_gateways
+                            cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
                               num_retries: 5
@@ -248,7 +248,7 @@ static_resources:
       dns_lookup_family: V4_PREFERRED
       lb_policy: LEAST_REQUEST
       load_assignment:
-        cluster_name: legacy_gateways
+        cluster_name: graphql_gateways
         endpoints:
           - lb_endpoints:
               - endpoint:
@@ -282,28 +282,31 @@ static_resources:
                       address: #@ data.values.OBSERVER_HOST
                       port_value: #@ data.values.OBSERVER_PORT
                       ipv4_compat: true
-    - name: legacy_gateways
+    - name: trusted_arweave_nodes
       connect_timeout: 1s
       type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
       lb_policy: LEAST_REQUEST
       load_assignment:
-        cluster_name: legacy_gateways
+        cluster_name: trusted_arweave_nodes
         endpoints:
           - lb_endpoints:
               - endpoint:
                   address:
                     socket_address:
-                      address: #@ data.values.GATEWAY_HOST
-                      port_value: 443
+                      address: #@ data.values.TRUSTED_NODE_HOST
+                      port_value: #@ data.values.TRUSTED_NODE_PORT
+      #@ if data.values.TRUSTED_NODE_PORT == "443":
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:
           '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-          sni: #@ data.values.GATEWAY_HOST
+          sni: #@ data.values.TRUSTED_NODE_HOST
           common_tls_context:
             validation_context:
               trusted_ca:
                 filename: /etc/ssl/certs/ca-certificates.crt
+      #@ end
 
     - name: upload_service_cluster
       connect_timeout: 1s

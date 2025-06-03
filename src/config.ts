@@ -74,7 +74,7 @@ export const REDIS_CACHE_TTL_SECONDS = +env.varOrDefault(
 // Trusted Arweave node URL (for syncing the chain and retrieving chunks)
 export const TRUSTED_NODE_URL = env.varOrDefault(
   'TRUSTED_NODE_URL',
-  'https://ar-io.net',
+  'https://arweave.net',
 );
 
 // Trusted gateway URL (for retrieving contiguous data)
