@@ -1099,6 +1099,13 @@ export class StandaloneSqliteDatabaseWorker {
         ? toB64Url(coreRow.root_transaction_id)
         : undefined;
 
+    let dataItemAttributes;
+    if (rootTransactionId !== undefined) {
+      dataItemAttributes = this.stmts.bundles.selectDataItemAttributes.get({
+        id: fromB64Url(id),
+      });
+    }
+
     return {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
@@ -1108,6 +1115,12 @@ export class StandaloneSqliteDatabaseWorker {
       rootTransactionId,
       rootParentOffset: coreRow?.root_parent_offset,
       dataOffset: coreRow?.data_offset,
+      offset: dataItemAttributes?.offset,
+      itemSize: dataItemAttributes?.size,
+      signatureOffset: dataItemAttributes?.signature_offset,
+      signatureSize: dataItemAttributes?.signature_size,
+      ownerOffset: dataItemAttributes?.owner_offset,
+      ownerSize: dataItemAttributes?.owner_size,
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
       verified: dataRow?.verified === 1,
