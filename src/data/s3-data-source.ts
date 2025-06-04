@@ -158,6 +158,7 @@ export class S3DataSource implements ContiguousDataSource {
         stream,
         size: response.ContentLength,
         verified: false,
+        trusted: true, // we only cache trusted data
         sourceContentType,
         cached: false,
         requestAttributes: requestAttributesHeaders?.attributes,

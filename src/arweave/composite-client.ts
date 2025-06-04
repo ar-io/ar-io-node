@@ -1125,6 +1125,7 @@ export class ArweaveCompositeClient
         stream,
         size: region ? region.size : size,
         verified: false,
+        trusted: true,
         cached: false,
       };
     } catch (error) {

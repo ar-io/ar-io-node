@@ -193,6 +193,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
               stream,
               size: parseInt(response.headers['content-length']),
               verified: false,
+              trusted: true,
               sourceContentType: response.headers['content-type'],
               cached: false,
               requestAttributes: parseRequestAttributesHeaders({
