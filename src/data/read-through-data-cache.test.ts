@@ -54,6 +54,7 @@ describe('ReadThroughDataCache', function () {
       stream: new Readable(),
       size: 100,
       verified: false,
+      trusted: false,
       cached: false,
     };
 
@@ -274,6 +275,7 @@ describe('ReadThroughDataCache', function () {
         size: 100,
         sourceContentType: 'plain/text',
         verified: true,
+        trusted: true,
         cached: true,
         requestAttributes: {
           hops: requestAttributes.hops + 1,
@@ -374,6 +376,7 @@ describe('ReadThroughDataCache', function () {
           size: 99,
           sourceContentType: 'plain/text',
           verified: true,
+          trusted: true,
           cached: false,
         });
       });
@@ -437,6 +440,7 @@ describe('ReadThroughDataCache', function () {
           size: 99,
           sourceContentType: 'plain/text',
           verified: true,
+          trusted: true,
           cached: false,
         });
       });
@@ -505,6 +509,7 @@ describe('ReadThroughDataCache', function () {
         size: 50,
         sourceContentType: 'plain/text',
         verified: true,
+        trusted: true,
         cached: true,
         requestAttributes: {
           hops: requestAttributes.hops + 1,
@@ -545,6 +550,7 @@ describe('ReadThroughDataCache', function () {
           size: 50,
           sourceContentType: 'plain/text',
           verified: true,
+          trusted: true,
           cached: false,
         });
       });

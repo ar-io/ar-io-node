@@ -538,6 +538,7 @@ export interface ContiguousData {
   stream: Readable;
   size: number;
   verified: boolean;
+  trusted: boolean;
   sourceContentType?: string;
   cached: boolean;
   requestAttributes?: RequestAttributes;

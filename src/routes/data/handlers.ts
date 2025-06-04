@@ -54,6 +54,8 @@ const setDigestStableVerifiedHeaders = ({
     res.setHeader(headerNames.stable, dataAttributes.stable ? 'true' : 'false');
     res.setHeader(
       headerNames.verified,
+      // NOTE: even if the DB indicates the data is verified, we can't be sure
+      // we're streaming the right data unless it comes from our local cache
       dataAttributes.verified && data.cached ? 'true' : 'false',
     );
 
@@ -73,7 +75,7 @@ const setDataHeaders = ({
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
 }) => {
-  // TODO cached header for zero length data (maybe...)
+  // TODO: cached header for zero length data (maybe...)
 
   // Allow range requests
   res.header('Accept-Ranges', 'bytes');

@@ -434,6 +434,7 @@ export class ArIODataSource
       stream,
       size: contentLength,
       verified: false,
+      trusted: false,
       sourceContentType: response.headers['content-type'],
       cached: false,
       requestAttributes,

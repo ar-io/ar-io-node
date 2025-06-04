@@ -286,6 +286,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           size: region?.size ?? cacheData.size,
           sourceContentType: attributes?.contentType,
           verified: attributes?.verified ?? false,
+          trusted: true, // only trusted or verified data is cached in the first place
           cached: true,
           requestAttributes: processedRequestAttributes?.attributes,
         };
@@ -298,10 +299,10 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         region,
       });
 
-      // Skip caching when serving regions to avoid persisting data fragments
-      // and (more importantly) writing invalid ID to hash relationships in the
-      // DB.
-      if (region === undefined) {
+      // Skip caching when data is untrusted to avoid cache poisoning and when
+      // serving regions to avoid persisting data fragments and (more
+      // importantly) writing invalid ID to hash relationships in the DB.
+      if (data.trusted === true && region === undefined) {
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
         pipeline(data.stream, cacheStream, async (error: any) => {

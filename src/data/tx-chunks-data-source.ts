@@ -138,6 +138,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       await chunkDataPromise;
 
       if (region) {
+        // TODO: seek to chunks by offset instead of streaming all the chunks
         const byteRangeStream = new ByteRangeTransform(
           region.offset,
           region.size,
@@ -146,6 +147,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
           stream: stream.pipe(byteRangeStream),
           size: region.size,
           verified: true,
+          trusted: true,
           cached: false,
           requestAttributes:
             generateRequestAttributes(requestAttributes)?.attributes,
@@ -156,6 +158,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         stream,
         size,
         verified: true,
+        trusted: true,
         cached: false,
         requestAttributes:
           generateRequestAttributes(requestAttributes)?.attributes,

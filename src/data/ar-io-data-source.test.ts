@@ -110,6 +110,7 @@ describe('ArIODataSource', () => {
         stream: axiosStreamData,
         size: 123,
         verified: false,
+        trusted: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
         requestAttributes: {
@@ -163,6 +164,7 @@ describe('ArIODataSource', () => {
         stream: secondPeerStreamData,
         size: 10,
         verified: false,
+        trusted: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
         requestAttributes: {
@@ -240,6 +242,7 @@ describe('ArIODataSource', () => {
         stream: axiosStreamData,
         size: 123,
         verified: false,
+        trusted: false,
         sourceContentType: 'application/octet-stream',
         cached: false,
         requestAttributes: {
