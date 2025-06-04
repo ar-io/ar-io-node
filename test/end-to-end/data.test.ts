@@ -344,7 +344,7 @@ describe('ANS-104 Bundles', function () {
     });
 
     it('Verifying offset headers are not present for L1 bundle', async function () {
-      const res = await axios.head(`http://localhost:4000/raw/${bundle1}`);
+      const res = await axios.head(`http://localhost:4000/${bundle1}`);
 
       assert.equal(res.headers['x-ar-io-data-item-data-offset'], undefined);
       assert.equal(
@@ -446,7 +446,7 @@ describe('ANS-104 Bundles', function () {
       });
 
       it('Verifying all offset headers are returned for a nested data item', async function () {
-        const res = await axios.head(`http://localhost:4000/raw/${di}`);
+        const res = await axios.head(`http://localhost:4000/${nestedDataItem}`);
 
         // Verify all offset headers exist and have expected values
         assert.equal(
