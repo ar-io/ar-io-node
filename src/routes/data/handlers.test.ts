@@ -1087,6 +1087,285 @@ st
             });
         });
       });
+
+      describe('X-AR-IO-Trusted header', () => {
+        it('should set X-AR-IO-Trusted to true when data.trusted is true', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              trusted: true, // data.trusted is true
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-trusted'], 'true');
+              assert.equal(res.body.toString(), 'testing...');
+            });
+        });
+
+        it('should set X-AR-IO-Trusted to false when data.trusted is false', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              trusted: false, // data.trusted is false
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-trusted'], 'false');
+              assert.equal(res.body.toString(), 'testing...');
+            });
+        });
+
+        it('should set X-AR-IO-Trusted header correctly for HEAD requests', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              trusted: true, // data.trusted is true
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .head('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-trusted'], 'true');
+              assert.deepEqual(res.body, {});
+            });
+        });
+
+        it('should set X-AR-IO-Trusted header for non-cached data', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              trusted: false, // data.trusted is false
+              cached: false, // non-cached data
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-trusted'], 'false');
+              assert.equal(res.headers['x-ar-io-cache'], 'MISS');
+              assert.equal(res.body.toString(), 'testing...');
+            });
+        });
+
+        it('should set X-AR-IO-Trusted header for range requests', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              trusted: true, // data.trusted is true
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'bytes=2-3')
+            .expect(206)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-trusted'], 'true');
+              assert.equal(res.body.toString(), 'st');
+            });
+        });
+      });
     });
   });
 });
