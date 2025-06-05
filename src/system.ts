@@ -19,8 +19,6 @@ import { default as Arweave } from 'arweave';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
 import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
-import awsLite from '@aws-lite/client';
-import awsLiteS3 from '@aws-lite/s3';
 import postgres from 'postgres';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
@@ -95,6 +93,7 @@ import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
 import { parquetExporter } from './routes/ar-io.js';
 import { server } from './app.js';
+import { awsClient } from './aws-client.js';
 import { S3DataStore } from './store/s3-data-store.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
@@ -123,22 +122,6 @@ const networkProcess = ARIO.init({
     }),
   }),
 });
-
-export const awsClient =
-  config.AWS_ACCESS_KEY_ID !== undefined &&
-  config.AWS_SECRET_ACCESS_KEY !== undefined &&
-  config.AWS_REGION !== undefined
-    ? await awsLite({
-        accessKeyId: config.AWS_ACCESS_KEY_ID,
-        secretAccessKey: config.AWS_SECRET_ACCESS_KEY,
-        endpoint: config.AWS_ENDPOINT,
-        region: config.AWS_REGION,
-        ...(config.AWS_SESSION_TOKEN !== undefined && {
-          sessionToken: config.AWS_SESSION_TOKEN,
-        }),
-        plugins: [awsLiteS3],
-      })
-    : undefined;
 
 export const arweaveClient = new ArweaveCompositeClient({
   log,
