@@ -24,8 +24,10 @@ async function hasAnyAwsCreds() {
   try {
     // `defaultProvider` reproduces the exact chain aws-lite will use.
     // It throws if *nothing* can be resolved (env, profile, IMDS, …).
-    await fromNodeProviderChain()();
-    return true;
+    const creds = await fromNodeProviderChain()();
+    return (
+      creds.sessionToken !== undefined || process.env.AWS_REGION !== undefined
+    );
   } catch {
     return false;
   }
