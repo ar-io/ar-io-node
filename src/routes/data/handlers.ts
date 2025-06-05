@@ -118,29 +118,29 @@ const setDataHeaders = ({
       DEFAULT_CONTENT_TYPE,
   );
 
-  if (dataAttributes?.contentEncoding !== undefined) {
+  if (dataAttributes?.contentEncoding != null) {
     res.header('Content-Encoding', dataAttributes.contentEncoding);
   }
 
-  if (dataAttributes?.rootTransactionId !== undefined) {
+  if (dataAttributes?.rootTransactionId != null) {
     res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
-  if (dataAttributes?.rootParentOffset !== undefined) {
+  if (dataAttributes?.rootParentOffset != null) {
     res.header(
       headerNames.dataItemRootParentOffset,
       dataAttributes.rootParentOffset.toString(),
     );
 
-    if (dataAttributes.offset !== undefined) {
+    if (dataAttributes.offset != null) {
       res.header(headerNames.dataItemOffset, dataAttributes.offset.toString());
     }
 
-    if (dataAttributes.itemSize !== undefined) {
+    if (dataAttributes.itemSize != null) {
       res.header(headerNames.dataItemSize, dataAttributes.itemSize.toString());
     }
 
-    if (dataAttributes.dataOffset !== undefined) {
+    if (dataAttributes.dataOffset != null) {
       res.header(
         headerNames.dataItemDataOffset,
         (
