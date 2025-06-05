@@ -143,9 +143,7 @@ const setDataHeaders = ({
     if (dataAttributes.dataOffset != null) {
       res.header(
         headerNames.dataItemDataOffset,
-        (
-          dataAttributes.rootParentOffset + dataAttributes.dataOffset
-        ).toString(),
+        dataAttributes.dataOffset.toString(),
       );
     }
   }
