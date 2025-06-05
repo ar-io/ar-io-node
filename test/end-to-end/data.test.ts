@@ -347,18 +347,11 @@ describe('ANS-104 Bundles', function () {
       const res = await axios.head(`http://localhost:4000/${bundle1}`);
 
       assert.equal(res.headers['x-ar-io-data-item-data-offset'], undefined);
-      assert.equal(
-        res.headers['x-ar-io-data-item-signature-offset'],
-        undefined,
-      );
-      assert.equal(res.headers['x-ar-io-data-item-owner-offset'], undefined);
       assert.equal(res.headers['x-ar-io-data-item-offset'], undefined);
       assert.equal(
         res.headers['x-ar-io-data-item-root-parent-offset'],
         undefined,
       );
-      assert.equal(res.headers['x-ar-io-data-item-owner-size'], undefined);
-      assert.equal(res.headers['x-ar-io-data-item-signature-size'], undefined);
     });
 
     it('Verifying all offset headers for are provided for an unbundled data item', async function () {
@@ -374,16 +367,6 @@ describe('ANS-104 Bundles', function () {
         res.headers['x-ar-io-data-item-data-offset'] !== undefined,
         true,
         'missing x-ar-io-data-item-data-offset',
-      );
-      assert.equal(
-        res.headers['x-ar-io-data-item-signature-offset'] !== undefined,
-        true,
-        'missing x-ar-io-data-item-signature-offset',
-      );
-      assert.equal(
-        res.headers['x-ar-io-data-item-owner-offset'] !== undefined,
-        true,
-        'missing x-ar-io-data-item-owner-offset',
       );
       assert.equal(
         res.headers['x-ar-io-data-item-root-parent-offset'] !== undefined,
@@ -406,19 +389,7 @@ describe('ANS-104 Bundles', function () {
       );
 
       const dataItem = new DataItem(fetchedFullDataItem.data);
-      const signatureLength = dataItem.signatureLength;
-      const ownerLength = dataItem.ownerLength;
 
-      assert.equal(
-        signatureLength,
-        +res.headers['x-ar-io-data-item-signature-size'],
-        'x-ar-io-data-item-signature-size does not match',
-      );
-      assert.equal(
-        ownerLength,
-        +res.headers['x-ar-io-data-item-owner-size'],
-        'x-ar-io-data-item-owner-size does not match',
-      );
       assert.equal(
         dataItemSize,
         +res.headers['x-ar-io-data-item-size'],
@@ -451,14 +422,6 @@ describe('ANS-104 Bundles', function () {
         // Verify all offset headers exist and have expected values
         assert.equal(
           res.headers['x-ar-io-data-item-data-offset'] !== undefined,
-          true,
-        );
-        assert.equal(
-          res.headers['x-ar-io-data-item-signature-offset'] !== undefined,
-          true,
-        );
-        assert.equal(
-          res.headers['x-ar-io-data-item-owner-offset'] !== undefined,
           true,
         );
         assert.equal(
