@@ -148,38 +148,6 @@ const setDataHeaders = ({
         ).toString(),
       );
     }
-
-    if (dataAttributes.signatureOffset !== undefined) {
-      res.header(
-        headerNames.dataItemSignatureOffset,
-        (
-          dataAttributes.rootParentOffset + dataAttributes.signatureOffset
-        ).toString(),
-      );
-    }
-
-    if (dataAttributes.signatureSize !== undefined) {
-      res.header(
-        headerNames.dataItemSignatureSize,
-        dataAttributes.signatureSize.toString(),
-      );
-    }
-
-    if (dataAttributes.ownerOffset !== undefined) {
-      res.header(
-        headerNames.dataItemOwnerOffset,
-        (
-          dataAttributes.rootParentOffset + dataAttributes.ownerOffset
-        ).toString(),
-      );
-    }
-
-    if (dataAttributes.ownerSize !== undefined) {
-      res.header(
-        headerNames.dataItemOwnerSize,
-        dataAttributes.ownerSize.toString(),
-      );
-    }
   }
 
   setDigestStableVerifiedHeaders({ res, dataAttributes, data });
@@ -401,8 +369,6 @@ export const createRawDataHandler = ({
       sendNotFound(res);
       return;
     }
-
-    console.log('dataAttributes', dataAttributes);
 
     // Return 404 if the data is blocked by hash
     try {
