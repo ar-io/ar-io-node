@@ -41,11 +41,24 @@ const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
 
+const handleIfNoneMatch = (req: Request, res: Response): boolean => {
+  const ifNoneMatch = req.get('if-none-match');
+  const etag = res.getHeader('etag');
+
+  if (ifNoneMatch !== undefined && etag !== undefined && ifNoneMatch === etag) {
+    res.status(304);
+    return true;
+  }
+  return false;
+};
+
 const setDigestStableVerifiedHeaders = ({
+  req,
   res,
   dataAttributes,
   data,
 }: {
+  req: Request;
   res: Response;
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
@@ -59,18 +72,27 @@ const setDigestStableVerifiedHeaders = ({
       dataAttributes.verified && data.cached ? 'true' : 'false',
     );
 
-    if (dataAttributes.hash !== undefined && data.cached) {
+    // We only add digest and ETag headers when the data is either a HEAD
+    // request or cached locally. If the data is not cached, we might stream
+    // from the network and end up with a different hash than what is currently
+    // stored in the DB.
+    if (
+      dataAttributes.hash !== undefined &&
+      (data.cached || req.method === REQUEST_METHOD_HEAD)
+    ) {
       res.setHeader(headerNames.digest, dataAttributes.hash);
-      res.setHeader('ETag', dataAttributes.hash);
+      res.setHeader('ETag', `"${dataAttributes.hash}"`);
     }
   }
 };
 
 const setDataHeaders = ({
+  req,
   res,
   dataAttributes,
   data,
 }: {
+  req: Request;
   res: Response;
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
@@ -148,7 +170,7 @@ const setDataHeaders = ({
     }
   }
 
-  setDigestStableVerifiedHeaders({ res, dataAttributes, data });
+  setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
 };
 
 const getRequestAttributes = (
@@ -218,7 +240,7 @@ const handleRangeRequest = async ({
     data.sourceContentType ??
     'application/octet-stream';
 
-  setDigestStableVerifiedHeaders({ res, dataAttributes, data });
+  setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
 
   // FIXME: calculate Content-Length appropriately
 
@@ -231,6 +253,12 @@ const handleRangeRequest = async ({
     res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
     res.setHeader('Accept-Ranges', 'bytes');
     res.contentType(contentType);
+
+    // Handle If-None-Match for both HEAD and GET requests
+    if (handleIfNoneMatch(req, res)) {
+      res.end();
+      return;
+    }
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
@@ -264,6 +292,12 @@ const handleRangeRequest = async ({
     res.status(206); // Partial Content
     res.setHeader('Content-Type', `multipart/byteranges; boundary=${boundary}`);
     res.setHeader('Accept-Ranges', 'bytes');
+
+    // Handle If-None-Match for both HEAD and GET requests
+    if (handleIfNoneMatch(req, res)) {
+      res.end();
+      return;
+    }
 
     if (req.method === REQUEST_METHOD_HEAD) {
       res.end();
@@ -397,7 +431,7 @@ export const createRawDataHandler = ({
         // Range requests create new streams so the original is no longer
         // needed
         data.stream.destroy();
-        setDataHeaders({ res, dataAttributes, data });
+        setDataHeaders({ req, res, dataAttributes, data });
 
         await handleRangeRequest({
           log,
@@ -412,8 +446,15 @@ export const createRawDataHandler = ({
         });
       } else {
         // Set headers and stream data
-        setDataHeaders({ res, dataAttributes, data });
+        setDataHeaders({ req, res, dataAttributes, data });
         res.header('Content-Length', data.size.toString());
+
+        // Handle If-None-Match for both HEAD and GET requests
+        if (handleIfNoneMatch(req, res)) {
+          res.end();
+          data.stream.destroy();
+          return;
+        }
 
         if (req.method === REQUEST_METHOD_HEAD) {
           res.end();
@@ -510,6 +551,7 @@ const sendManifestResponse = async ({
         data.stream.destroy();
 
         setDataHeaders({
+          req,
           res,
           dataAttributes,
           data,
@@ -528,11 +570,19 @@ const sendManifestResponse = async ({
       } else {
         // Set headers and stream data
         setDataHeaders({
+          req,
           res,
           dataAttributes,
           data,
         });
         res.header('Content-Length', data.size.toString());
+
+        // Handle If-None-Match for both HEAD and GET requests
+        if (handleIfNoneMatch(req, res)) {
+          res.end();
+          data.stream.destroy();
+          return true;
+        }
 
         if (req.method === REQUEST_METHOD_HEAD) {
           res.end();
@@ -714,6 +764,7 @@ export const createDataHandler = ({
         data.stream.destroy();
 
         setDataHeaders({
+          req,
           res,
           dataAttributes,
           data,
@@ -733,11 +784,19 @@ export const createDataHandler = ({
       } else {
         // Set headers and stream data
         setDataHeaders({
+          req,
           res,
           dataAttributes,
           data,
         });
         res.header('Content-Length', data.size.toString());
+
+        // Handle If-None-Match for both HEAD and GET requests
+        if (handleIfNoneMatch(req, res)) {
+          res.end();
+          data.stream.destroy();
+          return;
+        }
 
         if (req.method === REQUEST_METHOD_HEAD) {
           res.end();

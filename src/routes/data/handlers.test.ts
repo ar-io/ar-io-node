@@ -712,7 +712,7 @@ st
             .expect(200)
             .then((res: any) => {
               assert.equal(res.headers['x-ar-io-digest'], 'hash');
-              assert.equal(res.headers['etag'], 'hash');
+              assert.equal(res.headers['etag'], '"hash"');
             });
         });
       });
@@ -772,6 +772,318 @@ st
                 res.headers['x-ar-io-root-transaction-id'],
                 'root-tx',
               );
+            });
+        });
+      });
+
+      describe('If-None-Match', () => {
+        it('should return 304 for HEAD request when If-None-Match matches ETag', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .head('/not-a-real-id')
+            .set('If-None-Match', '"test-hash"')
+            .expect(304)
+            .then((res: any) => {
+              assert.equal(res.headers['etag'], '"test-hash"');
+              assert.deepEqual(res.body, {});
+            });
+        });
+
+        it('should return 200 for HEAD request when If-None-Match does not match ETag', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .head('/not-a-real-id')
+            .set('If-None-Match', '"different-hash"')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['etag'], '"test-hash"');
+              assert.deepEqual(res.body, {});
+            });
+        });
+
+        it('should return 304 for GET request when If-None-Match matches ETag', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .set('If-None-Match', '"test-hash"')
+            .expect(304)
+            .then((res: any) => {
+              assert.equal(res.headers['etag'], '"test-hash"');
+              // 304 responses should have empty body
+              assert.equal(res.text || '', '');
+            });
+        });
+
+        it('should return 200 for GET request when If-None-Match does not match ETag', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .set('If-None-Match', '"different-hash"')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['etag'], '"test-hash"');
+              assert.equal(res.body.toString(), 'testing...');
+            });
+        });
+
+        it('should not return 304 when ETag is not set', async () => {
+          // No hash means no ETag
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .set('If-None-Match', '"some-hash"')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['etag'], undefined);
+              assert.equal(res.body.toString(), 'testing...');
+            });
+        });
+
+        it('should return 304 for range request when If-None-Match matches ETag', async () => {
+          dataIndex.getDataAttributes = () =>
+            Promise.resolve({
+              hash: 'test-hash',
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            });
+
+          dataSource.getData = (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            // Handle range requests
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              cached: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/not-a-real-id')
+            .set('Range', 'bytes=2-3')
+            .set('If-None-Match', '"test-hash"')
+            .expect(304)
+            .then((res: any) => {
+              assert.equal(res.headers['etag'], '"test-hash"');
+              assert.equal(res.text || '', '');
             });
         });
       });
