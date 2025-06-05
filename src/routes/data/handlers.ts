@@ -84,6 +84,9 @@ const setDigestStableVerifiedHeaders = ({
       res.setHeader('ETag', `"${dataAttributes.hash}"`);
     }
   }
+
+  // Set trusted header based on data source
+  res.setHeader(headerNames.trusted, data.trusted ? 'true' : 'false');
 };
 
 const setDataHeaders = ({

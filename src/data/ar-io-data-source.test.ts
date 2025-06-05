@@ -25,6 +25,7 @@ import { RequestAttributes } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
+import { headerNames } from '../constants.js';
 
 let log: winston.Logger;
 let dataSource: ArIODataSource;
@@ -67,6 +68,8 @@ beforeEach(async () => {
     headers: {
       'content-length': '123',
       'content-type': 'application/octet-stream',
+      [headerNames.verified.toLowerCase()]: 'true',
+      [headerNames.trusted.toLowerCase()]: 'false',
     },
   });
 
@@ -154,6 +157,8 @@ describe('ArIODataSource', () => {
           headers: {
             'content-length': '10',
             'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
           },
         };
       });
@@ -206,6 +211,8 @@ describe('ArIODataSource', () => {
         headers: {
           'content-length': '10',
           'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
         },
       }));
 
@@ -283,6 +290,8 @@ describe('ArIODataSource', () => {
           headers: {
             'content-length': '50',
             'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
           },
         };
       });
@@ -309,6 +318,123 @@ describe('ArIODataSource', () => {
         (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
         retryCount,
       );
+    });
+
+    it('should accept data when peer indicates verified=true', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: axiosStreamData,
+        headers: {
+          'content-length': '123',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      const data = await dataSource.getData({ id: 'dataId' });
+      assert.equal(data.size, 123);
+    });
+
+    it('should accept data when peer indicates trusted=true', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: axiosStreamData,
+        headers: {
+          'content-length': '123',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'false',
+          [headerNames.trusted.toLowerCase()]: 'true',
+        },
+      }));
+
+      const data = await dataSource.getData({ id: 'dataId' });
+      assert.equal(data.size, 123);
+    });
+
+    it('should accept data when peer indicates both verified=true and trusted=true', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: axiosStreamData,
+        headers: {
+          'content-length': '123',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'true',
+          [headerNames.trusted.toLowerCase()]: 'true',
+        },
+      }));
+
+      const data = await dataSource.getData({ id: 'dataId' });
+      assert.equal(data.size, 123);
+    });
+
+    it('should reject data when peer indicates neither verified nor trusted', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: axiosStreamData,
+        headers: {
+          'content-length': '123',
+          'content-type': 'application/octet-stream',
+          [headerNames.verified.toLowerCase()]: 'false',
+          [headerNames.trusted.toLowerCase()]: 'false',
+        },
+      }));
+
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId' }),
+        /Failed to fetch contiguous data from ArIO peers/,
+      );
+    });
+
+    it('should reject data when peer headers are missing', async () => {
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: axiosStreamData,
+        headers: {
+          'content-length': '123',
+          'content-type': 'application/octet-stream',
+        },
+      }));
+
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId' }),
+        /Failed to fetch contiguous data from ArIO peers/,
+      );
+    });
+
+    it('should retry with next peer when first peer rejects data as unverified/untrusted', async () => {
+      let firstPeer = true;
+      const secondPeerStreamData = Readable.from(['secondPeerData']);
+
+      mock.method(axios, 'get', async () => {
+        if (firstPeer) {
+          firstPeer = false;
+          return {
+            status: 200,
+            data: axiosStreamData,
+            headers: {
+              'content-length': '123',
+              'content-type': 'application/octet-stream',
+              [headerNames.verified.toLowerCase()]: 'false',
+              [headerNames.trusted.toLowerCase()]: 'false',
+            },
+          };
+        }
+        return {
+          status: 200,
+          data: secondPeerStreamData,
+          headers: {
+            'content-length': '10',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      const data = await dataSource.getData({ id: 'dataId' });
+      assert.equal(data.stream, secondPeerStreamData);
+      assert.equal(data.size, 10);
     });
   });
 });

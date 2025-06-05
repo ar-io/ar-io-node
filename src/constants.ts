@@ -23,6 +23,7 @@ export const headerNames = {
   digest: 'X-AR-IO-Digest',
   stable: 'X-AR-IO-Stable',
   verified: 'X-AR-IO-Verified',
+  trusted: 'X-AR-IO-Trusted',
   cache: 'X-Cache',
   rootTransactionId: 'X-AR-IO-Root-Transaction-Id',
   dataItemDataOffset: 'X-AR-IO-Data-Item-Data-Offset',

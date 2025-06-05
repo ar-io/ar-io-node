@@ -36,6 +36,7 @@ import {
   parseRequestAttributesHeaders,
 } from '../lib/request-attributes.js';
 import { shuffleArray } from '../lib/random.js';
+import { headerNames } from '../constants.js';
 
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
@@ -417,6 +418,18 @@ export class ArIODataSource
     ttfb: number;
   }): ContiguousData {
     const stream = response.data;
+
+    // Check if peer indicates data is verified or trusted
+    const peerVerified =
+      response.headers[headerNames.verified.toLowerCase()] === 'true';
+    const peerTrusted =
+      response.headers[headerNames.trusted.toLowerCase()] === 'true';
+
+    // Only accept data from peers that indicate it's either verified or trusted
+    if (!peerVerified && !peerTrusted) {
+      stream.destroy();
+      throw new Error('Peer does not indicate data is verified or trusted');
+    }
 
     const contentLength =
       parseInt(response.headers['content-length'] ?? '0') || 0;
