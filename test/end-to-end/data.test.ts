@@ -490,7 +490,7 @@ describe('X-AR-IO headers', function () {
       );
       assert.equal(
         resWithHeaders.headers['etag'],
-        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+        '"gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA"',
       );
       assert.equal(resWithHeaders.headers['x-ar-io-stable'], 'false');
       assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
@@ -626,7 +626,7 @@ describe('X-AR-IO headers', function () {
       );
       assert.equal(
         resWithHeaders.headers['etag'],
-        'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
+        '"gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA"',
       );
       assert.equal(resWithHeaders.headers['x-ar-io-stable'], 'false');
       assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
