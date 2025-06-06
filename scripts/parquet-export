@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+
+if ! command -v duckdb >/dev/null 2>&1; then
+  echo "Error: duckdb CLI is required but not found in PATH" >&2
+  exit 1
+fi
+
+set -euo pipefail
+
+usage() {
+  cat <<USAGE
+Usage: $0 --outputDir DIR --startHeight N --endHeight N --maxFileRows N [options]
+
+Options:
+  --includeL1Transactions   Include L1 transactions (default is to skip)
+  --includeL1Tags           Include L1 transaction tags (default is to skip)
+  --coreDb PATH             Path to core SQLite database (default: data/sqlite/core.db)
+  --bundlesDb PATH          Path to bundles SQLite database (default: data/sqlite/bundles.db)
+
+Note: If a single height contains more transactions than maxFileRows, the entire
+height will be exported in one file, potentially exceeding the row limit.
+USAGE
+}
+
+OUTPUT_DIR=""
+START_HEIGHT=""
+END_HEIGHT=""
+MAX_FILE_ROWS=""
+SKIP_L1_TRANSACTIONS=true
+SKIP_L1_TAGS=true
+CORE_DB_PATH="data/sqlite/core.db"
+BUNDLES_DB_PATH="data/sqlite/bundles.db"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --outputDir)
+      OUTPUT_DIR=$2
+      shift 2
+      ;;
+    --startHeight)
+      START_HEIGHT=$2
+      shift 2
+      ;;
+    --endHeight)
+      END_HEIGHT=$2
+      shift 2
+      ;;
+    --maxFileRows)
+      MAX_FILE_ROWS=$2
+      shift 2
+      ;;
+    --includeL1Transactions)
+      SKIP_L1_TRANSACTIONS=false
+      shift 1
+      ;;
+    --includeL1Tags)
+      SKIP_L1_TAGS=false
+      shift 1
+      ;;
+    --coreDb)
+      CORE_DB_PATH=$2
+      shift 2
+      ;;
+    --bundlesDb)
+      BUNDLES_DB_PATH=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$OUTPUT_DIR" || -z "$START_HEIGHT" || -z "$END_HEIGHT" || -z "$MAX_FILE_ROWS" ]]; then
+  usage
+  exit 1
+fi
+
+# Validate numeric arguments to prevent SQL injection
+for v in "$START_HEIGHT" "$END_HEIGHT" "$MAX_FILE_ROWS"; do
+  [[ $v =~ ^[0-9]+$ ]] || { echo "Error: Non-numeric argument detected: $v" >&2; exit 1; }
+done
+
+# Validate numeric bounds
+if (( START_HEIGHT > END_HEIGHT )); then
+  echo "Error: startHeight ($START_HEIGHT) cannot be greater than endHeight ($END_HEIGHT)" >&2
+  exit 1
+fi
+if ! [[ "$MAX_FILE_ROWS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: maxFileRows must be a positive integer" >&2
+  exit 1
+fi
+
+mkdir -p "$OUTPUT_DIR"
+
+TEMP_DB="$(mktemp -u /tmp/parquet_export_XXXX.duckdb)"
+SQL_INIT="$(mktemp -u /tmp/parquet_export_init_XXXX.sql)"
+
+# Build initialization SQL script
+{
+  cat src/database/duckdb/schema.sql
+  echo "INSTALL sqlite;"
+  echo "LOAD sqlite;"
+  echo "ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY, BUSY_TIMEOUT 30000);"
+  echo "ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY, BUSY_TIMEOUT 30000);"
+  echo ""
+  echo "INSERT INTO blocks"
+  echo "SELECT"
+  echo "  indep_hash,"
+  echo "  height,"
+  echo "  previous_block,"
+  echo "  nonce,"
+  echo "  hash,"
+  echo "  block_timestamp,"
+  echo "  tx_count,"
+  echo "  block_size"
+  echo "FROM core.stable_blocks"
+  echo "WHERE height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};"
+
+  if ! $SKIP_L1_TRANSACTIONS; then
+    cat <<EOS
+INSERT INTO transactions
+SELECT
+  st.id,
+  NULL AS indexed_at,
+  st.block_transaction_index,
+  0 AS is_data_item,
+  st.target,
+  st.quantity,
+  st.reward,
+  st.last_tx as anchor,
+  st.data_size,
+  st.content_type,
+  st.format,
+  st.height,
+  st.owner_address,
+  st.data_root,
+  NULL AS parent,
+  st."offset",
+  NULL AS size,
+  NULL AS data_offset,
+  NULL AS owner_offset,
+  NULL AS owner_size,
+  CASE
+    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
+    ELSE NULL
+  END AS owner,
+  NULL AS signature_offset,
+  NULL AS signature_size,
+  NULL AS signature_type,
+  NULL AS root_transaction_id,
+  NULL AS root_parent_offset
+FROM core.stable_transactions st
+LEFT JOIN core.wallets w ON st.owner_address = w.address
+WHERE st.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
+EOS
+  fi
+
+  cat <<EOS
+INSERT INTO transactions
+SELECT
+  sdi.id,
+  sdi.indexed_at,
+  block_transaction_index,
+  1 AS is_data_item,
+  sdi.target,
+  NULL AS quantity,
+  NULL AS reward,
+  sdi.anchor,
+  sdi.data_size,
+  sdi.content_type,
+  NULL AS format,
+  sdi.height,
+  sdi.owner_address,
+  NULL AS data_root,
+  sdi.parent_id AS parent,
+  sdi."offset",
+  sdi.size,
+  sdi.data_offset,
+  sdi.owner_offset,
+  sdi.owner_size,
+  CASE
+    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
+    ELSE NULL
+  END AS owner,
+  sdi.signature_offset,
+  sdi.signature_size,
+  sdi.signature_type,
+  sdi.root_transaction_id,
+  sdi.root_parent_offset
+FROM bundles.stable_data_items sdi
+LEFT JOIN bundles.wallets w ON sdi.owner_address = w.address
+WHERE sdi.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
+EOS
+
+  if ! $SKIP_L1_TAGS; then
+    cat <<EOS
+INSERT INTO tags
+SELECT
+  st.height,
+  st.id,
+  stt.transaction_tag_index AS tag_index,
+  NULL AS indexed_at,
+  tn.name AS tag_name,
+  tv.value AS tag_value,
+  0 AS is_data_item
+FROM core.stable_transactions st
+CROSS JOIN core.stable_transaction_tags stt
+CROSS JOIN core.tag_names tn
+CROSS JOIN core.tag_values tv
+WHERE st.id = stt.transaction_id
+  AND stt.tag_name_hash = tn.hash
+  AND stt.tag_value_hash = tv.hash
+  AND st.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
+EOS
+  fi
+
+  cat <<EOS
+INSERT INTO tags
+SELECT
+  sdi.height,
+  sdi.id,
+  sdit.data_item_tag_index AS tag_index,
+  sdi.indexed_at,
+  tn.name AS tag_name,
+  tv.value AS tag_value,
+  1 AS is_data_item
+FROM bundles.stable_data_items sdi
+CROSS JOIN bundles.stable_data_item_tags sdit
+CROSS JOIN bundles.tag_names tn
+CROSS JOIN bundles.tag_values tv
+WHERE sdi.id = sdit.data_item_id
+  AND sdit.tag_name_hash = tn.hash
+  AND sdit.tag_value_hash = tv.hash
+  AND sdi.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
+EOS
+} > "$SQL_INIT"
+
+# Run initialization
+duckdb "$TEMP_DB" < "$SQL_INIT"
+
+# Retrieve counts per height for transactions
+mapfile -t COUNTS < <(duckdb "$TEMP_DB" -csv -header -c "SELECT height, COUNT(*) AS c FROM transactions WHERE height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT} GROUP BY height ORDER BY height;")
+
+declare -a RANGE_STARTS=()
+declare -a RANGE_ENDS=()
+declare -a RANGE_COUNTS=()
+
+current_start=$START_HEIGHT
+current_count=0
+
+declare -A COUNT_MAP=()
+for line in "${COUNTS[@]}"; do
+  if [[ $line == height,* ]]; then continue; fi
+  h=${line%%,*}
+  c=${line#*,}
+  COUNT_MAP[$h]=$c
+done
+
+for ((h=START_HEIGHT; h<=END_HEIGHT; h++)); do
+  c=${COUNT_MAP[$h]:-0}
+  current_count=$((current_count + c))
+  if [[ $current_count -ge $MAX_FILE_ROWS || $h -eq $END_HEIGHT ]]; then
+    RANGE_STARTS+=("$current_start")
+    RANGE_ENDS+=("$h")
+    RANGE_COUNTS+=("$current_count")
+    current_start=$((h + 1))
+    current_count=0
+  fi
+done
+
+for i in "${!RANGE_STARTS[@]}"; do
+  start=${RANGE_STARTS[$i]}
+  end=${RANGE_ENDS[$i]}
+  count=${RANGE_COUNTS[$i]}
+  tx_file="${OUTPUT_DIR}/transactions-minHeight:${start}-maxHeight:${end}-rowCount:${count}.parquet"
+  duckdb "$TEMP_DB" <<SQL
+COPY (
+  SELECT * FROM transactions WHERE height >= $start AND height <= $end
+) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');
+SQL
+
+  block_count=$(duckdb "$TEMP_DB" -csv -c "SELECT COUNT(*) FROM blocks WHERE height >= $start AND height <= $end;")
+  block_file="${OUTPUT_DIR}/blocks-minHeight:${start}-maxHeight:${end}-rowCount:${block_count}.parquet"
+  duckdb "$TEMP_DB" <<SQL
+COPY (
+  SELECT * FROM blocks WHERE height >= $start AND height <= $end
+) TO '$block_file' (FORMAT PARQUET, COMPRESSION 'zstd');
+SQL
+
+  tag_count=$(duckdb "$TEMP_DB" -csv -c "SELECT COUNT(*) FROM tags WHERE height >= $start AND height <= $end;")
+  tag_file="${OUTPUT_DIR}/tags-minHeight:${start}-maxHeight:${end}-rowCount:${tag_count}.parquet"
+  duckdb "$TEMP_DB" <<SQL
+COPY (
+  SELECT * FROM tags WHERE height >= $start AND height <= $end
+) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');
+SQL
+
+done
+
+rm -f "$TEMP_DB" "$TEMP_DB.wal" "$SQL_INIT"
