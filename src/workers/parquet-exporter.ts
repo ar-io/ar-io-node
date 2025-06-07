@@ -676,15 +676,9 @@ if (!isMainThread) {
         await connection.exec(`INSTALL sqlite; LOAD sqlite;`);
       });
 
-      await logTiming('attach-databases', async () => {
+      await logTiming('attach-core-db', async () => {
         await db.exec(`
           ATTACH '${coreDbPath}' AS core (
-            TYPE SQLITE,
-            READONLY,
-            BUSY_TIMEOUT 30000
-          );
-
-          ATTACH '${bundlesDbPath}' AS bundles (
             TYPE SQLITE,
             READONLY,
             BUSY_TIMEOUT 30000
@@ -711,14 +705,6 @@ if (!isMainThread) {
         });
       }
 
-      await logTiming('import-data-items', async () => {
-        await importDataItems({
-          db: connection,
-          startHeight,
-          endHeight,
-        });
-      });
-
       if (!skipL1Tags) {
         await logTiming('import-transaction-tags', async () => {
           await importTransactionTags({
@@ -729,12 +715,38 @@ if (!isMainThread) {
         });
       }
 
+      await logTiming('detach-core-db', async () => {
+        await db.exec('DETACH core;');
+      });
+
+      await logTiming('attach-bundles-db', async () => {
+        await db.exec(`
+          ATTACH '${bundlesDbPath}' AS bundles (
+            TYPE SQLITE,
+            READONLY,
+            BUSY_TIMEOUT 30000
+          );
+        `);
+      });
+
+      await logTiming('import-data-items', async () => {
+        await importDataItems({
+          db: connection,
+          startHeight,
+          endHeight,
+        });
+      });
+
       await logTiming('import-data-item-tags', async () => {
         await importDataItemTags({
           db: connection,
           startHeight,
           endHeight,
         });
+      });
+
+      await logTiming('detach-bundles-db', async () => {
+        await db.exec('DETACH bundles;');
       });
 
       const transactionRanges = await logTiming(
