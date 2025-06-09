@@ -2,6 +2,7 @@
 
 [![codecov](https://codecov.io/gh/ar-io/ar-io-node/graph/badge.svg?token=F3BJ7W74HY)](https://codecov.io/gh/ar-io/ar-io-node)
 [![protocol.land](https://arweave.net/eZp8gOeR8Yl_cyH9jJToaCrt2He1PHr0pR4o-mHbEcY)](https://protocol.land/#/repository/713c1b6f-86c8-493e-b2e6-6cb231862b93)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ar-io/ar-io-node)
 
 ## Getting Started
 
