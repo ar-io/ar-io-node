@@ -32,5 +32,8 @@ test-results.xml
 # JetBrains
 /.idea
 
+# Local Claude instructions
+CLAUDE.local.md
+
 # Exceptions
 !/data/.gitkeep
