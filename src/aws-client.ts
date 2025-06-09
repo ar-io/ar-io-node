@@ -20,24 +20,26 @@ import awsLite from '@aws-lite/client';
 import awsLiteS3 from '@aws-lite/s3';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-async function hasAnyAwsCreds() {
+async function canInitAwsClient() {
+  // 1. Region must be set
+  if (!process.env.AWS_REGION!) return false;
+
+  // 2. At least one credential source must resolve
   try {
-    // `defaultProvider` reproduces the exact chain aws-lite will use.
-    // It throws if *nothing* can be resolved (env, profile, IMDS, …).
-    const creds = await fromNodeProviderChain()();
-    return (
-      creds.sessionToken !== undefined || process.env.AWS_REGION !== undefined
-    );
+    await fromNodeProviderChain()(); // throws if none found
+    return true;
   } catch {
     return false;
   }
 }
 
-export const awsClient = (await hasAnyAwsCreds())
+export const awsClient = (await canInitAwsClient())
   ? await awsLite({
-      // pass only the “static” settings; auth is left to the provider chain
       endpoint: process.env.AWS_ENDPOINT,
-      region: process.env.AWS_REGION, // optional – picked up from IMDS if omitted
+      region: process.env.AWS_REGION, // guaranteed non-undefined now
       plugins: [awsLiteS3],
+    }).catch((err) => {
+      console.error('Failed to initialize AWS client', err);
+      return undefined; // keep graceful fallback
     })
   : undefined;
