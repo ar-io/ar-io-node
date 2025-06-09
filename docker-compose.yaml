@@ -227,7 +227,6 @@ services:
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
       - ${WALLETS_PATH:-./wallets}:/app/wallets
     environment:
-      - PORT=${OBSERVER_PORT:-5050}
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-}
       - IO_PROCESS_ID=${IO_PROCESS_ID:-}
