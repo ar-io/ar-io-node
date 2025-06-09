@@ -6,21 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 38] - 2025-06-09
 
-This release focuses on data integrity and security improvements, introducing trusted data verification and enhanced header information for data requests.
+This release focuses on data integrity and security improvements, introducing
+trusted data verification and enhanced header information for data requests.
+Upgrading to this release is recommended but not urgent.
 
 ### Added
 
-- Added `X-AR-IO-Trusted` header to indicate data source trustworthiness in responses. This header helps clients understand whether data comes from a trusted source and works alongside the existing `X-AR-IO-Verified` header to provide comprehensive data integrity information. The system now filters peer data by requiring peers to indicate their content is either verified or trusted, protecting against misconfigured peers that may inadvertently serve corrupted content (e.g., provider default landing pages) instead of actual Arweave data.
-- Added If-None-Match header support for HTTP conditional requests enabling better client-side caching efficiency. When clients send an If-None-Match header that matches the ETag, the gateway returns a 304 Not Modified response with an empty body, reducing bandwidth usage and improving performance.
-- Added digest and hash headers for data HEAD requests to enable client-side data integrity verification.
-- Added EC2 IMDS (instance-profile) credential support for S3 data access, improving AWS authentication in cloud environments.
-- Added trusted data flag to prevent caching of data from untrusted sources, ensuring only verified and reliable content is stored locally while still allowing serving of untrusted data when necessary.
+- Added `X-AR-IO-Trusted` header to indicate data source trustworthiness in
+  responses. This header helps clients understand whether data comes from a
+  trusted source and works alongside the existing `X-AR-IO-Verified` header to
+  provide data integrity information. The system now filters peer data by
+  requiring peers to indicate their content is either verified or trusted,
+  protecting against misconfigured peers that may inadvertently serve
+  unintended content (e.g., provider default landing pages) instead of actual
+  Arweave data.
+- Added If-None-Match header support for HTTP conditional requests enabling
+  better client-side caching efficiency. When clients send an If-None-Match
+  header that matches the ETag, the gateway returns a 304 Not Modified response
+  with an empty body, reducing bandwidth usage and improving performance.
+- Added digest and hash headers for data HEAD requests to enable client-side
+  data integrity verification.
+- Added EC2 IMDS (instance-profile) credential support for S3 data access,
+  improving AWS authentication in cloud environments.
+- Added trusted data flag to prevent caching of data from untrusted sources,
+  ensuring only verified and reliable content is stored locally while still
+  allowing serving of untrusted data when necessary.
 
 ### Changed
 
-- Re-enabled ar-io-peers as fallback data source in configuration for improved data availability.
-- Updated trusted node configuration to use arweave.net as the default trusted node URL.
-- Updated ETag header format to use properly quoted strings (e.g., `"hash"` instead of `hash`) following HTTP/1.1 specification standards for improved compatibility with caching proxies and clients.
+- Re-enabled ar-io-peers as fallback data source in configuration for improved
+  data availability.
+- Updated trusted node configuration to use arweave.net as the default trusted
+  node URL.
+- Updated ETag header format to use properly quoted strings (e.g., `"hash"`
+  instead of `hash`) following HTTP/1.1 specification standards for improved
+  compatibility with caching proxies and clients.
 
 ## [Release 37] - 2025-06-03
 
