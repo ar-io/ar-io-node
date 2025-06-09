@@ -31,7 +31,7 @@ services:
       context: .
     restart: unless-stopped
     ports:
-      - ${CORE_PORT:-4000}:${CORE_PORT:-4000}
+      - ${CORE_PORT:-4000}:4000
     volumes:
       - ${CHUNKS_DATA_PATH:-./data/chunks}:/app/data/chunks
       - ${CONTIGUOUS_DATA_PATH:-./data/contiguous}:/app/data/contiguous
@@ -176,7 +176,7 @@ services:
     ports:
       - ${CLICKHOUSE_PORT_2:-8123}:8123
       - ${CLICKHOUSE_PORT_3:-8443}:8443
-      - ${CLICKHOUSE_PORT:-9000}:${CLICKHOUSE_PORT:-9000}
+      - ${CLICKHOUSE_PORT:-9000}:9000
     ulimits:
       nofile:
         soft: 262144
@@ -185,7 +185,6 @@ services:
       - ${CLICKHOUSE_DATA_PATH:-./data/clickhouse}:/var/lib/clickhouse
       - ${CLICKHOUSE_LOGS_PATH:-./logs/clickhouse}:/var/log/clickhouse-server
     environment:
-      - CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-9000}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
     networks:
@@ -223,7 +222,7 @@ services:
     image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-6cb911e4ac9fd04a1795144f86b77ad0174ee6d9}
     restart: unless-stopped
     ports:
-      - ${OBSERVER_PORT:-5050}:${OBSERVER_PORT:-5050}
+      - ${OBSERVER_PORT:-5050}:5050
     volumes:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
