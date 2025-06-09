@@ -223,6 +223,7 @@ export const headerFsCacheCleanupWorker = config.ENABLE_FS_HEADER_CACHE_CLEANUP
   ? new FsCleanupWorker({
       log,
       basePath: 'data/headers',
+      dataType: 'headers',
     })
   : undefined;
 
@@ -242,6 +243,7 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
   ? new FsCleanupWorker({
       log,
       basePath: 'data/contiguous',
+      dataType: 'contiguous_data',
       shouldDelete: async (path) => {
         try {
           const stats = await fs.promises.stat(path);

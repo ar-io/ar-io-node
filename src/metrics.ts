@@ -331,3 +331,19 @@ export const filesCleanedTotal = new promClient.Counter({
   name: 'files_cleaned_total',
   help: 'Count of files deleted by the filesystem cleanup worker',
 });
+
+//
+// Cache storage metrics
+//
+
+export const cacheObjectsTotal = new promClient.Gauge({
+  name: 'cache_objects_total',
+  help: 'Current number of objects in cache',
+  labelNames: ['store_type', 'data_type'] as const,
+});
+
+export const cacheSizeBytes = new promClient.Gauge({
+  name: 'cache_size_bytes',
+  help: 'Current cache size in bytes',
+  labelNames: ['store_type', 'data_type'] as const,
+});

@@ -28,6 +28,7 @@ export class FsCleanupWorker {
   private deleteCallback: (path: string) => Promise<void>;
 
   private basePath: string;
+  private dataType: string;
   private batchSize: number;
   private pauseDuration: number;
   private restartPauseDuration: number;
@@ -35,9 +36,14 @@ export class FsCleanupWorker {
   private shouldRun = true;
   private lastPath: string | null = null;
 
+  // Running totals for the current cycle
+  private cycleKeptFileCount = 0;
+  private cycleKeptFileSize = 0;
+
   constructor({
     log,
     basePath,
+    dataType,
     shouldDelete,
     deleteCallback,
     batchSize = config.FS_CLEANUP_WORKER_BATCH_SIZE,
@@ -46,6 +52,7 @@ export class FsCleanupWorker {
   }: {
     log: winston.Logger;
     basePath: string;
+    dataType: string;
     shouldDelete?: (path: string) => Promise<boolean>;
     deleteCallback?: (path: string) => Promise<void>;
     batchSize?: number;
@@ -58,6 +65,7 @@ export class FsCleanupWorker {
       deleteCallback ?? ((file: string) => fs.promises.unlink(file));
 
     this.basePath = basePath;
+    this.dataType = dataType;
     this.lastPath = basePath;
     this.batchSize = batchSize;
     this.pauseDuration = pauseDuration;
@@ -86,10 +94,28 @@ export class FsCleanupWorker {
   }
 
   async processBatch(): Promise<void> {
-    const batch = await this.getBatch(this.basePath, this.lastPath);
+    const { batch, keptFileCount, keptFileSize } = await this.getBatch(
+      this.basePath,
+      this.lastPath,
+    );
+
+    // Add to running totals
+    this.cycleKeptFileCount += keptFileCount;
+    this.cycleKeptFileSize += keptFileSize;
+
     if (batch.length === 0) {
       this.log.info('No more files to delete, restarting from the base path');
+
+      // Update metrics with final totals for this cycle
+      const labels = { store_type: 'filesystem', data_type: this.dataType };
+      metrics.cacheObjectsTotal.set(labels, this.cycleKeptFileCount);
+      metrics.cacheSizeBytes.set(labels, this.cycleKeptFileSize);
+
+      // Reset for next cycle
+      this.cycleKeptFileCount = 0;
+      this.cycleKeptFileSize = 0;
       this.lastPath = this.basePath;
+
       await new Promise((resolve) =>
         setTimeout(resolve, this.restartPauseDuration),
       );
@@ -112,9 +138,18 @@ export class FsCleanupWorker {
     this.lastPath = batch[batch.length - 1];
   }
 
-  async getBatch(basePath: string, lastPath: string | null): Promise<string[]> {
+  async getBatch(
+    basePath: string,
+    lastPath: string | null,
+  ): Promise<{
+    batch: string[];
+    keptFileCount: number;
+    keptFileSize: number;
+  }> {
     const batch: string[] = [];
     let totalFilesProcessed = 0;
+    let keptFileCount = 0;
+    let keptFileSize = 0;
 
     const walk = async (dir: string) => {
       const files = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -138,9 +173,20 @@ export class FsCleanupWorker {
           await walk(fullPath);
         } else {
           if (lastPath === null || fullPath > lastPath) {
-            if (await this.shouldDelete(fullPath)) {
-              batch.push(fullPath);
-              totalFilesProcessed++;
+            if (file.isFile()) {
+              if (await this.shouldDelete(fullPath)) {
+                batch.push(fullPath);
+                totalFilesProcessed++;
+              } else {
+                // Track kept files
+                try {
+                  const stats = await fs.promises.stat(fullPath);
+                  keptFileCount++;
+                  keptFileSize += stats.size;
+                } catch {
+                  // File may not exist or be inaccessible, skip
+                }
+              }
             }
           }
         }
@@ -149,6 +195,6 @@ export class FsCleanupWorker {
 
     await walk(basePath);
 
-    return batch;
+    return { batch, keptFileCount, keptFileSize };
   }
 }
