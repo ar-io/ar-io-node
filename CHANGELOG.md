@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added configurable Docker Compose host port environment variables
+  (`CORE_PORT`, `ENVOY_PORT`, `CLICKHOUSE_PORT`, `CLICKHOUSE_PORT_2`,
+  `CLICKHOUSE_PORT_3`, `OBSERVER_PORT`) to allow flexible port mapping while
+  maintaining container-internal port compatibility and security.
+
 ## [Release 38] - 2025-06-09
 
 This release focuses on data integrity and security improvements, introducing
