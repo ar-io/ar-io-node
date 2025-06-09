@@ -42,7 +42,6 @@ services:
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
     environment:
-      - PORT=${CORE_PORT:-4000}
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
       - LOG_FORMAT=${CORE_LOG_FORMAT:-simple}
@@ -163,7 +162,7 @@ services:
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: unless-stopped
     ports:
-      - '${REDIS_PORT:-6379}:6379' # don't expose redis externally by default
+      - '6379' # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
     networks:
