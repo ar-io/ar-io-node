@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-9c70ba4712de389b957ca186e174f5f6ee86f912}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
     build:
       context: envoy/
     restart: unless-stopped
@@ -26,7 +26,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-e2098f5ff7610a2f6d88406ef514e5e8c10f4bd9}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
     build:
       context: .
     restart: unless-stopped
@@ -105,7 +105,7 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_S3_CONTIGUOUS_DATA_BUCKET=${AWS_S3_CONTIGUOUS_DATA_BUCKET:-}
       - AWS_S3_CONTIGUOUS_DATA_PREFIX=${AWS_S3_CONTIGUOUS_DATA_PREFIX:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-38}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-39-pre}
       - CHUNK_POST_URLS=${CHUNK_POST_URLS:-}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_CONCURRENCY_LIMIT=${CHUNK_POST_CONCURRENCY_LIMIT:-}
@@ -190,7 +190,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-e81d7c646318f8db6fec597c9653fcc673665202}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
     profiles:
       - clickhouse
     build:
@@ -249,7 +249,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
     build:
       context: litestream/
       dockerfile: Dockerfile
