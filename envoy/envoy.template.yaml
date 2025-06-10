@@ -126,6 +126,7 @@ static_resources:
                             cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
+                              retriable_status_codes: 404
                               num_retries: 5
                             auto_host_rewrite: true
                             internal_redirect_policy:
@@ -174,6 +175,7 @@ static_resources:
                             cluster: trusted_arweave_nodes
                             retry_policy:
                               retry_on: '5xx,reset,retriable-status-codes'
+                              retriable_status_codes: 404
                               num_retries: 5
                             auto_host_rewrite: true
                             internal_redirect_policy:
@@ -244,7 +246,7 @@ static_resources:
                       ipv4_compat: true
     - name: graphql_gateways
       connect_timeout: 1s
-      type: STRICT_DNS
+      type: LOGICAL_DNS
       dns_lookup_family: V4_PREFERRED
       lb_policy: LEAST_REQUEST
       load_assignment:
@@ -282,13 +284,13 @@ static_resources:
                       address: #@ data.values.OBSERVER_HOST
                       port_value: #@ data.values.OBSERVER_PORT
                       ipv4_compat: true
-    - name: trusted_arweave_nodes
+    - name: trusted_arweave_nodes_primary
       connect_timeout: 1s
-      type: STRICT_DNS
+      type: LOGICAL_DNS
       dns_lookup_family: V4_ONLY
       lb_policy: LEAST_REQUEST
       load_assignment:
-        cluster_name: trusted_arweave_nodes
+        cluster_name: trusted_arweave_nodes_primary
         endpoints:
           - lb_endpoints:
               - endpoint:
@@ -296,6 +298,13 @@ static_resources:
                     socket_address:
                       address: #@ data.values.TRUSTED_NODE_HOST
                       port_value: #@ data.values.TRUSTED_NODE_PORT
+                      ipv4_compat: true
+      outlier_detection:
+        consecutive_5xx: 5
+        interval: 30s
+        base_ejection_time: 30s
+        max_ejection_percent: 100
+        enforcing_consecutive_5xx: 100
       #@ if data.values.TRUSTED_NODE_PORT == "443":
       transport_socket:
         name: envoy.transport_sockets.tls
@@ -307,6 +316,61 @@ static_resources:
               trusted_ca:
                 filename: /etc/ssl/certs/ca-certificates.crt
       #@ end
+
+    #@ if data.values.FALLBACK_NODE_HOST:
+    - name: trusted_arweave_nodes_fallback
+      connect_timeout: 1s
+      type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: trusted_arweave_nodes_fallback
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: #@ data.values.FALLBACK_NODE_HOST
+                      port_value: #@ data.values.FALLBACK_NODE_PORT
+                      ipv4_compat: true
+      health_checks:
+        - timeout: 10s
+          interval: 30s
+          unhealthy_threshold: 5
+          healthy_threshold: 2
+          http_health_check:
+            path: /height
+      outlier_detection:
+        consecutive_5xx: 5
+        interval: 30s
+        base_ejection_time: 30s
+        max_ejection_percent: 100
+        enforcing_consecutive_5xx: 100
+      #@ if data.values.FALLBACK_NODE_PORT == "443":
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: #@ data.values.FALLBACK_NODE_HOST
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: /etc/ssl/certs/ca-certificates.crt
+      #@ end
+    #@ end
+
+    - name: trusted_arweave_nodes
+      connect_timeout: 1s
+      lb_policy: CLUSTER_PROVIDED
+      cluster_type:
+        name: envoy.clusters.aggregate
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.clusters.aggregate.v3.ClusterConfig
+          clusters:
+            - trusted_arweave_nodes_primary
+            #@ if data.values.FALLBACK_NODE_HOST:
+            - trusted_arweave_nodes_fallback
+            #@ end
 
     - name: upload_service_cluster
       connect_timeout: 1s
