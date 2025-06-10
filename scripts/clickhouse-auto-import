@@ -36,6 +36,7 @@ parquet_dir=${PARQUET_DATA_PATH:-./data/parquet}
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
+batch_pause_interval=${CLICKHOUSE_AUTO_IMPORT_BATCH_PAUSE_INTERVAL:-30} # Pause between height range batches
 
 # Check critical preconditions
 if [ -z "${ADMIN_API_KEY:-}" ]; then
@@ -204,6 +205,12 @@ while true; do
 
         # Bump current_height
         current_height=$end_height
+        
+        # Add a configurable pause between height range batches
+        if [ "$current_height" -le "$max_height" ]; then
+            echo "Pausing $batch_pause_interval seconds before next batch..."
+            sleep "$batch_pause_interval"
+        fi
     done
 
     # Log timing for the heights processing
