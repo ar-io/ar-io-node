@@ -35,7 +35,7 @@ export const headerNames = {
   arnsBasename: 'X-ArNS-Basename',
   arnsRecord: 'X-ArNS-Record',
   arnsResolvedId: 'X-ArNS-Resolved-Id',
-  pathId: 'X-AR-IO-Path-Id',
+  dataId: 'X-AR-IO-Data-Id',
   arnsProcessId: 'X-ArNS-Process-Id',
   arnsResolvedAt: 'X-ArNS-Resolved-At',
   arnsLimit: 'X-ArNS-Undername-Limit',

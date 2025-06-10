@@ -94,13 +94,18 @@ const setDataHeaders = ({
   res,
   dataAttributes,
   data,
+  id,
 }: {
   req: Request;
   res: Response;
   dataAttributes: ContiguousDataAttributes | undefined;
   data: ContiguousData;
+  id: string;
 }) => {
   // TODO: cached header for zero length data (maybe...)
+
+  // Set the data ID header to indicate which data ID is being served
+  res.header(headerNames.dataId, id);
 
   // Allow range requests
   res.header('Accept-Ranges', 'bytes');
@@ -434,7 +439,7 @@ export const createRawDataHandler = ({
         // Range requests create new streams so the original is no longer
         // needed
         data.stream.destroy();
-        setDataHeaders({ req, res, dataAttributes, data });
+        setDataHeaders({ req, res, dataAttributes, data, id });
 
         await handleRangeRequest({
           log,
@@ -449,7 +454,7 @@ export const createRawDataHandler = ({
         });
       } else {
         // Set headers and stream data
-        setDataHeaders({ req, res, dataAttributes, data });
+        setDataHeaders({ req, res, dataAttributes, data, id });
         res.header('Content-Length', data.size.toString());
 
         // Handle If-None-Match for both HEAD and GET requests
@@ -546,9 +551,6 @@ const sendManifestResponse = async ({
 
     // Set headers and stream data
     try {
-      // Set the resolved path ID header for manifest path resolution
-      res.header(headerNames.pathId, resolvedId);
-
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
@@ -561,6 +563,7 @@ const sendManifestResponse = async ({
           res,
           dataAttributes,
           data,
+          id: resolvedId,
         });
         await handleRangeRequest({
           log,
@@ -580,6 +583,7 @@ const sendManifestResponse = async ({
           res,
           dataAttributes,
           data,
+          id: resolvedId,
         });
         res.header('Content-Length', data.size.toString());
 
@@ -774,6 +778,7 @@ export const createDataHandler = ({
           res,
           dataAttributes,
           data,
+          id,
         });
 
         await handleRangeRequest({
@@ -794,6 +799,7 @@ export const createDataHandler = ({
           res,
           dataAttributes,
           data,
+          id,
         });
         res.header('Content-Length', data.size.toString());
 
