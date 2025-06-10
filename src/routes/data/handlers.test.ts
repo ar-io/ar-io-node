@@ -1366,6 +1366,126 @@ st
             });
         });
       });
+
+      describe('X-AR-IO-Path-Id header', () => {
+        it('should set X-AR-IO-Path-Id header when manifest path resolution succeeds', async () => {
+          const resolvedId = 'resolved-manifest-path-id';
+
+          // Mock the data attributes to indicate this is a manifest
+          mock.method(dataIndex, 'getDataAttributes', () =>
+            Promise.resolve({
+              size: 100,
+              contentType: 'application/x.arweave-manifest+json',
+              isManifest: true,
+              stable: true,
+              verified: true,
+              signature: null,
+            }),
+          );
+
+          // Mock resolveFromIndex to return undefined resolvedId (forcing fallback to resolveFromData)
+          mock.method(manifestPathResolver, 'resolveFromIndex', () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId: undefined,
+              complete: false,
+            }),
+          );
+
+          // Mock the data source to return a valid manifest JSON
+          mock.method(dataSource, 'getData', () => {
+            const manifestJson = JSON.stringify({
+              manifest: 'arweave/paths',
+              version: '0.1.0',
+              index: { path: 'index.html' },
+              paths: {
+                'path/to/file.txt': { id: resolvedId },
+              },
+            });
+            return Promise.resolve({
+              stream: Readable.from(Buffer.from(manifestJson)),
+              size: manifestJson.length,
+              verified: true,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            });
+          });
+
+          // Mock resolveFromData to return the correct resolved ID
+          mock.method(manifestPathResolver, 'resolveFromData', () =>
+            Promise.resolve({
+              id: 'manifest-id',
+              resolvedId,
+              complete: true,
+            }),
+          );
+
+          app.get(
+            '/:id/*',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/manifest-id/path/to/file.txt')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-path-id'], resolvedId);
+            });
+        });
+
+        it('should not set X-AR-IO-Path-Id header for direct data access (no manifest path)', async () => {
+          mock.method(dataIndex, 'getDataAttributes', () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            }),
+          );
+
+          mock.method(dataSource, 'getData', () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('test data')),
+              size: 9,
+              verified: true,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            }),
+          );
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/direct-data-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-path-id'], undefined);
+            });
+        });
+      });
     });
   });
 });
