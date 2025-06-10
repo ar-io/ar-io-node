@@ -86,7 +86,7 @@ export const TRUSTED_GATEWAYS_URLS = JSON.parse(
     'TRUSTED_GATEWAYS_URLS',
     TRUSTED_GATEWAY_URL !== undefined
       ? JSON.stringify({ [TRUSTED_GATEWAY_URL]: 1 })
-      : '{ "https://arweave.net": 1, "https://ar-io.net": 2}',
+      : '{ "https://arweave.net": 1}',
   ),
 ) as Record<string, number>;
 
