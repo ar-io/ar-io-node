@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`CORE_PORT`, `ENVOY_PORT`, `CLICKHOUSE_PORT`, `CLICKHOUSE_PORT_2`,
   `CLICKHOUSE_PORT_3`, `OBSERVER_PORT`) to allow flexible port mapping while
   maintaining container-internal port compatibility and security.
+- Added Envoy aggregate cluster configuration for automatic failover between
+  primary and fallback chain data sources. The primary cluster (default:
+  arweave.net:443) uses passive outlier detection while the fallback cluster
+  (default: peers.arweave.xyz:1984) uses active health checks. This enables
+  zero-downtime failover between HTTPS and HTTP endpoints with configurable
+  `FALLBACK_NODE_HOST` and `FALLBACK_NODE_PORT` environment variables.
 
 ## [Release 38] - 2025-06-09
 
