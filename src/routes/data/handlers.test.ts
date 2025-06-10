@@ -21,6 +21,7 @@ import express from 'express';
 import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
 
+import { headerNames } from '../../constants.js';
 import log from '../../log.js';
 import {
   ContiguousDataIndex,
@@ -1367,8 +1368,8 @@ st
         });
       });
 
-      describe('X-AR-IO-Path-Id header', () => {
-        it('should set X-AR-IO-Path-Id header when manifest path resolution succeeds', async () => {
+      describe('X-AR-IO-Data-Id header', () => {
+        it('should set X-AR-IO-Data-Id header with resolved ID when manifest path resolution succeeds', async () => {
           const resolvedId = 'resolved-manifest-path-id';
 
           // Mock the data attributes to indicate this is a manifest
@@ -1438,11 +1439,11 @@ st
             .get('/manifest-id/path/to/file.txt')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['x-ar-io-path-id'], resolvedId);
+              assert.equal(res.headers['x-ar-io-data-id'], resolvedId);
             });
         });
 
-        it('should not set X-AR-IO-Path-Id header for direct data access (no manifest path)', async () => {
+        it('should set X-AR-IO-Data-Id header with data ID for direct data access', async () => {
           mock.method(dataIndex, 'getDataAttributes', () =>
             Promise.resolve({
               size: 10,
@@ -1482,7 +1483,59 @@ st
             .get('/direct-data-id')
             .expect(200)
             .then((res: any) => {
-              assert.equal(res.headers['x-ar-io-path-id'], undefined);
+              assert.equal(res.headers['x-ar-io-data-id'], 'direct-data-id');
+            });
+        });
+
+        it('should set X-AR-IO-Data-Id header with ArNS resolved ID when ArNS resolution occurs', async () => {
+          const arnsResolvedId = 'arns-resolved-data-id';
+
+          mock.method(dataIndex, 'getDataAttributes', () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: true,
+              signature: null,
+            }),
+          );
+
+          mock.method(dataSource, 'getData', () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('test data')),
+              size: 9,
+              verified: true,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+              },
+            }),
+          );
+
+          // Mock res.getHeader to return ArNS resolved ID
+          app.get(
+            '/:id',
+            (req, res, next) => {
+              // Simulate ArNS resolution by setting the header
+              res.setHeader(headerNames.arnsResolvedId, arnsResolvedId);
+              next();
+            },
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          return request(app)
+            .get('/original-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(res.headers['x-ar-io-data-id'], arnsResolvedId);
             });
         });
       });
