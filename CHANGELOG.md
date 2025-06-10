@@ -13,6 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `CLICKHOUSE_PORT_3`, `OBSERVER_PORT`) to allow flexible port mapping while
   maintaining container-internal port compatibility and security.
 
+### Changed
+
+- Removed ar-io.net from default trusted gateways list and removed
+  TRUSTED_GATEWAY_URL default value to reduce load on ar-io.net now that P2P data
+  retrieval is re-enabled. Existing deployments with TRUSTED_GATEWAY_URL
+  explicitly set will continue to work for backwards compatibility.
+
 ## [Release 38] - 2025-06-09
 
 This release focuses on data integrity and security improvements, introducing
