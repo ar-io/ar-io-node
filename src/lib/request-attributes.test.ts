@@ -92,6 +92,35 @@ describe('Request attributes functions', () => {
       const result = generateRequestAttributes(input);
       assert.deepStrictEqual(result, expected);
     });
+
+    it('should handles ArNS headers correctly', () => {
+      const input: RequestAttributes = {
+        hops: 1,
+        origin: 'test-origin',
+        arnsName: 'test-basename_test-record',
+        arnsBasename: 'test-basename',
+        arnsRecord: 'test-record',
+      };
+      const expected = {
+        headers: {
+          [headerNames.hops]: '2',
+          [headerNames.origin]: 'test-origin',
+          [headerNames.arnsName]: 'test-basename_test-record',
+          [headerNames.arnsBasename]: 'test-basename',
+          [headerNames.arnsRecord]: 'test-record',
+        },
+        attributes: {
+          hops: 2,
+          origin: 'test-origin',
+          arnsName: 'test-basename_test-record',
+          arnsBasename: 'test-basename',
+          arnsRecord: 'test-record',
+        },
+      };
+
+      const result = generateRequestAttributes(input);
+      assert.deepStrictEqual(result, expected);
+    });
   });
 
   describe('parseRequestAttributesHeaders', () => {
@@ -139,6 +168,27 @@ describe('Request attributes functions', () => {
       };
 
       const result = parseRequestAttributesHeaders({ headers, currentHops });
+      assert.deepStrictEqual(result, expected);
+    });
+
+    it('should parses ArNS headers correctly', () => {
+      const headers = {
+        [headerNames.hops]: '2',
+        [headerNames.origin]: 'test-origin',
+        [headerNames.arnsName]: 'test-basename_test-record',
+        [headerNames.arnsBasename]: 'test-basename',
+        [headerNames.arnsRecord]: 'test-record',
+      };
+      const expected: RequestAttributes = {
+        hops: 2,
+        origin: 'test-origin',
+        originNodeRelease: undefined,
+        arnsName: 'test-basename_test-record',
+        arnsBasename: 'test-basename',
+        arnsRecord: 'test-record',
+      };
+
+      const result = parseRequestAttributesHeaders({ headers });
       assert.deepStrictEqual(result, expected);
     });
   });

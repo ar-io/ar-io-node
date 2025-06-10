@@ -31,7 +31,7 @@ export const generateRequestAttributes = (
   const headers: { [key: string]: string } = {};
   const attributes = {} as RequestAttributes;
 
-  if (requestAttributes.hops !== undefined) {
+  if (requestAttributes.hops != null) {
     const hops = requestAttributes.hops + 1;
     headers[headerNames.hops] = hops.toString();
     attributes.hops = hops;
@@ -40,15 +40,30 @@ export const generateRequestAttributes = (
     attributes.hops = 1;
   }
 
-  if (requestAttributes.origin !== undefined) {
+  if (requestAttributes.origin != null) {
     headers[headerNames.origin] = requestAttributes.origin;
     attributes.origin = requestAttributes.origin;
   }
 
-  if (requestAttributes.originNodeRelease !== undefined) {
+  if (requestAttributes.originNodeRelease != null) {
     headers[headerNames.originNodeRelease] =
       requestAttributes.originNodeRelease;
     attributes.originNodeRelease = requestAttributes.originNodeRelease;
+  }
+
+  if (requestAttributes.arnsName != null) {
+    headers[headerNames.arnsName] = requestAttributes.arnsName;
+    attributes.arnsName = requestAttributes.arnsName;
+  }
+
+  if (requestAttributes.arnsBasename != null) {
+    headers[headerNames.arnsBasename] = requestAttributes.arnsBasename;
+    attributes.arnsBasename = requestAttributes.arnsBasename;
+  }
+
+  if (requestAttributes.arnsRecord !== undefined) {
+    headers[headerNames.arnsRecord] = requestAttributes.arnsRecord;
+    attributes.arnsRecord = requestAttributes.arnsRecord;
   }
 
   return { headers, attributes };
@@ -70,18 +85,26 @@ export const parseRequestAttributesHeaders = ({
   );
 
   let hops;
-  if (headersLowercaseKeys[headerNames.hops.toLowerCase()] !== undefined) {
+  if (headersLowercaseKeys[headerNames.hops.toLowerCase()] != null) {
     hops = parseInt(headersLowercaseKeys[headerNames.hops.toLowerCase()], 10);
-  } else if (currentHops !== undefined) {
+  } else if (currentHops != null) {
     hops = currentHops;
   } else {
     hops = 1;
   }
+
+  const arnsName = headersLowercaseKeys[headerNames.arnsName.toLowerCase()];
+  const arnsBasename =
+    headersLowercaseKeys[headerNames.arnsBasename.toLowerCase()];
+  const arnsRecord = headersLowercaseKeys[headerNames.arnsRecord.toLowerCase()];
 
   return {
     hops,
     origin: headersLowercaseKeys[headerNames.origin.toLowerCase()],
     originNodeRelease:
       headersLowercaseKeys[headerNames.originNodeRelease.toLowerCase()],
+    ...(arnsName != null && { arnsName }),
+    ...(arnsBasename != null && { arnsBasename }),
+    ...(arnsRecord != null && { arnsRecord }),
   };
 };

@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added ArNS headers to outbound gateway requests to enable data prioritization.
+  The `generateRequestAttributes` function now includes ArNS context headers
+  (`X-ArNS-Name`, `X-ArNS-Basename`, `X-ArNS-Record`) in requests to other
+  gateways and Arweave nodes, allowing downstream gateways to effectively
+  prioritize ArNS data requests.
 - Added configurable Docker Compose host port environment variables
   (`CORE_PORT`, `ENVOY_PORT`, `CLICKHOUSE_PORT`, `CLICKHOUSE_PORT_2`,
   `CLICKHOUSE_PORT_3`, `OBSERVER_PORT`) to allow flexible port mapping while
