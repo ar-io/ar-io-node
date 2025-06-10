@@ -546,6 +546,9 @@ const sendManifestResponse = async ({
 
     // Set headers and stream data
     try {
+      // Set the resolved path ID header for manifest path resolution
+      res.header(headerNames.pathId, resolvedId);
+
       // Check if the request includes a Range header
       const rangeHeader = req.headers.range;
       if (rangeHeader !== undefined) {
