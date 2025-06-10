@@ -652,8 +652,9 @@ export const createDataHandler = ({
       id = arnsResolvedId;
       manifestPath = req.path.slice(1);
     } else {
-      id = req.params[0] ?? req.params[1];
-      manifestPath = req.params[2];
+      // Handle both named parameters (:id) and positional parameters ([0], [1])
+      id = req.params.id ?? req.params[0] ?? req.params[1];
+      manifestPath = req.params['*'] ?? req.params[2];
     }
 
     // Return 404 if the data is blocked by ID
