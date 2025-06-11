@@ -281,11 +281,13 @@ export class Ans104Parser {
     parentId,
     parentIndex,
     rootParentOffset,
+    bypassDataItemFilter = false,
   }: {
     rootTxId: string;
     parentId: string;
     parentIndex: number;
     rootParentOffset: number;
+    bypassDataItemFilter?: boolean;
   }): Promise<void> {
     // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve, reject) => {
@@ -347,6 +349,7 @@ export class Ans104Parser {
                 parentIndex,
                 bundlePath,
                 rootParentOffset,
+                bypassDataItemFilter,
               },
             });
             this.drainQueue();
@@ -421,8 +424,14 @@ if (!isMainThread) {
       process.exit(0);
     }
 
-    const { rootTxId, parentId, parentIndex, bundlePath, rootParentOffset } =
-      message;
+    const {
+      rootTxId,
+      parentId,
+      parentIndex,
+      bundlePath,
+      rootParentOffset,
+      bypassDataItemFilter = false,
+    } = message;
     let stream: fs.ReadStream | undefined = undefined;
     try {
       stream = fs.createReadStream(bundlePath);
@@ -478,7 +487,7 @@ if (!isMainThread) {
           rootParentOffset,
         });
 
-        if (await filter.match(normalizedDataItem)) {
+        if (bypassDataItemFilter || (await filter.match(normalizedDataItem))) {
           matchedItemCount++;
           parentPort?.postMessage({
             eventName: DATA_ITEM_MATCHED,

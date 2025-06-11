@@ -257,20 +257,46 @@ arIoRouter.post(
   express.json(),
   async (req, res) => {
     try {
-      const { id, bypassFilter = true } = req.body;
+      const {
+        id,
+        bypassBundleFilter = true,
+        bypassDataItemFilter = false,
+        // Legacy support
+        bypassFilter,
+      } = req.body;
 
       if (id === undefined) {
         res.status(400).send("Must provide 'id'");
         return;
       }
 
-      if (bypassFilter !== undefined && typeof bypassFilter !== 'boolean') {
-        res.status(400).send("'bypassFilter' must be a boolean");
+      // Handle legacy bypassFilter parameter
+      const effectiveBypassBundleFilter =
+        bypassFilter !== undefined ? bypassFilter : bypassBundleFilter;
+
+      if (
+        effectiveBypassBundleFilter !== undefined &&
+        typeof effectiveBypassBundleFilter !== 'boolean'
+      ) {
+        // Use legacy error message if using legacy parameter
+        const errorMessage =
+          bypassFilter !== undefined
+            ? "'bypassFilter' must be a boolean"
+            : "'bypassBundleFilter' must be a boolean";
+        res.status(400).send(errorMessage);
         return;
       }
 
-      // if byPassFilter is false, then queue like queue-tx
-      if (bypassFilter === false) {
+      if (
+        bypassDataItemFilter !== undefined &&
+        typeof bypassDataItemFilter !== 'boolean'
+      ) {
+        res.status(400).send("'bypassDataItemFilter' must be a boolean");
+        return;
+      }
+
+      // if bypassBundleFilter is false, then queue like queue-tx
+      if (effectiveBypassBundleFilter === false) {
         system.prioritizedTxIds.add(id);
         system.txFetcher.queueTxId({ txId: id });
         res.json({ message: 'TX queued' });
@@ -284,11 +310,14 @@ arIoRouter.post(
         return;
       }
 
-      const queuedBundle = await system.queueBundle(
-        { id, root_tx_id: id } as NormalizedDataItem | PartialJsonTransaction,
-        true,
-        bypassFilter,
-      );
+      const queuedBundle = await system.queueBundle({
+        item: { id, root_tx_id: id } as
+          | NormalizedDataItem
+          | PartialJsonTransaction,
+        prioritized: true,
+        bypassBundleFilter: effectiveBypassBundleFilter,
+        bypassDataItemFilter,
+      });
 
       if (queuedBundle.error !== undefined) {
         res.status(503).send(queuedBundle.error);
