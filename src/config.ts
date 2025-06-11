@@ -267,6 +267,39 @@ export const START_WRITERS =
 export const START_HEIGHT = +env.varOrDefault('START_HEIGHT', '0');
 export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
 
+//
+// Verification
+//
+
+// Whether or not to enable the background data verification worker
+export const ENABLE_BACKGROUND_DATA_VERIFICATION =
+  env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'true') === 'true';
+
+export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
+  'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
+  '600', // 10 minutes
+);
+
+export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = +env.varOrDefault(
+  'BACKGROUND_DATA_VERIFICATION_WORKER_COUNT',
+  '1',
+);
+
+export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
+  'BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS',
+  `${1000 * 30}`, // 30 seconds
+);
+
+export const MIN_DATA_VERIFICATION_PRIORITY = +env.varOrDefault(
+  'MIN_DATA_VERIFICATION_PRIORITY',
+  '80', // Only verify data with priority 80 or higher
+);
+
+export const MAX_VERIFICATION_RETRIES = +env.varOrDefault(
+  'MAX_VERIFICATION_RETRIES',
+  '5', // Maximum number of verification retry attempts
+);
+
 // Filter determining which ANS-104 bundles to unbundle
 export const ANS104_UNBUNDLE_FILTER_PARSED = JSON.parse(
   env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}'),
@@ -279,10 +312,21 @@ export const ANS104_UNBUNDLE_FILTER = createFilter(
   logger,
 );
 
+// Auto-enable data item indexing when verification is enabled
+const getDefaultIndexFilter = () => {
+  const explicitFilter = env.varOrUndefined('ANS104_INDEX_FILTER');
+  // If filter is explicitly set, use it as-is
+  if (explicitFilter !== undefined) {
+    return explicitFilter;
+  }
+  // If verification is enabled, auto-enable data item indexing, otherwise disable it
+  return ENABLE_BACKGROUND_DATA_VERIFICATION
+    ? '{"always": true}'
+    : '{"never": true}';
+};
+
 // Filter determining which ANS-104 data items to index
-export const ANS104_INDEX_FILTER_PARSED = JSON.parse(
-  env.varOrDefault('ANS104_INDEX_FILTER', '{"never": true}'),
-);
+export const ANS104_INDEX_FILTER_PARSED = JSON.parse(getDefaultIndexFilter());
 export const ANS104_INDEX_FILTER_STRING = canonicalize(
   ANS104_INDEX_FILTER_PARSED,
 );
@@ -291,16 +335,33 @@ export const ANS104_INDEX_FILTER = createFilter(
   logger,
 );
 
+// Auto-enable workers when verification is enabled (even if unbundle filter is "never")
+const getDefaultWorkerCount = (defaultCount: string) => {
+  const isNeverMatch = ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch';
+
+  // If verification is enabled, we need workers for verification-driven unbundling
+  if (ENABLE_BACKGROUND_DATA_VERIFICATION) {
+    return defaultCount;
+  }
+
+  // If verification is disabled and unbundle filter is "never", no workers needed
+  if (isNeverMatch) {
+    return '0';
+  }
+
+  return defaultCount;
+};
+
 // The number of ANS-104 worker threads to run
 export const ANS104_UNBUNDLE_WORKERS = +env.varOrDefault(
   'ANS104_UNBUNDLE_WORKERS',
-  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '1',
+  getDefaultWorkerCount('1'),
 );
 
 // The number of ANS-104 bundle downloads to attempt in parallel
 export const ANS104_DOWNLOAD_WORKERS = +env.varOrDefault(
   'ANS104_DOWNLOAD_WORKERS',
-  ANS104_UNBUNDLE_FILTER.constructor.name === 'NeverMatch' ? '0' : '5',
+  getDefaultWorkerCount('5'),
 );
 
 // Whether or not to attempt to rematch old bundles using the current filter
@@ -426,39 +487,6 @@ export const FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION = +env.varOrDefault(
 export const FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION = +env.varOrDefault(
   'FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION',
   `${1000 * 60 * 60 * 4}`, // every 4 hours
-);
-
-//
-// Verification
-//
-
-// Whether or not to enable the background data verification worker
-export const ENABLE_BACKGROUND_DATA_VERIFICATION =
-  env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'true') === 'true';
-
-export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
-  'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
-  '600', // 10 minutes
-);
-
-export const BACKGROUND_DATA_VERIFICATION_WORKER_COUNT = +env.varOrDefault(
-  'BACKGROUND_DATA_VERIFICATION_WORKER_COUNT',
-  '1',
-);
-
-export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
-  'BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS',
-  `${1000 * 30}`, // 30 seconds
-);
-
-export const MIN_DATA_VERIFICATION_PRIORITY = +env.varOrDefault(
-  'MIN_DATA_VERIFICATION_PRIORITY',
-  '80', // Only verify data with priority 80 or higher
-);
-
-export const MAX_VERIFICATION_RETRIES = +env.varOrDefault(
-  'MAX_VERIFICATION_RETRIES',
-  '5', // Maximum number of verification retry attempts
 );
 
 //
