@@ -611,11 +611,19 @@ export type QueueBundleResponse = {
   status: 'skipped' | 'queued' | 'error';
   error?: string;
 };
-export async function queueBundle(
-  item: NormalizedDataItem | PartialJsonTransaction,
-  isPrioritized = false,
-  bypassFilter = false,
-): Promise<QueueBundleResponse> {
+export interface QueueBundleOptions {
+  item: NormalizedDataItem | PartialJsonTransaction;
+  prioritized?: boolean;
+  bypassBundleFilter?: boolean;
+  bypassDataItemFilter?: boolean;
+}
+
+export async function queueBundle({
+  item,
+  prioritized = false,
+  bypassBundleFilter = false,
+  bypassDataItemFilter = false,
+}: QueueBundleOptions): Promise<QueueBundleResponse> {
   try {
     if ('root_tx_id' in item && item.root_tx_id === null) {
       log.debug('Skipping download of optimistically indexed data item', {
@@ -632,7 +640,10 @@ export async function queueBundle(
       format: 'ans-104',
     });
 
-    if (bypassFilter || (await config.ANS104_UNBUNDLE_FILTER.match(item))) {
+    if (
+      bypassBundleFilter ||
+      (await config.ANS104_UNBUNDLE_FILTER.match(item))
+    ) {
       metrics.bundlesMatchedCounter.inc({ bundle_format: 'ans-104' });
       const {
         unbundleFilterId,
@@ -662,17 +673,18 @@ export async function queueBundle(
         return { status: 'skipped' };
       }
 
-      bundleDataImporter.queueItem(
-        {
+      bundleDataImporter.queueItem({
+        item: {
           ...item,
           index:
             'parent_index' in item && item.parent_index !== undefined
               ? item.parent_index
               : -1, // parent indexes are not needed for L1
         },
-        isPrioritized,
-        bypassFilter,
-      );
+        prioritized,
+        bypassBundleFilter,
+        bypassDataItemFilter,
+      });
       metrics.bundlesQueuedCounter.inc({ bundle_format: 'ans-104' });
     } else {
       await db.saveBundle({
@@ -701,7 +713,7 @@ eventEmitter.on(
     const isPrioritized = prioritizedTxIds.has(item.id);
     prioritizedTxIds.delete(item.id);
 
-    await queueBundle(item, isPrioritized);
+    await queueBundle({ item, prioritized: isPrioritized });
   },
 );
 
@@ -709,7 +721,7 @@ eventEmitter.on(
 eventEmitter.on(
   events.ANS104_NESTED_BUNDLE_INDEXED,
   async (item: NormalizedDataItem | PartialJsonTransaction) => {
-    await queueBundle(item, true);
+    await queueBundle({ item, prioritized: true });
   },
 );
 

@@ -43,11 +43,12 @@ export class DataVerificationWorker {
   private dataRootComputer: DataRootComputer;
   private dataImporter: DataImporter | undefined;
   private queueBundle:
-    | ((
-        item: NormalizedDataItem | PartialJsonTransaction,
-        isPrioritized: boolean,
-        bypassFilter: boolean,
-      ) => Promise<QueueBundleResponse>)
+    | ((options: {
+        item: NormalizedDataItem | PartialJsonTransaction;
+        prioritized?: boolean;
+        bypassBundleFilter?: boolean;
+        bypassDataItemFilter?: boolean;
+      }) => Promise<QueueBundleResponse>)
     | undefined;
 
   private workerCount: number;
@@ -71,11 +72,12 @@ export class DataVerificationWorker {
     dataItemRootTxIndex: DataItemRootTxIndex;
     contiguousDataSource: ContiguousDataSource;
     dataImporter?: DataImporter;
-    queueBundle?: (
-      item: NormalizedDataItem | PartialJsonTransaction,
-      isPrioritized: boolean,
-      bypassFilter: boolean,
-    ) => Promise<QueueBundleResponse>;
+    queueBundle?: (options: {
+      item: NormalizedDataItem | PartialJsonTransaction;
+      prioritized?: boolean;
+      bypassBundleFilter?: boolean;
+      bypassDataItemFilter?: boolean;
+    }) => Promise<QueueBundleResponse>;
     workerCount?: number;
     streamTimeout?: number;
     interval?: number;
@@ -154,13 +156,13 @@ export class DataVerificationWorker {
         // TODO: consider using bundle index to make this determination
         if (this.queueBundle && dataAttributes?.hash === undefined) {
           log.verbose('Root bundle has not been unbundled, queuing...');
-          await this.queueBundle(
-            { id, root_tx_id: id } as
+          await this.queueBundle({
+            item: { id, root_tx_id: id } as
               | NormalizedDataItem
               | PartialJsonTransaction,
-            true,
-            true,
-          ); // isPrioritized: true, bypassFilter: true
+            prioritized: true,
+            bypassBundleFilter: true,
+          });
         } else {
           return false;
         }
@@ -189,7 +191,10 @@ export class DataVerificationWorker {
           log.verbose(
             'Computed data root mismatch, queueing for root bundle download from chunks....',
           );
-          await this.dataImporter.queueItem({ id }, true);
+          await this.dataImporter.queueItem({
+            item: { id },
+            prioritized: true,
+          });
         }
 
         return false;

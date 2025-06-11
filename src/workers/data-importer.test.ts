@@ -31,7 +31,12 @@ import { ContiguousDataSource } from '../types.js';
 import { DataImporter } from './data-importer.js';
 
 class Ans104UnbundlerStub {
-  async queueItem(): Promise<void> {
+  async queueItem(_options: {
+    item: any;
+    prioritized?: boolean;
+    bypassBundleFilter?: boolean;
+    bypassDataItemFilter?: boolean;
+  }): Promise<void> {
     return;
   }
 
@@ -100,7 +105,10 @@ describe('DataImporter', () => {
     it('should queue a non-prioritized item if queue is not full', async () => {
       mock.method(contiguousDataSource, 'getData');
 
-      await bundleDataImporter.queueItem(mockItem, false);
+      await bundleDataImporter.queueItem({
+        item: mockItem,
+        prioritized: false,
+      });
 
       assert.deepEqual(
         (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
@@ -111,7 +119,10 @@ describe('DataImporter', () => {
     it('should not queue a non-prioritized item if queue is full', async () => {
       mock.method(contiguousDataSource, 'getData');
 
-      await bundleDataImporterWithFullQueue.queueItem(mockItem, false);
+      await bundleDataImporterWithFullQueue.queueItem({
+        item: mockItem,
+        prioritized: false,
+      });
 
       assert.equal((contiguousDataSource.getData as any).mock.callCount(), 0);
     });
@@ -119,7 +130,7 @@ describe('DataImporter', () => {
     it('should queue a prioritized item if the queue is not full', async () => {
       mock.method(contiguousDataSource, 'getData');
 
-      await bundleDataImporter.queueItem(mockItem, true);
+      await bundleDataImporter.queueItem({ item: mockItem, prioritized: true });
 
       assert.deepEqual(
         (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
@@ -130,7 +141,10 @@ describe('DataImporter', () => {
     it('should queue a prioritized item if the queue is full', async () => {
       mock.method(contiguousDataSource, 'getData');
 
-      await bundleDataImporterWithFullQueue.queueItem(mockItem, true);
+      await bundleDataImporterWithFullQueue.queueItem({
+        item: mockItem,
+        prioritized: true,
+      });
 
       assert.deepEqual(
         (contiguousDataSource.getData as any).mock.calls[0].arguments[0],
@@ -153,12 +167,20 @@ describe('DataImporter', () => {
       await bundleDataImporter.download({
         item: mockItem,
         prioritized: true,
-        bypassFilter: false,
+        bypassBundleFilter: false,
+        bypassDataItemFilter: false,
       });
 
       assert.deepEqual(
         (ans104Unbundler.queueItem as any).mock.calls[0].arguments,
-        [mockItem, true, false],
+        [
+          {
+            item: mockItem,
+            prioritized: true,
+            bypassBundleFilter: false,
+            bypassDataItemFilter: false,
+          },
+        ],
       );
     });
 

@@ -53,7 +53,11 @@ export class Ans104Unbundler {
   private workerCount: number;
   private maxQueueSize: number;
   private queue: queueAsPromised<
-    { item: UnbundleableItem; bypassFilter: boolean },
+    {
+      item: UnbundleableItem;
+      bypassBundleFilter: boolean;
+      bypassDataItemFilter: boolean;
+    },
     void
   >;
   private shouldUnbundle: () => boolean;
@@ -103,11 +107,17 @@ export class Ans104Unbundler {
     this.shouldUnbundle = shouldUnbundle;
   }
 
-  async queueItem(
-    item: UnbundleableItem,
-    prioritized: boolean | undefined,
-    bypassFilter = false,
-  ): Promise<void> {
+  async queueItem({
+    item,
+    prioritized,
+    bypassBundleFilter = false,
+    bypassDataItemFilter = false,
+  }: {
+    item: UnbundleableItem;
+    prioritized?: boolean;
+    bypassBundleFilter?: boolean;
+    bypassDataItemFilter?: boolean;
+  }): Promise<void> {
     const log = this.log.child({ method: 'queueItem', id: item.id });
 
     if (this.workerCount === 0) {
@@ -122,11 +132,11 @@ export class Ans104Unbundler {
 
     if (prioritized === true) {
       log.debug('Queueing prioritized bundle...');
-      this.queue.unshift({ item, bypassFilter });
+      this.queue.unshift({ item, bypassBundleFilter, bypassDataItemFilter });
       log.debug('Prioritized bundle queued.');
     } else if (this.queue.length() < this.maxQueueSize) {
       log.debug('Queueing bundle...');
-      this.queue.push({ item, bypassFilter });
+      this.queue.push({ item, bypassBundleFilter, bypassDataItemFilter });
       log.debug('Bundle queued.');
     } else {
       log.debug('Skipping unbundle, queue is full.');
@@ -135,10 +145,12 @@ export class Ans104Unbundler {
 
   async unbundle({
     item,
-    bypassFilter,
+    bypassBundleFilter,
+    bypassDataItemFilter,
   }: {
     item: UnbundleableItem;
-    bypassFilter: boolean;
+    bypassBundleFilter: boolean;
+    bypassDataItemFilter: boolean;
   }): Promise<void> {
     const log = this.log.child({ method: 'unbundle', id: item.id });
     try {
@@ -153,7 +165,7 @@ export class Ans104Unbundler {
         // Data item without root_tx_id (should be impossible)
         throw new Error('Missing root_tx_id on data item.');
       }
-      if (bypassFilter || (await this.filter.match(item))) {
+      if (bypassBundleFilter || (await this.filter.match(item))) {
         log.info('Unbundling bundle...');
         let rootParentOffset = 0;
 
@@ -171,6 +183,7 @@ export class Ans104Unbundler {
           parentId: item.id,
           parentIndex: item.index,
           rootParentOffset,
+          bypassDataItemFilter,
         });
         log.info('Bundle unbundled.');
       }

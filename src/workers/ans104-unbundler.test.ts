@@ -68,7 +68,7 @@ describe('Ans104Unbundler', () => {
       shouldUnbundleMock.mock.mockImplementation(() => false);
 
       for (let i = 0; i < 10; i++) {
-        ans104Unbundler.queueItem(mockItem, false);
+        ans104Unbundler.queueItem({ item: mockItem, prioritized: false });
       }
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 10);
@@ -77,7 +77,7 @@ describe('Ans104Unbundler', () => {
 
     it('should queue item when shouldUnbundle returns true', async () => {
       for (let i = 0; i < 10; i++) {
-        ans104Unbundler.queueItem(mockItem, false);
+        ans104Unbundler.queueItem({ item: mockItem, prioritized: false });
       }
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 10);
@@ -88,7 +88,7 @@ describe('Ans104Unbundler', () => {
       shouldUnbundleMock.mock.mockImplementation(() => false);
 
       for (let i = 0; i < 10; i++) {
-        ans104Unbundler.queueItem(mockItem, true);
+        ans104Unbundler.queueItem({ item: mockItem, prioritized: true });
       }
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 10);
@@ -99,7 +99,7 @@ describe('Ans104Unbundler', () => {
       ans104Unbundler['workerCount'] = 0;
 
       for (let i = 0; i < 10; i++) {
-        ans104Unbundler.queueItem(mockItem, false);
+        ans104Unbundler.queueItem({ item: mockItem, prioritized: false });
       }
 
       assert.equal(shouldUnbundleMock.mock.calls.length, 0);
@@ -115,7 +115,11 @@ describe('Ans104Unbundler', () => {
         root_tx_id: 'root_tx_id',
       } as UnbundleableItem;
 
-      await ans104Unbundler.queueItem(mockItem, false, true);
+      await ans104Unbundler.queueItem({
+        item: mockItem,
+        prioritized: false,
+        bypassBundleFilter: true,
+      });
 
       assert.deepEqual(
         (mockAns104Parser.parseBundle as any).mock.calls[0].arguments[0],
@@ -124,6 +128,7 @@ describe('Ans104Unbundler', () => {
           parentIndex: undefined,
           rootParentOffset: 0,
           rootTxId: 'root_tx_id',
+          bypassDataItemFilter: false,
         },
       );
     });

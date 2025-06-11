@@ -40,7 +40,8 @@ type ImportableItem = AnyContiguousData | UnbundleableItem;
 interface DataImporterQueueItem {
   item: ImportableItem;
   prioritized: boolean | undefined;
-  bypassFilter: boolean;
+  bypassBundleFilter: boolean;
+  bypassDataItemFilter: boolean;
 }
 
 export class DataImporter {
@@ -80,11 +81,17 @@ export class DataImporter {
     );
   }
 
-  async queueItem(
-    item: ImportableItem,
-    prioritized: boolean | undefined,
-    bypassFilter = false,
-  ): Promise<void> {
+  async queueItem({
+    item,
+    prioritized,
+    bypassBundleFilter = false,
+    bypassDataItemFilter = false,
+  }: {
+    item: ImportableItem;
+    prioritized?: boolean;
+    bypassBundleFilter?: boolean;
+    bypassDataItemFilter?: boolean;
+  }): Promise<void> {
     const log = this.log.child({ method: 'queueItem', id: item.id });
     if (this.workerCount === 0) {
       log.debug('Skipping contiguous-data download, no workers.');
@@ -93,11 +100,21 @@ export class DataImporter {
 
     if (prioritized === true) {
       log.debug('Queueing prioritized contiguous data download...');
-      this.queue.unshift({ item, prioritized, bypassFilter });
+      this.queue.unshift({
+        item,
+        prioritized,
+        bypassBundleFilter,
+        bypassDataItemFilter,
+      });
       log.debug('Prioritized contiguous data download queued.');
     } else if (this.queue.length() < this.maxQueueSize) {
       log.debug('Queueing contiguous data download...');
-      this.queue.push({ item, prioritized, bypassFilter });
+      this.queue.push({
+        item,
+        prioritized,
+        bypassBundleFilter,
+        bypassDataItemFilter,
+      });
       log.debug('Contiguous data download queued.');
     } else {
       log.debug('Skipping contiguous data download, queue is full.');
@@ -107,7 +124,8 @@ export class DataImporter {
   async download({
     item,
     prioritized,
-    bypassFilter,
+    bypassBundleFilter,
+    bypassDataItemFilter,
   }: DataImporterQueueItem): Promise<void> {
     const log = this.log.child({ method: 'download', id: item.id });
 
@@ -118,7 +136,12 @@ export class DataImporter {
         const hasIndexProperty = this.hasIndexPropery(item);
         if (this.ans104Unbundler && hasIndexProperty) {
           log.debug('Data download completed. Queuing for unbundling...');
-          this.ans104Unbundler.queueItem(item, prioritized, bypassFilter);
+          this.ans104Unbundler.queueItem({
+            item,
+            prioritized,
+            bypassBundleFilter,
+            bypassDataItemFilter,
+          });
         } else {
           log.debug(
             hasIndexProperty
