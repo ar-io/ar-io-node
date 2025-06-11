@@ -42,6 +42,7 @@ export class DataVerificationWorker {
   private dataItemRootTxIndex: DataItemRootTxIndex;
   private dataRootComputer: DataRootComputer;
   private dataImporter: DataImporter | undefined;
+  private bundleDataImporter: DataImporter | undefined;
   private queueBundle:
     | ((
         item: NormalizedDataItem | PartialJsonTransaction,
@@ -61,6 +62,7 @@ export class DataVerificationWorker {
     dataItemRootTxIndex,
     contiguousDataSource,
     dataImporter,
+    bundleDataImporter,
     queueBundle,
     workerCount = config.BACKGROUND_DATA_VERIFICATION_WORKER_COUNT,
     streamTimeout = config.BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS,
@@ -71,6 +73,7 @@ export class DataVerificationWorker {
     dataItemRootTxIndex: DataItemRootTxIndex;
     contiguousDataSource: ContiguousDataSource;
     dataImporter?: DataImporter;
+    bundleDataImporter?: DataImporter;
     queueBundle?: (
       item: NormalizedDataItem | PartialJsonTransaction,
       isPrioritized: boolean,
@@ -97,6 +100,7 @@ export class DataVerificationWorker {
     });
 
     this.dataImporter = dataImporter;
+    this.bundleDataImporter = bundleDataImporter;
     this.queueBundle = queueBundle;
   }
 
@@ -153,14 +157,24 @@ export class DataVerificationWorker {
 
         // TODO: consider using bundle index to make this determination
         if (this.queueBundle && dataAttributes?.hash === undefined) {
-          log.verbose('Root bundle has not been unbundled, queuing...');
-          await this.queueBundle(
-            { id, root_tx_id: id } as
-              | NormalizedDataItem
-              | PartialJsonTransaction,
-            true,
-            true,
-          ); // isPrioritized: true, bypassFilter: true
+          // Only queue bundle for verification if unbundling queue is empty
+          const unbundlingQueueDepth =
+            this.bundleDataImporter?.queueDepth() ?? 0;
+          if (unbundlingQueueDepth === 0) {
+            log.verbose('Root bundle has not been unbundled, queuing...');
+            await this.queueBundle(
+              { id, root_tx_id: id } as
+                | NormalizedDataItem
+                | PartialJsonTransaction,
+              true,
+              true,
+            ); // isPrioritized: true, bypassFilter: true
+          } else {
+            log.debug('Skipping bundle queue due to busy unbundling system', {
+              unbundlingQueueDepth,
+            });
+            return false;
+          }
         } else {
           return false;
         }
