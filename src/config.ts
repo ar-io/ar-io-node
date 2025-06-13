@@ -224,10 +224,7 @@ export const ON_DEMAND_RETRIEVAL_ORDER = env
 
 // Background data retrieval priority order
 export const BACKGROUND_RETRIEVAL_ORDER = env
-  .varOrDefault(
-    'BACKGROUND_RETRIEVAL_ORDER',
-    'chunks,s3,trusted-gateways,tx-data',
-  )
+  .varOrDefault('BACKGROUND_RETRIEVAL_ORDER', 'chunks,s3')
   .split(',');
 
 // Cache type for contigous metadata (access time, etc.). Defaults to 'node'
