@@ -24,7 +24,7 @@ import NodeCache from 'node-cache';
 /* eslint-disable */
 // @ts-ignore
 // TODO sort out types
-import { default as yesql } from 'yesql';
+import loadSql from './sql-loader.js';
 
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
 import {
@@ -469,7 +469,7 @@ export class StandaloneSqliteDatabaseWorker {
 
     for (const [stmtsKey, stmts] of Object.entries(this.stmts)) {
       const sqlUrl = new URL(`./sql/${stmtsKey}`, import.meta.url);
-      const coreSql = yesql(sqlUrl.pathname) as { [key: string]: string };
+      const coreSql = loadSql(sqlUrl.pathname);
       for (const [k, sql] of Object.entries(coreSql)) {
         // Skip the key containing the complete file
         if (!k.endsWith('.sql')) {
