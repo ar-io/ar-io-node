@@ -67,8 +67,7 @@
     "umzug": "^3.8.2",
     "wait": "^0.4.2",
     "winston": "^3.17.0",
-    "yaml": "^2.7.0",
-    "yesql": "^7.0.0"
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@aws-lite/s3-types": "^0.2.6",
