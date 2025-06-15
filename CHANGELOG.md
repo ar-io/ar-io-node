@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added filesystem cache metrics with cycle-based tracking. Two new Prometheus
+  metrics track cache utilization: `cache_objects_total` (number of objects in
+  cache) and `cache_size_bytes` (total cache size in bytes). Both metrics include
+  `store_type` and `data_type` labels to differentiate between cache types (e.g.,
+  headers, contiguous_data). Metrics are updated after each complete cache scan
+  cycle, providing accurate visibility into filesystem cache usage.
+- Added `X-AR-IO-Data-Id` header to all data responses. This header shows the
+  actual data ID being served, whether from a direct ID request or manifest path
+  resolution, providing transparency about the content being delivered.
+- Added automatic data item indexing when data verification is enabled. When
+  `ENABLE_BACKGROUND_DATA_VERIFICATION` is set to true, the system now
+  automatically enables data item indexing (`ANS104_UNBUNDLE_FILTER`) with an
+  `always: true` filter if no filter is explicitly configured. This ensures
+  bundles are unbundled to verify that data items are actually contained in
+  the bundle associated with the Arweave transaction's data root.
 - Added ArNS headers to outbound gateway requests to enable data prioritization.
   The `generateRequestAttributes` function now includes ArNS context headers
   (`X-ArNS-Name`, `X-ArNS-Basename`, `X-ArNS-Record`) in requests to other
@@ -26,6 +41,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Streamlined background data retrieval to reduce reliance on centralized sources.
+  The default `BACKGROUND_RETRIEVAL_ORDER` now only includes `chunks,s3`, removing
+  `trusted-gateways` and `tx-data` from the default configuration. This prioritizes
+  verifiable chunk data and S3 storage for background operations like unbundling.
 - Removed ar-io.net from default trusted gateways list and removed
   TRUSTED_GATEWAY_URL default value to reduce load on ar-io.net now that P2P data
   retrieval is re-enabled. Existing deployments with TRUSTED_GATEWAY_URL
