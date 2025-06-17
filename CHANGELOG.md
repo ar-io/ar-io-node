@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [Release 39] - 2025-01-17
+## [Release 39] - 2025-06-17
 
 This release enhances observability and reliability with new cache metrics,
 improved data verification capabilities, and automatic failover between chain
