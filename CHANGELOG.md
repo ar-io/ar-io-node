@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Release 39] - 2025-01-17
+
+This release enhances observability and reliability with new cache metrics,
+improved data verification capabilities, and automatic failover between chain
+data sources. The addition of ArNS-aware headers enables better data
+prioritization across the gateway network. This is a recommended but not urgent
+upgrade.
+
 ### Added
 
 - Added filesystem cache metrics with cycle-based tracking. Two new Prometheus
