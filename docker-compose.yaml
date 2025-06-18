@@ -280,4 +280,4 @@ services:
 
 networks:
   ar-io-network:
-    name: ar-io-network
+    name: ${NETWORK_NAME:-ar-io-network}
