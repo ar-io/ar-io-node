@@ -1,6 +1,6 @@
 -- selectMaxStableBlockTimestamp
 SELECT IFNULL(MAX(block_timestamp), 0) AS block_timestamp
-FROM stable_blocks
+FROM stable_blocks;
 
 -- insertOrIgnoreStableBlocks
 INSERT INTO stable_blocks (
@@ -21,7 +21,7 @@ INSERT INTO stable_blocks (
   nb.tx_count, nb.missing_tx_count
 FROM new_blocks nb
 WHERE nb.height < @end_height
-ON CONFLICT DO NOTHING
+ON CONFLICT DO NOTHING;
 
 -- insertOrIgnoreStableBlockTransactions
 INSERT INTO stable_block_transactions (
@@ -30,7 +30,7 @@ INSERT INTO stable_block_transactions (
   nbt.block_indep_hash, nbt.transaction_id, nbt.block_transaction_index
 FROM new_block_transactions nbt
 WHERE nbt.height < @end_height
-ON CONFLICT DO NOTHING
+ON CONFLICT DO NOTHING;
 
 -- insertOrIgnoreStableTransactions
 INSERT INTO stable_transactions (
@@ -46,7 +46,7 @@ INSERT INTO stable_transactions (
 FROM new_transactions nt
 JOIN new_block_transactions nbt ON nbt.transaction_id = nt.id
 WHERE nbt.height < @end_height
-ON CONFLICT DO NOTHING
+ON CONFLICT DO NOTHING;
 
 -- insertOrIgnoreStableTransactionTags
 INSERT INTO stable_transaction_tags (
@@ -60,4 +60,4 @@ INSERT INTO stable_transaction_tags (
 FROM new_transaction_tags ntt
 JOIN new_block_transactions nbt ON nbt.transaction_id = ntt.transaction_id
 WHERE nbt.height < @end_height
-ON CONFLICT DO NOTHING
+ON CONFLICT DO NOTHING;

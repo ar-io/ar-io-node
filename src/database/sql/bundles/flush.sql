@@ -21,7 +21,7 @@ FROM new_data_items ndi
 JOIN core.stable_block_transactions sbt
   ON ndi.root_transaction_id = sbt.transaction_id
 WHERE ndi.height < @end_height
-ON CONFLICT DO NOTHING
+ON CONFLICT DO NOTHING;
 
 -- insertOrIgnoreStableDataItemTags
 INSERT INTO stable_data_item_tags (
@@ -40,4 +40,4 @@ JOIN new_data_items ndi
 JOIN core.stable_block_transactions sbt
   ON ndit.root_transaction_id = sbt.transaction_id
 WHERE ndit.height < @end_height
-ON CONFLICT DO NOTHING
+ON CONFLICT DO NOTHING;

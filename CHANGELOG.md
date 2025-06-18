@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added experimental `flush-to-stable` script for manual database maintenance.
+  This script allows operators to manually flush stable chain and data item
+  tables, mirroring the logic of `StandaloneSqliteDatabase.flushStableDataItems`.
+  **WARNING: This script is experimental and directly modifies database contents.
+  Use with caution and ensure proper backups before running.**
+
 ## [Release 39] - 2025-06-17
 
 This release enhances observability and reliability with new cache metrics,
