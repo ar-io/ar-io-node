@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+# WARNING: Experimental, use with caution
+
+# Flush stable chain and data item tables using existing SQL queries
+# mirrors the logic of StandaloneSqliteDatabase.flushStableDataItems
+
+# Export environment variables from .env if it exists
+if [ -f .env ]; then
+  set -a  # automatically export all variables
+  . ./.env
+  set +a
+fi
+
+set -euo pipefail
+
+SQLITE_DATA_PATH="${SQLITE_DATA_PATH:-./data/sqlite}"
+CORE_DB_PATH="${CORE_DB_PATH:-$SQLITE_DATA_PATH/core.db}"
+BUNDLES_DB_PATH="${BUNDLES_DB_PATH:-$SQLITE_DATA_PATH/bundles.db}"
+
+MAX_FORK_DEPTH=18
+NEW_TX_CLEANUP_WAIT_SECS=$((60*60*2))
+NEW_DATA_ITEM_CLEANUP_WAIT_SECS=$((60*60*2))
+
+if [ ! -f "$CORE_DB_PATH" ]; then
+  echo "Core DB not found: $CORE_DB_PATH" >&2
+  exit 1
+fi
+
+if [ ! -f "$BUNDLES_DB_PATH" ]; then
+  echo "Bundles DB not found: $BUNDLES_DB_PATH" >&2
+  exit 1
+fi
+
+# Obtain the current maximum block height across new and stable tables
+MAX_HEIGHT=$(sqlite3 "$CORE_DB_PATH" "SELECT MAX(height) FROM (SELECT MAX(height) AS height FROM new_blocks UNION SELECT MAX(height) AS height FROM stable_blocks);")
+MAX_HEIGHT=${MAX_HEIGHT:-0}
+END_HEIGHT=$(( MAX_HEIGHT - MAX_FORK_DEPTH ))
+if [ $END_HEIGHT -lt 0 ]; then
+  END_HEIGHT=0
+fi
+
+# Obtain the latest stable block timestamp
+MAX_STABLE_TS=$(sqlite3 "$CORE_DB_PATH" "SELECT IFNULL(MAX(block_timestamp),0) FROM stable_blocks;")
+MAX_STABLE_TS=${MAX_STABLE_TS:-0}
+TX_CLEANUP_THRESHOLD=$(( MAX_STABLE_TS - NEW_TX_CLEANUP_WAIT_SECS ))
+DATA_CLEANUP_THRESHOLD=$(( MAX_STABLE_TS - NEW_DATA_ITEM_CLEANUP_WAIT_SECS ))
+
+# Flush core (blocks and transactions)
+sqlite3 "$CORE_DB_PATH" <<SQL
+.parameter set end_height $END_HEIGHT
+.read 'src/database/sql/core/flush.sql'
+.parameter clear
+.parameter set height_threshold $END_HEIGHT
+.parameter set indexed_at_threshold $TX_CLEANUP_THRESHOLD
+.read 'src/database/sql/core/cleanup.sql'
+.parameter clear
+SQL
+
+# Flush bundled data items
+sqlite3 "$BUNDLES_DB_PATH" <<SQL
+ATTACH DATABASE '$CORE_DB_PATH' AS core;
+.parameter set end_height $END_HEIGHT
+.read 'src/database/sql/bundles/flush.sql'
+.parameter clear
+.parameter set height_threshold $END_HEIGHT
+.parameter set indexed_at_threshold $DATA_CLEANUP_THRESHOLD
+.read 'src/database/sql/bundles/cleanup.sql'
+.parameter clear
+DETACH DATABASE core;
+SQL
+
