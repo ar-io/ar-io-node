@@ -299,10 +299,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         region,
       });
 
-      // Skip caching when data is untrusted to avoid cache poisoning and when
-      // serving regions to avoid persisting data fragments and (more
-      // importantly) writing invalid ID to hash relationships in the DB.
-      if (data.trusted === true && region === undefined) {
+      // Skip caching when data is untrusted and we don't have a local hash to
+      // compare against, and when serving regions to avoid persisting data
+      // fragments and (more importantly) writing invalid ID to hash
+      // relationships in the DB.
+      if (
+        (data.trusted === true || dataAttributes?.hash !== undefined) &&
+        region === undefined
+      ) {
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
         pipeline(data.stream, cacheStream, async (error: any) => {
@@ -318,7 +322,21 @@ export class ReadThroughDataCache implements ContiguousDataSource {
               const hash = hasher.digest('base64url');
 
               try {
-                await this.dataStore.finalize(cacheStream, hash);
+                // Only finalize (cache locally) when we trust the source or
+                // the computed hash matches an existing hash computed from a
+                // trusted source.
+                if (data.trusted === true || dataAttributes?.hash === hash) {
+                  await this.dataStore.finalize(cacheStream, hash);
+                } else {
+                  this.log.debug(
+                    'Skipping caching of untrusted data with hash that does not match local hash',
+                    {
+                      trustedHash: dataAttributes?.hash,
+                      streamedHash: hash,
+                    },
+                  );
+                  await this.dataStore.cleanup(cacheStream);
+                }
               } catch (error: any) {
                 this.log.error('Error finalizing data in cache:', {
                   id,
@@ -332,16 +350,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 const verificationPriority =
                   this.calculateVerificationPriority(requestAttributes);
 
-                this.dataContentAttributeImporter.queueDataContentAttributes({
-                  id,
-                  dataRoot: attributes?.dataRoot,
-                  hash,
-                  dataSize: data.size,
-                  contentType: data.sourceContentType,
-                  cachedAt: currentUnixTimestamp(),
-                  verified: data.verified,
-                  verificationPriority,
-                });
+                // Only update hashes when we trust the data source
+                if (data.trusted === true) {
+                  this.dataContentAttributeImporter.queueDataContentAttributes({
+                    id,
+                    dataRoot: attributes?.dataRoot,
+                    hash,
+                    dataSize: data.size,
+                    contentType: data.sourceContentType,
+                    cachedAt: currentUnixTimestamp(),
+                    verified: data.verified,
+                    verificationPriority,
+                  });
+                }
               } catch (error: any) {
                 this.log.error('Error saving data content attributes:', {
                   id,
