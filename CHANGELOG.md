@@ -4,15 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 40] - 2025-06-23
+
+This is an optional release that primarily improves caching when data is fetch
+from peers.
 
 ### Added
 
 - Added experimental `flush-to-stable` script for manual database maintenance.
   This script allows operators to manually flush stable chain and data item
-  tables, mirroring the logic of `StandaloneSqliteDatabase.flushStableDataItems`.
+  tables, mirroring the logic of
+  `StandaloneSqliteDatabase.flushStableDataItems`.
   **WARNING: This script is experimental and directly modifies database contents.
   Use with caution and ensure proper backups before running.**
+
+### Changed
+
+- Replaced yesql with custom SQL loader that handles comments better, improving
+  SQL file parsing and maintenance.
+- Switched to SPDX license headers to reduce LLM token usage, making the
+  codebase more efficient for AI-assisted development.
+- Improved untrusted data handling and hash validation in cache operations. The
+  cache now allows caching when a hash is available for validation even for
+  untrusted data sources, but only finalizes the cache when the computed hash
+  matches a known trusted hash. This prevents cache poisoning while still
+  allowing data caching from untrusted sources when the data can be validated.
 
 ## [Release 39] - 2025-06-17
 
