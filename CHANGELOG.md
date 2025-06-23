@@ -6,8 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 40] - 2025-06-23
 
-This is an optional release that primarily improves caching when data is fetch
-from peers.
+This is an optional release that primarily improves caching when data is
+fetched from peers.
 
 ### Added
 
