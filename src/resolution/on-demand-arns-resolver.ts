@@ -17,6 +17,7 @@ import * as metrics from '../metrics.js';
 export class OnDemandArNSResolver implements NameResolver {
   private log: winston.Logger;
   private ao: AoClient;
+  private hyperbeamUrl: string | undefined;
 
   constructor({
     log,
@@ -26,17 +27,21 @@ export class OnDemandArNSResolver implements NameResolver {
       GRAPHQL_URL: config.AO_GRAPHQL_URL,
       GATEWAY_URL: config.AO_GATEWAY_URL,
     }),
+    hyperbeamUrl = config.AO_ANT_HYPERBEAM_URL,
   }: {
     log: winston.Logger;
     ao?: AoClient;
     circuitBreakerOptions?: CircuitBreaker.Options;
+    hyperbeamUrl?: string;
   }) {
     this.log = log.child({
       class: 'OnDemandArNSResolver',
       networkCuUrl: config.NETWORK_AO_CU_URL ?? '<sdk default>',
       antCuUrl: config.ANT_AO_CU_URL ?? '<sdk default>',
+      hyperbeamUrl: hyperbeamUrl ?? '<sdk default>',
     });
     this.ao = ao;
+    this.hyperbeamUrl = hyperbeamUrl;
   }
 
   async resolve({
@@ -95,6 +100,7 @@ export class OnDemandArNSResolver implements NameResolver {
           processId: processId,
           ao: this.ao,
         }),
+        hyperbeamUrl: this.hyperbeamUrl,
       });
 
       // if it is the root name, then it should point to '@'
