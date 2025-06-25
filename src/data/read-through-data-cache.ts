@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import crypto from 'node:crypto';
-import { Readable, pipeline } from 'node:stream';
+import { Readable, pipeline, PassThrough, finished } from 'node:stream';
 import winston from 'winston';
 
 import { currentUnixTimestamp } from '../lib/time.js';
@@ -252,14 +252,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       );
 
       if (cacheData !== undefined) {
-        cacheData.stream.on('error', () => {
+        cacheData.stream.once('error', () => {
           metrics.getDataStreamErrorsTotal.inc({
             class: this.constructor.name,
             source: 'cache',
           });
         });
 
-        cacheData.stream.on('end', () => {
+        cacheData.stream.once('end', () => {
           metrics.getDataStreamSuccessesTotal.inc({
             class: this.constructor.name,
             source: 'cache',
@@ -288,6 +288,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         region,
       });
 
+      // Use a PassThrough stream so we only attach a single listener to the
+      // underlying data stream. This avoids triggering MaxListenersExceeded
+      // warnings when the same HTTP stream is consumed by multiple handlers
+      // (caching, metrics, hashing, and response piping).
+      const passThrough = new PassThrough();
+      pipeline(data.stream, passThrough, (error) => {
+        if (error) {
+          // Pipeline automatically destroys both streams on error
+          this.log.debug('Pipeline error occurred', { error: error.message });
+        }
+      });
+      const stream = passThrough;
+
       // Skip caching when data is untrusted and we don't have a local hash to
       // compare against, and when serving regions to avoid persisting data
       // fragments and (more importantly) writing invalid ID to hash
@@ -298,13 +311,22 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       ) {
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
-        pipeline(data.stream, cacheStream, async (error: any) => {
+
+        // Set up cleanup on stream end/error
+        finished(stream, (err) => {
+          if (err && !stream.destroyed) {
+            stream.destroy();
+          }
+        });
+
+        pipeline(stream, cacheStream, async (error: any) => {
           if (error !== undefined) {
             this.log.error('Error streaming or caching data:', {
               id,
               message: error.message,
               stack: error.stack,
             });
+            // Only cleanup cacheStream - pipeline handles stream destruction
             await this.dataStore.cleanup(cacheStream);
           } else {
             if (cacheStream !== undefined) {
@@ -363,28 +385,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           }
         });
 
-        data.stream.on('data', (chunk) => {
+        stream.on('data', (chunk) => {
           hasher.update(chunk);
         });
       }
 
-      data.stream.on('error', () => {
+      stream.once('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: 'cache',
         });
       });
 
-      data.stream.on('end', () => {
+      stream.once('end', () => {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: 'cache',
         });
       });
 
-      data.stream.pause();
+      stream.pause();
 
-      return data;
+      return { ...data, stream };
     } catch (error) {
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
