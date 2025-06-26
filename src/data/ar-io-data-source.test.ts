@@ -425,5 +425,152 @@ describe('ArIODataSource', () => {
       assert.equal(data.stream, secondPeerStreamData);
       assert.equal(data.size, 10);
     });
+
+    describe('hash validation', () => {
+      it('should accept data when peer digest matches expected hash', async () => {
+        const expectedHash = 'test-hash-123';
+        const streamData = Readable.from(['valid data']);
+        
+        mock.method(axios, 'get', async (url, config) => {
+          // Verify expected digest header is sent
+          assert.equal(config.headers[headerNames.expectedDigest], expectedHash);
+          
+          return {
+            status: 200,
+            data: streamData,
+            headers: {
+              'content-length': '10',
+              'content-type': 'application/octet-stream',
+              [headerNames.digest.toLowerCase()]: expectedHash,
+              [headerNames.verified.toLowerCase()]: 'true',
+            },
+          };
+        });
+
+        const data = await dataSource.getData({
+          id: 'dataId',
+          dataAttributes: { 
+            hash: expectedHash,
+            size: 10,
+            isManifest: false,
+            stable: true,
+            verified: true,
+            offset: 0,
+            signature: null,
+          },
+        });
+
+        assert.deepEqual(data, {
+          stream: streamData,
+          size: 10,
+          verified: false,
+          trusted: false,
+          sourceContentType: 'application/octet-stream',
+          cached: false,
+          requestAttributes: {
+            hops: 1,
+            origin: undefined,
+            originNodeRelease: undefined,
+          },
+        });
+      });
+
+      it('should reject data when peer digest does not match expected hash', async () => {
+        const expectedHash = 'expected-hash-123';
+        const wrongHash = 'wrong-hash-456';
+        const streamData = Readable.from(['invalid data']);
+        
+        mock.method(axios, 'get', async () => ({
+          status: 200,
+          data: streamData,
+          headers: {
+            'content-length': '10',
+            'content-type': 'application/octet-stream',
+            [headerNames.digest.toLowerCase()]: wrongHash,
+            [headerNames.verified.toLowerCase()]: 'true',
+          },
+        }));
+
+        await assert.rejects(
+          dataSource.getData({
+            id: 'dataId',
+            dataAttributes: {
+              hash: expectedHash,
+              size: 10,
+              isManifest: false,
+              stable: true,
+              verified: true,
+              offset: 0,
+              signature: null,
+            },
+          }),
+          {
+            message: 'Failed to fetch contiguous data from ArIO peers',
+          },
+        );
+
+        // Verify the stream was destroyed
+        assert.equal(streamData.destroyed, true);
+        
+        // Verify error metrics were incremented
+        assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 2);
+      });
+
+      it('should not send expected digest header when no hash is provided', async () => {
+        const streamData = Readable.from(['data without hash']);
+        
+        mock.method(axios, 'get', async (url, config) => {
+          // Verify expected digest header is NOT sent
+          assert.equal(config.headers[headerNames.expectedDigest], undefined);
+          
+          return {
+            status: 200,
+            data: streamData,
+            headers: {
+              'content-length': '10',
+              'content-type': 'application/octet-stream',
+              [headerNames.verified.toLowerCase()]: 'true',
+            },
+          };
+        });
+
+        const data = await dataSource.getData({ id: 'dataId' });
+
+        assert.equal(data.stream, streamData);
+        assert.equal(data.size, 10);
+      });
+
+      it('should accept data when peer does not provide digest header', async () => {
+        const expectedHash = 'test-hash-123';
+        const streamData = Readable.from(['data without digest']);
+        
+        mock.method(axios, 'get', async () => ({
+          status: 200,
+          data: streamData,
+          headers: {
+            'content-length': '10',
+            'content-type': 'application/octet-stream',
+            // No digest header provided by peer
+            [headerNames.verified.toLowerCase()]: 'true',
+          },
+        }));
+
+        const data = await dataSource.getData({
+          id: 'dataId',
+          dataAttributes: {
+            hash: expectedHash,
+            size: 10,
+            isManifest: false,
+            stable: true,
+            verified: true,
+            offset: 0,
+            signature: null,
+          },
+        });
+
+        assert.equal(data.stream, streamData);
+        assert.equal(data.size, 10);
+      });
+    });
   });
 });

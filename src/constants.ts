@@ -10,6 +10,7 @@ export const headerNames = {
   origin: 'X-AR-IO-Origin',
   originNodeRelease: 'X-AR-IO-Origin-Node-Release',
   digest: 'X-AR-IO-Digest',
+  expectedDigest: 'X-AR-IO-Expected-Digest',
   stable: 'X-AR-IO-Stable',
   verified: 'X-AR-IO-Verified',
   trusted: 'X-AR-IO-Trusted',
