@@ -15,6 +15,7 @@ import memoize from 'memoizee';
 
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataSource,
   Region,
   RequestAttributes,
@@ -319,11 +320,13 @@ export class ArIODataSource
 
   async getData({
     id,
+    dataAttributes,
     requestAttributes,
     region,
     retryCount,
   }: {
     id: string;
+    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
     retryCount?: number;
@@ -356,6 +359,11 @@ export class ArIODataSource
           id,
           headers: {
             ...(requestAttributesHeaders?.headers || {}),
+            ...(dataAttributes?.hash !== undefined
+              ? {
+                  [headerNames.expectedDigest]: dataAttributes.hash,
+                }
+              : {}),
             ...(region
               ? {
                   Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
@@ -376,6 +384,7 @@ export class ArIODataSource
           requestStartTime,
           peer: currentPeer,
           ttfb,
+          expectedHash: dataAttributes?.hash,
         });
       } catch (error: any) {
         metrics.getDataErrorsTotal.inc({
@@ -399,14 +408,30 @@ export class ArIODataSource
     requestStartTime,
     peer,
     ttfb,
+    expectedHash,
   }: {
     response: AxiosResponse;
     requestAttributes: RequestAttributes;
     requestStartTime: number;
     peer: string;
     ttfb: number;
+    expectedHash?: string;
   }): ContiguousData {
     const stream = response.data;
+
+    // Check if peer's digest matches our expected hash
+    if (expectedHash !== undefined) {
+      const peerDigest = response.headers[headerNames.digest.toLowerCase()];
+      if (peerDigest !== undefined && peerDigest !== expectedHash) {
+        stream.destroy();
+        this.log.warn('Peer digest does not match expected hash', {
+          peer,
+          expectedHash,
+          peerDigest,
+        });
+        throw new Error('Peer digest does not match expected hash');
+      }
+    }
 
     // Check if peer indicates data is verified or trusted
     const peerVerified =
