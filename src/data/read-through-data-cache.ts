@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import crypto from 'node:crypto';
-import { Readable, pipeline, PassThrough, finished } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
 
 import { currentUnixTimestamp } from '../lib/time.js';
@@ -287,19 +287,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         requestAttributes,
         region,
       });
-
-      // Use a PassThrough stream so we only attach a single listener to the
-      // underlying data stream. This avoids triggering MaxListenersExceeded
-      // warnings when the same HTTP stream is consumed by multiple handlers
-      // (caching, metrics, hashing, and response piping).
-      const passThrough = new PassThrough();
-      pipeline(data.stream, passThrough, (error) => {
-        if (error) {
-          // Pipeline automatically destroys both streams on error
-          this.log.debug('Pipeline error occurred', { error: error.message });
-        }
-      });
-      const stream = passThrough;
+      data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
 
       // Skip caching when data is untrusted and we don't have a local hash to
       // compare against, and when serving regions to avoid persisting data
@@ -312,14 +300,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
-        // Set up cleanup on stream end/error
-        finished(stream, (err) => {
-          if (err && !stream.destroyed) {
-            stream.destroy();
-          }
-        });
-
-        pipeline(stream, cacheStream, async (error: any) => {
+        pipeline(data.stream, cacheStream, async (error: any) => {
           if (error !== undefined) {
             this.log.error('Error streaming or caching data:', {
               id,
@@ -385,28 +366,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           }
         });
 
-        stream.on('data', (chunk) => {
+        data.stream.on('data', (chunk) => {
           hasher.update(chunk);
         });
       }
 
-      stream.once('error', () => {
+      data.stream.once('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: 'cache',
         });
       });
 
-      stream.once('end', () => {
+      data.stream.once('end', () => {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: 'cache',
         });
       });
 
-      stream.pause();
+      data.stream.pause();
 
-      return { ...data, stream };
+      return data;
     } catch (error) {
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
