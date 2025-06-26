@@ -66,6 +66,24 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
+// Preferred URLs for chunk GET requests (comma-separated URLs)
+const PREFERRED_CHUNK_GET_NODE_URLS_STRING = env.varOrUndefined(
+  'PREFERRED_CHUNK_GET_NODE_URLS',
+);
+export const PREFERRED_CHUNK_GET_NODE_URLS =
+  PREFERRED_CHUNK_GET_NODE_URLS_STRING !== undefined
+    ? PREFERRED_CHUNK_GET_NODE_URLS_STRING.split(',').map((url) => url.trim())
+    : [];
+
+// Validate preferred chunk GET URLs
+PREFERRED_CHUNK_GET_NODE_URLS.forEach((url) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in PREFERRED_CHUNK_GET_NODE_URLS: ${url}`);
+  }
+});
+
 // Trusted gateway URL (for retrieving contiguous data)
 export const TRUSTED_GATEWAY_URL = env.varOrUndefined('TRUSTED_GATEWAY_URL');
 
