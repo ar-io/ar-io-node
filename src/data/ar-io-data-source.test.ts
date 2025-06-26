@@ -430,11 +430,14 @@ describe('ArIODataSource', () => {
       it('should accept data when peer digest matches expected hash', async () => {
         const expectedHash = 'test-hash-123';
         const streamData = Readable.from(['valid data']);
-        
+
         mock.method(axios, 'get', async (url, config) => {
           // Verify expected digest header is sent
-          assert.equal(config.headers[headerNames.expectedDigest], expectedHash);
-          
+          assert.equal(
+            config.headers[headerNames.expectedDigest],
+            expectedHash,
+          );
+
           return {
             status: 200,
             data: streamData,
@@ -449,7 +452,7 @@ describe('ArIODataSource', () => {
 
         const data = await dataSource.getData({
           id: 'dataId',
-          dataAttributes: { 
+          dataAttributes: {
             hash: expectedHash,
             size: 10,
             isManifest: false,
@@ -479,7 +482,7 @@ describe('ArIODataSource', () => {
         const expectedHash = 'expected-hash-123';
         const wrongHash = 'wrong-hash-456';
         const streamData = Readable.from(['invalid data']);
-        
+
         mock.method(axios, 'get', async () => ({
           status: 200,
           data: streamData,
@@ -511,18 +514,21 @@ describe('ArIODataSource', () => {
 
         // Verify the stream was destroyed
         assert.equal(streamData.destroyed, true);
-        
+
         // Verify error metrics were incremented
-        assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 2);
+        assert.equal(
+          (metrics.getDataErrorsTotal.inc as any).mock.callCount(),
+          2,
+        );
       });
 
       it('should not send expected digest header when no hash is provided', async () => {
         const streamData = Readable.from(['data without hash']);
-        
+
         mock.method(axios, 'get', async (url, config) => {
           // Verify expected digest header is NOT sent
           assert.equal(config.headers[headerNames.expectedDigest], undefined);
-          
+
           return {
             status: 200,
             data: streamData,
@@ -543,7 +549,7 @@ describe('ArIODataSource', () => {
       it('should accept data when peer does not provide digest header', async () => {
         const expectedHash = 'test-hash-123';
         const streamData = Readable.from(['data without digest']);
-        
+
         mock.method(axios, 'get', async () => ({
           status: 200,
           data: streamData,
