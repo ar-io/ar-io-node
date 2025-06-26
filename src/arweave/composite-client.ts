@@ -105,6 +105,7 @@ export class ArweaveCompositeClient
 
   // Peers
   private peers: Record<string, Peer> = {};
+  private preferredChunkGetUrls: string[];
   private weightedChainPeers: WeightedElement<string>[] = [];
   private weightedGetChunkPeers: WeightedElement<string>[] = [];
   private weightedPostChunkPeers: WeightedElement<string>[] = [];
@@ -181,6 +182,7 @@ export class ArweaveCompositeClient
     blockPrefetchCount = DEFAULT_BLOCK_PREFETCH_COUNT,
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
+    preferredChunkGetUrls = [],
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -201,10 +203,14 @@ export class ArweaveCompositeClient
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
+    preferredChunkGetUrls?: string[];
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
+    this.preferredChunkGetUrls = preferredChunkGetUrls.map((url) =>
+      url.replace(/\/$/, ''),
+    );
 
     // TODO: use defaults in constructor instead of referencing config here
 
@@ -353,9 +359,20 @@ export class ArweaveCompositeClient
     // Refresh Arweave peers every 10 minutes
     setInterval(() => this.refreshPeers(), 10 * 60 * 1000);
 
+    // Initialize preferred chunk GET URLs with high weight
+    this.initializePreferredChunkGetUrls();
+
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
+  }
+
+  private initializePreferredChunkGetUrls(): void {
+    // Initialize weightedGetChunkPeers with preferred URLs at high weight
+    this.weightedGetChunkPeers = this.preferredChunkGetUrls.map((peerUrl) => ({
+      id: peerUrl,
+      weight: 100, // High weight for preferred chunk GET URLs
+    }));
   }
 
   async refreshPeers(): Promise<void> {
@@ -393,9 +410,9 @@ export class ArweaveCompositeClient
           }
         }),
       );
+      // Update chain and post chunk peers (no preferred URLs)
       for (const peerListName of [
         'weightedChainPeers',
-        'weightedGetChunkPeers',
         'weightedPostChunkPeers',
       ] as WeightedPeerListName[]) {
         this[peerListName] = Object.values(this.peers).map((peerObject) => {
@@ -408,6 +425,35 @@ export class ArweaveCompositeClient
           };
         });
       }
+
+      // Update GET chunk peers (preserve preferred URLs)
+      const preferredChunkGetEntries = this.weightedGetChunkPeers.filter(
+        (peer) => this.preferredChunkGetUrls.includes(peer.id),
+      );
+
+      // Add discovered peers for chunk GET
+      const discoveredChunkGetEntries = Object.values(this.peers).map(
+        (peerObject) => {
+          const previousWeight =
+            this.weightedGetChunkPeers.find(
+              (peer) => peer.id === peerObject.url,
+            )?.weight ?? undefined;
+          return {
+            id: peerObject.url,
+            weight: previousWeight === undefined ? 1 : previousWeight,
+          };
+        },
+      );
+
+      // Combine preferred and discovered peers for chunk GET, avoiding duplicates
+      const allChunkGetEntries = [...preferredChunkGetEntries];
+      for (const discoveredPeer of discoveredChunkGetEntries) {
+        if (!allChunkGetEntries.some((peer) => peer.id === discoveredPeer.id)) {
+          allChunkGetEntries.push(discoveredPeer);
+        }
+      }
+
+      this.weightedGetChunkPeers = allChunkGetEntries;
     } catch (error) {
       metrics.arweavePeerRefreshErrorCounter.inc();
     }
@@ -856,19 +902,32 @@ export class ArweaveCompositeClient
 
   async peerGetChunk({
     absoluteOffset,
-    retryCount,
     txSize,
     dataRoot,
     relativeOffset,
+    peerSelectionCount = 10,
+    retryCount = 50,
   }: {
     txSize: number;
     absoluteOffset: number;
     dataRoot: string;
     relativeOffset: number;
-    retryCount: number;
+    peerSelectionCount?: number;
+    retryCount?: number;
   }): Promise<Chunk> {
-    const randomPeers = this.selectPeers(retryCount, 'weightedGetChunkPeers');
-    for (const randomPeer of randomPeers) {
+    for (let attempt = 0; attempt < retryCount; attempt++) {
+      // Select a random set of peers for each retry attempt
+      const randomPeers = this.selectPeers(
+        peerSelectionCount,
+        'weightedGetChunkPeers',
+      );
+
+      if (randomPeers.length === 0) {
+        throw new Error('No peers available for chunk retrieval');
+      }
+
+      const randomPeer = randomPeers[0];
+
       try {
         const response = await axios({
           method: 'GET',
@@ -926,6 +985,13 @@ export class ArweaveCompositeClient
           'peer',
           'weightedGetChunkPeers',
         );
+
+        // If this is the last attempt, throw the error
+        if (attempt === retryCount - 1) {
+          throw new Error(
+            `Failed to fetch chunk from any peer after ${retryCount} attempts`,
+          );
+        }
       }
     }
 
@@ -940,73 +1006,7 @@ export class ArweaveCompositeClient
   }: ChunkDataByAnySourceParams): Promise<Chunk> {
     this.failureSimulator.maybeFail();
 
-    try {
-      const response = await this.trustedNodeRequestQueue.push({
-        method: 'GET',
-        url: `/chunk/${absoluteOffset}`,
-      });
-      const jsonChunk = response.data;
-
-      // Fast fail if chunk has the wrong structure
-      sanityCheckChunk(jsonChunk);
-
-      const txPath = fromB64Url(jsonChunk.tx_path);
-      const dataRootBuffer = txPath.slice(-64, -32);
-      const dataPath = fromB64Url(jsonChunk.data_path);
-      const hash = dataPath.slice(-64, -32);
-
-      const chunk = {
-        tx_path: txPath,
-        data_root: dataRootBuffer,
-        data_size: txSize,
-        data_path: dataPath,
-        offset: relativeOffset,
-        hash,
-        chunk: fromB64Url(jsonChunk.chunk),
-      };
-
-      await validateChunk(txSize, chunk, fromB64Url(dataRoot), relativeOffset);
-
-      this.handlePeerSuccess(
-        this.trustedNodeUrl,
-        'getChunkByAny',
-        'trusted',
-        'weightedGetChunkPeers',
-      );
-
-      this.chunkCache.set(
-        { absoluteOffset },
-        {
-          cachedAt: Date.now(),
-          chunk,
-        },
-      );
-
-      metrics.getChunkTotal.inc({
-        status: 'success',
-        method: 'getChunkByAny',
-        class: this.constructor.name,
-      });
-
-      return chunk;
-    } catch (error: any) {
-      this.handlePeerFailure(
-        this.trustedNodeUrl,
-        'getChunkByAny',
-        'trusted',
-        'weightedGetChunkPeers',
-      );
-      metrics.getChunkTotal.inc({
-        status: 'error',
-        method: 'getChunkByAny',
-        class: this.constructor.name,
-      });
-      this.log.warn('Failed to fetch chunk trusted node, attempting peers: ', {
-        messsage: error.message,
-        stack: error.stack,
-      });
-    }
-
+    // Check cache first
     const cacheEntry = this.chunkCache.get({ absoluteOffset });
     if (
       cacheEntry &&
@@ -1020,10 +1020,10 @@ export class ArweaveCompositeClient
       return cacheEntry.chunk;
     }
 
+    // Only use peer-based chunk retrieval
     try {
       const result = await this.peerGetChunk({
         absoluteOffset,
-        retryCount: 3,
         txSize,
         dataRoot,
         relativeOffset,
@@ -1035,13 +1035,17 @@ export class ArweaveCompositeClient
       });
       return result;
     } catch (error: any) {
+      metrics.getChunkTotal.inc({
+        status: 'error',
+        method: 'getChunkByAny',
+        class: this.constructor.name,
+      });
       this.log.warn('Unable to fetch chunk from peers', {
         messsage: error.message,
         stack: error.stack,
       });
+      throw new Error('Unable to fetch chunk from any available peers');
     }
-
-    throw new Error('Unable to fetch chunk from trusted node or peers');
   }
 
   async getChunkDataByAny({
