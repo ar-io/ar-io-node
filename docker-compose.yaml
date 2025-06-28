@@ -281,4 +281,4 @@ services:
 
 networks:
   ar-io-network:
-    name: ${NETWORK_NAME:-ar-io-network}
+    name: ${DOCKER_NETWORK_NAME:-ar-io-network}
