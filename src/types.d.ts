@@ -514,11 +514,13 @@ export interface ChunkBroadcaster {
     abortTimeout,
     responseTimeout,
     originAndHopsHeaders,
+    chunkPostMinSuccessCount,
   }: {
     chunk: JsonChunkPost;
     abortTimeout?: number;
     responseTimeout?: number;
     originAndHopsHeaders: Record<string, string | undefined>;
+    chunkPostMinSuccessCount: number;
   }): Promise<BroadcastChunkResult>;
 }
 

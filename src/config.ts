@@ -137,32 +137,49 @@ export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 
-// Trusted chunk POST URLs (for posting chunks received at /chunk)
-export const CHUNK_POST_URLS = env
-  .varOrDefault('CHUNK_POST_URLS', `${TRUSTED_NODE_URL}/chunk`)
-  .split(',');
-
-export const CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
-  'CHUNK_POST_CONCURRENCY_LIMIT',
-  '2',
+// Preferred chunk POST URLs (prioritized over discovered peers)
+const PREFERRED_CHUNK_POST_NODE_URLS_STRING = env.varOrUndefined(
+  'PREFERRED_CHUNK_POST_NODE_URLS',
 );
-
-const SECONDARY_CHUNK_POST_URLS_STRING = env.varOrUndefined(
-  'SECONDARY_CHUNK_POST_URLS',
-);
-export const SECONDARY_CHUNK_POST_URLS =
-  SECONDARY_CHUNK_POST_URLS_STRING !== undefined
-    ? SECONDARY_CHUNK_POST_URLS_STRING.split(',')
+export const PREFERRED_CHUNK_POST_NODE_URLS =
+  PREFERRED_CHUNK_POST_NODE_URLS_STRING !== undefined
+    ? PREFERRED_CHUNK_POST_NODE_URLS_STRING.split(',')
     : [];
 
-export const SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
-  'SECONDARY_CHUNK_POST_CONCURRENCY_LIMIT',
-  '2',
+// Maximum queue depth before skipping a peer for chunk POST
+export const CHUNK_POST_QUEUE_DEPTH_THRESHOLD = +env.varOrDefault(
+  'CHUNK_POST_QUEUE_DEPTH_THRESHOLD',
+  '10',
 );
 
-export const SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
-  'SECONDARY_CHUNK_POST_MIN_SUCCESS_COUNT',
-  '1',
+// Maximum number of peers to broadcast to in parallel
+export const CHUNK_POST_PEER_CONCURRENCY = +env.varOrDefault(
+  'CHUNK_POST_PEER_CONCURRENCY',
+  '10',
+);
+
+// Maximum number of concurrent chunk posts per node
+export const CHUNK_POST_PER_NODE_CONCURRENCY = +env.varOrDefault(
+  'CHUNK_POST_PER_NODE_CONCURRENCY',
+  '10',
+);
+
+// Maximum number of concurrent peer info requests during refresh
+export const PEER_REFRESH_CONCURRENCY = +env.varOrDefault(
+  'PEER_REFRESH_CONCURRENCY',
+  '50',
+);
+
+// Initial weight for preferred chunk POST peers
+export const PREFERRED_CHUNK_POST_WEIGHT = +env.varOrDefault(
+  'PREFERRED_CHUNK_POST_WEIGHT',
+  '100',
+);
+
+// Cache duration for sorted chunk POST peers
+export const CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS = +env.varOrDefault(
+  'CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS',
+  '10000', // 10 seconds
 );
 
 // Chunk POST response timeout in milliseconds
