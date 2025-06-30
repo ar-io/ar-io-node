@@ -7,10 +7,8 @@
 
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
-import * as metrics from '../../metrics.js';
 import { StandaloneSqliteDatabase } from '../../database/standalone-sqlite.js';
 import {
-  CHUNK_POST_URLS,
   CHUNK_POST_ABORT_TIMEOUT_MS,
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
   CHUNK_POST_MIN_SUCCESS_COUNT,
@@ -141,18 +139,12 @@ export const createChunkPostHandler = ({
       });
 
       // Check if successCount meets the threshold
-      if (
-        result.successCount >=
-        Math.min(CHUNK_POST_MIN_SUCCESS_COUNT, CHUNK_POST_URLS.length)
-      ) {
-        metrics.arweaveChunkBroadcastCounter.inc({ status: 'success' });
+      if (result.successCount >= CHUNK_POST_MIN_SUCCESS_COUNT) {
         res.status(200).send(result);
       } else {
-        metrics.arweaveChunkBroadcastCounter.inc({ status: 'fail' });
         res.status(500).send(result);
       }
     } catch (error: any) {
-      metrics.arweaveChunkBroadcastCounter.inc({ status: 'fail' });
       log.error('Failed to broadcast chunk', {
         message: error?.message,
         stack: error?.stack,

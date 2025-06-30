@@ -514,12 +514,38 @@ export interface ChunkBroadcaster {
     abortTimeout,
     responseTimeout,
     originAndHopsHeaders,
+    chunkPostMinSuccessCount,
   }: {
     chunk: JsonChunkPost;
     abortTimeout?: number;
     responseTimeout?: number;
     originAndHopsHeaders: Record<string, string | undefined>;
+    chunkPostMinSuccessCount: number;
   }): Promise<BroadcastChunkResult>;
+}
+
+// Peer queue management types
+export interface ChunkPostTask {
+  peer: string;
+  chunk: JsonChunkPost;
+  abortTimeout: number;
+  responseTimeout: number;
+  headers: Record<string, string | undefined>;
+}
+
+export interface ChunkPostResult {
+  success: boolean;
+  statusCode?: number;
+  error?: string;
+  canceled?: boolean;
+  timedOut?: boolean;
+}
+
+export interface PeerChunkQueue {
+  queue: import('fastq').queueAsPromised<ChunkPostTask, ChunkPostResult>;
+  currentDepth: number;
+  totalAttempts: number;
+  totalSuccesses: number;
 }
 
 export interface ContiguousData {
