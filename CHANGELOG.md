@@ -4,7 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 41] - 2025-06-30
+
+### Added
+
+- Added preferred chunk GET node URLs configuration via
+  `PREFERRED_CHUNK_GET_NODE_URLS` environment variable to enable chunk-specific
+  peer prioritization. Preferred URLs receive a weight of 100 for
+  prioritization and the system selects 10 peers per attempt by default.
+- Added hash validation for peer data fetching by including
+  `X-AR-IO-Expected-Digest` header in peer requests when hash is available,
+  validating peer responses against expected hash, and immediately rejecting
+  mismatched data.
+- Added `DOCKER_NETWORK_NAME` environment variable to configure the Docker
+  network name used by Docker Compose.
+- Added draft guide for running a community gateway.
+- Added draft data verification architecture document.
+
+### Changed
+
+- Removed trusted node fallback for chunk retrieval. Chunks are now retrieved
+  exclusively from peers, with the retry count increased from 3 to 50 to ensure
+  reliability without the trusted node fallback.
+
+### Fixed
+
+- Fixed inverted logic preventing symlink creation in `FsChunkDataStore`.
+- Fixed `Content-Length` header for range requests and 304 responses, properly
+  setting header for single and multipart range requests and removing entity
+  headers from 304 Not Modified responses per RFC 7232.
+- Fixed `MaxListenersExceeded` warnings by adding `setMaxListeners` to
+  read-through data cache.
+- Fixed potential memory leaks in read-through data cache by using `once`
+  instead of `on` for `error` and `end` event listeners.
 
 ## [Release 40] - 2025-06-23
 
