@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Revamped chunk broadcasting architecture from 3-tier system to unified peer-based approach. Chunk broadcasting now uses individual fastq queues per peer with configurable concurrency and queue depth protection. Added support for preferred chunk POST peers via `PREFERRED_CHUNK_POST_URLS` environment variable. This change improves broadcast reliability and performance while simplifying the codebase by removing circuit breakers and tier-based logic.
+
 ## [Release 42] - 2025-07-14
 
 This is an optional release that improves peer request traceability, adds
