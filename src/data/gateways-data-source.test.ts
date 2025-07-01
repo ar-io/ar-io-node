@@ -287,7 +287,7 @@ describe('GatewayDataSource', () => {
       }
     });
 
-    it('should send hops and origin headers if provided', async () => {
+    it('should send hops and origin query parameters if provided', async () => {
       let requestParams: any;
       mockedAxiosInstance.request = async (params: any) => {
         requestParams = params;
@@ -304,16 +304,16 @@ describe('GatewayDataSource', () => {
       });
 
       assert.equal(
-        requestParams.headers['X-AR-IO-Hops'],
-        (requestAttributes.hops + 1).toString(),
+        requestParams.params['ar-io-hops'],
+        requestAttributes.hops + 1,
       );
       assert.equal(
-        requestParams.headers['X-AR-IO-Origin'],
+        requestParams.params['ar-io-origin'],
         requestAttributes.origin,
       );
     });
 
-    it('should not send origin header if not provided', async () => {
+    it('should not send origin query parameter if not provided', async () => {
       let requestParams: any;
       mockedAxiosInstance.request = async (params: any) => {
         requestParams = params;
@@ -329,11 +329,11 @@ describe('GatewayDataSource', () => {
         requestAttributes: { hops: 0 },
       });
 
-      assert.equal(requestParams.headers['X-AR-IO-Hops'], '1');
-      assert.equal(requestParams.headers['X-AR-IO-Origin'], undefined);
+      assert.equal(requestParams.params['ar-io-hops'], 1);
+      assert.equal(requestParams.params['ar-io-origin'], undefined);
     });
 
-    it('should not send hops or origin headers if not provided', async () => {
+    it('should not send hops or origin query parameters if not provided', async () => {
       let requestParams: any;
       mockedAxiosInstance.request = async (params: any) => {
         requestParams = params;
@@ -348,8 +348,8 @@ describe('GatewayDataSource', () => {
         id: 'some-id',
       });
 
-      assert.equal(requestParams.headers['X-AR-IO-Hops'], undefined);
-      assert.equal(requestParams.headers['X-AR-IO-Origin'], undefined);
+      assert.equal(requestParams.params['ar-io-hops'], undefined);
+      assert.equal(requestParams.params['ar-io-origin'], undefined);
     });
 
     it('should return hops 1 in the response if not provided', async () => {
@@ -425,6 +425,96 @@ describe('GatewayDataSource', () => {
 
       assert.equal(data.size, 200);
       assert.equal(data.sourceContentType, 'application/octet-stream');
+    });
+
+    describe('ArNS query parameters', () => {
+      it('should include ArNS record and basename as query parameters when provided', async () => {
+        let requestParams: any;
+        mockedAxiosInstance.request = async (params: any) => {
+          requestParams = params;
+          return {
+            status: 200,
+            headers: { 'content-length': '123' },
+            data: axiosStreamData,
+          };
+        };
+
+        const requestAttributesWithArns: RequestAttributes = {
+          hops: 1,
+          origin: 'test-origin',
+          originNodeRelease: '42',
+          arnsRecord: 'subdomain',
+          arnsBasename: 'example',
+        };
+
+        await dataSource.getData({
+          id: 'testId',
+          requestAttributes: requestAttributesWithArns,
+        });
+
+        // Verify all query parameters are included
+        assert.equal(requestParams.params['ar-io-hops'], 2); // hops + 1
+        assert.equal(requestParams.params['ar-io-origin'], 'test-origin');
+        assert.equal(requestParams.params['ar-io-origin-release'], '42');
+        assert.equal(requestParams.params['ar-io-arns-record'], 'subdomain');
+        assert.equal(requestParams.params['ar-io-arns-basename'], 'example');
+      });
+
+      it('should include only provided request attributes as query parameters', async () => {
+        let requestParams: any;
+        mockedAxiosInstance.request = async (params: any) => {
+          requestParams = params;
+          return {
+            status: 200,
+            headers: { 'content-length': '123' },
+            data: axiosStreamData,
+          };
+        };
+
+        const requestAttributesPartial: RequestAttributes = {
+          hops: 0,
+          arnsBasename: 'example',
+          // arnsRecord is undefined
+        };
+
+        await dataSource.getData({
+          id: 'testId',
+          requestAttributes: requestAttributesPartial,
+        });
+
+        // Verify provided parameters are included
+        assert.equal(requestParams.params['ar-io-hops'], 1); // hops + 1
+        assert.equal(requestParams.params['ar-io-arns-basename'], 'example');
+
+        // Verify undefined parameters are passed through
+        assert.equal(requestParams.params['ar-io-origin'], undefined);
+        assert.equal(requestParams.params['ar-io-origin-release'], undefined);
+        assert.equal(requestParams.params['ar-io-arns-record'], undefined);
+      });
+
+      it('should handle empty request attributes', async () => {
+        let requestParams: any;
+        mockedAxiosInstance.request = async (params: any) => {
+          requestParams = params;
+          return {
+            status: 200,
+            headers: { 'content-length': '123' },
+            data: axiosStreamData,
+          };
+        };
+
+        await dataSource.getData({
+          id: 'testId',
+          // no requestAttributes provided
+        });
+
+        // Verify all parameters are undefined when no request attributes are provided
+        assert.equal(requestParams.params['ar-io-hops'], undefined);
+        assert.equal(requestParams.params['ar-io-origin'], undefined);
+        assert.equal(requestParams.params['ar-io-origin-release'], undefined);
+        assert.equal(requestParams.params['ar-io-arns-record'], undefined);
+        assert.equal(requestParams.params['ar-io-arns-basename'], undefined);
+      });
     });
   });
 });

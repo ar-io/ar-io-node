@@ -10,6 +10,8 @@ import { Readable } from 'node:stream';
 import rangeParser from 'range-parser';
 import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
+import * as config from '../../config.js';
+import { release } from '../../version.js';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import {
@@ -121,18 +123,9 @@ const setDataHeaders = ({
   // Indicate whether the data was served from cache
   res.header(headerNames.cache, data.cached ? 'HIT' : 'MISS');
 
-  // Indicate the number of hops the request has made and origin
+  // Indicate the number of hops the request has made
   if (data.requestAttributes !== undefined) {
     res.header(headerNames.hops, data.requestAttributes.hops.toString());
-    if (data.requestAttributes.origin !== undefined) {
-      res.header(headerNames.origin, data.requestAttributes.origin);
-    }
-    if (data.requestAttributes.originNodeRelease !== undefined) {
-      res.header(
-        headerNames.originNodeRelease,
-        data.requestAttributes.originNodeRelease,
-      );
-    }
   }
 
   // Use the content type from the L1 or data item index if available
@@ -175,21 +168,41 @@ const setDataHeaders = ({
   setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
 };
 
-const getRequestAttributes = (
+export const getRequestAttributes = (
   req: Request,
   res: Response,
+  {
+    arnsRootHost = config.ARNS_ROOT_HOST,
+    nodeRelease = release,
+  }: {
+    arnsRootHost?: string;
+    nodeRelease?: string;
+  } = {},
 ): RequestAttributes => {
   const hopsHeader = req.headers[headerNames.hops.toLowerCase()] as string;
   const hops = parseInt(hopsHeader) || 0;
+
+  // Get origin and originNodeRelease from request headers
+  let origin = req.headers[headerNames.origin.toLowerCase()] as
+    | string
+    | undefined;
+  let originNodeRelease = req.headers[
+    headerNames.originNodeRelease.toLowerCase()
+  ] as string | undefined;
+
+  // Initialize both origin and originNodeRelease only if neither is present and ARNS_ROOT_HOST is configured
+  if (origin == null && originNodeRelease == null && arnsRootHost != null) {
+    origin = arnsRootHost;
+    originNodeRelease = nodeRelease;
+  }
+
   return {
     hops,
+    origin,
+    originNodeRelease,
     arnsName: res.get(headerNames.arnsName?.toLowerCase()),
     arnsBasename: res.get(headerNames.arnsBasename?.toLowerCase()),
     arnsRecord: res.get(headerNames.arnsRecord?.toLowerCase()),
-    origin: req.headers[headerNames.origin.toLowerCase()] as string | undefined,
-    originNodeRelease: req.headers[
-      headerNames.originNodeRelease.toLowerCase()
-    ] as string | undefined,
   };
 };
 

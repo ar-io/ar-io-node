@@ -295,10 +295,12 @@ export class ArIODataSource
     peerAddress,
     id,
     headers,
+    requestAttributesHeaders,
   }: {
     peerAddress: string;
     id: string;
     headers: { [key: string]: string };
+    requestAttributesHeaders?: ReturnType<typeof generateRequestAttributes>;
   }): Promise<AxiosResponse> {
     const path = `/raw/${id}`;
 
@@ -309,6 +311,15 @@ export class ArIODataSource
       },
       responseType: 'stream',
       timeout: this.requestTimeoutMs,
+      params: {
+        'ar-io-hops': requestAttributesHeaders?.attributes.hops,
+        'ar-io-origin': requestAttributesHeaders?.attributes.origin,
+        'ar-io-origin-release':
+          requestAttributesHeaders?.attributes.originNodeRelease,
+        'ar-io-arns-record': requestAttributesHeaders?.attributes.arnsRecord,
+        'ar-io-arns-basename':
+          requestAttributesHeaders?.attributes.arnsBasename,
+      },
     });
 
     if (response.status !== 200) {
@@ -370,6 +381,7 @@ export class ArIODataSource
                 }
               : {}),
           },
+          requestAttributesHeaders,
         });
         const ttfb = Date.now() - requestStartTime;
 

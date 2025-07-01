@@ -28,6 +28,7 @@ import {
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container.js';
 import { isTestFiltered } from '../utils.js';
 import { DataItem } from '@dha-team/arbundles';
+import { release } from '../../src/version.js';
 
 const projectRootPath = process.cwd();
 
@@ -448,8 +449,6 @@ describe('X-AR-IO headers', function () {
       const res = await axios.get(`http://localhost:4000/raw/${tx3}`);
 
       assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
       await waitForLogMessage({
         container: coreContainer,
@@ -468,11 +467,6 @@ describe('X-AR-IO headers', function () {
       );
 
       assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(
-        resWithHeaders.headers['x-ar-io-origin-node-release'],
-        'v1.0.0',
-      );
       assert.equal(
         resWithHeaders.headers['x-ar-io-digest'],
         'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
@@ -485,7 +479,7 @@ describe('X-AR-IO headers', function () {
       assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
     });
 
-    it('Verifying that /<id> for a manifest with a missing index returns no hops, origin and node release', async function () {
+    it('Verifying that /<id> for a manifest with a missing index returns no hops', async function () {
       const res = await axios.get(`http://localhost:4000/${tx1}`, {
         validateStatus: () => true,
         headers: {
@@ -494,11 +488,9 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(res.headers['x-ar-io-hops'], undefined);
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
     });
 
-    it('verifying that /<id> for a manifest with a valid index returns hops, origin and node release', async function () {
+    it('verifying that /<id> for a manifest with a valid index returns hops', async function () {
       const res = await axios.get(`http://localhost:4000/${tx2}/`, {
         headers: {
           Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
@@ -506,8 +498,6 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
       await waitForLogMessage({
         container: coreContainer,
@@ -524,14 +514,9 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(resWithHeaders.headers['x-ar-io-hops'], '3');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(
-        resWithHeaders.headers['x-ar-io-origin-node-release'],
-        'v2.0.0',
-      );
     });
 
-    it('Verifying that /<id> for a non-manifest returns hops, origin and node release', async function () {
+    it('Verifying that /<id> for a non-manifest returns hops', async function () {
       const res = await axios.get(`http://localhost:4000/${tx3}`, {
         headers: {
           Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
@@ -539,8 +524,6 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
       await waitForLogMessage({
         container: coreContainer,
@@ -557,11 +540,6 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(
-        resWithHeaders.headers['x-ar-io-origin-node-release'],
-        'v2.0.0',
-      );
     });
   });
 
@@ -587,8 +565,6 @@ describe('X-AR-IO headers', function () {
       const res = await axios.get(`http://localhost:4000/raw/${tx3}`);
 
       assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
       await waitForLogMessage({
         container: coreContainer,
@@ -607,8 +583,6 @@ describe('X-AR-IO headers', function () {
       );
 
       assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin-node-release'], '10');
       assert.equal(
         resWithHeaders.headers['x-ar-io-digest'],
         'gkOH8JBTdKr_wD9SriwYwCM6p7saQAJFU60AREREQLA',
@@ -621,17 +595,15 @@ describe('X-AR-IO headers', function () {
       assert.equal(resWithHeaders.headers['x-ar-io-verified'], 'false');
     });
 
-    it('Verifying that /<id> for a manifest with a missing index returns no hops, origin and node release', async function () {
+    it('Verifying that /<id> for a manifest with a missing index returns no hops', async function () {
       const res = await axios.get(`http://localhost:4000/${tx1}`, {
         validateStatus: () => true,
       });
 
       assert.equal(res.headers['x-ar-io-hops'], undefined);
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
     });
 
-    it('verifying that /<id> for a manifest with a valid index returns hops, origin and node release', async function () {
+    it('verifying that /<id> for a manifest with a valid index returns hops', async function () {
       const res = await axios.get(`http://localhost:4000/${tx2}/`, {
         headers: {
           Host: 'zhtq6zlaiu54cz5ss7vqxlf7yquechmhzcpmwccmrcu7w44f4zbq.ar-io.localhost',
@@ -639,8 +611,6 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
       await waitForLogMessage({
         container: coreContainer,
@@ -657,11 +627,9 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(resWithHeaders.headers['x-ar-io-hops'], '3');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin-node-release'], '10');
     });
 
-    it('Verifying that /<id> for a non-manifest returns hops, origin and node release', async function () {
+    it('Verifying that /<id> for a non-manifest returns hops', async function () {
       const res = await axios.get(`http://localhost:4000/${tx3}`, {
         headers: {
           Host: 'sw3yqmkl5ajki5vl5jflcpqy43opvgtpngs6tel3eltuhq73l2jq.ar-io.localhost',
@@ -669,8 +637,6 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(res.headers['x-ar-io-hops'], '1');
-      assert.equal(res.headers['x-ar-io-origin'], undefined);
-      assert.equal(res.headers['x-ar-io-origin-node-release'], undefined);
 
       await waitForLogMessage({
         container: coreContainer,
@@ -687,8 +653,6 @@ describe('X-AR-IO headers', function () {
       });
 
       assert.equal(resWithHeaders.headers['x-ar-io-hops'], '6');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(resWithHeaders.headers['x-ar-io-origin-node-release'], '10');
     });
   });
 
@@ -701,13 +665,10 @@ describe('X-AR-IO headers', function () {
     before(async function () {
       fakeGateway = createServer((req, res) => {
         const hops = req.headers['x-ar-io-hops'] as string;
-        const origin = req.headers['x-ar-io-origin'] as string;
         res.writeHead(200, {
           'Content-Type': 'text/plain',
           'Content-Length': '11',
           'X-AR-IO-Hops': hops ? (parseInt(hops) + 1).toString() : '1',
-          'X-AR-IO-Origin': origin ?? 'fake-gateway',
-          'X-AR-IO-Origin-Node-Release': '10',
         });
         res.end('hello world');
       });
@@ -749,8 +710,6 @@ describe('X-AR-IO headers', function () {
       const req = await axios.get(`http://localhost:${corePort}/raw/${tx2}`);
 
       assert.equal(req.headers['x-ar-io-hops'], '2');
-      assert.equal(req.headers['x-ar-io-origin'], 'fake-gateway');
-      assert.equal(req.headers['x-ar-io-origin-node-release'], '10');
 
       const reqWithHeaders = await axios.get(
         `http://localhost:${corePort}/raw/${tx3}`,
@@ -764,8 +723,6 @@ describe('X-AR-IO headers', function () {
       );
 
       assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '7');
-      assert.equal(reqWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(reqWithHeaders.headers['x-ar-io-origin-node-release'], '10');
     });
 
     it('Verifying that /<id> returns expected response', async function () {
@@ -775,8 +732,6 @@ describe('X-AR-IO headers', function () {
         },
       });
       assert.equal(req.headers['x-ar-io-hops'], '2');
-      assert.equal(req.headers['x-ar-io-origin'], 'fake-gateway');
-      assert.equal(req.headers['x-ar-io-origin-node-release'], '10');
 
       const reqWithHeaders = await axios.get(
         `http://localhost:${corePort}/${tx3}`,
@@ -791,8 +746,6 @@ describe('X-AR-IO headers', function () {
       );
 
       assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '12');
-      assert.equal(reqWithHeaders.headers['x-ar-io-origin'], 'another-host');
-      assert.equal(reqWithHeaders.headers['x-ar-io-origin-node-release'], '10');
     });
   });
 });

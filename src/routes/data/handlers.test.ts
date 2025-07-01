@@ -12,13 +12,14 @@ import { default as request } from 'supertest';
 
 import { headerNames } from '../../constants.js';
 import log from '../../log.js';
+import { release } from '../../version.js';
 import {
   ContiguousDataIndex,
   ContiguousDataSource,
   DataBlockListValidator,
   ManifestPathResolver,
 } from '../../types.js';
-import { createDataHandler } from './handlers.js';
+import { createDataHandler, getRequestAttributes } from './handlers.js';
 
 describe('Data routes', () => {
   describe('createDataHandler', () => {
@@ -1689,6 +1690,128 @@ st
             .then((res: any) => {
               assert.equal(res.headers['x-ar-io-data-id'], arnsResolvedId);
             });
+        });
+      });
+
+      describe('Request Attributes Initialization', () => {
+        it('should propagate existing X-AR-IO-Origin and X-AR-IO-Origin-Node-Release headers', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-hops': '3',
+              'x-ar-io-origin': 'original-gateway.ar.io',
+              'x-ar-io-origin-node-release': 'v1.0.0',
+            },
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes);
+
+          assert.equal(requestAttributes.hops, 3);
+          assert.equal(requestAttributes.origin, 'original-gateway.ar.io');
+          assert.equal(requestAttributes.originNodeRelease, 'v1.0.0');
+        });
+
+        it('should not initialize originNodeRelease when only origin is present in headers', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-hops': '1',
+              'x-ar-io-origin': 'partial-origin.ar.io',
+            },
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes, {
+            arnsRootHost: 'test-gateway.ar.io',
+            nodeRelease: 'test-release-1.0.0',
+          });
+
+          assert.equal(requestAttributes.hops, 1);
+          assert.equal(requestAttributes.origin, 'partial-origin.ar.io');
+          assert.equal(requestAttributes.originNodeRelease, undefined);
+        });
+
+        it('should not initialize origin when only originNodeRelease is present in headers', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-hops': '2',
+              'x-ar-io-origin-node-release': 'v2.0.0',
+            },
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes, {
+            arnsRootHost: 'test-gateway.ar.io',
+            nodeRelease: 'test-release-1.0.0',
+          });
+
+          assert.equal(requestAttributes.hops, 2);
+          assert.equal(requestAttributes.origin, undefined);
+          assert.equal(requestAttributes.originNodeRelease, 'v2.0.0');
+        });
+
+        it('should initialize origin and originNodeRelease when ARNS_ROOT_HOST is configured', () => {
+          const mockReq = {
+            headers: {},
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes, {
+            arnsRootHost: 'test-gateway.ar.io',
+            nodeRelease: 'test-release-2.0.0',
+          });
+
+          assert.equal(requestAttributes.hops, 0);
+          assert.equal(requestAttributes.origin, 'test-gateway.ar.io');
+          assert.equal(
+            requestAttributes.originNodeRelease,
+            'test-release-2.0.0',
+          );
+        });
+
+        it('should not initialize origin when ARNS_ROOT_HOST is not configured', () => {
+          const mockReq = {
+            headers: {},
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes, {
+            arnsRootHost: undefined,
+            nodeRelease: 'test-release-3.0.0',
+          });
+
+          assert.equal(requestAttributes.hops, 0);
+          assert.equal(requestAttributes.origin, undefined);
+          assert.equal(requestAttributes.originNodeRelease, undefined);
+        });
+
+        it('should handle invalid hops header gracefully', () => {
+          const mockReq = {
+            headers: {
+              'x-ar-io-hops': 'invalid',
+              'x-ar-io-origin': 'test-origin.ar.io',
+            },
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes, {
+            nodeRelease: 'test-release-4.0.0',
+          });
+
+          assert.equal(requestAttributes.hops, 0); // parseInt('invalid') || 0 = 0
+          assert.equal(requestAttributes.origin, 'test-origin.ar.io');
+          assert.equal(requestAttributes.originNodeRelease, undefined); // Not initialized since origin is from headers
         });
       });
     });
