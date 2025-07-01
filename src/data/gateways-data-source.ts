@@ -148,6 +148,10 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 'ar-io-origin': requestAttributesHeaders?.attributes.origin,
                 'ar-io-origin-release':
                   requestAttributesHeaders?.attributes.originNodeRelease,
+                'ar-io-arns-record':
+                  requestAttributesHeaders?.attributes.arnsRecord,
+                'ar-io-arns-basename':
+                  requestAttributesHeaders?.attributes.arnsBasename,
               },
             });
 

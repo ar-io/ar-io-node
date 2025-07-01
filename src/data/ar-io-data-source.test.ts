@@ -15,9 +15,11 @@ import { ArIODataSource } from './ar-io-data-source.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { headerNames } from '../constants.js';
+import { release } from '../version.js';
 
 let log: winston.Logger;
 let dataSource: ArIODataSource;
+const nodeUrl = 'localNode.com';
 let requestAttributes: RequestAttributes;
 let mockedArIOInstance: AoARIORead;
 let mockedAxiosGet: any;
@@ -577,6 +579,356 @@ describe('ArIODataSource', () => {
         assert.equal(data.stream, streamData);
         assert.equal(data.size, 10);
       });
+    });
+
+    describe('ArNS query parameters', () => {
+      it('should include ArNS record and basename as query parameters when provided', async () => {
+        let requestUrl: string | undefined;
+        let requestConfig: any;
+
+        mock.method(axios, 'get', async (url: string, config: any) => {
+          requestUrl = url;
+          requestConfig = config;
+          return {
+            status: 200,
+            data: axiosStreamData,
+            headers: {
+              'content-length': '123',
+              'content-type': 'application/octet-stream',
+              [headerNames.verified.toLowerCase()]: 'true',
+              [headerNames.trusted.toLowerCase()]: 'false',
+            },
+          };
+        });
+
+        const requestAttributesWithArns: RequestAttributes = {
+          hops: 1,
+          origin: 'test-origin',
+          originNodeRelease: '42',
+          arnsRecord: 'subdomain',
+          arnsBasename: 'example',
+        };
+
+        await dataSource.getData({
+          id: 'testId',
+          requestAttributes: requestAttributesWithArns,
+        });
+
+        // Verify the URL includes the base path
+        assert.ok(requestUrl?.includes('/raw/testId'));
+
+        // Verify all query parameters are included
+        assert.equal(requestConfig.params['ar-io-hops'], 2); // hops + 1
+        assert.equal(requestConfig.params['ar-io-origin'], 'test-origin');
+        assert.equal(requestConfig.params['ar-io-origin-release'], '42');
+        assert.equal(requestConfig.params['ar-io-arns-record'], 'subdomain');
+        assert.equal(requestConfig.params['ar-io-arns-basename'], 'example');
+      });
+
+      it('should include only provided request attributes as query parameters', async () => {
+        let requestConfig: any;
+
+        mock.method(axios, 'get', async (url: string, config: any) => {
+          requestConfig = config;
+          return {
+            status: 200,
+            data: axiosStreamData,
+            headers: {
+              'content-length': '123',
+              'content-type': 'application/octet-stream',
+              [headerNames.verified.toLowerCase()]: 'true',
+              [headerNames.trusted.toLowerCase()]: 'false',
+            },
+          };
+        });
+
+        const requestAttributesPartial: RequestAttributes = {
+          hops: 0,
+          arnsBasename: 'example',
+          // arnsRecord is undefined
+        };
+
+        await dataSource.getData({
+          id: 'testId',
+          requestAttributes: requestAttributesPartial,
+        });
+
+        // Verify provided parameters are included
+        assert.equal(requestConfig.params['ar-io-hops'], 1); // hops + 1
+        assert.equal(requestConfig.params['ar-io-arns-basename'], 'example');
+
+        // Verify undefined parameters are still passed (following axios behavior)
+        assert.equal(requestConfig.params['ar-io-origin'], undefined);
+        assert.equal(requestConfig.params['ar-io-origin-release'], undefined);
+        assert.equal(requestConfig.params['ar-io-arns-record'], undefined);
+      });
+
+      it('should handle empty request attributes', async () => {
+        let requestConfig: any;
+
+        mock.method(axios, 'get', async (url: string, config: any) => {
+          requestConfig = config;
+          return {
+            status: 200,
+            data: axiosStreamData,
+            headers: {
+              'content-length': '123',
+              'content-type': 'application/octet-stream',
+              [headerNames.verified.toLowerCase()]: 'true',
+              [headerNames.trusted.toLowerCase()]: 'false',
+            },
+          };
+        });
+
+        await dataSource.getData({
+          id: 'testId',
+          // no requestAttributes provided
+        });
+
+        // Verify all parameters are undefined when no request attributes are provided
+        assert.equal(requestConfig.params['ar-io-hops'], undefined);
+        assert.equal(requestConfig.params['ar-io-origin'], undefined);
+        assert.equal(requestConfig.params['ar-io-origin-release'], undefined);
+        assert.equal(requestConfig.params['ar-io-arns-record'], undefined);
+        assert.equal(requestConfig.params['ar-io-arns-basename'], undefined);
+      });
+    });
+  });
+
+  describe('Request attribute headers propagation', () => {
+    it('should send X-AR-IO-Hops and X-AR-IO-Origin headers when requestAttributes are provided', async () => {
+      let capturedHeaders: any;
+      let capturedParams: any;
+
+      mock.method(axios, 'get', async (url: string, config: any) => {
+        capturedHeaders = config.headers;
+        capturedParams = config.params;
+        return {
+          status: 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': '123',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      await dataSource.getData({
+        id: 'dataId',
+        requestAttributes: {
+          hops: 1,
+          origin: 'test-origin',
+          originNodeRelease: 'v1.2.3',
+        },
+      });
+
+      // Check headers
+      assert.equal(capturedHeaders[headerNames.hops], '2'); // incremented from 1
+      assert.equal(capturedHeaders[headerNames.origin], 'test-origin');
+      assert.equal(capturedHeaders[headerNames.originNodeRelease], 'v1.2.3');
+
+      // Check query params
+      assert.equal(capturedParams['ar-io-hops'], 2);
+      assert.equal(capturedParams['ar-io-origin'], 'test-origin');
+      assert.equal(capturedParams['ar-io-origin-release'], 'v1.2.3');
+    });
+
+    it('should send only X-AR-IO-Hops header when origin is not provided', async () => {
+      let capturedHeaders: any;
+      let capturedParams: any;
+
+      mock.method(axios, 'get', async (url: string, config: any) => {
+        capturedHeaders = config.headers;
+        capturedParams = config.params;
+        return {
+          status: 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': '123',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      await dataSource.getData({
+        id: 'dataId',
+        requestAttributes: {
+          hops: 1,
+        },
+      });
+
+      // Check headers
+      assert.equal(capturedHeaders[headerNames.hops], '2'); // incremented from 1
+      assert.equal(capturedHeaders[headerNames.origin], undefined);
+      assert.equal(capturedHeaders[headerNames.originNodeRelease], undefined);
+
+      // Check query params
+      assert.equal(capturedParams['ar-io-hops'], 2);
+      assert.equal(capturedParams['ar-io-origin'], undefined);
+      assert.equal(capturedParams['ar-io-origin-release'], undefined);
+    });
+
+    it('should not send request attribute headers when no requestAttributes are provided', async () => {
+      let capturedHeaders: any;
+      let capturedParams: any;
+
+      mock.method(axios, 'get', async (url: string, config: any) => {
+        capturedHeaders = config.headers;
+        capturedParams = config.params;
+        return {
+          status: 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': '123',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      await dataSource.getData({ id: 'dataId' });
+
+      // Check headers - should not be present when no requestAttributes provided
+      assert.equal(capturedHeaders[headerNames.hops], undefined);
+      assert.equal(capturedHeaders[headerNames.origin], undefined);
+      assert.equal(capturedHeaders[headerNames.originNodeRelease], undefined);
+
+      // Check query params - should also not be present
+      assert.equal(capturedParams['ar-io-hops'], undefined);
+      assert.equal(capturedParams['ar-io-origin'], undefined);
+      assert.equal(capturedParams['ar-io-origin-release'], undefined);
+    });
+
+    it('should send request attribute headers when both origin and release are initialized', async () => {
+      let capturedHeaders: any;
+      let capturedParams: any;
+
+      mock.method(axios, 'get', async (url: string, config: any) => {
+        capturedHeaders = config.headers;
+        capturedParams = config.params;
+        return {
+          status: 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': '123',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      // This simulates the initial request from handlers where both origin and release are initialized together
+      await dataSource.getData({
+        id: 'dataId',
+        requestAttributes: {
+          hops: 0,
+          origin: nodeUrl,
+          originNodeRelease: release,
+        },
+      });
+
+      // Check headers - hops should be incremented to 1
+      assert.equal(capturedHeaders[headerNames.hops], '1');
+      assert.equal(capturedHeaders[headerNames.origin], nodeUrl);
+      assert.equal(capturedHeaders[headerNames.originNodeRelease], release);
+
+      // Check query params
+      assert.equal(capturedParams['ar-io-hops'], 1);
+      assert.equal(capturedParams['ar-io-origin'], nodeUrl);
+      assert.equal(capturedParams['ar-io-origin-release'], release);
+    });
+
+    it('should propagate headers correctly across multiple peer retries', async () => {
+      let callCount = 0;
+      const capturedHeaders: any[] = [];
+      const capturedParams: any[] = [];
+
+      mock.method(axios, 'get', async (url: string, config: any) => {
+        capturedHeaders.push({ ...config.headers });
+        capturedParams.push({ ...config.params });
+        callCount++;
+
+        if (callCount === 1) {
+          // First peer fails
+          throw new Error('First peer failed');
+        }
+
+        // Second peer succeeds
+        return {
+          status: 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': '123',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      await dataSource.getData({
+        id: 'dataId',
+        requestAttributes: {
+          hops: 1,
+          origin: 'original-node',
+          originNodeRelease: 'v1.0.0',
+        },
+      });
+
+      // Both attempts should have the same headers
+      assert.equal(callCount, 2);
+      for (const headers of capturedHeaders) {
+        assert.equal(headers[headerNames.hops], '2');
+        assert.equal(headers[headerNames.origin], 'original-node');
+        assert.equal(headers[headerNames.originNodeRelease], 'v1.0.0');
+      }
+
+      // Both attempts should have the same query params
+      for (const params of capturedParams) {
+        assert.equal(params['ar-io-hops'], 2);
+        assert.equal(params['ar-io-origin'], 'original-node');
+        assert.equal(params['ar-io-origin-release'], 'v1.0.0');
+      }
+    });
+
+    it('should include request attribute headers along with other headers', async () => {
+      let capturedHeaders: any;
+
+      mock.method(axios, 'get', async (url: string, config: any) => {
+        capturedHeaders = config.headers;
+        return {
+          status: 200,
+          data: axiosStreamData,
+          headers: {
+            'content-length': '50',
+            'content-type': 'application/octet-stream',
+            [headerNames.verified.toLowerCase()]: 'true',
+            [headerNames.trusted.toLowerCase()]: 'false',
+          },
+        };
+      });
+
+      const region = { offset: 100, size: 200 };
+      await dataSource.getData({
+        id: 'dataId',
+        region,
+        requestAttributes: {
+          hops: 1,
+          origin: 'test-node',
+        },
+      });
+
+      // Should have both Range header and request attribute headers
+      assert.equal(capturedHeaders['Range'], 'bytes=100-299');
+      assert.equal(capturedHeaders[headerNames.hops], '2');
+      assert.equal(capturedHeaders[headerNames.origin], 'test-node');
+      assert.equal(capturedHeaders['Accept-Encoding'], 'identity');
     });
   });
 });
