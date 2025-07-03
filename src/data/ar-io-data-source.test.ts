@@ -271,6 +271,24 @@ describe('ArIODataSource', () => {
       );
     });
 
+    it('should throw error when hops equals default max hops (3)', async () => {
+      requestAttributes.hops = 3;
+
+      await assert.rejects(
+        dataSource.getData({ id: 'dataId', requestAttributes }),
+        /Max hops reached/,
+      );
+    });
+
+    it('should allow hops less than max hops (2 < 3)', async () => {
+      requestAttributes.hops = 2;
+
+      const data = await dataSource.getData({ id: 'dataId', requestAttributes });
+      
+      assert.ok(data.stream);
+      assert.equal(data.requestAttributes?.hops, 3); // Should increment from 2 to 3
+    });
+
     it('should include Range header when region is provided', async () => {
       let rangeHeader: string | undefined;
       mock.method(axios, 'get', async (_: string, config: any) => {
