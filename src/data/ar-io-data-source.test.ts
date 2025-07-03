@@ -283,9 +283,12 @@ describe('ArIODataSource', () => {
     it('should allow hops less than max hops (2 < 3)', async () => {
       requestAttributes.hops = 2;
 
-      const data = await dataSource.getData({ id: 'dataId', requestAttributes });
-      
-      assert.ok(data.stream);
+      const data = await dataSource.getData({
+        id: 'dataId',
+        requestAttributes,
+      });
+
+      assert.ok(data.stream != null);
       assert.equal(data.requestAttributes?.hops, 3); // Should increment from 2 to 3
     });
 
