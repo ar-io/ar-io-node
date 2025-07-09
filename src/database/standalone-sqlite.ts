@@ -1272,6 +1272,8 @@ export class StandaloneSqliteDatabaseWorker {
     cachedAt,
     verified,
     verificationPriority,
+    retentionPolicyId,
+    retentionExpiresAt,
   }: {
     id: string;
     parentId?: string;
@@ -1282,6 +1284,8 @@ export class StandaloneSqliteDatabaseWorker {
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
+    retentionPolicyId?: string;
+    retentionExpiresAt?: number;
   }) {
     const hashBuffer = fromB64Url(hash);
     const currentTimestamp = currentUnixTimestamp();
@@ -1318,7 +1322,24 @@ export class StandaloneSqliteDatabaseWorker {
       original_source_content_type: contentType,
       indexed_at: currentTimestamp,
       cached_at: cachedAt,
+      retention_policy_id: retentionPolicyId ?? null,
+      retention_expires_at: retentionExpiresAt ?? null,
     });
+  }
+
+  getDataRetention(hash: string) {
+    const row = this.stmts.data.selectDataRetention.get({
+      hash: fromB64Url(hash),
+    });
+    
+    if (!row) {
+      return undefined;
+    }
+
+    return {
+      retentionPolicyId: row.retention_policy_id,
+      retentionExpiresAt: row.retention_expires_at,
+    };
   }
 
   getBundle(id: string) {
@@ -3246,8 +3267,11 @@ export class StandaloneSqliteDatabase
     hash,
     dataSize,
     contentType,
+    cachedAt,
     verified,
     verificationPriority,
+    retentionPolicyId,
+    retentionExpiresAt,
   }: {
     id: string;
     parentId?: string;
@@ -3255,8 +3279,11 @@ export class StandaloneSqliteDatabase
     hash: string;
     dataSize: number;
     contentType?: string;
+    cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
+    retentionPolicyId?: string;
+    retentionExpiresAt?: number;
   }) {
     if (this.saveDataContentAttributesCache.get(id)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
@@ -3275,10 +3302,17 @@ export class StandaloneSqliteDatabase
         hash,
         dataSize,
         contentType,
+        cachedAt,
         verified,
         verificationPriority,
+        retentionPolicyId,
+        retentionExpiresAt,
       },
     ]);
+  }
+
+  getDataRetention(hash: string) {
+    return this.queueRead('data', 'getDataRetention', [hash]);
   }
 
   getBundle(id: string) {

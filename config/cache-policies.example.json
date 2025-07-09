@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "policies": [
+    {
+      "id": "ardrive-long-term",
+      "name": "ArDrive Long-Term Retention",
+      "enabled": true,
+      "priority": 100,
+      "retentionDays": 2555,
+      "filter": {
+        "or": [
+          {
+            "tags": [
+              {
+                "name": "App-Name",
+                "value": "ArDrive"
+              }
+            ]
+          },
+          {
+            "tags": [
+              {
+                "name": "App-Name",
+                "value": "ArDrive-Web"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "vip-wallets",
+      "name": "VIP Wallet Retention",
+      "enabled": true,
+      "priority": 90,
+      "retentionDays": 365,
+      "filter": {
+        "or": [
+          {
+            "attributes": {
+              "owner_address": "wallet-address-1"
+            }
+          },
+          {
+            "attributes": {
+              "owner_address": "wallet-address-2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "specific-app-wallet",
+      "name": "Specific App and Wallet Combo",
+      "enabled": true,
+      "priority": 110,
+      "retentionDays": 1825,
+      "filter": {
+        "and": [
+          {
+            "attributes": {
+              "owner_address": "important-wallet-address"
+            }
+          },
+          {
+            "tags": [
+              {
+                "name": "App-Name",
+                "value": "ImportantApp"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "video-content",
+      "name": "Video Content Extended Storage",
+      "enabled": true,
+      "priority": 80,
+      "retentionDays": 180,
+      "filter": {
+        "or": [
+          {
+            "tags": [
+              {
+                "name": "Content-Type",
+                "value": "video/mp4"
+              }
+            ]
+          },
+          {
+            "tags": [
+              {
+                "name": "Content-Type",
+                "value": "video/webm"
+              }
+            ]
+          },
+          {
+            "tags": [
+              {
+                "name": "Content-Type",
+                "value": "video/ogg"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "default-retention",
+      "name": "Default Retention Policy",
+      "enabled": true,
+      "priority": 10,
+      "retentionDays": 30,
+      "filter": {
+        "always": true
+      }
+    }
+  ]
+}

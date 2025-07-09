@@ -3,7 +3,9 @@ CREATE TABLE contiguous_data  (
   data_size INTEGER NOT NULL,
   original_source_content_type TEXT,
   indexed_at INTEGER NOT NULL,
-  cached_at INTEGER
+  cached_at INTEGER,
+  retention_policy_id TEXT,
+  retention_expires_at INTEGER
 );
 CREATE TABLE contiguous_data_ids (
   id BLOB PRIMARY KEY,
@@ -39,3 +41,6 @@ CREATE TABLE contiguous_data_id_parents (
 CREATE INDEX contiguous_data_ids_verification_priority_retry_idx 
 ON contiguous_data_ids (verification_priority DESC, verification_retry_count ASC, id ASC) 
 WHERE verified = FALSE;
+CREATE INDEX contiguous_data_retention_expires_idx 
+ON contiguous_data(retention_expires_at) 
+WHERE retention_expires_at IS NOT NULL;

@@ -4,13 +4,17 @@ INSERT INTO contiguous_data (
   data_size,
   original_source_content_type,
   indexed_at,
-  cached_at
+  cached_at,
+  retention_policy_id,
+  retention_expires_at
 ) VALUES (
   :hash,
   :data_size,
   :original_source_content_type,
   :indexed_at,
-  :cached_at
+  :cached_at,
+  :retention_policy_id,
+  :retention_expires_at
 ) ON CONFLICT DO NOTHING
 
 -- insertDataId
@@ -112,4 +116,12 @@ FROM contiguous_data_id_parents cdip
 JOIN contiguous_data_ids cdi ON cdip.parent_id = cdi.id
 LEFT JOIN contiguous_data cd ON cd.hash = cdi.contiguous_data_hash
 WHERE cdip.id = :id
+LIMIT 1
+
+-- selectDataRetention
+SELECT
+  cd.retention_policy_id,
+  cd.retention_expires_at
+FROM contiguous_data cd
+WHERE cd.hash = :hash
 LIMIT 1

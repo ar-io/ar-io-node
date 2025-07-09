@@ -620,6 +620,24 @@ export const PREFERRED_ARNS_NAMES = new Set(
   env.varOrDefault('PREFERRED_ARNS_NAMES', '').split(','),
 );
 
+// Custom cache retention policies
+export const ENABLE_CUSTOM_CACHE_POLICIES = env.varOrDefault(
+  'ENABLE_CUSTOM_CACHE_POLICIES',
+  false,
+);
+
+export const CACHE_POLICY_CONFIG_PATH = env.varOrDefault(
+  'CACHE_POLICY_CONFIG_PATH',
+  './config/cache-policies.json',
+);
+
+export const RETENTION_DATA_PATH = env.varOrDefault('RETENTION_DATA_PATH', '');
+
+export const DEFAULT_CACHE_RETENTION_DAYS = env.varOrDefault(
+  'DEFAULT_CACHE_RETENTION_DAYS',
+  7,
+);
+
 // The set of base ArNS names to preferentially cache
 export const PREFERRED_ARNS_BASE_NAMES = new Set(
   env.varOrDefault('PREFERRED_ARNS_BASE_NAMES', '').split(','),

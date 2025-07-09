@@ -598,6 +598,8 @@ export interface ContiguousDataIndex {
     cachedAt,
     verified,
     verificationPriority,
+    retentionPolicyId,
+    retentionExpiresAt,
   }: {
     id: string;
     parentId?: string;
@@ -608,7 +610,16 @@ export interface ContiguousDataIndex {
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
+    retentionPolicyId?: string;
+    retentionExpiresAt?: number;
   }): Promise<void>;
+  getDataRetention(hash: string): Promise<
+    | {
+        retentionPolicyId?: string;
+        retentionExpiresAt?: number;
+      }
+    | undefined
+  >;
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
   }): Promise<string[]>;

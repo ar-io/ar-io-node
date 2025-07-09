@@ -43,6 +43,7 @@ import * as metrics from './metrics.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
+import { TieredFsDataStore } from './store/tiered-fs-data-store.js';
 import {
   DataBlockListValidator,
   NameBlockListValidator,
@@ -51,6 +52,7 @@ import {
   ChainOffsetIndex,
   ContiguousDataIndex,
   ContiguousDataSource,
+  ContiguousDataStore,
   DataItemIndexWriter,
   GqlQueryable,
   NestedDataIndexWriter,
@@ -77,6 +79,8 @@ import { ArIODataSource } from './data/ar-io-data-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
+import { CachePolicyEvaluator } from './cache/cache-policy-evaluator.js';
+import { CachePolicyLoader } from './cache/cache-policy-loader.js';
 import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
@@ -238,6 +242,25 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
         try {
           const stats = await fs.promises.stat(path);
           const hash = path.split('/').pop() ?? '';
+
+          // Check custom retention policy first
+          if (config.ENABLE_CUSTOM_CACHE_POLICIES) {
+            const retentionData = await db.getDataRetention(hash);
+            if (retentionData?.retentionExpiresAt) {
+              const now = Date.now();
+              if (now < retentionData.retentionExpiresAt) {
+                log.debug('Skipping deletion due to retention policy', {
+                  hash,
+                  policyId: retentionData.retentionPolicyId,
+                  expiresAt: new Date(
+                    retentionData.retentionExpiresAt,
+                  ).toISOString(),
+                });
+                return false; // Don't delete, still within retention period
+              }
+            }
+          }
+
           const metadata = await contiguousMetadataStore.get(hash);
 
           // Determine whether data is associated with a preferred name by
@@ -498,27 +521,74 @@ for (const sourceName of config.BACKGROUND_RETRIEVAL_ORDER) {
   }
 }
 
+// Initialize cache policy evaluator if enabled
+let cachePolicyEvaluator: CachePolicyEvaluator | undefined;
+if (config.ENABLE_CUSTOM_CACHE_POLICIES) {
+  try {
+    const policyLoader = new CachePolicyLoader({ log });
+    const policies = policyLoader.loadPolicies(config.CACHE_POLICY_CONFIG_PATH);
+    if (policies.length > 0) {
+      cachePolicyEvaluator = new CachePolicyEvaluator({ log, policies });
+      log.info('Cache policy evaluator initialized', {
+        policyCount: policies.length,
+        enabledCount: policies.filter((p) => p.enabled).length,
+      });
+    }
+  } catch (error: any) {
+    log.error('Failed to initialize cache policy evaluator', {
+      error: error.message,
+    });
+  }
+}
+
 const dataContentAttributeImporter = new DataContentAttributeImporter({
   log,
   contiguousDataIndex: contiguousDataIndex,
+  policyEvaluator: cachePolicyEvaluator,
 });
 metrics.registerQueueLengthGauge('dataContentAttributeImporter', {
   length: () => dataContentAttributeImporter.queueDepth(),
 });
 
-const contiguousDataStore =
-  awsClient !== undefined && config.AWS_S3_CONTIGUOUS_DATA_BUCKET !== undefined
-    ? new S3DataStore({
-        log,
-        baseDir: 'data/contiguous',
-        s3Client: awsClient.S3,
-        s3Prefix: config.AWS_S3_CONTIGUOUS_DATA_PREFIX,
-        s3Bucket: config.AWS_S3_CONTIGUOUS_DATA_BUCKET,
-      })
-    : new FsDataStore({
-        log,
-        baseDir: 'data/contiguous',
-      });
+let contiguousDataStore: ContiguousDataStore;
+
+if (
+  awsClient !== undefined &&
+  config.AWS_S3_CONTIGUOUS_DATA_BUCKET !== undefined
+) {
+  // S3 storage (unchanged)
+  contiguousDataStore = new S3DataStore({
+    log,
+    baseDir: 'data/contiguous',
+    s3Client: awsClient.S3,
+    s3Prefix: config.AWS_S3_CONTIGUOUS_DATA_PREFIX,
+    s3Bucket: config.AWS_S3_CONTIGUOUS_DATA_BUCKET,
+  });
+} else {
+  // Filesystem storage with optional tiered storage
+  const regularStore = new FsDataStore({
+    log,
+    baseDir: 'data/contiguous',
+  });
+
+  if (config.ENABLE_CUSTOM_CACHE_POLICIES && config.RETENTION_DATA_PATH) {
+    // Use tiered storage
+    const retentionStore = new FsDataStore({
+      log,
+      baseDir: config.RETENTION_DATA_PATH,
+    });
+
+    contiguousDataStore = new TieredFsDataStore({
+      log,
+      regularStore,
+      retentionStore,
+      db: indexDataContentDatabase,
+    });
+  } else {
+    // Use regular storage only
+    contiguousDataStore = regularStore;
+  }
+}
 
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,

@@ -9,6 +9,7 @@ import type { queueAsPromised } from 'fastq';
 import * as winston from 'winston';
 
 import { ContiguousDataIndex } from '../types.js';
+import { CachePolicyEvaluator } from '../cache/cache-policy-evaluator.js';
 
 const DEFAULT_WORKER_COUNT = 1;
 const DEFAULT_MAX_QUEUE_SIZE = 100;
@@ -22,27 +23,35 @@ export type DataContentAttributeProperties = {
   cachedAt?: number;
   verified?: boolean;
   verificationPriority?: number;
+  owner?: string;
+  target?: string;
+  timestamp?: number;
+  tags?: Array<{ name: string; value: string }>;
 };
 
 export class DataContentAttributeImporter {
   private log: winston.Logger;
   private contiguousDataIndex: ContiguousDataIndex;
+  private policyEvaluator?: CachePolicyEvaluator;
   private maxQueueSize: number;
   private queue: queueAsPromised<DataContentAttributeProperties, void>;
 
   constructor({
     log,
     contiguousDataIndex,
+    policyEvaluator,
     workerCount = DEFAULT_WORKER_COUNT,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
   }: {
     log: winston.Logger;
     contiguousDataIndex: ContiguousDataIndex;
+    policyEvaluator?: CachePolicyEvaluator;
     workerCount?: number;
     maxQueueSize?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.contiguousDataIndex = contiguousDataIndex;
+    this.policyEvaluator = policyEvaluator;
     this.maxQueueSize = maxQueueSize;
 
     this.queue = fastq.promise(
@@ -70,7 +79,50 @@ export class DataContentAttributeImporter {
   ): Promise<void> {
     const log = this.log.child({ id: properties.id });
     log.debug('Saving data content attributes...');
-    await this.contiguousDataIndex.saveDataContentAttributes(properties);
+
+    let retentionPolicyId: string | undefined;
+    let retentionExpiresAt: number | undefined;
+
+    // Evaluate cache policies if evaluator is configured
+    if (
+      this.policyEvaluator !== undefined &&
+      properties.owner !== undefined &&
+      properties.tags !== undefined
+    ) {
+      try {
+        const policyResult = await this.policyEvaluator.evaluatePolicies(
+          {
+            id: properties.id,
+            owner_address: properties.owner,
+            target: properties.target,
+            data_size: properties.dataSize,
+            timestamp: properties.timestamp,
+          },
+          properties.tags,
+        );
+
+        if (policyResult) {
+          retentionPolicyId = policyResult.policyId;
+          retentionExpiresAt = policyResult.expiresAt;
+
+          log.info('Applied cache retention policy', {
+            policyId: policyResult.policyId,
+            policyName: policyResult.policyName,
+            retentionDays: policyResult.retentionDays,
+            expiresAt: new Date(policyResult.expiresAt).toISOString(),
+          });
+        }
+      } catch (error) {
+        log.error('Error evaluating cache policies', error);
+      }
+    }
+
+    await this.contiguousDataIndex.saveDataContentAttributes({
+      ...properties,
+      retentionPolicyId,
+      retentionExpiresAt,
+    });
+
     log.debug('Data content attributes saved...');
   }
 
