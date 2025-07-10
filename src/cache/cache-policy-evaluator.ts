@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import winston from 'winston';
-import { Tag } from '../types.js';
+import { B64uTag } from '../types.js';
 import { createFilter } from '../filters.js';
 import { CachePolicy, CachePolicyResult } from './cache-policy-types.js';
 
@@ -32,7 +32,7 @@ export class CachePolicyEvaluator {
       data_size: number;
       timestamp?: number;
     },
-    tags: Tag[],
+    tags: B64uTag[],
   ): Promise<CachePolicyResult | undefined> {
     const sortedPolicies = [...this.policies]
       .filter((p) => p.enabled)

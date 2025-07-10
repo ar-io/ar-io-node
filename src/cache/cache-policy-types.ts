@@ -4,15 +4,13 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { Filter } from '../filters.js';
-
 export interface CachePolicy {
   id: string;
   name: string;
   enabled: boolean;
   priority: number;
   retentionDays: number;
-  filter: Filter;
+  filter: any; // Filter configuration object for createFilter
 }
 
 export interface CachePolicyResult {

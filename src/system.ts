@@ -582,7 +582,7 @@ if (
       log,
       regularStore,
       retentionStore,
-      db: indexDataContentDatabase,
+      db,
     });
   } else {
     // Use regular storage only

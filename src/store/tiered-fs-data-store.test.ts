@@ -22,7 +22,7 @@ import winston from 'winston';
 import { tmpdir } from 'node:os';
 import { TieredFsDataStore } from './tiered-fs-data-store.js';
 import { FsDataStore } from './fs-data-store.js';
-import { DataContentIndexDatabase } from '../types.js';
+// Using any for database type since it just needs getDataRetention method
 
 async function streamToBuffer(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -45,7 +45,7 @@ describe('TieredFsDataStore', () => {
   let testRetentionDir: string;
   let regularStore: FsDataStore;
   let retentionStore: FsDataStore;
-  let mockDb: DataContentIndexDatabase;
+  let mockDb: any;
   let tieredStore: TieredFsDataStore;
 
   before(() => {

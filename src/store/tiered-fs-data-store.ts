@@ -4,20 +4,17 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { Readable, Writable } from 'node:stream';
+import { Readable } from 'node:stream';
+import fs from 'node:fs';
 import winston from 'winston';
-import {
-  ContiguousDataStore,
-  DataContentIndexDatabase,
-  Region,
-} from '../types.js';
+import { ContiguousDataStore, Region } from '../types.js';
 import { FsDataStore } from './fs-data-store.js';
 
 export class TieredFsDataStore implements ContiguousDataStore {
   private log: winston.Logger;
   private regularStore: FsDataStore;
   private retentionStore: FsDataStore | undefined;
-  private db: DataContentIndexDatabase;
+  private db: any; // Database with getDataRetention method
 
   constructor({
     log,
@@ -28,7 +25,7 @@ export class TieredFsDataStore implements ContiguousDataStore {
     log: winston.Logger;
     regularStore: FsDataStore;
     retentionStore: FsDataStore | undefined;
-    db: DataContentIndexDatabase;
+    db: any;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.regularStore = regularStore;
@@ -63,17 +60,17 @@ export class TieredFsDataStore implements ContiguousDataStore {
     return regularData;
   }
 
-  async createWriteStream(): Promise<Writable> {
+  async createWriteStream(): Promise<fs.WriteStream> {
     // Always create write stream in regular store first
     // We'll move it to retention store in finalize if needed
     return this.regularStore.createWriteStream();
   }
 
-  async cleanup(stream: Writable): Promise<void> {
+  async cleanup(stream: fs.WriteStream): Promise<void> {
     return this.regularStore.cleanup(stream);
   }
 
-  async finalize(stream: Writable, hash: string): Promise<void> {
+  async finalize(stream: fs.WriteStream, hash: string): Promise<void> {
     // If no retention store configured, use regular store
     if (!this.retentionStore) {
       return this.regularStore.finalize(stream, hash);
@@ -129,7 +126,7 @@ export class TieredFsDataStore implements ContiguousDataStore {
    * Helper method to delete data from a specific store
    */
   private async deleteFromStore(
-    store: FsDataStore,
+    _store: FsDataStore,
     hash: string,
   ): Promise<void> {
     try {
