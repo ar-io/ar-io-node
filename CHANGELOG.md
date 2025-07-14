@@ -4,7 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 42] - 2025-07-14
+
+This is an optional release that improves peer request traceability, adds
+HyperBEAM URL support, and includes draft AI-generated technical documentation.
+
+### Added
+
+- Added support for optional HyperBEAM URL configuration via
+  `AO_ANT_HYPERBEAM_URL` environment variable. In the future this allows ANT
+  processes to use HyperBEAM nodes for caching and serving state, reducing
+  pressure on compute units for simple read requests.
+- Added AI-generated technical documentation covering AR.IO gateway
+  architecture, data retrieval, Arweave connectivity, ArNS name resolution
+  system, centralization analysis, and database architecture. These guides in
+  `docs/drafts/` are generally correct but should not be considered
+  authoritative.
+- Added origin and release information to query string parameters in outbound
+  requests to both peer gateways and trusted gateways. Data requests now
+  include `ar-io-hops`, `ar-io-origin`, `ar-io-origin-release`,
+  `ar-io-arns-record`, and `ar-io-arns-basename` as query parameters,
+  improving network observability and request tracing across the entire
+  gateway network.
+
+### Changed
+
+- Implemented X-AR-IO header initialization for outbound peer requests while
+  removing `x-ar-io-origin` and `x-ar-io-origin-node-release` headers from
+  responses. This change maintains necessary header functionality for peer
+  communication while reducing unnecessary header overhead in responses.
+- Updated `@ar.io/sdk` dependency to support optional HyperBEAM URL
+  functionality.
 
 ## [Release 41] - 2025-06-30
 
@@ -161,7 +191,7 @@ Upgrading to this release is recommended but not urgent.
 
 ## [Release 37] - 2025-06-03
 
-This is a *recommended release* due to the included observer robustness
+This is a _recommended release_ due to the included observer robustness
 improvements. It also adds an important new feature - data verification for
 preferred ArNS names. When preferred ArNS names are set, the bundles containing
 the data they point to will be locally unbundled (verifying data item
