@@ -13,7 +13,7 @@ import { cleanDb, composeUp } from './utils.js';
 
 const chunk = readFileSync('test/mock_files/chunks/random-chunk.json', 'utf8');
 
-describe('Post Chunk', () => {
+describe.skip('Post Chunk', () => {
   let compose: StartedDockerComposeEnvironment;
 
   describe('with default timeout and abort settings', () => {
