@@ -286,7 +286,7 @@ COPY (
 ) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');
 SQL
 
-  block_count=$(duckdb "$TEMP_DB" -csv -c "SELECT COUNT(*) FROM blocks WHERE height >= $start AND height <= $end;")
+  block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $start AND height <= $end;")
   block_file="${OUTPUT_DIR}/blocks-minHeight:${start}-maxHeight:${end}-rowCount:${block_count}.parquet"
   duckdb "$TEMP_DB" <<SQL
 COPY (
@@ -294,7 +294,7 @@ COPY (
 ) TO '$block_file' (FORMAT PARQUET, COMPRESSION 'zstd');
 SQL
 
-  tag_count=$(duckdb "$TEMP_DB" -csv -c "SELECT COUNT(*) FROM tags WHERE height >= $start AND height <= $end;")
+  tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM tags WHERE height >= $start AND height <= $end;")
   tag_file="${OUTPUT_DIR}/tags-minHeight:${start}-maxHeight:${end}-rowCount:${tag_count}.parquet"
   duckdb "$TEMP_DB" <<SQL
 COPY (
