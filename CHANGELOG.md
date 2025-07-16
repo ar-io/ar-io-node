@@ -6,8 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added automatic chunk data cache cleanup functionality with configurable retention period. Chunks are now automatically removed after 4 hours by default (configurable via `CHUNK_DATA_CACHE_CLEANUP_THRESHOLD`). The cleanup can be disabled by setting `ENABLE_CHUNK_DATA_CACHE_CLEANUP=false`. This helps manage disk space usage while maintaining cache performance benefits.
+
 ### Changed
 
+- Simplified chunk data storage by removing the dual-storage approach (by-hash and by-dataroot with symlinks). Chunks are now stored directly by data root only, reducing complexity and improving performance.
 - Revamped chunk broadcasting architecture from 3-tier system to unified peer-based approach. Chunk broadcasting now uses individual fastq queues per peer with configurable concurrency and queue depth protection. Added support for preferred chunk POST peers via `PREFERRED_CHUNK_POST_URLS` environment variable. This change improves broadcast reliability and performance while simplifying the codebase by removing circuit breakers and tier-based logic.
 
 ## [Release 42] - 2025-07-14

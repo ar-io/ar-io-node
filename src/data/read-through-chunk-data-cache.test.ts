@@ -94,12 +94,12 @@ describe('ReadThroughChunkDataCache', () => {
     });
 
     it('should fetch chunk data from network when not in local cache', async () => {
-      const chuunkDataStoreHasSpy = mock.method(
+      const chunkDataStoreGetSpy = mock.method(
         chunkDataStore,
-        'has',
-        async () => false,
+        'get',
+        async () => undefined,
       );
-      const chunkDataStoreGetSpy = mock.method(chunkDataStore, 'get');
+      const chunkDataStoreSetSpy = mock.method(chunkDataStore, 'set');
       const networkSpy = mock.method(
         chunkSource,
         'getChunkByAny',
@@ -112,29 +112,7 @@ describe('ReadThroughChunkDataCache', () => {
         relativeOffset: 0,
       });
       assert.deepEqual(chunkDataStoreGetSpy.mock.callCount(), 1);
-      assert.deepEqual(chuunkDataStoreHasSpy.mock.callCount(), 1);
-      assert.deepEqual(networkSpy.mock.callCount(), 1);
-    });
-
-    it('should fetch chunk data from network when an error occurs fetching from local cache', async () => {
-      const storeHasSpy = mock.method(chunkDataStore, 'has', async () => {
-        throw new Error('Error');
-      });
-      const storeGetSpy = mock.method(chunkDataStore, 'get');
-      const networkSpy = mock.method(
-        chunkSource,
-        'getChunkByAny',
-        async () => mockedChunk,
-      );
-      await chunkCache.getChunkDataByAny({
-        txSize: TX_SIZE,
-        absoluteOffset: ABSOLUTE_OFFSET,
-        dataRoot: B64_DATA_ROOT,
-        relativeOffset: 0,
-      });
-
-      assert.deepEqual(storeGetSpy.mock.callCount(), 1);
-      assert.deepEqual(storeHasSpy.mock.callCount(), 1);
+      assert.deepEqual(chunkDataStoreSetSpy.mock.callCount(), 1);
       assert.deepEqual(networkSpy.mock.callCount(), 1);
     });
   });

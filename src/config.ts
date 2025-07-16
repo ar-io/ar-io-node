@@ -615,6 +615,20 @@ export const ENABLE_FS_HEADER_CACHE_CLEANUP =
   env.varOrDefault('ENABLE_FS_HEADER_CACHE_CLEANUP', 'false') === 'true';
 
 //
+// Chunk data caching
+//
+
+// Whether or not to cleanup filesystem chunk cache files
+export const ENABLE_CHUNK_DATA_CACHE_CLEANUP =
+  env.varOrDefault('ENABLE_CHUNK_DATA_CACHE_CLEANUP', 'true') === 'true';
+
+// The threshold in seconds to cleanup the filesystem chunk data cache
+export const CHUNK_DATA_CACHE_CLEANUP_THRESHOLD = +env.varOrDefault(
+  'CHUNK_DATA_CACHE_CLEANUP_THRESHOLD',
+  `${60 * 60 * 4}`, // 4 hours by default
+);
+
+//
 // Contiguous data caching
 //
 
