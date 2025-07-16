@@ -462,6 +462,41 @@ const s3DataSource =
       })
     : undefined;
 
+// Create chunk data cache cleanup worker
+export const chunkDataFsCacheCleanupWorker =
+  config.ENABLE_CHUNK_DATA_CACHE_CLEANUP
+    ? new FsCleanupWorker({
+        log,
+        basePath: 'data/chunks/by-dataroot',
+        dataType: 'chunk_data',
+        shouldDelete: async (path) => {
+          try {
+            const stats = await fs.promises.stat(path);
+            // Use the more recent of atime or mtime, matching contiguous data cleanup pattern
+            const mostRecentTimeMs =
+              stats.atime > stats.mtime ? stats.atime : stats.mtime;
+            const ageInSeconds = (Date.now() - mostRecentTimeMs) / 1000;
+
+            // Delete if file is older than threshold
+            if (
+              config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD > 0 &&
+              ageInSeconds > config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD
+            ) {
+              return true;
+            }
+
+            return false;
+          } catch (error: any) {
+            log.error('Error checking chunk file for cleanup', {
+              path,
+              error: error.message,
+            });
+            return false;
+          }
+        },
+      })
+    : undefined;
+
 function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   switch (sourceName) {
     case 's3':
@@ -901,6 +936,7 @@ export const shutdown = async (exitCode = 0) => {
       await webhookEmitter.stop();
       await headerFsCacheCleanupWorker?.stop();
       await contiguousDataFsCacheCleanupWorker?.stop();
+      await chunkDataFsCacheCleanupWorker?.stop();
       await dataVerificationWorker?.stop();
       await db.stop();
       process.exit(exitCode);
