@@ -152,16 +152,22 @@ export const CHUNK_POST_QUEUE_DEPTH_THRESHOLD = +env.varOrDefault(
   '10',
 );
 
+// Minimum number of successful chunk POST responses required
+export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+  'CHUNK_POST_MIN_SUCCESS_COUNT',
+  '3',
+);
+
 // Maximum number of peers to broadcast to in parallel
 export const CHUNK_POST_PEER_CONCURRENCY = +env.varOrDefault(
   'CHUNK_POST_PEER_CONCURRENCY',
-  '10',
+  String(CHUNK_POST_MIN_SUCCESS_COUNT),
 );
 
 // Maximum number of concurrent chunk posts per node
 export const CHUNK_POST_PER_NODE_CONCURRENCY = +env.varOrDefault(
   'CHUNK_POST_PER_NODE_CONCURRENCY',
-  '10',
+  String(CHUNK_POST_QUEUE_DEPTH_THRESHOLD),
 );
 
 // Maximum number of concurrent peer info requests during refresh
@@ -199,11 +205,6 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
   CHUNK_POST_ABORT_TIMEOUT_MS_STRING !== undefined
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
-
-export const CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
-  'CHUNK_POST_MIN_SUCCESS_COUNT',
-  '3',
-);
 
 // Arweave network peer post success goal
 // setting to 0 means this behaviour is disabled.
