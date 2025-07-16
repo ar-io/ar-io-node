@@ -474,7 +474,7 @@ export const chunkDataFsCacheCleanupWorker =
             const stats = await fs.promises.stat(path);
             // Use the more recent of atime or mtime, matching contiguous data cleanup pattern
             const mostRecentTimeMs =
-              stats.atime > stats.mtime ? stats.atime : stats.mtime;
+              stats.atime > stats.mtime ? stats.atimeMs : stats.mtimeMs;
             const ageInSeconds = (Date.now() - mostRecentTimeMs) / 1000;
 
             // Delete if file is older than threshold
