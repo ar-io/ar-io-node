@@ -49,6 +49,7 @@ describe('FsChunkDataStore', () => {
       // Verify the file was created at the expected path
       const expectedPath = join(
         tempDir,
+        'data',
         'by-dataroot',
         'wR',
         'q6',
@@ -75,11 +76,15 @@ describe('FsChunkDataStore', () => {
 
       // Verify directory structure
       const fs = await import('node:fs');
-      assert.ok(fs.existsSync(join(tempDir, 'by-dataroot')));
-      assert.ok(fs.existsSync(join(tempDir, 'by-dataroot', '3n')));
-      assert.ok(fs.existsSync(join(tempDir, 'by-dataroot', '3n', 'H8')));
+      assert.ok(fs.existsSync(join(tempDir, 'data', 'by-dataroot')));
+      assert.ok(fs.existsSync(join(tempDir, 'data', 'by-dataroot', '3n')));
       assert.ok(
-        fs.existsSync(join(tempDir, 'by-dataroot', '3n', 'H8', dataRoot)),
+        fs.existsSync(join(tempDir, 'data', 'by-dataroot', '3n', 'H8')),
+      );
+      assert.ok(
+        fs.existsSync(
+          join(tempDir, 'data', 'by-dataroot', '3n', 'H8', dataRoot),
+        ),
       );
     });
 
@@ -104,6 +109,7 @@ describe('FsChunkDataStore', () => {
       for (const { offset } of chunks) {
         const path = join(
           tempDir,
+          'data',
           'by-dataroot',
           'kB',
           '-r',
@@ -133,7 +139,15 @@ describe('FsChunkDataStore', () => {
 
       // Verify the new data overwrote the original
       const fs = await import('node:fs');
-      const path = join(tempDir, 'by-dataroot', 'QU', 'km', dataRoot, '0');
+      const path = join(
+        tempDir,
+        'data',
+        'by-dataroot',
+        'QU',
+        'km',
+        dataRoot,
+        '0',
+      );
       const savedContent = fs.readFileSync(path);
       assert.deepEqual(savedContent, newData.chunk);
     });
@@ -173,7 +187,7 @@ describe('FsChunkDataStore', () => {
 
       // Manually create the file to ensure we're testing hash calculation
       const fs = await import('node:fs');
-      const dir = join(tempDir, 'by-dataroot', 'l1', '4E', dataRoot);
+      const dir = join(tempDir, 'data', 'by-dataroot', 'l1', '4E', dataRoot);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(join(dir, '0'), chunkContent);
 
@@ -189,7 +203,15 @@ describe('FsChunkDataStore', () => {
 
       // Create a directory instead of a file to cause read error
       const fs = await import('node:fs');
-      const path = join(tempDir, 'by-dataroot', 'Sw', 'iD', dataRoot, '0');
+      const path = join(
+        tempDir,
+        'data',
+        'by-dataroot',
+        'Sw',
+        'iD',
+        dataRoot,
+        '0',
+      );
       fs.mkdirSync(path, { recursive: true });
 
       const result = await store.get(dataRoot, relativeOffset);
@@ -222,7 +244,7 @@ describe('FsChunkDataStore', () => {
 
       // Create the directory structure without the file
       const fs = await import('node:fs');
-      const dir = join(tempDir, 'by-dataroot', 'aQ', 'HT', dataRoot);
+      const dir = join(tempDir, 'data', 'by-dataroot', 'aQ', 'HT', dataRoot);
       fs.mkdirSync(dir, { recursive: true });
 
       const exists = await store.has(dataRoot, 0);
@@ -273,8 +295,8 @@ describe('FsChunkDataStore', () => {
 
       // Make the base directory read-only
       const fs = await import('node:fs');
-      const baseDir = join(tempDir, 'by-dataroot');
-      fs.mkdirSync(baseDir);
+      const baseDir = join(tempDir, 'data', 'by-dataroot');
+      fs.mkdirSync(baseDir, { recursive: true });
       fs.chmodSync(baseDir, 0o444);
 
       try {

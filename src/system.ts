@@ -468,7 +468,7 @@ export const chunkDataFsCacheCleanupWorker =
   config.ENABLE_CHUNK_DATA_CACHE_CLEANUP
     ? new FsCleanupWorker({
         log,
-        basePath: 'data/chunks/by-dataroot',
+        basePath: 'data/chunks/data',
         dataType: 'chunk_data',
         shouldDelete: async (path) => {
           try {

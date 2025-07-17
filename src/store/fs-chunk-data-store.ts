@@ -24,7 +24,7 @@ export class FsChunkDataStore implements ChunkDataStore {
       2,
       4,
     )}`;
-    return `${this.baseDir}/by-dataroot/${dataRootPrefix}/${dataRoot}`;
+    return `${this.baseDir}/data/by-dataroot/${dataRootPrefix}/${dataRoot}`;
   }
 
   private chunkDataRootPath(dataRoot: string, relativeOffset: number) {
