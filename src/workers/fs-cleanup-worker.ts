@@ -21,6 +21,7 @@ export class FsCleanupWorker {
   private batchSize: number;
   private pauseDuration: number;
   private restartPauseDuration: number;
+  private initialDelay: number;
 
   private shouldRun = true;
   private lastPath: string | null = null;
@@ -38,6 +39,7 @@ export class FsCleanupWorker {
     batchSize = config.FS_CLEANUP_WORKER_BATCH_SIZE,
     pauseDuration = config.FS_CLEANUP_WORKER_BATCH_PAUSE_DURATION,
     restartPauseDuration = config.FS_CLEANUP_WORKER_RESTART_PAUSE_DURATION,
+    initialDelay = 0,
   }: {
     log: winston.Logger;
     basePath: string;
@@ -47,6 +49,7 @@ export class FsCleanupWorker {
     batchSize?: number;
     pauseDuration?: number;
     restartPauseDuration?: number;
+    initialDelay?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.shouldDelete = shouldDelete ?? (() => Promise.resolve(true));
@@ -59,10 +62,16 @@ export class FsCleanupWorker {
     this.batchSize = batchSize;
     this.pauseDuration = pauseDuration;
     this.restartPauseDuration = restartPauseDuration;
+    this.initialDelay = initialDelay;
   }
 
   async start(): Promise<void> {
-    // TODO: delay first cleanup to allow metadata cache to populate?
+    // Delay first cleanup if configured
+    if (this.initialDelay > 0) {
+      this.log.info(`Delaying initial cleanup by ${this.initialDelay}ms`);
+      await new Promise((resolve) => setTimeout(resolve, this.initialDelay));
+    }
+
     this.log.info('Starting worker');
     while (this.shouldRun) {
       try {

@@ -23,6 +23,7 @@ import {
 import * as metrics from '../metrics.js';
 import { DataContentAttributeImporter } from '../workers/data-content-attribute-importer.js';
 import { PREFERRED_ARNS_NAMES, PREFERRED_ARNS_BASE_NAMES } from '../config.js';
+import { verificationPriorities } from '../constants.js';
 
 const MAX_MRU_ARNS_NAMES_LENGTH = 10;
 
@@ -85,13 +86,34 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private calculateVerificationPriority(
     requestAttributes?: RequestAttributes,
   ): number | undefined {
-    // Check if the ArNS name is preferred
     const { arnsName, arnsBasename } = requestAttributes ?? {};
+
+    // Check if the ArNS name is preferred
     const isPreferredName =
       arnsName !== undefined && PREFERRED_ARNS_NAMES.has(arnsName);
     const isPreferredBasename =
       arnsBasename !== undefined && PREFERRED_ARNS_BASE_NAMES.has(arnsBasename);
-    return isPreferredName || isPreferredBasename ? 80 : undefined;
+
+    if (isPreferredName || isPreferredBasename) {
+      this.log.debug('Setting preferred ArNS verification priority', {
+        arnsName,
+        arnsBasename,
+        priority: verificationPriorities.preferredArns,
+      });
+      return verificationPriorities.preferredArns;
+    }
+
+    // Check if any ArNS attributes are present
+    if (arnsName !== undefined || arnsBasename !== undefined) {
+      this.log.debug('Setting ArNS verification priority', {
+        arnsName,
+        arnsBasename,
+        priority: verificationPriorities.arns,
+      });
+      return verificationPriorities.arns;
+    }
+
+    return undefined;
   }
 
   private async updateMetadataCache({

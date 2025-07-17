@@ -233,6 +233,7 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       log,
       basePath: 'data/contiguous',
       dataType: 'contiguous_data',
+      initialDelay: contiguousDataCacheCleanupThresholdSeconds * 1000, // Use cleanup threshold as initial delay
       shouldDelete: async (path) => {
         try {
           const stats = await fs.promises.stat(path);
