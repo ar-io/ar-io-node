@@ -41,6 +41,10 @@ import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
+import {
+  generatePartitionSeed,
+  getNodePartition,
+} from './lib/verification-partition.js';
 import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import {
@@ -193,6 +197,21 @@ if (config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql') {
 
 // Workers
 export const eventEmitter = new EventEmitter();
+
+// Calculate node's verification partition
+export const verificationPartitionSeed = generatePartitionSeed(
+  config.AR_IO_WALLET,
+);
+export const nodeVerificationPartition = getNodePartition(
+  verificationPartitionSeed,
+  config.VERIFICATION_PARTITION_COUNT,
+);
+
+log.info('Node verification partition assigned', {
+  partition: nodeVerificationPartition,
+  totalPartitions: config.VERIFICATION_PARTITION_COUNT,
+  seedSource: config.AR_IO_WALLET !== undefined ? 'wallet' : 'random',
+});
 eventEmitter.setMaxListeners(100);
 
 export const blockImporter = new BlockImporter({
@@ -468,7 +487,7 @@ export const chunkDataFsCacheCleanupWorker =
   config.ENABLE_CHUNK_DATA_CACHE_CLEANUP
     ? new FsCleanupWorker({
         log,
-        basePath: 'data/chunks/by-dataroot',
+        basePath: 'data/chunks/data/by-dataroot',
         dataType: 'chunk_data',
         shouldDelete: async (path) => {
           try {

@@ -18,6 +18,8 @@ import {
 } from '../types.js';
 import { DataRootComputer } from '../lib/data-root.js';
 import * as config from '../config.js';
+import { shouldVerifyId } from '../lib/verification-partition.js';
+import { nodeVerificationPartition } from '../system.js';
 
 export type QueueBundleResponse = {
   status: 'skipped' | 'queued' | 'error';
@@ -113,22 +115,68 @@ export class DataVerificationWorker {
     }
 
     const dataIds = await this.contiguousDataIndex.getVerifiableDataIds();
-    const rootTxIds: string[] = [];
+    const rootTxIdsToVerify: string[] = [];
+    const skippedDataIds: string[] = [];
 
     for (const dataId of dataIds) {
       const rootTxId = await this.dataItemRootTxIndex.getRootTxId(dataId);
+      const rootIdToCheck = rootTxId ?? dataId;
 
-      if (rootTxId !== undefined && !rootTxIds.includes(rootTxId)) {
-        rootTxIds.push(rootTxId);
+      // Get data attributes to check priority
+      const dataAttributes =
+        await this.contiguousDataIndex.getDataAttributes(dataId);
+      const priority = dataAttributes?.verificationPriority;
+
+      // Apply partition filtering
+      const shouldVerify = shouldVerifyId(
+        rootIdToCheck,
+        nodeVerificationPartition,
+        config.VERIFICATION_PARTITION_COUNT,
+        priority,
+        config.VERIFICATION_PARTITION_THRESHOLD,
+      );
+
+      if (shouldVerify) {
+        if (!rootTxIdsToVerify.includes(rootIdToCheck)) {
+          rootTxIdsToVerify.push(rootIdToCheck);
+        }
+      } else {
+        // Track skipped IDs to increment retry count
+        skippedDataIds.push(dataId);
       }
     }
+
+    // Increment retry count for skipped IDs
+    for (const dataId of skippedDataIds) {
+      try {
+        await this.contiguousDataIndex.incrementVerificationRetryCount(dataId);
+        log.debug('Skipped verification due to partition filter', {
+          dataId,
+          nodePartition: nodeVerificationPartition,
+        });
+      } catch (error: any) {
+        log.error('Error incrementing retry count for skipped ID', {
+          dataId,
+          error: error.message,
+        });
+      }
+    }
+
+    // Queue only the IDs that passed partition filtering
     const queuedItems = this.queue.getQueue();
-    for (const rootTxId of rootTxIds) {
-      if (rootTxId !== undefined && !queuedItems.includes(rootTxId)) {
+    for (const rootTxId of rootTxIdsToVerify) {
+      if (!queuedItems.includes(rootTxId)) {
         log.debug('Queueing data ID for verification.', { id: rootTxId });
         this.queue.push(rootTxId);
       }
     }
+
+    log.info('Data verification queue updated', {
+      totalDataIds: dataIds.length,
+      queued: rootTxIdsToVerify.length,
+      skipped: skippedDataIds.length,
+      nodePartition: nodeVerificationPartition,
+    });
   }
 
   async verifyDataRoot(id: string): Promise<boolean> {
