@@ -323,6 +323,16 @@ export const MAX_VERIFICATION_RETRIES = +env.varOrDefault(
   '5', // Maximum number of verification retry attempts
 );
 
+export const VERIFICATION_PARTITION_COUNT = +env.varOrDefault(
+  'VERIFICATION_PARTITION_COUNT',
+  '64', // Number of partitions to divide ID space
+);
+
+export const VERIFICATION_PARTITION_THRESHOLD = +env.varOrDefault(
+  'VERIFICATION_PARTITION_THRESHOLD',
+  '70', // Only partition filter IDs with priority below this threshold
+);
+
 // Filter determining which ANS-104 bundles to unbundle
 export const ANS104_UNBUNDLE_FILTER_PARSED = JSON.parse(
   env.varOrDefault('ANS104_UNBUNDLE_FILTER', '{"never": true}'),
