@@ -12,6 +12,7 @@ import { createFilter } from './filters.js';
 import * as env from './lib/env.js';
 import { release } from './version.js';
 import logger from './log.js';
+import { verificationPriorities } from './constants.js';
 
 //
 // HTTP server
@@ -314,7 +315,7 @@ export const BACKGROUND_DATA_VERIFICATION_STREAM_TIMEOUT_MS = +env.varOrDefault(
 
 export const MIN_DATA_VERIFICATION_PRIORITY = +env.varOrDefault(
   'MIN_DATA_VERIFICATION_PRIORITY',
-  '80', // Only verify data with priority 80 or higher
+  `${verificationPriorities.arns}`, // Verify all ArNS data (priority 60+) and preferred names (priority 80)
 );
 
 export const MAX_VERIFICATION_RETRIES = +env.varOrDefault(

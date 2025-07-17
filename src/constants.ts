@@ -32,6 +32,11 @@ export const headerNames = {
   arnsIndex: 'X-ArNS-Record-Index',
 };
 
+export const verificationPriorities = {
+  preferredArns: 80,
+  arns: 60,
+} as const;
+
 export const DATA_PATH_REGEX =
   /^\/?([a-zA-Z0-9-_]{43})\/?$|^\/?([a-zA-Z0-9-_]{43})\/(.*)$/i;
 export const RAW_DATA_PATH_REGEX = /^\/raw\/([a-zA-Z0-9-_]{43})\/?$/i;
