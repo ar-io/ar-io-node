@@ -48,14 +48,16 @@ export class FsChunkDataStore implements ChunkDataStore {
     relativeOffset: number,
   ): Promise<ChunkData | undefined> {
     try {
-      const chunkPath = this.chunkDataRootPath(dataRoot, relativeOffset);
-      const chunk = await fs.promises.readFile(chunkPath);
-      const hash = crypto.createHash('sha256').update(chunk).digest();
+      if (await this.has(dataRoot, relativeOffset)) {
+        const chunkPath = this.chunkDataRootPath(dataRoot, relativeOffset);
+        const chunk = await fs.promises.readFile(chunkPath);
+        const hash = crypto.createHash('sha256').update(chunk).digest();
 
-      return {
-        hash,
-        chunk,
-      };
+        return {
+          hash,
+          chunk,
+        };
+      }
     } catch (error: any) {
       this.log.error('Failed to fetch chunk data from cache', {
         dataRoot,
