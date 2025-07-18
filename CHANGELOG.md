@@ -8,16 +8,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Added automatic chunk data cache cleanup functionality with configurable retention period. Chunks are now automatically removed after 4 hours by default (configurable via `CHUNK_DATA_CACHE_CLEANUP_THRESHOLD`). The cleanup can be disabled by setting `ENABLE_CHUNK_DATA_CACHE_CLEANUP=false`. This helps manage disk space usage while maintaining cache performance benefits.
+- Added automatic chunk data cache cleanup functionality with configurable
+  retention period. Chunks are now automatically removed after 4 hours by default
+  (configurable via `CHUNK_DATA_CACHE_CLEANUP_THRESHOLD`). The cleanup can be
+  disabled by setting `ENABLE_CHUNK_DATA_CACHE_CLEANUP=false`. This helps manage
+  disk space usage while maintaining cache performance benefits.
+- Added demand-driven opt-out background verification for ArNS data. When ArNS
+  names are requested, the system now proactively verifies the underlying data
+  asynchronously in the background by unbundling verified chunk data retrieved
+  directly from Arweave nodes. This ensures ArNS-served content is prioritized
+  for verification, improving data integrity guarantees for frequently accessed
+  named content.
 
 ### Changed
 
-- Simplified chunk data storage by removing the dual-storage approach (by-hash and by-dataroot with symlinks). Chunks are now stored directly by data root only, reducing complexity and improving performance.
-- Revamped chunk broadcasting architecture from 3-tier system to unified peer-based approach. Chunk broadcasting now uses individual fastq queues per peer with configurable concurrency and queue depth protection. Added support for preferred chunk POST peers via `PREFERRED_CHUNK_POST_URLS` environment variable. Configuration defaults have been optimized: `CHUNK_POST_PEER_CONCURRENCY` now defaults to match `CHUNK_POST_MIN_SUCCESS_COUNT` (3) to avoid over-broadcasting, and `CHUNK_POST_PER_NODE_CONCURRENCY` defaults to match `CHUNK_POST_QUEUE_DEPTH_THRESHOLD` (10) for consistent per-node load management. This change improves broadcast reliability and performance while simplifying the codebase by removing circuit breakers and tier-based logic.
+- Simplified chunk data storage by removing the dual-storage approach (by-hash
+  and by-dataroot with symlinks). Chunks are now stored directly by data root
+  only, reducing complexity and improving performance.
+- Revamped chunk broadcasting architecture from 3-tier system to unified
+  peer-based approach. Chunk broadcasting now uses individual fastq queues per
+  peer with configurable concurrency and queue depth protection. Added support
+  for preferred chunk POST peers via `PREFERRED_CHUNK_POST_URLS` environment
+  variable. Configuration defaults have been optimized:
+  `CHUNK_POST_PEER_CONCURRENCY` now defaults to match
+  `CHUNK_POST_MIN_SUCCESS_COUNT` (3) to avoid over-broadcasting, and
+  `CHUNK_POST_PER_NODE_CONCURRENCY` defaults to match
+  `CHUNK_POST_QUEUE_DEPTH_THRESHOLD` (10) for consistent per-node load
+  management. This change improves broadcast reliability and performance while
+  simplifying the codebase by removing circuit breakers and tier-based logic.
+- Modified `DataVerificationWorker` to ensure data item IDs (not just root IDs)
+  have their retry count incremented, preventing IDs from being stuck without
+  retry attempts. This improves the reliability of the data verification
+  process.
 
 ### Fixed
 
-- Fixed parquet export script generating filenames with `count_star()` instead of actual row counts for blocks and tags files. The script now correctly uses the `-noheader` flag when retrieving counts for filename generation.
+- Fixed experiment bash Parquet export script generating filenames with
+  `count_star()` instead of actual row counts for blocks and tags files. The
+  script now correctly uses the `-noheader` flag when retrieving counts for
+  filename generation.
+- Fixed missing directory existence checks in FsCleanupWorker to prevent errors
+  when attempting to scan non-existent directories during filesystem cleanup
+  operations.
 
 ## [Release 42] - 2025-07-14
 
