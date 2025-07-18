@@ -51,7 +51,7 @@ export class FsCleanupWorker {
     restartPauseDuration?: number;
     initialDelay?: number;
   }) {
-    this.log = log.child({ class: this.constructor.name });
+    this.log = log.child({ class: this.constructor.name, dataType });
     this.shouldDelete = shouldDelete ?? (() => Promise.resolve(true));
     this.deleteCallback =
       deleteCallback ?? ((file: string) => fs.promises.unlink(file));
@@ -66,6 +66,15 @@ export class FsCleanupWorker {
   }
 
   async start(): Promise<void> {
+    // Check if base path exists and log warning if not
+    try {
+      await fs.promises.access(this.basePath, fs.constants.F_OK);
+    } catch (error) {
+      this.log.warn('Base path does not exist', {
+        basePath: this.basePath,
+      });
+    }
+
     // Delay first cleanup if configured
     if (this.initialDelay > 0) {
       this.log.info(`Delaying initial cleanup by ${this.initialDelay}ms`);
@@ -150,6 +159,14 @@ export class FsCleanupWorker {
     let keptFileSize = 0;
 
     const walk = async (dir: string) => {
+      // Check if directory exists before trying to read it
+      try {
+        await fs.promises.access(dir, fs.constants.F_OK);
+      } catch (error) {
+        this.log.debug('Directory does not exist, skipping', { dir });
+        return;
+      }
+
       const files = await fs.promises.readdir(dir, { withFileTypes: true });
       files.sort((a, b) => a.name.localeCompare(b.name));
 
