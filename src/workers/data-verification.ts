@@ -30,7 +30,7 @@ export class DataVerificationWorker {
   private contiguousDataIndex: ContiguousDataIndex;
   private dataItemRootTxIndex: DataItemRootTxIndex;
   private dataRootComputer: DataRootComputer;
-  private dataImporter: DataImporter | undefined;
+  private chunkDataImporter: DataImporter | undefined;
   private bundleDataImporter: DataImporter | undefined;
   private queueBundle:
     | ((
@@ -41,7 +41,10 @@ export class DataVerificationWorker {
     | undefined;
 
   private workerCount: number;
-  private queue: queueAsPromised<string, void | boolean>;
+  private queue: queueAsPromised<
+    { rootTxId: string; dataIds: string[] },
+    void | boolean
+  >;
   private interval: number;
   private intervalId?: NodeJS.Timeout;
 
@@ -50,7 +53,7 @@ export class DataVerificationWorker {
     contiguousDataIndex,
     dataItemRootTxIndex,
     contiguousDataSource,
-    dataImporter,
+    chunkDataImporter,
     bundleDataImporter,
     queueBundle,
     workerCount = config.BACKGROUND_DATA_VERIFICATION_WORKER_COUNT,
@@ -61,7 +64,7 @@ export class DataVerificationWorker {
     contiguousDataIndex: ContiguousDataIndex;
     dataItemRootTxIndex: DataItemRootTxIndex;
     contiguousDataSource: ContiguousDataSource;
-    dataImporter?: DataImporter;
+    chunkDataImporter?: DataImporter;
     bundleDataImporter?: DataImporter;
     queueBundle?: (
       item: NormalizedDataItem | PartialJsonTransaction,
@@ -72,7 +75,7 @@ export class DataVerificationWorker {
     streamTimeout?: number;
     interval?: number;
   }) {
-    this.log = log.child({ class: 'DataVerification' });
+    this.log = log.child({ class: this.constructor.name });
     this.contiguousDataIndex = contiguousDataIndex;
     this.dataItemRootTxIndex = dataItemRootTxIndex;
     this.workerCount = workerCount;
@@ -88,7 +91,7 @@ export class DataVerificationWorker {
       streamTimeout,
     });
 
-    this.dataImporter = dataImporter;
+    this.chunkDataImporter = chunkDataImporter;
     this.bundleDataImporter = bundleDataImporter;
     this.queueBundle = queueBundle;
   }
@@ -98,11 +101,11 @@ export class DataVerificationWorker {
 
     log.info('Starting background data verification');
 
-    await this.queueRootTx();
-    this.intervalId = setInterval(this.queueRootTx.bind(this), this.interval);
+    await this.queueRootTxs();
+    this.intervalId = setInterval(this.queueRootTxs.bind(this), this.interval);
   }
 
-  async queueRootTx() {
+  async queueRootTxs() {
     const log = this.log.child({ method: 'queueRootTx' });
 
     log.debug('Queueing data items for verification.');
@@ -113,29 +116,45 @@ export class DataVerificationWorker {
     }
 
     const dataIds = await this.contiguousDataIndex.getVerifiableDataIds();
-    const rootTxIds: string[] = [];
+    const rootTxToDataIds = new Map<string, Set<string>>();
 
     for (const dataId of dataIds) {
       const rootTxId = await this.dataItemRootTxIndex.getRootTxId(dataId);
 
-      if (rootTxId !== undefined && !rootTxIds.includes(rootTxId)) {
-        rootTxIds.push(rootTxId);
+      if (rootTxId !== undefined) {
+        if (!rootTxToDataIds.has(rootTxId)) {
+          rootTxToDataIds.set(rootTxId, new Set());
+        }
+        rootTxToDataIds.get(rootTxId)!.add(dataId);
       }
     }
+
     const queuedItems = this.queue.getQueue();
-    for (const rootTxId of rootTxIds) {
-      if (rootTxId !== undefined && !queuedItems.includes(rootTxId)) {
+    for (const [rootTxId, dataIdSet] of rootTxToDataIds) {
+      if (!queuedItems.some((item) => item.rootTxId === rootTxId)) {
         log.debug('Queueing data ID for verification.', { id: rootTxId });
-        this.queue.push(rootTxId);
+        this.queue.push({
+          rootTxId,
+          dataIds: Array.from(dataIdSet),
+        });
       }
     }
   }
 
-  async verifyDataRoot(id: string): Promise<boolean> {
-    const log = this.log.child({ method: 'verifyDataRoot', id });
+  async verifyDataRoot({
+    rootTxId,
+    dataIds,
+  }: {
+    rootTxId: string;
+    dataIds: string[];
+  }): Promise<boolean> {
+    const log = this.log.child({ method: 'verifyDataRoot', id: rootTxId });
     try {
+      // TODO: use an implementation of contiguousDataIndex that attempts to
+      // get 'data_root' from network sources (trusted Arweave nodes, gateways,
+      // GQL) when it's unavailable in the local index
       const dataAttributes =
-        await this.contiguousDataIndex.getDataAttributes(id);
+        await this.contiguousDataIndex.getDataAttributes(rootTxId);
 
       const indexedDataRoot = dataAttributes?.dataRoot;
       let computedDataRoot: string | undefined = undefined;
@@ -144,7 +163,9 @@ export class DataVerificationWorker {
           'No indexed transaction data root found for ID. Skipping data root computation.',
         );
 
-        // TODO: consider using bundle index to make this determination
+        // TODO: consider using bundle index to make unbundled determination
+
+        // Queue bundle for unbundling if it has not already been unbundled
         if (this.queueBundle && dataAttributes?.hash === undefined) {
           // Only queue bundle for verification if unbundling queue is empty
           const unbundlingQueueDepth =
@@ -152,16 +173,19 @@ export class DataVerificationWorker {
           if (unbundlingQueueDepth === 0) {
             log.verbose('Root bundle has not been unbundled, queuing...');
             await this.queueBundle(
-              { id, root_tx_id: id } as
+              { id: rootTxId, root_tx_id: rootTxId } as
                 | NormalizedDataItem
                 | PartialJsonTransaction,
-              true,
-              true,
-            ); // isPrioritized: true, bypassFilter: true
+              true, // isPrioritized
+              true, // bypassFilter
+            );
           } else {
-            log.debug('Skipping bundle queue due to busy unbundling system', {
-              unbundlingQueueDepth,
-            });
+            log.verbose(
+              'Skipping bundle queuing due to unbundling queue depth',
+              {
+                unbundlingQueueDepth,
+              },
+            );
             return false;
           }
         } else {
@@ -171,14 +195,16 @@ export class DataVerificationWorker {
         log.verbose('Computing data root...');
 
         computedDataRoot = await this.dataRootComputer
-          .computeDataRoot(id)
+          .computeDataRoot(rootTxId)
           .catch((error) => {
             log.debug('Error computing data root.', { error });
             return undefined;
           });
       }
 
-      // TODO: consider how to handle downloaded, but never unbundled bundles
+      // TODO: queue bundle for unbundling even if data roots match if bundle
+      // index indicates it has not been unbundled (may be redundant if earlier
+      // conditional is modified)
       if (
         indexedDataRoot === undefined ||
         indexedDataRoot !== computedDataRoot
@@ -188,28 +214,33 @@ export class DataVerificationWorker {
           computedDataRoot: computedDataRoot ?? null,
         });
 
-        if (this.dataImporter && indexedDataRoot !== undefined) {
+        if (this.chunkDataImporter && indexedDataRoot !== undefined) {
           log.verbose(
             'Computed data root mismatch, queueing for root bundle download from chunks....',
           );
-          await this.dataImporter.queueItem({ id }, true);
+          await this.chunkDataImporter.queueItem({ id: rootTxId }, true);
         }
 
         return false;
       }
 
       log.debug('Data root verified successfully.');
-      await this.contiguousDataIndex.saveVerificationStatus(id);
+      await this.contiguousDataIndex.saveVerificationStatus(rootTxId);
       log.debug('Saved verified status successfully.');
       return true;
     } catch (error) {
       log.error('Error verifying data root', { error });
       return false;
     } finally {
-      try {
-        await this.contiguousDataIndex.incrementVerificationRetryCount(id);
-      } catch (retryError) {
-        log.error('Error incrementing retry count', { retryError });
+      // Increment retry count for all associated data IDs
+      for (const dataId of dataIds) {
+        try {
+          await this.contiguousDataIndex.incrementVerificationRetryCount(
+            dataId,
+          );
+        } catch (retryError) {
+          log.error('Error incrementing retry count', { dataId, retryError });
+        }
       }
     }
   }

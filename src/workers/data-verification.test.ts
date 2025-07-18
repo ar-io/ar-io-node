@@ -73,7 +73,13 @@ describe('DataVerificationWorker', () => {
   });
 
   it('should verify data root correctly', async () => {
-    assert.equal(await dataVerificationWorker.verifyDataRoot(''), true);
+    assert.equal(
+      await dataVerificationWorker.verifyDataRoot({
+        rootTxId: '',
+        dataIds: [''],
+      }),
+      true,
+    );
   });
 
   it('should fail verification when they dont match', async () => {
@@ -83,7 +89,13 @@ describe('DataVerificationWorker', () => {
       };
     };
 
-    assert.equal(await dataVerificationWorker.verifyDataRoot(''), false);
+    assert.equal(
+      await dataVerificationWorker.verifyDataRoot({
+        rootTxId: '',
+        dataIds: [''],
+      }),
+      false,
+    );
   });
 
   it('should increment retry count on verification failure', async () => {
@@ -93,12 +105,43 @@ describe('DataVerificationWorker', () => {
       };
     };
 
-    await dataVerificationWorker.verifyDataRoot('test-id');
+    await dataVerificationWorker.verifyDataRoot({
+      rootTxId: 'test-id',
+      dataIds: ['test-id'],
+    });
 
     assert.equal(incrementVerificationRetryCountMock.mock.calls.length, 1);
     assert.equal(
       incrementVerificationRetryCountMock.mock.calls[0].arguments[0],
       'test-id',
+    );
+  });
+
+  it('should increment retry count for all associated data IDs', async () => {
+    (contiguousDataIndex as any).getDataAttributes = async () => {
+      return {
+        dataRoot: 'nomatch',
+      };
+    };
+
+    const rootTxId = 'root-tx-id';
+    const dataIds = ['data-id-1', 'data-id-2', 'data-id-3'];
+
+    await dataVerificationWorker.verifyDataRoot({ rootTxId, dataIds });
+
+    // Should increment retry count for all data IDs
+    assert.equal(incrementVerificationRetryCountMock.mock.calls.length, 3);
+    assert.equal(
+      incrementVerificationRetryCountMock.mock.calls[0].arguments[0],
+      'data-id-1',
+    );
+    assert.equal(
+      incrementVerificationRetryCountMock.mock.calls[1].arguments[0],
+      'data-id-2',
+    );
+    assert.equal(
+      incrementVerificationRetryCountMock.mock.calls[2].arguments[0],
+      'data-id-3',
     );
   });
 });

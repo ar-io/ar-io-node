@@ -888,7 +888,7 @@ const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
       contiguousDataIndex,
       dataItemRootTxIndex: rootTxIndex,
       contiguousDataSource: gatewaysDataSource,
-      dataImporter: verificationDataImporter,
+      chunkDataImporter: verificationDataImporter,
       bundleDataImporter,
       queueBundle,
     })
