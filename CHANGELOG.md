@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 43] - 2025-07-21
+
+This is a recommended release that enables data verification by default for data
+items linked to ArNS names, improves chunk broadcasting efficiency, and adds
+automatic chunk data cache cleanup.
 
 ### Added
 
