@@ -85,13 +85,10 @@ export class S3DataSource implements ContiguousDataSource {
         throw new Error('Failed to head data from S3');
       }
 
-      const payloadDataStartS3MetaDataTag = 'x-amz-meta-payload-data-start';
-      let range = 'bytes=0-';
-      if (region) {
-        range = `bytes=${region.offset}-${region.offset + region.size - 1}`;
-      } else if (head.headers?.[payloadDataStartS3MetaDataTag] !== undefined) {
-        range = `bytes=${head.headers[payloadDataStartS3MetaDataTag]}-`;
-      }
+      const startOffset =
+        +(head.headers?.['x-amz-meta-payload-data-start'] ?? 0) +
+        +(region?.offset ?? 0);
+      const range = `bytes=${startOffset}-${region?.size !== undefined ? region.size - 1 : ''}`;
 
       const response = await this.s3Client.GetObject({
         Bucket: this.s3Bucket,
