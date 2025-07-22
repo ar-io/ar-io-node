@@ -86,6 +86,7 @@ import { awsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { CompositeChunkSource } from './data/composite-chunk-source.js';
+import { RedisDataSource } from './data/redis-data-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -474,6 +475,15 @@ const turboS3DataSource =
       })
     : undefined;
 
+const turboElasticacheDataSouce =
+  config.AWS_ELASTICACHE_TURBO_HOST !== undefined
+    ? new RedisDataSource({
+        redisHost: config.AWS_ELASTICACHE_TURBO_HOST,
+        redisUseTls: config.AWS_ELASTICACHE_TURBO_USE_TLS,
+        log,
+      })
+    : undefined;
+
 // Create chunk data cache cleanup worker
 export const chunkDataFsCacheCleanupWorker =
   config.ENABLE_CHUNK_DATA_CACHE_CLEANUP
@@ -515,6 +525,8 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return s3DataSource;
     case 'turbo-s3':
       return turboS3DataSource;
+    case 'turbo-elasticache':
+      return turboElasticacheDataSouce;
     // ario-peer is for backwards compatibility
     case 'ario-peer':
     case 'ar-io-peers':

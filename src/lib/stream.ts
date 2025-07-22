@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { Transform, TransformCallback } from 'node:stream';
+import { Readable, Transform, TransformCallback } from 'node:stream';
 
 export class ByteRangeTransform extends Transform {
   private offset: number;
@@ -52,3 +52,13 @@ export class ByteRangeTransform extends Transform {
     callback();
   }
 }
+
+export const bufferToStream = (buffer: Buffer) => {
+  return new Readable({
+    objectMode: false,
+    read() {
+      this.push(buffer);
+      this.push(null);
+    },
+  });
+};
