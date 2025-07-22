@@ -1,0 +1,19 @@
+{
+  "transaction": {
+    "id": "NfS5pzQ3qLdR4y1AbTjQocRq5GM7D7IpdfdjYCOTlPo",
+    "data_root": "QsB3Rr6C66f1QYRfXV_DXllCOTx2J_Eo2RLOr_egtx8",
+    "data_size": "11879200"
+  },
+  "chunks": {
+    "first": {
+      "offset": 262143,
+      "absolute_offset": 351531360100599,
+      "comment": "First chunk of transaction, offset is the last byte index (0-based) of this chunk"
+    },
+    "second": {
+      "offset": 524287,
+      "absolute_offset": 351531360362743,
+      "comment": "Second chunk of transaction"
+    }
+  }
+}
