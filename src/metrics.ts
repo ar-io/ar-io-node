@@ -264,13 +264,27 @@ export const getDataErrorsTotal = new promClient.Counter({
 export const getDataStreamErrorsTotal = new promClient.Counter({
   name: 'get_data_stream_errors_total',
   help: 'Count of data stream errors',
-  labelNames: ['class', 'source'] as const,
+  labelNames: ['class', 'source', 'request_type'] as const,
 });
 
 export const getDataStreamSuccessesTotal = new promClient.Counter({
   name: 'get_data_stream_successes_total',
   help: 'Count of data stream successes',
-  labelNames: ['class', 'source'] as const,
+  labelNames: ['class', 'source', 'request_type'] as const,
+});
+
+export const dataRequestChunksHistogram = new promClient.Histogram({
+  name: 'data_request_chunks',
+  help: 'Number of chunks fetched per data request',
+  labelNames: ['class', 'source', 'request_type'] as const,
+  buckets: [1, 5, 20, 100, 500],
+});
+
+export const dataRequestFirstChunkLatency = new promClient.Histogram({
+  name: 'data_request_first_chunk_latency_ms',
+  help: 'Time to first chunk in milliseconds',
+  labelNames: ['class', 'source', 'request_type'] as const,
+  buckets: [50, 200, 1000, 5000],
 });
 
 //

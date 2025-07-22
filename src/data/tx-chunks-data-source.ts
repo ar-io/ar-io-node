@@ -7,11 +7,13 @@
 import { Readable } from 'node:stream';
 import winston from 'winston';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { streamRangeData } from '../lib/stream-tx-range.js';
 
 import {
   ChainSource,
   ChunkData,
   ChunkDataByAnySource,
+  ChunkByAnySource,
   ContiguousData,
   ContiguousDataSource,
   Region,
@@ -23,7 +25,7 @@ import { ByteRangeTransform } from '../lib/stream.js';
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
-  private chunkSource: ChunkDataByAnySource;
+  private chunkSource: ChunkDataByAnySource & ChunkByAnySource;
 
   constructor({
     log,
@@ -32,7 +34,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
   }: {
     log: winston.Logger;
     chainSource: ChainSource;
-    chunkSource: ChunkDataByAnySource;
+    chunkSource: ChunkDataByAnySource & ChunkByAnySource;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.chainSource = chainSource;
@@ -112,6 +114,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: 'chunks',
+          request_type: 'full',
         });
       });
 
@@ -119,6 +122,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: 'chunks',
+          request_type: 'full',
         });
       });
 
@@ -127,13 +131,61 @@ export class TxChunksDataSource implements ContiguousDataSource {
       await chunkDataPromise;
 
       if (region) {
-        // TODO: seek to chunks by offset instead of streaming all the chunks
-        const byteRangeStream = new ByteRangeTransform(
-          region.offset,
-          region.size,
-        );
+        // Use efficient range streaming that seeks directly to required chunks
+        const rangeStartTime = Date.now();
+        const rangeResult = streamRangeData({
+          txId: id,
+          txSize: size,
+          txAbsoluteStart: startOffset,
+          dataRoot: txDataRoot,
+          rangeStart: region.offset,
+          rangeEnd: region.offset + region.size,
+          getChunkByAny: this.chunkSource.getChunkByAny.bind(this.chunkSource),
+          log: this.log,
+        });
+
+        const rangeStream = Readable.from(rangeResult.stream);
+
+        // Track metrics timing
+        const firstChunkTime = Date.now() - rangeStartTime;
+
+        rangeStream.on('end', () => {
+          metrics.getDataStreamSuccessesTotal.inc({
+            class: this.constructor.name,
+            source: 'chunks',
+            request_type: 'range',
+          });
+
+          // Track chunks fetched per request
+          metrics.dataRequestChunksHistogram.observe(
+            {
+              class: this.constructor.name,
+              source: 'chunks',
+              request_type: 'range',
+            },
+            rangeResult.getChunksFetched(),
+          );
+
+          metrics.dataRequestFirstChunkLatency.observe(
+            {
+              class: this.constructor.name,
+              source: 'chunks',
+              request_type: 'range',
+            },
+            firstChunkTime,
+          );
+        });
+
+        rangeStream.on('error', () => {
+          metrics.getDataStreamErrorsTotal.inc({
+            class: this.constructor.name,
+            source: 'chunks',
+            request_type: 'range',
+          });
+        });
+
         return {
-          stream: stream.pipe(byteRangeStream),
+          stream: rangeStream,
           size: region.size,
           verified: true,
           trusted: true,
