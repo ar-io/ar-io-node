@@ -463,6 +463,18 @@ const s3DataSource =
       })
     : undefined;
 
+const turboS3DataSource =
+  awsClient !== undefined &&
+  config.AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET !== undefined
+    ? new S3DataSource({
+        log,
+        s3Client: awsClient.S3,
+        s3Bucket: config.AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET,
+        s3Prefix: config.AWS_S3_TURBO_CONTIGUOUS_DATA_PREFIX,
+        awsClient,
+      })
+    : undefined;
+
 // Create chunk data cache cleanup worker
 export const chunkDataFsCacheCleanupWorker =
   config.ENABLE_CHUNK_DATA_CACHE_CLEANUP
@@ -502,6 +514,8 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   switch (sourceName) {
     case 's3':
       return s3DataSource;
+    case 'turbo-s3':
+      return turboS3DataSource;
     // ario-peer is for backwards compatibility
     case 'ario-peer':
     case 'ar-io-peers':
