@@ -126,7 +126,13 @@ export class ArIODataSource
         maxAge: config.GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS,
       },
     );
+    // TODO: Remove deprecated circuit breaker metrics setup
     metrics.circuitBreakerMetrics.add(this.arioGatewaysCircuitBreaker);
+    metrics.setUpCircuitBreakerListenerMetrics(
+      'ar-io-data-source',
+      this.arioGatewaysCircuitBreaker,
+      this.log,
+    );
   }
 
   stopUpdatingPeers() {

@@ -20,6 +20,7 @@ import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
 import * as metrics from '../metrics.js';
 import CircuitBreaker from 'opossum';
+import { set } from 'ramda';
 
 const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
@@ -104,7 +105,13 @@ export class ArNSNamesCache {
       hydrateFn: this.hydrateArNSNamesCache.bind(this),
     });
     // add circuit breaker metrics
+    // TODO: Remove deprecated circuit breaker metrics setup
     metrics.circuitBreakerMetrics.add(this.arnsNamesCircuitBreaker);
+    metrics.setUpCircuitBreakerListenerMetrics(
+      'arns-names-cache',
+      this.arnsNamesCircuitBreaker,
+      this.log,
+    );
   }
 
   /**
