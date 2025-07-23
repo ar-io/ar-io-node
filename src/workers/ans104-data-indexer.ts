@@ -16,6 +16,7 @@ import {
   NestedDataIndexWriter,
   NormalizedDataItem,
 } from '../types.js';
+import { ANS_104_FORMAT_ID } from '../constants.js';
 
 const DEFAULT_WORKER_COUNT = 1;
 
@@ -84,7 +85,11 @@ export class Ans104DataIndexer {
         typeof item.data_offset === 'number' &&
         !Number.isNaN(item.data_offset) &&
         typeof item.data_size === 'number' &&
-        !Number.isNaN(item.data_size)
+        !Number.isNaN(item.data_size) &&
+        typeof item.size === 'number' &&
+        !Number.isNaN(item.size) &&
+        typeof item.offset === 'number' &&
+        !Number.isNaN(item.offset)
       ) {
         log.debug('Indexing data item data...');
         if (item.data_hash != null) {
@@ -94,6 +99,12 @@ export class Ans104DataIndexer {
             hash: item.data_hash,
             dataSize: item.data_size,
             contentType: item.content_type,
+            rootTransactionId: item.root_tx_id,
+            rootParentOffset: item.root_parent_offset,
+            dataOffset: item.data_offset,
+            dataItemSize: item.size,
+            dataItemOffset: item.offset,
+            formatId: ANS_104_FORMAT_ID,
           });
 
           // Index data hash to parent ID relationship
