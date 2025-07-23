@@ -552,6 +552,8 @@ export interface ContiguousDataAttributes {
   rootParentOffset?: number;
   dataOffset?: number;
   itemSize?: number;
+  dataItemOffset?: number;
+  formatId?: number;
   signatureSize?: number;
   signatureOffset?: number;
   ownerOffset?: number;
@@ -600,6 +602,12 @@ export interface ContiguousDataIndex {
     cachedAt,
     verified,
     verificationPriority,
+    rootTransactionId,
+    rootParentOffset,
+    dataOffset,
+    dataItemSize,
+    dataItemOffset,
+    formatId,
   }: {
     id: string;
     parentId?: string;
@@ -610,6 +618,12 @@ export interface ContiguousDataIndex {
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
+    rootTransactionId?: string;
+    rootParentOffset?: number;
+    dataOffset?: number;
+    dataItemSize?: number;
+    dataItemOffset?: number;
+    formatId?: number;
   }): Promise<void>;
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
