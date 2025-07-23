@@ -16,6 +16,7 @@ import winston from 'winston';
 import CircuitBreaker from 'opossum';
 import { bufferToStream, ByteRangeTransform } from '../lib/stream';
 import { generateRequestAttributes } from '../lib/request-attributes';
+import { setUpCircuitBreakerListenerMetrics } from '../metrics';
 
 // A helper type that will allow us to pass around closures involving CacheService activities
 type CacheServiceTask<T> = () => Promise<T>;
@@ -129,6 +130,12 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     // TODO: Integrate with opossum-prometheus library
     this.circuitBreaker.on('timeout', () =>
       this.log.error('Redis circuit breaker command timed out'),
+    );
+
+    setUpCircuitBreakerListenerMetrics(
+      'turbo_elasticache',
+      this.circuitBreaker,
+      this.log,
     );
   }
 
