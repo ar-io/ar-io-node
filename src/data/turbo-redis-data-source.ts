@@ -8,7 +8,6 @@
 import Redis, { Cluster } from 'ioredis';
 import {
   ContiguousData,
-  ContiguousDataAttributes,
   ContiguousDataSource,
   Region,
   RequestAttributes,
@@ -63,7 +62,7 @@ type TurboOffsetsInfo = {
   payloadDataStart: number;
 };
 
-export class RedisDataSource implements ContiguousDataSource {
+export class TurboRedisDataSource implements ContiguousDataSource {
   private redis: Cluster;
   private log: winston.Logger;
   private circuitBreaker: CircuitBreaker<[CacheServiceTask<unknown>], unknown>;
@@ -77,7 +76,7 @@ export class RedisDataSource implements ContiguousDataSource {
     redisUseTls: boolean;
     log: winston.Logger;
   }) {
-    this.log = log;
+    this.log = log.child({ class: this.constructor.name });
     this.redis = new Redis.Cluster(
       [
         {
@@ -103,7 +102,7 @@ export class RedisDataSource implements ContiguousDataSource {
       this.log.warn(`Reconnecting to Redis at ${redisHost}...`),
     );
     this.redis.on('end', () =>
-      this.log.error(`Redis connection to ${redisHost} has ended.`),
+      this.log.warn(`Redis connection to ${redisHost} has ended.`),
     );
     this.redis.on('error', (err: Error) =>
       this.log.error(`Connection error with Redis at host ${redisHost}:`, err),
@@ -139,12 +138,10 @@ export class RedisDataSource implements ContiguousDataSource {
 
   async getData({
     id,
-    dataAttributes,
     requestAttributes,
     region,
   }: {
     id: string;
-    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
@@ -344,7 +341,6 @@ export class RedisDataSource implements ContiguousDataSource {
     region?: Region;
     requestAttributes?: RequestAttributes;
   }): Promise<ContiguousData> {
-    // TODO: readthroughpromisecache-ing
     const rawDataItemBuffer = await this.fire(() =>
       this.redis.getBuffer(`raw_{${dataItemId}}`),
     ).catch(() => undefined);

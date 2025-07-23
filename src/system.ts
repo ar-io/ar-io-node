@@ -87,7 +87,7 @@ import { S3DataStore } from './store/s3-data-store.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { CompositeChunkSource } from './data/composite-chunk-source.js';
-import { RedisDataSource } from './data/redis-data-source.js';
+import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -478,7 +478,7 @@ const turboS3DataSource =
 
 const turboElasticacheDataSouce =
   config.AWS_ELASTICACHE_TURBO_HOST !== undefined
-    ? new RedisDataSource({
+    ? new TurboRedisDataSource({
         redisHost: config.AWS_ELASTICACHE_TURBO_HOST,
         redisUseTls: config.AWS_ELASTICACHE_TURBO_USE_TLS,
         log,
