@@ -11,12 +11,12 @@ import {
   ContiguousDataSource,
   Region,
   RequestAttributes,
-} from '../types';
+} from '../types.js';
 import winston from 'winston';
 import CircuitBreaker from 'opossum';
-import { bufferToStream, ByteRangeTransform } from '../lib/stream';
-import { generateRequestAttributes } from '../lib/request-attributes';
-import { setUpCircuitBreakerListenerMetrics } from '../metrics';
+import { bufferToStream, ByteRangeTransform } from '../lib/stream.js';
+import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 
 // A helper type that will allow us to pass around closures involving CacheService activities
 type CacheServiceTask<T> = () => Promise<T>;
