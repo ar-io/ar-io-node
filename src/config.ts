@@ -253,7 +253,7 @@ export const BACKGROUND_RETRIEVAL_ORDER = env
   .varOrDefault('BACKGROUND_RETRIEVAL_ORDER', 'chunks,s3')
   .split(',');
 
-// Cache type for contigous metadata (access time, etc.). Defaults to 'node'
+// Cache type for contiguous metadata (access time, etc.). Defaults to 'node'
 // here for development but is set to 'redis' in 'docker-compose.yaml'.
 export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
   'CHUNK_METADATA_CACHE_TYPE',
