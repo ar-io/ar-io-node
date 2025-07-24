@@ -536,6 +536,8 @@ for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
   const dataSource = getDataSource(sourceName);
   if (dataSource !== undefined) {
     onDemandDataSources.push(dataSource);
+  } else {
+    log.error(`Data source ${sourceName} not found! Skipping.`);
   }
 }
 
