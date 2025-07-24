@@ -11,23 +11,27 @@ import {
   ChunkDataByAnySource,
   ChunkDataByAnySourceParams,
   Chunk,
+  ChunkData,
+  ChunkMetadata,
 } from '../types';
 
-export class CompositeChunkSource implements ChunkByAnySource {
-  private readonly chunkMetaDataSource: ChunkMetadataByAnySource;
+export class CompositeChunkSource
+  implements ChunkByAnySource, ChunkMetadataByAnySource, ChunkDataByAnySource
+{
+  private readonly chunkMetadataSource: ChunkMetadataByAnySource;
   private readonly chunkDataSource: ChunkDataByAnySource;
 
   constructor(
-    chunkMetaDataSource: ChunkMetadataByAnySource,
+    chunkMetadataSource: ChunkMetadataByAnySource,
     chunkDataSource: ChunkDataByAnySource,
   ) {
-    this.chunkMetaDataSource = chunkMetaDataSource;
+    this.chunkMetadataSource = chunkMetadataSource;
     this.chunkDataSource = chunkDataSource;
   }
 
   async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
     const metadata =
-      await this.chunkMetaDataSource.getChunkMetadataByAny(params);
+      await this.chunkMetadataSource.getChunkMetadataByAny(params);
 
     const chunkDataParams: ChunkDataByAnySourceParams = {
       txSize: params.txSize,
@@ -43,5 +47,17 @@ export class CompositeChunkSource implements ChunkByAnySource {
       ...data,
       tx_path: undefined,
     };
+  }
+
+  async getChunkDataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkData> {
+    return this.chunkDataSource.getChunkDataByAny(params);
+  }
+
+  async getChunkMetadataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkMetadata> {
+    return this.chunkMetadataSource.getChunkMetadataByAny(params);
   }
 }
