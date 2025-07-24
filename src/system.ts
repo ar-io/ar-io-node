@@ -438,7 +438,7 @@ export const chunkSource = new CompositeChunkSource(
 const txChunksDataSource = new TxChunksDataSource({
   log,
   chainSource: arweaveClient,
-  chunkSource: chunkDataSource,
+  chunkSource,
 });
 
 const gatewaysDataSource = new GatewaysDataSource({
