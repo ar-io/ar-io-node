@@ -16,6 +16,7 @@ import * as winston from 'winston';
 import pLimit from 'p-limit';
 import memoize from 'memoizee';
 import { context, trace, Span } from '@opentelemetry/api';
+import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
 
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
@@ -63,6 +64,7 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS = 100;
 const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
 const CHUNK_CACHE_TTL_SECONDS = 5;
+const CHUNK_CACHE_CAPACITY = 1000;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_INFO_TIMEOUT_MS = 5000;
@@ -117,10 +119,7 @@ export class ArweaveCompositeClient
   private failureSimulator: FailureSimulator;
   private txStore: PartialJsonTransactionStore;
   private blockStore: PartialJsonBlockStore;
-  private chunkCache: WeakMap<
-    { absoluteOffset: number },
-    { cachedAt: number; chunk: Chunk }
-  >;
+  private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
   private skipCache: boolean;
 
   // Trusted node
@@ -170,7 +169,6 @@ export class ArweaveCompositeClient
     arweave,
     trustedNodeUrl,
     blockStore,
-    chunkCache = new WeakMap(),
     txStore,
     failureSimulator,
     requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -186,10 +184,6 @@ export class ArweaveCompositeClient
     arweave: Arweave;
     trustedNodeUrl: string;
     blockStore: PartialJsonBlockStore;
-    chunkCache?: WeakMap<
-      { absoluteOffset: number },
-      { cachedAt: number; chunk: Chunk }
-    >;
     txStore: PartialJsonTransactionStore;
     failureSimulator: FailureSimulator;
     requestTimeout?: number;
@@ -238,8 +232,47 @@ export class ArweaveCompositeClient
     this.failureSimulator = failureSimulator;
     this.txStore = txStore;
     this.blockStore = blockStore;
-    this.chunkCache = chunkCache;
     this.skipCache = skipCache;
+
+    // Initialize chunk promise cache with read-through function
+    this.chunkPromiseCache = new ReadThroughPromiseCache<string, Chunk>({
+      cacheParams: {
+        cacheCapacity: CHUNK_CACHE_CAPACITY,
+        cacheTTL: CHUNK_CACHE_TTL_SECONDS * 1000,
+      },
+      readThroughFunction: async (cacheKey: string) => {
+        // Parse the cache key back to parameters
+        const params: ChunkDataByAnySourceParams = JSON.parse(cacheKey);
+
+        try {
+          const chunk = await this.peerGetChunk({
+            absoluteOffset: params.absoluteOffset,
+            txSize: params.txSize,
+            dataRoot: params.dataRoot,
+            relativeOffset: params.relativeOffset,
+          });
+
+          metrics.getChunkTotal.inc({
+            status: 'success',
+            method: 'getChunkByAny',
+            class: this.constructor.name,
+          });
+
+          return chunk;
+        } catch (error: any) {
+          metrics.getChunkTotal.inc({
+            status: 'error',
+            method: 'getChunkByAny',
+            class: this.constructor.name,
+          });
+          this.log.warn('Unable to fetch chunk from peers', {
+            message: error.message,
+            stack: error.stack,
+          });
+          throw new Error('Unable to fetch chunk from any available peers');
+        }
+      },
+    });
 
     // Initialize trusted node Axios with automatic retries
     this.trustedNodeAxios = axios.create({
@@ -1117,14 +1150,6 @@ export class ArweaveCompositeClient
           'weightedGetChunkPeers',
         );
 
-        this.chunkCache.set(
-          { absoluteOffset },
-          {
-            cachedAt: Date.now(),
-            chunk,
-          },
-        );
-
         return chunk;
       } catch {
         this.handlePeerFailure(
@@ -1154,46 +1179,14 @@ export class ArweaveCompositeClient
   }: ChunkDataByAnySourceParams): Promise<Chunk> {
     this.failureSimulator.maybeFail();
 
-    // Check cache first
-    const cacheEntry = this.chunkCache.get({ absoluteOffset });
-    if (
-      cacheEntry &&
-      cacheEntry.cachedAt > Date.now() - CHUNK_CACHE_TTL_SECONDS * 1000
-    ) {
-      metrics.getChunkTotal.inc({
-        status: 'success',
-        method: 'getChunkByAny',
-        class: this.constructor.name,
-      });
-      return cacheEntry.chunk;
-    }
+    const cacheKey = JSON.stringify({
+      absoluteOffset,
+      txSize,
+      dataRoot,
+      relativeOffset,
+    });
 
-    // Only use peer-based chunk retrieval
-    try {
-      const result = await this.peerGetChunk({
-        absoluteOffset,
-        txSize,
-        dataRoot,
-        relativeOffset,
-      });
-      metrics.getChunkTotal.inc({
-        status: 'success',
-        method: 'getChunkByAny',
-        class: this.constructor.name,
-      });
-      return result;
-    } catch (error: any) {
-      metrics.getChunkTotal.inc({
-        status: 'error',
-        method: 'getChunkByAny',
-        class: this.constructor.name,
-      });
-      this.log.warn('Unable to fetch chunk from peers', {
-        messsage: error.message,
-        stack: error.stack,
-      });
-      throw new Error('Unable to fetch chunk from any available peers');
-    }
+    return this.chunkPromiseCache.get(cacheKey);
   }
 
   async getChunkDataByAny({
