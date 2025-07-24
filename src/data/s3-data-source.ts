@@ -56,11 +56,11 @@ export class S3DataSource implements ContiguousDataSource {
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
-    const log = this.log.child({ method: 'getData' });
+    const log = this.log.child({ method: 'getData', id });
     log.debug('Fetching contiguous data from S3', {
-      id,
       bucket: this.s3Bucket,
       prefix: this.s3Prefix,
+      region,
     });
 
     try {
@@ -69,26 +69,22 @@ export class S3DataSource implements ContiguousDataSource {
       //   Bucket: this.s3Bucket,
       //   Key: `${this.s3Prefix}/${id}`,
       // });
-
-      log.debug('Fetching S3 metadata', {
-        id,
-        bucket: this.s3Bucket,
-        prefix: this.s3Prefix,
+      const head = await this.awsClient.S3.HeadObject({
+        Bucket: this.s3Bucket,
+        Key: `${this.s3Prefix}/${id}`,
       });
 
-      const head = await this.awsClient({
-        service: 's3',
-        path: `${this.s3Bucket}/${this.s3Prefix}/${id}`,
+      log.debug('S3 head response', {
+        response: {
+          ContentLength: head.ContentLength,
+          ContentType: head.ContentType,
+          Metadata: head.Metadata,
+        },
       });
-
-      if (head.statusCode !== 200) {
-        throw new Error('Failed to head data from S3');
-      }
 
       const startOffset =
-        +(head.headers?.['x-amz-meta-payload-data-start'] ?? 0) +
-        +(region?.offset ?? 0);
-      const range = `bytes=${startOffset}-${region?.size !== undefined ? region.size - 1 : ''}`;
+        +(head.Metadata?.['payload-data-start'] ?? 0) + +(region?.offset ?? 0);
+      const range = `bytes=${startOffset}-${region?.size !== undefined ? startOffset + region.size - 1 : ''}`;
 
       const response = await this.s3Client.GetObject({
         Bucket: this.s3Bucket,
@@ -97,15 +93,14 @@ export class S3DataSource implements ContiguousDataSource {
         streamResponsePayload: true,
       });
 
-      const payloadContentTypeS3MetaDataTag = 'x-amz-meta-payload-content-type';
       const sourceContentType =
-        head.headers?.[payloadContentTypeS3MetaDataTag] ?? response.ContentType;
+        head.Metadata?.['payload-content-type'] ?? response.ContentType;
 
       log.debug('S3 response', {
-        id,
         response: {
           ContentLength: response.ContentLength,
           ContentType: response.ContentType,
+          ContentRange: response.ContentRange,
         },
         payload: {
           range,
@@ -142,7 +137,9 @@ export class S3DataSource implements ContiguousDataSource {
 
       return {
         stream,
-        size: response.ContentLength,
+        size:
+          contentSizeFromContentRange(response.ContentRange) ??
+          response.ContentLength,
         verified: false,
         trusted: true, // we only cache trusted data
         sourceContentType,
@@ -162,4 +159,21 @@ export class S3DataSource implements ContiguousDataSource {
       throw error;
     }
   }
+}
+
+// Expected format: `bytes start-end/maxSize`
+function contentSizeFromContentRange(
+  contentRange: string | undefined,
+): number | undefined {
+  // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+  if (!contentRange) return undefined;
+
+  const parts = contentRange.match(/bytes (\d+)-(\d+)/);
+  if (!parts) return undefined;
+
+  const start = parseInt(parts[1], 10);
+  const end = parseInt(parts[2], 10);
+  if (isNaN(start) || isNaN(end)) return undefined;
+
+  return end - start + 1;
 }
