@@ -6,6 +6,7 @@
  */
 import { Readable, Writable } from 'node:stream';
 import { AoArNSNameDataWithName } from '@ar.io/sdk';
+import { Span } from '@opentelemetry/api';
 
 export interface B64uTag {
   name: string;
@@ -515,12 +516,14 @@ export interface ChunkBroadcaster {
     responseTimeout,
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
+    parentSpan,
   }: {
     chunk: JsonChunkPost;
     abortTimeout?: number;
     responseTimeout?: number;
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
+    parentSpan?: Span;
   }): Promise<BroadcastChunkResult>;
 }
 
