@@ -83,7 +83,6 @@ import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js'
 import { parquetExporter } from './routes/ar-io.js';
 import { server } from './app.js';
 import { awsClient } from './aws-client.js';
-import { S3DataStore } from './store/s3-data-store.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { CompositeChunkSource } from './data/composite-chunk-source.js';
@@ -557,19 +556,11 @@ metrics.registerQueueLengthGauge('dataContentAttributeImporter', {
   length: () => dataContentAttributeImporter.queueDepth(),
 });
 
-const contiguousDataStore =
-  awsClient !== undefined && config.AWS_S3_CONTIGUOUS_DATA_BUCKET !== undefined
-    ? new S3DataStore({
-        log,
-        baseDir: 'data/contiguous',
-        s3Client: awsClient.S3,
-        s3Prefix: config.AWS_S3_CONTIGUOUS_DATA_PREFIX,
-        s3Bucket: config.AWS_S3_CONTIGUOUS_DATA_BUCKET,
-      })
-    : new FsDataStore({
-        log,
-        baseDir: 'data/contiguous',
-      });
+// TODO: Reinstate an S3 data store here when configuration better supports it
+const contiguousDataStore = new FsDataStore({
+  log,
+  baseDir: 'data/contiguous',
+});
 
 export const onDemandContiguousDataSource = new ReadThroughDataCache({
   log,
