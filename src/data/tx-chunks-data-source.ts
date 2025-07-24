@@ -62,75 +62,14 @@ export class TxChunksDataSource implements ContiguousDataSource {
       const startOffset = offset - size + 1;
       let bytes = 0;
 
-      // Rebind getChunkDataByAny to preserve access to it in the stream read
-      // function since 'this' is assigned to the stream as opposed to the
-      // TxChunksDataSource instance there.
-      const getChunkDataByAny = (
-        absoluteOffset: number,
-        dataRoot: string,
-        relativeOffset: number,
-      ) =>
-        this.chunkSource.getChunkDataByAny({
-          txSize: size,
-          absoluteOffset,
-          dataRoot,
-          relativeOffset,
-        });
-      let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
-        startOffset,
-        txDataRoot,
-        bytes,
-      );
-
-      const stream = new Readable({
-        autoDestroy: true,
-        read: async function () {
-          try {
-            if (!chunkDataPromise) {
-              this.push(null);
-              return;
-            }
-
-            const chunkData = await chunkDataPromise;
-            this.push(chunkData.chunk);
-            bytes += chunkData.chunk.length;
-
-            if (bytes < size) {
-              chunkDataPromise = getChunkDataByAny(
-                startOffset + bytes,
-                txDataRoot,
-                bytes,
-              );
-            } else {
-              chunkDataPromise = undefined;
-            }
-          } catch (error: any) {
-            this.destroy(error);
-          }
-        },
-      });
-
-      stream.on('error', () => {
-        metrics.getDataStreamErrorsTotal.inc({
-          class: this.constructor.name,
-          source: 'chunks',
-          request_type: 'full',
-        });
-      });
-
-      stream.on('end', () => {
-        metrics.getDataStreamSuccessesTotal.inc({
-          class: this.constructor.name,
-          source: 'chunks',
-          request_type: 'full',
-        });
-      });
-
-      // await the first chunk promise so that it throws and returns 404 if no
-      // chunk data is found.
-      await chunkDataPromise;
-
       if (region) {
+        const getChunkByAny = (params: {
+          txSize: number;
+          absoluteOffset: number;
+          dataRoot: string;
+          relativeOffset: number;
+        }) => this.chunkSource.getChunkByAny(params);
+
         // Use efficient range streaming that seeks directly to required chunks
         const rangeStartTime = Date.now();
         const rangeResult = streamRangeData({
@@ -140,7 +79,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
           dataRoot: txDataRoot,
           rangeStart: region.offset,
           rangeEnd: region.offset + region.size,
-          getChunkByAny: this.chunkSource.getChunkByAny.bind(this.chunkSource),
+          getChunkByAny,
           log: this.log,
         });
 
@@ -194,6 +133,75 @@ export class TxChunksDataSource implements ContiguousDataSource {
             generateRequestAttributes(requestAttributes)?.attributes,
         };
       }
+
+      // Rebind getChunkDataByAny to preserve access to it in the stream read
+      // function since 'this' is assigned to the stream as opposed to the
+      // TxChunksDataSource instance there.
+      const getChunkDataByAny = (
+        absoluteOffset: number,
+        dataRoot: string,
+        relativeOffset: number,
+      ) =>
+        this.chunkSource.getChunkDataByAny({
+          txSize: size,
+          absoluteOffset,
+          dataRoot,
+          relativeOffset,
+        });
+
+      let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
+        startOffset,
+        txDataRoot,
+        bytes,
+      );
+
+      // await the first chunk promise so that it throws and returns 404 if no
+      // chunk data is found.
+      await chunkDataPromise;
+
+      const stream = new Readable({
+        autoDestroy: true,
+        read: async function () {
+          try {
+            if (!chunkDataPromise) {
+              this.push(null);
+              return;
+            }
+
+            const chunkData = await chunkDataPromise;
+            this.push(chunkData.chunk);
+            bytes += chunkData.chunk.length;
+
+            if (bytes < size) {
+              chunkDataPromise = getChunkDataByAny(
+                startOffset + bytes,
+                txDataRoot,
+                bytes,
+              );
+            } else {
+              chunkDataPromise = undefined;
+            }
+          } catch (error: any) {
+            this.destroy(error);
+          }
+        },
+      });
+
+      stream.on('error', () => {
+        metrics.getDataStreamErrorsTotal.inc({
+          class: this.constructor.name,
+          source: 'chunks',
+          request_type: 'full',
+        });
+      });
+
+      stream.on('end', () => {
+        metrics.getDataStreamSuccessesTotal.inc({
+          class: this.constructor.name,
+          source: 'chunks',
+          request_type: 'full',
+        });
+      });
 
       return {
         stream,
