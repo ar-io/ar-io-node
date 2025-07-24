@@ -18,6 +18,7 @@ import { toB64Url } from '../../lib/encoding.js';
 import { Chunk, ChunkByAnySource } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
+import { tracer } from '../../tracing.js';
 
 export const createChunkOffsetHandler = ({
   chunkSource,
@@ -118,6 +119,14 @@ export const createChunkPostHandler = ({
   log: Logger;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
+    const span = tracer.startSpan('ChunkPostHandler.post', {
+      attributes: {
+        'chunk.size': req.body?.chunk ? req.body.chunk.length : 0,
+        'http.method': 'POST',
+        'http.target': req.originalUrl,
+      },
+    });
+
     try {
       // Extract the required headers
       const headers = {
@@ -136,20 +145,33 @@ export const createChunkPostHandler = ({
         responseTimeout: CHUNK_POST_RESPONSE_TIMEOUT_MS,
         chunkPostMinSuccessCount: CHUNK_POST_MIN_SUCCESS_COUNT,
         originAndHopsHeaders: headers,
+        parentSpan: span,
       });
 
       // Check if successCount meets the threshold
       if (result.successCount >= CHUNK_POST_MIN_SUCCESS_COUNT) {
+        span.setAttribute('chunk.broadcast.success', true);
+        span.setAttribute('chunk.broadcast.success_count', result.successCount);
+        span.setAttribute('chunk.broadcast.failure_count', result.failureCount);
+        span.setAttribute('http.status_code', 200);
         res.status(200).send(result);
       } else {
+        span.setAttribute('chunk.broadcast.success', false);
+        span.setAttribute('chunk.broadcast.success_count', result.successCount);
+        span.setAttribute('chunk.broadcast.failure_count', result.failureCount);
+        span.setAttribute('http.status_code', 500);
         res.status(500).send(result);
       }
     } catch (error: any) {
+      span.recordException(error);
+      span.setAttribute('http.status_code', 500);
       log.error('Failed to broadcast chunk', {
         message: error?.message,
         stack: error?.stack,
       });
       res.status(500).send('Failed to broadcast chunk');
+    } finally {
+      span.end();
     }
   });
 };
