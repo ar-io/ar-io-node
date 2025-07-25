@@ -20,7 +20,6 @@ import {
   RequestAttributes,
 } from '../types.js';
 import * as metrics from '../metrics.js';
-import { ByteRangeTransform } from '../lib/stream.js';
 
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;

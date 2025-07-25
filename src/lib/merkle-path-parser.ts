@@ -80,19 +80,6 @@ function bufferToInt(buffer: Buffer): number {
 }
 
 /**
- * Convert integer to buffer (big-endian)
- */
-function intToBuffer(value: number): Buffer {
-  const buffer = Buffer.alloc(32);
-  let remaining = value;
-  for (let i = 31; i >= 0 && remaining > 0; i--) {
-    buffer[i] = remaining & 0xff;
-    remaining = remaining >>> 8;
-  }
-  return buffer;
-}
-
-/**
  * Hash function matching Arweave's implementation
  */
 async function hash(data: Buffer | Buffer[]): Promise<Buffer> {
