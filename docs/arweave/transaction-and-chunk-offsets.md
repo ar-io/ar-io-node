@@ -1,6 +1,8 @@
 # Arweave Transaction and Chunk Offsets
 
-This document explains how Arweave's offset system works for transactions and chunks, including the relationship between absolute offsets, relative offsets, and chunk boundaries.
+This document explains how Arweave's offset system works for transactions and
+chunks, including the relationship between absolute offsets, relative offsets,
+and chunk boundaries.
 
 ## Table of Contents
 
@@ -16,52 +18,85 @@ This document explains how Arweave's offset system works for transactions and ch
 
 ## Overview
 
-Arweave uses an offset-based system to track the position of every byte of data stored on the network. This system enables efficient data retrieval by allowing nodes to locate any specific byte without scanning through all previous data.
+Arweave uses an offset-based system to track the position of every byte of data
+stored on the network.
 
 ## Key Concepts
 
 ### The Weave
-The "weave" is the complete, append-only data structure containing all Arweave transactions. Every byte in the weave has a unique position called an "absolute offset".
+
+The "weave" is the complete, append-only data structure containing all Arweave
+transactions. Every byte in the weave has a unique position called an "absolute
+offset".
 
 ### Absolute vs Relative Offsets
+
 - **Absolute Offset**: The global position of a byte in the entire weave (0-indexed)
 - **Relative Offset**: The position of a byte within a specific transaction (0-indexed)
 
 ### End-Offset Convention
-Arweave uses end-offsets rather than start-offsets. A transaction's offset represents the position of its last byte (inclusive) in the weave.
+
+Arweave uses end-offsets rather than start-offsets. A transaction's offset
+represents the position of its last byte (inclusive) in the weave.
+
+### Chunks
+
+Transactions are divided into chunks for efficient storage and retrieval:
+
+- Chunks are fixed-size pieces of transaction data (max 256 KiB each)
+- Each chunk can be independently retrieved and verified
+- Chunks enable partial data access without downloading entire transactions
 
 ## Offset Types
 
 ### 1. Transaction Offset
+
 ```
 {
-  "offset": "123456789",  // Position of last byte (inclusive)
+  "offset": "123456789", // Position of last byte (inclusive)
   "size": "1000"         // Transaction data size in bytes
 }
 ```
 
 ### 2. Chunk Offset
+
 - Represents the position of the last byte within a chunk
 - Stored in the Merkle tree as part of the data_path
 
 ### 3. Absolute Chunk Offset
+
 - The position of a chunk in the global weave
 - Used to retrieve chunks from storage
+
+### When Each Offset Type is Used
+
+**Relative offsets** are used:
+
+- Within data_path Merkle proofs (chunk positions within a transaction)
+- When processing transaction data internally
+- For calculating which chunk contains specific transaction bytes
+
+**Absolute offsets** are used:
+
+- When requesting chunks from Arweave nodes (`/chunk/{offset}`)
+- For storing and retrieving chunks from disk
+- In data sync operations between nodes
 
 ## Transaction Offsets
 
 ### Calculating Transaction Boundaries
 
 Given a transaction offset response:
+
 ```javascript
 const txOffset = {
-  offset: 123456789,  // Last byte position (inclusive)
-  size: 1000         // Transaction size
+  offset: 123456789, // Last byte position (inclusive)
+  size: 1000, // Transaction size
 };
 
 // Calculate boundaries
-const txEndOffset = txOffset.offset;                    // 123456789
-const txStartOffset = txOffset.offset - txOffset.size + 1;  // 123455790
+const txEndOffset = txOffset.offset; // 123456789
+const txStartOffset = txOffset.offset - txOffset.size + 1; // 123455790
 
 // The transaction occupies bytes 123455790 through 123456789 (inclusive)
 ```
@@ -70,46 +105,58 @@ const txStartOffset = txOffset.offset - txOffset.size + 1;  // 123455790
 
 ```
 Weave: [...previous data...][----Transaction Data----][...next data...]
-                            ^                         ^
-                            |                         |
-                      txStartOffset              txEndOffset
-                      (123455790)                (123456789)
+                            ^                        ^
+                            |                        |
+                      txStartOffset             txEndOffset
+                      (123455790)               (123456789)
 ```
 
 ## Chunk Organization
 
 ### Chunk Size Rules
-- Maximum chunk size: 256 KB (262,144 bytes)
-- Last chunk of a transaction can be smaller
-- Chunks are created during the proof-of-access process
+
+- Maximum chunk size: 256 KiB (262,144 bytes)
+- Last chunk of a transaction can be smaller than 256 KiB
 
 ### Chunk Boundaries in Transactions
 
 For a transaction split into multiple chunks:
+
 ```
 Transaction: [---Chunk 1---][---Chunk 2---][--Chunk 3--]
-             ^             ^              ^             ^
-             0           256KB         512KB         700KB
+             ^             ^              ^            ^
+             0          256KiB         512KiB       700KiB
              (relative offsets within transaction)
 ```
 
 ### Chunk Data Structure
-```javascript
+
+When requesting chunks from Arweave, the response includes:
+
+```typescript
 {
-  chunk: Buffer,           // The actual chunk data
-  data_path: Buffer,       // Merkle proof including offsets
-  data_root: Buffer,       // Root hash of the Merkle tree
-  data_size: number,       // Total transaction size
-  offset: number,          // Relative offset within transaction
-  hash: Buffer            // SHA-256 hash of chunk data
+  chunk: Buffer,     // The actual chunk data (up to 256KiB)
+  tx_path: Buffer,   // Merkle path proving chunk belongs to block (variable size)
+  data_path: Buffer, // Merkle path proving chunk position in transaction (variable size)
+  packing: string,   // Packing type (e.g., "unpacked", "spora_2_5", "spora_2_6")
 }
 ```
+
+Additional fields in chunk proofs:
+
+- `chunk_start_offset`: Start position of chunk within transaction
+- `chunk_end_offset`: End position of chunk within transaction
+- `tx_start_offset`: Start position of transaction in weave
+- `tx_end_offset`: End position of transaction in weave
+- `block_start_offset`: Start position of block in weave
+- `block_end_offset`: End position of block in weave
 
 ## Offset Calculations
 
 ### Converting Between Offset Types
 
 #### Relative to Absolute
+
 ```javascript
 function relativeToAbsolute(relativeOffset, txStartOffset) {
   return txStartOffset + relativeOffset;
@@ -117,6 +164,7 @@ function relativeToAbsolute(relativeOffset, txStartOffset) {
 ```
 
 #### Absolute to Relative
+
 ```javascript
 function absoluteToRelative(absoluteOffset, txStartOffset) {
   return absoluteOffset - txStartOffset;
@@ -128,6 +176,7 @@ function absoluteToRelative(absoluteOffset, txStartOffset) {
 To find which chunk contains a specific byte:
 
 1. **Using Relative Offset** (within transaction):
+
    ```javascript
    const chunkIndex = Math.floor(relativeOffset / 256_144);
    const offsetInChunk = relativeOffset % 256_144;
@@ -142,14 +191,20 @@ To find which chunk contains a specific byte:
 
 ### Chunk Boundary Extraction
 
-The Merkle path parser extracts exact chunk boundaries:
+The Merkle path parser extracts exact chunk boundaries from the data_path:
+
 ```javascript
-// From parsed data_path
+// Parsed from data_path
 {
-  startOffset: 256144,    // Start of chunk (inclusive)
-  endOffset: 512288,      // End of chunk (exclusive)
+  startOffset: 256144,    // Start of chunk within transaction (inclusive)
+  endOffset: 512288,      // End of chunk within transaction (exclusive)
   chunkSize: 256144,      // Actual size of this chunk
-  absoluteOffset: 123711934  // Position in weave
+}
+
+// Combined with transaction offset to get absolute positions:
+{
+  absoluteStart: txStartOffset + startOffset,
+  absoluteEnd: txStartOffset + endOffset
 }
 ```
 
@@ -157,25 +212,27 @@ The Merkle path parser extracts exact chunk boundaries:
 
 ### Offset Storage in Merkle Trees
 
-Each node in the Merkle tree stores an offset representing the cumulative size up to that point:
+Each node in the Merkle tree stores an offset representing the cumulative size
+up to that point:
 
 ```
-                    Root (700KB)
+                    Root (700KiB)
                    /            \
-            Node (512KB)      Leaf3 (700KB)
+            Node (512KiB)      Leaf3 (700KiB)
            /          \
-    Leaf1 (256KB)  Leaf2 (512KB)
+    Leaf1 (256KiB)  Leaf2 (512KiB)
 ```
 
 ### Data Path Structure
 
 The data_path contains the Merkle proof with embedded offsets:
+
 ```
 Standard path (single chunk):
 [chunk_hash (32 bytes)][chunk_offset (32 bytes)]
 
-Multi-chunk path:
-[left_hash][right_hash][boundary_offset]...[chunk_hash][chunk_offset]
+Multi-chunk path (each level adds 96 bytes):
+[left_hash (32 bytes)][right_hash (32 bytes)][boundary_offset (32 bytes)]...[chunk_hash (32 bytes)][chunk_offset (32 bytes)]
 ```
 
 ## Practical Examples
@@ -184,52 +241,78 @@ Multi-chunk path:
 
 Request: Bytes 300,000-400,000 of a transaction
 
+Note: The request uses relative offsets (within the transaction), but chunk
+retrieval requires absolute offsets.
+
 ```javascript
-// Given transaction info
-const txOffset = { offset: 123456789, size: 1048576 }; // 1MB transaction
-const txStart = txOffset.offset - txOffset.size + 1;   // 123455790
+// Step 1: Get transaction offset (from Arweave node)
+// GET /tx/{txId}/offset
+const txOffsetResponse = await fetch(`/tx/${txId}/offset`);
+const txOffset = await txOffsetResponse.json();
+// Returns: { offset: "123456789", size: "1048576" }
 
-// Convert range to absolute offsets
-const rangeStartAbs = txStart + 300000;  // 123755790
-const rangeEndAbs = txStart + 400000;    // 123855790
+// Step 2: Calculate absolute positions
+const txEndOffset = parseInt(txOffset.offset);
+const txSize = parseInt(txOffset.size);
+const txStartOffset = txEndOffset - txSize + 1;
 
-// Determine chunks needed
-// Chunk 2: bytes 256KB-512KB (contains start of range)
-// Need bytes 300000-400000, which spans into chunk 2
+// Step 3: Convert requested range to absolute offsets
+const rangeStartAbs = txStartOffset + 300000; // 123455790 + 300000
+const rangeEndAbs = txStartOffset + 400000; // 123455790 + 400000
+
+// Step 4: Request chunks at these absolute offsets
+// GET /chunk/123755790
+// GET /chunk/123855790 (if range spans multiple chunks)
 ```
 
 ### Example 2: Chunk Resolution
 
-Arweave nodes can resolve any absolute offset to its containing chunk:
+Arweave's `/chunk/{offset}` endpoint requires an absolute offset (position in the weave):
 
 ```javascript
 // Request chunk at absolute offset 123755790
-// Node returns chunk containing that offset with its boundaries
+// GET /chunk/123755790
+// Node returns:
 {
-  chunk: <Buffer...>,
-  boundaries: {
-    startOffset: 262144,  // Relative start in transaction
-    endOffset: 524288,    // Relative end in transaction
-    absoluteStart: 123717934,
-    absoluteEnd: 123980078
-  }
+  chunk: <Buffer...>,      // The chunk data (up to 256KiB)
+  tx_path: <Buffer...>,    // Proof of inclusion in block (variable size)
+  data_path: <Buffer...>,  // Proof of position in transaction (variable size)
+  packing: "spora_2_6"     // Packing format used
 }
+
+// The data_path can be parsed to extract chunk boundaries:
+// - Chunk spans bytes 262144-524288 within the transaction
+// - Combined with tx offset: absolute bytes 123717934-123980078
 ```
 
 ### Example 3: Multi-Range Request
 
 For a video player requesting multiple ranges:
+
 ```javascript
+// Assume we've already fetched the transaction offset
+const txEndOffset = 123456789;
+const txSize = 1048576;
+const txStartOffset = txEndOffset - txSize + 1;
+
+// Multiple ranges requested by client
 const ranges = [
-  { start: 0, end: 1024 },        // Header
-  { start: 500000, end: 600000 }  // Seek position
+  { start: 0, end: 1024 }, // Header/metadata
+  { start: 500000, end: 600000 }, // Seek position
 ];
 
-// Process each range independently
+// Convert each range to absolute offsets
 for (const range of ranges) {
-  const absStart = txStart + range.start;
-  const absEnd = txStart + range.end;
-  // Fetch only chunks containing these ranges
+  const absStart = txStartOffset + range.start;
+  const absEnd = txStartOffset + range.end;
+
+  // Note: You cannot calculate chunk boundaries directly from offsets
+  // unless the transaction uses strict data splitting.
+  // Instead, request chunks by any offset within the desired range:
+
+  // GET /chunk/{absStart} - returns chunk containing this offset
+  // Parse the returned data_path to determine actual chunk boundaries
+  // Request additional chunks if range spans multiple chunks
 }
 ```
 
@@ -245,11 +328,12 @@ for (const range of ranges) {
 
 1. **Single-Byte Ranges**: Supported by seeking to exact chunk
 2. **Chunk Boundaries**: Ranges spanning multiple chunks handled sequentially
-3. **Last Chunk**: May be smaller than 256KB, requires special handling
+3. **Last Chunk**: May be smaller than 256KiB, requires special handling
 
 ### Validation
 
 Always validate:
+
 - Offset calculations don't exceed transaction boundaries
 - Chunk boundaries align with expected sizes
 - Merkle proofs validate against data_root
