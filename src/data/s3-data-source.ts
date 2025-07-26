@@ -82,9 +82,9 @@ export class S3DataSource implements ContiguousDataSource {
 
       // Handle zero-byte data items
       const payloadDataStart = head.Metadata?.['payload-data-start'];
+      const payloadContentType = head.Metadata?.['payload-content-type'];
       if (
         payloadDataStart !== undefined &&
-        head.ContentLength !== undefined &&
         +payloadDataStart === head.ContentLength
       ) {
         log.debug('Returning empty stream for zero-byte data item', {
@@ -96,15 +96,14 @@ export class S3DataSource implements ContiguousDataSource {
           size: 0,
           verified: false,
           trusted: true,
-          sourceContentType: head.Metadata?.['payload-content-type'],
+          sourceContentType: payloadContentType,
           cached: false,
           requestAttributes: requestAttributesHeaders?.attributes,
         };
       }
 
       // Handle non-zero-byte data
-      const startOffset =
-        +(head.Metadata?.['payload-data-start'] ?? 0) + +(region?.offset ?? 0);
+      const startOffset = +(payloadDataStart ?? 0) + +(region?.offset ?? 0);
       const range = `bytes=${startOffset}-${region?.size !== undefined ? startOffset + region.size - 1 : ''}`;
 
       const response = await this.s3Client.GetObject({
@@ -114,8 +113,7 @@ export class S3DataSource implements ContiguousDataSource {
         streamResponsePayload: true,
       });
 
-      const sourceContentType =
-        head.Metadata?.['payload-content-type'] ?? response.ContentType;
+      const sourceContentType = payloadContentType ?? response.ContentType;
 
       log.debug('S3 response', {
         response: {
