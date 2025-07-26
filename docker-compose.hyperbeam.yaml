@@ -1,0 +1,15 @@
+# allows hyperbeam to connect to the ar-io network of primary docker-compose file
+networks:
+  ar-io-network:
+    external: true
+
+services:
+  hyperbeam:
+    image: p10node/arweave-hb:latest
+    restart: unless-stopped
+    networks:
+      - ar-io-network
+    ports:
+      - ${HB_PORT:-10000}:8080
+    volumes:
+      - ${WALLETS_PATH:-./wallets}/${AR_IO_WALLET:-}.json:/app/wallet.json
