@@ -64,11 +64,6 @@ export class S3DataSource implements ContiguousDataSource {
     });
 
     try {
-      // TODO: Use S3 client instead of accessing  aws client directly when aws-lite s3 supports Metadata on head-requests
-      // const head = this.s3Client.HeadObject({
-      //   Bucket: this.s3Bucket,
-      //   Key: `${this.s3Prefix}/${id}`,
-      // });
       const head = await this.awsClient.S3.HeadObject({
         Bucket: this.s3Bucket,
         Key: `${this.s3Prefix}/${id}`,
@@ -82,6 +77,32 @@ export class S3DataSource implements ContiguousDataSource {
         },
       });
 
+      const requestAttributesHeaders =
+        generateRequestAttributes(requestAttributes);
+
+      // Handle zero-byte data items
+      const payloadDataStart = head.Metadata?.['payload-data-start'];
+      if (
+        payloadDataStart !== undefined &&
+        head.ContentLength !== undefined &&
+        +payloadDataStart === head.ContentLength
+      ) {
+        log.debug('Returning empty stream for zero-byte data item', {
+          payloadDataStart,
+          contentLength: head.ContentLength,
+        });
+        return {
+          stream: Readable.from([]), // Return an empty stream for zero-byte items
+          size: 0,
+          verified: false,
+          trusted: true,
+          sourceContentType: head.Metadata?.['payload-content-type'],
+          cached: false,
+          requestAttributes: requestAttributesHeaders?.attributes,
+        };
+      }
+
+      // Handle non-zero-byte data
       const startOffset =
         +(head.Metadata?.['payload-data-start'] ?? 0) + +(region?.offset ?? 0);
       const range = `bytes=${startOffset}-${region?.size !== undefined ? startOffset + region.size - 1 : ''}`;
@@ -107,9 +128,6 @@ export class S3DataSource implements ContiguousDataSource {
           sourceContentType,
         },
       });
-
-      const requestAttributesHeaders =
-        generateRequestAttributes(requestAttributes);
 
       if (response.ContentLength === undefined) {
         throw new Error('Content-Length header missing from S3 response');
