@@ -92,18 +92,48 @@ export class ArNSNamesCache {
       this.log.info('Hydrating ArNS names cache...');
       let cursor: string | undefined = undefined;
       const start = Date.now();
+      const maxRetries = 3;
+
       do {
-        const {
-          items: records,
-          nextCursor,
-        }: PaginationResult<AoArNSNameDataWithName> =
-          await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
-        for (const record of records) {
-          // do not await, avoid blocking the event loop
-          this.setCachedArNSBaseName(record.name, record);
+        let retryCount = 0;
+        let success = false;
+
+        while (retryCount < maxRetries && !success) {
+          try {
+            const {
+              items: records,
+              nextCursor,
+            }: PaginationResult<AoArNSNameDataWithName> =
+              await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
+
+            for (const record of records) {
+              // do not await, avoid blocking the event loop
+              this.setCachedArNSBaseName(record.name, record);
+            }
+
+            cursor = nextCursor;
+            success = true;
+          } catch (pageError: any) {
+            retryCount++;
+
+            if (retryCount >= maxRetries) {
+              this.log.error('Failed to fetch page after max retries', {
+                cursor,
+                attempts: retryCount,
+                error: pageError.message,
+              });
+              throw pageError;
+            }
+
+            this.log.warn('Page fetch failed, retrying', {
+              cursor,
+              attempt: retryCount,
+              error: pageError.message,
+            });
+          }
         }
-        cursor = nextCursor;
       } while (cursor !== undefined);
+
       metrics.arnsNameCacheDurationSummary.observe(Date.now() - start);
       this.log.info('Successfully hydrated ArNS names cache');
     } catch (error: any) {

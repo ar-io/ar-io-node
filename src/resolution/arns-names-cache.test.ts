@@ -341,4 +341,135 @@ describe('ArNSNamesCache', () => {
     assert.deepEqual(cachedName2, cachedName);
     assert.equal(callCount, 1);
   });
+
+  it('should retry failed pagination requests up to 3 times', async () => {
+    let callCount = 0;
+    const debounceCache = new ArNSNamesCache({
+      log,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async ({ cursor }) => {
+          callCount++;
+
+          // First page succeeds
+          if (!cursor) {
+            return {
+              items: [{ name: 'name-1', processId: 'process-1' }],
+              nextCursor: 'cursor-1',
+            };
+          }
+
+          // Second page fails twice then succeeds
+          if (cursor === 'cursor-1') {
+            if (callCount <= 3) {
+              throw new Error('Temporary network error');
+            }
+            return {
+              items: [{ name: 'name-2', processId: 'process-2' }],
+              nextCursor: undefined,
+            };
+          }
+
+          return { items: [], nextCursor: undefined };
+        },
+      } as unknown as AoARIORead,
+    });
+
+    // Wait for initial hydration
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Verify both names were cached despite retries
+    const name1 = await debounceCache.getCachedArNSBaseName('name-1');
+    assert.deepEqual(name1, { name: 'name-1', processId: 'process-1' });
+
+    const name2 = await debounceCache.getCachedArNSBaseName('name-2');
+    assert.deepEqual(name2, { name: 'name-2', processId: 'process-2' });
+
+    // Should have called: 1 (first page) + 3 (retries for second page) = 4
+    assert.equal(callCount, 4);
+  });
+
+  it('should stop hydration after max retries on a page', async () => {
+    let callCount = 0;
+    const debounceCache = new ArNSNamesCache({
+      log,
+      registryCache,
+      cacheMissDebounceTtl: 10000, // Longer debounce to prevent re-hydration during test
+      networkProcess: {
+        getArNSRecords: async ({ cursor }) => {
+          callCount++;
+
+          // First page succeeds
+          if (!cursor) {
+            return {
+              items: [{ name: 'name-1', processId: 'process-1' }],
+              nextCursor: 'cursor-1',
+            };
+          }
+
+          // Second page always fails
+          if (cursor === 'cursor-1') {
+            throw new Error('Persistent error');
+          }
+
+          // Third page (should never be reached)
+          return {
+            items: [{ name: 'name-3', processId: 'process-3' }],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as AoARIORead,
+    });
+
+    // Wait for initial hydration
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // First page should be cached
+    const name1 = await debounceCache.getCachedArNSBaseName('name-1');
+    assert.deepEqual(name1, { name: 'name-1', processId: 'process-1' });
+
+    // The cache miss for name-3 triggers another hydration attempt
+    // which starts from the beginning
+    const name3 = await debounceCache.getCachedArNSBaseName('name-3');
+    assert.equal(name3, undefined);
+
+    // Initial hydration: 1 (first page) + 3 (retries for second page) = 4
+    // Cache miss triggers new hydration: 1 (first page) + 3 (retries) = 4
+    // Total = 8
+    assert.equal(callCount, 8);
+  });
+
+  it('should handle immediate failures without circuit breaker', async () => {
+    let callCount = 0;
+    const debounceCache = new ArNSNamesCache({
+      log,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async () => {
+          callCount++;
+          throw new Error('AO service unavailable');
+        },
+      } as unknown as AoARIORead,
+    });
+
+    // Wait for initial hydration attempt
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Should have retried 3 times
+    assert.equal(callCount, 3);
+
+    // Cache should return undefined for missing names
+    const name = await debounceCache.getCachedArNSBaseName('any-name');
+    assert.equal(name, undefined);
+
+    // Wait past debounce time
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+
+    // Another request should trigger new hydration attempts
+    await debounceCache.getCachedArNSBaseName('any-name');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Should have made 3 more attempts (no circuit breaker blocking)
+    assert.equal(callCount, 6);
+  });
 });
