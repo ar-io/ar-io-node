@@ -7,6 +7,8 @@
 
 import { KVBufferStore } from '../types';
 import pDebounce from 'p-debounce';
+import { tracer } from '../tracing.js';
+import * as metrics from '../metrics.js';
 
 /**
  * A wrapper around a KVBufferStore that debounces the hydrate function
@@ -59,21 +61,37 @@ export class KvDebounceStore implements KVBufferStore {
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    let value = await this.kvBufferStore.get(key);
-    if (value === undefined) {
-      // await any actively running hydrates but don't wait for debounces. This
-      // ensures that we don't unnecessarily return a 404 during startup while
-      // avoiding excessive delays waiting for long debounces.
-      if (this.pendingHydrate) {
-        await this.debounceHydrateOnMiss(key);
+    const span = tracer.startSpan('KvDebounceStore.get', {
+      attributes: {
+        'kv.key': key,
+      },
+    });
+
+    try {
+      let value = await this.kvBufferStore.get(key);
+      if (value === undefined) {
+        span.setAttributes({ 'kv.cache.hit': false });
+        // await any actively running hydrates but don't wait for debounces. This
+        // ensures that we don't unnecessarily return a 404 during startup while
+        // avoiding excessive delays waiting for long debounces.
+        if (this.pendingHydrate) {
+          await this.debounceHydrateOnMiss(key);
+        }
+        this.debounceHydrateOnMiss(key);
+        metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'miss' });
+        span.addEvent('Debounce triggered on miss');
+        value = await this.kvBufferStore.get(key);
+      } else {
+        span.setAttributes({ 'kv.cache.hit': true });
+        // don't await on a hit, fire and forget
+        this.debounceHydrateOnHit(key);
+        metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'hit' });
+        span.addEvent('Debounce triggered on hit');
       }
-      this.debounceHydrateOnMiss(key);
-      value = await this.kvBufferStore.get(key);
-    } else {
-      // don't await on a hit, fire and forget
-      this.debounceHydrateOnHit(key);
+      return value;
+    } finally {
+      span.end();
     }
-    return value;
   }
 
   async set(key: string, value: Buffer): Promise<void> {
