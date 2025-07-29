@@ -35,25 +35,47 @@ export class KvDebounceStore implements KVBufferStore {
     hydrateFn: (parentSpan?: Span) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
   }) {
     this.kvBufferStore = kvBufferStore;
-    const syncedHydrateFn = (parentSpan?: Span) => {
+    const syncedHydrateFn = () => {
       if (this.pendingHydrate !== undefined) {
         return this.pendingHydrate;
       }
 
-      this.pendingHydrate = hydrateFn(parentSpan).finally(() => {
+      this.pendingHydrate = hydrateFn().finally(() => {
         this.pendingHydrate = undefined;
       });
 
       return this.pendingHydrate;
     };
+    // Wrap the debounced functions to add tracking
+    const trackedSyncedHydrateFnMiss = async () => {
+      const span = tracer.startSpan(
+        'KvDebounceStore.debounceHydrateOnMiss.execute',
+      );
+      return syncedHydrateFn().finally(() => {
+        span.end();
+      });
+    };
+
+    const trackedSyncedHydrateFnHit = async () => {
+      const span = tracer.startSpan(
+        'KvDebounceStore.debounceHydrateOnHit.execute',
+      );
+      return syncedHydrateFn().finally(() => {
+        span.end();
+      });
+    };
+
     this.debounceHydrateOnMiss = pDebounce(
-      syncedHydrateFn,
+      trackedSyncedHydrateFnMiss,
       cacheMissDebounceTtl,
       {
         before: true,
       },
     );
-    this.debounceHydrateOnHit = pDebounce(syncedHydrateFn, cacheHitDebounceTtl);
+    this.debounceHydrateOnHit = pDebounce(
+      trackedSyncedHydrateFnHit,
+      cacheHitDebounceTtl,
+    );
 
     // debounce the cache immediately when the cache is created
     if (debounceImmediately) {
@@ -76,16 +98,17 @@ export class KvDebounceStore implements KVBufferStore {
         // ensures that we don't unnecessarily return a 404 during startup while
         // avoiding excessive delays waiting for long debounces.
         if (this.pendingHydrate) {
-          await this.debounceHydrateOnMiss(span);
+          await this.debounceHydrateOnMiss();
+        } else {
+          this.debounceHydrateOnMiss();
         }
-        this.debounceHydrateOnMiss(span);
         metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'miss' });
         span.addEvent('Debounce triggered on miss');
         value = await this.kvBufferStore.get(key);
       } else {
         span.setAttributes({ 'kv.cache.hit': true });
         // don't await on a hit, fire and forget
-        this.debounceHydrateOnHit(span);
+        this.debounceHydrateOnHit();
         metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'hit' });
         span.addEvent('Debounce triggered on hit');
       }
