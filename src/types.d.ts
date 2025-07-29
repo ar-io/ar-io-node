@@ -718,7 +718,9 @@ export interface NameResolver {
     signal,
   }: {
     name: string;
-    baseArNSRecordFn?: () => Promise<AoArNSNameDataWithName | undefined>;
+    baseArNSRecordFn?: (
+      parentSpan?: Span,
+    ) => Promise<AoArNSNameDataWithName | undefined>;
     signal?: AbortSignal;
   }): Promise<NameResolution>;
 }

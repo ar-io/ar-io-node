@@ -9,6 +9,7 @@ import { KVBufferStore } from '../types';
 import pDebounce from 'p-debounce';
 import { tracer } from '../tracing.js';
 import * as metrics from '../metrics.js';
+import { Span } from '@opentelemetry/api';
 
 /**
  * A wrapper around a KVBufferStore that debounces the hydrate function
@@ -31,15 +32,15 @@ export class KvDebounceStore implements KVBufferStore {
     cacheMissDebounceTtl: number;
     cacheHitDebounceTtl: number;
     debounceImmediately?: boolean;
-    hydrateFn: (...args: any[]) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
+    hydrateFn: (parentSpan?: Span) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
   }) {
     this.kvBufferStore = kvBufferStore;
-    const syncedHydrateFn = () => {
+    const syncedHydrateFn = (parentSpan?: Span) => {
       if (this.pendingHydrate !== undefined) {
         return this.pendingHydrate;
       }
 
-      this.pendingHydrate = hydrateFn().finally(() => {
+      this.pendingHydrate = hydrateFn(parentSpan).finally(() => {
         this.pendingHydrate = undefined;
       });
 
@@ -75,16 +76,16 @@ export class KvDebounceStore implements KVBufferStore {
         // ensures that we don't unnecessarily return a 404 during startup while
         // avoiding excessive delays waiting for long debounces.
         if (this.pendingHydrate) {
-          await this.debounceHydrateOnMiss(key);
+          await this.debounceHydrateOnMiss(span);
         }
-        this.debounceHydrateOnMiss(key);
+        this.debounceHydrateOnMiss(span);
         metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'miss' });
         span.addEvent('Debounce triggered on miss');
         value = await this.kvBufferStore.get(key);
       } else {
         span.setAttributes({ 'kv.cache.hit': true });
         // don't await on a hit, fire and forget
-        this.debounceHydrateOnHit(key);
+        this.debounceHydrateOnHit(span);
         metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'hit' });
         span.addEvent('Debounce triggered on hit');
       }

@@ -20,6 +20,7 @@ import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
 import * as metrics from '../metrics.js';
 import { tracer } from '../tracing.js';
+import { context, trace, Span } from '@opentelemetry/api';
 
 const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
@@ -88,8 +89,14 @@ export class ArNSNamesCache {
    * with the names and their associated processId and undernameLimits. The ar-io-sdk
    * retries requests 3 times with exponential backoff by default.
    */
-  private async hydrateArNSNamesCache() {
-    const span = tracer.startSpan('ArNSNamesCache.hydrateArNSNamesCache');
+  private async hydrateArNSNamesCache(parentSpan?: Span) {
+    const span = parentSpan
+      ? tracer.startSpan(
+          'ArNSNamesCache.hydrateArNSNamesCache',
+          {},
+          trace.setSpan(context.active(), parentSpan),
+        )
+      : tracer.startSpan('ArNSNamesCache.hydrateArNSNamesCache');
 
     try {
       this.log.info('Hydrating ArNS names cache...');
@@ -199,16 +206,28 @@ export class ArNSNamesCache {
    * Get the ArNS name data for a given name. The debounce cache will
    * automatically refresh the cache after the debounce ttl has expired.
    * @param name - The name to get the ArNS name data for.
+   * @param parentSpan - Optional parent span for distributed tracing
    * @returns The ArNS name data for the given name, or undefined if the name is not found.
    */
   async getCachedArNSBaseName(
     name: string,
+    parentSpan?: Span,
   ): Promise<AoArNSNameDataWithName | undefined> {
-    const span = tracer.startSpan('ArNSNamesCache.getCachedArNSBaseName', {
-      attributes: {
-        'arns.cache.name': name,
-      },
-    });
+    const span = parentSpan
+      ? tracer.startSpan(
+          'ArNSNamesCache.getCachedArNSBaseName',
+          {
+            attributes: {
+              'arns.cache.name': name,
+            },
+          },
+          trace.setSpan(context.active(), parentSpan),
+        )
+      : tracer.startSpan('ArNSNamesCache.getCachedArNSBaseName', {
+          attributes: {
+            'arns.cache.name': name,
+          },
+        });
 
     try {
       const record = await this.arnsDebounceCache.get(name);

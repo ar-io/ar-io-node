@@ -101,7 +101,7 @@ export class CompositeArNSResolver implements NameResolver {
   }: {
     resolver: NameResolver;
     name: string;
-    baseArNSRecordFn: () => Promise<any>;
+    baseArNSRecordFn: (parentSpan?: Span) => Promise<any>;
     isLastResolver: boolean;
     signal: AbortSignal;
     parentSpan: Span;
@@ -120,7 +120,7 @@ export class CompositeArNSResolver implements NameResolver {
       try {
         const resolution = await resolver.resolve({
           name,
-          baseArNSRecordFn,
+          baseArNSRecordFn: () => baseArNSRecordFn(span),
           signal,
         });
 
@@ -176,7 +176,7 @@ export class CompositeArNSResolver implements NameResolver {
     parentSpan,
   }: {
     name: string;
-    baseArNSRecordFn: () => Promise<any>;
+    baseArNSRecordFn: (parentSpan?: Span) => Promise<any>;
     signal: AbortSignal;
     parentSpan: Span;
   }): Promise<NameResolution | undefined> {
@@ -271,10 +271,13 @@ export class CompositeArNSResolver implements NameResolver {
     }
 
     try {
-      const baseArNSRecordFn = async () => {
+      const baseArNSRecordFn = async (parentSpan?: Span) => {
         try {
           // NOTE: The name cache handles its own request deduplication
-          return await this.arnsNamesCache.getCachedArNSBaseName(baseName);
+          return await this.arnsNamesCache.getCachedArNSBaseName(
+            baseName,
+            parentSpan,
+          );
         } catch (error: any) {
           this.log.error('Error getting base name from names cache: ', {
             baseName,
@@ -320,7 +323,8 @@ export class CompositeArNSResolver implements NameResolver {
             );
             this.resolveParallel({
               name,
-              baseArNSRecordFn,
+              baseArNSRecordFn: (parentSpan?: Span) =>
+                baseArNSRecordFn(parentSpan || innerSpan),
               signal,
               parentSpan: innerSpan,
             }).finally(() => {
@@ -344,7 +348,8 @@ export class CompositeArNSResolver implements NameResolver {
           pTimeout(
             this.resolveParallel({
               name,
-              baseArNSRecordFn,
+              baseArNSRecordFn: (parentSpan?: Span) =>
+                baseArNSRecordFn(parentSpan || span),
               signal: signal,
               parentSpan: span,
             }),
@@ -363,7 +368,8 @@ export class CompositeArNSResolver implements NameResolver {
         : // No cached resolution exists
           this.resolveParallel({
             name,
-            baseArNSRecordFn,
+            baseArNSRecordFn: (parentSpan?: Span) =>
+              baseArNSRecordFn(parentSpan || span),
             signal,
             parentSpan: span,
           }));

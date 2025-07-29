@@ -49,7 +49,9 @@ export class OnDemandArNSResolver implements NameResolver {
     baseArNSRecordFn,
   }: {
     name: string;
-    baseArNSRecordFn: () => Promise<AoArNSNameDataWithName | undefined>;
+    baseArNSRecordFn: (
+      parentSpan?: any,
+    ) => Promise<AoArNSNameDataWithName | undefined>;
   }): Promise<NameResolution> {
     this.log.info('Resolving name...', { name });
     try {
