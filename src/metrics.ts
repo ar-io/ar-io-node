@@ -240,6 +240,32 @@ export const arnsNameCacheMissCounter = new promClient.Counter({
   help: 'Number of misses in the arns name cache',
 });
 
+export const arnsNameCacheHydrationPagesCounter = new promClient.Counter({
+  name: 'arns_name_cache_hydration_pages_total',
+  help: 'Total number of pages fetched during ArNS cache hydration',
+});
+
+export const arnsNameCacheHydrationRetriesCounter = new promClient.Counter({
+  name: 'arns_name_cache_hydration_retries_total',
+  help: 'Total number of retry attempts during ArNS cache hydration',
+});
+
+export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
+  name: 'arns_name_cache_hydration_failures_total',
+  help: 'Number of failed hydration attempts for ArNS cache',
+});
+
+export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
+  name: 'arns_base_name_cache_entries',
+  help: 'Current number of base name entries in the ArNS name cache',
+});
+
+export const arnsNameCacheDebounceTriggeredCounter = new promClient.Counter({
+  name: 'arns_name_cache_debounce_triggered_total',
+  help: 'Number of debounce triggers for ArNS cache refresh',
+  labelNames: ['type'],
+});
+
 export const arnsResolutionTime = new promClient.Summary({
   name: 'arns_resolution_time_ms',
   help: 'Time in ms it takes to resolve an arns name',

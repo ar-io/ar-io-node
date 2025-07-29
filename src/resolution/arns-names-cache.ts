@@ -19,6 +19,7 @@ import { connect } from '@permaweb/aoconnect';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
 import * as metrics from '../metrics.js';
+import { tracer } from '../tracing.js';
 
 const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
@@ -88,15 +89,22 @@ export class ArNSNamesCache {
    * retries requests 3 times with exponential backoff by default.
    */
   private async hydrateArNSNamesCache() {
+    const span = tracer.startSpan('ArNSNamesCache.hydrateArNSNamesCache');
+
     try {
       this.log.info('Hydrating ArNS names cache...');
       let cursor: string | undefined = undefined;
       const start = Date.now();
       const maxRetries = 3;
+      let totalPages = 0;
+      let failedPages = 0;
+      let totalRetries = 0;
+      let cachedNames = 0;
 
       do {
         let retryCount = 0;
         let success = false;
+        totalPages++;
 
         while (retryCount < maxRetries && !success) {
           try {
@@ -109,14 +117,26 @@ export class ArNSNamesCache {
             for (const record of records) {
               // do not await, avoid blocking the event loop
               this.setCachedArNSBaseName(record.name, record);
+              cachedNames++;
             }
+
+            metrics.arnsNameCacheHydrationPagesCounter.inc();
 
             cursor = nextCursor;
             success = true;
           } catch (pageError: any) {
             retryCount++;
+            totalRetries++;
+            metrics.arnsNameCacheHydrationRetriesCounter.inc();
+
+            span.addEvent('Page fetch failed', {
+              cursor: cursor ?? 'initial',
+              attempt: retryCount,
+              error: pageError.message,
+            });
 
             if (retryCount >= maxRetries) {
+              failedPages++;
               this.log.error('Failed to fetch page after max retries', {
                 cursor,
                 attempts: retryCount,
@@ -134,13 +154,36 @@ export class ArNSNamesCache {
         }
       } while (cursor !== undefined);
 
-      metrics.arnsNameCacheDurationSummary.observe(Date.now() - start);
+      const duration = Date.now() - start;
+      metrics.arnsNameCacheDurationSummary.observe(duration);
+
+      span.setAttributes({
+        'arns.cache.hydration.duration_ms': duration,
+        'arns.cache.hydration.total_pages': totalPages,
+        'arns.cache.hydration.failed_pages': failedPages,
+        'arns.cache.hydration.total_retries': totalRetries,
+        'arns.cache.hydration.cached_names': cachedNames,
+        'arns.cache.hydration.success': true,
+      });
+
+      metrics.arnsBaseNameCacheEntriesGauge.set(cachedNames);
+
       this.log.info('Successfully hydrated ArNS names cache');
     } catch (error: any) {
+      span.recordException(error);
+      span.setAttributes({
+        'arns.cache.hydration.success': false,
+        'error.type': error.name || 'UnknownError',
+      });
+
+      metrics.arnsNameCacheHydrationFailuresCounter.inc();
+
       this.log.error('Error hydrating ArNS names cache', {
         error: error.message,
         stack: error.stack,
       });
+    } finally {
+      span.end();
     }
   }
 
@@ -161,13 +204,25 @@ export class ArNSNamesCache {
   async getCachedArNSBaseName(
     name: string,
   ): Promise<AoArNSNameDataWithName | undefined> {
-    const record = await this.arnsDebounceCache.get(name);
-    if (record) {
-      metrics.arnsNameCacheHitCounter.inc();
-      return <AoArNSNameDataWithName>JSON.parse(record.toString());
+    const span = tracer.startSpan('ArNSNamesCache.getCachedArNSBaseName', {
+      attributes: {
+        'arns.cache.name': name,
+      },
+    });
+
+    try {
+      const record = await this.arnsDebounceCache.get(name);
+      if (record) {
+        metrics.arnsNameCacheHitCounter.inc();
+        span.setAttributes({ 'arns.cache.hit': true });
+        return <AoArNSNameDataWithName>JSON.parse(record.toString());
+      }
+      metrics.arnsNameCacheMissCounter.inc();
+      span.setAttributes({ 'arns.cache.hit': false });
+      return undefined;
+    } finally {
+      span.end();
     }
-    metrics.arnsNameCacheMissCounter.inc();
-    return undefined;
   }
 
   /**
