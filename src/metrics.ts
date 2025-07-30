@@ -388,7 +388,6 @@ export const cacheSizeBytes = new promClient.Gauge({
 const breakerSourceNames = [
   // Keep this list alphabetized
   'ar-io-data-source',
-  'arns-names-cache',
   'get-data-attributes',
   'get-data-item-attributes',
   'get-data-parent',
