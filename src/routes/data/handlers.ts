@@ -390,6 +390,10 @@ const handleRangeRequest = async ({
   }
 };
 
+export const sendInvalidId = (res: Response, id: string) => {
+  res.status(400).send(`Invalid ID: ${id}`);
+};
+
 export const sendNotFound = (res: Response) => {
   res.header(
     'Cache-Control',
@@ -420,6 +424,13 @@ export const createRawDataHandler = ({
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
     const id = req.params[0];
+
+    // Ensure this is a valid id
+    if (Buffer.from(id, 'base64url').toString('base64url') !== id) {
+      log.warn('Invalid ID', { id });
+      sendInvalidId(res, id);
+      return;
+    }
 
     // Return 404 if the data is blocked by ID
     try {
@@ -695,6 +706,13 @@ export const createDataHandler = ({
       // Handle both named parameters (:id) and positional parameters ([0], [1])
       id = req.params.id ?? req.params[0] ?? req.params[1];
       manifestPath = req.params['*'] ?? req.params[2];
+    }
+
+    // Ensure this is a valid id
+    if (Buffer.from(id, 'base64url').toString('base64url') !== id) {
+      log.warn('Invalid ID', { id });
+      sendInvalidId(res, id);
+      return;
     }
 
     // Return 404 if the data is blocked by ID

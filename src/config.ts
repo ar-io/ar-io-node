@@ -253,7 +253,7 @@ export const BACKGROUND_RETRIEVAL_ORDER = env
   .varOrDefault('BACKGROUND_RETRIEVAL_ORDER', 'chunks,s3')
   .split(',');
 
-// Cache type for contigous metadata (access time, etc.). Defaults to 'node'
+// Cache type for contiguous metadata (access time, etc.). Defaults to 'node'
 // here for development but is set to 'redis' in 'docker-compose.yaml'.
 export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
   'CHUNK_METADATA_CACHE_TYPE',
@@ -851,8 +851,14 @@ export const AWS_S3_CONTIGUOUS_DATA_BUCKET = env.varOrUndefined(
 export const AWS_S3_CONTIGUOUS_DATA_PREFIX = env.varOrUndefined(
   'AWS_S3_CONTIGUOUS_DATA_PREFIX',
 );
+export const AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET = env.varOrUndefined(
+  'AWS_S3_TURBO_CONTIGUOUS_DATA_BUCKET',
+);
+export const AWS_S3_TURBO_CONTIGUOUS_DATA_PREFIX = env.varOrUndefined(
+  'AWS_S3_TURBO_CONTIGUOUS_DATA_PREFIX',
+);
 
-// Chunk data source speficially set-up for interoperability with
+// Chunk data source specifically set-up for interoperability with
 // the legacy arweave gateways
 export const LEGACY_AWS_S3_CHUNK_DATA_BUCKET = env.varOrUndefined(
   'LEGACY_AWS_S3_CHUNK_DATA_BUCKET',

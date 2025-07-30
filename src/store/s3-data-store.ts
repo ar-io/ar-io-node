@@ -183,7 +183,7 @@ export class S3DataStore implements ContiguousDataStore {
         await fs.promises.unlink(stream.path);
       }
     } catch (error: any) {
-      this.log.error('Failed to cleanup contigous data stream', {
+      this.log.error('Failed to cleanup contiguous data stream', {
         message: error.message,
         stack: error.stack,
       });

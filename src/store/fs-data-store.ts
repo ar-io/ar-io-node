@@ -64,7 +64,7 @@ export class FsDataStore implements ContiguousDataStore {
         return fs.createReadStream(this.dataPath(hash), opts);
       }
     } catch (error: any) {
-      this.log.error('Failed to get contigous data stream', {
+      this.log.error('Failed to get contiguous data stream', {
         hash,
         ...region,
         message: error.message,
@@ -86,7 +86,7 @@ export class FsDataStore implements ContiguousDataStore {
       stream.end();
       await fs.promises.unlink(stream.path);
     } catch (error: any) {
-      this.log.error('Failed to cleanup contigous data stream', {
+      this.log.error('Failed to cleanup contiguous data stream', {
         message: error.message,
         stack: error.stack,
       });
@@ -100,7 +100,7 @@ export class FsDataStore implements ContiguousDataStore {
       await fs.promises.mkdir(dataDir, { recursive: true });
       await fs.promises.rename(stream.path, this.dataPath(hash));
     } catch (error: any) {
-      this.log.error('Failed to finalize contigous data stream', {
+      this.log.error('Failed to finalize contiguous data stream', {
         message: error.message,
         stack: error.stack,
       });
