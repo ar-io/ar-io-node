@@ -394,7 +394,7 @@ describe('ArNSNamesCache', () => {
     const debounceCache = new ArNSNamesCache({
       log,
       registryCache,
-      cacheMissDebounceTtl: 10000, // Longer debounce to prevent re-hydration during test
+      cacheMissDebounceTtl: 100, // Short debounce to allow re-hydration in test
       networkProcess: {
         getArNSRecords: async ({ cursor }) => {
           callCount++;
@@ -427,6 +427,9 @@ describe('ArNSNamesCache', () => {
     // First page should be cached
     const name1 = await debounceCache.getCachedArNSBaseName('name-1');
     assert.deepEqual(name1, { name: 'name-1', processId: 'process-1' });
+
+    // Wait for debounce TTL to expire
+    await new Promise((resolve) => setTimeout(resolve, 110));
 
     // The cache miss for name-3 triggers another hydration attempt
     // which starts from the beginning
