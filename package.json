@@ -52,7 +52,6 @@
     "node-cache": "^5.1.2",
     "opossum": "^8.4.0",
     "opossum-prometheus": "^0.4.0",
-    "p-debounce": "^4.0.0",
     "p-limit": "^6.2.0",
     "p-timeout": "^6.1.4",
     "postgres": "^3.4.5",
