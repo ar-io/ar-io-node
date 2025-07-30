@@ -123,6 +123,9 @@ describe('KvDebounceCache', () => {
       assert.equal(callCount, 1);
       assert.ok(lastCallTimestamp <= Date.now());
 
+      // wait for the debounce ttl to expire
+      await new Promise((resolve) => setTimeout(resolve, 11));
+
       // request a missing key, should call debounceFn and await the debounceFn to complete
       const result = await kvDebounceStore.get(key);
       assert.equal(callCount, 2);
@@ -156,12 +159,20 @@ describe('KvDebounceCache', () => {
       assert.ok(lastCallTimestamp <= Date.now());
       assert.equal(callCount, 1);
 
-      // it should debounce after the cache hit debounce ttl expires
+      // wait for the cache hit debounce ttl to expire
       await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // trigger another get to cause the refresh on hit
+      const result2 = await kvDebounceStore.get(key);
       assert.equal(callCount, 2);
       assert.ok(lastCallTimestamp >= Date.now() - 100);
-      const result2 = await kvDebounceStore.get(key);
-      assert.equal(result2!.toString('utf-8'), 'test1');
+
+      // Since refresh on hit is fire-and-forget, wait a bit for the async update to complete
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Now get the updated value
+      const result3 = await kvDebounceStore.get(key);
+      assert.equal(result3!.toString('utf-8'), 'test1');
     });
 
     // intentional design choice to bubble up errors from debounceFn and let the caller handle them appropriately

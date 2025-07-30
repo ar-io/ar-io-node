@@ -8274,11 +8274,6 @@ p-cancelable@^3.0.0:
   resolved "https://registry.npmjs.org/p-cancelable/-/p-cancelable-3.0.0.tgz"
   integrity sha512-mlVgR3PGuzlo0MmTdk4cXqXWlwQDLnONTAg6sm62XkMJEiRxN3GL3SffkYvqwonbkJBcrI7Uvv5Zh9yjvn2iUw==
 
-p-debounce@^4.0.0:
-  version "4.0.0"
-  resolved "https://registry.npmjs.org/p-debounce/-/p-debounce-4.0.0.tgz"
-  integrity sha512-4Ispi9I9qYGO4lueiLDhe4q4iK5ERK8reLsuzH6BPaXn53EGaua8H66PXIFGrW897hwjXp+pVLrm/DLxN0RF0A==
-
 p-limit@^2.2.0:
   version "2.3.0"
   resolved "https://registry.npmjs.org/p-limit/-/p-limit-2.3.0.tgz"

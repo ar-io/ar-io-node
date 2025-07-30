@@ -6,20 +6,21 @@
  */
 
 import { KVBufferStore } from '../types';
-import pDebounce from 'p-debounce';
 import { tracer } from '../tracing.js';
 import * as metrics from '../metrics.js';
 import { Span } from '@opentelemetry/api';
 
 /**
  * A wrapper around a KVBufferStore that debounces the hydrate function
- * on cache miss and cache hit.
+ * on cache miss and cache hit using timestamp-based tracking.
  */
 export class KvDebounceStore implements KVBufferStore {
   private kvBufferStore: KVBufferStore;
-  private debounceHydrateOnMiss: (...args: any[]) => Promise<void>;
-  private debounceHydrateOnHit: (...args: any[]) => Promise<void>;
+  private cacheMissDebounceTtl: number;
+  private cacheHitDebounceTtl: number;
+  private hydrateFn: (parentSpan?: Span) => Promise<void>;
   private pendingHydrate: Promise<void> | undefined;
+  private lastRefreshTimestamp: number = 0;
 
   constructor({
     kvBufferStore,
@@ -32,55 +33,40 @@ export class KvDebounceStore implements KVBufferStore {
     cacheMissDebounceTtl: number;
     cacheHitDebounceTtl: number;
     debounceImmediately?: boolean;
-    hydrateFn: (parentSpan?: Span) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
+    hydrateFn: (parentSpan?: Span) => Promise<void>;
   }) {
     this.kvBufferStore = kvBufferStore;
-    const syncedHydrateFn = () => {
-      if (this.pendingHydrate !== undefined) {
-        return this.pendingHydrate;
-      }
-
-      this.pendingHydrate = hydrateFn().finally(() => {
-        this.pendingHydrate = undefined;
-      });
-
-      return this.pendingHydrate;
-    };
-    // Wrap the debounced functions to add tracking
-    const trackedSyncedHydrateFnMiss = async () => {
-      const span = tracer.startSpan(
-        'KvDebounceStore.debounceHydrateOnMiss.execute',
-      );
-      return syncedHydrateFn().finally(() => {
-        span.end();
-      });
-    };
-
-    const trackedSyncedHydrateFnHit = async () => {
-      const span = tracer.startSpan(
-        'KvDebounceStore.debounceHydrateOnHit.execute',
-      );
-      return syncedHydrateFn().finally(() => {
-        span.end();
-      });
-    };
-
-    this.debounceHydrateOnMiss = pDebounce(
-      trackedSyncedHydrateFnMiss,
-      cacheMissDebounceTtl,
-      {
-        before: true,
-      },
-    );
-    this.debounceHydrateOnHit = pDebounce(
-      trackedSyncedHydrateFnHit,
-      cacheHitDebounceTtl,
-    );
+    this.cacheMissDebounceTtl = cacheMissDebounceTtl;
+    this.cacheHitDebounceTtl = cacheHitDebounceTtl;
+    this.hydrateFn = hydrateFn;
 
     // debounce the cache immediately when the cache is created
     if (debounceImmediately) {
-      syncedHydrateFn();
+      this.triggerHydrate();
+      this.lastRefreshTimestamp = Date.now();
     }
+  }
+
+  private triggerHydrate(parentSpan?: Span): Promise<void> {
+    if (this.pendingHydrate !== undefined) {
+      parentSpan?.addEvent('Reusing pending hydrate');
+      return this.pendingHydrate;
+    }
+
+    parentSpan?.addEvent('Starting new hydrate');
+    const span = tracer.startSpan('KvDebounceStore.triggerHydrate');
+
+    this.pendingHydrate = this.hydrateFn().finally(() => {
+      this.pendingHydrate = undefined;
+      span.end();
+    });
+
+    return this.pendingHydrate;
+  }
+
+  private shouldRefresh(debounceTtl: number): boolean {
+    const now = Date.now();
+    return now - this.lastRefreshTimestamp >= debounceTtl;
   }
 
   async get(key: string): Promise<Buffer | undefined> {
@@ -94,23 +80,37 @@ export class KvDebounceStore implements KVBufferStore {
       let value = await this.kvBufferStore.get(key);
       if (value === undefined) {
         span.setAttributes({ 'kv.cache.hit': false });
-        // await any actively running hydrates but don't wait for debounces. This
-        // ensures that we don't unnecessarily return a 404 during startup while
-        // avoiding excessive delays waiting for long debounces.
-        if (this.pendingHydrate) {
-          await this.debounceHydrateOnMiss();
-        } else {
-          this.debounceHydrateOnMiss();
+
+        // Check if we should refresh based on miss debounce TTL
+        if (this.shouldRefresh(this.cacheMissDebounceTtl)) {
+          this.lastRefreshTimestamp = Date.now();
+
+          // await any actively running hydrates but don't wait for new ones
+          if (this.pendingHydrate) {
+            await this.triggerHydrate(span);
+          } else {
+            this.triggerHydrate(span);
+          }
+
+          metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'miss' });
+          span.addEvent('Debounce triggered on miss');
+
+          // Try to get the value again after hydration
+          value = await this.kvBufferStore.get(key);
         }
-        metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'miss' });
-        span.addEvent('Debounce triggered on miss');
-        value = await this.kvBufferStore.get(key);
       } else {
         span.setAttributes({ 'kv.cache.hit': true });
-        // don't await on a hit, fire and forget
-        this.debounceHydrateOnHit();
-        metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'hit' });
-        span.addEvent('Debounce triggered on hit');
+
+        // Check if we should refresh based on hit debounce TTL
+        if (this.shouldRefresh(this.cacheHitDebounceTtl)) {
+          this.lastRefreshTimestamp = Date.now();
+
+          // don't await on a hit, fire and forget
+          this.triggerHydrate(span);
+
+          metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'hit' });
+          span.addEvent('Debounce triggered on hit');
+        }
       }
       return value;
     } finally {
