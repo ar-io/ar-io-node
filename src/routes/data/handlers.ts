@@ -426,7 +426,11 @@ export const createRawDataHandler = ({
     const id = req.params[0];
 
     // Ensure this is a valid id
-    if (Buffer.from(id, 'base64url').toString('base64url') !== id) {
+    if (
+      id != null &&
+      id?.match(/^[a-zA-Z0-9-_]{43}$/) &&
+      Buffer.from(id, 'base64url').toString('base64url') !== id
+    ) {
       log.warn('Invalid ID', { id });
       sendInvalidId(res, id);
       return;
@@ -708,8 +712,13 @@ export const createDataHandler = ({
       manifestPath = req.params['*'] ?? req.params[2];
     }
 
+    // TODO: remove regex match if possible
     // Ensure this is a valid id
-    if (Buffer.from(id, 'base64url').toString('base64url') !== id) {
+    if (
+      id != null &&
+      id?.match(/^[a-zA-Z0-9-_]{43}$/) &&
+      Buffer.from(id, 'base64url').toString('base64url') !== id
+    ) {
       log.warn('Invalid ID', { id });
       sendInvalidId(res, id);
       return;
