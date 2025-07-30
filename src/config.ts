@@ -244,13 +244,13 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
-    's3,trusted-gateways,chunks,tx-data,ar-io-peers',
+    'trusted-gateways,chunks,tx-data,ar-io-peers',
   )
   .split(',');
 
 // Background data retrieval priority order
 export const BACKGROUND_RETRIEVAL_ORDER = env
-  .varOrDefault('BACKGROUND_RETRIEVAL_ORDER', 'chunks,s3')
+  .varOrDefault('BACKGROUND_RETRIEVAL_ORDER', 'chunks')
   .split(',');
 
 // Cache type for contiguous metadata (access time, etc.). Defaults to 'node'
