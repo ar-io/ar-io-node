@@ -139,7 +139,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     );
   }
 
-  fire<T>(task: CacheServiceTask<T>): Promise<T> {
+  private fire<T>(task: CacheServiceTask<T>): Promise<T> {
     return this.circuitBreaker.fire(task) as Promise<T>;
   }
 
