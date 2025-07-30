@@ -863,6 +863,10 @@ export const AWS_ELASTICACHE_TURBO_HOST = env.varOrUndefined(
 export const AWS_ELASTICACHE_TURBO_USE_TLS =
   env.varOrDefault('AWS_ELASTICACHE_TURBO_USE_TLS', 'false') === 'true';
 
+export const AWS_ELASTICACHE_TURBO_PORT = env.varOrUndefined(
+  'AWS_ELASTICACHE_TURBO_PORT',
+);
+
 // Chunk data source specifically set-up for interoperability with
 // the legacy arweave gateways
 export const LEGACY_AWS_S3_CHUNK_DATA_BUCKET = env.varOrUndefined(

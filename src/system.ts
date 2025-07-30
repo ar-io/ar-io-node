@@ -480,6 +480,10 @@ const turboElasticacheDataSouce =
     ? new TurboRedisDataSource({
         redisHost: config.AWS_ELASTICACHE_TURBO_HOST,
         redisUseTls: config.AWS_ELASTICACHE_TURBO_USE_TLS,
+        redisPort:
+          config.AWS_ELASTICACHE_TURBO_PORT !== undefined
+            ? +config.AWS_ELASTICACHE_TURBO_PORT
+            : undefined,
         log,
       })
     : undefined;

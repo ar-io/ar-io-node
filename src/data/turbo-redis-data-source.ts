@@ -71,10 +71,12 @@ export class TurboRedisDataSource implements ContiguousDataSource {
   constructor({
     redisHost,
     redisUseTls,
+    redisPort = 6379,
     log,
   }: {
     redisHost: string;
     redisUseTls: boolean;
+    redisPort?: number;
     log: winston.Logger;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -82,7 +84,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
       [
         {
           host: redisHost,
-          port: 6379, // TODO: Parameterize
+          port: redisPort,
         },
       ],
       {
@@ -127,7 +129,6 @@ export class TurboRedisDataSource implements ContiguousDataSource {
       },
     );
 
-    // TODO: Integrate with opossum-prometheus library
     this.circuitBreaker.on('timeout', () =>
       this.log.error('Redis circuit breaker command timed out'),
     );
@@ -211,7 +212,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
           sourceContentType: payloadContentType,
           verified: false,
           trusted: true,
-          cached: false, // TODO: ?
+          cached: false,
           requestAttributes: requestAttributesHeaders?.attributes,
         };
       }
@@ -375,7 +376,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
       stream,
       sourceContentType: payloadContentType,
       size: region?.size ?? rawDataItemBuffer.byteLength,
-      cached: false, // TODO: ?
+      cached: false,
       trusted: true,
       verified: false,
       requestAttributes: requestAttributesHeaders?.attributes,
