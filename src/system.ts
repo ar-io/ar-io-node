@@ -536,7 +536,7 @@ for (const sourceName of config.ON_DEMAND_RETRIEVAL_ORDER) {
   if (dataSource !== undefined) {
     onDemandDataSources.push(dataSource);
   } else {
-    log.error(`Data source ${sourceName} not found! Skipping.`);
+    throw new Error(`Data source ${sourceName} not found!`);
   }
 }
 
@@ -545,6 +545,8 @@ for (const sourceName of config.BACKGROUND_RETRIEVAL_ORDER) {
   const dataSource = getDataSource(sourceName);
   if (dataSource !== undefined) {
     backgroundDataSources.push(dataSource);
+  } else {
+    throw new Error(`Background data source ${sourceName} not found!`);
   }
 }
 
