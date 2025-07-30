@@ -19,7 +19,8 @@ import { connect } from '@permaweb/aoconnect';
 import { KvDebounceStore } from '../store/kv-debounce-store.js';
 import { KVBufferStore } from '../types.js';
 import * as metrics from '../metrics.js';
-import CircuitBreaker from 'opossum';
+import { tracer } from '../tracing.js';
+import { context, trace, Span } from '@opentelemetry/api';
 
 const DEFAULT_CACHE_MISS_DEBOUNCE_TTL =
   config.ARNS_NAME_LIST_CACHE_MISS_REFRESH_INTERVAL_SECONDS * 1000;
@@ -39,10 +40,6 @@ export class ArNSNamesCache {
   private networkProcess: AoARIORead;
   private arnsRegistryKvCache: KVBufferStore;
   private arnsDebounceCache: KvDebounceStore;
-  private arnsNamesCircuitBreaker: CircuitBreaker<
-    Parameters<AoARIORead['getArNSRecords']>,
-    Awaited<ReturnType<AoARIORead['getArNSRecords']>>
-  >;
 
   constructor({
     log,
@@ -61,15 +58,6 @@ export class ArNSNamesCache {
     }),
     cacheMissDebounceTtl = DEFAULT_CACHE_MISS_DEBOUNCE_TTL,
     cacheHitDebounceTtl = DEFAULT_CACHE_HIT_DEBOUNCE_TTL,
-    circuitBreakerOptions = {
-      timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
-      errorThresholdPercentage:
-        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
-      rollingCountTimeout:
-        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
-      resetTimeout:
-        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
-    },
   }: {
     log: winston.Logger;
     registryCache: KVBufferStore;
@@ -77,21 +65,12 @@ export class ArNSNamesCache {
     networkProcess?: AoARIORead;
     cacheMissDebounceTtl?: number;
     cacheHitDebounceTtl?: number;
-    circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({
       class: 'ArNSNamesCache',
     });
     this.networkProcess = networkProcess;
     this.arnsRegistryKvCache = registryCache;
-    this.arnsNamesCircuitBreaker = new CircuitBreaker(
-      this.networkProcess.getArNSRecords.bind(this.networkProcess),
-      {
-        ...circuitBreakerOptions,
-        capacity: 1, // only allow one request at a time
-        name: 'getArNSRecords',
-      },
-    );
     this.arnsDebounceCache = new KvDebounceStore({
       kvBufferStore: registryCache,
       cacheMissDebounceTtl,
@@ -103,8 +82,6 @@ export class ArNSNamesCache {
        */
       hydrateFn: this.hydrateArNSNamesCache.bind(this),
     });
-    // add circuit breaker metrics
-    metrics.circuitBreakerMetrics.add(this.arnsNamesCircuitBreaker);
   }
 
   /**
@@ -112,30 +89,108 @@ export class ArNSNamesCache {
    * with the names and their associated processId and undernameLimits. The ar-io-sdk
    * retries requests 3 times with exponential backoff by default.
    */
-  private async hydrateArNSNamesCache() {
+  private async hydrateArNSNamesCache(parentSpan?: Span) {
+    const span = parentSpan
+      ? tracer.startSpan(
+          'ArNSNamesCache.hydrateArNSNamesCache',
+          {},
+          trace.setSpan(context.active(), parentSpan),
+        )
+      : tracer.startSpan('ArNSNamesCache.hydrateArNSNamesCache');
+
     try {
       this.log.info('Hydrating ArNS names cache...');
       let cursor: string | undefined = undefined;
       const start = Date.now();
+      const maxRetries = 3;
+      let totalPages = 0;
+      let failedPages = 0;
+      let totalRetries = 0;
+      let cachedNames = 0;
+
       do {
-        const {
-          items: records,
-          nextCursor,
-        }: PaginationResult<AoArNSNameDataWithName> =
-          await this.arnsNamesCircuitBreaker.fire({ cursor, limit: 1000 });
-        for (const record of records) {
-          // do not await, avoid blocking the event loop
-          this.setCachedArNSBaseName(record.name, record);
+        let retryCount = 0;
+        let success = false;
+        totalPages++;
+
+        while (retryCount < maxRetries && !success) {
+          try {
+            const {
+              items: records,
+              nextCursor,
+            }: PaginationResult<AoArNSNameDataWithName> =
+              await this.networkProcess.getArNSRecords({ cursor, limit: 1000 });
+
+            for (const record of records) {
+              // do not await, avoid blocking the event loop
+              this.setCachedArNSBaseName(record.name, record);
+              cachedNames++;
+            }
+
+            metrics.arnsNameCacheHydrationPagesCounter.inc();
+
+            cursor = nextCursor;
+            success = true;
+          } catch (pageError: any) {
+            retryCount++;
+            totalRetries++;
+            metrics.arnsNameCacheHydrationRetriesCounter.inc();
+
+            span.addEvent('Page fetch failed', {
+              cursor: cursor ?? 'initial',
+              attempt: retryCount,
+              error: pageError.message,
+            });
+
+            if (retryCount >= maxRetries) {
+              failedPages++;
+              this.log.error('Failed to fetch page after max retries', {
+                cursor,
+                attempts: retryCount,
+                error: pageError.message,
+              });
+              throw pageError;
+            }
+
+            this.log.warn('Page fetch failed, retrying', {
+              cursor,
+              attempt: retryCount,
+              error: pageError.message,
+            });
+          }
         }
-        cursor = nextCursor;
       } while (cursor !== undefined);
-      metrics.arnsNameCacheDurationSummary.observe(Date.now() - start);
+
+      const duration = Date.now() - start;
+      metrics.arnsNameCacheDurationSummary.observe(duration);
+
+      span.setAttributes({
+        'arns.cache.hydration.duration_ms': duration,
+        'arns.cache.hydration.total_pages': totalPages,
+        'arns.cache.hydration.failed_pages': failedPages,
+        'arns.cache.hydration.total_retries': totalRetries,
+        'arns.cache.hydration.cached_names': cachedNames,
+        'arns.cache.hydration.success': true,
+      });
+
+      metrics.arnsBaseNameCacheEntriesGauge.set(cachedNames);
+
       this.log.info('Successfully hydrated ArNS names cache');
     } catch (error: any) {
+      span.recordException(error);
+      span.setAttributes({
+        'arns.cache.hydration.success': false,
+        'error.type': error.name || 'UnknownError',
+      });
+
+      metrics.arnsNameCacheHydrationFailuresCounter.inc();
+
       this.log.error('Error hydrating ArNS names cache', {
         error: error.message,
         stack: error.stack,
       });
+    } finally {
+      span.end();
     }
   }
 
@@ -151,18 +206,42 @@ export class ArNSNamesCache {
    * Get the ArNS name data for a given name. The debounce cache will
    * automatically refresh the cache after the debounce ttl has expired.
    * @param name - The name to get the ArNS name data for.
+   * @param parentSpan - Optional parent span for distributed tracing
    * @returns The ArNS name data for the given name, or undefined if the name is not found.
    */
   async getCachedArNSBaseName(
     name: string,
+    parentSpan?: Span,
   ): Promise<AoArNSNameDataWithName | undefined> {
-    const record = await this.arnsDebounceCache.get(name);
-    if (record) {
-      metrics.arnsNameCacheHitCounter.inc();
-      return <AoArNSNameDataWithName>JSON.parse(record.toString());
+    const span = parentSpan
+      ? tracer.startSpan(
+          'ArNSNamesCache.getCachedArNSBaseName',
+          {
+            attributes: {
+              'arns.cache.name': name,
+            },
+          },
+          trace.setSpan(context.active(), parentSpan),
+        )
+      : tracer.startSpan('ArNSNamesCache.getCachedArNSBaseName', {
+          attributes: {
+            'arns.cache.name': name,
+          },
+        });
+
+    try {
+      const record = await this.arnsDebounceCache.get(name);
+      if (record) {
+        metrics.arnsNameCacheHitCounter.inc();
+        span.setAttributes({ 'arns.cache.hit': true });
+        return <AoArNSNameDataWithName>JSON.parse(record.toString());
+      }
+      metrics.arnsNameCacheMissCounter.inc();
+      span.setAttributes({ 'arns.cache.hit': false });
+      return undefined;
+    } finally {
+      span.end();
     }
-    metrics.arnsNameCacheMissCounter.inc();
-    return undefined;
   }
 
   /**

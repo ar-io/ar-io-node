@@ -5,4 +5,4 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export const release = '43';
+export const release = '45-pre';

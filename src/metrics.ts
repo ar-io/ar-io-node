@@ -240,6 +240,32 @@ export const arnsNameCacheMissCounter = new promClient.Counter({
   help: 'Number of misses in the arns name cache',
 });
 
+export const arnsNameCacheHydrationPagesCounter = new promClient.Counter({
+  name: 'arns_name_cache_hydration_pages_total',
+  help: 'Total number of pages fetched during ArNS cache hydration',
+});
+
+export const arnsNameCacheHydrationRetriesCounter = new promClient.Counter({
+  name: 'arns_name_cache_hydration_retries_total',
+  help: 'Total number of retry attempts during ArNS cache hydration',
+});
+
+export const arnsNameCacheHydrationFailuresCounter = new promClient.Counter({
+  name: 'arns_name_cache_hydration_failures_total',
+  help: 'Number of failed hydration attempts for ArNS cache',
+});
+
+export const arnsBaseNameCacheEntriesGauge = new promClient.Gauge({
+  name: 'arns_base_name_cache_entries',
+  help: 'Current number of base name entries in the ArNS name cache',
+});
+
+export const arnsNameCacheDebounceTriggeredCounter = new promClient.Counter({
+  name: 'arns_name_cache_debounce_triggered_total',
+  help: 'Number of debounce triggers for ArNS cache refresh',
+  labelNames: ['type'],
+});
+
 export const arnsResolutionTime = new promClient.Summary({
   name: 'arns_resolution_time_ms',
   help: 'Time in ms it takes to resolve an arns name',
@@ -264,13 +290,27 @@ export const getDataErrorsTotal = new promClient.Counter({
 export const getDataStreamErrorsTotal = new promClient.Counter({
   name: 'get_data_stream_errors_total',
   help: 'Count of data stream errors',
-  labelNames: ['class', 'source'] as const,
+  labelNames: ['class', 'source', 'request_type'] as const,
 });
 
 export const getDataStreamSuccessesTotal = new promClient.Counter({
   name: 'get_data_stream_successes_total',
   help: 'Count of data stream successes',
-  labelNames: ['class', 'source'] as const,
+  labelNames: ['class', 'source', 'request_type'] as const,
+});
+
+export const dataRequestChunksHistogram = new promClient.Histogram({
+  name: 'data_request_chunks',
+  help: 'Number of chunks fetched per data request',
+  labelNames: ['class', 'source', 'request_type'] as const,
+  buckets: [1, 5, 20, 100, 500],
+});
+
+export const dataRequestFirstChunkLatency = new promClient.Histogram({
+  name: 'data_request_first_chunk_latency_ms',
+  help: 'Time to first chunk in milliseconds',
+  labelNames: ['class', 'source', 'request_type'] as const,
+  buckets: [50, 200, 1000, 5000],
 });
 
 //

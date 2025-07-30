@@ -1082,9 +1082,13 @@ export class StandaloneSqliteDatabaseWorker {
     const hash = dataRow?.hash;
     const dataRoot = coreRow?.data_root;
 
+    // Prefer root_transaction_id from data.db if available
     const rootTransactionId =
-      coreRow?.root_transaction_id !== null &&
-      coreRow?.root_transaction_id !== undefined
+      dataRow?.root_transaction_id !== null &&
+      dataRow?.root_transaction_id !== undefined
+        ? toB64Url(dataRow.root_transaction_id)
+        : coreRow?.root_transaction_id !== null &&
+          coreRow?.root_transaction_id !== undefined
         ? toB64Url(coreRow.root_transaction_id)
         : undefined;
 
@@ -1102,10 +1106,11 @@ export class StandaloneSqliteDatabaseWorker {
       contentEncoding: coreRow?.content_encoding,
       contentType,
       rootTransactionId,
-      rootParentOffset: coreRow?.root_parent_offset,
-      dataOffset: coreRow?.data_offset,
-      offset: dataItemAttributes?.offset,
-      itemSize: dataItemAttributes?.size,
+      rootParentOffset: dataRow?.root_parent_offset ?? coreRow?.root_parent_offset,
+      dataOffset: dataRow?.data_offset ?? coreRow?.data_offset,
+      offset: dataRow?.data_item_offset ?? dataItemAttributes?.offset,
+      itemSize: dataRow?.data_item_size ?? dataItemAttributes?.size,
+      formatId: dataRow?.format_id,
       signatureOffset: dataItemAttributes?.signature_offset,
       signatureSize: dataItemAttributes?.signature_size,
       ownerOffset: dataItemAttributes?.owner_offset,
@@ -1272,6 +1277,12 @@ export class StandaloneSqliteDatabaseWorker {
     cachedAt,
     verified,
     verificationPriority,
+    rootTransactionId,
+    rootParentOffset,
+    dataOffset,
+    dataItemSize,
+    dataItemOffset,
+    formatId,
   }: {
     id: string;
     parentId?: string;
@@ -1282,6 +1293,12 @@ export class StandaloneSqliteDatabaseWorker {
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
+    rootTransactionId?: string;
+    rootParentOffset?: number;
+    dataOffset?: number;
+    dataItemSize?: number;
+    dataItemOffset?: number;
+    formatId?: number;
   }) {
     const hashBuffer = fromB64Url(hash);
     const currentTimestamp = currentUnixTimestamp();
@@ -1295,6 +1312,13 @@ export class StandaloneSqliteDatabaseWorker {
       verified: isVerified,
       verified_at: currentTimestamp,
       verification_priority: verificationPriority ?? null,
+      root_transaction_id: rootTransactionId ? fromB64Url(rootTransactionId) : null,
+      root_parent_offset: rootParentOffset ?? null,
+      data_offset: dataOffset ?? null,
+      data_size: dataSize ?? null,
+      data_item_offset: dataItemOffset ?? null,
+      data_item_size: dataItemSize ?? null,
+      format_id: formatId ?? null,
     });
 
     if (dataRoot !== undefined) {
@@ -2612,12 +2636,20 @@ export class StandaloneSqliteDatabaseWorker {
     return dataIds.map((row) => toB64Url(row.id));
   }
 
-  getRootTxId(id: string) {
+  getRootTxIdFromCoreAndBundles(id: string) {
     const row = this.stmts.core.selectRootTxId.get({ id: fromB64Url(id) });
     if (row.root_transaction_id) {
       return toB64Url(row.root_transaction_id);
     }
 
+    return;
+  }
+
+  getRootTxIdFromData(id: string) {
+    const row = this.stmts.data.selectRootTransactionId.get({ id: fromB64Url(id) });
+    if (row?.root_transaction_id) {
+      return toB64Url(row.root_transaction_id);
+    }
     return;
   }
 
@@ -3248,6 +3280,12 @@ export class StandaloneSqliteDatabase
     contentType,
     verified,
     verificationPriority,
+    rootTransactionId,
+    rootParentOffset,
+    dataOffset,
+    dataItemSize,
+    dataItemOffset,
+    formatId,
   }: {
     id: string;
     parentId?: string;
@@ -3257,6 +3295,12 @@ export class StandaloneSqliteDatabase
     contentType?: string;
     verified?: boolean;
     verificationPriority?: number;
+    rootTransactionId?: string;
+    rootParentOffset?: number;
+    dataOffset?: number;
+    dataItemSize?: number;
+    dataItemOffset?: number;
+    formatId?: number;
   }) {
     if (this.saveDataContentAttributesCache.get(id)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
@@ -3277,6 +3321,12 @@ export class StandaloneSqliteDatabase
         contentType,
         verified,
         verificationPriority,
+        rootTransactionId,
+        rootParentOffset,
+        dataOffset,
+        dataItemSize,
+        dataItemOffset,
+        formatId,
       },
     ]);
   }
@@ -3462,7 +3512,13 @@ export class StandaloneSqliteDatabase
   }
 
   async getRootTxId(id: string) {
-    return this.queueRead('core', 'getRootTxId', [id]);
+    // First try to get from data DB
+    const rootTxIdFromData = await this.queueRead('data', 'getRootTxIdFromData', [id]);
+    if (rootTxIdFromData) {
+      return rootTxIdFromData;
+    }
+    // Fall back to core and bundles
+    return this.queueRead('core', 'getRootTxIdFromCoreAndBundles', [id]);
   }
 
   async saveVerificationStatus(id: string) {
@@ -3703,9 +3759,13 @@ if (!isMainThread) {
           const ids = worker.getVerifiableDataIds();
           parentPort?.postMessage(ids);
           break;
-        case 'getRootTxId':
-          const rootTxId = worker.getRootTxId(args[0]);
+        case 'getRootTxIdFromCoreAndBundles':
+          const rootTxId = worker.getRootTxIdFromCoreAndBundles(args[0]);
           parentPort?.postMessage(rootTxId);
+          break;
+        case 'getRootTxIdFromData':
+          const rootTxIdFromData = worker.getRootTxIdFromData(args[0]);
+          parentPort?.postMessage(rootTxIdFromData);
           break;
         case 'saveVerificationStatus':
           worker.saveVerificationStatus(args[0]);

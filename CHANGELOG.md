@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [Release 44] - 2025-07-28
+
+This is a recommended release that introduces efficient range request support
+for contiguous data retrieval from chunks, adds bundle metadata columns with
+offset indexing to improve offset availability throughout the network, enhances
+Merkle path parsing compatibility, and includes comprehensive documentation for
+offsets and Merkle paths.
+
+### Added
+
+- Added efficient range request support for chunk data retrieval, enabling
+  optimized verifiable contiguous data fetching directly from Arweave nodes.
+- Added bundle metadata columns to `data.db` to improve offset availability
+  across the gateway network.
+- Added OTEL (OpenTelemetry) tracing support for chunk POST operations,
+  providing better observability for chunk broadcasting performance.
+- Added OTEL environment variables to `docker-compose.yaml` for easier
+  configuration of distributed tracing.
+- Added comprehensive Arweave Merkle tree structure documentation detailing
+  the data organization and validation rules.
+- Added detailed documentation explaining Arweave transaction and chunk offset
+  calculations.
+- Added merkle-path-parser with full Arweave compatibility for improved
+  Merkle proof validation.
+
+### Changed
+
+- Implemented promise-based chunk caching system replacing the previous WeakMap
+  implementation, improving memory efficiency and cache reliability.
+- Extended CompositeChunkSource to implement all chunk interfaces, providing
+  a more unified chunk data access layer.
+
+## [Release 43] - 2025-07-21
+
+This is a recommended release that enables data verification by default for data
+items linked to ArNS names, improves chunk broadcasting efficiency, and adds
+automatic chunk data cache cleanup.
+
 ### Added
 
 - Added automatic chunk data cache cleanup functionality with configurable

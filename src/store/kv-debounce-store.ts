@@ -7,6 +7,9 @@
 
 import { KVBufferStore } from '../types';
 import pDebounce from 'p-debounce';
+import { tracer } from '../tracing.js';
+import * as metrics from '../metrics.js';
+import { Span } from '@opentelemetry/api';
 
 /**
  * A wrapper around a KVBufferStore that debounces the hydrate function
@@ -29,7 +32,7 @@ export class KvDebounceStore implements KVBufferStore {
     cacheMissDebounceTtl: number;
     cacheHitDebounceTtl: number;
     debounceImmediately?: boolean;
-    hydrateFn: (...args: any[]) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
+    hydrateFn: (parentSpan?: Span) => Promise<void>; // caller is responsible for handling errors from debounceFn, this class will bubble up errors on instantiation if debounceFn throws
   }) {
     this.kvBufferStore = kvBufferStore;
     const syncedHydrateFn = () => {
@@ -43,14 +46,36 @@ export class KvDebounceStore implements KVBufferStore {
 
       return this.pendingHydrate;
     };
+    // Wrap the debounced functions to add tracking
+    const trackedSyncedHydrateFnMiss = async () => {
+      const span = tracer.startSpan(
+        'KvDebounceStore.debounceHydrateOnMiss.execute',
+      );
+      return syncedHydrateFn().finally(() => {
+        span.end();
+      });
+    };
+
+    const trackedSyncedHydrateFnHit = async () => {
+      const span = tracer.startSpan(
+        'KvDebounceStore.debounceHydrateOnHit.execute',
+      );
+      return syncedHydrateFn().finally(() => {
+        span.end();
+      });
+    };
+
     this.debounceHydrateOnMiss = pDebounce(
-      syncedHydrateFn,
+      trackedSyncedHydrateFnMiss,
       cacheMissDebounceTtl,
       {
         before: true,
       },
     );
-    this.debounceHydrateOnHit = pDebounce(syncedHydrateFn, cacheHitDebounceTtl);
+    this.debounceHydrateOnHit = pDebounce(
+      trackedSyncedHydrateFnHit,
+      cacheHitDebounceTtl,
+    );
 
     // debounce the cache immediately when the cache is created
     if (debounceImmediately) {
@@ -59,21 +84,38 @@ export class KvDebounceStore implements KVBufferStore {
   }
 
   async get(key: string): Promise<Buffer | undefined> {
-    let value = await this.kvBufferStore.get(key);
-    if (value === undefined) {
-      // await any actively running hydrates but don't wait for debounces. This
-      // ensures that we don't unnecessarily return a 404 during startup while
-      // avoiding excessive delays waiting for long debounces.
-      if (this.pendingHydrate) {
-        await this.debounceHydrateOnMiss(key);
+    const span = tracer.startSpan('KvDebounceStore.get', {
+      attributes: {
+        'kv.key': key,
+      },
+    });
+
+    try {
+      let value = await this.kvBufferStore.get(key);
+      if (value === undefined) {
+        span.setAttributes({ 'kv.cache.hit': false });
+        // await any actively running hydrates but don't wait for debounces. This
+        // ensures that we don't unnecessarily return a 404 during startup while
+        // avoiding excessive delays waiting for long debounces.
+        if (this.pendingHydrate) {
+          await this.debounceHydrateOnMiss();
+        } else {
+          this.debounceHydrateOnMiss();
+        }
+        metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'miss' });
+        span.addEvent('Debounce triggered on miss');
+        value = await this.kvBufferStore.get(key);
+      } else {
+        span.setAttributes({ 'kv.cache.hit': true });
+        // don't await on a hit, fire and forget
+        this.debounceHydrateOnHit();
+        metrics.arnsNameCacheDebounceTriggeredCounter.inc({ type: 'hit' });
+        span.addEvent('Debounce triggered on hit');
       }
-      this.debounceHydrateOnMiss(key);
-      value = await this.kvBufferStore.get(key);
-    } else {
-      // don't await on a hit, fire and forget
-      this.debounceHydrateOnHit(key);
+      return value;
+    } finally {
+      span.end();
     }
-    return value;
   }
 
   async set(key: string, value: Buffer): Promise<void> {

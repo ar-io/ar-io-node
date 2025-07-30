@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ar.io/sdk": "3.14.0",
+    "@ardrive/ardrive-promise-cache": "^1.1.8",
     "@aws-lite/client": "^0.23.2",
     "@aws-lite/s3": "^0.2.6",
     "@aws-sdk/credential-providers": "^3.823.0",
@@ -102,6 +103,7 @@
     "eslint-plugin-jest-formatting": "^3.1.0",
     "eslint-plugin-prettier": "^5.2.3",
     "eslint-plugin-unicorn": "^56.0.1",
+    "fast-check": "^4.2.0",
     "msgpack-lite": "^0.1.26",
     "nodemon": "^2.0.22",
     "npm-check-updates": "^16.14.20",

@@ -382,7 +382,7 @@ export const bundleRepairWorker = new BundleRepairWorker({
 });
 const txChunkMetaDataStore = new FsChunkMetadataStore({
   log,
-  baseDir: 'data/chunks',
+  baseDir: 'data/chunks/metadata',
 });
 
 export const chunkMetaDataSource =
@@ -437,7 +437,7 @@ export const chunkSource = new CompositeChunkSource(
 const txChunksDataSource = new TxChunksDataSource({
   log,
   chainSource: arweaveClient,
-  chunkSource: chunkDataSource,
+  chunkSource,
 });
 
 const gatewaysDataSource = new GatewaysDataSource({
@@ -479,7 +479,7 @@ export const chunkDataFsCacheCleanupWorker =
   config.ENABLE_CHUNK_DATA_CACHE_CLEANUP
     ? new FsCleanupWorker({
         log,
-        basePath: 'data/chunks/data',
+        basePath: 'data/chunks',
         dataType: 'chunk_data',
         shouldDelete: async (path) => {
           try {

@@ -22,6 +22,12 @@ export type DataContentAttributeProperties = {
   cachedAt?: number;
   verified?: boolean;
   verificationPriority?: number;
+  rootTransactionId?: string;
+  rootParentOffset?: number;
+  dataOffset?: number;
+  dataItemSize?: number;
+  dataItemOffset?: number;
+  formatId?: number;
 };
 
 export class DataContentAttributeImporter {

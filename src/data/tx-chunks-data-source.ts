@@ -7,23 +7,24 @@
 import { Readable } from 'node:stream';
 import winston from 'winston';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { streamRangeData } from '../lib/stream-tx-range.js';
 
 import {
   ChainSource,
   ChunkData,
   ChunkDataByAnySource,
+  ChunkByAnySource,
   ContiguousData,
   ContiguousDataSource,
   Region,
   RequestAttributes,
 } from '../types.js';
 import * as metrics from '../metrics.js';
-import { ByteRangeTransform } from '../lib/stream.js';
 
 export class TxChunksDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private chainSource: ChainSource;
-  private chunkSource: ChunkDataByAnySource;
+  private chunkSource: ChunkDataByAnySource & ChunkByAnySource;
 
   constructor({
     log,
@@ -32,7 +33,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
   }: {
     log: winston.Logger;
     chainSource: ChainSource;
-    chunkSource: ChunkDataByAnySource;
+    chunkSource: ChunkDataByAnySource & ChunkByAnySource;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.chainSource = chainSource;
@@ -60,6 +61,78 @@ export class TxChunksDataSource implements ContiguousDataSource {
       const startOffset = offset - size + 1;
       let bytes = 0;
 
+      if (region) {
+        const getChunkByAny = (params: {
+          txSize: number;
+          absoluteOffset: number;
+          dataRoot: string;
+          relativeOffset: number;
+        }) => this.chunkSource.getChunkByAny(params);
+
+        // Use efficient range streaming that seeks directly to required chunks
+        const rangeStartTime = Date.now();
+        const rangeResult = streamRangeData({
+          txId: id,
+          txSize: size,
+          txAbsoluteStart: startOffset,
+          dataRoot: txDataRoot,
+          rangeStart: region.offset,
+          rangeEnd: region.offset + region.size,
+          getChunkByAny,
+          log: this.log,
+        });
+
+        const rangeStream = Readable.from(rangeResult.stream);
+
+        // Track metrics timing
+        const firstChunkTime = Date.now() - rangeStartTime;
+
+        rangeStream.on('end', () => {
+          metrics.getDataStreamSuccessesTotal.inc({
+            class: this.constructor.name,
+            source: 'chunks',
+            request_type: 'range',
+          });
+
+          // Track chunks fetched per request
+          metrics.dataRequestChunksHistogram.observe(
+            {
+              class: this.constructor.name,
+              source: 'chunks',
+              request_type: 'range',
+            },
+            rangeResult.getChunksFetched(),
+          );
+
+          metrics.dataRequestFirstChunkLatency.observe(
+            {
+              class: this.constructor.name,
+              source: 'chunks',
+              request_type: 'range',
+            },
+            firstChunkTime,
+          );
+        });
+
+        rangeStream.on('error', () => {
+          metrics.getDataStreamErrorsTotal.inc({
+            class: this.constructor.name,
+            source: 'chunks',
+            request_type: 'range',
+          });
+        });
+
+        return {
+          stream: rangeStream,
+          size: region.size,
+          verified: true,
+          trusted: true,
+          cached: false,
+          requestAttributes:
+            generateRequestAttributes(requestAttributes)?.attributes,
+        };
+      }
+
       // Rebind getChunkDataByAny to preserve access to it in the stream read
       // function since 'this' is assigned to the stream as opposed to the
       // TxChunksDataSource instance there.
@@ -74,11 +147,16 @@ export class TxChunksDataSource implements ContiguousDataSource {
           dataRoot,
           relativeOffset,
         });
+
       let chunkDataPromise: Promise<ChunkData> | undefined = getChunkDataByAny(
         startOffset,
         txDataRoot,
         bytes,
       );
+
+      // await the first chunk promise so that it throws and returns 404 if no
+      // chunk data is found.
+      await chunkDataPromise;
 
       const stream = new Readable({
         autoDestroy: true,
@@ -112,6 +190,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: 'chunks',
+          request_type: 'full',
         });
       });
 
@@ -119,29 +198,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: 'chunks',
+          request_type: 'full',
         });
       });
-
-      // await the first chunk promise so that it throws and returns 404 if no
-      // chunk data is found.
-      await chunkDataPromise;
-
-      if (region) {
-        // TODO: seek to chunks by offset instead of streaming all the chunks
-        const byteRangeStream = new ByteRangeTransform(
-          region.offset,
-          region.size,
-        );
-        return {
-          stream: stream.pipe(byteRangeStream),
-          size: region.size,
-          verified: true,
-          trusted: true,
-          cached: false,
-          requestAttributes:
-            generateRequestAttributes(requestAttributes)?.attributes,
-        };
-      }
 
       return {
         stream,

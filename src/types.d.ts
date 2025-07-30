@@ -6,6 +6,7 @@
  */
 import { Readable, Writable } from 'node:stream';
 import { AoArNSNameDataWithName } from '@ar.io/sdk';
+import { Span } from '@opentelemetry/api';
 
 export interface B64uTag {
   name: string;
@@ -515,12 +516,14 @@ export interface ChunkBroadcaster {
     responseTimeout,
     originAndHopsHeaders,
     chunkPostMinSuccessCount,
+    parentSpan,
   }: {
     chunk: JsonChunkPost;
     abortTimeout?: number;
     responseTimeout?: number;
     originAndHopsHeaders: Record<string, string | undefined>;
     chunkPostMinSuccessCount: number;
+    parentSpan?: Span;
   }): Promise<BroadcastChunkResult>;
 }
 
@@ -552,6 +555,8 @@ export interface ContiguousDataAttributes {
   rootParentOffset?: number;
   dataOffset?: number;
   itemSize?: number;
+  dataItemOffset?: number;
+  formatId?: number;
   signatureSize?: number;
   signatureOffset?: number;
   ownerOffset?: number;
@@ -600,6 +605,12 @@ export interface ContiguousDataIndex {
     cachedAt,
     verified,
     verificationPriority,
+    rootTransactionId,
+    rootParentOffset,
+    dataOffset,
+    dataItemSize,
+    dataItemOffset,
+    formatId,
   }: {
     id: string;
     parentId?: string;
@@ -610,6 +621,12 @@ export interface ContiguousDataIndex {
     cachedAt?: number;
     verified?: boolean;
     verificationPriority?: number;
+    rootTransactionId?: string;
+    rootParentOffset?: number;
+    dataOffset?: number;
+    dataItemSize?: number;
+    dataItemOffset?: number;
+    formatId?: number;
   }): Promise<void>;
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
@@ -701,7 +718,9 @@ export interface NameResolver {
     signal,
   }: {
     name: string;
-    baseArNSRecordFn?: () => Promise<AoArNSNameDataWithName | undefined>;
+    baseArNSRecordFn?: (
+      parentSpan?: Span,
+    ) => Promise<AoArNSNameDataWithName | undefined>;
     signal?: AbortSignal;
   }): Promise<NameResolution>;
 }
