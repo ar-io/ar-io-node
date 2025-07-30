@@ -69,18 +69,23 @@ afterEach(async () => {
 
 describe('S3DataSource', () => {
   describe('constructor', () => {
-    it('should create an instance with required parameters', () => {
-      assert.ok(s3DataSource instanceof S3DataSource);
-    });
-
-    it('should use empty string as default prefix', () => {
+    it('should use empty string as default prefix', async () => {
       const dataSource = new S3DataSource({
         log,
         s3Client: mockS3Client,
         s3Bucket: testBucket,
         awsClient: mockAwsClient,
       });
-      assert.ok(dataSource instanceof S3DataSource);
+
+      // Call getData to verify the prefix is used correctly
+      await dataSource.getData({ id: testId });
+
+      // Verify that the S3 calls use the correct key format (no prefix)
+      const headCall = (mockAwsClient.S3.HeadObject as any).mock.calls[0];
+      assert.equal(headCall.arguments[0].Key, `/${testId}`); // Should be just the ID, no prefix
+
+      const getCall = (mockS3Client.GetObject as any).mock.calls[0];
+      assert.equal(getCall.arguments[0].Key, `/${testId}`); // Should be just the ID, no prefix
     });
   });
 
@@ -258,7 +263,7 @@ describe('S3DataSource', () => {
       const mockStream = Readable.from(['partial data']);
       mockS3Client.GetObject = mock.fn(async () => ({
         Body: mockStream as any,
-        ContentLength: 30,
+        ContentLength: 12345, // Nonsensical, but provided to show that ContentRange is used
         ContentType: 'application/octet-stream',
         ContentRange: 'bytes 10-39/100',
         $metadata: {},
@@ -272,7 +277,7 @@ describe('S3DataSource', () => {
       assert.equal(result.size, 30);
     });
 
-    it('should throw error when ContentLength is missing', async () => {
+    it('should throw error and increment metric when ContentLength is missing', async () => {
       mockS3Client.GetObject = mock.fn(async () => ({
         Body: Readable.from(['data']) as any,
         ContentType: 'application/octet-stream',
