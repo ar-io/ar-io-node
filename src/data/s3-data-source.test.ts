@@ -182,7 +182,7 @@ describe('S3DataSource', () => {
       assert.equal(getCall.arguments[0].Range, 'bytes=60-79');
     });
 
-    it('should handle region without size (open-ended range)', async () => {
+    it('should handle region that spans to end of data', async () => {
       const region = { offset: 10, size: 90 };
       mockAwsClient.S3.HeadObject = mock.fn(async () => ({
         ContentLength: 100,
@@ -191,7 +191,7 @@ describe('S3DataSource', () => {
         $metadata: {},
       }));
 
-      const mockStream = Readable.from(['data from offset']);
+      const mockStream = Readable.from(['data from offset to end']);
       mockS3Client.GetObject = mock.fn(async () => ({
         Body: mockStream as any,
         ContentLength: 90,
@@ -206,6 +206,39 @@ describe('S3DataSource', () => {
 
       const getCall = (mockS3Client.GetObject as any).mock.calls[0];
       assert.equal(getCall.arguments[0].Range, 'bytes=10-99');
+    });
+
+    it('should handle invalid range requests', async () => {
+      mockAwsClient.S3.HeadObject = mock.fn(async () => ({
+        ContentLength: 100,
+        ContentType: 'application/octet-stream',
+        Metadata: {},
+        $metadata: {},
+      }));
+
+      // Test region that extends beyond file size
+      const invalidRegion = { offset: 50, size: 100 }; // Would request bytes 50-149 but file is only 100 bytes
+
+      mockS3Client.GetObject = mock.fn(async () => {
+        const error = new Error('The requested range is not satisfiable');
+        (error as any).statusCode = 416;
+        throw error;
+      });
+
+      await assert.rejects(
+        s3DataSource.getData({
+          id: testId,
+          region: invalidRegion,
+        }),
+        /The requested range is not satisfiable/,
+      );
+
+      const getCall = (mockS3Client.GetObject as any).mock.calls[0];
+      // Should still attempt the range request
+      assert.equal(getCall.arguments[0].Range, 'bytes=50-149');
+
+      // Should increment error metrics
+      assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
     });
 
     it('should use payload content type from metadata when available', async () => {
@@ -292,7 +325,7 @@ describe('S3DataSource', () => {
       assert.equal((metrics.getDataErrorsTotal.inc as any).mock.callCount(), 1);
     });
 
-    it('should throw error when Body is missing', async () => {
+    it('should throw error and increment metric when Body is missing', async () => {
       mockS3Client.GetObject = mock.fn(async () => ({
         ContentLength: 10,
         ContentType: 'application/octet-stream',
