@@ -475,7 +475,7 @@ const turboS3DataSource =
       })
     : undefined;
 
-const turboElasticacheDataSouce =
+const turboElasticacheDataSource =
   config.AWS_ELASTICACHE_TURBO_HOST !== undefined
     ? new TurboRedisDataSource({
         redisHost: config.AWS_ELASTICACHE_TURBO_HOST,
@@ -530,7 +530,7 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
     case 'turbo-s3':
       return turboS3DataSource;
     case 'turbo-elasticache':
-      return turboElasticacheDataSouce;
+      return turboElasticacheDataSource;
     // ario-peer is for backwards compatibility
     case 'ario-peer':
     case 'ar-io-peers':
