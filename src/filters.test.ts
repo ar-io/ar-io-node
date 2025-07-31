@@ -393,7 +393,7 @@ describe('MatchHashPartition', () => {
         const filter = new MatchHashPartition(partitionCount, 'id', [
           partition,
         ]);
-        const tx = { id };
+        const tx = { id, tags: [] };
         if (filter.match(tx)) {
           partitions.set(partition, partitions.get(partition)! + 1);
           break;
@@ -440,7 +440,7 @@ describe('MatchHashPartition', () => {
       targetPartitions,
     );
 
-    const tx = { id: TX_ID };
+    const tx = { id: TX_ID, tags: [] };
     const matches = filter.match(tx);
 
     // Find which partition this ID actually maps to
@@ -459,24 +459,24 @@ describe('MatchHashPartition', () => {
 
   it('should return false for missing partition key', () => {
     const filter = new MatchHashPartition(4, 'nonexistent', [0]);
-    const tx = { id: TX_ID };
+    const tx = { id: TX_ID, tags: [] };
 
     assert.strictEqual(filter.match(tx), false);
   });
 
   it('should return false for empty partition key value', () => {
     const filter = new MatchHashPartition(4, 'target', [0]);
-    const tx = { id: TX_ID, target: '' };
+    const tx = { id: TX_ID, target: '', tags: [] };
 
     assert.strictEqual(filter.match(tx), false);
   });
 
-  it('should work with MatchableObject items', () => {
+  it('should return false for non-transaction items', () => {
     const filter = new MatchHashPartition(4, 'customField', [0, 1]);
     const obj = { customField: 'someValue', otherField: 123 };
 
-    const result = filter.match(obj);
-    assert.strictEqual(typeof result, 'boolean');
+    // Should return false for objects without 'tags' property
+    assert.strictEqual(filter.match(obj), false);
   });
 
   it('should throw error for invalid constructor parameters', () => {
