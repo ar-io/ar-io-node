@@ -313,10 +313,11 @@ export class MatchHashPartition implements ItemFilter {
     const valueBuffer = Buffer.from(value.toString());
     const hash = sha256B64Url(valueBuffer);
 
-    // Convert first 8 bytes of hash to number for modulo operation
+    // Convert first 6 bytes of hash to number for modulo operation
+    // 6 bytes = 48 bits = max value ~281 trillion, well within Number.MAX_SAFE_INTEGER
     const hashBuffer = fromB64Url(hash);
-    const hashNumber = hashBuffer.readBigUInt64BE(0);
-    const partition = Number(hashNumber % BigInt(this.partitionCount));
+    const hashNumber = hashBuffer.readUIntBE(0, 6);
+    const partition = hashNumber % this.partitionCount;
 
     const isMatching = this.targetPartitions.has(partition);
 
