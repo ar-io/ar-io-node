@@ -237,6 +237,105 @@ export class MatchNestedBundle implements ItemFilter {
   }
 }
 
+export class MatchHashPartition implements ItemFilter {
+  private readonly partitionCount: number;
+  private readonly partitionKey: string;
+  private readonly targetPartitions: Set<number>;
+  private log: Logger | undefined;
+
+  constructor(
+    partitionCount: number,
+    partitionKey: string,
+    targetPartitions: number[],
+    log?: Logger,
+  ) {
+    if (partitionCount <= 0) {
+      throw new Error('partitionCount must be greater than 0');
+    }
+    if (targetPartitions.length === 0) {
+      throw new Error('targetPartitions must contain at least one partition');
+    }
+    if (targetPartitions.some((p) => p < 0 || p >= partitionCount)) {
+      throw new Error(
+        `All targetPartitions must be between 0 and ${partitionCount - 1}`,
+      );
+    }
+
+    this.partitionCount = partitionCount;
+    this.partitionKey = partitionKey;
+    this.targetPartitions = new Set(targetPartitions);
+    this.log = log ? log.child({ class: this.constructor.name }) : undefined;
+  }
+
+  match(item: MatchableItem) {
+    let value: string | undefined;
+
+    if ('tags' in item) {
+      // This is a MatchableTxLike
+      const txLikeItem = item as MatchableTxLike;
+
+      if (this.partitionKey === 'owner_address') {
+        // Special handling for owner_address
+        if (
+          txLikeItem.owner_address !== undefined &&
+          txLikeItem.owner_address !== null
+        ) {
+          value = txLikeItem.owner_address;
+        } else if (
+          txLikeItem.owner !== undefined &&
+          txLikeItem.owner !== null
+        ) {
+          // Compute owner_address from owner
+          const ownerBuffer = fromB64Url(txLikeItem.owner);
+          value = sha256B64Url(ownerBuffer);
+        }
+      } else if (this.partitionKey in txLikeItem) {
+        value = txLikeItem[this.partitionKey as keyof MatchableTxLike] as
+          | string
+          | undefined;
+      }
+    } else {
+      // This is a MatchableObject
+      value = item[this.partitionKey] as string | undefined;
+    }
+
+    if (value === undefined || value === null || value === '') {
+      if (this.log) {
+        this.log.debug('Partition key value is missing or empty', {
+          partitionKey: this.partitionKey,
+          item: item.id || item,
+        });
+      }
+      return false;
+    }
+
+    // Convert value to Buffer and hash it
+    const valueBuffer = Buffer.from(value.toString());
+    const hash = sha256B64Url(valueBuffer);
+
+    // Convert first 8 bytes of hash to number for modulo operation
+    const hashBuffer = fromB64Url(hash);
+    const hashNumber = hashBuffer.readBigUInt64BE(0);
+    const partition = Number(hashNumber % BigInt(this.partitionCount));
+
+    const isMatching = this.targetPartitions.has(partition);
+
+    if (this.log) {
+      this.log.debug('Hash partition calculation', {
+        partitionKey: this.partitionKey,
+        value: value.substring(0, 20) + '...',
+        hash: hash.substring(0, 10) + '...',
+        partition,
+        isMatching,
+        targetPartitions: Array.from(this.targetPartitions),
+      });
+      logMatchResult({ log: this.log, item, isMatching });
+    }
+
+    return isMatching;
+  }
+}
+
 /**
  * Examples:
  *
@@ -360,6 +459,18 @@ export function createFilter(
         itemFilterPath: JSON.stringify([
           ...itemFilterPath,
           { always: filter.always },
+        ]),
+      }),
+    );
+  } else if (filter?.hashPartition) {
+    return new MatchHashPartition(
+      filter.hashPartition.partitionCount,
+      filter.hashPartition.partitionKey,
+      filter.hashPartition.targetPartitions,
+      log.child({
+        itemFilterPath: JSON.stringify([
+          ...itemFilterPath,
+          { hashPartition: filter.hashPartition },
         ]),
       }),
     );

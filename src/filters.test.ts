@@ -18,6 +18,7 @@ import {
   createFilter,
   NegateMatch,
   MatchNestedBundle,
+  MatchHashPartition,
 } from './filters.js';
 import defaultLogger from './log.js';
 import { utf8ToB64Url } from './lib/encoding.js';
@@ -351,5 +352,238 @@ describe('createFilter', () => {
   it('should throw an error for invalid filter', () => {
     const filter = { invalid: true };
     assert.throws(() => createFilter(filter, defaultLogger));
+  });
+});
+
+describe('MatchHashPartition', () => {
+  it('should partition items deterministically', () => {
+    const filter = new MatchHashPartition(4, 'id', [0]);
+
+    // Same ID should always map to same partition
+    const tx1 = { ...TX };
+    const tx2 = { ...TX };
+
+    assert.strictEqual(filter.match(tx1), filter.match(tx2));
+  });
+
+  it('should distribute items across partitions', () => {
+    const partitionCount = 4;
+    const partitions = new Map<number, number>();
+
+    // Initialize partition counts
+    for (let i = 0; i < partitionCount; i++) {
+      partitions.set(i, 0);
+    }
+
+    // Test with multiple different IDs
+    const ids = [
+      '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w',
+      'abcd1234567890abcd1234567890abcd1234567890',
+      'wxyz9876543210wxyz9876543210wxyz9876543210',
+      '1111111111111111111111111111111111111111111',
+      '2222222222222222222222222222222222222222222',
+      '3333333333333333333333333333333333333333333',
+      '4444444444444444444444444444444444444444444',
+      '5555555555555555555555555555555555555555555',
+    ];
+
+    // Check which partition each ID maps to
+    for (const id of ids) {
+      for (let partition = 0; partition < partitionCount; partition++) {
+        const filter = new MatchHashPartition(partitionCount, 'id', [
+          partition,
+        ]);
+        const tx = { id };
+        if (filter.match(tx)) {
+          partitions.set(partition, partitions.get(partition)! + 1);
+          break;
+        }
+      }
+    }
+
+    // Verify that items are distributed (at least 2 partitions should have items)
+    const nonEmptyPartitions = Array.from(partitions.values()).filter(
+      (count) => count > 0,
+    ).length;
+    assert.ok(
+      nonEmptyPartitions >= 2,
+      'Items should be distributed across multiple partitions',
+    );
+  });
+
+  it('should handle owner_address partitioning', () => {
+    const filter = new MatchHashPartition(4, 'owner_address', [0, 1]);
+
+    // Test with explicit owner_address
+    const txWithOwnerAddress = {
+      id: TX_ID,
+      owner_address: TX_OWNER_ADDRESS,
+    };
+    const result1 = filter.match(txWithOwnerAddress);
+    assert.strictEqual(typeof result1, 'boolean');
+
+    // Test with owner that should be converted to owner_address
+    const txWithOwner = {
+      id: TX_ID,
+      owner: TX.owner,
+    };
+    const result2 = filter.match(txWithOwner);
+    assert.strictEqual(typeof result2, 'boolean');
+  });
+
+  it('should only match specified target partitions', () => {
+    const partitionCount = 10;
+    const targetPartitions = [2, 5, 7];
+    const filter = new MatchHashPartition(
+      partitionCount,
+      'id',
+      targetPartitions,
+    );
+
+    const tx = { id: TX_ID };
+    const matches = filter.match(tx);
+
+    // Find which partition this ID actually maps to
+    let actualPartition = -1;
+    for (let i = 0; i < partitionCount; i++) {
+      const testFilter = new MatchHashPartition(partitionCount, 'id', [i]);
+      if (testFilter.match(tx)) {
+        actualPartition = i;
+        break;
+      }
+    }
+
+    // Verify the filter matches if and only if the actual partition is in targetPartitions
+    assert.strictEqual(matches, targetPartitions.includes(actualPartition));
+  });
+
+  it('should return false for missing partition key', () => {
+    const filter = new MatchHashPartition(4, 'nonexistent', [0]);
+    const tx = { id: TX_ID };
+
+    assert.strictEqual(filter.match(tx), false);
+  });
+
+  it('should return false for empty partition key value', () => {
+    const filter = new MatchHashPartition(4, 'target', [0]);
+    const tx = { id: TX_ID, target: '' };
+
+    assert.strictEqual(filter.match(tx), false);
+  });
+
+  it('should work with MatchableObject items', () => {
+    const filter = new MatchHashPartition(4, 'customField', [0, 1]);
+    const obj = { customField: 'someValue', otherField: 123 };
+
+    const result = filter.match(obj);
+    assert.strictEqual(typeof result, 'boolean');
+  });
+
+  it('should throw error for invalid constructor parameters', () => {
+    // Invalid partition count
+    assert.throws(
+      () => new MatchHashPartition(0, 'id', [0]),
+      /partitionCount must be greater than 0/,
+    );
+
+    // Empty target partitions
+    assert.throws(
+      () => new MatchHashPartition(4, 'id', []),
+      /targetPartitions must contain at least one partition/,
+    );
+
+    // Target partition out of range
+    assert.throws(
+      () => new MatchHashPartition(4, 'id', [4]),
+      /All targetPartitions must be between 0 and 3/,
+    );
+  });
+
+  it('should work with filter composition', () => {
+    const hashFilter = new MatchHashPartition(4, 'owner_address', [0]);
+    const tagFilter = new MatchTags([{ name: 'App-Name', value: 'TestApp' }]);
+    const combinedFilter = new MatchAll([hashFilter, tagFilter]);
+
+    const tx = {
+      id: TX_ID,
+      owner_address: TX_OWNER_ADDRESS,
+      tags: [
+        { name: utf8ToB64Url('App-Name'), value: utf8ToB64Url('TestApp') },
+      ],
+    };
+
+    const hashMatches = hashFilter.match(tx);
+    const tagMatches = tagFilter.match(tx);
+    const combinedMatches = combinedFilter.match(tx);
+
+    assert.strictEqual(combinedMatches, hashMatches && tagMatches);
+  });
+
+  it('should support different partition keys', () => {
+    const keys = ['id', 'signature', 'owner', 'target', 'quantity'];
+
+    for (const key of keys) {
+      const filter = new MatchHashPartition(4, key, [0, 1, 2, 3]);
+      const tx = {
+        id: 'test-id',
+        signature: 'test-signature',
+        owner: 'test-owner',
+        target: 'test-target',
+        quantity: '1000',
+        tags: [],
+      };
+
+      // Should match since we're targeting all partitions
+      assert.strictEqual(filter.match(tx), true);
+    }
+  });
+});
+
+describe('createFilter with hashPartition', () => {
+  it('should create MatchHashPartition from configuration', () => {
+    const config = {
+      hashPartition: {
+        partitionCount: 10,
+        partitionKey: 'owner_address',
+        targetPartitions: [0, 1, 2],
+      },
+    };
+
+    const filter = createFilter(config, defaultLogger);
+    assert.ok(filter instanceof MatchHashPartition);
+
+    // Test that it works
+    const tx = { id: TX_ID, owner_address: TX_OWNER_ADDRESS };
+    const result = filter.match(tx);
+    assert.strictEqual(typeof result, 'boolean');
+  });
+
+  it('should work in complex filter configurations', () => {
+    const config = {
+      and: [
+        {
+          hashPartition: {
+            partitionCount: 4,
+            partitionKey: 'owner_address',
+            targetPartitions: [0, 1],
+          },
+        },
+        {
+          tags: [{ name: 'App-Name', value: 'TestApp' }],
+        },
+      ],
+    };
+
+    const filter = createFilter(config, defaultLogger);
+    const tx = {
+      id: TX_ID,
+      owner_address: TX_OWNER_ADDRESS,
+      tags: [
+        { name: utf8ToB64Url('App-Name'), value: utf8ToB64Url('TestApp') },
+      ],
+    };
+
+    const result = filter.match(tx);
+    assert.strictEqual(typeof result, 'boolean');
   });
 });
