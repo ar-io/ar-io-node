@@ -1,7 +1,7 @@
 # allows hyperbeam to connect to the ar-io network of primary docker-compose file
 networks:
   ar-io-network:
-    external: true
+    name: ${DOCKER_NETWORK_NAME:-ar-io-network}
 
 services:
   hyperbeam:
