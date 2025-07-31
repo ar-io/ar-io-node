@@ -119,6 +119,68 @@ nested bundles in both `ANS104_UNBUNDLE_FILTER` and `ANS104_INDEX_FILTER`. The
 bundle data items (nested bundles) need to be indexed to be matched by the
 unbundle filter.
 
+### Hash Partition Filter
+
+The hash partition filter enables deterministic partitioning of transactions and
+data items based on a hash of a specified property. This is particularly useful
+for horizontally scaling data processing across multiple nodes, where each node
+can handle a specific subset of the data.
+
+Basic partition filter:
+```json
+{
+  "hashPartition": {
+    "partitionCount": 10,
+    "partitionKey": "owner_address",
+    "targetPartitions": [0, 1, 2]
+  }
+}
+```
+
+This filter:
+- Divides all items into 10 partitions based on a hash of their owner address
+- Matches only items that fall into partitions 0, 1, or 2
+- Uses SHA-256 hashing for deterministic distribution
+
+The partition is calculated as: `hash(value) % partitionCount`
+
+Supported partition keys include:
+- `id` - Transaction or data item ID
+- `owner` - Owner public key
+- `owner_address` - Owner address (computed from owner if not present)
+- `target` - Target address
+- `signature` - Transaction signature
+- `quantity` - Transaction quantity
+- Any other property present on the transaction/data item
+
+Use cases:
+```json
+{
+  "hashPartition": {
+    "partitionCount": 4,
+    "partitionKey": "id",
+    "targetPartitions": [0]
+  }
+}
+```
+This configuration divides all transactions by ID into 4 partitions and only
+processes those in partition 0 (roughly 25% of all transactions).
+
+```json
+{
+  "hashPartition": {
+    "partitionCount": 100,
+    "partitionKey": "owner_address",
+    "targetPartitions": [10, 11, 12, 13, 14]
+  }
+}
+```
+This configuration creates 100 partitions based on owner address and processes
+only 5% of transactions (those in partitions 10-14).
+
+Note: The hash partition filter only works with transaction-like items (those
+with a `tags` property). It will return false for generic objects.
+
 ### Complex Filters Using Logical Operators
 
 For more complex scenarios, the system provides logical operators (AND, OR,
@@ -332,6 +394,46 @@ This filter will match items that:
 
 This type of filter is useful when you want to process ArDrive-related items
 while explicitly excluding items from specific bundlers.
+
+### Distributed Processing with Hash Partitioning
+
+```json
+{
+  "and": [
+    {
+      "hashPartition": {
+        "partitionCount": 4,
+        "partitionKey": "owner_address",
+        "targetPartitions": [0]
+      }
+    },
+    {
+      "tags": [
+        {
+          "name": "App-Name",
+          "value": "ArDrive-App"
+        }
+      ]
+    }
+  ]
+}
+```
+
+This filter combines hash partitioning with tag filtering for distributed
+processing. It uses an AND operator to require both conditions.
+
+This filter will match items that:
+- Fall into partition 0 of a 4-partition scheme based on owner address (25% of items)
+- AND have an `App-Name` tag with value `"ArDrive-App"`
+
+This approach allows multiple nodes to process different partitions in parallel:
+- Node 1: `targetPartitions: [0]`
+- Node 2: `targetPartitions: [1]`
+- Node 3: `targetPartitions: [2]`
+- Node 4: `targetPartitions: [3]`
+
+Each node processes only its assigned partition, enabling horizontal scaling
+while ensuring no data is processed by multiple nodes.
 
 ---
 
