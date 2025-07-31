@@ -744,7 +744,7 @@ export interface MatchableTxLike {
  * Used for filtering arbitrary objects like log entries or other
  * non-transaction data structures. Any object with string keys
  * and values of any type can be matched using filters like
- * MatchObjectAttributes or MatchHashPartition.
+ * MatchObjectAttributes.
  */
 export type MatchableObject = Record<string, unknown>;
 
