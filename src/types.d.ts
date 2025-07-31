@@ -742,6 +742,13 @@ export interface MatchableTxLike {
   parent_id?: string | null;
 }
 
+/**
+ * A generic object that can be filtered based on its properties.
+ * Used for filtering arbitrary objects like log entries or other
+ * non-transaction data structures. Any object with string keys
+ * and values of any type can be matched using filters like
+ * MatchObjectAttributes or MatchHashPartition.
+ */
 export type MatchableObject = Record<string, unknown>;
 
 export type MatchableItem = MatchableTxLike | MatchableObject;

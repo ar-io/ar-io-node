@@ -268,35 +268,27 @@ export class MatchHashPartition implements ItemFilter {
   }
 
   match(item: MatchableItem) {
+    // Only handle transaction-like items
+    if (!('tags' in item)) {
+      return false;
+    }
+
+    const txItem = item as MatchableTxLike;
     let value: string | undefined;
 
-    if ('tags' in item) {
-      // This is a MatchableTxLike
-      const txLikeItem = item as MatchableTxLike;
-
-      if (this.partitionKey === 'owner_address') {
-        // Special handling for owner_address
-        if (
-          txLikeItem.owner_address !== undefined &&
-          txLikeItem.owner_address !== null
-        ) {
-          value = txLikeItem.owner_address;
-        } else if (
-          txLikeItem.owner !== undefined &&
-          txLikeItem.owner !== null
-        ) {
-          // Compute owner_address from owner
-          const ownerBuffer = fromB64Url(txLikeItem.owner);
-          value = sha256B64Url(ownerBuffer);
-        }
-      } else if (this.partitionKey in txLikeItem) {
-        value = txLikeItem[this.partitionKey as keyof MatchableTxLike] as
-          | string
-          | undefined;
+    if (this.partitionKey === 'owner_address') {
+      // Special handling for owner_address
+      if (txItem.owner_address !== undefined && txItem.owner_address !== null) {
+        value = txItem.owner_address;
+      } else if (txItem.owner !== undefined && txItem.owner !== null) {
+        // Compute owner_address from owner
+        const ownerBuffer = fromB64Url(txItem.owner);
+        value = sha256B64Url(ownerBuffer);
       }
-    } else {
-      // This is a MatchableObject
-      value = item[this.partitionKey] as string | undefined;
+    } else if (this.partitionKey in txItem) {
+      value = txItem[this.partitionKey as keyof MatchableTxLike] as
+        | string
+        | undefined;
     }
 
     if (value === undefined || value === null || value === '') {
