@@ -5,7 +5,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
+import {
+  after,
+  afterEach,
+  before,
+  beforeEach,
+  describe,
+  it,
+  mock,
+} from 'node:test';
 import { Readable } from 'node:stream';
 import * as winston from 'winston';
 
@@ -25,7 +33,7 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  // Create mock objects
+  // Create mock Redis cluster
   mockRedis = {
     status: 'ready',
     get: mock.fn(async () => null),
@@ -33,22 +41,27 @@ beforeEach(async () => {
     on: mock.fn(),
   };
 
+  // Create mock circuit breaker
   mockCircuitBreaker = {
     fire: mock.fn(async (task: any) => task()),
     opened: false,
     on: mock.fn(),
+    removeAllListeners: mock.fn(),
   };
 
-  // Create instance and inject mocks
+  // Create instance with injected Redis mock
   turboRedisDataSource = new TurboRedisDataSource({
-    redisHost: 'test-host',
-    redisUseTls: false,
+    redis: mockRedis as any,
     log,
   });
 
-  // Replace the internal dependencies with mocks
-  (turboRedisDataSource as any).redis = mockRedis;
+  // Replace the circuit breaker with our mock after construction
   (turboRedisDataSource as any).circuitBreaker = mockCircuitBreaker;
+});
+
+after(async () => {
+  // Clean up any remaining mock state
+  mock.restoreAll();
 });
 
 afterEach(async () => {

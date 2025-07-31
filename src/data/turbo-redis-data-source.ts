@@ -68,48 +68,59 @@ export class TurboRedisDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private circuitBreaker: CircuitBreaker<[CacheServiceTask<unknown>], unknown>;
 
-  constructor({
-    redisHost,
-    redisUseTls,
-    redisPort = 6379,
-    log,
-  }: {
-    redisHost: string;
-    redisUseTls: boolean;
-    redisPort?: number;
-    log: winston.Logger;
-  }) {
-    this.log = log.child({ class: this.constructor.name });
-    this.redis = new Redis.Cluster(
-      [
-        {
-          host: redisHost,
-          port: redisPort,
+  constructor(
+    config:
+      | {
+          redis: Cluster;
+          log: winston.Logger;
+        }
+      | {
+          redisHost: string;
+          redisUseTls: boolean;
+          redisPort?: number;
+          log: winston.Logger;
         },
-      ],
-      {
-        dnsLookup: (address, callback) => callback(null, address),
-        redisOptions: {
-          tls: redisUseTls ? {} : undefined,
-        },
-      },
-    );
+  ) {
+    this.log = config.log.child({ class: this.constructor.name });
 
-    this.redis.on('connect', () =>
-      this.log.info(`Connected to Redis at ${redisHost}!`),
-    );
-    this.redis.on('ready', () =>
-      this.log.info(`Redis client is ready at ${redisHost}!`),
-    );
-    this.redis.on('reconnecting', () =>
-      this.log.warn(`Reconnecting to Redis at ${redisHost}...`),
-    );
-    this.redis.on('end', () =>
-      this.log.warn(`Redis connection to ${redisHost} has ended.`),
-    );
-    this.redis.on('error', (err: Error) =>
-      this.log.error(`Connection error with Redis at host ${redisHost}:`, err),
-    );
+    // Use provided Redis instance or create a new one
+    if ('redis' in config) {
+      this.redis = config.redis;
+    } else {
+      this.redis = new Redis.Cluster(
+        [
+          {
+            host: config.redisHost,
+            port: config.redisPort ?? 6379,
+          },
+        ],
+        {
+          dnsLookup: (address, callback) => callback(null, address),
+          redisOptions: {
+            tls: config.redisUseTls ? {} : undefined,
+          },
+        },
+      );
+
+      this.redis.on('connect', () =>
+        this.log.info(`Connected to Redis at ${config.redisHost}!`),
+      );
+      this.redis.on('ready', () =>
+        this.log.info(`Redis client is ready at ${config.redisHost}!`),
+      );
+      this.redis.on('reconnecting', () =>
+        this.log.warn(`Reconnecting to Redis at ${config.redisHost}...`),
+      );
+      this.redis.on('end', () =>
+        this.log.warn(`Redis connection to ${config.redisHost} has ended.`),
+      );
+      this.redis.on('error', (err: Error) =>
+        this.log.error(
+          `Connection error with Redis at host ${config.redisHost}:`,
+          err,
+        ),
+      );
+    }
 
     this.circuitBreaker = new CircuitBreaker<
       [CacheServiceTask<unknown>],
