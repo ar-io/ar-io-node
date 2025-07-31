@@ -7,7 +7,6 @@
 import winston from 'winston';
 
 import {
-  ChunkByAnySource,
   ChunkDataByAnySourceParams,
   ChunkMetadata,
   ChunkMetadataByAnySource,
@@ -16,20 +15,20 @@ import {
 
 export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
   private log: winston.Logger;
-  private chunkSource: ChunkByAnySource;
+  private chunkMetadataSource: ChunkMetadataByAnySource;
   private chunkMetadataStore: ChunkMetadataStore;
 
   constructor({
     log,
-    chunkSource,
+    chunkMetadataSource,
     chunkMetadataStore,
   }: {
     log: winston.Logger;
-    chunkSource: ChunkByAnySource;
+    chunkMetadataSource: ChunkMetadataByAnySource;
     chunkMetadataStore: ChunkMetadataStore;
   }) {
     this.log = log.child({ class: this.constructor.name });
-    this.chunkSource = chunkSource;
+    this.chunkMetadataSource = chunkMetadataSource;
     this.chunkMetadataStore = chunkMetadataStore;
   }
 
@@ -51,27 +50,14 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
           return cachedChunkMetadata;
         }
 
-        // Fetch from ChunkSource
-        const chunk = await this.chunkSource.getChunkByAny({
-          txSize,
-          absoluteOffset,
-          dataRoot,
-          relativeOffset,
-        });
-
-        // TODO use an assertion to compare the data root passed in with the
-        // extracted value
-
-        const chunkMetadata = {
-          data_root:
-            chunk.tx_path === undefined
-              ? chunk.data_root
-              : chunk.tx_path.slice(-64, -32),
-          data_size: chunk.chunk.length,
-          offset: relativeOffset,
-          data_path: chunk.data_path,
-          hash: chunk.data_path.slice(-64, -32),
-        };
+        // Fetch from ChunkMetadataSource
+        const chunkMetadata =
+          await this.chunkMetadataSource.getChunkMetadataByAny({
+            txSize,
+            absoluteOffset,
+            dataRoot,
+            relativeOffset,
+          });
 
         await this.chunkMetadataStore.set(chunkMetadata);
 

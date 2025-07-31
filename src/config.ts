@@ -277,6 +277,17 @@ export const CHUNK_METADATA_SOURCE_TYPE = env.varOrDefault(
   'fs',
 ) as 'fs' | 'legacy-psql';
 
+// Parallelism configuration for composite chunk sources
+export const CHUNK_DATA_SOURCE_PARALLELISM = +env.varOrDefault(
+  'CHUNK_DATA_SOURCE_PARALLELISM',
+  '1',
+);
+
+export const CHUNK_METADATA_SOURCE_PARALLELISM = +env.varOrDefault(
+  'CHUNK_METADATA_SOURCE_PARALLELISM',
+  '1',
+);
+
 //
 // Indexing
 //
