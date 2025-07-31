@@ -199,6 +199,7 @@ describe('TurboRedisDataSource', () => {
     it('should return data stream from cached buffer', async () => {
       const testBuffer = Buffer.from('test payload data');
       mockRedis.getBuffer = mock.fn(async () => testBuffer);
+      const expectedStreamData = 'payload data';
 
       const result =
         await turboRedisDataSource.getCachedTurboPayloadDataStreamFromMetadata({
@@ -209,7 +210,7 @@ describe('TurboRedisDataSource', () => {
 
       assert.ok(result.stream instanceof Readable);
       assert.equal(result.sourceContentType, 'text/plain');
-      assert.equal(result.size, testBuffer.byteLength);
+      assert.equal(result.size, expectedStreamData.length);
       assert.equal(result.cached, false);
       assert.equal(result.trusted, true);
       assert.equal(result.verified, false);
@@ -224,7 +225,7 @@ describe('TurboRedisDataSource', () => {
       for await (const chunk of result.stream) {
         streamData += chunk;
       }
-      assert.equal(streamData, 'payload data');
+      assert.equal(streamData, expectedStreamData);
     });
 
     it('should handle region offset and size', async () => {
@@ -312,14 +313,22 @@ describe('TurboRedisDataSource', () => {
 
       mockRedis.getBuffer = mock.fn(async () => testBuffer);
 
+      const expectedData = 'metadata payload data';
       const result = await turboRedisDataSource.getData({ id: testDataId });
 
       assert.ok(result.stream instanceof Readable);
       assert.equal(result.sourceContentType, 'text/plain');
-      assert.equal(result.size, testBuffer.byteLength);
+      assert.equal(result.size, expectedData.length);
       assert.equal(result.verified, false);
       assert.equal(result.trusted, true);
       assert.equal(result.cached, false);
+
+      // Verify stream content
+      let streamData = '';
+      for await (const chunk of result.stream) {
+        streamData += chunk;
+      }
+      assert.equal(streamData, expectedData);
     });
 
     it('should handle region parameters', async () => {

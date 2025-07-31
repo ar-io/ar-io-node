@@ -386,7 +386,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     return {
       stream,
       sourceContentType: payloadContentType,
-      size: region?.size ?? rawDataItemBuffer.byteLength,
+      size: region?.size ?? rawDataItemBuffer.byteLength - payloadStartOffset,
       cached: false,
       trusted: true,
       verified: false,
