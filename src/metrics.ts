@@ -10,7 +10,12 @@ import { Gauge } from 'prom-client';
 /* eslint-disable */
 // @ts-ignore
 import PrometheusMetrics from 'opossum-prometheus';
+import CircuitBreaker from 'opossum';
+import winston from 'winston';
 
+/**
+ * @deprecated Use setUpCircuitBreakerListenerMetrics instead.
+ */
 export const circuitBreakerMetrics = new PrometheusMetrics({
   registry: promClient.register,
 });
@@ -376,3 +381,121 @@ export const cacheSizeBytes = new promClient.Gauge({
   help: 'Current cache size in bytes',
   labelNames: ['store_type', 'data_type'] as const,
 });
+
+//
+// Circuit breaker metrics
+//
+const breakerSourceNames = [
+  // Keep this list alphabetized
+  'ar-io-data-source',
+  'get-data-attributes',
+  'get-data-item-attributes',
+  'get-data-parent',
+  'get-transaction-attributes',
+  'turbo_elasticache',
+] as const;
+export type BreakerSource = (typeof breakerSourceNames)[number];
+const breakerSources: BreakerSource[] = [...breakerSourceNames];
+
+export const circuitBreakerOpenCount = createCounter({
+  name: 'circuit_breaker_open_count',
+  help: 'Count of occasions when a circuit breaker has opened',
+  labelNames: ['breaker'],
+  expectedLabelNames: {
+    breaker: breakerSources,
+  },
+});
+
+export const circuitBreakerState = createGauge({
+  name: 'circuit_breaker_state',
+  help: 'State of the circuit breaker (1 is open, 0 is closed, 0.5 is half open)',
+  labelNames: ['breaker'],
+  expectedLabelNames: {
+    breaker: breakerSources,
+  },
+});
+
+//
+// Helper functions
+//
+
+type CounterCfgPlusLabelValues = promClient.CounterConfiguration<string> & {
+  expectedLabelNames?: Record<string, string[]>;
+};
+
+function createCounter(
+  config: CounterCfgPlusLabelValues,
+): promClient.Counter<string> {
+  const counter = new promClient.Counter(config);
+  // Initialize the counter to zero so it will print right away
+  if (config.expectedLabelNames) {
+    for (const [labelName, labelValues] of Object.entries(
+      config.expectedLabelNames,
+    )) {
+      for (const labelValue of labelValues) {
+        counter.inc({ [labelName]: labelValue }, 0);
+      }
+    }
+  } else {
+    counter.inc(0);
+  }
+  return counter;
+}
+
+type GaugeCfgPlusLabelValues = promClient.GaugeConfiguration<string> & {
+  expectedLabelNames?: Record<string, string[]>;
+};
+
+function createGauge(config: GaugeCfgPlusLabelValues): Gauge<string> {
+  const gauge = new Gauge(config);
+  // Initialize the gauge to zero so it will print right away
+  if (config.expectedLabelNames) {
+    for (const [labelName, labelValues] of Object.entries(
+      config.expectedLabelNames,
+    )) {
+      for (const labelValue of labelValues) {
+        gauge.set({ [labelName]: labelValue }, 0);
+      }
+    }
+  } else {
+    gauge.set(0);
+  }
+  return gauge;
+}
+
+export function setUpCircuitBreakerListenerMetrics(
+  breakerName: BreakerSource,
+  breaker: CircuitBreaker,
+  logger?: winston.Logger | undefined,
+) {
+  breaker.on('open', () => {
+    circuitBreakerOpenCount.inc({
+      breaker: breakerName,
+    });
+    circuitBreakerState.set(
+      {
+        breaker: breakerName,
+      },
+      1,
+    );
+    logger?.error(`${breakerName} circuit breaker opened`);
+  });
+  breaker.on('close', () => {
+    circuitBreakerState.set(
+      {
+        breaker: breakerName,
+      },
+      0,
+    );
+    logger?.info(`${breakerName} circuit breaker closed`);
+  });
+  breaker.on('halfOpen', () => {
+    circuitBreakerState.set(
+      {
+        breaker: breakerName,
+      },
+      0.5,
+    );
+    logger?.info(`${breakerName} circuit breaker half-open`);
+  });
+}

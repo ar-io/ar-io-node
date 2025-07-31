@@ -2868,12 +2868,27 @@ export class StandaloneSqliteDatabase
       },
     );
 
+    // TODO: Remove deprecated circuit breaker metrics setup
     metrics.circuitBreakerMetrics.add([
       this.getDataParentCircuitBreaker,
       this.getDataAttributesCircuitBreaker,
       this.getDataItemAttributesCircuitBreaker,
       this.getTransactionAttributesCircuitBreaker,
     ]);
+    Object.entries({
+      'get-data-parent': this.getDataParentCircuitBreaker,
+      'get-data-attributes': this.getDataAttributesCircuitBreaker,
+      'get-data-item-attributes': this.getDataItemAttributesCircuitBreaker,
+      'get-transaction-attributes': this.getTransactionAttributesCircuitBreaker,
+    } satisfies Partial<Record<metrics.BreakerSource, CircuitBreaker>>).forEach(
+      ([name, breaker]) => {
+        metrics.setUpCircuitBreakerListenerMetrics(
+          name as metrics.BreakerSource,
+          breaker,
+          this.log,
+        );
+      },
+    );
 
     //
     // Initialize method caches
