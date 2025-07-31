@@ -85,7 +85,9 @@ import { server } from './app.js';
 import { awsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
-import { CompositeChunkSource } from './data/composite-chunk-source.js';
+import { FullChunkSource } from './data/full-chunk-source.js';
+import { CompositeChunkDataSource } from './data/composite-chunk-data-source.js';
+import { CompositeChunkMetadataSource } from './data/composite-chunk-metadata-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 
@@ -387,17 +389,30 @@ const txChunkMetaDataStore = new FsChunkMetadataStore({
   baseDir: 'data/chunks/metadata',
 });
 
-export const chunkMetaDataSource =
+// Configure chunk metadata source
+const baseChunkMetadataSource =
   config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql'
     ? new LegacyPostgresChunkMetadataSource({
         log,
         legacyPsql: legacyPsql!,
       })
-    : new ReadThroughChunkMetadataCache({
+    : arweaveClient;
+
+// Wrap in composite source if parallelism > 1 or for future multi-source support
+export const chunkMetaDataSource =
+  config.CHUNK_METADATA_SOURCE_PARALLELISM > 1
+    ? new CompositeChunkMetadataSource({
         log,
-        chunkSource: arweaveClient,
-        chunkMetadataStore: txChunkMetaDataStore,
-      });
+        sources: [baseChunkMetadataSource],
+        parallelism: config.CHUNK_METADATA_SOURCE_PARALLELISM,
+      })
+    : config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql'
+      ? baseChunkMetadataSource
+      : new ReadThroughChunkMetadataCache({
+          log,
+          chunkMetadataSource: baseChunkMetadataSource,
+          chunkMetadataStore: txChunkMetaDataStore,
+        });
 
 if (
   config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql' &&
@@ -414,8 +429,8 @@ if (config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3' && awsClient === undefined) {
   );
 }
 
-// Configure contiguous data source
-const chunkDataSource =
+// Configure chunk data source
+const baseChunkDataSource =
   config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3'
     ? new S3ChunkSource({
         log,
@@ -425,13 +440,25 @@ const chunkDataSource =
           s3Prefix: config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX,
         }),
       })
-    : new ReadThroughChunkDataCache({
-        log,
-        chunkSource: arweaveClient,
-        chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
-      });
+    : arweaveClient;
 
-export const chunkSource = new CompositeChunkSource(
+// Wrap in composite source if parallelism > 1 or for future multi-source support
+const chunkDataSource =
+  config.CHUNK_DATA_SOURCE_PARALLELISM > 1
+    ? new CompositeChunkDataSource({
+        log,
+        sources: [baseChunkDataSource],
+        parallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
+      })
+    : config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3'
+      ? baseChunkDataSource
+      : new ReadThroughChunkDataCache({
+          log,
+          chunkSource: baseChunkDataSource,
+          chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
+        });
+
+export const chunkSource = new FullChunkSource(
   chunkMetaDataSource,
   chunkDataSource,
 );

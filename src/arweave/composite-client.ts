@@ -43,6 +43,8 @@ import {
   ChunkByAnySource,
   ChunkData,
   ChunkDataByAnySource,
+  ChunkMetadata,
+  ChunkMetadataByAnySource,
   ContiguousData,
   ContiguousDataSource,
   JsonChunkPost,
@@ -111,6 +113,7 @@ export class ArweaveCompositeClient
     ChunkBroadcaster,
     ChunkByAnySource,
     ChunkDataByAnySource,
+    ChunkMetadataByAnySource,
     ContiguousDataSource,
     WithPeers<Peer>
 {
@@ -1228,6 +1231,40 @@ export class ArweaveCompositeClient
       hash,
       chunk,
     };
+  }
+
+  async getChunkMetadataByAny({
+    txSize,
+    absoluteOffset,
+    dataRoot,
+    relativeOffset,
+  }: ChunkDataByAnySourceParams): Promise<ChunkMetadata> {
+    this.failureSimulator.maybeFail();
+
+    // Fetch the full chunk using the existing getChunkByAny method
+    // This leverages the existing chunk caching
+    const chunk = await this.getChunkByAny({
+      txSize,
+      absoluteOffset,
+      dataRoot,
+      relativeOffset,
+    });
+
+    // Extract and return only the metadata portion
+    const metadata: ChunkMetadata = {
+      data_root: chunk.data_root,
+      data_size: chunk.data_size,
+      data_path: chunk.data_path,
+      offset: chunk.offset,
+      hash: chunk.hash,
+    };
+
+    // Include chunk_size if it's available
+    if (chunk.chunk_size !== undefined) {
+      metadata.chunk_size = chunk.chunk_size;
+    }
+
+    return metadata;
   }
 
   async getData({
