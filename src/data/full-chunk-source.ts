@@ -15,7 +15,7 @@ import {
   ChunkMetadata,
 } from '../types';
 
-export class CompositeChunkSource
+export class FullChunkSource
   implements ChunkByAnySource, ChunkMetadataByAnySource, ChunkDataByAnySource
 {
   private readonly chunkMetadataSource: ChunkMetadataByAnySource;
