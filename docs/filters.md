@@ -154,6 +154,8 @@ Supported partition keys include:
 - Any other property present on the transaction/data item
 
 Use cases:
+
+**Uniform Distribution by Transaction ID:**
 ```json
 {
   "hashPartition": {
@@ -163,9 +165,18 @@ Use cases:
   }
 }
 ```
-This configuration divides all transactions by ID into 4 partitions and only
-processes those in partition 0 (roughly 25% of all transactions).
+This configuration divides all transactions by their unique ID into 4 partitions.
+Since transaction IDs are random, this provides uniform distribution where each
+partition receives approximately 25% of all transactions. This is ideal when you
+want to evenly distribute processing load without any bias.
 
+Example distribution across 4 nodes:
+- Node A: `targetPartitions: [0]` - ~25% of transactions
+- Node B: `targetPartitions: [1]` - ~25% of transactions
+- Node C: `targetPartitions: [2]` - ~25% of transactions
+- Node D: `targetPartitions: [3]` - ~25% of transactions
+
+**Grouped Distribution by Owner:**
 ```json
 {
   "hashPartition": {
@@ -175,8 +186,11 @@ processes those in partition 0 (roughly 25% of all transactions).
   }
 }
 ```
-This configuration creates 100 partitions based on owner address and processes
-only 5% of transactions (those in partitions 10-14).
+This configuration creates 100 partitions based on owner address. All
+transactions from the same wallet will always go to the same partition. This
+node processes only 5% of wallets (partitions 10-14), but will process ALL
+transactions from those wallets. This is useful when you need to maintain
+wallet-level consistency or analytics.
 
 Note: The hash partition filter only works with transaction-like items (those
 with a `tags` property). It will return false for generic objects.
