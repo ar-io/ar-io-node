@@ -30,9 +30,6 @@ application-specific functionality.
 43-character base64url ID. Contains data, tags, and cryptographic signatures
 proving ownership and integrity.
 
-**Transaction Offset** - The position within a transaction's data where content
-begins, accounting for any format headers or metadata.
-
 ## ANS-104 Bundle System
 
 **ANS-102/ANS-104** - Arweave standards for bundling multiple data items into a
