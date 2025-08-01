@@ -306,10 +306,10 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       }
 
       const buffer =
-        res.Item.D && res.Item.D.B
+        res.Item.D?.B !== undefined
           ? Buffer.from(gunzipSync(res.Item.D.B as Uint8Array))
           : Buffer.alloc(0);
-      if (!res.Item.P?.N) {
+      if (res.Item.P?.N === undefined || res.Item.P?.N === '') {
         throw new Error(`Data item ${dataItemId} has no payload start!`);
       }
       const payloadDataStart = +(res.Item.P?.N ?? 0);
