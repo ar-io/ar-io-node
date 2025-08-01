@@ -1,3 +1,10 @@
+## Documentation
+
+- The project includes a comprehensive glossary at `docs/glossary.md`
+- When adding new concepts, features, or technical terms, update the glossary
+- Keep glossary definitions concise and focused on concepts rather than implementation details
+- Organize new terms into the appropriate existing sections
+
 ## Releases
 
 - Releases are tagged with rN in git where N is a monotonically increasing
