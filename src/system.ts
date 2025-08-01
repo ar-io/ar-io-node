@@ -87,6 +87,7 @@ import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { CompositeChunkSource } from './data/composite-chunk-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
+import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -488,6 +489,15 @@ const turboElasticacheDataSource =
       })
     : undefined;
 
+const turboDynamoDBDataSource =
+  config.AWS_DYNAMODB_TURBO_REGION !== undefined
+    ? new TurboDynamoDbDataSource({
+        log,
+        region: config.AWS_DYNAMODB_TURBO_REGION,
+        endpoint: config.AWS_DYNAMODB_TURBO_ENDPOINT,
+      })
+    : undefined;
+
 // Create chunk data cache cleanup worker
 export const chunkDataFsCacheCleanupWorker =
   config.ENABLE_CHUNK_DATA_CACHE_CLEANUP
@@ -531,6 +541,8 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return turboS3DataSource;
     case 'turbo-elasticache':
       return turboElasticacheDataSource;
+    case 'turbo-dynamodb':
+      return turboDynamoDBDataSource;
     // ario-peer is for backwards compatibility
     case 'ario-peer':
     case 'ar-io-peers':

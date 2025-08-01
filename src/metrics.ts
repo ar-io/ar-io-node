@@ -393,6 +393,7 @@ const breakerSourceNames = [
   'get-data-parent',
   'get-transaction-attributes',
   'turbo_elasticache',
+  'turbo_dynamodb',
 ] as const;
 export type BreakerSource = (typeof breakerSourceNames)[number];
 const breakerSources: BreakerSource[] = [...breakerSourceNames];
