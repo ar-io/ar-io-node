@@ -121,6 +121,7 @@ describe('DataSources', () => {
           AWS_S3_CONTIGUOUS_DATA_BUCKET: 'ar.io',
           AWS_ENDPOINT: `http://localstack:4566`,
           ON_DEMAND_RETRIEVAL_ORDER: 's3',
+          BACKGROUND_RETRIEVAL_ORDER: 's3',
           LOG_LEVEL: 'debug',
         })
         .withBindMounts([
