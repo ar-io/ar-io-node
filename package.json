@@ -13,6 +13,7 @@
     "@ardrive/ardrive-promise-cache": "^1.1.8",
     "@aws-lite/client": "^0.23.2",
     "@aws-lite/s3": "^0.2.6",
+    "@aws-sdk/client-dynamodb": "^3.858.0",
     "@aws-sdk/credential-providers": "^3.823.0",
     "@clickhouse/client": "^1.10.1",
     "@dha-team/arbundles": "^1.0.1",
