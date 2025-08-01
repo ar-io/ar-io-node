@@ -57,6 +57,7 @@ export class TrustedGatewayArNSResolver implements NameResolver {
         this.log.info('Resolved name', { name, nameUrl, resolvedId, ttl });
         return {
           name,
+          statusCode: response.status,
           resolvedId,
           resolvedAt: Date.now(),
           processId,

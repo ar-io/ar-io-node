@@ -135,11 +135,11 @@ describe('DataSources', () => {
         .start();
 
       // Uncomment to see core logs
-      // core.logs().then((stream) => {
-      //   stream
-      //     .on('data', (line) => console.log(`[core] ${line.toString()}`))
-      //     .on('err', (line) => console.error(`[core err] ${line.toString()}`));
-      // });
+      //core.logs().then((stream) => {
+      //  stream
+      //    .on('data', (line) => console.log(`[core] ${line.toString()}`))
+      //    .on('err', (line) => console.error(`[core err] ${line.toString()}`));
+      //});
 
       corePort = core.getMappedPort(4000);
       bundlesDb = new Sqlite(`${projectRootPath}/data/sqlite/bundles.db`);

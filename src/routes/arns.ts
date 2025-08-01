@@ -43,9 +43,10 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
     return;
   }
 
-  const { resolvedId, ttl, processId, resolvedAt, index, limit } = resolved;
+  const { statusCode, resolvedId, ttl, processId, resolvedAt, index, limit } =
+    resolved;
 
-  if (resolvedId === undefined) {
+  if (resolvedId === undefined || statusCode === 404) {
     sendNotFound(res);
     return;
   }

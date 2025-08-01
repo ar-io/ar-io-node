@@ -676,6 +676,7 @@ export interface ManifestPathResolver {
 
 export interface ValidNameResolution {
   name: string;
+  statusCode?: number;
   resolvedId: string;
   resolvedAt: number;
   ttl: number;
@@ -687,6 +688,7 @@ export interface ValidNameResolution {
 // Name resolved, but is missing
 export interface MissingNameResolution {
   name: string;
+  statusCode?: number;
   resolvedId: undefined;
   resolvedAt: number;
   ttl: number;
@@ -698,6 +700,7 @@ export interface MissingNameResolution {
 // An error occurred while resolving the name
 export interface FailedNameResolution {
   name: string;
+  statusCode?: number;
   resolvedId: undefined;
   resolvedAt: undefined;
   ttl: undefined;

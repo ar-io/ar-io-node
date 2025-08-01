@@ -107,12 +107,12 @@ export const createArnsMiddleware = ({
     // NOTE: Errors and in-flight resolution deduplication are expected to be
     // handled by the resolver.
     const end = metrics.arnsResolutionTime.startTimer();
-    let { resolvedId, ttl, processId, resolvedAt, limit, index } =
-      await nameResolver.resolve({
-        name: arnsSubdomain,
-      });
+    const resolution = await nameResolver.resolve({
+      name: arnsSubdomain,
+    });
+    let { resolvedId, ttl, processId, resolvedAt, limit, index } = resolution;
     end();
-    if (resolvedId !== undefined) {
+    if (resolvedId !== undefined && resolution.statusCode !== 404) {
       // Populate the ArNS name headers if resolution was successful
       res.header(headerNames.arnsName, arnsSubdomain);
       if (arnsSubdomain) {
