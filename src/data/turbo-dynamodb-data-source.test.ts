@@ -28,10 +28,6 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  // Set environment variables for table names
-  process.env.DDB_DATA_ITEM_TABLE = CACHE_TABLE;
-  process.env.DDB_OFFSETS_TABLE = OFFSETS_TABLE;
-
   // Create mock DynamoDB client
   mockDynamoClient = {
     send: mock.fn(async () => ({ Item: null })),
