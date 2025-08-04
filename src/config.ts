@@ -867,6 +867,14 @@ export const AWS_ELASTICACHE_TURBO_PORT = env.varOrUndefined(
   'AWS_ELASTICACHE_TURBO_PORT',
 );
 
+export const AWS_DYNAMODB_TURBO_REGION = env.varOrUndefined(
+  'AWS_DYNAMODB_TURBO_REGION',
+);
+
+export const AWS_DYNAMODB_TURBO_ENDPOINT = env.varOrUndefined(
+  'AWS_DYNAMODB_TURBO_ENDPOINT',
+);
+
 // Chunk data source specifically set-up for interoperability with
 // the legacy arweave gateways
 export const LEGACY_AWS_S3_CHUNK_DATA_BUCKET = env.varOrUndefined(
