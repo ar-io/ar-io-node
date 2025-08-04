@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { describe, it, before, beforeEach } from 'node:test';
+import { describe, it, before, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mock } from 'node:test';
 import { gzipSync } from 'node:zlib';
@@ -38,6 +38,10 @@ beforeEach(async () => {
     dynamoClient: mockDynamoClient as any,
     log,
   });
+});
+
+afterEach(() => {
+  mock.restoreAll();
 });
 
 describe('TurboDynamoDbDataSource', () => {
