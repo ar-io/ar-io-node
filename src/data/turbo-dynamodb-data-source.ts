@@ -69,7 +69,10 @@ const dynamoBreakers = new WeakMap<
 >();
 
 // TODO: Move this to a dynamodb utility module when we get more dynamo use cases
-function breakerForDynamo(client: DynamoDBClient): {
+function breakerForDynamo(
+  client: DynamoDBClient,
+  log: winston.Logger,
+): {
   fire<T>(task: DynamoTask<T>): Promise<T>;
   breaker: CircuitBreaker<[DynamoTask<unknown>], unknown>;
 } {
@@ -98,7 +101,7 @@ function breakerForDynamo(client: DynamoDBClient): {
   );
 
   breaker.on('timeout', () =>
-    console.error('DynamoDB circuit breaker command timed out'),
+    log.error('DynamoDB circuit breaker command timed out'),
   );
 
   const wrapper = {
@@ -187,7 +190,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       );
     }
 
-    this.circuitBreakerWrapper = breakerForDynamo(this.dynamoClient);
+    this.circuitBreakerWrapper = breakerForDynamo(this.dynamoClient, this.log);
 
     setUpCircuitBreakerListenerMetrics(
       'turbo_dynamodb',
