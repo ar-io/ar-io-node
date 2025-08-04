@@ -23,6 +23,7 @@ import {
   Region,
   RequestAttributes,
 } from '../types.js';
+import * as env from '../lib/env.js';
 
 type TransactionId = string; // Base64URL encoded string
 
@@ -47,12 +48,14 @@ export interface DataItemOffsetsInfo {
 }
 
 // Table names based on reference implementation
-const cacheTableName =
-  process.env.DDB_DATA_ITEM_TABLE ??
-  `upload-service-cache-${process.env.NODE_ENV ?? 'local'}`;
-const offsetsTableName =
-  process.env.DDB_OFFSETS_TABLE ??
-  `upload-service-offsets-${process.env.NODE_ENV ?? 'local'}`;
+const cacheTableName = env.varOrDefault(
+  'DDB_DATA_ITEM_TABLE',
+  `upload-service-cache-${process.env.NODE_ENV ?? 'local'}`,
+);
+const offsetsTableName = env.varOrDefault(
+  'DDB_OFFSETS_TABLE',
+  `upload-service-offsets-${process.env.NODE_ENV ?? 'local'}`,
+);
 
 // DynamoDB circuit breaker types and utilities
 type DynamoTask<T> = () => Promise<T>;
@@ -79,9 +82,18 @@ function breakerForDynamo(client: DynamoDBClient): {
       return task();
     },
     {
-      timeout: process.env.NODE_ENV === 'local' ? 10_000 : 3000,
-      errorThresholdPercentage: 10,
-      resetTimeout: 30_000,
+      timeout: +env.varOrDefault(
+        'TURBO_DYNAMODB_CIRCUIT_BREAKER_TIMEOUT_MS',
+        process.env.NODE_ENV === 'local' ? '10_000' : '3000',
+      ),
+      errorThresholdPercentage: +env.varOrDefault(
+        'TURBO_DYNAMODB_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
+        '10',
+      ),
+      resetTimeout: +env.varOrDefault(
+        'TURBO_DYNAMODB_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
+        '30_000',
+      ),
     },
   );
 
