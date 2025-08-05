@@ -495,6 +495,7 @@ const turboDynamoDBDataSource =
         log,
         region: config.AWS_DYNAMODB_TURBO_REGION,
         endpoint: config.AWS_DYNAMODB_TURBO_ENDPOINT,
+        assumeRoleArn: config.AWS_DYNAMODB_TURBO_ASSUME_ROLE_ARN,
       })
     : undefined;
 

@@ -875,6 +875,10 @@ export const AWS_DYNAMODB_TURBO_ENDPOINT = env.varOrUndefined(
   'AWS_DYNAMODB_TURBO_ENDPOINT',
 );
 
+export const AWS_DYNAMODB_TURBO_ASSUME_ROLE_ARN = env.varOrUndefined(
+  'AWS_DYNAMODB_TURBO_ASSUME_ROLE_ARN',
+);
+
 // Chunk data source specifically set-up for interoperability with
 // the legacy arweave gateways
 export const LEGACY_AWS_S3_CHUNK_DATA_BUCKET = env.varOrUndefined(
