@@ -10,6 +10,7 @@ import {
   GetItemCommand,
   GetItemCommandOutput,
 } from '@aws-sdk/client-dynamodb';
+import { fromTemporaryCredentials } from '@aws-sdk/credential-providers';
 import CircuitBreaker from 'opossum';
 import { gunzipSync } from 'node:zlib';
 import winston from 'winston';
@@ -157,6 +158,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     endpoint,
     region,
     credentials,
+    assumeRoleArn,
     log,
   }: {
     dynamoClient?: DynamoDBClient;
@@ -167,6 +169,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       secretAccessKey: string;
       sessionToken?: string;
     };
+    assumeRoleArn?: string;
     log: winston.Logger;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -180,7 +183,16 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       this.dynamoClient = new DynamoDBClient({
         endpoint,
         region,
-        credentials,
+        credentials:
+          assumeRoleArn !== undefined
+            ? fromTemporaryCredentials({
+                params: {
+                  RoleArn: assumeRoleArn,
+                  RoleSessionName: 'TurboDynamoDbDataSource',
+                },
+                masterCredentials: credentials,
+              })
+            : credentials,
       });
     }
     // If neither client nor region is provided, throw an error
