@@ -54,10 +54,14 @@ arnsRouter.get('/ar-io/resolver/:name', async (req, res) => {
   res.header(headerNames.arnsResolvedId, resolvedId);
   res.header(
     headerNames.arnsTtlSeconds,
-    ttl.toString() || DEFAULT_ARNS_TTL_SECONDS.toString(),
+    (ttl ?? DEFAULT_ARNS_TTL_SECONDS).toString(),
   );
-  res.header(headerNames.arnsProcessId, processId);
-  res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
+  if (processId !== undefined) {
+    res.header(headerNames.arnsProcessId, processId);
+  }
+  if (resolvedAt !== undefined) {
+    res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
+  }
   if (index !== undefined && limit !== undefined) {
     res.header(headerNames.arnsIndex, index.toString());
     res.header(headerNames.arnsLimit, limit.toString());

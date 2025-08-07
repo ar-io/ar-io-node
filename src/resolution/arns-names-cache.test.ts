@@ -71,6 +71,35 @@ describe('ArNSNamesCache', () => {
     assert.deepEqual(name, { name: 'name-1-1', processId: 'process-1' });
   });
 
+  it('should return name requested during initial hydration once complete', async () => {
+    let resolveHydrate: () => void;
+    const hydratePromise = new Promise<void>((resolve) => {
+      resolveHydrate = resolve;
+    });
+    const debounceCache = new ArNSNamesCache({
+      log,
+      registryCache,
+      networkProcess: {
+        getArNSRecords: async () => {
+          await hydratePromise;
+          return {
+            items: [{ name: 'name-1', processId: 'process-1' }],
+            nextCursor: undefined,
+          };
+        },
+      } as unknown as AoARIORead,
+    });
+
+    // Request the name immediately, before hydration completes
+    const resultPromise = debounceCache.getCachedArNSBaseName('name-1');
+
+    // Allow hydration to finish
+    resolveHydrate();
+
+    const result = await resultPromise;
+    assert.deepEqual(result, { name: 'name-1', processId: 'process-1' });
+  });
+
   it('should use cached names within TTL period', async () => {
     let callCount = 0;
     const debounceCache = new ArNSNamesCache({

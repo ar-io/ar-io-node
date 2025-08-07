@@ -78,6 +78,14 @@ export class KvDebounceStore implements KVBufferStore {
 
     try {
       let value = await this.kvBufferStore.get(key);
+
+      // If a hydrate is already in progress, wait for it to finish and retry
+      if (value === undefined && this.pendingHydrate !== undefined) {
+        span.addEvent('Awaiting pending hydrate');
+        await this.pendingHydrate;
+        value = await this.kvBufferStore.get(key);
+      }
+
       if (value === undefined) {
         span.setAttributes({ 'kv.cache.hit': false });
 
