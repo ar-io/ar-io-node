@@ -170,4 +170,146 @@ describe('ArweaveCompositeClient', () => {
       (client as any).peerGetChunk = originalPeerGetChunk;
     });
   });
+
+  describe('Preferred Chunk POST Peer Weight Management', () => {
+    it('should identify preferred peers correctly', () => {
+      const client = createTestClient();
+
+      // Set up preferred chunk POST URLs through the private property
+      (client as any).preferredChunkPostUrls = [
+        'http://preferred1.example.com',
+        'http://preferred2.example.com',
+      ];
+
+      assert.equal(
+        (client as any).isPreferredPeer('http://preferred1.example.com'),
+        true,
+      );
+      assert.equal(
+        (client as any).isPreferredPeer('http://preferred2.example.com'),
+        true,
+      );
+      assert.equal(
+        (client as any).isPreferredPeer('http://regular.example.com'),
+        false,
+      );
+    });
+
+    it('should not decrease weight for preferred peers on failure', () => {
+      const client = createTestClient();
+
+      // Set up preferred chunk POST URLs and peers
+      (client as any).preferredChunkPostUrls = ['http://preferred.example.com'];
+      (client as any).weightedPostChunkPeers = [
+        { id: 'http://preferred.example.com', weight: 100 },
+        { id: 'http://regular.example.com', weight: 50 },
+      ];
+
+      // Simulate failure for preferred peer
+      (client as any).updateChunkPostPeerWeight(
+        'http://preferred.example.com',
+        false,
+      );
+
+      // Weight should remain unchanged for preferred peer
+      const preferredPeer = (client as any).weightedPostChunkPeers.find(
+        (p: any) => p.id === 'http://preferred.example.com',
+      );
+      assert.equal(preferredPeer.weight, 100);
+
+      // Simulate failure for regular peer
+      (client as any).updateChunkPostPeerWeight(
+        'http://regular.example.com',
+        false,
+      );
+
+      // Weight should decrease for regular peer
+      const regularPeer = (client as any).weightedPostChunkPeers.find(
+        (p: any) => p.id === 'http://regular.example.com',
+      );
+      assert.ok(regularPeer.weight < 50);
+    });
+
+    it('should increase weight for preferred peers on success', () => {
+      const client = createTestClient();
+
+      // Set up preferred chunk POST URLs and peers
+      (client as any).preferredChunkPostUrls = ['http://preferred.example.com'];
+      (client as any).weightedPostChunkPeers = [
+        { id: 'http://preferred.example.com', weight: 90 },
+      ];
+
+      // Simulate success for preferred peer
+      (client as any).updateChunkPostPeerWeight(
+        'http://preferred.example.com',
+        true,
+      );
+
+      // Weight should increase for preferred peer
+      const preferredPeer = (client as any).weightedPostChunkPeers.find(
+        (p: any) => p.id === 'http://preferred.example.com',
+      );
+      assert.ok(preferredPeer.weight > 90);
+    });
+
+    it('should maintain high weight for preferred peers over multiple failures', () => {
+      const client = createTestClient();
+
+      // Set up preferred chunk POST URLs and peers
+      (client as any).preferredChunkPostUrls = ['http://preferred.example.com'];
+      (client as any).weightedPostChunkPeers = [
+        { id: 'http://preferred.example.com', weight: 100 },
+      ];
+
+      const initialWeight = 100;
+
+      // Simulate multiple failures
+      for (let i = 0; i < 10; i++) {
+        (client as any).updateChunkPostPeerWeight(
+          'http://preferred.example.com',
+          false,
+        );
+      }
+
+      // Weight should remain unchanged despite failures
+      const preferredPeer = (client as any).weightedPostChunkPeers.find(
+        (p: any) => p.id === 'http://preferred.example.com',
+      );
+      assert.equal(preferredPeer.weight, initialWeight);
+    });
+
+    it('should correctly handle mixed success and failure for regular peers', () => {
+      const client = createTestClient();
+
+      // Set up only regular peers (no preferred)
+      (client as any).preferredChunkPostUrls = [];
+      (client as any).weightedPostChunkPeers = [
+        { id: 'http://regular.example.com', weight: 50 },
+      ];
+
+      const initialWeight = 50;
+
+      // Simulate failure
+      (client as any).updateChunkPostPeerWeight(
+        'http://regular.example.com',
+        false,
+      );
+      let peer = (client as any).weightedPostChunkPeers.find(
+        (p: any) => p.id === 'http://regular.example.com',
+      );
+      assert.ok(peer.weight < initialWeight);
+
+      const afterFailureWeight = peer.weight;
+
+      // Simulate success
+      (client as any).updateChunkPostPeerWeight(
+        'http://regular.example.com',
+        true,
+      );
+      peer = (client as any).weightedPostChunkPeers.find(
+        (p: any) => p.id === 'http://regular.example.com',
+      );
+      assert.ok(peer.weight > afterFailureWeight);
+    });
+  });
 });

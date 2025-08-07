@@ -369,22 +369,36 @@ export class ArweaveCompositeClient
     return weightedPeer?.weight ?? 1;
   }
 
+  private isPreferredPeer(peer: string): boolean {
+    return this.preferredChunkPostUrls.includes(peer);
+  }
+
   private updateChunkPostPeerWeight(peer: string, success: boolean): void {
     const peerIndex = this.weightedPostChunkPeers.findIndex(
       (p) => p.id === peer,
     );
     if (peerIndex !== -1) {
       const delta = config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
+      const isPreferred = this.isPreferredPeer(peer);
+
       if (success) {
         this.weightedPostChunkPeers[peerIndex].weight = Math.min(
           this.weightedPostChunkPeers[peerIndex].weight + delta,
           100,
         );
       } else {
-        this.weightedPostChunkPeers[peerIndex].weight = Math.max(
-          this.weightedPostChunkPeers[peerIndex].weight - delta,
-          1,
-        );
+        // Never decrease weight for preferred peers
+        if (!isPreferred) {
+          this.weightedPostChunkPeers[peerIndex].weight = Math.max(
+            this.weightedPostChunkPeers[peerIndex].weight - delta,
+            1,
+          );
+        } else {
+          this.log.debug('Skipping weight decrease for preferred peer', {
+            peer,
+            currentWeight: this.weightedPostChunkPeers[peerIndex].weight,
+          });
+        }
       }
     }
   }
@@ -454,6 +468,7 @@ export class ArweaveCompositeClient
       {
         attributes: {
           'chunk.peer': peer,
+          'chunk.peer.is_preferred': this.isPreferredPeer(peer),
           'chunk.data_root': chunk.data_root,
           'chunk.data_size': chunk.data_size,
         },
@@ -1325,7 +1340,14 @@ export class ArweaveCompositeClient
 
       // 2. Get sorted peers from memoized function (cached for 10 seconds)
       const sortedPeers = this.getSortedChunkPostPeers(eligiblePeers);
+      const preferredPeerCount = sortedPeers.filter((peer) =>
+        this.isPreferredPeer(peer),
+      ).length;
+      const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
+
       span.setAttribute('chunk.sorted_peers', sortedPeers.length);
+      span.setAttribute('chunk.preferred_peers', preferredPeerCount);
+      span.setAttribute('chunk.non_preferred_peers', nonPreferredPeerCount);
 
       // 3. Broadcast in parallel with concurrency limit
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);
@@ -1336,6 +1358,8 @@ export class ArweaveCompositeClient
       this.log.debug('Starting chunk broadcast', {
         eligiblePeers: eligiblePeers.length,
         sortedPeers: sortedPeers.length,
+        preferredPeers: preferredPeerCount,
+        nonPreferredPeers: nonPreferredPeerCount,
         minSuccessCount: chunkPostMinSuccessCount,
         concurrency: config.CHUNK_POST_PEER_CONCURRENCY,
       });
