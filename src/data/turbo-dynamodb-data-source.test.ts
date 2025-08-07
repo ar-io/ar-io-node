@@ -297,6 +297,118 @@ describe('TurboDynamoDbDataSource', () => {
   });
 
   describe('getData', () => {
+    it('should fetch top-level item from cache table when offsets exist with only root parent info', async () => {
+      const topLevelData = 'top-level-payload';
+
+      mockDynamoClient.send = mock.fn(async (command: any) => {
+        const tableName = command.input.TableName;
+
+        // Offsets table returns only root parent info (no parent info)
+        if (
+          tableName === OFFSETS_TABLE &&
+          Buffer.from(command.input.Key.Id.B).toString('base64url') ===
+            testDataId
+        ) {
+          return {
+            Item: {
+              RId: { B: Buffer.from('SomeRootParentId', 'base64url') },
+              SR: { N: '0' },
+              S: { N: `${topLevelData.length}` },
+              C: { S: 'text/plain' },
+              P: { N: '0' },
+            },
+          };
+        }
+
+        // Cache table returns the actual data
+        if (
+          tableName === CACHE_TABLE &&
+          Buffer.from(command.input.Key.Id.B).toString('base64url') ===
+            testDataId
+        ) {
+          return {
+            Item: {
+              D: { B: gzipSync(Buffer.from(topLevelData)) },
+              P: { N: '0' },
+              C: { S: 'text/plain' },
+            },
+          };
+        }
+
+        return { Item: null };
+      });
+
+      const result = await turboDynamoDbDataSource.getData({ id: testDataId });
+      assert.equal(result.sourceContentType, 'text/plain');
+      assert.equal(result.size, topLevelData.length);
+      let streamData = '';
+      for await (const chunk of result.stream) {
+        streamData += chunk;
+      }
+      assert.equal(streamData, topLevelData);
+    });
+
+    it('should fetch nested item from offsets table when parent has only root parent info', async () => {
+      // Nested item info
+      const nestedId = 'NestedDataIdForTesting123456789AbCdEfGhI';
+      const parentData = 'header--nested-payload--footer';
+      const nestedPayload = 'nested-payload';
+      // The nested payload starts at offset 8, length 14
+
+      mockDynamoClient.send = mock.fn(async (command: any) => {
+        const tableName = command.input.TableName;
+        const id = Buffer.from(command.input.Key.Id.B).toString('base64url');
+
+        // Offsets for nested item: points to parent, with offset/size
+        if (tableName === OFFSETS_TABLE && id === nestedId) {
+          return {
+            Item: {
+              PId: { B: Buffer.from(testParentId, 'base64url') },
+              SP: { N: '8' },
+              S: { N: '14' },
+              C: { S: 'text/plain' },
+              P: { N: '0' },
+            },
+          };
+        }
+
+        // Offsets for parent: only root info, no parent info
+        if (tableName === OFFSETS_TABLE && id === testParentId) {
+          return {
+            Item: {
+              RId: { B: Buffer.from('SomeRootParentId', 'base64url') },
+              SR: { N: '0' },
+              S: { N: `${parentData.length}` },
+              C: { S: 'text/plain' },
+              P: { N: '0' },
+            },
+          };
+        }
+
+        // Cache table for parent
+        if (tableName === CACHE_TABLE && id === testParentId) {
+          return {
+            Item: {
+              D: { B: gzipSync(Buffer.from(parentData)) },
+              P: { N: '0' },
+              C: { S: 'text/plain' },
+            },
+          };
+        }
+
+        return { Item: null };
+      });
+
+      const result = await turboDynamoDbDataSource.getData({ id: nestedId });
+      assert.equal(result.sourceContentType, 'text/plain');
+      assert.equal(result.size, 14);
+      let streamData = '';
+      for await (const chunk of result.stream) {
+        streamData += chunk;
+      }
+      assert.equal(streamData, nestedPayload);
+    });
+
     it('should return data from nested item using both offsets and cache tables', async () => {
       // Setup parent data in cache table
       const parentData = 'header-data__nested-json-payload__footer-data';
