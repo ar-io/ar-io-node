@@ -224,10 +224,20 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       // First try to get offsets info for nested data items
       // TODO: Move this to an offsets provider once those are worked into the architecture
       const offsetsInfo = await this.getOffsetsInfo(id);
-      if (offsetsInfo) {
-        this.log.debug(`Turbo DynamoDB: Found offsets for ${id}`, {
-          offsetsInfo,
-        });
+      if (offsetsInfo && offsetsInfo.parentInfo === undefined) {
+        this.log.debug(
+          `Turbo DynamoDB: Found offsets without parent into for data item ${id}. Skipping...`,
+          {
+            offsetsInfo,
+          },
+        );
+      } else if (offsetsInfo?.parentInfo) {
+        this.log.debug(
+          `Turbo DynamoDB: Found offsets with parent info for ${id}`,
+          {
+            offsetsInfo,
+          },
+        );
 
         const {
           parentInfo,
@@ -235,12 +245,6 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           payloadDataStart,
           rawContentLength,
         } = offsetsInfo;
-
-        if (!parentInfo) {
-          throw new Error(
-            `Invalid offsets info for ${id}: missing parent info`,
-          );
-        }
 
         const { parentDataItemId, startOffsetInParentPayload } = parentInfo;
         const payloadLength = rawContentLength - payloadDataStart;
