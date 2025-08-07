@@ -50,11 +50,11 @@ export interface DataItemOffsetsInfo {
 
 // Table names based on reference implementation
 const cacheTableName = env.varOrDefault(
-  'DDB_DATA_ITEM_TABLE',
+  'AWS_DYNAMODB_TURBO_DATA_ITEM_TABLE',
   `upload-service-cache-${process.env.NODE_ENV ?? 'local'}`,
 );
 const offsetsTableName = env.varOrDefault(
-  'DDB_OFFSETS_TABLE',
+  'AWS_DYNAMODB_TURBO_OFFSETS_TABLE',
   `upload-service-offsets-${process.env.NODE_ENV ?? 'local'}`,
 );
 
