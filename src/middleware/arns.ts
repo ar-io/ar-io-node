@@ -168,10 +168,18 @@ export const createArnsMiddleware = ({
       }
     }
 
-    res.header(headerNames.arnsResolvedId, resolvedId);
-    res.header(headerNames.arnsTtlSeconds, ttl?.toString());
-    res.header(headerNames.arnsProcessId, processId);
-    res.header(headerNames.arnsResolvedAt, resolvedAt?.toString());
+    if (resolvedId !== undefined) {
+      res.header(headerNames.arnsResolvedId, resolvedId);
+    }
+    if (ttl !== undefined) {
+      res.header(headerNames.arnsTtlSeconds, ttl.toString());
+    }
+    if (processId !== undefined) {
+      res.header(headerNames.arnsProcessId, processId);
+    }
+    if (resolvedAt !== undefined) {
+      res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
+    }
     // Limit and index can be undefined if they come from a cache that existed
     // before they were added.
     if (limit !== undefined && index !== undefined) {
@@ -189,6 +197,8 @@ export const createArnsMiddleware = ({
     }
 
     // TODO: add a header for arns cache status
-    res.header('Cache-Control', `public, max-age=${ttl}`);
+    if (ttl !== undefined) {
+      res.header('Cache-Control', `public, max-age=${ttl}`);
+    }
     dataHandler(req, res, next);
   });
