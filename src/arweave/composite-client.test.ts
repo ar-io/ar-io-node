@@ -311,5 +311,63 @@ describe('ArweaveCompositeClient', () => {
       );
       assert.ok(peer.weight > afterFailureWeight);
     });
+
+    it('should always sort preferred peers first regardless of weight', () => {
+      const client = createTestClient();
+
+      // Set up preferred and regular peers with various weights
+      (client as any).preferredChunkPostUrls = [
+        'http://preferred1.example.com',
+        'http://preferred2.example.com',
+      ];
+      (client as any).weightedPostChunkPeers = [
+        { id: 'http://regular1.example.com', weight: 100 }, // High weight regular
+        { id: 'http://preferred1.example.com', weight: 10 }, // Low weight preferred
+        { id: 'http://regular2.example.com', weight: 80 },
+        { id: 'http://preferred2.example.com', weight: 50 }, // Medium weight preferred
+        { id: 'http://regular3.example.com', weight: 90 },
+      ];
+
+      // Get eligible peers (all of them)
+      const eligiblePeers = [
+        'http://regular1.example.com',
+        'http://preferred1.example.com',
+        'http://regular2.example.com',
+        'http://preferred2.example.com',
+        'http://regular3.example.com',
+      ];
+
+      // Call the sorting function
+      const sortedPeers = (client as any).getSortedChunkPostPeers(
+        eligiblePeers,
+      );
+
+      // Verify preferred peers come first
+      assert.equal(sortedPeers[0], 'http://preferred2.example.com'); // Higher weight preferred
+      assert.equal(sortedPeers[1], 'http://preferred1.example.com'); // Lower weight preferred
+
+      // Verify regular peers come after, sorted by weight
+      assert.equal(sortedPeers[2], 'http://regular1.example.com'); // Weight 100
+      assert.equal(sortedPeers[3], 'http://regular3.example.com'); // Weight 90
+      assert.equal(sortedPeers[4], 'http://regular2.example.com'); // Weight 80
+
+      // Verify all preferred peers are before all regular peers
+      const firstRegularIndex = sortedPeers.findIndex(
+        (peer: string) => !(client as any).isPreferredPeer(peer),
+      );
+      const lastPreferredIndex = sortedPeers
+        .map((peer: string, index: number) => ({
+          peer,
+          index,
+          isPreferred: (client as any).isPreferredPeer(peer),
+        }))
+        .filter((item: any) => item.isPreferred)
+        .pop()?.index;
+
+      assert.ok(
+        lastPreferredIndex < firstRegularIndex,
+        'All preferred peers should come before regular peers',
+      );
+    });
   });
 });

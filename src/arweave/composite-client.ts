@@ -214,10 +214,18 @@ export class ArweaveCompositeClient
     // Initialize memoized sorting function for chunk POST peers
     this.getSortedChunkPostPeers = memoize(
       (eligiblePeers: string[]) => {
-        // Create a copy and sort by weight
-        return [...eligiblePeers].sort(
-          (a, b) => this.getPeerWeight(b) - this.getPeerWeight(a),
-        );
+        // Create a copy and sort: preferred peers first, then by weight within each group
+        return [...eligiblePeers].sort((a, b) => {
+          const aIsPreferred = this.isPreferredPeer(a);
+          const bIsPreferred = this.isPreferredPeer(b);
+
+          // If one is preferred and the other isn't, preferred comes first
+          if (aIsPreferred && !bIsPreferred) return -1;
+          if (!aIsPreferred && bIsPreferred) return 1;
+
+          // If both are preferred or both are not, sort by weight
+          return this.getPeerWeight(b) - this.getPeerWeight(a);
+        });
       },
       {
         maxAge: config.CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS,
