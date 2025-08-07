@@ -150,7 +150,7 @@ export const PREFERRED_CHUNK_POST_NODE_URLS =
 // Maximum queue depth before skipping a peer for chunk POST
 export const CHUNK_POST_QUEUE_DEPTH_THRESHOLD = +env.varOrDefault(
   'CHUNK_POST_QUEUE_DEPTH_THRESHOLD',
-  '10',
+  '20',
 );
 
 // Minimum number of successful chunk POST responses required
