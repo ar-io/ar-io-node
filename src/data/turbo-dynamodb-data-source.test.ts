@@ -353,7 +353,7 @@ describe('TurboDynamoDbDataSource', () => {
       const nestedId = 'NestedDataIdForTesting123456789AbCdEfGhI';
       const parentData = 'header--nested-payload--footer';
       const nestedPayload = 'nested-payload';
-      // The nested payload starts at offset 8, length 13
+      // The nested payload starts at offset 8, length 14
 
       mockDynamoClient.send = mock.fn(async (command: any) => {
         const tableName = command.input.TableName;
@@ -365,7 +365,7 @@ describe('TurboDynamoDbDataSource', () => {
             Item: {
               PId: { B: Buffer.from(testParentId, 'base64url') },
               SP: { N: '8' },
-              S: { N: '13' },
+              S: { N: '14' },
               C: { S: 'text/plain' },
               P: { N: '0' },
             },
@@ -401,7 +401,7 @@ describe('TurboDynamoDbDataSource', () => {
 
       const result = await turboDynamoDbDataSource.getData({ id: nestedId });
       assert.equal(result.sourceContentType, 'text/plain');
-      assert.equal(result.size, 13);
+      assert.equal(result.size, 14);
       let streamData = '';
       for await (const chunk of result.stream) {
         streamData += chunk;
