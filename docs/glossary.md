@@ -21,7 +21,11 @@ without downloading the entire transaction.
 
 <a id="item-id"></a> **Item ID** - A unifying term for both transaction IDs and
 data item IDs. Both are unique identifiers derived from cryptographic signatures
-that identify stored data on Arweave.
+that identify stored data on Arweave. Note that "transaction ID" is often used
+interchangeably for "item ID" in the Arweave ecosystem, and item IDs are also
+sometimes referred to as "data IDs" in ar.io projects. This codebase attempts to
+always distinguish between "item ID", "transaction ID", and "data item ID" where
+appropriate for maximum clarity.
 
 **Stable/New Data** - Classification based on block confirmations. Stable data
 is from blocks unlikely to be reorganized (18+ blocks deep), while new data is
@@ -34,7 +38,11 @@ tags.
 
 <a id="transaction"></a> **Transaction** - A data storage unit on Arweave
 identified by a unique 43-character base64url [item ID](#item-id). Contains
-data, tags, and cryptographic signatures proving ownership and integrity.
+data, tags, and cryptographic signatures proving ownership and integrity. Note
+that "transaction ID" is often used interchangeably with "item ID" in the
+broader Arweave ecosystem. This codebase attempts to always distinguish between
+"item ID", "transaction ID", and "data item ID" where appropriate for maximum
+clarity.
 
 <a id="weave"></a> **Weave** - The concatenated sequence of all transaction data
 on Arweave, forming the complete blockchain dataset.
