@@ -170,7 +170,7 @@ const setDataHeaders = ({
 
 export const getRequestAttributes = (
   req: Request,
-  res: Response,
+  _res: Response,
   {
     arnsRootHost = config.ARNS_ROOT_HOST,
     nodeRelease = release,
@@ -200,9 +200,9 @@ export const getRequestAttributes = (
     hops,
     origin,
     originNodeRelease,
-    arnsName: res.get(headerNames.arnsName?.toLowerCase()),
-    arnsBasename: res.get(headerNames.arnsBasename?.toLowerCase()),
-    arnsRecord: res.get(headerNames.arnsRecord?.toLowerCase()),
+    arnsName: req.arns?.name,
+    arnsBasename: req.arns?.basename,
+    arnsRecord: req.arns?.record,
   };
 };
 
@@ -699,18 +699,9 @@ export const createDataHandler = ({
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
     const requestAttributes = getRequestAttributes(req, res);
-    const arnsResolvedId = res.getHeader(headerNames.arnsResolvedId);
-    let id: string | undefined;
-    let manifestPath: string | undefined;
-    // TODO: add comment explaining this
-    if (typeof arnsResolvedId === 'string') {
-      id = arnsResolvedId;
-      manifestPath = req.path.slice(1);
-    } else {
-      // Handle both named parameters (:id) and positional parameters ([0], [1])
-      id = req.params.id ?? req.params[0] ?? req.params[1];
-      manifestPath = req.params['*'] ?? req.params[2];
-    }
+    // Use dataId from request context (set by ArNS middleware) or from route params
+    const id = req.dataId ?? req.params.id ?? req.params[0] ?? req.params[1];
+    const manifestPath = req.manifestPath ?? req.params['*'] ?? req.params[2];
 
     // TODO: remove regex match if possible
     // Ensure this is a valid id

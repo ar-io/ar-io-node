@@ -57,7 +57,11 @@ export const createArnsMiddleware = ({
 
       // Use apex ID as ArNS root data if it's set.
       if (config.APEX_TX_ID !== undefined) {
-        res.header(headerNames.arnsResolvedId, config.APEX_TX_ID);
+        req.dataId = config.APEX_TX_ID;
+        if (req.path) {
+          req.manifestPath = req.path.slice(1);
+        }
+        // Note: Not setting req.arns or headers for apex ID
         dataHandler(req, res, next);
         return;
       }
@@ -110,23 +114,61 @@ export const createArnsMiddleware = ({
     const resolution = await nameResolver.resolve({
       name: arnsSubdomain,
     });
-    let { resolvedId, ttl, processId, resolvedAt, limit, index } = resolution;
+    const { resolvedId, ttl, processId, resolvedAt, limit, index } = resolution;
     end();
     if (resolvedId !== undefined && resolution.statusCode !== 404) {
-      // Populate the ArNS name headers if resolution was successful
+      // Successful ArNS resolution
+      // Set request context
+      req.dataId = resolvedId;
+      if (req.path) {
+        req.manifestPath = req.path.slice(1);
+      }
+
+      // Parse ArNS name components
+      const parts = arnsSubdomain.split('_');
+      const basename = parts.pop() ?? ''; // last part is basename
+      const undername = parts.join('_'); // everything else is undername
+      const record = undername || '@';
+
+      // Set ArNS metadata on request
+      req.arns = {
+        name: arnsSubdomain,
+        basename,
+        record,
+        ttl,
+        processId,
+        resolvedAt,
+        limit,
+        index,
+      };
+
+      // Populate the ArNS response headers for client visibility
       res.header(headerNames.arnsName, arnsSubdomain);
-      if (arnsSubdomain) {
-        // FIXME: move this into the resolver
-        const parts = arnsSubdomain.split('_');
-        const basename = parts.pop(); // last part is basename
-        const undername = parts.join('_'); // everything else is undername
-        if (basename !== undefined && basename !== '') {
-          res.header(headerNames.arnsBasename, basename);
-        }
-        if (undername !== undefined && undername !== '') {
-          res.header(headerNames.arnsRecord, undername);
-        } else {
-          res.header(headerNames.arnsRecord, '@');
+      res.header(headerNames.arnsResolvedId, resolvedId);
+      if (basename !== '') {
+        res.header(headerNames.arnsBasename, basename);
+      }
+      res.header(headerNames.arnsRecord, record);
+      if (ttl !== undefined) {
+        res.header(headerNames.arnsTtlSeconds, ttl.toString());
+      }
+      if (processId !== undefined) {
+        res.header(headerNames.arnsProcessId, processId);
+      }
+      if (resolvedAt !== undefined) {
+        res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
+      }
+      if (limit !== undefined && index !== undefined) {
+        res.header(headerNames.arnsLimit, limit.toString());
+        res.header(headerNames.arnsIndex, index.toString());
+
+        // handle undername limit exceeded
+        if (config.ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT && index > limit) {
+          sendPaymentRequired(
+            res,
+            'ArNS undername limit exceeded. Purchase additional undernames to continue.',
+          );
+          return;
         }
       }
     } else {
@@ -156,49 +198,34 @@ export const createArnsMiddleware = ({
         sendNotFound(res);
         return;
       } else if (config.ARNS_NOT_FOUND_TX_ID !== undefined) {
-        resolvedId = config.ARNS_NOT_FOUND_TX_ID;
+        // Use custom 404 transaction ID
+        req.dataId = config.ARNS_NOT_FOUND_TX_ID;
+        if (req.path) {
+          req.manifestPath = req.path.slice(1);
+        }
       } else if (config.ARNS_NOT_FOUND_ARNS_NAME !== undefined) {
-        ({ resolvedId, ttl, processId, resolvedAt, limit, index } =
-          await nameResolver.resolve({
-            name: config.ARNS_NOT_FOUND_ARNS_NAME,
-          }));
+        // Resolve custom 404 ArNS name
+        const custom404Resolution = await nameResolver.resolve({
+          name: config.ARNS_NOT_FOUND_ARNS_NAME,
+        });
+        if (custom404Resolution.resolvedId !== undefined) {
+          req.dataId = custom404Resolution.resolvedId;
+          if (req.path) {
+            req.manifestPath = req.path.slice(1);
+          }
+        } else {
+          sendNotFound(res);
+          return;
+        }
       } else {
         sendNotFound(res);
         return;
       }
     }
 
-    if (resolvedId !== undefined) {
-      res.header(headerNames.arnsResolvedId, resolvedId);
-    }
-    if (ttl !== undefined) {
-      res.header(headerNames.arnsTtlSeconds, ttl.toString());
-    }
-    if (processId !== undefined) {
-      res.header(headerNames.arnsProcessId, processId);
-    }
-    if (resolvedAt !== undefined) {
-      res.header(headerNames.arnsResolvedAt, resolvedAt.toString());
-    }
-    // Limit and index can be undefined if they come from a cache that existed
-    // before they were added.
-    if (limit !== undefined && index !== undefined) {
-      res.header(headerNames.arnsLimit, limit.toString());
-      res.header(headerNames.arnsIndex, index.toString());
-
-      // handle undername limit exceeded
-      if (config.ARNS_RESOLVER_ENFORCE_UNDERNAME_LIMIT && index > limit) {
-        sendPaymentRequired(
-          res,
-          'ArNS undername limit exceeded. Purchase additional undernames to continue.',
-        );
-        return;
-      }
-    }
-
     // TODO: add a header for arns cache status
-    if (ttl !== undefined) {
-      res.header('Cache-Control', `public, max-age=${ttl}`);
+    if (req.arns?.ttl !== undefined) {
+      res.header('Cache-Control', `public, max-age=${req.arns.ttl}`);
     }
     dataHandler(req, res, next);
   });
