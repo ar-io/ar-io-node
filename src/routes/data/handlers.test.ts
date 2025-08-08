@@ -1667,12 +1667,12 @@ st
             }),
           );
 
-          // Mock res.getHeader to return ArNS resolved ID
+          // Mock req.dataId to simulate ArNS resolution
           app.get(
             '/:id',
             (req, res, next) => {
-              // Simulate ArNS resolution by setting the header
-              res.setHeader(headerNames.arnsResolvedId, arnsResolvedId);
+              // Simulate ArNS resolution by setting the dataId on request
+              req.dataId = arnsResolvedId;
               next();
             },
             createDataHandler({
@@ -1812,6 +1812,41 @@ st
           assert.equal(requestAttributes.hops, 0); // parseInt('invalid') || 0 = 0
           assert.equal(requestAttributes.origin, 'test-origin.ar.io');
           assert.equal(requestAttributes.originNodeRelease, undefined); // Not initialized since origin is from headers
+        });
+
+        it('should get ArNS attributes from req.arns when present', () => {
+          const mockReq = {
+            headers: {},
+            arns: {
+              name: 'test-name',
+              basename: 'test-basename',
+              record: 'test-record',
+            },
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes);
+
+          assert.equal(requestAttributes.arnsName, 'test-name');
+          assert.equal(requestAttributes.arnsBasename, 'test-basename');
+          assert.equal(requestAttributes.arnsRecord, 'test-record');
+        });
+
+        it('should return undefined ArNS attributes when req.arns is not present', () => {
+          const mockReq = {
+            headers: {},
+          } as any;
+          const mockRes = {
+            get: () => undefined,
+          } as any;
+
+          const requestAttributes = getRequestAttributes(mockReq, mockRes);
+
+          assert.equal(requestAttributes.arnsName, undefined);
+          assert.equal(requestAttributes.arnsBasename, undefined);
+          assert.equal(requestAttributes.arnsRecord, undefined);
         });
       });
     });
