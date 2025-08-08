@@ -6,45 +6,38 @@ section.
 
 ## Core Arweave Concepts
 
-<a id="block"></a>
-**Block** - The fundamental unit of the Arweave blockchain containing a set of
-transactions. Each block has a unique height (sequential number) and hash
-identifier.
+<a id="block"></a> **Block** - The fundamental unit of the Arweave blockchain
+containing a set of transactions. Each block has a unique height (sequential
+number) and hash identifier.
 
-<a id="chunk"></a>
-**Chunk** - A 256KiB segment of transaction data. Large transactions are split
-into chunks for efficient storage and retrieval using Merkle trees for
-verification. Transaction costs are proportional to the number of chunks
-required.
+<a id="chunk"></a> **Chunk** - A 256KiB segment of transaction data. Large
+transactions are split into chunks for efficient storage and retrieval using
+Merkle trees for verification. Transaction costs are proportional to the number
+of chunks required.
 
-<a id="data-root"></a>
-**Data Root** - The Merkle tree root hash of a transaction's data chunks. Used
-to cryptographically verify data integrity without downloading the entire
-transaction.
+<a id="data-root"></a> **Data Root** - The Merkle tree root hash of a
+transaction's data chunks. Used to cryptographically verify data integrity
+without downloading the entire transaction.
 
-<a id="item-id"></a>
-**Item ID** - A unifying term for both transaction IDs and data item IDs. Both
-are unique identifiers derived from cryptographic signatures that identify
-stored data on Arweave.
+<a id="item-id"></a> **Item ID** - A unifying term for both transaction IDs and
+data item IDs. Both are unique identifiers derived from cryptographic signatures
+that identify stored data on Arweave.
 
 **Stable/New Data** - Classification based on block confirmations. Stable data
 is from blocks unlikely to be reorganized (18+ blocks deep), while new data is
 from recent blocks that could still be affected by chain reorganizations.
 
-<a id="tags"></a>
-**Tags** - Key-value metadata pairs attached to transactions and data items.
-Tags are indexed and searchable, enabling content discovery and
+<a id="tags"></a> **Tags** - Key-value metadata pairs attached to transactions
+and data items. Tags are indexed and searchable, enabling content discovery and
 application-specific functionality. Includes both transaction tags and data item
 tags.
 
-<a id="transaction"></a>
-**Transaction** - A data storage unit on Arweave identified by a unique
-43-character base64url [item ID](#item-id). Contains data, tags, and
-cryptographic signatures proving ownership and integrity.
+<a id="transaction"></a> **Transaction** - A data storage unit on Arweave
+identified by a unique 43-character base64url [item ID](#item-id). Contains
+data, tags, and cryptographic signatures proving ownership and integrity.
 
-<a id="weave"></a>
-**Weave** - The concatenated sequence of all transaction data on Arweave,
-forming the complete blockchain dataset.
+<a id="weave"></a> **Weave** - The concatenated sequence of all transaction data
+on Arweave, forming the complete blockchain dataset.
 
 ## ANS-104 Bundle System
 
@@ -52,63 +45,56 @@ forming the complete blockchain dataset.
 single transaction. ANS-104 is the current standard supporting advanced features
 like nested bundles.
 
-<a id="bdi"></a>
-**BDI (Bundle Data Item)** - A [data item](#data-item) that itself is a
-[bundle](#bundle), enabling nested bundle structures within the ANS-104
-standard.
+<a id="bdi"></a> **BDI (Bundle Data Item)** - A [data item](#data-item) that
+itself is a [bundle](#bundle), enabling nested bundle structures within the
+ANS-104 standard.
 
-<a id="bundle"></a>
-**Bundle** - A collection of [data items](#data-item) packed into a single
-Arweave [transaction](#transaction). Bundles reduce costs and improve throughput
-by amortizing transaction overhead and making efficient use of chunk space.
+<a id="bundle"></a> **Bundle** - A collection of [data items](#data-item) packed
+into a single Arweave [transaction](#transaction). Bundles reduce costs and
+improve throughput by amortizing transaction overhead and making efficient use
+of chunk space.
 
 **Bundle Format** - The specific standard (ANS-102 or ANS-104) used to encode a
 bundle. The format determines how data items are structured and indexed within
 the bundle.
 
-<a id="data-item"></a>
-**Data Item** - An individual piece of data within a bundle. Each data item has
-its own ID, signature, tags, and data, similar to a transaction but more
-lightweight.
+<a id="data-item"></a> **Data Item** - An individual piece of data within a
+bundle. Each data item has its own ID, signature, tags, and data, similar to a
+transaction but more lightweight.
 
-<a id="data-item-id"></a>
-**Data Item ID** - A unique [item ID](#item-id) for a [data item](#data-item)
-within a bundle, calculated from the data item's signature.
+<a id="data-item-id"></a> **Data Item ID** - A unique [item ID](#item-id) for a
+[data item](#data-item) within a bundle, calculated from the data item's
+signature.
 
-<a id="nested-bundle"></a>
-**Nested Bundle** - A [bundle](#bundle) contained within another bundle.
-Identified by having a parent_id field pointing to the containing bundle.
+<a id="nested-bundle"></a> **Nested Bundle** - A [bundle](#bundle) contained
+within another bundle. Identified by having a parent_id field pointing to the
+containing bundle.
 
-<a id="parent-id"></a>
-**Parent ID** - The identifier of the containing [bundle](#bundle) or
-[transaction](#transaction) for a data item. For data items in nested bundles,
-points to the immediate parent bundle. For top-level data items, equals the
-[root transaction ID](#root-transaction-id).
+<a id="parent-id"></a> **Parent ID** - The identifier of the containing
+[bundle](#bundle) or [transaction](#transaction) for a data item. For data items
+in nested bundles, points to the immediate parent bundle. For top-level data
+items, equals the [root transaction ID](#root-transaction-id).
 
-<a id="root-transaction-id"></a>
-**Root Transaction ID** - The top-level Arweave [transaction](#transaction) ID
-containing a [bundle](#bundle) or data item. Used to retrieve the raw data from
-Arweave.
+<a id="root-transaction-id"></a> **Root Transaction ID** - The top-level Arweave
+[transaction](#transaction) ID containing a [bundle](#bundle) or data item. Used
+to retrieve the raw data from Arweave.
 
-<a id="unbundling"></a>
-**Unbundling** - The process of extracting and indexing individual
-[data items](#data-item) from a [bundle](#bundle) transaction.
+<a id="unbundling"></a> **Unbundling** - The process of extracting and indexing
+individual [data items](#data-item) from a [bundle](#bundle) transaction.
 
 ## AR.IO Gateway Concepts
 
 **ArNS (Arweave Name System)** - A decentralized naming system that maps
-human-readable names to Arweave transaction IDs, similar to DNS for the
+human-readable names to Arweave [item IDs](#item-id), similar to DNS for the
 permaweb.
 
-<a id="contiguous-data"></a>
-**Contiguous Data** - Complete data, potentially reassembled from multiple
-[chunks](#chunk), of a [transaction](#transaction) or [data item](#data-item).
-The gateway stores metadata about contiguous data availability and verification
-status.
+<a id="contiguous-data"></a> **Contiguous Data** - Complete data, potentially
+reassembled from multiple [chunks](#chunk), of a [transaction](#transaction) or
+[data item](#data-item). The gateway stores metadata about contiguous data
+availability and verification status.
 
-<a id="undername"></a>
-**Undername** - A subdomain-like path component in ArNS resolution (e.g., 'app'
-in 'app_myname' resolves to a path within the manifest).
+<a id="undername"></a> **Undername** - A subdomain-like path component in ArNS
+resolution (e.g., 'app' in 'app_myname' resolves to a path within the manifest).
 
 **Observer** - A gateway component that monitors and reports on the health and
 behavior of other gateways in the AR.IO network.
@@ -118,7 +104,7 @@ data verification, caching, and trust status.
 
 **X-ArNS Headers** - HTTP response headers added during ArNS name resolution
 that provide metadata about the resolution process, including the resolved
-transaction ID, TTL (Time To Live), process ID, and [undername](#undername)
+[item ID](#item-id), TTL (Time To Live), process ID, and [undername](#undername)
 information.
 
 ## Databases
@@ -154,10 +140,11 @@ Manages both data files and verification metadata.
 integrity. For transactions, this involves verifying that retrieved data matches
 its [data root](#data-root) hash and comparing it to the chain, confirming the
 transaction is part of Arweave. Once a transaction is verified, if it contains a
-[bundle](#bundle), this verification also confirms that all [data items](#data-item)
-within it are part of Arweave. For data items specifically, verification includes
-checking they are correctly positioned within their parent bundles, their
-signatures are valid, and their IDs (hashed signatures) are correct.
+[bundle](#bundle), this verification also confirms that all
+[data items](#data-item) within it are part of Arweave. For data items
+specifically, verification includes checking they are correctly positioned
+within their parent bundles, their signatures are valid, and their IDs (hashed
+signatures) are correct.
 
 **Verification Priority** - Numeric value determining the order of data
 verification. Higher priority items are verified first.
@@ -168,19 +155,20 @@ piece of data. Used with exponential backoff to manage retries.
 ## Resolution
 
 **Name Resolution** - The process of converting names or identifiers to
-transaction IDs. The primary type is ArNS resolution, which maps human-readable
-names (like "my-app") to their corresponding Arweave transaction IDs.
+[item IDs](#item-id). The primary type is ArNS resolution, which maps
+human-readable names (like "my-app") to their corresponding Arweave
+[item IDs](#item-id).
 
 **Path Resolution** - The process of interpreting URL paths to determine which
 transaction data to serve. Includes manifest resolution (looking up paths in a
 manifest's routing table), index path resolution (adding index.html), and
 fallback path handling for 404 errors.
 
-**Manifest** - A special JSON document that maps paths to transaction IDs,
+**Manifest** - A special JSON document that maps paths to [item IDs](#item-id),
 enabling directory-like navigation of Arweave data.
 
-**Sandbox** - A security mechanism that redirects transaction access to unique
-subdomains based on the transaction ID. Each transaction gets its own
+**Sandbox** - A security mechanism that redirects data access to unique
+subdomains based on the [item ID](#item-id). Each item gets its own
 base32-encoded subdomain, providing browser origin isolation between different
 applications and content.
 
