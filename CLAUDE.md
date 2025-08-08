@@ -4,6 +4,7 @@
 - When adding new concepts, features, or technical terms, update the glossary
 - Keep glossary definitions concise and focused on concepts rather than implementation details
 - Organize new terms into the appropriate existing sections
+- When modifying code, add or improve JSDoc comments where possible to enhance documentation
 
 ## Releases
 
