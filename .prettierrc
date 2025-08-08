@@ -9,7 +9,7 @@
   "importOrderSortSpecifiers": true,
   "overrides": [
     {
-      "files": "*.md",
+      "files": "**/*.md",
       "options": {
         "proseWrap": "always"
       }

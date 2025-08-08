@@ -10,13 +10,18 @@ section.
 transactions. Each block has a unique height (sequential number) and hash
 identifier.
 
-**Chunk** - A 256KB segment of transaction data. Large transactions are split
+**Chunk** - A 256KiB segment of transaction data. Large transactions are split
 into chunks for efficient storage and retrieval using Merkle trees for
-verification.
+verification. Transaction costs are proportional to the number of chunks
+required.
 
 **Data Root** - The Merkle tree root hash of a transaction's data chunks. Used
 to cryptographically verify data integrity without downloading the entire
 transaction.
+
+**Item ID** - A unifying term for both transaction IDs and data item IDs. Both
+are unique identifiers derived from cryptographic signatures that identify
+stored data on Arweave.
 
 **Stable/New Data** - Classification based on block confirmations. Stable data
 is from blocks unlikely to be reorganized (18+ blocks deep), while new data is
@@ -24,11 +29,15 @@ from recent blocks that could still be affected by chain reorganizations.
 
 **Tags** - Key-value metadata pairs attached to transactions and data items.
 Tags are indexed and searchable, enabling content discovery and
-application-specific functionality.
+application-specific functionality. Includes both transaction tags and data item
+tags.
 
 **Transaction** - A data storage unit on Arweave identified by a unique
-43-character base64url ID. Contains data, tags, and cryptographic signatures
-proving ownership and integrity.
+43-character base64url [item ID](#item-id). Contains data, tags, and
+cryptographic signatures proving ownership and integrity.
+
+**Weave** - The concatenated sequence of all transaction data on Arweave,
+forming the complete blockchain dataset.
 
 ## ANS-104 Bundle System
 
@@ -36,12 +45,13 @@ proving ownership and integrity.
 single transaction. ANS-104 is the current standard supporting advanced features
 like nested bundles.
 
-**BDI (Bundle Data Item)** - A data item that itself is a bundle, enabling
-nested bundle structures within the ANS-104 standard.
+**BDI (Bundle Data Item)** - A [data item](#data-item) that itself is a
+[bundle](#bundle), enabling nested bundle structures within the ANS-104
+standard.
 
-**Bundle** - A collection of data items packed into a single Arweave
-transaction. Bundles reduce costs and improve throughput by amortizing
-transaction overhead.
+**Bundle** - A collection of [data items](#data-item) packed into a single
+Arweave [transaction](#transaction). Bundles reduce costs and improve throughput
+by amortizing transaction overhead and making efficient use of chunk space.
 
 **Bundle Format** - The specific standard (ANS-102 or ANS-104) used to encode a
 bundle. The format determines how data items are structured and indexed within
@@ -51,21 +61,23 @@ the bundle.
 its own ID, signature, tags, and data, similar to a transaction but more
 lightweight.
 
-**Data Item ID** - A unique identifier for a data item within a bundle,
-calculated from the data item's signature.
+**Data Item ID** - A unique [item ID](#item-id) for a [data item](#data-item)
+within a bundle, calculated from the data item's signature.
 
-**Nested Bundle** - A bundle contained within another bundle. Identified by
-having a parent_id field pointing to the containing bundle.
+**Nested Bundle** - A [bundle](#bundle) contained within another bundle.
+Identified by having a parent_id field pointing to the containing bundle.
 
-**Parent ID** - The identifier of the containing bundle or transaction for a
-data item. For data items in nested bundles, points to the immediate parent
-bundle. For top-level data items, equals the root transaction ID.
+**Parent ID** - The identifier of the containing [bundle](#bundle) or
+[transaction](#transaction) for a data item. For data items in nested bundles,
+points to the immediate parent bundle. For top-level data items, equals the
+[root transaction ID](#root-transaction-id).
 
-**Root Transaction ID** - The top-level Arweave transaction ID containing a
-bundle or data item. Used to retrieve the raw data from Arweave.
+**Root Transaction ID** - The top-level Arweave [transaction](#transaction) ID
+containing a [bundle](#bundle) or data item. Used to retrieve the raw data from
+Arweave.
 
-**Unbundling** - The process of extracting and indexing individual data items
-from a bundle transaction.
+**Unbundling** - The process of extracting and indexing individual
+[data items](#data-item) from a [bundle](#bundle) transaction.
 
 ## AR.IO Gateway Concepts
 
@@ -73,12 +85,13 @@ from a bundle transaction.
 human-readable names to Arweave transaction IDs, similar to DNS for the
 permaweb.
 
-**Contiguous Data** - Complete, reassembled data from all chunks of a
-transaction. The gateway stores metadata about contiguous data availability and
-verification status.
+**Contiguous Data** - Complete data, potentially reassembled from multiple
+[chunks](#chunk), of a [transaction](#transaction) or [data item](#data-item).
+The gateway stores metadata about contiguous data availability and verification
+status.
 
-**Data Verification** - The process of cryptographically verifying that
-retrieved data matches its data root hash, ensuring data integrity.
+**Undername** - A subdomain-like path component in ArNS resolution (e.g., 'app'
+in 'app_myname' resolves to a path within the manifest).
 
 **Observer** - A gateway component that monitors and reports on the health and
 behavior of other gateways in the AR.IO network.
@@ -88,16 +101,18 @@ data verification, caching, and trust status.
 
 **X-ArNS Headers** - HTTP response headers added during ArNS name resolution
 that provide metadata about the resolution process, including the resolved
-transaction ID, TTL, process ID, and undername information.
+transaction ID, TTL (Time To Live), process ID, and [undername](#undername)
+information.
 
 ## Databases
 
-**Bundles Database** - SQLite database storing ANS-104 bundle metadata, data
-items, and their relationships. Includes retry tracking for bundle processing.
+**Bundles Database** - SQLite database storing ANS-104 bundle metadata,
+[data items](#data-item), and their relationships. Includes retry tracking for
+bundle processing.
 
-**Core Database** - Primary SQLite database containing blocks, transactions,
-transaction tags, stable/new data indexes, and the migrations table that tracks
-applied database schema changes.
+**Core Database** - Primary SQLite database containing blocks,
+[transactions](#transaction), transaction [tags](#tags), stable/new data
+indexes, and the migrations table that tracks applied database schema changes.
 
 **Data Database** - SQLite database tracking contiguous data availability,
 verification status, and retry attempts.
@@ -115,6 +130,17 @@ implementations including filesystem and S3.
 
 **Contiguous Data Store** - Storage backend for complete transaction data.
 Manages both data files and verification metadata.
+
+## Data Verification
+
+**Data Verification** - The process of cryptographically verifying data
+integrity. For transactions, this involves verifying that retrieved data matches
+its [data root](#data-root) hash and comparing it to the chain, confirming the
+transaction is part of Arweave. Once a transaction is verified, if it contains a
+[bundle](#bundle), this verification also confirms that all [data items](#data-item)
+within it are part of Arweave. For data items specifically, verification includes
+checking they are correctly positioned within their parent bundles, their
+signatures are valid, and their IDs (hashed signatures) are correct.
 
 **Verification Priority** - Numeric value determining the order of data
 verification. Higher priority items are verified first.
@@ -188,40 +214,44 @@ trigger webhook notifications.
 ## Offsets
 
 Offsets are numeric positions that indicate where data is located within the
-Arweave weave, transactions, or bundles. AR.IO Node uses multiple offset types
-to efficiently locate and retrieve data.
+Arweave [weave](#weave), [transactions](#transaction), or [bundles](#bundle).
+AR.IO Node uses multiple offset types to efficiently locate and retrieve data.
 
-**Absolute Offset** - The global byte position within the entire Arweave weave.
-Used to retrieve chunks from Arweave nodes using the `/chunk/{offset}` endpoint.
+**Absolute Offset** - The global byte position within the entire Arweave
+[weave](#weave). Used to retrieve chunks from Arweave nodes using the
+`/chunk/{offset}` endpoint.
 
-**Transaction Offset** - The end position (last byte) of a transaction in the
-weave. Combined with transaction size to calculate start position.
+**Transaction Offset** - The end position (last byte) of a
+[transaction](#transaction) in the [weave](#weave). Combined with transaction
+size to calculate start position.
 
 **Relative Offset** - Position relative to the start of a transaction. Used
 primarily for chunk positions in Merkle proofs and data paths. While other
 offsets may be relative to bundles or data items, the term "relative offset"
 typically refers specifically to transaction-relative positions.
 
-**Data Offset** - The starting position of actual data content (payload) within
-a data item, relative to the parent bundle's start. Calculated by adding the
-data item's offset to the size of its headers and metadata.
+**Data Offset** - For [data items](#data-item), the starting position of actual
+data content (payload) within a data item, relative to the parent bundle's
+start. Calculated by adding the data item's offset to the size of its headers
+and metadata.
 
-**Root Parent Offset** - The offset of the parent bundle's data payload relative
-to the root transaction. For top-level bundles, this is 0. For nested bundles,
-calculated by adding the parent's root_parent_offset to its data_offset. Used to
-locate data items within the root transaction without traversing the bundle
-hierarchy.
+**Root Parent Offset** - The offset of the parent [bundle's](#bundle) data
+payload relative to the root [transaction](#transaction). For top-level bundles,
+this is 0. For nested bundles, calculated by adding the parent's
+root_parent_offset to its data_offset. Used to locate [data items](#data-item)
+within the root transaction without traversing the bundle hierarchy.
 
-**Signature Offset** - Position where the signature bytes begin, relative to the
-parent bundle's start. Located 2 bytes after the data item's start position (after
-the signature type field).
+**Signature Offset** - For [data items](#data-item), position where the
+signature bytes begin, relative to the parent bundle's start. Located 2 bytes
+after the data item's start position (after the signature type field).
 
-**Owner Offset** - Position where the owner public key begins, relative to the
-parent bundle's start. Located immediately after the signature bytes.
+**Owner Offset** - For [data items](#data-item), position where the owner public
+key begins, relative to the parent bundle's start. Located immediately after the
+signature bytes.
 
-**Data Item Offset** - The position of a data item within its parent bundle,
-relative to the bundle's start. Used to locate specific items within bundled
-data.
+**Data Item Offset** - The position of a [data item](#data-item) within its
+parent [bundle](#bundle), relative to the bundle's start. Used to locate
+specific items within bundled data.
 
 ## Network Participation
 
@@ -253,6 +283,9 @@ preserved from the original upload.
 
 **Signature Type** - The cryptographic algorithm used to sign a transaction or
 data item (e.g., RSA, ED25519, Ethereum, Solana).
+
+**TTL (Time To Live)** - The duration for which an ArNS name resolution is
+cached before requiring refresh.
 
 **Webhook** - HTTP callback triggered when indexed data matches a configured
 filter, enabling real-time integrations.
