@@ -6,19 +6,23 @@ section.
 
 ## Core Arweave Concepts
 
+<a id="block"></a>
 **Block** - The fundamental unit of the Arweave blockchain containing a set of
 transactions. Each block has a unique height (sequential number) and hash
 identifier.
 
+<a id="chunk"></a>
 **Chunk** - A 256KiB segment of transaction data. Large transactions are split
 into chunks for efficient storage and retrieval using Merkle trees for
 verification. Transaction costs are proportional to the number of chunks
 required.
 
+<a id="data-root"></a>
 **Data Root** - The Merkle tree root hash of a transaction's data chunks. Used
 to cryptographically verify data integrity without downloading the entire
 transaction.
 
+<a id="item-id"></a>
 **Item ID** - A unifying term for both transaction IDs and data item IDs. Both
 are unique identifiers derived from cryptographic signatures that identify
 stored data on Arweave.
@@ -27,15 +31,18 @@ stored data on Arweave.
 is from blocks unlikely to be reorganized (18+ blocks deep), while new data is
 from recent blocks that could still be affected by chain reorganizations.
 
+<a id="tags"></a>
 **Tags** - Key-value metadata pairs attached to transactions and data items.
 Tags are indexed and searchable, enabling content discovery and
 application-specific functionality. Includes both transaction tags and data item
 tags.
 
+<a id="transaction"></a>
 **Transaction** - A data storage unit on Arweave identified by a unique
 43-character base64url [item ID](#item-id). Contains data, tags, and
 cryptographic signatures proving ownership and integrity.
 
+<a id="weave"></a>
 **Weave** - The concatenated sequence of all transaction data on Arweave,
 forming the complete blockchain dataset.
 
@@ -45,10 +52,12 @@ forming the complete blockchain dataset.
 single transaction. ANS-104 is the current standard supporting advanced features
 like nested bundles.
 
+<a id="bdi"></a>
 **BDI (Bundle Data Item)** - A [data item](#data-item) that itself is a
 [bundle](#bundle), enabling nested bundle structures within the ANS-104
 standard.
 
+<a id="bundle"></a>
 **Bundle** - A collection of [data items](#data-item) packed into a single
 Arweave [transaction](#transaction). Bundles reduce costs and improve throughput
 by amortizing transaction overhead and making efficient use of chunk space.
@@ -57,25 +66,31 @@ by amortizing transaction overhead and making efficient use of chunk space.
 bundle. The format determines how data items are structured and indexed within
 the bundle.
 
+<a id="data-item"></a>
 **Data Item** - An individual piece of data within a bundle. Each data item has
 its own ID, signature, tags, and data, similar to a transaction but more
 lightweight.
 
+<a id="data-item-id"></a>
 **Data Item ID** - A unique [item ID](#item-id) for a [data item](#data-item)
 within a bundle, calculated from the data item's signature.
 
+<a id="nested-bundle"></a>
 **Nested Bundle** - A [bundle](#bundle) contained within another bundle.
 Identified by having a parent_id field pointing to the containing bundle.
 
+<a id="parent-id"></a>
 **Parent ID** - The identifier of the containing [bundle](#bundle) or
 [transaction](#transaction) for a data item. For data items in nested bundles,
 points to the immediate parent bundle. For top-level data items, equals the
 [root transaction ID](#root-transaction-id).
 
+<a id="root-transaction-id"></a>
 **Root Transaction ID** - The top-level Arweave [transaction](#transaction) ID
 containing a [bundle](#bundle) or data item. Used to retrieve the raw data from
 Arweave.
 
+<a id="unbundling"></a>
 **Unbundling** - The process of extracting and indexing individual
 [data items](#data-item) from a [bundle](#bundle) transaction.
 
@@ -85,11 +100,13 @@ Arweave.
 human-readable names to Arweave transaction IDs, similar to DNS for the
 permaweb.
 
+<a id="contiguous-data"></a>
 **Contiguous Data** - Complete data, potentially reassembled from multiple
 [chunks](#chunk), of a [transaction](#transaction) or [data item](#data-item).
 The gateway stores metadata about contiguous data availability and verification
 status.
 
+<a id="undername"></a>
 **Undername** - A subdomain-like path component in ArNS resolution (e.g., 'app'
 in 'app_myname' resolves to a path within the manifest).
 
