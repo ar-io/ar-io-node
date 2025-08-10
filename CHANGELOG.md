@@ -4,7 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 45] - 2025-08-11
+
+This is an optional release that enhances chunk broadcasting with improved preferred 
+peer management, adds a hash-based partitioning filter for distributed data processing, 
+fixes ArNS basename cache refresh issues, and includes comprehensive documentation 
+improvements with a new glossary of AR.IO Node terminology.
+
+### Added
+
+- Added hash partitioning filter (`MatchHashPartition`) for distributing
+  transaction and data item processing across multiple nodes with configurable
+  partition ranges.
+- Added comprehensive glossary documentation covering AR.IO Node terminology,
+  concepts, and architectural components.
+
+### Changed
+
+- Improved chunk broadcasting preferred peer management with doubled default
+  per-node queue depth threshold and ensured preferred peers are always
+  prioritized first.
+- Enhanced circuit breaker metrics with more detailed labels for better
+  monitoring of data source failures.
+- Improved ArNS resolution to properly propagate 404 errors from trusted
+  gateway resolution (a more complete fix is coming in the next release).
+- Expanded OTEL tracing to include ArNS cache operations for improved
+  observability of name resolution and cache hydration.
+
+### Fixed
+
+- Fixed unreliable ArNS basename cache refreshes by adding retry logic for
+  pagination failures and replacing p-debounce with timestamp-based debouncing
+  for more predictable behavior.
+- Fixed undefined headers handling in data requests.
+- Fixed invalid cache hits by ensuring base64url encoded IDs are properly
+  validated before use.
+- Fixed routes data handling for undefined IDs in validity checks.
 
 ## [Release 44] - 2025-07-28
 
