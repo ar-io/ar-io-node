@@ -40,19 +40,40 @@ export class CompositeChunkMetadataSource implements ChunkMetadataByAnySource {
     }
 
     const errors: Error[] = [];
+    const limit = pLimit(this.parallelism);
+    let successResult: ChunkMetadata | undefined;
 
-    if (this.parallelism === 1) {
-      // Sequential execution
-      for (const source of this.sources) {
+    // Create all promises at once, controlled by pLimit
+    const promises = this.sources.map((source) =>
+      limit(async () => {
+        // Check if we already have a success before starting
+        if (successResult) {
+          return null;
+        }
+
         try {
           const result = await source.getChunkMetadataByAny(params);
+
+          // Check again after async operation
+          if (successResult !== undefined) {
+            return null;
+          }
+
           this.log.debug('Successfully fetched chunk metadata from source', {
             source: source.constructor.name,
             dataRoot: params.dataRoot,
             relativeOffset: params.relativeOffset,
           });
+
+          // Store success result
+          successResult = result;
           return result;
         } catch (error: any) {
+          // Check again if we got a success while this was running
+          if (successResult) {
+            return null;
+          }
+
           this.log.debug('Failed to fetch chunk metadata from source', {
             source: source.constructor.name,
             error: error.message,
@@ -60,64 +81,17 @@ export class CompositeChunkMetadataSource implements ChunkMetadataByAnySource {
             relativeOffset: params.relativeOffset,
           });
           errors.push(error);
+          return null;
         }
-      }
-    } else {
-      // Parallel execution with early termination
-      let sourceIndex = 0;
-      const limit = pLimit(this.parallelism);
+      }),
+    );
 
-      while (sourceIndex < this.sources.length) {
-        // Create a batch of promises up to the parallelism limit
-        const batchPromises: Promise<ChunkMetadata | null>[] = [];
-        const batchSources: ChunkMetadataByAnySource[] = [];
+    // Wait for all promises to complete
+    await Promise.all(promises);
 
-        for (
-          let i = 0;
-          i < this.parallelism && sourceIndex < this.sources.length;
-          i++
-        ) {
-          const source = this.sources[sourceIndex];
-          batchSources.push(source);
-          sourceIndex++;
-
-          batchPromises.push(
-            limit(async () => {
-              try {
-                const result = await source.getChunkMetadataByAny(params);
-                this.log.debug(
-                  'Successfully fetched chunk metadata from source',
-                  {
-                    source: source.constructor.name,
-                    dataRoot: params.dataRoot,
-                    relativeOffset: params.relativeOffset,
-                  },
-                );
-                return result;
-              } catch (error: any) {
-                this.log.debug('Failed to fetch chunk metadata from source', {
-                  source: source.constructor.name,
-                  error: error.message,
-                  dataRoot: params.dataRoot,
-                  relativeOffset: params.relativeOffset,
-                });
-                errors.push(error);
-                return null;
-              }
-            }),
-          );
-        }
-
-        // Use Promise.race to get the first successful result
-        const results = await Promise.all(batchPromises);
-        for (const result of results) {
-          if (result !== null) {
-            // Cancel any remaining tasks
-            limit.clearQueue();
-            return result;
-          }
-        }
-      }
+    // Return success if we got one
+    if (successResult) {
+      return successResult;
     }
 
     // All sources failed
