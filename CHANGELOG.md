@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
 ## [Release 45] - 2025-08-11
 
 This is an optional release that enhances chunk broadcasting with improved preferred 
