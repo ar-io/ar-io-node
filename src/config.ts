@@ -260,22 +260,17 @@ export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
   'node',
 );
 
-// By default it looks for chunk from the filesystem's dataDir
-// but it can be configured to use an s3 bucket that assumes a
-// specific kind of layout of /{dataRoot}/{relativeOffset}
-export const CHUNK_DATA_SOURCE_TYPE = env.varOrDefault(
-  'CHUNK_DATA_SOURCE_TYPE',
-  'fs',
-) as 'fs' | 'legacy-s3';
+// Chunk data retrieval priority order (comma-separated list of sources)
+// Available sources: 'arweave-network', 'legacy-s3'
+export const CHUNK_DATA_RETRIEVAL_ORDER = env
+  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'arweave-network')
+  .split(',');
 
-// By default is uses FsChunkMetadataStore marked here as 'fs'
-// but it can be configured to use a "legacy" PostgreSQL database
-// that has a specific table "chunks" with specific columns. This
-// is designed for legacy arweave gateway support.
-export const CHUNK_METADATA_SOURCE_TYPE = env.varOrDefault(
-  'CHUNK_METADATA_SOURCE_TYPE',
-  'fs',
-) as 'fs' | 'legacy-psql';
+// Chunk metadata retrieval priority order (comma-separated list of sources)
+// Available sources: 'arweave-network', 'legacy-psql'
+export const CHUNK_METADATA_RETRIEVAL_ORDER = env
+  .varOrDefault('CHUNK_METADATA_RETRIEVAL_ORDER', 'arweave-network')
+  .split(',');
 
 // Parallelism configuration for composite chunk sources
 export const CHUNK_DATA_SOURCE_PARALLELISM = +env.varOrDefault(

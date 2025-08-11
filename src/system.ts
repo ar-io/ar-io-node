@@ -13,13 +13,8 @@ import postgres from 'postgres';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
-import { FsChunkMetadataStore } from './store/fs-chunk-metadata-store.js';
-import { LegacyPostgresChunkMetadataSource } from './data/legacy-psql-chunk-metadata-cache.js';
-import { ReadThroughChunkDataCache } from './data/read-through-chunk-data-cache.js';
-import { ReadThroughChunkMetadataCache } from './data/read-through-chunk-metadata-cache.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
-import { S3ChunkSource } from './data/s3-chunk-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
@@ -41,7 +36,6 @@ import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
 import * as metrics from './metrics.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
-import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
 import { FsDataStore } from './store/fs-data-store.js';
 import {
   DataBlockListValidator,
@@ -71,6 +65,10 @@ import { TransactionOffsetImporter } from './workers/transaction-offset-importer
 import { TransactionOffsetRepairWorker } from './workers/transaction-offset-repair-worker.js';
 import { WebhookEmitter } from './workers/webhook-emitter.js';
 import { createArNSKvStore, createArNSResolver } from './init/resolvers.js';
+import {
+  createChunkDataSource,
+  createChunkMetadataSource,
+} from './init/chunk-sources.js';
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
@@ -86,8 +84,6 @@ import { awsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { FullChunkSource } from './data/full-chunk-source.js';
-import { CompositeChunkDataSource } from './data/composite-chunk-data-source.js';
-import { CompositeChunkMetadataSource } from './data/composite-chunk-metadata-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 
@@ -172,7 +168,7 @@ export type PostgreSQL = postgres.Sql;
 
 export let legacyPsql: PostgreSQL | undefined = undefined;
 
-if (config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql') {
+if (config.CHUNK_METADATA_RETRIEVAL_ORDER.includes('legacy-psql')) {
   if (config.LEGACY_PSQL_CONNECTION_STRING !== undefined) {
     legacyPsql = postgres(config.LEGACY_PSQL_CONNECTION_STRING, {
       ...(config.LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED && {
@@ -384,79 +380,22 @@ export const bundleRepairWorker = new BundleRepairWorker({
   shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
   filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
-const txChunkMetaDataStore = new FsChunkMetadataStore({
+// Configure chunk sources using comma-separated retrieval orders
+export const chunkMetaDataSource = createChunkMetadataSource({
   log,
-  baseDir: 'data/chunks/metadata',
+  arweaveClient,
+  legacyPsql,
+  chunkMetadataRetrievalOrder: config.CHUNK_METADATA_RETRIEVAL_ORDER,
+  chunkMetadataSourceParallelism: config.CHUNK_METADATA_SOURCE_PARALLELISM,
 });
 
-// Configure chunk metadata source
-const baseChunkMetadataSource =
-  config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql'
-    ? new LegacyPostgresChunkMetadataSource({
-        log,
-        legacyPsql: legacyPsql!,
-      })
-    : arweaveClient;
-
-// Wrap in composite source if parallelism > 1 or for future multi-source support
-export const chunkMetaDataSource =
-  config.CHUNK_METADATA_SOURCE_PARALLELISM > 1
-    ? new CompositeChunkMetadataSource({
-        log,
-        sources: [baseChunkMetadataSource],
-        parallelism: config.CHUNK_METADATA_SOURCE_PARALLELISM,
-      })
-    : config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql'
-      ? baseChunkMetadataSource
-      : new ReadThroughChunkMetadataCache({
-          log,
-          chunkMetadataSource: baseChunkMetadataSource,
-          chunkMetadataStore: txChunkMetaDataStore,
-        });
-
-if (
-  config.CHUNK_METADATA_SOURCE_TYPE === 'legacy-psql' &&
-  config.LEGACY_AWS_S3_CHUNK_DATA_BUCKET === undefined
-) {
-  throw new Error(
-    'LEGACY_AWS_S3_CHUNK_DATA_BUCKET is required for legacy-psql chunk metadata source',
-  );
-}
-
-if (config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3' && awsClient === undefined) {
-  throw new Error(
-    'AWS Credentials are required for legacy-s3 chunk data source',
-  );
-}
-
-// Configure chunk data source
-const baseChunkDataSource =
-  config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3'
-    ? new S3ChunkSource({
-        log,
-        s3Client: awsClient!.S3,
-        s3Bucket: config.LEGACY_AWS_S3_CHUNK_DATA_BUCKET!,
-        ...(config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX !== undefined && {
-          s3Prefix: config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX,
-        }),
-      })
-    : arweaveClient;
-
-// Wrap in composite source if parallelism > 1 or for future multi-source support
-const chunkDataSource =
-  config.CHUNK_DATA_SOURCE_PARALLELISM > 1
-    ? new CompositeChunkDataSource({
-        log,
-        sources: [baseChunkDataSource],
-        parallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
-      })
-    : config.CHUNK_DATA_SOURCE_TYPE === 'legacy-s3'
-      ? baseChunkDataSource
-      : new ReadThroughChunkDataCache({
-          log,
-          chunkSource: baseChunkDataSource,
-          chunkDataStore: new FsChunkDataStore({ log, baseDir: 'data/chunks' }),
-        });
+const chunkDataSource = createChunkDataSource({
+  log,
+  arweaveClient,
+  awsS3Client: awsClient?.S3,
+  chunkDataRetrievalOrder: config.CHUNK_DATA_RETRIEVAL_ORDER,
+  chunkDataSourceParallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
+});
 
 export const chunkSource = new FullChunkSource(
   chunkMetaDataSource,
