@@ -9,7 +9,7 @@ import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
 import { headerNames } from '../constants.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
-import { ArIODataSource } from './ar-io-data-source.js';
+import { ArIOPeerManager } from './ar-io-peer-manager.js';
 import { shuffleArray } from '../lib/random.js';
 import {
   WeightedElement,
@@ -33,7 +33,7 @@ export class ArIOChunkSource
   implements ChunkDataByAnySource, ChunkMetadataByAnySource
 {
   private log: winston.Logger;
-  private arIODataSource: ArIODataSource;
+  private peerManager: ArIOPeerManager;
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
 
   // Independent peer weights for chunk retrieval performance
@@ -48,13 +48,13 @@ export class ArIOChunkSource
 
   constructor({
     log,
-    arIODataSource,
+    peerManager,
   }: {
     log: winston.Logger;
-    arIODataSource: ArIODataSource;
+    peerManager: ArIOPeerManager;
   }) {
     this.log = log.child({ class: this.constructor.name });
-    this.arIODataSource = arIODataSource;
+    this.peerManager = peerManager;
 
     // Initialize random weighted choice function for chunk peers
     this.getRandomWeightedChunkPeers = (
@@ -94,8 +94,8 @@ export class ArIOChunkSource
   }
 
   private updateChunkPeerWeights(): void {
-    const peers = this.arIODataSource.peers;
-    this.chunkWeightedPeers = Object.values(peers).map((id) => {
+    const peers = this.peerManager.getPeerUrls();
+    this.chunkWeightedPeers = peers.map((id) => {
       const previousWeight =
         this.chunkWeightedPeers.find((peer) => peer.id === id)?.weight ??
         undefined;
@@ -240,7 +240,7 @@ export class ArIOChunkSource
       log.debug('Selected peers for chunk retrieval attempt', {
         attempt: attempt + 1,
         peers: selectedPeers,
-        totalPeers: Object.keys(this.arIODataSource.peers).length,
+        totalPeers: this.peerManager.getPeerUrls().length,
       });
 
       // Try each selected peer

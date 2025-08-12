@@ -10,8 +10,8 @@ import {
   WeightedElement,
   randomWeightedChoices,
 } from '../lib/random-weighted-choices.js';
-import { AoARIORead } from '@ar.io/sdk';
 import memoize from 'memoizee';
+import { ArIOPeerManager } from './ar-io-peer-manager.js';
 
 import {
   ContiguousData,
@@ -30,10 +30,8 @@ import { headerNames } from '../constants.js';
 
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
-import CircuitBreaker from 'opossum';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
-const DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS = 3_600_000; // 1 hour
 const DEFAULT_MAX_HOPS_ALLOWED = 3;
 
 export type PeerWeight = {
@@ -45,16 +43,13 @@ export class ArIODataSource
   implements ContiguousDataSource, WithPeers<PeerWeight>
 {
   private log: winston.Logger;
-  private nodeWallet: string | undefined;
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
-  private updatePeersRefreshIntervalMs: number;
   private previousGatewayPeerTtfbDurations: number[];
   private previousGatewayPeerKbpsDownloadRate: number[];
 
-  private networkProcess: AoARIORead;
+  private peerManager: ArIOPeerManager;
   peers: Record<string, string> = {};
-  private intervalId?: NodeJS.Timeout;
 
   private getRandomWeightedPeers: (
     table: WeightedElement<string>[],
@@ -63,58 +58,24 @@ export class ArIODataSource
 
   protected weightedPeers: WeightedElement<string>[] = [];
 
-  // circuit breaker for getGateways
-  private arioGatewaysCircuitBreaker: CircuitBreaker<
-    Parameters<AoARIORead['getGateways']>,
-    Awaited<ReturnType<AoARIORead['getGateways']>>
-  >;
-
   constructor({
     log,
-    networkProcess,
-    nodeWallet,
+    peerManager,
     maxHopsAllowed = DEFAULT_MAX_HOPS_ALLOWED,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
-    updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
-    circuitBreakerOptions = {
-      timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
-      errorThresholdPercentage:
-        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
-      rollingCountTimeout:
-        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS,
-      resetTimeout:
-        config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS,
-    },
   }: {
     log: winston.Logger;
-    networkProcess: AoARIORead;
-    nodeWallet?: string;
+    peerManager: ArIOPeerManager;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
-    updatePeersRefreshIntervalMs?: number;
-    circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
-    this.nodeWallet = nodeWallet;
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
-    this.updatePeersRefreshIntervalMs = updatePeersRefreshIntervalMs;
     this.previousGatewayPeerTtfbDurations = [];
     this.previousGatewayPeerKbpsDownloadRate = [];
-    this.networkProcess = networkProcess;
-    this.arioGatewaysCircuitBreaker = new CircuitBreaker(
-      this.networkProcess.getGateways.bind(this.networkProcess),
-      {
-        ...circuitBreakerOptions,
-        capacity: 1, // only allow one request at a time
-        name: 'getGateways',
-      },
-    );
-    this.updatePeerList();
-    this.intervalId = setInterval(
-      this.updatePeerList.bind(this),
-      this.updatePeersRefreshIntervalMs,
-    );
+    this.peerManager = peerManager;
+    this.updateWeightedPeers();
 
     this.getRandomWeightedPeers = memoize(
       (table: WeightedElement<string>[], peerCount: number) =>
@@ -126,19 +87,10 @@ export class ArIODataSource
         maxAge: config.GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS,
       },
     );
-    // TODO: Remove deprecated circuit breaker metrics setup
-    metrics.circuitBreakerMetrics.add(this.arioGatewaysCircuitBreaker);
-    metrics.setUpCircuitBreakerListenerMetrics(
-      'ar-io-data-source',
-      this.arioGatewaysCircuitBreaker,
-      this.log,
-    );
   }
 
   stopUpdatingPeers() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-    }
+    // Peer updates are now managed by the peer manager
   }
 
   getPeers(): Record<string, PeerWeight> {
@@ -158,50 +110,9 @@ export class ArIODataSource
     return peers;
   }
 
-  async updatePeerList() {
-    const log = this.log.child({ method: 'updatePeerList' });
-    log.info('Fetching AR.IO network peer list');
-
-    const peers: Record<string, string> = {};
-    let cursor: string | undefined;
-    do {
-      try {
-        // depending on how often this is called, we may want to add a circuit breaker
-        const { nextCursor, items } =
-          await this.arioGatewaysCircuitBreaker.fire({
-            cursor,
-            limit: 1000,
-          });
-
-        for (const gateway of items) {
-          // skip our own node wallet
-          if (
-            this.nodeWallet !== undefined &&
-            this.nodeWallet === gateway.gatewayAddress
-          ) {
-            continue;
-          }
-
-          peers[gateway.gatewayAddress] =
-            `${gateway.settings.protocol}://${gateway.settings.fqdn}`;
-        }
-        cursor = nextCursor;
-      } catch (error: any) {
-        log.error(
-          'Failed to fetch gateways from ARIO Returning current peer list.',
-          {
-            message: error.message,
-            stack: error.stack,
-          },
-        );
-        break;
-      }
-    } while (cursor !== undefined);
-    log.info('Successfully fetched AR.IO network peer list', {
-      count: Object.keys(peers).length,
-    });
-    this.peers = peers;
-    this.weightedPeers = Object.values(peers).map((id) => {
+  private updateWeightedPeers() {
+    this.peers = this.peerManager.getPeers();
+    this.weightedPeers = Object.values(this.peers).map((id) => {
       const previousWeight =
         this.weightedPeers.find((peer) => peer.id === id)?.weight ?? undefined;
       return {
@@ -215,6 +126,9 @@ export class ArIODataSource
   selectPeers(peerCount: number): string[] {
     const log = this.log.child({ method: 'selectPeers' });
 
+    // Refresh weighted peers from peer manager
+    this.updateWeightedPeers();
+
     if (this.weightedPeers.length === 0) {
       log.warn('No weighted peers available');
       throw new Error('No weighted peers available');
@@ -226,6 +140,9 @@ export class ArIODataSource
   }
 
   handlePeerSuccess(peer: string, kbps: number, ttfb: number): void {
+    // Refresh weighted peers from peer manager
+    this.updateWeightedPeers();
+
     metrics.getDataStreamSuccessesTotal.inc({
       class: this.constructor.name,
       source: peer,
@@ -282,6 +199,9 @@ export class ArIODataSource
   }
 
   handlePeerFailure(peer: string): void {
+    // Refresh weighted peers from peer manager
+    this.updateWeightedPeers();
+
     metrics.getDataStreamErrorsTotal.inc({
       class: this.constructor.name,
       source: peer,

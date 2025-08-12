@@ -73,6 +73,7 @@ import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
+import { ArIOPeerManager } from './data/ar-io-peer-manager.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
@@ -387,15 +388,20 @@ const gatewaysDataSource = new GatewaysDataSource({
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
 });
 
-export const arIODataSource = new ArIODataSource({
+export const arIOPeerManager = new ArIOPeerManager({
   log,
   networkProcess,
   nodeWallet: config.AR_IO_WALLET,
 });
 
+export const arIODataSource = new ArIODataSource({
+  log,
+  peerManager: arIOPeerManager,
+});
+
 export const arIOChunkSource = new ArIOChunkSource({
   log,
-  arIODataSource,
+  peerManager: arIOPeerManager,
 });
 
 // Configure chunk sources using comma-separated retrieval orders
@@ -929,7 +935,7 @@ export const shutdown = async (exitCode = 0) => {
     server.close(async () => {
       log.debug('Web server stopped successfully');
       eventEmitter.removeAllListeners();
-      arIODataSource.stopUpdatingPeers();
+      arIOPeerManager.stopUpdatingPeers();
       dataSqliteWalCleanupWorker?.stop();
       parquetExporter?.stop();
       await arnsResolutionCache.close();
