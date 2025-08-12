@@ -72,6 +72,7 @@ import {
 import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
+import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
@@ -380,11 +381,29 @@ export const bundleRepairWorker = new BundleRepairWorker({
   shouldBackfillBundles: config.BACKFILL_BUNDLE_RECORDS,
   filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
+
+const gatewaysDataSource = new GatewaysDataSource({
+  log,
+  trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+});
+
+export const arIODataSource = new ArIODataSource({
+  log,
+  networkProcess,
+  nodeWallet: config.AR_IO_WALLET,
+});
+
+export const arIOChunkSource = new ArIOChunkSource({
+  log,
+  arIODataSource,
+});
+
 // Configure chunk sources using comma-separated retrieval orders
 export const chunkMetaDataSource = createChunkMetadataSource({
   log,
   arweaveClient,
   legacyPsql,
+  arIOChunkSource,
   chunkMetadataRetrievalOrder: config.CHUNK_METADATA_RETRIEVAL_ORDER,
   chunkMetadataSourceParallelism: config.CHUNK_METADATA_SOURCE_PARALLELISM,
 });
@@ -393,6 +412,7 @@ const chunkDataSource = createChunkDataSource({
   log,
   arweaveClient,
   awsS3Client: awsClient?.S3,
+  arIOChunkSource,
   chunkDataRetrievalOrder: config.CHUNK_DATA_RETRIEVAL_ORDER,
   chunkDataSourceParallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
 });
@@ -406,17 +426,6 @@ const txChunksDataSource = new TxChunksDataSource({
   log,
   chainSource: arweaveClient,
   chunkSource,
-});
-
-const gatewaysDataSource = new GatewaysDataSource({
-  log,
-  trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
-});
-
-export const arIODataSource = new ArIODataSource({
-  log,
-  networkProcess,
-  nodeWallet: config.AR_IO_WALLET,
 });
 
 const s3DataSource =

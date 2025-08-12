@@ -18,16 +18,19 @@ import { ReadThroughChunkMetadataCache } from '../data/read-through-chunk-metada
 import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
 import { FsChunkMetadataStore } from '../store/fs-chunk-metadata-store.js';
 import { ChunkDataByAnySource, ChunkMetadataByAnySource } from '../types.js';
+import { ArIOChunkSource } from '../data/ar-io-chunk-source.js';
 
 function getChunkDataSource({
   sourceName,
   arweaveClient,
   awsS3Client,
+  arIOChunkSource,
   log,
 }: {
   sourceName: string;
   arweaveClient: ArweaveCompositeClient;
   awsS3Client?: AwsLiteS3;
+  arIOChunkSource?: ArIOChunkSource;
   log: winston.Logger;
 }): ChunkDataByAnySource | undefined {
   switch (sourceName) {
@@ -52,6 +55,13 @@ function getChunkDataSource({
           s3Prefix: config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX,
         }),
       });
+    case 'ar-io-network':
+      if (!arIOChunkSource) {
+        throw new Error(
+          'AR.IO chunk source is required for ar-io-network chunk data source',
+        );
+      }
+      return arIOChunkSource;
     default:
       return undefined;
   }
@@ -61,11 +71,13 @@ function getChunkMetadataSource({
   sourceName,
   arweaveClient,
   legacyPsql,
+  arIOChunkSource,
   log,
 }: {
   sourceName: string;
   arweaveClient: ArweaveCompositeClient;
   legacyPsql?: any;
+  arIOChunkSource?: ArIOChunkSource;
   log: winston.Logger;
 }): ChunkMetadataByAnySource | undefined {
   switch (sourceName) {
@@ -81,6 +93,13 @@ function getChunkMetadataSource({
         log,
         legacyPsql,
       });
+    case 'ar-io-network':
+      if (!arIOChunkSource) {
+        throw new Error(
+          'AR.IO chunk source is required for ar-io-network chunk metadata source',
+        );
+      }
+      return arIOChunkSource;
     default:
       return undefined;
   }
@@ -90,12 +109,14 @@ export function createChunkDataSource({
   log,
   arweaveClient,
   awsS3Client,
+  arIOChunkSource,
   chunkDataRetrievalOrder,
   chunkDataSourceParallelism,
 }: {
   log: winston.Logger;
   arweaveClient: ArweaveCompositeClient;
   awsS3Client?: AwsLiteS3;
+  arIOChunkSource?: ArIOChunkSource;
   chunkDataRetrievalOrder: string[];
   chunkDataSourceParallelism: number;
 }): ChunkDataByAnySource {
@@ -106,6 +127,7 @@ export function createChunkDataSource({
       sourceName,
       arweaveClient,
       awsS3Client,
+      arIOChunkSource,
       log,
     });
     if (dataSource !== undefined) {
@@ -143,12 +165,14 @@ export function createChunkMetadataSource({
   log,
   arweaveClient,
   legacyPsql,
+  arIOChunkSource,
   chunkMetadataRetrievalOrder,
   chunkMetadataSourceParallelism,
 }: {
   log: winston.Logger;
   arweaveClient: ArweaveCompositeClient;
   legacyPsql?: any;
+  arIOChunkSource?: ArIOChunkSource;
   chunkMetadataRetrievalOrder: string[];
   chunkMetadataSourceParallelism: number;
 }): ChunkMetadataByAnySource {
@@ -159,6 +183,7 @@ export function createChunkMetadataSource({
       sourceName,
       arweaveClient,
       legacyPsql,
+      arIOChunkSource,
       log,
     });
     if (metadataSource !== undefined) {

@@ -480,6 +480,7 @@ export interface ChunkDataByAnySourceParams {
   absoluteOffset: number;
   dataRoot: string;
   relativeOffset: number;
+  requestAttributes?: RequestAttributes;
 }
 
 export interface ChunkByAnySource {
