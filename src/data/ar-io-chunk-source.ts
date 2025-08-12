@@ -8,7 +8,13 @@ import winston from 'winston';
 import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
 import { headerNames } from '../constants.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 import { ArIODataSource } from './ar-io-data-source.js';
+import { shuffleArray } from '../lib/random.js';
+import {
+  WeightedElement,
+  randomWeightedChoices,
+} from '../lib/random-weighted-choices.js';
 import {
   ChunkData,
   ChunkDataByAnySource,
@@ -30,6 +36,16 @@ export class ArIOChunkSource
   private arIODataSource: ArIODataSource;
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
 
+  // Independent peer weights for chunk retrieval performance
+  private chunkWeightedPeers: WeightedElement<string>[] = [];
+  private previousChunkPeerResponseTimes: number[] = [];
+
+  // Memoized random weighted choice function for chunk peers
+  private getRandomWeightedChunkPeers: (
+    table: WeightedElement<string>[],
+    peerCount: number,
+  ) => string[];
+
   constructor({
     log,
     arIODataSource,
@@ -39,6 +55,17 @@ export class ArIOChunkSource
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arIODataSource = arIODataSource;
+
+    // Initialize random weighted choice function for chunk peers
+    this.getRandomWeightedChunkPeers = (
+      table: WeightedElement<string>[],
+      peerCount: number,
+    ) => {
+      return randomWeightedChoices({
+        table,
+        count: peerCount,
+      });
+    };
 
     // Initialize promise cache with read-through function
     this.chunkPromiseCache = new ReadThroughPromiseCache<string, Chunk>({
@@ -60,6 +87,97 @@ export class ArIOChunkSource
         };
         return this.fetchChunkFromArIOPeer(params);
       },
+    });
+
+    // Initialize chunk peer weights from available peers
+    this.updateChunkPeerWeights();
+  }
+
+  private updateChunkPeerWeights(): void {
+    const peers = this.arIODataSource.peers;
+    this.chunkWeightedPeers = Object.values(peers).map((id) => {
+      const previousWeight =
+        this.chunkWeightedPeers.find((peer) => peer.id === id)?.weight ??
+        undefined;
+      return {
+        id,
+        weight: previousWeight === undefined ? 50 : previousWeight,
+      };
+    });
+  }
+
+  private selectChunkPeers(peerCount: number): string[] {
+    const log = this.log.child({ method: 'selectChunkPeers' });
+
+    // Update weights from latest peer list
+    this.updateChunkPeerWeights();
+
+    if (this.chunkWeightedPeers.length === 0) {
+      log.warn('No weighted chunk peers available');
+      throw new Error('No weighted chunk peers available');
+    }
+
+    return shuffleArray([
+      ...this.getRandomWeightedChunkPeers(this.chunkWeightedPeers, peerCount),
+    ]);
+  }
+
+  private handleChunkPeerSuccess(peer: string, responseTimeMs: number): void {
+    metrics.getChunkTotal.inc({
+      status: 'success',
+      method: 'ar-io-network',
+      class: this.constructor.name,
+    });
+
+    this.previousChunkPeerResponseTimes.push(responseTimeMs);
+    if (
+      this.previousChunkPeerResponseTimes.length >
+      config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT
+    ) {
+      this.previousChunkPeerResponseTimes.shift();
+    }
+
+    const currentAverageResponseTime =
+      this.previousChunkPeerResponseTimes.length === 0
+        ? 0
+        : this.previousChunkPeerResponseTimes.reduce(
+            (acc, value) => acc + value,
+            0,
+          ) / this.previousChunkPeerResponseTimes.length;
+
+    const additionalWeightFromResponseTime =
+      responseTimeMs > currentAverageResponseTime
+        ? 0
+        : config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
+
+    // Warm the succeeding chunk peer
+    this.chunkWeightedPeers.forEach((weightedPeer) => {
+      if (weightedPeer.id === peer) {
+        weightedPeer.weight = Math.min(
+          weightedPeer.weight +
+            config.WEIGHTED_PEERS_TEMPERATURE_DELTA +
+            additionalWeightFromResponseTime,
+          100,
+        );
+      }
+    });
+  }
+
+  private handleChunkPeerFailure(peer: string): void {
+    metrics.getChunkTotal.inc({
+      status: 'error',
+      method: 'ar-io-network',
+      class: this.constructor.name,
+    });
+
+    // Cool the failing chunk peer
+    this.chunkWeightedPeers.forEach((weightedPeer) => {
+      if (weightedPeer.id === peer) {
+        weightedPeer.weight = Math.max(
+          weightedPeer.weight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+          1,
+        );
+      }
     });
   }
 
@@ -112,7 +230,7 @@ export class ArIOChunkSource
     for (let attempt = 0; attempt < retryCount; attempt++) {
       let selectedPeers: string[];
       try {
-        selectedPeers = this.arIODataSource.selectPeers(peerSelectionCount);
+        selectedPeers = this.selectChunkPeers(peerSelectionCount);
       } catch (error) {
         throw new Error(
           `No AR.IO peers available for chunk retrieval: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -127,6 +245,7 @@ export class ArIOChunkSource
 
       // Try each selected peer
       for (const selectedPeer of selectedPeers) {
+        const startTime = Date.now();
         try {
           const response = await fetch(
             `${selectedPeer}/chunk/${params.absoluteOffset}`,
@@ -143,8 +262,8 @@ export class ArIOChunkSource
               status: response.status,
               statusText: response.statusText,
             });
-            // Report failure to update peer weights
-            this.arIODataSource.handlePeerFailure(selectedPeer);
+            // Report failure to update chunk-specific peer weights
+            this.handleChunkPeerFailure(selectedPeer);
             continue; // Try next peer
           }
 
@@ -155,7 +274,7 @@ export class ArIOChunkSource
             log.debug('Peer returned invalid chunk response format', {
               peer: selectedPeer,
             });
-            this.arIODataSource.handlePeerFailure(selectedPeer);
+            this.handleChunkPeerFailure(selectedPeer);
             continue; // Try next peer
           }
 
@@ -170,16 +289,18 @@ export class ArIOChunkSource
           const crypto = await import('node:crypto');
           const hash = crypto.createHash('sha256').update(chunkBuffer).digest();
 
+          const responseTimeMs = Date.now() - startTime;
+
           log.debug('Successfully fetched chunk from AR.IO peer', {
             peer: selectedPeer,
             chunkSize: chunkBuffer.length,
             dataPathSize: dataPathBuffer.length,
+            responseTimeMs,
             attempt: attempt + 1,
           });
 
-          // Report success to update peer weights
-          // Note: We don't have timing info here, so we'll use placeholder values
-          this.arIODataSource.handlePeerSuccess(selectedPeer, 0, 0);
+          // Report success to update chunk-specific peer weights
+          this.handleChunkPeerSuccess(selectedPeer, responseTimeMs);
 
           return {
             chunk: chunkBuffer,
@@ -195,9 +316,10 @@ export class ArIOChunkSource
             peer: selectedPeer,
             error: error.message,
             attempt: attempt + 1,
+            responseTimeMs: Date.now() - startTime,
           });
-          // Report failure to update peer weights
-          this.arIODataSource.handlePeerFailure(selectedPeer);
+          // Report failure to update chunk-specific peer weights
+          this.handleChunkPeerFailure(selectedPeer);
           // Continue to next peer
         }
       }
