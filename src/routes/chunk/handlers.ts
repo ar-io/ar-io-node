@@ -19,6 +19,7 @@ import { Chunk, ChunkByAnySource } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
+import { getRequestAttributes } from '../data/handlers.js';
 
 export const createChunkOffsetHandler = ({
   chunkSource,
@@ -59,6 +60,9 @@ export const createChunkOffsetHandler = ({
     const contiguousDataStartDelimiter = weaveOffset - data_size + 1;
     const relativeOffset = offset - contiguousDataStartDelimiter;
 
+    // Extract request attributes for hop tracking
+    const requestAttributes = getRequestAttributes(request, response);
+
     // composite-chunk-source returns chunk metadata and chunk data
     let chunk: Chunk | undefined = undefined;
 
@@ -69,6 +73,7 @@ export const createChunkOffsetHandler = ({
         absoluteOffset: offset,
         dataRoot: data_root,
         relativeOffset,
+        requestAttributes,
       });
     } catch (error) {
       response.sendStatus(404);
