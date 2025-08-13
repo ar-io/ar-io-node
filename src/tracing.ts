@@ -77,4 +77,11 @@ if (
   sdk.start();
 }
 
-export const tracer = trace.getTracer('ar-io-node-core', version.release);
+// Create a no-op tracer for test environments to prevent hanging
+const isTestEnvironment =
+  process.env.NODE_ENV === 'test' ||
+  process.argv.some((arg) => arg.includes('--test'));
+
+export const tracer = isTestEnvironment
+  ? trace.getTracer('no-op') // No-op tracer that doesn't interfere with tests
+  : trace.getTracer('ar-io-node-core', version.release);
