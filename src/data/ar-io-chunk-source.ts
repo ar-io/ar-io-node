@@ -14,6 +14,7 @@ import {
   generateRequestAttributes,
   validateHopCount,
 } from '../lib/request-attributes.js';
+import { validateChunk } from '../lib/validation.js';
 import {
   ChunkData,
   ChunkDataByAnySource,
@@ -222,7 +223,7 @@ export class ArIOChunkSource
           // Extract hostname from peer URL for source tracking
           const sourceHost = new URL(selectedPeer).hostname;
 
-          return {
+          const chunk = {
             chunk: chunkBuffer,
             hash,
             data_path: dataPathBuffer,
@@ -233,6 +234,16 @@ export class ArIOChunkSource
             source: 'ar-io-network',
             sourceHost,
           };
+
+          // Validate chunk integrity against Merkle tree structure
+          await validateChunk(
+            params.txSize,
+            chunk,
+            Buffer.from(params.dataRoot, 'base64url'),
+            params.relativeOffset,
+          );
+
+          return chunk;
         } catch (error: any) {
           log.debug('Failed to fetch chunk from peer', {
             peer: selectedPeer,
