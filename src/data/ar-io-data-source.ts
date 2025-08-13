@@ -60,11 +60,6 @@ export class ArIODataSource
     this.peers = peerManager.getPeers();
   }
 
-  stopUpdatingPeers() {
-    // Peer updates are now managed by the peer manager
-    // TODO: remove this
-  }
-
   getPeers(): Record<string, PeerWeight> {
     const peers: Record<string, PeerWeight> = {};
     const weights = this.peerManager.getWeights(DATA_CATEGORY);
