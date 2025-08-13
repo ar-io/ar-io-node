@@ -38,6 +38,8 @@ export const createChunkOffsetHandler = ({
       return;
     }
 
+    // TODO: use a binary search to get this from the chain if it's not
+    // available in the DB
     const {
       data_root,
       id,

@@ -241,10 +241,12 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 //
 
 // On-demand data retrieval priority order
+// Available sources: 'ar-io-network', 'trusted-gateways', 'chunks', 'tx-data', 's3', 'turbo-s3', 'turbo-elasticache', 'turbo-dynamodb'
+// Legacy sources: 'ar-io-peers', 'ario-peer' (use 'ar-io-network' instead)
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
-    'trusted-gateways,chunks,tx-data,ar-io-peers',
+    'trusted-gateways,chunks,tx-data,ar-io-network',
   )
   .split(',');
 
@@ -261,15 +263,18 @@ export const CONTIGUOUS_METADATA_CACHE_TYPE = env.varOrDefault(
 );
 
 // Chunk data retrieval priority order (comma-separated list of sources)
-// Available sources: 'arweave-network', 'legacy-s3'
+// Available sources: 'ar-io-network', 'arweave-network', 'legacy-s3'
 export const CHUNK_DATA_RETRIEVAL_ORDER = env
-  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'arweave-network')
+  .varOrDefault('CHUNK_DATA_RETRIEVAL_ORDER', 'ar-io-network,arweave-network')
   .split(',');
 
 // Chunk metadata retrieval priority order (comma-separated list of sources)
-// Available sources: 'arweave-network', 'legacy-psql'
+// Available sources: 'ar-io-network', 'arweave-network', 'legacy-psql'
 export const CHUNK_METADATA_RETRIEVAL_ORDER = env
-  .varOrDefault('CHUNK_METADATA_RETRIEVAL_ORDER', 'arweave-network')
+  .varOrDefault(
+    'CHUNK_METADATA_RETRIEVAL_ORDER',
+    'ar-io-network,arweave-network',
+  )
   .split(',');
 
 // Parallelism configuration for composite chunk sources
