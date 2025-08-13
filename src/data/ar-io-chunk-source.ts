@@ -88,6 +88,11 @@ export class ArIOChunkSource
     return `${params.dataRoot}:${params.absoluteOffset}:${params.txSize}:${params.relativeOffset}`;
   }
 
+  private validateRequestHops(params: ChunkDataByAnySourceParams): void {
+    const currentHops = params.requestAttributes?.hops ?? 0;
+    validateHopCount(currentHops, MAX_CHUNK_HOPS);
+  }
+
   async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
     const span = tracer.startSpan('ArIOChunkSource.getChunkByAny', {
       attributes: {
@@ -157,10 +162,10 @@ export class ArIOChunkSource
       });
 
       // Validate hop count before proceeding
-      const currentHops = params.requestAttributes?.hops ?? 0;
-      validateHopCount(currentHops, MAX_CHUNK_HOPS);
+      this.validateRequestHops(params);
 
       // Generate request attributes with hop increment and headers
+      const currentHops = params.requestAttributes?.hops ?? 0;
       const requestAttributesHeaders = generateRequestAttributes({
         hops: currentHops,
         // Initialize origin and originNodeRelease if both are missing

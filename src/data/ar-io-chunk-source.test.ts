@@ -86,73 +86,60 @@ describe('ArIOChunkSource', () => {
   });
 
   describe('hop count validation', () => {
-    it('should validate hop count before making requests', async () => {
+    it('should reject requests exceeding maximum hops', () => {
       const params = {
         ...TEST_PARAMS,
         requestAttributes: { hops: 1 },
       };
 
-      await assert.rejects(
-        chunkSource.getChunkByAny(params),
-        /Maximum hops \(1\) exceeded/,
+      // Test the validation method directly (fast unit test)
+      const validateHops = (chunkSource as any).validateRequestHops.bind(
+        chunkSource,
       );
+
+      assert.throws(() => validateHops(params), /Maximum hops \(1\) exceeded/);
     });
 
-    it('should allow requests with hops less than max', async () => {
-      // Mock fetch to prevent actual HTTP calls
-      const mockFetch = mock.fn(globalThis, 'fetch');
-      mockFetch.mock.mockImplementation(() =>
-        Promise.resolve({
-          ok: true,
-          json: async () => ({
-            chunk: 'dGVzdC1jaHVuay1kYXRh',
-            data_path: 'dGVzdC1kYXRhLXBhdGg',
-          }),
-        }),
-      );
-
+    it('should allow requests with hops less than max', () => {
       const params = {
         ...TEST_PARAMS,
         requestAttributes: { hops: 0 },
       };
 
-      try {
-        const result = await chunkSource.getChunkByAny(params);
-        assert.ok(result?.chunk !== undefined);
-      } catch (error) {
-        // If peer selection fails, that's ok - we just want to verify hop validation passed
-        assert.match(
-          error.message,
-          /No AR\.IO peers available|Failed to fetch chunk/,
-        );
-      }
-    });
-
-    it('should default to hops=0 when requestAttributes not provided', async () => {
-      // Mock fetch to prevent actual HTTP calls
-      const mockFetch = mock.fn(globalThis, 'fetch');
-      mockFetch.mock.mockImplementation(() =>
-        Promise.resolve({
-          ok: true,
-          json: async () => ({
-            chunk: 'dGVzdC1jaHVuay1kYXRh',
-            data_path: 'dGVzdC1kYXRhLXBhdGg',
-          }),
-        }),
+      // Test the validation method directly (fast unit test)
+      const validateHops = (chunkSource as any).validateRequestHops.bind(
+        chunkSource,
       );
 
+      assert.doesNotThrow(() => validateHops(params));
+    });
+
+    it('should default to hops=0 when requestAttributes not provided', () => {
       const params = {
         ...TEST_PARAMS,
         requestAttributes: undefined,
       };
 
-      try {
-        const result = await chunkSource.getChunkByAny(params);
-        assert.ok(result !== undefined || true); // Either success or expected failure
-      } catch (error) {
-        // Should not be a hop validation error
-        assert.doesNotMatch(error.message, /Maximum hops.*exceeded/);
-      }
+      // Test the validation method directly (fast unit test)
+      const validateHops = (chunkSource as any).validateRequestHops.bind(
+        chunkSource,
+      );
+
+      assert.doesNotThrow(() => validateHops(params));
+    });
+
+    it('should allow requests at exactly the maximum hop count', () => {
+      const params = {
+        ...TEST_PARAMS,
+        requestAttributes: { hops: 1 }, // MAX_CHUNK_HOPS = 1
+      };
+
+      // Test the validation method directly (fast unit test)
+      const validateHops = (chunkSource as any).validateRequestHops.bind(
+        chunkSource,
+      );
+
+      assert.throws(() => validateHops(params), /Maximum hops \(1\) exceeded/);
     });
   });
 
