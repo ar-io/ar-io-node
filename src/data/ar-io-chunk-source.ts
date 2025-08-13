@@ -37,8 +37,10 @@ export class ArIOChunkSource
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
 
   // Independent peer weights for chunk retrieval performance
-  private chunkWeightedPeers: WeightedElement<string>[] = [];
+  private chunkWeightedPeers: Map<string, number> = new Map();
   private previousChunkPeerResponseTimes: number[] = [];
+  private lastPeerListUpdate = 0;
+  private readonly PEER_LIST_UPDATE_INTERVAL_MS = 60000; // Update peer list at most once per minute
 
   // Memoized random weighted choice function for chunk peers
   private getRandomWeightedChunkPeers: (
@@ -90,35 +92,66 @@ export class ArIOChunkSource
     });
 
     // Initialize chunk peer weights from available peers
-    this.updateChunkPeerWeights();
+    this.initializeChunkPeerWeights();
   }
 
-  private updateChunkPeerWeights(): void {
+  private initializeChunkPeerWeights(): void {
     const peers = this.peerManager.getPeerUrls();
-    this.chunkWeightedPeers = peers.map((id) => {
-      const previousWeight =
-        this.chunkWeightedPeers.find((peer) => peer.id === id)?.weight ??
-        undefined;
-      return {
+    // Only add new peers, don't reset existing weights
+    for (const peerId of peers) {
+      if (!this.chunkWeightedPeers.has(peerId)) {
+        this.chunkWeightedPeers.set(peerId, 50); // Default neutral weight
+      }
+    }
+    this.lastPeerListUpdate = Date.now();
+  }
+
+  private syncPeerListIfNeeded(): void {
+    const now = Date.now();
+    if (now - this.lastPeerListUpdate > this.PEER_LIST_UPDATE_INTERVAL_MS) {
+      const currentPeerUrls = new Set(this.peerManager.getPeerUrls());
+
+      // Remove peers that no longer exist
+      for (const peerId of this.chunkWeightedPeers.keys()) {
+        if (!currentPeerUrls.has(peerId)) {
+          this.chunkWeightedPeers.delete(peerId);
+        }
+      }
+
+      // Add new peers with default weight
+      for (const peerId of currentPeerUrls) {
+        if (!this.chunkWeightedPeers.has(peerId)) {
+          this.chunkWeightedPeers.set(peerId, 50);
+        }
+      }
+
+      this.lastPeerListUpdate = now;
+    }
+  }
+
+  private getWeightedPeersArray(): WeightedElement<string>[] {
+    return Array.from(this.chunkWeightedPeers.entries()).map(
+      ([id, weight]) => ({
         id,
-        weight: previousWeight === undefined ? 50 : previousWeight,
-      };
-    });
+        weight,
+      }),
+    );
   }
 
   private selectChunkPeers(peerCount: number): string[] {
     const log = this.log.child({ method: 'selectChunkPeers' });
 
-    // Update weights from latest peer list
-    this.updateChunkPeerWeights();
+    // Only sync peer list periodically, not on every call
+    this.syncPeerListIfNeeded();
 
-    if (this.chunkWeightedPeers.length === 0) {
+    if (this.chunkWeightedPeers.size === 0) {
       log.warn('No weighted chunk peers available');
       throw new Error('No weighted chunk peers available');
     }
 
+    const weightedPeersArray = this.getWeightedPeersArray();
     return shuffleArray([
-      ...this.getRandomWeightedChunkPeers(this.chunkWeightedPeers, peerCount),
+      ...this.getRandomWeightedChunkPeers(weightedPeersArray, peerCount),
     ]);
   }
 
@@ -151,16 +184,18 @@ export class ArIOChunkSource
         : config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
 
     // Warm the succeeding chunk peer
-    this.chunkWeightedPeers.forEach((weightedPeer) => {
-      if (weightedPeer.id === peer) {
-        weightedPeer.weight = Math.min(
-          weightedPeer.weight +
+    const currentWeight = this.chunkWeightedPeers.get(peer);
+    if (currentWeight !== undefined) {
+      this.chunkWeightedPeers.set(
+        peer,
+        Math.min(
+          currentWeight +
             config.WEIGHTED_PEERS_TEMPERATURE_DELTA +
             additionalWeightFromResponseTime,
           100,
-        );
-      }
-    });
+        ),
+      );
+    }
   }
 
   private handleChunkPeerFailure(peer: string): void {
@@ -171,14 +206,13 @@ export class ArIOChunkSource
     });
 
     // Cool the failing chunk peer
-    this.chunkWeightedPeers.forEach((weightedPeer) => {
-      if (weightedPeer.id === peer) {
-        weightedPeer.weight = Math.max(
-          weightedPeer.weight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
-          1,
-        );
-      }
-    });
+    const currentWeight = this.chunkWeightedPeers.get(peer);
+    if (currentWeight !== undefined) {
+      this.chunkWeightedPeers.set(
+        peer,
+        Math.max(currentWeight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA, 1),
+      );
+    }
   }
 
   private getCacheKey(params: ChunkDataByAnySourceParams): string {
