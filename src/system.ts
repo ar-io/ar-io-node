@@ -525,9 +525,10 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return turboElasticacheDataSource;
     case 'turbo-dynamodb':
       return turboDynamoDBDataSource;
-    // ario-peer is for backwards compatibility
+    // Legacy names for backwards compatibility
     case 'ario-peer':
-    case 'ar-io-peers':
+    case 'ar-io-peers': // Keep for backwards compatibility
+    case 'ar-io-network': // New preferred name
       return arIODataSource;
     case 'trusted-gateways':
       return gatewaysDataSource;

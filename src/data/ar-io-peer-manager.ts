@@ -112,25 +112,19 @@ export class ArIOPeerManager {
       },
     );
 
-    // TODO: more efficient normalizer
-
     // Initialize memoized peer selection cache
     this.selectPeersCache = memoize(this._selectPeersUncached.bind(this), {
       primitive: true,
       maxAge: DEFAULT_SELECTION_CACHE_TTL_MS,
       normalizer: (args) => {
-        // Cache key is: category:count:weightsHash
+        // Cache key format: category:requestedCount:totalPeerCount
+        // - requestedCount: number of peers to select
+        // - totalPeerCount: total peers available in category (for cache invalidation)
         const [category, count] = args;
         const weights = this.peerWeights.get(category);
-        if (!weights) return `${category}:${count}:empty`;
+        const peerCount = weights?.size ?? 0;
 
-        // Create a simple hash of weights for cache invalidation
-        const weightsHash = Array.from(weights.entries())
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([id, w]) => `${id}:${w}`)
-          .join(',');
-
-        return `${category}:${count}:${weightsHash}`;
+        return `${category}:${count}:${peerCount}`;
       },
     });
 
