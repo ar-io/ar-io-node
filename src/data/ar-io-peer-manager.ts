@@ -112,6 +112,8 @@ export class ArIOPeerManager {
       },
     );
 
+    // TODO: more efficient normalizer
+
     // Initialize memoized peer selection cache
     this.selectPeersCache = memoize(this._selectPeersUncached.bind(this), {
       primitive: true,
