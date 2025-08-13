@@ -1152,6 +1152,9 @@ export class ArweaveCompositeClient
         const dataPath = fromB64Url(jsonChunk.data_path);
         const hash = dataPath.slice(-64, -32);
 
+        // Extract hostname from peer URL for source tracking
+        const sourceHost = new URL(randomPeer).hostname;
+
         const chunk = {
           tx_path: txPath,
           data_root: dataRootBuffer,
@@ -1160,6 +1163,8 @@ export class ArweaveCompositeClient
           offset: relativeOffset,
           hash,
           chunk: fromB64Url(jsonChunk.chunk),
+          source: 'arweave-network',
+          sourceHost,
         };
 
         await validateChunk(
@@ -1221,7 +1226,7 @@ export class ArweaveCompositeClient
     dataRoot,
     relativeOffset,
   }: ChunkDataByAnySourceParams): Promise<ChunkData> {
-    const { hash, chunk } = await this.getChunkByAny({
+    const { hash, chunk, source, sourceHost } = await this.getChunkByAny({
       txSize,
       absoluteOffset,
       dataRoot,
@@ -1230,6 +1235,8 @@ export class ArweaveCompositeClient
     return {
       hash,
       chunk,
+      source,
+      sourceHost,
     };
   }
 

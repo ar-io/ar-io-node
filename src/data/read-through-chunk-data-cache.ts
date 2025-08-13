@@ -47,7 +47,12 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
             dataRoot,
             relativeOffset,
           });
-          return cachedChunkData;
+          return {
+            ...cachedChunkData,
+            source: 'cache',
+            // No sourceHost for cache hits
+            sourceHost: undefined,
+          };
         }
 
         // Fetch from ChunkSource

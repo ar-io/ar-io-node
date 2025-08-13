@@ -219,6 +219,9 @@ export class ArIOChunkSource
           // Report success to update chunk-specific peer weights
           this.handleChunkPeerSuccess(selectedPeer, responseTimeMs);
 
+          // Extract hostname from peer URL for source tracking
+          const sourceHost = new URL(selectedPeer).hostname;
+
           return {
             chunk: chunkBuffer,
             hash,
@@ -227,6 +230,8 @@ export class ArIOChunkSource
             data_size: params.txSize,
             offset: params.relativeOffset,
             tx_path: undefined, // Not provided by /chunk endpoint
+            source: 'ar-io-network',
+            sourceHost,
           };
         } catch (error: any) {
           log.debug('Failed to fetch chunk from peer', {
@@ -261,6 +266,8 @@ export class ArIOChunkSource
     return {
       hash: chunk.hash,
       chunk: chunk.chunk,
+      source: chunk.source,
+      sourceHost: chunk.sourceHost,
     };
   }
 

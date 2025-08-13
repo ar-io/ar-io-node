@@ -460,6 +460,8 @@ export interface JsonChunkPost {
 export interface ChunkData {
   hash: Buffer;
   chunk: Buffer;
+  source?: string;
+  sourceHost?: string;
 }
 
 export interface ChunkMetadata {

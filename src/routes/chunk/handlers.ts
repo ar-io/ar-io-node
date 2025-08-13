@@ -106,6 +106,18 @@ export const createChunkOffsetHandler = ({
       return;
     }
 
+    // Add source tracking headers
+    if (chunk.source !== undefined && chunk.source !== '') {
+      response.setHeader(headerNames.chunkSource, chunk.source);
+    }
+    if (chunk.sourceHost !== undefined && chunk.sourceHost !== '') {
+      response.setHeader(headerNames.chunkHost, chunk.sourceHost);
+    }
+
+    // Set cache status header
+    const cacheStatus = chunk.source === 'cache' ? 'HIT' : 'MISS';
+    response.setHeader(headerNames.cache, cacheStatus);
+
     // this is a very limited interface of the node network chunk response
     response.status(200).json({
       chunk: chunkBase64Url,
