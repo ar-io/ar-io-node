@@ -61,6 +61,8 @@ export class CompositeChunkDataSource implements ChunkDataByAnySource {
 
           this.log.debug('Successfully fetched chunk data from source', {
             source: source.constructor.name,
+            chunkSource: result.source,
+            chunkHost: result.sourceHost,
             dataRoot: params.dataRoot,
             relativeOffset: params.relativeOffset,
           });

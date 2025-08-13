@@ -74,6 +74,8 @@ export class S3ChunkSource implements ChunkDataByAnySource {
     return {
       hash, // Buffer containing the SHA-256 digest
       chunk, // Buffer of the actual chunk data
+      source: 'legacy-s3',
+      // No sourceHost for S3 since it's internal storage
     };
   }
 }
