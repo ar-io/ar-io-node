@@ -1122,84 +1122,143 @@ export class ArweaveCompositeClient
     peerSelectionCount?: number;
     retryCount?: number;
   }): Promise<Chunk> {
-    for (let attempt = 0; attempt < retryCount; attempt++) {
-      // Select a random set of peers for each retry attempt
-      const randomPeers = this.selectPeers(
-        peerSelectionCount,
-        'weightedGetChunkPeers',
-      );
+    const span = tracer.startSpan('ArweaveCompositeClient.peerGetChunk', {
+      attributes: {
+        'chunk.data_root': dataRoot,
+        'chunk.absolute_offset': absoluteOffset,
+        'chunk.relative_offset': relativeOffset,
+        'chunk.tx_size': txSize,
+        'chunk.retry_count': retryCount,
+        'chunk.peer_selection_count': peerSelectionCount,
+      },
+    });
 
-      if (randomPeers.length === 0) {
-        throw new Error('No peers available for chunk retrieval');
-      }
-
-      const randomPeer = randomPeers[0];
-
-      try {
-        const response = await axios({
-          method: 'GET',
-          url: `/chunk/${absoluteOffset}`,
-          baseURL: randomPeer,
-          timeout: 500,
+    try {
+      for (let attempt = 0; attempt < retryCount; attempt++) {
+        span.addEvent('Starting peer attempt', {
+          attempt: attempt + 1,
+          max_attempts: retryCount,
         });
-        const jsonChunk = response.data;
 
-        // Fast fail if chunk has the wrong structure
-        sanityCheckChunk(jsonChunk);
-
-        const txPath = fromB64Url(jsonChunk.tx_path);
-        const dataRootBuffer = txPath.slice(-64, -32);
-        const dataPath = fromB64Url(jsonChunk.data_path);
-        const hash = dataPath.slice(-64, -32);
-
-        // Extract hostname from peer URL for source tracking
-        const sourceHost = new URL(randomPeer).hostname;
-
-        const chunk = {
-          tx_path: txPath,
-          data_root: dataRootBuffer,
-          data_size: txSize,
-          data_path: dataPath,
-          offset: relativeOffset,
-          hash,
-          chunk: fromB64Url(jsonChunk.chunk),
-          source: 'arweave-network',
-          sourceHost,
-        };
-
-        await validateChunk(
-          txSize,
-          chunk,
-          fromB64Url(dataRoot),
-          relativeOffset,
-        );
-
-        this.handlePeerSuccess(
-          randomPeer,
-          'peerGetChunk',
-          'peer',
+        // Select a random set of peers for each retry attempt
+        const randomPeers = this.selectPeers(
+          peerSelectionCount,
           'weightedGetChunkPeers',
         );
 
-        return chunk;
-      } catch {
-        this.handlePeerFailure(
-          randomPeer,
-          'peerGetChunk',
-          'peer',
-          'weightedGetChunkPeers',
-        );
+        if (randomPeers.length === 0) {
+          const error = new Error('No peers available for chunk retrieval');
+          span.recordException(error);
+          throw error;
+        }
 
-        // If this is the last attempt, throw the error
-        if (attempt === retryCount - 1) {
-          throw new Error(
-            `Failed to fetch chunk from any peer after ${retryCount} attempts`,
+        span.setAttribute('chunk.available_peers', randomPeers.length);
+        const randomPeer = randomPeers[0];
+        const peerHost = new URL(randomPeer).hostname;
+
+        span.addEvent('Trying peer', {
+          peer_host: peerHost,
+          attempt: attempt + 1,
+        });
+
+        try {
+          const startTime = Date.now();
+          const response = await axios({
+            method: 'GET',
+            url: `/chunk/${absoluteOffset}`,
+            baseURL: randomPeer,
+            timeout: 500,
+          });
+          const responseTime = Date.now() - startTime;
+
+          const jsonChunk = response.data;
+
+          // Fast fail if chunk has the wrong structure
+          sanityCheckChunk(jsonChunk);
+
+          const txPath = fromB64Url(jsonChunk.tx_path);
+          const dataRootBuffer = txPath.slice(-64, -32);
+          const dataPath = fromB64Url(jsonChunk.data_path);
+          const hash = dataPath.slice(-64, -32);
+
+          // Extract hostname from peer URL for source tracking
+          const sourceHost = new URL(randomPeer).hostname;
+
+          const chunk = {
+            tx_path: txPath,
+            data_root: dataRootBuffer,
+            data_size: txSize,
+            data_path: dataPath,
+            offset: relativeOffset,
+            hash,
+            chunk: fromB64Url(jsonChunk.chunk),
+            source: 'arweave-network',
+            sourceHost,
+          };
+
+          await validateChunk(
+            txSize,
+            chunk,
+            fromB64Url(dataRoot),
+            relativeOffset,
           );
+
+          span.setAttributes({
+            'chunk.successful_peer': peerHost,
+            'chunk.final_attempt': attempt + 1,
+            'chunk.response_time_ms': responseTime,
+            'chunk.size': chunk.chunk.length,
+          });
+
+          span.addEvent('Chunk retrieval and validation successful', {
+            peer_host: peerHost,
+            response_time_ms: responseTime,
+            chunk_size: chunk.chunk.length,
+          });
+
+          this.handlePeerSuccess(
+            randomPeer,
+            'peerGetChunk',
+            'peer',
+            'weightedGetChunkPeers',
+          );
+
+          return chunk;
+        } catch (error: any) {
+          span.addEvent('Peer request failed', {
+            peer_host: peerHost,
+            error: error.message,
+            attempt: attempt + 1,
+          });
+
+          this.handlePeerFailure(
+            randomPeer,
+            'peerGetChunk',
+            'peer',
+            'weightedGetChunkPeers',
+          );
+
+          // If this is the last attempt, throw the error
+          if (attempt === retryCount - 1) {
+            const finalError = new Error(
+              `Failed to fetch chunk from any peer after ${retryCount} attempts`,
+            );
+            span.recordException(finalError);
+            throw finalError;
+          }
         }
       }
-    }
 
-    throw new Error('Failed to fetch chunk from any peer');
+      span.addEvent('All attempts failed');
+      const error = new Error('Failed to fetch chunk from any peer');
+      span.recordException(error);
+      throw error;
+    } catch (error: any) {
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
   }
 
   async getChunkByAny({
@@ -1208,16 +1267,39 @@ export class ArweaveCompositeClient
     dataRoot,
     relativeOffset,
   }: ChunkDataByAnySourceParams): Promise<Chunk> {
-    this.failureSimulator.maybeFail();
-
-    const cacheKey = JSON.stringify({
-      absoluteOffset,
-      txSize,
-      dataRoot,
-      relativeOffset,
+    const span = tracer.startSpan('ArweaveCompositeClient.getChunkByAny', {
+      attributes: {
+        'chunk.data_root': dataRoot,
+        'chunk.absolute_offset': absoluteOffset,
+        'chunk.relative_offset': relativeOffset,
+        'chunk.tx_size': txSize,
+      },
     });
 
-    return this.chunkPromiseCache.get(cacheKey);
+    try {
+      this.failureSimulator.maybeFail();
+
+      const cacheKey = JSON.stringify({
+        absoluteOffset,
+        txSize,
+        dataRoot,
+        relativeOffset,
+      });
+
+      const result = await this.chunkPromiseCache.get(cacheKey);
+
+      span.setAttributes({
+        'chunk.source': result.source ?? 'unknown',
+        'chunk.source_host': result.sourceHost ?? 'unknown',
+      });
+
+      return result;
+    } catch (error: any) {
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
   }
 
   async getChunkDataByAny({
