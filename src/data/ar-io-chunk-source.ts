@@ -5,10 +5,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import winston from 'winston';
-import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
+import { LRUCache } from 'lru-cache';
 import { headerNames } from '../constants.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
+import { release } from '../version.js';
 import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
 import {
   ChunkData,
@@ -30,7 +31,7 @@ export class ArIOChunkSource
 {
   private log: winston.Logger;
   private peerManager: ArIOPeerManager;
-  private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
+  private chunkPromiseCache: LRUCache<string, Promise<Chunk>>;
 
   constructor({
     log,
@@ -42,26 +43,10 @@ export class ArIOChunkSource
     this.log = log.child({ class: this.constructor.name });
     this.peerManager = peerManager;
 
-    // Initialize promise cache with read-through function
-    this.chunkPromiseCache = new ReadThroughPromiseCache<string, Chunk>({
-      cacheParams: {
-        cacheCapacity: CHUNK_CACHE_CAPACITY,
-        cacheTTL: CHUNK_CACHE_TTL_SECONDS * 1000,
-      },
-      readThroughFunction: async (cacheKey: string) => {
-        // Parse the cache key back to basic parameters
-        // Note: We lose request attributes in this approach, but that's acceptable
-        // since hop tracking is more important at the entry point
-        const [dataRoot, absoluteOffsetStr, txSizeStr, relativeOffsetStr] =
-          cacheKey.split(':');
-        const params: ChunkDataByAnySourceParams = {
-          dataRoot,
-          absoluteOffset: parseInt(absoluteOffsetStr),
-          txSize: parseInt(txSizeStr),
-          relativeOffset: parseInt(relativeOffsetStr),
-        };
-        return this.fetchChunkFromArIOPeer(params);
-      },
+    // Initialize promise cache with capacity and TTL
+    this.chunkPromiseCache = new LRUCache<string, Promise<Chunk>>({
+      max: CHUNK_CACHE_CAPACITY,
+      ttl: CHUNK_CACHE_TTL_SECONDS * 1000, // Convert to milliseconds
     });
   }
 
@@ -101,10 +86,19 @@ export class ArIOChunkSource
   async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
     const cacheKey = this.getCacheKey(params);
 
-    // The read-through cache will handle calling fetchChunkFromArIOPeer via the readThroughFunction
-    // Note: Request attributes from the first call are lost in cached responses, but hop tracking
-    // is most important at the entry point to prevent infinite loops
-    return this.chunkPromiseCache.get(cacheKey);
+    // Check for existing promise (either in-flight or resolved)
+    const existingPromise = this.chunkPromiseCache.get(cacheKey);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    // Create new promise that fetches with FULL params including request attributes
+    const chunkPromise = this.fetchChunkFromArIOPeer(params);
+
+    // Store promise in cache
+    this.chunkPromiseCache.set(cacheKey, chunkPromise);
+
+    return chunkPromise;
   }
 
   private async fetchChunkFromArIOPeer(
@@ -130,13 +124,31 @@ export class ArIOChunkSource
       );
     }
 
-    const origin =
-      params.requestAttributes?.origin ?? config.ARNS_ROOT_HOST ?? 'unknown';
-
-    const headers = {
+    const headers: Record<string, string> = {
       [headerNames.hops]: nextHops.toString(),
-      [headerNames.origin]: origin,
     };
+
+    // Initialize origin and originNodeRelease from request attributes
+    const origin = params.requestAttributes?.origin;
+    const originNodeRelease = params.requestAttributes?.originNodeRelease;
+
+    // Only initialize BOTH if BOTH are missing and ARNS_ROOT_HOST is configured
+    if (
+      origin == null &&
+      originNodeRelease == null &&
+      config.ARNS_ROOT_HOST != null
+    ) {
+      headers[headerNames.origin] = config.ARNS_ROOT_HOST;
+      headers[headerNames.originNodeRelease] = release;
+    } else {
+      // Pass through existing values if present
+      if (origin != null) {
+        headers[headerNames.origin] = origin;
+      }
+      if (originNodeRelease != null) {
+        headers[headerNames.originNodeRelease] = originNodeRelease;
+      }
+    }
 
     // Retry with different peers on failure
     for (let attempt = 0; attempt < retryCount; attempt++) {

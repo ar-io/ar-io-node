@@ -62,6 +62,7 @@ export class ArIODataSource
 
   stopUpdatingPeers() {
     // Peer updates are now managed by the peer manager
+    // TODO: remove this
   }
 
   getPeers(): Record<string, PeerWeight> {
