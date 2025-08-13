@@ -9,12 +9,7 @@ import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
 import { headerNames } from '../constants.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
-import { ArIOPeerManager } from './ar-io-peer-manager.js';
-import { shuffleArray } from '../lib/random.js';
-import {
-  WeightedElement,
-  randomWeightedChoices,
-} from '../lib/random-weighted-choices.js';
+import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
 import {
   ChunkData,
   ChunkDataByAnySource,
@@ -28,6 +23,7 @@ import {
 const CHUNK_CACHE_CAPACITY = 100;
 const CHUNK_CACHE_TTL_SECONDS = 60;
 const MAX_CHUNK_HOPS_ALLOWED = 1;
+const CHUNK_CATEGORY = 'chunk';
 
 export class ArIOChunkSource
   implements ChunkDataByAnySource, ChunkMetadataByAnySource
@@ -35,18 +31,6 @@ export class ArIOChunkSource
   private log: winston.Logger;
   private peerManager: ArIOPeerManager;
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
-
-  // Independent peer weights for chunk retrieval performance
-  private chunkWeightedPeers: Map<string, number> = new Map();
-  private previousChunkPeerResponseTimes: number[] = [];
-  private lastPeerListUpdate = 0;
-  private readonly PEER_LIST_UPDATE_INTERVAL_MS = 60000; // Update peer list at most once per minute
-
-  // Memoized random weighted choice function for chunk peers
-  private getRandomWeightedChunkPeers: (
-    table: WeightedElement<string>[],
-    peerCount: number,
-  ) => string[];
 
   constructor({
     log,
@@ -57,17 +41,6 @@ export class ArIOChunkSource
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.peerManager = peerManager;
-
-    // Initialize random weighted choice function for chunk peers
-    this.getRandomWeightedChunkPeers = (
-      table: WeightedElement<string>[],
-      peerCount: number,
-    ) => {
-      return randomWeightedChoices({
-        table,
-        count: peerCount,
-      });
-    };
 
     // Initialize promise cache with read-through function
     this.chunkPromiseCache = new ReadThroughPromiseCache<string, Chunk>({
@@ -90,69 +63,10 @@ export class ArIOChunkSource
         return this.fetchChunkFromArIOPeer(params);
       },
     });
-
-    // Initialize chunk peer weights from available peers
-    this.initializeChunkPeerWeights();
-  }
-
-  private initializeChunkPeerWeights(): void {
-    const peers = this.peerManager.getPeerUrls();
-    // Only add new peers, don't reset existing weights
-    for (const peerId of peers) {
-      if (!this.chunkWeightedPeers.has(peerId)) {
-        this.chunkWeightedPeers.set(peerId, 50); // Default neutral weight
-      }
-    }
-    this.lastPeerListUpdate = Date.now();
-  }
-
-  private syncPeerListIfNeeded(): void {
-    const now = Date.now();
-    if (now - this.lastPeerListUpdate > this.PEER_LIST_UPDATE_INTERVAL_MS) {
-      const currentPeerUrls = new Set(this.peerManager.getPeerUrls());
-
-      // Remove peers that no longer exist
-      for (const peerId of this.chunkWeightedPeers.keys()) {
-        if (!currentPeerUrls.has(peerId)) {
-          this.chunkWeightedPeers.delete(peerId);
-        }
-      }
-
-      // Add new peers with default weight
-      for (const peerId of currentPeerUrls) {
-        if (!this.chunkWeightedPeers.has(peerId)) {
-          this.chunkWeightedPeers.set(peerId, 50);
-        }
-      }
-
-      this.lastPeerListUpdate = now;
-    }
-  }
-
-  private getWeightedPeersArray(): WeightedElement<string>[] {
-    return Array.from(this.chunkWeightedPeers.entries()).map(
-      ([id, weight]) => ({
-        id,
-        weight,
-      }),
-    );
   }
 
   private selectChunkPeers(peerCount: number): string[] {
-    const log = this.log.child({ method: 'selectChunkPeers' });
-
-    // Only sync peer list periodically, not on every call
-    this.syncPeerListIfNeeded();
-
-    if (this.chunkWeightedPeers.size === 0) {
-      log.warn('No weighted chunk peers available');
-      throw new Error('No weighted chunk peers available');
-    }
-
-    const weightedPeersArray = this.getWeightedPeersArray();
-    return shuffleArray([
-      ...this.getRandomWeightedChunkPeers(weightedPeersArray, peerCount),
-    ]);
+    return this.peerManager.selectPeers(CHUNK_CATEGORY, peerCount);
   }
 
   private handleChunkPeerSuccess(peer: string, responseTimeMs: number): void {
@@ -162,40 +76,11 @@ export class ArIOChunkSource
       class: this.constructor.name,
     });
 
-    this.previousChunkPeerResponseTimes.push(responseTimeMs);
-    if (
-      this.previousChunkPeerResponseTimes.length >
-      config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT
-    ) {
-      this.previousChunkPeerResponseTimes.shift();
-    }
+    const successMetrics: PeerSuccessMetrics = {
+      responseTimeMs,
+    };
 
-    const currentAverageResponseTime =
-      this.previousChunkPeerResponseTimes.length === 0
-        ? 0
-        : this.previousChunkPeerResponseTimes.reduce(
-            (acc, value) => acc + value,
-            0,
-          ) / this.previousChunkPeerResponseTimes.length;
-
-    const additionalWeightFromResponseTime =
-      responseTimeMs > currentAverageResponseTime
-        ? 0
-        : config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
-
-    // Warm the succeeding chunk peer
-    const currentWeight = this.chunkWeightedPeers.get(peer);
-    if (currentWeight !== undefined) {
-      this.chunkWeightedPeers.set(
-        peer,
-        Math.min(
-          currentWeight +
-            config.WEIGHTED_PEERS_TEMPERATURE_DELTA +
-            additionalWeightFromResponseTime,
-          100,
-        ),
-      );
-    }
+    this.peerManager.reportSuccess(CHUNK_CATEGORY, peer, successMetrics);
   }
 
   private handleChunkPeerFailure(peer: string): void {
@@ -205,14 +90,7 @@ export class ArIOChunkSource
       class: this.constructor.name,
     });
 
-    // Cool the failing chunk peer
-    const currentWeight = this.chunkWeightedPeers.get(peer);
-    if (currentWeight !== undefined) {
-      this.chunkWeightedPeers.set(
-        peer,
-        Math.max(currentWeight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA, 1),
-      );
-    }
+    this.peerManager.reportFailure(CHUNK_CATEGORY, peer);
   }
 
   private getCacheKey(params: ChunkDataByAnySourceParams): string {

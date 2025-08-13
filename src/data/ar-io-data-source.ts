@@ -6,12 +6,7 @@
  */
 import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
-import {
-  WeightedElement,
-  randomWeightedChoices,
-} from '../lib/random-weighted-choices.js';
-import memoize from 'memoizee';
-import { ArIOPeerManager } from './ar-io-peer-manager.js';
+import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
 
 import {
   ContiguousData,
@@ -25,14 +20,13 @@ import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
 } from '../lib/request-attributes.js';
-import { shuffleArray } from '../lib/random.js';
 import { headerNames } from '../constants.js';
 
 import * as metrics from '../metrics.js';
-import * as config from '../config.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const DEFAULT_MAX_HOPS_ALLOWED = 3;
+const DATA_CATEGORY = 'data';
 
 export type PeerWeight = {
   url: string;
@@ -45,20 +39,8 @@ export class ArIODataSource
   private log: winston.Logger;
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
-  private previousGatewayPeerTtfbDurations: number[];
-  private previousGatewayPeerKbpsDownloadRate: number[];
-
   private peerManager: ArIOPeerManager;
   peers: Record<string, string> = {};
-
-  private getRandomWeightedPeers: (
-    table: WeightedElement<string>[],
-    peerCount: number,
-  ) => string[];
-
-  protected weightedPeers: Map<string, number> = new Map();
-  private lastPeerListUpdate = 0;
-  private readonly PEER_LIST_UPDATE_INTERVAL_MS = 60000; // Update peer list at most once per minute
 
   constructor({
     log,
@@ -74,21 +56,8 @@ export class ArIODataSource
     this.log = log.child({ class: this.constructor.name });
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
-    this.previousGatewayPeerTtfbDurations = [];
-    this.previousGatewayPeerKbpsDownloadRate = [];
     this.peerManager = peerManager;
-    this.initializeWeightedPeers();
-
-    this.getRandomWeightedPeers = memoize(
-      (table: WeightedElement<string>[], peerCount: number) =>
-        randomWeightedChoices<string>({
-          table,
-          count: peerCount,
-        }),
-      {
-        maxAge: config.GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS,
-      },
-    );
+    this.peers = peerManager.getPeers();
   }
 
   stopUpdatingPeers() {
@@ -97,7 +66,13 @@ export class ArIODataSource
 
   getPeers(): Record<string, PeerWeight> {
     const peers: Record<string, PeerWeight> = {};
-    for (const [peerId, weight] of this.weightedPeers) {
+    const weights = this.peerManager.getWeights(DATA_CATEGORY);
+
+    if (!weights) {
+      return peers;
+    }
+
+    for (const [peerId, weight] of weights) {
       try {
         const url = new URL(peerId);
         const key = url.hostname + (url.port ? `:${url.port}` : ':443');
@@ -112,63 +87,8 @@ export class ArIODataSource
     return peers;
   }
 
-  private initializeWeightedPeers() {
-    this.peers = this.peerManager.getPeers();
-    // Only add new peers, don't reset existing weights
-    for (const peerId of Object.values(this.peers)) {
-      if (!this.weightedPeers.has(peerId)) {
-        this.weightedPeers.set(peerId, 50); // Default neutral weight
-      }
-    }
-    this.lastPeerListUpdate = Date.now();
-  }
-
-  private syncPeerListIfNeeded() {
-    const now = Date.now();
-    if (now - this.lastPeerListUpdate > this.PEER_LIST_UPDATE_INTERVAL_MS) {
-      this.peers = this.peerManager.getPeers();
-      const currentPeerUrls = new Set(Object.values(this.peers));
-
-      // Remove peers that no longer exist
-      for (const peerId of this.weightedPeers.keys()) {
-        if (!currentPeerUrls.has(peerId)) {
-          this.weightedPeers.delete(peerId);
-        }
-      }
-
-      // Add new peers with default weight
-      for (const peerId of currentPeerUrls) {
-        if (!this.weightedPeers.has(peerId)) {
-          this.weightedPeers.set(peerId, 50);
-        }
-      }
-
-      this.lastPeerListUpdate = now;
-    }
-  }
-
-  private getWeightedPeersArray(): WeightedElement<string>[] {
-    return Array.from(this.weightedPeers.entries()).map(([id, weight]) => ({
-      id,
-      weight,
-    }));
-  }
-
   selectPeers(peerCount: number): string[] {
-    const log = this.log.child({ method: 'selectPeers' });
-
-    // Only sync peer list periodically, not on every call
-    this.syncPeerListIfNeeded();
-
-    if (this.weightedPeers.size === 0) {
-      log.warn('No weighted peers available');
-      throw new Error('No weighted peers available');
-    }
-
-    const weightedPeersArray = this.getWeightedPeersArray();
-    return shuffleArray([
-      ...this.getRandomWeightedPeers(weightedPeersArray, peerCount),
-    ]);
+    return this.peerManager.selectPeers(DATA_CATEGORY, peerCount);
   }
 
   handlePeerSuccess(peer: string, kbps: number, ttfb: number): void {
@@ -177,56 +97,12 @@ export class ArIODataSource
       source: peer,
     });
 
-    this.previousGatewayPeerTtfbDurations.push(ttfb);
-    if (
-      this.previousGatewayPeerTtfbDurations.length >
-      config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT
-    ) {
-      this.previousGatewayPeerTtfbDurations.shift();
-    }
+    const successMetrics: PeerSuccessMetrics = {
+      kbps,
+      ttfb,
+    };
 
-    this.previousGatewayPeerKbpsDownloadRate.push(kbps);
-    if (
-      this.previousGatewayPeerKbpsDownloadRate.length >
-      config.GATEWAY_PEERS_REQUEST_WINDOW_COUNT
-    ) {
-      this.previousGatewayPeerKbpsDownloadRate.shift();
-    }
-    const currentAverageTtfb =
-      this.previousGatewayPeerTtfbDurations.length === 0
-        ? 0
-        : this.previousGatewayPeerTtfbDurations.reduce(
-            (acc, value) => acc + value,
-            0,
-          ) / this.previousGatewayPeerTtfbDurations.length;
-
-    const currentAverageKbps =
-      this.previousGatewayPeerKbpsDownloadRate.length === 0
-        ? 0
-        : this.previousGatewayPeerKbpsDownloadRate.reduce(
-            (acc, value) => acc + value,
-            0,
-          ) / this.previousGatewayPeerKbpsDownloadRate.length;
-
-    const additionalWeightFromTtfb =
-      ttfb > currentAverageTtfb ? 0 : config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
-    const additionalWeightFromKbps =
-      kbps <= currentAverageKbps ? 0 : config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
-
-    // warm the succeeding peer
-    const currentWeight = this.weightedPeers.get(peer);
-    if (currentWeight !== undefined) {
-      this.weightedPeers.set(
-        peer,
-        Math.min(
-          currentWeight +
-            config.WEIGHTED_PEERS_TEMPERATURE_DELTA +
-            additionalWeightFromTtfb +
-            additionalWeightFromKbps,
-          100,
-        ),
-      );
-    }
+    this.peerManager.reportSuccess(DATA_CATEGORY, peer, successMetrics);
   }
 
   handlePeerFailure(peer: string): void {
@@ -235,14 +111,7 @@ export class ArIODataSource
       source: peer,
     });
 
-    // cool the failing peer
-    const currentWeight = this.weightedPeers.get(peer);
-    if (currentWeight !== undefined) {
-      this.weightedPeers.set(
-        peer,
-        Math.max(currentWeight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA, 1),
-      );
-    }
+    this.peerManager.reportFailure(DATA_CATEGORY, peer);
   }
 
   private async request({
@@ -298,7 +167,8 @@ export class ArIODataSource
   }): Promise<ContiguousData> {
     const log = this.log.child({ method: 'getData' });
     const totalRetryCount =
-      retryCount ?? Math.min(Math.max(Object.keys(this.peers).length, 1), 3);
+      retryCount ??
+      Math.min(Math.max(Object.keys(this.peerManager.getPeers()).length, 1), 3);
 
     log.debug('Fetching contiguous data from ArIO peer', {
       id,
