@@ -12,6 +12,7 @@ import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
+import { ArIOPeerManager } from './ar-io-peer-manager.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { headerNames } from '../constants.js';
@@ -19,6 +20,7 @@ import { release } from '../version.js';
 
 let log: winston.Logger;
 let dataSource: ArIODataSource;
+let peerManager: ArIOPeerManager;
 const nodeUrl = 'localNode.com';
 let requestAttributes: RequestAttributes;
 let mockedArIOInstance: AoARIORead;
@@ -72,24 +74,35 @@ beforeEach(async () => {
   mock.method(metrics.getDataStreamErrorsTotal, 'inc');
   mock.method(metrics.getDataStreamSuccessesTotal, 'inc');
 
-  dataSource = new ArIODataSource({
+  peerManager = new ArIOPeerManager({
     log,
     networkProcess: ARIO.init(),
     nodeWallet: 'localNode',
+    initialPeers: {
+      peer1: 'http://peer1.com',
+      peer2: 'https://peer2.com',
+    },
+    initialCategories: ['data'],
+  });
+
+  dataSource = new ArIODataSource({
+    log,
+    peerManager,
   });
 
   requestAttributes = { origin: 'node-url', hops: 0 };
 });
 
 afterEach(async () => {
-  dataSource.stopUpdatingPeers();
+  peerManager.stopUpdatingPeers();
   mock.restoreAll();
 });
 
 describe('ArIODataSource', () => {
   describe('constructor', () => {
-    it('should fetch peers and update peer list ignoring the running node as a peer', async () => {
-      assert.deepEqual(dataSource.peers, {
+    it('should initialize with test peers', async () => {
+      const peers = peerManager.getPeers();
+      assert.deepEqual(peers, {
         peer1: 'http://peer1.com',
         peer2: 'https://peer2.com',
       });

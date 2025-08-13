@@ -77,6 +77,8 @@ export class ArIOPeerManager {
     log,
     networkProcess,
     nodeWallet,
+    initialPeers,
+    initialCategories,
     updatePeersRefreshIntervalMs = DEFAULT_UPDATE_PEERS_REFRESH_INTERVAL_MS,
     circuitBreakerOptions = {
       timeout: config.ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_TIMEOUT_MS,
@@ -91,6 +93,8 @@ export class ArIOPeerManager {
     log: winston.Logger;
     networkProcess: AoARIORead;
     nodeWallet?: string;
+    initialPeers?: Record<string, string>;
+    initialCategories?: WeightCategory[];
     updatePeersRefreshIntervalMs?: number;
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
@@ -107,19 +111,6 @@ export class ArIOPeerManager {
         name: 'getGateways',
       },
     );
-
-    // Initialize default category configs
-    this.categoryConfigs.set('data', {
-      defaultWeight: DEFAULT_WEIGHT,
-      temperatureDelta: config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
-      cacheTtlMs: config.GATEWAY_PEERS_WEIGHTS_CACHE_DURATION_MS,
-    });
-
-    this.categoryConfigs.set('chunk', {
-      defaultWeight: DEFAULT_WEIGHT,
-      temperatureDelta: config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
-      cacheTtlMs: DEFAULT_SELECTION_CACHE_TTL_MS,
-    });
 
     // Initialize memoized peer selection cache
     this.selectPeersCache = memoize(this._selectPeersUncached.bind(this), {
@@ -141,11 +132,22 @@ export class ArIOPeerManager {
       },
     });
 
-    this.updatePeerList();
-    this.intervalId = setInterval(
-      this.updatePeerList.bind(this),
-      this.updatePeersRefreshIntervalMs,
-    );
+    // Initialize with provided peers or start fetching from network
+    if (initialPeers) {
+      this.peers = initialPeers;
+      // Initialize provided categories with the provided peers
+      if (initialCategories) {
+        for (const category of initialCategories) {
+          this.registerCategory(category);
+        }
+      }
+    } else {
+      this.updatePeerList();
+      this.intervalId = setInterval(
+        this.updatePeerList.bind(this),
+        this.updatePeersRefreshIntervalMs,
+      );
+    }
 
     // TODO: Remove deprecated circuit breaker metrics setup
     metrics.circuitBreakerMetrics.add(this.arioGatewaysCircuitBreaker);
