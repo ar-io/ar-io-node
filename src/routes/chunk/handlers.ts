@@ -31,102 +31,176 @@ export const createChunkOffsetHandler = ({
   log: Logger;
 }) => {
   return asyncHandler(async (request: Request, response: Response) => {
-    const offset = Number.parseInt(request.params.offset);
-
-    if (Number.isNaN(offset) || offset < 0) {
-      response.status(400).send('Invalid offset');
-      return;
-    }
-
-    // TODO: use a binary search to get this from the chain if it's not
-    // available in the DB
-    const {
-      data_root,
-      id,
-      data_size,
-      offset: weaveOffset,
-    } = await db.getTxByOffset(offset);
-
-    // This is unnecessary amount of validation, but it is here to be make typescript happy
-    if (
-      data_root === undefined ||
-      weaveOffset === undefined ||
-      id === undefined ||
-      data_size === undefined
-    ) {
-      response.sendStatus(404);
-      return;
-    }
-
-    // Calculate the relative offset, needed for chunk data source
-    const contiguousDataStartDelimiter = weaveOffset - data_size + 1;
-    const relativeOffset = offset - contiguousDataStartDelimiter;
-
-    // Extract request attributes for hop tracking
-    const requestAttributes = getRequestAttributes(request, response);
-
-    // composite-chunk-source returns chunk metadata and chunk data
-    let chunk: Chunk | undefined = undefined;
-
-    // actually fetch the chunk data
-    try {
-      chunk = await chunkSource.getChunkByAny({
-        txSize: data_size,
-        absoluteOffset: offset,
-        dataRoot: data_root,
-        relativeOffset,
-        requestAttributes,
-      });
-    } catch (error) {
-      response.sendStatus(404);
-      return;
-    }
-
-    if (chunk === undefined) {
-      response.sendStatus(404);
-      return;
-    }
-
-    let chunkBase64Url: string | undefined = undefined;
-    let dataPath: string | undefined = undefined;
-
-    try {
-      chunkBase64Url = toB64Url(chunk.chunk);
-    } catch (error) {
-      log.error('Error converting chunk to base64url', { error });
-      response.status(500).send('Error converting chunk to base64url');
-      return;
-    }
-
-    try {
-      dataPath = toB64Url(chunk.data_path);
-    } catch (error) {
-      log.error('Error getting data path from chunk', { error });
-      response.status(500).send('Error converting data path to base64url');
-      return;
-    }
-
-    // Add source tracking headers
-    if (chunk.source !== undefined && chunk.source !== '') {
-      response.setHeader(headerNames.chunkSource, chunk.source);
-    }
-    if (chunk.sourceHost !== undefined && chunk.sourceHost !== '') {
-      response.setHeader(headerNames.chunkHost, chunk.sourceHost);
-    }
-
-    // Set cache status header
-    const cacheStatus = chunk.source === 'cache' ? 'HIT' : 'MISS';
-    response.setHeader(headerNames.cache, cacheStatus);
-
-    // this is a very limited interface of the node network chunk response
-    response.status(200).json({
-      chunk: chunkBase64Url,
-      ...(dataPath !== undefined && {
-        data_path: dataPath,
-      }),
-      // as of today, ar-io-node doesn't pack chunks
-      packing: 'unpacked',
+    const span = tracer.startSpan('ChunkOffsetHandler.get', {
+      attributes: {
+        'http.method': 'GET',
+        'http.target': request.originalUrl,
+        'chunk.offset': request.params.offset,
+      },
     });
+
+    try {
+      const offset = Number.parseInt(request.params.offset);
+
+      if (Number.isNaN(offset) || offset < 0) {
+        span.setAttribute('http.status_code', 400);
+        span.setAttribute('chunk.retrieval.error', 'invalid_offset');
+        response.status(400).send('Invalid offset');
+        return;
+      }
+
+      span.setAttribute('chunk.absolute_offset', offset);
+
+      // TODO: use a binary search to get this from the chain if it's not
+      // available in the DB
+      const {
+        data_root,
+        id,
+        data_size,
+        offset: weaveOffset,
+      } = await db.getTxByOffset(offset);
+
+      // This is unnecessary amount of validation, but it is here to be make typescript happy
+      if (
+        data_root === undefined ||
+        weaveOffset === undefined ||
+        id === undefined ||
+        data_size === undefined
+      ) {
+        span.setAttribute('http.status_code', 404);
+        span.setAttribute('chunk.retrieval.error', 'tx_not_found');
+        span.addEvent('Transaction not found in database');
+        response.sendStatus(404);
+        return;
+      }
+
+      // Calculate the relative offset, needed for chunk data source
+      const contiguousDataStartDelimiter = weaveOffset - data_size + 1;
+      const relativeOffset = offset - contiguousDataStartDelimiter;
+
+      span.setAttributes({
+        'chunk.tx_id': id,
+        'chunk.data_root': data_root,
+        'chunk.data_size': data_size,
+        'chunk.weave_offset': weaveOffset,
+        'chunk.relative_offset': relativeOffset,
+      });
+
+      // Extract request attributes for hop tracking
+      const requestAttributes = getRequestAttributes(request, response);
+
+      // composite-chunk-source returns chunk metadata and chunk data
+      let chunk: Chunk | undefined = undefined;
+
+      // actually fetch the chunk data
+      span.addEvent('Starting chunk retrieval');
+      const chunkRetrievalStart = Date.now();
+
+      try {
+        chunk = await chunkSource.getChunkByAny({
+          txSize: data_size,
+          absoluteOffset: offset,
+          dataRoot: data_root,
+          relativeOffset,
+          requestAttributes,
+        });
+      } catch (error: any) {
+        const retrievalDuration = Date.now() - chunkRetrievalStart;
+        span.setAttributes({
+          'http.status_code': 404,
+          'chunk.retrieval.error': 'fetch_failed',
+          'chunk.retrieval.duration_ms': retrievalDuration,
+        });
+        span.recordException(error);
+        response.sendStatus(404);
+        return;
+      }
+
+      const retrievalDuration = Date.now() - chunkRetrievalStart;
+      span.setAttribute('chunk.retrieval.duration_ms', retrievalDuration);
+
+      if (chunk === undefined) {
+        span.setAttribute('http.status_code', 404);
+        span.setAttribute('chunk.retrieval.error', 'chunk_undefined');
+        response.sendStatus(404);
+        return;
+      }
+
+      span.addEvent('Chunk retrieval successful');
+
+      // Track chunk source information
+      if (chunk.source !== undefined) {
+        span.setAttribute('chunk.source', chunk.source);
+      }
+      if (chunk.sourceHost !== undefined) {
+        span.setAttribute('chunk.source_host', chunk.sourceHost);
+      }
+
+      let chunkBase64Url: string | undefined = undefined;
+      let dataPath: string | undefined = undefined;
+
+      try {
+        chunkBase64Url = toB64Url(chunk.chunk);
+        span.setAttribute('chunk.encoded_size', chunkBase64Url.length);
+      } catch (error: any) {
+        span.setAttribute('http.status_code', 500);
+        span.setAttribute('chunk.retrieval.error', 'encoding_failed');
+        span.recordException(error);
+        log.error('Error converting chunk to base64url', { error });
+        response.status(500).send('Error converting chunk to base64url');
+        return;
+      }
+
+      try {
+        dataPath = toB64Url(chunk.data_path);
+      } catch (error: any) {
+        span.setAttribute('http.status_code', 500);
+        span.setAttribute('chunk.retrieval.error', 'datapath_encoding_failed');
+        span.recordException(error);
+        log.error('Error getting data path from chunk', { error });
+        response.status(500).send('Error converting data path to base64url');
+        return;
+      }
+
+      // Add source tracking headers
+      if (chunk.source !== undefined && chunk.source !== '') {
+        response.setHeader(headerNames.chunkSource, chunk.source);
+      }
+      if (chunk.sourceHost !== undefined && chunk.sourceHost !== '') {
+        response.setHeader(headerNames.chunkHost, chunk.sourceHost);
+      }
+
+      // Set cache status header
+      const cacheStatus = chunk.source === 'cache' ? 'HIT' : 'MISS';
+      response.setHeader(headerNames.cache, cacheStatus);
+      span.setAttribute('chunk.cache_status', cacheStatus);
+
+      span.setAttributes({
+        'http.status_code': 200,
+        'chunk.raw_size': chunk.chunk.length,
+      });
+      span.addEvent('Chunk response successful');
+
+      // this is a very limited interface of the node network chunk response
+      response.status(200).json({
+        chunk: chunkBase64Url,
+        ...(dataPath !== undefined && {
+          data_path: dataPath,
+        }),
+        // as of today, ar-io-node doesn't pack chunks
+        packing: 'unpacked',
+      });
+    } catch (error: any) {
+      span.recordException(error);
+      span.setAttribute('http.status_code', 500);
+      log.error('Unexpected error in chunk offset handler', {
+        message: error?.message,
+        stack: error?.stack,
+      });
+      response.status(500).send('Internal server error');
+    } finally {
+      span.end();
+    }
   });
 };
 

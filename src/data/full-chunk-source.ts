@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { tracer } from '../tracing.js';
 import {
   ChunkMetadataByAnySource,
   ChunkByAnySource,
@@ -30,23 +31,75 @@ export class FullChunkSource
   }
 
   async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
-    const metadata =
-      await this.chunkMetadataSource.getChunkMetadataByAny(params);
+    const span = tracer.startSpan('FullChunkSource.getChunkByAny', {
+      attributes: {
+        'chunk.data_root': params.dataRoot,
+        'chunk.absolute_offset': params.absoluteOffset,
+        'chunk.relative_offset': params.relativeOffset,
+        'chunk.tx_size': params.txSize,
+      },
+    });
 
-    const chunkDataParams: ChunkDataByAnySourceParams = {
-      txSize: params.txSize,
-      absoluteOffset: params.absoluteOffset,
-      dataRoot: params.dataRoot,
-      relativeOffset: metadata.offset, // aligned offset
-    };
+    try {
+      span.addEvent('Fetching chunk metadata');
+      const metadataStart = Date.now();
 
-    const data = await this.chunkDataSource.getChunkDataByAny(chunkDataParams);
+      const metadata =
+        await this.chunkMetadataSource.getChunkMetadataByAny(params);
+      const metadataDuration = Date.now() - metadataStart;
 
-    return {
-      ...metadata,
-      ...data,
-      tx_path: undefined,
-    };
+      span.setAttributes({
+        'chunk.metadata_duration_ms': metadataDuration,
+        'chunk.metadata_offset': metadata.offset,
+        'chunk.metadata_size': metadata.chunk_size,
+      });
+
+      span.addEvent('Metadata retrieved', {
+        duration_ms: metadataDuration,
+        aligned_offset: metadata.offset,
+        chunk_size: metadata.chunk_size,
+      });
+
+      const chunkDataParams: ChunkDataByAnySourceParams = {
+        txSize: params.txSize,
+        absoluteOffset: params.absoluteOffset,
+        dataRoot: params.dataRoot,
+        relativeOffset: metadata.offset, // aligned offset
+      };
+
+      span.addEvent('Fetching chunk data');
+      const dataStart = Date.now();
+
+      const data =
+        await this.chunkDataSource.getChunkDataByAny(chunkDataParams);
+      const dataDuration = Date.now() - dataStart;
+
+      span.setAttributes({
+        'chunk.data_duration_ms': dataDuration,
+        'chunk.source': data.source ?? 'unknown',
+        'chunk.source_host': data.sourceHost ?? 'unknown',
+      });
+
+      span.addEvent('Chunk data retrieved', {
+        duration_ms: dataDuration,
+        chunk_source: data.source,
+        chunk_host: data.sourceHost,
+      });
+
+      const result = {
+        ...metadata,
+        ...data,
+        tx_path: undefined,
+      };
+
+      span.addEvent('Full chunk assembly complete');
+      return result;
+    } catch (error: any) {
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
   }
 
   async getChunkDataByAny(

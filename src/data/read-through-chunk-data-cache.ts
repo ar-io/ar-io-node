@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import winston from 'winston';
+import { tracer } from '../tracing.js';
 
 import {
   ChunkData,
@@ -38,36 +39,102 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
     dataRoot,
     relativeOffset,
   }: ChunkDataByAnySourceParams): Promise<ChunkData> {
-    const chunkDataPromise = this.chunkStore
-      .get(dataRoot, relativeOffset)
-      .then(async (cachedChunkData) => {
-        // Chunk is cached
-        if (cachedChunkData) {
-          this.log.debug('Successfully fetched chunk data from cache', {
-            dataRoot,
-            relativeOffset,
-          });
-          return {
-            ...cachedChunkData,
-            source: 'cache',
-            // No sourceHost for cache hits
-            sourceHost: undefined,
-          };
-        }
+    const span = tracer.startSpan(
+      'ReadThroughChunkDataCache.getChunkDataByAny',
+      {
+        attributes: {
+          'chunk.data_root': dataRoot,
+          'chunk.absolute_offset': absoluteOffset,
+          'chunk.relative_offset': relativeOffset,
+          'chunk.tx_size': txSize,
+        },
+      },
+    );
 
-        // Fetch from ChunkSource
-        const chunkData = await this.chunkSource.getChunkDataByAny({
-          txSize,
-          absoluteOffset,
+    try {
+      span.addEvent('Checking cache');
+      const cacheCheckStart = Date.now();
+
+      const cachedChunkData = await this.chunkStore.get(
+        dataRoot,
+        relativeOffset,
+      );
+      const cacheCheckDuration = Date.now() - cacheCheckStart;
+
+      // Chunk is cached
+      if (cachedChunkData) {
+        span.setAttributes({
+          'chunk.cache_hit': true,
+          'chunk.cache_check_duration_ms': cacheCheckDuration,
+          'chunk.source': 'cache',
+        });
+
+        span.addEvent('Cache hit', {
+          cache_check_duration_ms: cacheCheckDuration,
+        });
+
+        this.log.debug('Successfully fetched chunk data from cache', {
           dataRoot,
           relativeOffset,
         });
 
-        await this.chunkStore.set(dataRoot, relativeOffset, chunkData);
+        return {
+          ...cachedChunkData,
+          source: 'cache',
+          // No sourceHost for cache hits
+          sourceHost: undefined,
+        };
+      }
 
-        return chunkData;
+      // Cache miss - need to fetch from source
+      span.setAttributes({
+        'chunk.cache_hit': false,
+        'chunk.cache_check_duration_ms': cacheCheckDuration,
       });
 
-    return chunkDataPromise;
+      span.addEvent('Cache miss - fetching from source', {
+        cache_check_duration_ms: cacheCheckDuration,
+      });
+
+      const sourceStart = Date.now();
+      const chunkData = await this.chunkSource.getChunkDataByAny({
+        txSize,
+        absoluteOffset,
+        dataRoot,
+        relativeOffset,
+      });
+      const sourceDuration = Date.now() - sourceStart;
+
+      span.setAttributes({
+        'chunk.source_fetch_duration_ms': sourceDuration,
+        'chunk.source': chunkData.source ?? 'unknown',
+        'chunk.source_host': chunkData.sourceHost ?? 'unknown',
+      });
+
+      span.addEvent('Source fetch completed', {
+        source_duration_ms: sourceDuration,
+        chunk_source: chunkData.source,
+      });
+
+      // Cache the result
+      const cacheStoreStart = Date.now();
+      await this.chunkStore.set(dataRoot, relativeOffset, chunkData);
+      const cacheStoreDuration = Date.now() - cacheStoreStart;
+
+      span.setAttributes({
+        'chunk.cache_store_duration_ms': cacheStoreDuration,
+      });
+
+      span.addEvent('Chunk cached', {
+        cache_store_duration_ms: cacheStoreDuration,
+      });
+
+      return chunkData;
+    } catch (error: any) {
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
   }
 }
