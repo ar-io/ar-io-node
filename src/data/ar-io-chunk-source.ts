@@ -6,11 +6,14 @@
  */
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
-import { headerNames } from '../constants.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import { release } from '../version.js';
 import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
+import {
+  generateRequestAttributes,
+  validateHopCount,
+} from '../lib/request-attributes.js';
 import {
   ChunkData,
   ChunkDataByAnySource,
@@ -23,7 +26,7 @@ import {
 // Local constants (no configuration needed)
 const CHUNK_CACHE_CAPACITY = 100;
 const CHUNK_CACHE_TTL_SECONDS = 60;
-const MAX_CHUNK_HOPS_ALLOWED = 1;
+const MAX_CHUNK_HOPS = 1;
 const CHUNK_CATEGORY = 'chunk';
 
 export class ArIOChunkSource
@@ -113,42 +116,32 @@ export class ArIOChunkSource
       absoluteOffset: params.absoluteOffset,
     });
 
-    // Determine hop count and origin from request attributes
+    // Validate hop count before proceeding
     const currentHops = params.requestAttributes?.hops ?? 0;
-    const nextHops = currentHops + 1;
+    validateHopCount(currentHops, MAX_CHUNK_HOPS);
 
-    // Check if we've exceeded the maximum allowed hops
-    if (nextHops > MAX_CHUNK_HOPS_ALLOWED) {
-      throw new Error(
-        `Maximum hops (${MAX_CHUNK_HOPS_ALLOWED}) exceeded for chunk request`,
-      );
-    }
+    // Generate request attributes with hop increment and headers
+    const requestAttributesHeaders = generateRequestAttributes({
+      hops: currentHops,
+      // Initialize origin and originNodeRelease if both are missing
+      origin:
+        params.requestAttributes?.origin ??
+        (params.requestAttributes?.originNodeRelease == null &&
+        config.ARNS_ROOT_HOST != null
+          ? config.ARNS_ROOT_HOST
+          : undefined),
+      originNodeRelease:
+        params.requestAttributes?.originNodeRelease ??
+        (params.requestAttributes?.origin == null &&
+        config.ARNS_ROOT_HOST != null
+          ? release
+          : undefined),
+      arnsName: params.requestAttributes?.arnsName,
+      arnsBasename: params.requestAttributes?.arnsBasename,
+      arnsRecord: params.requestAttributes?.arnsRecord,
+    });
 
-    const headers: Record<string, string> = {
-      [headerNames.hops]: nextHops.toString(),
-    };
-
-    // Initialize origin and originNodeRelease from request attributes
-    const origin = params.requestAttributes?.origin;
-    const originNodeRelease = params.requestAttributes?.originNodeRelease;
-
-    // Only initialize BOTH if BOTH are missing and ARNS_ROOT_HOST is configured
-    if (
-      origin == null &&
-      originNodeRelease == null &&
-      config.ARNS_ROOT_HOST != null
-    ) {
-      headers[headerNames.origin] = config.ARNS_ROOT_HOST;
-      headers[headerNames.originNodeRelease] = release;
-    } else {
-      // Pass through existing values if present
-      if (origin != null) {
-        headers[headerNames.origin] = origin;
-      }
-      if (originNodeRelease != null) {
-        headers[headerNames.originNodeRelease] = originNodeRelease;
-      }
-    }
+    const headers = requestAttributesHeaders?.headers || {};
 
     // Retry with different peers on failure
     for (let attempt = 0; attempt < retryCount; attempt++) {

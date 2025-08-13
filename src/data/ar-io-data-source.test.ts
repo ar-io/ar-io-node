@@ -280,7 +280,7 @@ describe('ArIODataSource', () => {
 
       assert.rejects(
         dataSource.getData({ id: 'dataId', requestAttributes }),
-        /Max hops reached/,
+        /Maximum hops \(\d+\) exceeded/,
       );
     });
 
@@ -289,7 +289,7 @@ describe('ArIODataSource', () => {
 
       await assert.rejects(
         dataSource.getData({ id: 'dataId', requestAttributes }),
-        /Max hops reached/,
+        /Maximum hops \(\d+\) exceeded/,
       );
     });
 

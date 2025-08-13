@@ -19,13 +19,14 @@ import {
 import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  validateHopCount,
 } from '../lib/request-attributes.js';
 import { headerNames } from '../constants.js';
 
 import * as metrics from '../metrics.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
-const DEFAULT_MAX_HOPS_ALLOWED = 3;
+const MAX_DATA_HOPS = 3;
 const DATA_CATEGORY = 'data';
 
 export type PeerWeight = {
@@ -45,7 +46,7 @@ export class ArIODataSource
   constructor({
     log,
     peerManager,
-    maxHopsAllowed = DEFAULT_MAX_HOPS_ALLOWED,
+    maxHopsAllowed = MAX_DATA_HOPS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   }: {
     log: winston.Logger;
@@ -172,10 +173,7 @@ export class ArIODataSource
     });
 
     if (requestAttributes !== undefined) {
-      if (requestAttributes.hops >= this.maxHopsAllowed) {
-        log.error('Max hops reached');
-        throw new Error('Max hops reached');
-      }
+      validateHopCount(requestAttributes.hops, this.maxHopsAllowed);
     }
 
     const randomPeers = this.selectPeers(totalRetryCount);

@@ -8,6 +8,12 @@
 import { headerNames } from '../constants.js';
 import { RequestAttributes } from '../types.js';
 
+export function validateHopCount(currentHops: number, maxHops: number): void {
+  if (currentHops >= maxHops) {
+    throw new Error(`Maximum hops (${maxHops}) exceeded`);
+  }
+}
+
 export const generateRequestAttributes = (
   requestAttributes: RequestAttributes | undefined,
 ):
