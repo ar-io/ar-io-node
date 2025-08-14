@@ -15,7 +15,7 @@ export const headerNames = {
   verified: 'X-AR-IO-Verified',
   trusted: 'X-AR-IO-Trusted',
   cache: 'X-Cache',
-  chunkSource: 'X-AR-IO-Chunk-Source',
+  chunkSourceType: 'X-AR-IO-Chunk-Source-Type',
   chunkHost: 'X-AR-IO-Chunk-Host',
   rootTransactionId: 'X-AR-IO-Root-Transaction-Id',
   dataItemDataOffset: 'X-AR-IO-Data-Item-Data-Offset',

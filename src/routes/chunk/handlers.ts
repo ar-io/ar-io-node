@@ -178,7 +178,7 @@ export const createChunkOffsetHandler = ({
 
       // Add source tracking headers
       if (chunk.source !== undefined && chunk.source !== '') {
-        response.setHeader(headerNames.chunkSource, chunk.source);
+        response.setHeader(headerNames.chunkSourceType, chunk.source);
       }
       if (chunk.sourceHost !== undefined && chunk.sourceHost !== '') {
         response.setHeader(headerNames.chunkHost, chunk.sourceHost);
