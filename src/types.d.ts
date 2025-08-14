@@ -803,3 +803,9 @@ export interface OwnerSource {
 export interface WithPeers<T> {
   getPeers(): Record<string, T>;
 }
+
+export interface WithFormattedPeers {
+  getFormattedPeers(
+    categories: string[],
+  ): Record<string, { url: string; weights: Record<string, number> }>;
+}

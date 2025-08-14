@@ -10,6 +10,7 @@ import CircuitBreaker from 'opossum';
 import memoize from 'memoizee';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
+import { WithFormattedPeers } from '../types.js';
 import {
   WeightedElement,
   randomWeightedChoices,
@@ -35,13 +36,18 @@ export interface PeerSuccessMetrics {
 
 export type WeightCategory = 'data' | 'chunk' | string;
 
+export interface FormattedPeer {
+  url: string;
+  weights: Record<WeightCategory, number>;
+}
+
 interface WeightCategoryConfig {
   defaultWeight?: number;
   temperatureDelta?: number;
   cacheTtlMs?: number;
 }
 
-export class ArIOPeerManager {
+export class ArIOPeerManager implements WithFormattedPeers {
   private log: winston.Logger;
   private nodeWallet: string | undefined;
   private updatePeersRefreshIntervalMs: number;
@@ -368,6 +374,42 @@ export class ArIOPeerManager {
    */
   getPeerUrls(): string[] {
     return Object.values(this.peers);
+  }
+
+  /**
+   * Get peers formatted as host:port keys with weights for specified categories
+   * @param categories - Array of weight categories to include
+   * @returns Record of host:port to peer info with weights
+   */
+  getFormattedPeers(
+    categories: WeightCategory[],
+  ): Record<string, FormattedPeer> {
+    const peers: Record<string, FormattedPeer> = {};
+
+    for (const [walletAddress, url] of Object.entries(this.getPeers())) {
+      try {
+        const urlObj = new URL(url);
+        const defaultPort = urlObj.protocol === 'https:' ? '443' : '80';
+        const key =
+          urlObj.hostname +
+          (urlObj.port ? `:${urlObj.port}` : `:${defaultPort}`);
+
+        const weights: Record<WeightCategory, number> = {};
+        for (const category of categories) {
+          const categoryWeights = this.peerWeights.get(category);
+          weights[category] = categoryWeights?.get(url) ?? DEFAULT_WEIGHT;
+        }
+
+        peers[key] = {
+          url: url,
+          weights,
+        };
+      } catch (error) {
+        // Skip if URL parsing fails
+      }
+    }
+
+    return peers;
   }
 
   /**

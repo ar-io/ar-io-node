@@ -132,7 +132,7 @@ arIoRouter.get('/ar-io/info', arIoInfoHandler);
 arIoRouter.get('/ar-io/peers', async (_req, res) => {
   try {
     const [gateways, arweaveNodes] = await Promise.all([
-      system.arIODataSource.getPeers(),
+      getGatewayPeers(),
       system.arweaveClient.getPeers(),
     ]);
     res.json({ gateways, arweaveNodes });
@@ -140,6 +140,28 @@ arIoRouter.get('/ar-io/peers', async (_req, res) => {
     res.status(500).send(error?.message);
   }
 });
+
+function getGatewayPeers() {
+  const formattedPeers = system.arIOPeerManager.getFormattedPeers([
+    'data',
+    'chunk',
+  ]);
+
+  // Transform to the expected format for backward compatibility
+  const peers: Record<
+    string,
+    { url: string; dataWeight: number; chunkWeight: number }
+  > = {};
+  for (const [key, peer] of Object.entries(formattedPeers)) {
+    peers[key] = {
+      url: peer.url,
+      dataWeight: peer.weights.data,
+      chunkWeight: peer.weights.chunk,
+    };
+  }
+
+  return peers;
+}
 
 // Only allow access to admin routes if the bearer token matches the admin api key
 arIoRouter.use('/ar-io/admin', (req, res, next) => {

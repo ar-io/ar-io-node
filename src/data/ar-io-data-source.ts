@@ -14,7 +14,6 @@ import {
   ContiguousDataSource,
   Region,
   RequestAttributes,
-  WithPeers,
 } from '../types.js';
 import {
   generateRequestAttributes,
@@ -29,14 +28,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const MAX_DATA_HOPS = 3;
 const DATA_CATEGORY = 'data';
 
-export type PeerWeight = {
-  url: string;
-  dataWeight: number;
-};
-
-export class ArIODataSource
-  implements ContiguousDataSource, WithPeers<PeerWeight>
-{
+export class ArIODataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
@@ -59,29 +51,6 @@ export class ArIODataSource
     this.requestTimeoutMs = requestTimeoutMs;
     this.peerManager = peerManager;
     this.peers = peerManager.getPeers();
-  }
-
-  getPeers(): Record<string, PeerWeight> {
-    const peers: Record<string, PeerWeight> = {};
-    const weights = this.peerManager.getWeights(DATA_CATEGORY);
-
-    if (!weights) {
-      return peers;
-    }
-
-    for (const [peerId, weight] of weights) {
-      try {
-        const url = new URL(peerId);
-        const key = url.hostname + (url.port ? `:${url.port}` : ':443');
-        peers[key] = {
-          url: peerId,
-          dataWeight: weight,
-        };
-      } catch (error) {
-        // Skip if URL parsing fails
-      }
-    }
-    return peers;
   }
 
   selectPeers(peerCount: number): string[] {
