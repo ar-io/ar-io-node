@@ -21,6 +21,20 @@ import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
 import { getRequestAttributes } from '../data/handlers.js';
 
+const handleIfNoneMatch = (req: Request, res: Response): boolean => {
+  const ifNoneMatch = req.get('if-none-match');
+  const etag = res.getHeader('etag');
+
+  if (ifNoneMatch !== undefined && etag !== undefined && ifNoneMatch === etag) {
+    res.status(304);
+    // Remove entity headers as per RFC 7232
+    res.removeHeader('content-length');
+    res.removeHeader('content-type');
+    return true;
+  }
+  return false;
+};
+
 export const createChunkOffsetHandler = ({
   chunkSource,
   db,
@@ -31,9 +45,9 @@ export const createChunkOffsetHandler = ({
   log: Logger;
 }) => {
   return asyncHandler(async (request: Request, response: Response) => {
-    const span = tracer.startSpan('ChunkOffsetHandler.get', {
+    const span = tracer.startSpan('ChunkOffsetHandler.handle', {
       attributes: {
-        'http.method': 'GET',
+        'http.method': request.method,
         'http.target': request.originalUrl,
         'chunk.offset': request.params.offset,
       },
@@ -175,21 +189,62 @@ export const createChunkOffsetHandler = ({
       response.setHeader(headerNames.cache, cacheStatus);
       span.setAttribute('chunk.cache_status', cacheStatus);
 
-      span.setAttributes({
-        'http.status_code': 200,
-        'chunk.raw_size': chunk.chunk.length,
-      });
-      span.addEvent('Chunk response successful');
+      // Add ETag and digest headers when hash is available
+      // Following the pattern from data handlers: only add these when
+      // data is cached OR it's a HEAD request (to prevent incorrect hashes on streamed data)
+      if (
+        chunk.hash !== undefined &&
+        (chunk.source === 'cache' || request.method === 'HEAD')
+      ) {
+        const hashString = toB64Url(chunk.hash);
+        response.setHeader('ETag', `"${hashString}"`);
+        response.setHeader(headerNames.digest, hashString);
+        span.setAttribute('chunk.hash', hashString);
+      }
 
-      // this is a very limited interface of the node network chunk response
-      response.status(200).json({
+      // Set content type and prepare response data
+      response.setHeader('Content-Type', 'application/json; charset=utf-8');
+
+      // Calculate Content-Length for HEAD requests
+      const responseBody = {
         chunk: chunkBase64Url,
         ...(dataPath !== undefined && {
           data_path: dataPath,
         }),
         // as of today, ar-io-node doesn't pack chunks
         packing: 'unpacked',
+      };
+      const responseBodyString = JSON.stringify(responseBody);
+      response.setHeader(
+        'Content-Length',
+        Buffer.byteLength(responseBodyString).toString(),
+      );
+
+      // Handle conditional requests (If-None-Match)
+      if (handleIfNoneMatch(request, response)) {
+        span.setAttribute('http.status_code', 304);
+        span.addEvent('Conditional request - not modified');
+        response.end();
+        return;
+      }
+
+      span.setAttributes({
+        'http.status_code': 200,
+        'chunk.raw_size': chunk.chunk.length,
       });
+
+      // Handle HEAD request - return headers only, no body
+      if (request.method === 'HEAD') {
+        span.addEvent('HEAD request - headers only');
+        response.status(200).end();
+        return;
+      }
+
+      span.addEvent('Chunk response successful');
+
+      // Send the full response for GET requests
+      // We manually send JSON to preserve our custom ETag
+      response.status(200).send(responseBodyString);
     } catch (error: any) {
       span.recordException(error);
       span.setAttribute('http.status_code', 500);
