@@ -1324,14 +1324,104 @@ paths:
           required: true
           schema:
             type: integer
+        - name: If-None-Match
+          in: header
+          required: false
+          description: ETag value for conditional request. Returns 304 if chunk hash matches.
+          schema:
+            type: string
       responses:
         '200':
           description: |-
             200 response
+          headers:
+            ETag:
+              description: Entity tag based on chunk hash (when available)
+              schema:
+                type: string
+            X-AR-IO-Digest:
+              description: Chunk hash digest (when available)
+              schema:
+                type: string
+            X-AR-IO-Cache-Status:
+              description: Cache status (HIT or MISS)
+              schema:
+                type: string
+                enum: [HIT, MISS]
+            X-AR-IO-Source:
+              description: Source of the chunk data
+              schema:
+                type: string
+            X-AR-IO-Host:
+              description: Host that provided the chunk
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 '$ref': '#/components/schemas/Chunk'
+        '304':
+          description: Not Modified - chunk hash matches If-None-Match header
+        '400':
+          description: Invalid offset parameter
+        '404':
+          description: Chunk not found
+    head:
+      tags: [Chunks]
+      summary: Get chunk metadata without body.
+      description: Returns the same headers as GET but without the response body. Useful for checking chunk existence and metadata.
+      parameters:
+        - name: offset
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: If-None-Match
+          in: header
+          required: false
+          description: ETag value for conditional request. Returns 304 if chunk hash matches.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: |-
+            200 response with headers only
+          headers:
+            Content-Length:
+              description: Size of the response body (if it were returned)
+              schema:
+                type: integer
+            Content-Type:
+              description: Media type of the response
+              schema:
+                type: string
+            ETag:
+              description: Entity tag based on chunk hash (when available)
+              schema:
+                type: string
+            X-AR-IO-Digest:
+              description: Chunk hash digest (when available)
+              schema:
+                type: string
+            X-AR-IO-Cache-Status:
+              description: Cache status (HIT or MISS)
+              schema:
+                type: string
+                enum: [HIT, MISS]
+            X-AR-IO-Source:
+              description: Source of the chunk data
+              schema:
+                type: string
+            X-AR-IO-Host:
+              description: Host that provided the chunk
+              schema:
+                type: string
+        '304':
+          description: Not Modified - chunk hash matches If-None-Match header
+        '400':
+          description: Invalid offset parameter
+        '404':
+          description: Chunk not found
 
   # Index
   '/graphql':

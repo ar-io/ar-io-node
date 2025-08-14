@@ -32,6 +32,15 @@ chunkRouter.get(
   }),
 );
 
+chunkRouter.head(
+  CHUNK_OFFSET_PATH,
+  createChunkOffsetHandler({
+    chunkSource,
+    db,
+    log: log.child({ class: 'ChunkHeadOffsetHandler' }),
+  }),
+);
+
 chunkRouter.post(
   '/chunk',
   createChunkPostHandler({
