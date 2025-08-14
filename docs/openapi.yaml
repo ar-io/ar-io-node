@@ -572,6 +572,87 @@ paths:
                   - processId
                   - supportedManifestVersions
                   - release
+  '/ar-io/peers':
+    get:
+      tags: [Gateway]
+      summary: Get AR.IO Gateway peer information
+      description: |
+        Returns information about AR.IO Gateway peers and Arweave node peers.
+        For gateways, includes both data and chunk weights used for peer selection.
+        Peer keys are formatted as host:port.
+      responses:
+        '200':
+          description: Peer information response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gateways:
+                    type: object
+                    description: AR.IO Gateway peers with their weights
+                    additionalProperties:
+                      type: object
+                      properties:
+                        url:
+                          type: string
+                          format: uri
+                          description: Full URL of the gateway peer
+                          example: "https://gateway.example.com"
+                        dataWeight:
+                          type: number
+                          minimum: 1
+                          maximum: 100
+                          description: Weight for data retrieval operations
+                          example: 50
+                        chunkWeight:
+                          type: number
+                          minimum: 1
+                          maximum: 100
+                          description: Weight for chunk retrieval operations
+                          example: 50
+                      required:
+                        - url
+                        - dataWeight
+                        - chunkWeight
+                  arweaveNodes:
+                    type: object
+                    description: Arweave node peers with their metadata
+                    additionalProperties:
+                      type: object
+                      properties:
+                        url:
+                          type: string
+                          format: uri
+                          description: URL of the Arweave node peer
+                          example: "http://arweave.example.com:1984"
+                        blocks:
+                          type: number
+                          description: Number of blocks stored by this peer
+                          example: 165967
+                        height:
+                          type: number
+                          description: Current block height of this peer
+                          example: 1732652
+                        lastSeen:
+                          type: number
+                          description: Unix timestamp when peer was last seen
+                          example: 1755190447700
+                required:
+                  - gateways
+                  - arweaveNodes
+                example:
+                  gateways:
+                    "gateway.example.com:443":
+                      url: "https://gateway.example.com"
+                      dataWeight: 50
+                      chunkWeight: 50
+                  arweaveNodes:
+                    "arweave.example.com:1984":
+                      url: "http://arweave.example.com:1984"
+                      blocks: 165967
+                      height: 1732652
+                      lastSeen: 1755190447700
   '/ar-io/__gateway_metrics':
     get:
       tags: [Gateway]
