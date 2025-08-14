@@ -159,8 +159,8 @@ describe('KvDebounceCache', () => {
       assert.ok(lastCallTimestamp <= Date.now());
       assert.equal(callCount, 1);
 
-      // wait for the cache hit debounce ttl to expire
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // wait for the cache hit debounce ttl to expire (add small buffer for timing precision)
+      await new Promise((resolve) => setTimeout(resolve, 105));
 
       // trigger another get to cause the refresh on hit
       const result2 = await kvDebounceStore.get(key);
