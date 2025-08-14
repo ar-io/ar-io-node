@@ -386,7 +386,7 @@ export class ArIOPeerManager implements WithFormattedPeers {
   ): Record<string, FormattedPeer> {
     const peers: Record<string, FormattedPeer> = {};
 
-    for (const [walletAddress, url] of Object.entries(this.getPeers())) {
+    for (const [_walletAddress, url] of Object.entries(this.getPeers())) {
       try {
         const urlObj = new URL(url);
         const defaultPort = urlObj.protocol === 'https:' ? '443' : '80';
