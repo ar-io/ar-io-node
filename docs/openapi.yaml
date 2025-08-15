@@ -734,6 +734,11 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              schema:
+                type: string
+                description: RFC 9530 compliant digest header with SHA-256
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               schema:
                 type: string
@@ -778,6 +783,11 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              schema:
+                type: string
+                description: RFC 9530 compliant digest header with SHA-256
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               schema:
                 type: string
@@ -847,6 +857,11 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              schema:
+                type: string
+                description: RFC 9530 compliant digest header with SHA-256
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               schema:
                 type: string
@@ -909,6 +924,11 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              schema:
+                type: string
+                description: RFC 9530 compliant digest header with SHA-256
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               schema:
                 type: string
@@ -953,6 +973,11 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              schema:
+                type: string
+                description: RFC 9530 compliant digest header with SHA-256
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               schema:
                 type: string
@@ -1018,6 +1043,11 @@ paths:
               schema:
                 type: string
                 example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              schema:
+                type: string
+                description: RFC 9530 compliant digest header with SHA-256
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
             ETag:
               schema:
                 type: string
@@ -1339,10 +1369,11 @@ paths:
               description: Entity tag based on chunk hash (when available)
               schema:
                 type: string
-            X-AR-IO-Digest:
-              description: Chunk hash digest (when available)
+            Content-Digest:
+              description: RFC 9530 compliant digest header with SHA-256 (when available)
               schema:
                 type: string
+                example: 'sha-256=:YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE=:'
             X-AR-IO-Cache-Status:
               description: Cache status (HIT or MISS)
               schema:
@@ -1399,10 +1430,11 @@ paths:
               description: Entity tag based on chunk hash (when available)
               schema:
                 type: string
-            X-AR-IO-Digest:
-              description: Chunk hash digest (when available)
+            Content-Digest:
+              description: RFC 9530 compliant digest header with SHA-256 (when available)
               schema:
                 type: string
+                example: 'sha-256=:YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE=:'
             X-AR-IO-Cache-Status:
               description: Cache status (HIT or MISS)
               schema:

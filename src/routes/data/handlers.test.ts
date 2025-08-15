@@ -765,6 +765,7 @@ st
             .expect(200)
             .then((res: any) => {
               assert.equal(res.headers['x-ar-io-digest'], undefined);
+              assert.equal(res.headers['content-digest'], undefined);
               assert.equal(res.headers['etag'], undefined);
             });
         });
@@ -797,6 +798,7 @@ st
             .expect(200)
             .then((res: any) => {
               assert.equal(res.headers['x-ar-io-digest'], undefined);
+              assert.equal(res.headers['content-digest'], undefined);
               assert.equal(res.headers['etag'], undefined);
             });
         });
@@ -851,7 +853,58 @@ st
             .expect(200)
             .then((res: any) => {
               assert.equal(res.headers['x-ar-io-digest'], 'hash');
+              assert.equal(res.headers['content-digest'], 'sha-256=:hash:');
               assert.equal(res.headers['etag'], '"hash"');
+            });
+        });
+
+        it('should return Content-Digest header with RFC 9530 format when hash is available AND data is cached', async () => {
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataIndex,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
+            }),
+          );
+
+          // Mock data with base64url hash
+          dataIndex.getDataAttributes = async () => ({
+            hash: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4',
+            size: 100,
+            contentType: 'text/plain',
+            stable: true,
+            verified: true,
+            offset: 0,
+          });
+
+          dataSource.getData = async () => ({
+            stream: Readable.from(Buffer.from('test data')),
+            size: 100,
+            sourceContentType: 'text/plain',
+            verified: true,
+            cached: true,
+            trusted: true,
+          });
+
+          await request(app)
+            .get('/test-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.equal(
+                res.headers['x-ar-io-digest'],
+                '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4',
+              );
+              assert.equal(
+                res.headers['content-digest'],
+                'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:',
+              );
+              assert.equal(
+                res.headers['etag'],
+                '"4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4"',
+              );
             });
         });
       });

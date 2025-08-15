@@ -14,6 +14,7 @@ import * as config from '../../config.js';
 import { release } from '../../version.js';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
+import { formatContentDigest } from '../../lib/digest.js';
 import {
   DataBlockListValidator,
   ContiguousData,
@@ -77,6 +78,10 @@ const setDigestStableVerifiedHeaders = ({
       (data.cached || req.method === REQUEST_METHOD_HEAD)
     ) {
       res.setHeader(headerNames.digest, dataAttributes.hash);
+      res.setHeader(
+        headerNames.contentDigest,
+        formatContentDigest(dataAttributes.hash),
+      );
       res.setHeader('ETag', `"${dataAttributes.hash}"`);
     }
   }

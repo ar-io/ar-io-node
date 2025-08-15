@@ -224,7 +224,7 @@ describe('Chunk routes', () => {
           chunk: Buffer.from('chunk data'),
           data_path: Buffer.from('12345abc'),
           source: 'cache',
-          hash: Buffer.from('test-hash'),
+          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
         }),
       };
 
@@ -256,8 +256,7 @@ describe('Chunk routes', () => {
             'application/json; charset=utf-8',
           );
           assert.strictEqual(res.header['x-cache'], 'HIT');
-          assert.strictEqual(res.header['etag'], '"test-hash"');
-          assert.strictEqual(res.header['x-ar-io-digest'], 'test-hash');
+          assert.strictEqual(res.header['etag'], '"dGVzdC1oYXNo"');
           assert.ok(res.header['content-length']);
           // HEAD request should have no body
           assert.ok(res.text === '' || res.text === undefined);
@@ -345,7 +344,7 @@ describe('Chunk routes', () => {
           chunk: Buffer.from('chunk data'),
           data_path: Buffer.from('12345abc'),
           source: 'cache',
-          hash: Buffer.from('abc123def456'),
+          hash: Buffer.from('abc123def456', 'base64url'),
         }),
       };
 
@@ -372,7 +371,10 @@ describe('Chunk routes', () => {
         .expect(200)
         .then((res: any) => {
           assert.strictEqual(res.header['etag'], '"abc123def456"');
-          assert.strictEqual(res.header['x-ar-io-digest'], 'abc123def456');
+          assert.strictEqual(
+            res.header['content-digest'],
+            'sha-256=:abc123def456:',
+          );
         });
     });
 
@@ -382,7 +384,7 @@ describe('Chunk routes', () => {
           chunk: Buffer.from('chunk data'),
           data_path: Buffer.from('12345abc'),
           source: 'network', // Not cached
-          hash: Buffer.from('abc123def456'),
+          hash: Buffer.from('abc123def456', 'base64url'),
         }),
       };
 
@@ -409,7 +411,10 @@ describe('Chunk routes', () => {
         .expect(200)
         .then((res: any) => {
           assert.strictEqual(res.header['etag'], '"abc123def456"');
-          assert.strictEqual(res.header['x-ar-io-digest'], 'abc123def456');
+          assert.strictEqual(
+            res.header['content-digest'],
+            'sha-256=:abc123def456:',
+          );
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
@@ -448,7 +453,7 @@ describe('Chunk routes', () => {
         .then((res: any) => {
           // Express may set a weak ETag automatically, but we should not have our strong ETag
           assert.ok(!res.header['etag'] || res.header['etag'].startsWith('W/'));
-          assert.strictEqual(res.header['x-ar-io-digest'], undefined);
+          assert.strictEqual(res.header['content-digest'], undefined);
         });
     });
 
@@ -458,7 +463,7 @@ describe('Chunk routes', () => {
           chunk: Buffer.from('chunk data'),
           data_path: Buffer.from('12345abc'),
           source: 'network',
-          hash: Buffer.from('abc123def456'),
+          hash: Buffer.from('abc123def456', 'base64url'),
         }),
       };
 
@@ -486,7 +491,7 @@ describe('Chunk routes', () => {
         .then((res: any) => {
           // No strong ETag for streamed network data on GET (Express may add weak ETag)
           assert.ok(!res.header['etag'] || res.header['etag'].startsWith('W/'));
-          assert.strictEqual(res.header['x-ar-io-digest'], undefined);
+          assert.strictEqual(res.header['content-digest'], undefined);
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
@@ -499,7 +504,7 @@ describe('Chunk routes', () => {
           chunk: Buffer.from('chunk data'),
           data_path: Buffer.from('12345abc'),
           source: 'cache',
-          hash: Buffer.from('test-hash'),
+          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
         }),
       };
 
@@ -523,7 +528,7 @@ describe('Chunk routes', () => {
 
       await request(app)
         .get('/chunk/1234')
-        .set('If-None-Match', '"test-hash"')
+        .set('If-None-Match', '"dGVzdC1oYXNo"')
         .expect(304)
         .then((res: any) => {
           assert.strictEqual(res.status, 304);
@@ -539,7 +544,7 @@ describe('Chunk routes', () => {
           chunk: Buffer.from('chunk data'),
           data_path: Buffer.from('12345abc'),
           source: 'cache',
-          hash: Buffer.from('test-hash'),
+          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
         }),
       };
 
@@ -563,7 +568,7 @@ describe('Chunk routes', () => {
 
       await request(app)
         .head('/chunk/1234')
-        .set('If-None-Match', '"test-hash"')
+        .set('If-None-Match', '"dGVzdC1oYXNo"')
         .expect(304)
         .then((res: any) => {
           assert.strictEqual(res.status, 304);
@@ -578,7 +583,7 @@ describe('Chunk routes', () => {
           chunk: Buffer.from('chunk data'),
           data_path: Buffer.from('12345abc'),
           source: 'cache',
-          hash: Buffer.from('test-hash'),
+          hash: Buffer.from('dGVzdC1oYXNo', 'base64url'),
         }),
       };
 
@@ -607,7 +612,7 @@ describe('Chunk routes', () => {
         .then((res: any) => {
           assert.strictEqual(res.status, 200);
           assert.ok(res.body.chunk);
-          assert.strictEqual(res.header['etag'], '"test-hash"');
+          assert.strictEqual(res.header['etag'], '"dGVzdC1oYXNo"');
         });
     });
 
