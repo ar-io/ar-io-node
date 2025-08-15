@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+This release introduces AR.IO network chunk retrieval with cryptographic
+validation and enhanced observability. Gateway operators can now retrieve
+chunks directly from AR.IO peers with the same security guarantees as Arweave
+network chunks.
+
+### Added
+
+- Added AR.IO network chunk source enabling chunk retrieval from AR.IO peers
+  with weighted peer selection, retry logic, and cryptographic validation to
+  prevent serving of corrupted or malicious data.
+- Added comprehensive OpenTelemetry tracing for chunk retrieval operations
+  providing visibility into performance, cache behavior, and source attribution
+  across the entire pipeline.
+- Added HEAD request support to `/chunk/{offset}` endpoint with ETag headers
+  for efficient caching and conditional request handling with If-None-Match
+  support.
+- Added chunk source headers for traceability: `X-AR-IO-Chunk-Source-Type`
+  indicating data source, `X-AR-IO-Chunk-Host` with peer hostname, and
+  `X-Cache` for cache status.
+- Added RFC 9530 `Content-Digest` header support for standard-compliant content
+  integrity verification in data and chunk responses.
+- Added configurable composite chunk sources with parallelism control via
+  `CHUNK_DATA_RETRIEVAL_ORDER` and `CHUNK_METADATA_RETRIEVAL_ORDER` environment
+  variables supporting comma-separated source ordering.
+- Added OpenAPI documentation for `/ar-io/peers` endpoint.
+
+### Changed
+
+- Renamed `ar-io-peers` to `ar-io-network` as the preferred configuration name
+  while maintaining backwards compatibility.
+- Enhanced `/ar-io/peers` endpoint to include both data and chunk weights for
+  AR.IO gateway peers.
+
+### Fixed
+
+- Fixed ArNS custom 404 pages to prevent incorrect ArNS headers from being
+  propagated to other gateways.
+
 ## [Release 45] - 2025-08-11
 
 This is an optional release that enhances chunk broadcasting with improved preferred 
