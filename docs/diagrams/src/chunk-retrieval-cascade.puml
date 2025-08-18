@@ -1,7 +1,8 @@
 @startuml
+skinparam dpi 300
 skinparam backgroundColor white
 
-title Chunk Retrieval Source Priority
+title Chunk Retrieval Cascade
 
 left to right direction
 
@@ -18,10 +19,11 @@ CR --> LC: First
 LC --> AP: If miss
 AP --> AN: If fail
 AN --> S3: Last resort
+S3 ..> AN: Rebroadcast
 
-note bottom of LC: Fastest\n(local disk)
-note bottom of AP: Fast\n(nearby nodes)
-note bottom of AN: Slower\n(blockchain)
+note bottom of LC: Fastest\n(in-memory & disk)
+note bottom of AP: Fast\n(frequently used)
+note bottom of AN: Slower\n(complete set)
 note bottom of S3: Backup\n(cloud storage)
 
 @enduml
