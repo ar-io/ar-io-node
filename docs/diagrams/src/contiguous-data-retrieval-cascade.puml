@@ -1,0 +1,31 @@
+@startuml
+skinparam dpi 200
+skinparam backgroundColor white
+
+title Contiguous Data Retrieval Cascade
+
+left to right direction
+
+rectangle "Data Request" as DR
+
+rectangle "AR.IO Node" {
+  rectangle "1. Local Cache" as LC #90EE90
+  rectangle "2. Trusted Gateways" as TG #87CEEB  
+  rectangle "3. Chunk Reconstruction" as CR #FFB6C1
+  rectangle "4. TX Data" as TD #DDA0DD
+  rectangle "5. AR.IO Network" as AN #FFFFE0
+}
+
+DR --> LC: First
+LC --> TG: If miss
+TG --> CR: If fail
+CR --> TD: If fail  
+TD --> AN: If fail
+
+note bottom of LC: Fastest\n(verified data)
+note bottom of TG: Fast\n(external gateways)
+note bottom of CR: Reliable\n(from chunks)
+note bottom of TD: Direct\n(Arweave nodes)
+note bottom of AN: Fallback\n(AR.IO peers)
+
+@enduml
