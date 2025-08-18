@@ -4,12 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 46] - 2025-08-18
 
-This release introduces AR.IO network chunk retrieval with cryptographic
-validation and enhanced observability. Gateway operators can now retrieve
-chunks directly from AR.IO peers with the same security guarantees as Arweave
-network chunks.
+This is a recommended release that introduces AR.IO network chunk retrieval with 
+cryptographic validation and enhanced observability. Gateway operators can now 
+retrieve chunks directly from AR.IO peers with the same security guarantees as 
+Arweave network chunks, significantly improving chunk caching and retrieval 
+performance.
 
 ### Added
 
