@@ -13,6 +13,7 @@ import { headerNames } from '../../constants.js';
 import * as config from '../../config.js';
 import { release } from '../../version.js';
 import { tracer } from '../../tracing.js';
+import { Span } from '@opentelemetry/api';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
 import { formatContentDigest } from '../../lib/digest.js';
@@ -222,6 +223,7 @@ interface HandleRangeRequestArgs {
   id: string;
   dataAttributes: ContiguousDataAttributes | undefined;
   requestAttributes: RequestAttributes;
+  parentSpan?: Span;
 }
 
 const handleRangeRequest = async ({
@@ -234,71 +236,83 @@ const handleRangeRequest = async ({
   id,
   dataAttributes,
   requestAttributes,
+  parentSpan,
 }: HandleRangeRequestArgs) => {
-  const ranges = rangeParser(data.size, rangeHeader);
+  const { startChildSpan } = await import('../../tracing.js');
+  const span = startChildSpan('handleRangeRequest', {
+    attributes: {
+      'http.range_header': rangeHeader,
+      'data.id': id,
+      'data.size': data.size,
+    },
+  }, parentSpan);
 
-  // Malformed range header
-  if (ranges === -2) {
-    log.warn(`Malformed 'range' header`);
-    res.status(400).type('text').send(`Malformed 'range' header`);
-    return;
-  }
+  try {
+    const ranges = rangeParser(data.size, rangeHeader);
 
-  // Unsatisfiable range
-  if (ranges === -1 || ranges.type !== 'bytes') {
-    log.warn('Range not satisfiable');
-    res
-      .status(416)
-      .set('Content-Range', `bytes */${data.size}`)
-      .type('text')
-      .send('Range not satisfiable');
-    return;
-  }
-
-  const isSingleRange = ranges.length === 1;
-  const contentType =
-    dataAttributes?.contentType ??
-    data.sourceContentType ??
-    'application/octet-stream';
-
-  setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
-
-  // FIXME: calculate Content-Length appropriately
-
-  if (isSingleRange) {
-    const totalSize = data.size;
-    const start = ranges[0].start;
-    const end = ranges[0].end;
-
-    res.status(206); // Partial Content
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.contentType(contentType);
-    res.setHeader('Content-Length', (end - start + 1).toString());
-
-    // Handle If-None-Match for both HEAD and GET requests
-    if (handleIfNoneMatch(req, res)) {
-      res.end();
+    // Malformed range header
+    if (ranges === -2) {
+      log.warn(`Malformed 'range' header`);
+      res.status(400).type('text').send(`Malformed 'range' header`);
       return;
     }
 
-    if (req.method === REQUEST_METHOD_HEAD) {
-      res.end();
+    // Unsatisfiable range
+    if (ranges === -1 || ranges.type !== 'bytes') {
+      log.warn('Range not satisfiable');
+      res
+        .status(416)
+        .set('Content-Range', `bytes */${data.size}`)
+        .type('text')
+        .send('Range not satisfiable');
       return;
     }
 
-    const rangeData = await dataSource.getData({
-      id,
-      dataAttributes,
-      requestAttributes,
-      region: {
-        offset: start,
-        size: end - start + 1,
-      },
-    });
+    const isSingleRange = ranges.length === 1;
+    const contentType =
+      dataAttributes?.contentType ??
+      data.sourceContentType ??
+      'application/octet-stream';
 
-    rangeData.stream.pipe(res);
-  } else {
+    setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
+
+    // FIXME: calculate Content-Length appropriately
+
+    if (isSingleRange) {
+      const totalSize = data.size;
+      const start = ranges[0].start;
+      const end = ranges[0].end;
+
+      res.status(206); // Partial Content
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.contentType(contentType);
+      res.setHeader('Content-Length', (end - start + 1).toString());
+
+      // Handle If-None-Match for both HEAD and GET requests
+      if (handleIfNoneMatch(req, res)) {
+        res.end();
+        return;
+      }
+
+      if (req.method === REQUEST_METHOD_HEAD) {
+        res.end();
+        return;
+      }
+
+      const rangeData = await dataSource.getData({
+        id,
+        dataAttributes,
+        requestAttributes,
+        region: {
+          offset: start,
+          size: end - start + 1,
+        },
+        parentSpan: span,
+      });
+
+      rangeData.stream.pipe(res);
+    } else {
     const generateBoundary = () => {
       // This generates a 50 character boundary similar to those used by Firefox.
       // They are optimized for boyer-moore parsing.
@@ -374,6 +388,7 @@ const handleRangeRequest = async ({
           offset: start,
           size: end - start + 1,
         },
+        parentSpan: span,
       });
 
       rangeStreams.push({ range, stream: rangeData.stream });
@@ -393,6 +408,12 @@ const handleRangeRequest = async ({
       }
     }
     res.end();
+    }
+  } catch (error: any) {
+    span.recordException(error);
+    throw error;
+  } finally {
+    span.end();
   }
 };
 
@@ -540,6 +561,7 @@ export const createRawDataHandler = ({
           id,
           dataAttributes,
           requestAttributes,
+          parentSpan: span,
         });
         const dataDuration = Date.now() - dataStartTime;
         span.setAttributes({
@@ -640,6 +662,7 @@ const sendManifestResponse = async ({
   resolvedId,
   complete,
   requestAttributes,
+  parentSpan,
 }: {
   log: Logger;
   req: Request;
@@ -650,6 +673,7 @@ const sendManifestResponse = async ({
   resolvedId: string | undefined;
   complete: boolean;
   requestAttributes: RequestAttributes;
+  parentSpan?: Span;
 }): Promise<boolean> => {
   let data: ContiguousData | undefined;
   if (resolvedId !== undefined) {
@@ -683,6 +707,7 @@ const sendManifestResponse = async ({
         id: resolvedId,
         dataAttributes,
         requestAttributes,
+        parentSpan,
       });
     } catch (error: any) {
       log.warn('Unable to retrieve contiguous data:', {
@@ -720,6 +745,7 @@ const sendManifestResponse = async ({
           id: resolvedId,
           dataAttributes,
           requestAttributes,
+          parentSpan,
         });
       } else {
         // Set headers and stream data
@@ -928,6 +954,7 @@ export const createDataHandler = ({
             dataIndex,
             dataSource,
             requestAttributes,
+            parentSpan: span,
             ...manifestResolution,
           })
         ) {
@@ -946,6 +973,7 @@ export const createDataHandler = ({
           id,
           dataAttributes,
           requestAttributes,
+          parentSpan: span,
         });
         const dataDuration = Date.now() - dataStartTime;
         span.setAttributes({

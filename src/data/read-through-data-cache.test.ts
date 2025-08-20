@@ -340,7 +340,7 @@ describe('ReadThroughDataCache', function () {
     });
 
     it('should fetch data from the source and cache it when not available in cache', async function () {
-      let calledWithArgument: string;
+      let calledWithArgument: any;
       mock.method(mockContiguousDataStore, 'get', () =>
         Promise.resolve(undefined),
       );
@@ -353,8 +353,8 @@ describe('ReadThroughDataCache', function () {
           }),
         );
       });
-      mock.method(mockContiguousDataSource, 'getData', (id: string) => {
-        calledWithArgument = id;
+      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+        calledWithArgument = args;
         return Promise.resolve({
           stream: new Readable({
             read() {
@@ -375,12 +375,12 @@ describe('ReadThroughDataCache', function () {
         requestAttributes,
       });
 
-      assert.deepEqual(calledWithArgument!, {
-        id: 'test-id',
-        dataAttributes: undefined,
-        requestAttributes,
-        region: undefined,
-      });
+      // Check that getData was called with expected arguments (excluding parentSpan which is implementation detail)
+      assert.equal(calledWithArgument!.id, 'test-id');
+      assert.equal(calledWithArgument!.dataAttributes, undefined);
+      assert.deepEqual(calledWithArgument!.requestAttributes, requestAttributes);
+      assert.equal(calledWithArgument!.region, undefined);
+      // parentSpan should be present but we don't need to check its exact value
       assert.deepEqual(
         (mockContiguousDataStore.createWriteStream as any).mock.callCount(),
         1,

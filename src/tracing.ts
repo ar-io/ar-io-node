@@ -8,7 +8,13 @@ import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { trace } from '@opentelemetry/api';
+import {
+  trace,
+  context,
+  SpanStatusCode,
+  Span,
+  SpanOptions,
+} from '@opentelemetry/api';
 import { TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { resourceFromAttributes } from '@opentelemetry/resources';
@@ -85,3 +91,27 @@ const isTestEnvironment =
 export const tracer = isTestEnvironment
   ? trace.getTracer('no-op') // No-op tracer that doesn't interfere with tests
   : trace.getTracer('ar-io-node-core', version.release);
+
+// Export context utilities for consistent usage across the codebase
+export { context, trace, SpanStatusCode };
+
+// Helper function to start a child span with proper context inheritance
+export function startChildSpan(
+  name: string,
+  options?: SpanOptions,
+  parentSpan?: Span,
+): Span {
+  if (parentSpan) {
+    return tracer.startSpan(
+      name,
+      options,
+      trace.setSpan(context.active(), parentSpan),
+    );
+  }
+  return tracer.startSpan(name, options);
+}
+
+// Helper function to run a function within a span's context
+export function withSpan<T>(span: Span, fn: () => T): T {
+  return context.with(trace.setSpan(context.active(), span), fn);
+}

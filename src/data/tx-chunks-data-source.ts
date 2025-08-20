@@ -8,8 +8,8 @@ import { Readable } from 'node:stream';
 import winston from 'winston';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { streamRangeData } from '../lib/stream-tx-range.js';
-import { tracer } from '../tracing.js';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { startChildSpan } from '../tracing.js';
+import { SpanStatusCode, Span } from '@opentelemetry/api';
 
 import {
   ChainSource,
@@ -46,21 +46,27 @@ export class TxChunksDataSource implements ContiguousDataSource {
     id,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('TxChunksDataSource.getData', {
-      attributes: {
-        'data.id': id,
-        'data.region.has_region': region !== undefined,
-        'data.region.offset': region?.offset,
-        'data.region.size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
+    const span = startChildSpan(
+      'TxChunksDataSource.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.region.has_region': region !== undefined,
+          'data.region.offset': region?.offset,
+          'data.region.size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+        },
       },
-    });
+      parentSpan,
+    );
 
     try {
       this.log.debug('Fetching chunk data for TX', { id });

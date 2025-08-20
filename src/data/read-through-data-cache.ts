@@ -9,7 +9,8 @@ import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
 
 import { currentUnixTimestamp } from '../lib/time.js';
-import { tracer } from '../tracing.js';
+import { startChildSpan } from '../tracing.js';
+import { Span } from '@opentelemetry/api';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { KvJsonStore } from '../store/kv-attributes-store.js';
 import {
@@ -239,6 +240,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataAttributes,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     dataAttributes?: ContiguousDataAttributes;
@@ -247,18 +249,23 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       offset: number;
       size: number;
     };
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('ReadThroughDataCache.getData', {
-      attributes: {
-        'data.id': id,
-        'data.has_attributes': dataAttributes !== undefined,
-        'data.has_region': region !== undefined,
-        'data.region_offset': region?.offset,
-        'data.region_size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
+    const span = startChildSpan(
+      'ReadThroughDataCache.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.has_attributes': dataAttributes !== undefined,
+          'data.has_region': region !== undefined,
+          'data.region_offset': region?.offset,
+          'data.region_size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+        },
       },
-    });
+      parentSpan,
+    );
 
     this.log.debug('Checking for cached data...', {
       id,
@@ -360,6 +367,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         dataAttributes,
         requestAttributes,
         region,
+        parentSpan: span,
       });
       const upstreamDuration = Date.now() - upstreamStart;
 

@@ -13,7 +13,8 @@ import {
   Region,
   RequestAttributes,
 } from '../types.js';
-import { tracer } from '../tracing.js';
+import { startChildSpan } from '../tracing.js';
+import { Span } from '@opentelemetry/api';
 
 export class SequentialDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -35,24 +36,30 @@ export class SequentialDataSource implements ContiguousDataSource {
     dataAttributes,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('SequentialDataSource.getData', {
-      attributes: {
-        'data.id': id,
-        'data.has_attributes': dataAttributes !== undefined,
-        'data.has_region': region !== undefined,
-        'data.region.offset': region?.offset,
-        'data.region.size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
-        'sequential.config.sources_count': this.dataSources.length,
+    const span = startChildSpan(
+      'SequentialDataSource.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.has_attributes': dataAttributes !== undefined,
+          'data.has_region': region !== undefined,
+          'data.region.offset': region?.offset,
+          'data.region.size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+          'sequential.config.sources_count': this.dataSources.length,
+        },
       },
-    });
+      parentSpan,
+    );
 
     try {
       this.log.debug('Sequentialy fetching from data sources', {
@@ -67,6 +74,19 @@ export class SequentialDataSource implements ContiguousDataSource {
         const dataSource = this.dataSources[i];
         const sourceStart = Date.now();
 
+        // Create a child span for each data source attempt
+        const sourceSpan = startChildSpan(
+          `SequentialDataSource.attempt[${i}]`,
+          {
+            attributes: {
+              'sequential.attempt.source_index': i,
+              'sequential.attempt.source_name': dataSource.constructor.name,
+              'data.id': id,
+            },
+          },
+          span,
+        );
+
         span.addEvent('Trying data source', {
           'sequential.attempt.source_index': i,
           'sequential.attempt.source_name': dataSource.constructor.name,
@@ -78,6 +98,7 @@ export class SequentialDataSource implements ContiguousDataSource {
             dataAttributes,
             requestAttributes,
             region,
+            parentSpan: sourceSpan,
           });
 
           const sourceDuration = Date.now() - sourceStart;
@@ -99,6 +120,12 @@ export class SequentialDataSource implements ContiguousDataSource {
             'data.trusted': data.trusted,
           });
 
+          sourceSpan.setAttributes({
+            'sequential.attempt.result': 'success',
+            'sequential.attempt.duration_ms': sourceDuration,
+          });
+          sourceSpan.end();
+
           return data;
         } catch (error: any) {
           const sourceDuration = Date.now() - sourceStart;
@@ -118,6 +145,14 @@ export class SequentialDataSource implements ContiguousDataSource {
             message: error.message,
             stack: error.stack,
           });
+
+          sourceSpan.setAttributes({
+            'sequential.attempt.result': 'error',
+            'sequential.attempt.duration_ms': sourceDuration,
+            'sequential.attempt.error': error.message,
+          });
+          sourceSpan.recordException(error);
+          sourceSpan.end();
         }
       }
 

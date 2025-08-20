@@ -650,11 +650,13 @@ export interface ContiguousDataSource {
     dataAttributes,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    parentSpan?: Span;
   }): Promise<ContiguousData>;
 }
 

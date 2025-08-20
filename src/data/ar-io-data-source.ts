@@ -21,8 +21,8 @@ import {
   validateHopCount,
 } from '../lib/request-attributes.js';
 import { headerNames } from '../constants.js';
-import { tracer } from '../tracing.js';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { startChildSpan } from '../tracing.js';
+import { SpanStatusCode, Span } from '@opentelemetry/api';
 
 import * as metrics from '../metrics.js';
 
@@ -126,26 +126,32 @@ export class ArIODataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     retryCount,
+    parentSpan,
   }: {
     id: string;
     dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
     retryCount?: number;
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('ArIODataSource.getData', {
-      attributes: {
-        'data.id': id,
-        'data.has_attributes': dataAttributes !== undefined,
-        'data.region.has_region': region !== undefined,
-        'data.region.offset': region?.offset,
-        'data.region.size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
-        'ario.config.max_hops_allowed': this.maxHopsAllowed,
-        'ario.config.request_timeout_ms': this.requestTimeoutMs,
+    const span = startChildSpan(
+      'ArIODataSource.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.has_attributes': dataAttributes !== undefined,
+          'data.region.has_region': region !== undefined,
+          'data.region.offset': region?.offset,
+          'data.region.size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+          'ario.config.max_hops_allowed': this.maxHopsAllowed,
+          'ario.config.request_timeout_ms': this.requestTimeoutMs,
+        },
       },
-    });
+      parentSpan,
+    );
 
     try {
       const log = this.log.child({ method: 'getData' });

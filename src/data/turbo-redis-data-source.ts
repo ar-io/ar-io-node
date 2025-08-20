@@ -16,8 +16,8 @@ import winston from 'winston';
 import CircuitBreaker from 'opossum';
 import { bufferToStream, ByteRangeTransform } from '../lib/stream.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
-import { tracer } from '../tracing.js';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { startChildSpan } from '../tracing.js';
+import { SpanStatusCode, Span } from '@opentelemetry/api';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 
 // A helper type that will allow us to pass around closures involving CacheService activities
@@ -161,22 +161,28 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     id,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('TurboRedisDataSource.getData', {
-      attributes: {
-        'data.id': id,
-        'data.region.has_region': region !== undefined,
-        'data.region.offset': region?.offset,
-        'data.region.size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
-        'turbo.redis.circuit_breaker_open': this.circuitBreaker.opened,
+    const span = startChildSpan(
+      'TurboRedisDataSource.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.region.has_region': region !== undefined,
+          'data.region.offset': region?.offset,
+          'data.region.size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+          'turbo.redis.circuit_breaker_open': this.circuitBreaker.opened,
+        },
       },
-    });
+      parentSpan,
+    );
 
     try {
       // TODO: Configuration for whether metadata or offsets are checked first
@@ -223,6 +229,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
             offset: startOffsetInParentPayload + (region?.offset ?? 0),
             size: region?.size ?? payloadLength,
           },
+          parentSpan: span,
         });
         if (nestedDataItemDataStream?.stream === undefined) {
           const errMsg = `Turbo Elasticache: Parent ${parentDataItemId} payload data not found for nested data item ${id}`;

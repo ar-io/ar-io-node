@@ -17,8 +17,8 @@ import winston from 'winston';
 
 import { bufferToStream, ByteRangeTransform } from '../lib/stream.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
-import { tracer } from '../tracing.js';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { startChildSpan } from '../tracing.js';
+import { SpanStatusCode, Span } from '@opentelemetry/api';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 import {
   ContiguousData,
@@ -217,23 +217,29 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     id,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('TurboDynamoDbDataSource.getData', {
-      attributes: {
-        'data.id': id,
-        'data.has_region': region !== undefined,
-        'data.region_offset': region?.offset,
-        'data.region_size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
-        'dynamodb.circuit_breaker_open':
-          this.circuitBreakerWrapper.breaker.opened,
+    const span = startChildSpan(
+      'TurboDynamoDbDataSource.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.has_region': region !== undefined,
+          'data.region_offset': region?.offset,
+          'data.region_size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+          'dynamodb.circuit_breaker_open':
+            this.circuitBreakerWrapper.breaker.opened,
+        },
       },
-    });
+      parentSpan,
+    );
 
     try {
       // First try to get offsets info for nested data items
@@ -299,6 +305,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
               (region?.offset ?? 0),
             size: region?.size ?? payloadLength,
           },
+          parentSpan: span,
         });
 
         if (nestedDataItemDataStream?.stream === undefined) {

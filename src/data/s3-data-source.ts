@@ -16,7 +16,8 @@ import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
 import { AwsLiteClient } from '@aws-lite/client';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
-import { tracer } from '../tracing.js';
+import { startChildSpan } from '../tracing.js';
+import { Span } from '@opentelemetry/api';
 import { SpanStatusCode } from '@opentelemetry/api';
 import * as metrics from '../metrics.js';
 
@@ -53,23 +54,29 @@ export class S3DataSource implements ContiguousDataSource {
     id,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('S3DataSource.getData', {
-      attributes: {
-        'data.id': id,
-        'data.region.has_region': region !== undefined,
-        'data.region.offset': region?.offset,
-        'data.region.size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
-        's3.config.bucket': this.s3Bucket,
-        's3.config.prefix': this.s3Prefix,
+    const span = startChildSpan(
+      'S3DataSource.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.region.has_region': region !== undefined,
+          'data.region.offset': region?.offset,
+          'data.region.size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+          's3.config.bucket': this.s3Bucket,
+          's3.config.prefix': this.s3Prefix,
+        },
       },
-    });
+      parentSpan,
+    );
 
     const log = this.log.child({ method: 'getData', id });
     try {

@@ -19,7 +19,8 @@ import {
 } from '../types.js';
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
-import { tracer } from '../tracing.js';
+import { startChildSpan } from '../tracing.js';
+import { Span } from '@opentelemetry/api';
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -56,23 +57,29 @@ export class GatewaysDataSource implements ContiguousDataSource {
     id,
     requestAttributes,
     region,
+    parentSpan,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
+    parentSpan?: Span;
   }): Promise<ContiguousData> {
-    const span = tracer.startSpan('GatewaysDataSource.getData', {
-      attributes: {
-        'data.id': id,
-        'data.region.has_region': region !== undefined,
-        'data.region.offset': region?.offset,
-        'data.region.size': region?.size,
-        'arns.name': requestAttributes?.arnsName,
-        'arns.basename': requestAttributes?.arnsBasename,
-        'gateways.config.priority_tiers': this.trustedGateways.size,
-        'gateways.config.request_timeout_ms': this.requestTimeoutMs,
+    const span = startChildSpan(
+      'GatewaysDataSource.getData',
+      {
+        attributes: {
+          'data.id': id,
+          'data.region.has_region': region !== undefined,
+          'data.region.offset': region?.offset,
+          'data.region.size': region?.size,
+          'arns.name': requestAttributes?.arnsName,
+          'arns.basename': requestAttributes?.arnsBasename,
+          'gateways.config.priority_tiers': this.trustedGateways.size,
+          'gateways.config.request_timeout_ms': this.requestTimeoutMs,
+        },
       },
-    });
+      parentSpan,
+    );
 
     try {
       const path = `/raw/${id}`;
