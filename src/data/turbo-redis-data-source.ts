@@ -16,6 +16,7 @@ import winston from 'winston';
 import CircuitBreaker from 'opossum';
 import { bufferToStream, ByteRangeTransform } from '../lib/stream.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { tracer } from '../tracing.js';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 
 // A helper type that will allow us to pass around closures involving CacheService activities
@@ -164,10 +165,33 @@ export class TurboRedisDataSource implements ContiguousDataSource {
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
-    // TODO: Configuration for whether metadata or offsets are checked first
+    const span = tracer.startSpan('TurboRedisDataSource.getData', {
+      attributes: {
+        'data.id': id,
+        'data.region.has_region': region !== undefined,
+        'data.region.offset': region?.offset,
+        'data.region.size': region?.size,
+        'arns.name': requestAttributes?.arnsName,
+        'arns.basename': requestAttributes?.arnsBasename,
+        'turbo.redis.circuit_breaker_open': this.circuitBreaker.opened,
+      },
+    });
+
     try {
+      // TODO: Configuration for whether metadata or offsets are checked first
+      span.addEvent('Starting offsets lookup');
       const offsetsInfo = await this.getCachedTurboOffsetsInfo(id);
       if (offsetsInfo) {
+        span.addEvent('Offsets found');
+
+        span.setAttributes({
+          'turbo.offsets.found': true,
+          'turbo.offsets.parent_data_item_id': offsetsInfo.parentDataItemId,
+          'turbo.offsets.payload_content_type': offsetsInfo.payloadContentType,
+          'turbo.offsets.raw_content_length': offsetsInfo.rawContentLength,
+          'turbo.offsets.payload_data_start': offsetsInfo.payloadDataStart,
+        });
+
         this.log.debug(`Turbo Elasticache: Found offsets for ${id}`, {
           offsetsInfo,
         });
@@ -185,6 +209,13 @@ export class TurboRedisDataSource implements ContiguousDataSource {
           startOffsetInRawParent + payloadDataStart - parentPayloadDataStart;
         const payloadLength = rawContentLength - payloadDataStart;
 
+        span.setAttributes({
+          'turbo.offsets.start_offset_in_parent_payload':
+            startOffsetInParentPayload,
+          'turbo.offsets.payload_length': payloadLength,
+        });
+
+        span.addEvent('Recursively fetching parent data');
         const nestedDataItemDataStream = await this.getData({
           id: parentDataItemId,
           region: {
@@ -194,11 +225,18 @@ export class TurboRedisDataSource implements ContiguousDataSource {
         });
         if (nestedDataItemDataStream?.stream === undefined) {
           const errMsg = `Turbo Elasticache: Parent ${parentDataItemId} payload data not found for nested data item ${id}`;
+          span.addEvent('Parent data not found', {
+            'turbo.offsets.parent_id': parentDataItemId,
+          });
           this.log.debug(errMsg, {
             offsetsInfo,
           });
           throw new Error(errMsg);
         }
+
+        span.addEvent('Parent data found, returning nested stream', {
+          'turbo.offsets.parent_id': parentDataItemId,
+        });
 
         this.log.debug(
           `Turbo Elasticache: Found parent ${parentDataItemId} payload data stream for ${id}. Returning nested data item from offsets info.`,
@@ -217,6 +255,11 @@ export class TurboRedisDataSource implements ContiguousDataSource {
         const requestAttributesHeaders =
           generateRequestAttributes(requestAttributes);
 
+        span.setStatus({
+          code: 1,
+          message: 'Nested data item returned from offsets',
+        });
+
         return {
           stream: nestedDataItemDataStream.stream,
           size: region?.size ?? payloadLength,
@@ -228,6 +271,12 @@ export class TurboRedisDataSource implements ContiguousDataSource {
         };
       }
 
+      span.setAttributes({
+        'turbo.offsets.found': false,
+      });
+
+      span.addEvent('Offsets not found, checking metadata');
+
       // track &&
       //   turboPayloadFetchResultTotal.inc({
       //     result: 'miss',
@@ -237,9 +286,18 @@ export class TurboRedisDataSource implements ContiguousDataSource {
 
       const metadata = await this.getCachedTurboMetadata(id);
       if (metadata) {
+        span.addEvent('Metadata found');
+
+        span.setAttributes({
+          'turbo.metadata.found': true,
+          'turbo.metadata.payload_content_type': metadata.payloadContentType,
+          'turbo.metadata.payload_start_offset': metadata.payloadStartOffset,
+        });
+
         this.log.debug(`Turbo Elasticache: Found metadata for ${id}`, {
           metadata,
         });
+
         return this.getCachedTurboPayloadDataStreamFromMetadata({
           dataItemId: id,
           payloadContentType: metadata.payloadContentType,
@@ -258,9 +316,15 @@ export class TurboRedisDataSource implements ContiguousDataSource {
         //   return dataStream;
         // });
       } else {
+        span.setAttributes({
+          'turbo.metadata.found': false,
+        });
+
+        span.addEvent('Metadata not found');
         this.log.debug(`Turbo Elasticache: Metadata not found for ${id}`);
       }
 
+      span.addEvent('No data found in Redis');
       this.log.debug(
         `Turbo Elasticache: No metadata or offsets found for ${id}`,
       );
@@ -273,7 +337,10 @@ export class TurboRedisDataSource implements ContiguousDataSource {
       //     form: 'raw',
       //   });
       throw new Error(`Data item ${id} not found in Redis`);
-    } catch (error) {
+    } catch (error: any) {
+      span.recordException(error);
+      span.setStatus({ code: 2, message: error.message });
+
       this.log.error(
         `Turbo Elasticache error retrieving payload data for ${id}`,
         error,
@@ -287,6 +354,8 @@ export class TurboRedisDataSource implements ContiguousDataSource {
       //   });
 
       throw error;
+    } finally {
+      span.end();
     }
   }
 

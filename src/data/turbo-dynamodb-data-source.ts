@@ -17,6 +17,7 @@ import winston from 'winston';
 
 import { bufferToStream, ByteRangeTransform } from '../lib/stream.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { tracer } from '../tracing.js';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 import {
   ContiguousData,
@@ -220,11 +221,32 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
+    const span = tracer.startSpan('TurboDynamoDbDataSource.getData', {
+      attributes: {
+        'data.id': id,
+        'data.has_region': region !== undefined,
+        'data.region_offset': region?.offset,
+        'data.region_size': region?.size,
+        'arns.name': requestAttributes?.arnsName,
+        'arns.basename': requestAttributes?.arnsBasename,
+        'dynamodb.circuit_breaker_open':
+          this.circuitBreakerWrapper.breaker.opened,
+      },
+    });
+
     try {
       // First try to get offsets info for nested data items
       // TODO: Move this to an offsets provider once those are worked into the architecture
+      span.addEvent('Starting offsets lookup');
       const offsetsInfo = await this.getOffsetsInfo(id);
       if (offsetsInfo && offsetsInfo.parentInfo === undefined) {
+        span.addEvent('Offsets found without parent info, skipping');
+
+        span.setAttributes({
+          'turbo.offsets_found': true,
+          'turbo.offsets_has_parent': false,
+        });
+
         this.log.debug(
           `Turbo DynamoDB: Found offsets without parent into for data item ${id}. Skipping...`,
           {
@@ -232,6 +254,17 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           },
         );
       } else if (offsetsInfo?.parentInfo) {
+        span.addEvent('Offsets found with parent info');
+
+        span.setAttributes({
+          'turbo.offsets_found': true,
+          'turbo.offsets_has_parent': true,
+          'turbo.parent_data_item_id': offsetsInfo.parentInfo.parentDataItemId,
+          'turbo.payload_content_type': offsetsInfo.payloadContentType,
+          'turbo.raw_content_length': offsetsInfo.rawContentLength,
+          'turbo.payload_data_start': offsetsInfo.payloadDataStart,
+        });
+
         this.log.debug(
           `Turbo DynamoDB: Found offsets with parent info for ${id}`,
           {
@@ -249,7 +282,13 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         const { parentDataItemId, startOffsetInParentPayload } = parentInfo;
         const payloadLength = rawContentLength - payloadDataStart;
 
+        span.setAttributes({
+          'turbo.start_offset_in_parent_payload': startOffsetInParentPayload,
+          'turbo.payload_length': payloadLength,
+        });
+
         // Recursively get parent data with the appropriate offset
+        span.addEvent('Recursively fetching parent data');
         const nestedDataItemDataStream = await this.getData({
           id: parentDataItemId,
           region: {
@@ -263,11 +302,18 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
 
         if (nestedDataItemDataStream?.stream === undefined) {
           const errMsg = `Turbo DynamoDB: Parent ${parentDataItemId} payload data not found for nested data item ${id}`;
+          span.addEvent('Parent data not found', {
+            'turbo.parent_id': parentDataItemId,
+          });
           this.log.debug(errMsg, {
             offsetsInfo,
           });
           throw new Error(errMsg);
         }
+
+        span.addEvent('Parent data found, returning nested stream', {
+          'turbo.parent_id': parentDataItemId,
+        });
 
         this.log.debug(
           `Turbo DynamoDB: Returning stream for nested data item ${id} from offset into data for parent ${parentDataItemId}`,
@@ -278,6 +324,11 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
 
         const requestAttributesHeaders =
           generateRequestAttributes(requestAttributes);
+
+        span.setStatus({
+          code: 1,
+          message: 'Nested data item returned from offsets',
+        });
 
         return {
           stream: nestedDataItemDataStream.stream,
@@ -290,30 +341,58 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         };
       }
 
+      span.setAttributes({
+        'turbo.offsets.found': offsetsInfo !== undefined,
+        'turbo.offsets.has_parent': offsetsInfo?.parentInfo !== undefined,
+      });
+
       // If no offsets info, try to get the raw data item directly
+      span.addEvent('Offsets not found or no parent, checking raw data');
       const dataItem = await this.getDataItem(id);
 
       if (dataItem) {
+        span.addEvent('Raw data found');
+
+        span.setAttributes({
+          'turbo.raw_data_found': true,
+          'turbo.raw_buffer_size': dataItem.buffer.length,
+          'turbo.raw_payload_content_type': dataItem.info.payloadContentType,
+          'turbo.raw_payload_data_start': dataItem.info.payloadDataStart,
+        });
+
         this.log.debug(`Turbo DynamoDB: Found raw data for ${id}`, {
           payloadInfo: dataItem.info,
         });
 
-        return this.getDataStreamFromRawBuffer({
+        const result = this.getDataStreamFromRawBuffer({
           buffer: dataItem.buffer,
           payloadInfo: dataItem.info,
           region,
           requestAttributes,
         });
+
+        span.setStatus({ code: 1, message: 'Raw data item returned' });
+        return result;
       }
 
+      span.setAttributes({
+        'turbo.raw_data.found': false,
+      });
+
+      span.addEvent('No data found in DynamoDB');
       this.log.debug(`Turbo DynamoDB: No data or offsets found for ${id}`);
       throw new Error(`Data item ${id} not found in DynamoDB`);
-    } catch (error) {
+    } catch (error: any) {
+      span.recordException(error);
+      span.setStatus({ code: 2, message: error.message });
+
       this.log.error(
         `Turbo DynamoDB error retrieving payload data for ${id}`,
         error,
       );
       throw error;
+    } finally {
+      span.end();
     }
   }
 

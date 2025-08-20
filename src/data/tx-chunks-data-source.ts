@@ -8,6 +8,7 @@ import { Readable } from 'node:stream';
 import winston from 'winston';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { streamRangeData } from '../lib/stream-tx-range.js';
+import { tracer } from '../tracing.js';
 
 import {
   ChainSource,
@@ -49,9 +50,21 @@ export class TxChunksDataSource implements ContiguousDataSource {
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
-    this.log.debug('Fetching chunk data for TX', { id });
+    const span = tracer.startSpan('TxChunksDataSource.getData', {
+      attributes: {
+        'data.id': id,
+        'data.region.has_region': region !== undefined,
+        'data.region.offset': region?.offset,
+        'data.region.size': region?.size,
+        'arns.name': requestAttributes?.arnsName,
+        'arns.basename': requestAttributes?.arnsBasename,
+      },
+    });
 
     try {
+      this.log.debug('Fetching chunk data for TX', { id });
+
+      span.addEvent('Starting chain source requests');
       const [txDataRoot, txOffset] = await Promise.all([
         this.chainSource.getTxField(id, 'data_root'),
         this.chainSource.getTxOffset(id),
@@ -61,7 +74,19 @@ export class TxChunksDataSource implements ContiguousDataSource {
       const startOffset = offset - size + 1;
       let bytes = 0;
 
+      span.setAttributes({
+        'chunks.tx.data_root': txDataRoot,
+        'chunks.tx.size': size,
+        'chunks.tx.offset': offset,
+        'chunks.tx.start_offset': startOffset,
+      });
+
+      span.addEvent('Chain source requests completed');
+
       if (region) {
+        span.setAttribute('chunks.streaming.request_type', 'range');
+        span.addEvent('Starting range streaming');
+
         const getChunkByAny = (params: {
           txSize: number;
           absoluteOffset: number;
@@ -87,7 +112,16 @@ export class TxChunksDataSource implements ContiguousDataSource {
         // Track metrics timing
         const firstChunkTime = Date.now() - rangeStartTime;
 
+        span.setAttribute('chunks.first_chunk_time_ms', firstChunkTime);
+
         rangeStream.on('end', () => {
+          const chunksFetched = rangeResult.getChunksFetched();
+          span.setAttributes({
+            'chunks.streaming.fetched_count': chunksFetched,
+          });
+
+          span.addEvent('Range streaming completed');
+
           metrics.getDataStreamSuccessesTotal.inc({
             class: this.constructor.name,
             source: 'chunks',
@@ -101,7 +135,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
               source: 'chunks',
               request_type: 'range',
             },
-            rangeResult.getChunksFetched(),
+            chunksFetched,
           );
 
           metrics.dataRequestFirstChunkLatency.observe(
@@ -114,13 +148,17 @@ export class TxChunksDataSource implements ContiguousDataSource {
           );
         });
 
-        rangeStream.on('error', () => {
+        rangeStream.on('error', (error) => {
+          span.recordException(error);
+
           metrics.getDataStreamErrorsTotal.inc({
             class: this.constructor.name,
             source: 'chunks',
             request_type: 'range',
           });
         });
+
+        span.setStatus({ code: 1, message: 'Range streaming initialized' });
 
         return {
           stream: rangeStream,
@@ -132,6 +170,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
             generateRequestAttributes(requestAttributes)?.attributes,
         };
       }
+
+      // Full streaming mode
+      span.setAttribute('chunks.streaming.request_type', 'full');
+      span.addEvent('Starting full streaming');
 
       // Rebind getChunkDataByAny to preserve access to it in the stream read
       // function since 'this' is assigned to the stream as opposed to the
@@ -156,7 +198,13 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       // await the first chunk promise so that it throws and returns 404 if no
       // chunk data is found.
+      const firstChunkStart = Date.now();
       await chunkDataPromise;
+      const firstChunkTime = Date.now() - firstChunkStart;
+
+      span.setAttributes({
+        'chunks.streaming.first_chunk_time_ms': firstChunkTime,
+      });
 
       const stream = new Readable({
         autoDestroy: true,
@@ -186,7 +234,11 @@ export class TxChunksDataSource implements ContiguousDataSource {
         },
       });
 
-      stream.on('error', () => {
+      let totalChunks = 0;
+
+      stream.on('error', (error) => {
+        span.recordException(error);
+
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: 'chunks',
@@ -195,12 +247,27 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
 
       stream.on('end', () => {
+        span.setAttributes({
+          'chunks.streaming.total_chunks_processed': totalChunks,
+        });
+
+        span.addEvent('Full streaming completed');
+
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: 'chunks',
           request_type: 'full',
         });
       });
+
+      // Increment chunk counter on each chunk read
+      const originalRead = stream._read;
+      stream._read = function (...args) {
+        totalChunks++;
+        return originalRead.apply(this, args);
+      };
+
+      span.setStatus({ code: 1, message: 'Full streaming initialized' });
 
       return {
         stream,
@@ -211,12 +278,17 @@ export class TxChunksDataSource implements ContiguousDataSource {
         requestAttributes:
           generateRequestAttributes(requestAttributes)?.attributes,
       };
-    } catch (error) {
+    } catch (error: any) {
+      span.recordException(error);
+      span.setStatus({ code: 2, message: error.message });
+
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
         source: 'chunks',
       });
       throw error;
+    } finally {
+      span.end();
     }
   }
 }
