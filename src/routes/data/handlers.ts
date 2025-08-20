@@ -239,13 +239,17 @@ const handleRangeRequest = async ({
   parentSpan,
 }: HandleRangeRequestArgs) => {
   const { startChildSpan } = await import('../../tracing.js');
-  const span = startChildSpan('handleRangeRequest', {
-    attributes: {
-      'http.range_header': rangeHeader,
-      'data.id': id,
-      'data.size': data.size,
+  const span = startChildSpan(
+    'handleRangeRequest',
+    {
+      attributes: {
+        'http.range_header': rangeHeader,
+        'data.id': id,
+        'data.size': data.size,
+      },
     },
-  }, parentSpan);
+    parentSpan,
+  );
 
   try {
     const ranges = rangeParser(data.size, rangeHeader);
@@ -313,101 +317,104 @@ const handleRangeRequest = async ({
 
       rangeData.stream.pipe(res);
     } else {
-    const generateBoundary = () => {
-      // This generates a 50 character boundary similar to those used by Firefox.
-      // They are optimized for boyer-moore parsing.
-      // https://github.com/rexxars/byte-range-stream/blob/98a8e06e46193afc45219b63bc2dc5d9c7f77459/src/index.js#L115-L124
-      let boundary = '--------------------------';
-      for (let i = 0; i < 24; i++) {
-        boundary += Math.floor(Math.random() * 10).toString(16);
-      }
-
-      return boundary;
-    };
-    const boundary = generateBoundary();
-    res.status(206); // Partial Content
-    res.setHeader('Content-Type', `multipart/byteranges; boundary=${boundary}`);
-    res.setHeader('Accept-Ranges', 'bytes');
-
-    // Pre-build all multipart response parts
-    const partBoundary = `--${boundary}\r\n`;
-    const finalBoundary = `--${boundary}--\r\n`;
-    const contentTypeHeader = `Content-Type: ${contentType}\r\n`;
-    const blankLine = '\r\n';
-
-    type ResponsePart = string | { type: 'data'; range: rangeParser.Range };
-    const responseParts: ResponsePart[] = [];
-
-    for (const range of ranges) {
-      responseParts.push(partBoundary);
-      responseParts.push(contentTypeHeader);
-      responseParts.push(
-        `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
-      );
-      responseParts.push(blankLine);
-      responseParts.push({ type: 'data', range });
-      responseParts.push(blankLine);
-    }
-    responseParts.push(finalBoundary);
-
-    // Calculate Content-Length from pre-built parts
-    let totalLength = 0;
-    for (const part of responseParts) {
-      if (typeof part === 'string') {
-        totalLength += Buffer.byteLength(part);
-      } else if (part.type === 'data') {
-        totalLength += part.range.end - part.range.start + 1;
-      }
-    }
-
-    res.setHeader('Content-Length', totalLength.toString());
-
-    // Handle If-None-Match for both HEAD and GET requests
-    if (handleIfNoneMatch(req, res)) {
-      res.end();
-      return;
-    }
-
-    if (req.method === REQUEST_METHOD_HEAD) {
-      res.end();
-      return;
-    }
-
-    // Get data streams for all ranges
-    const rangeStreams: { range: rangeParser.Range; stream: Readable }[] = [];
-
-    for (const range of ranges) {
-      const start = range.start;
-      const end = range.end;
-
-      const rangeData = await dataSource.getData({
-        id,
-        dataAttributes,
-        requestAttributes,
-        region: {
-          offset: start,
-          size: end - start + 1,
-        },
-        parentSpan: span,
-      });
-
-      rangeStreams.push({ range, stream: rangeData.stream });
-    }
-
-    // Write response using pre-built parts
-    let rangeIndex = 0;
-    for (const part of responseParts) {
-      if (typeof part === 'string') {
-        res.write(part);
-      } else if (part.type === 'data') {
-        const { stream } = rangeStreams[rangeIndex];
-        for await (const chunk of stream) {
-          res.write(chunk);
+      const generateBoundary = () => {
+        // This generates a 50 character boundary similar to those used by Firefox.
+        // They are optimized for boyer-moore parsing.
+        // https://github.com/rexxars/byte-range-stream/blob/98a8e06e46193afc45219b63bc2dc5d9c7f77459/src/index.js#L115-L124
+        let boundary = '--------------------------';
+        for (let i = 0; i < 24; i++) {
+          boundary += Math.floor(Math.random() * 10).toString(16);
         }
-        rangeIndex++;
+
+        return boundary;
+      };
+      const boundary = generateBoundary();
+      res.status(206); // Partial Content
+      res.setHeader(
+        'Content-Type',
+        `multipart/byteranges; boundary=${boundary}`,
+      );
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      // Pre-build all multipart response parts
+      const partBoundary = `--${boundary}\r\n`;
+      const finalBoundary = `--${boundary}--\r\n`;
+      const contentTypeHeader = `Content-Type: ${contentType}\r\n`;
+      const blankLine = '\r\n';
+
+      type ResponsePart = string | { type: 'data'; range: rangeParser.Range };
+      const responseParts: ResponsePart[] = [];
+
+      for (const range of ranges) {
+        responseParts.push(partBoundary);
+        responseParts.push(contentTypeHeader);
+        responseParts.push(
+          `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
+        );
+        responseParts.push(blankLine);
+        responseParts.push({ type: 'data', range });
+        responseParts.push(blankLine);
       }
-    }
-    res.end();
+      responseParts.push(finalBoundary);
+
+      // Calculate Content-Length from pre-built parts
+      let totalLength = 0;
+      for (const part of responseParts) {
+        if (typeof part === 'string') {
+          totalLength += Buffer.byteLength(part);
+        } else if (part.type === 'data') {
+          totalLength += part.range.end - part.range.start + 1;
+        }
+      }
+
+      res.setHeader('Content-Length', totalLength.toString());
+
+      // Handle If-None-Match for both HEAD and GET requests
+      if (handleIfNoneMatch(req, res)) {
+        res.end();
+        return;
+      }
+
+      if (req.method === REQUEST_METHOD_HEAD) {
+        res.end();
+        return;
+      }
+
+      // Get data streams for all ranges
+      const rangeStreams: { range: rangeParser.Range; stream: Readable }[] = [];
+
+      for (const range of ranges) {
+        const start = range.start;
+        const end = range.end;
+
+        const rangeData = await dataSource.getData({
+          id,
+          dataAttributes,
+          requestAttributes,
+          region: {
+            offset: start,
+            size: end - start + 1,
+          },
+          parentSpan: span,
+        });
+
+        rangeStreams.push({ range, stream: rangeData.stream });
+      }
+
+      // Write response using pre-built parts
+      let rangeIndex = 0;
+      for (const part of responseParts) {
+        if (typeof part === 'string') {
+          res.write(part);
+        } else if (part.type === 'data') {
+          const { stream } = rangeStreams[rangeIndex];
+          for await (const chunk of stream) {
+            res.write(chunk);
+          }
+          rangeIndex++;
+        }
+      }
+      res.end();
     }
   } catch (error: any) {
     span.recordException(error);

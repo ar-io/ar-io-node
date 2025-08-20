@@ -378,7 +378,10 @@ describe('ReadThroughDataCache', function () {
       // Check that getData was called with expected arguments (excluding parentSpan which is implementation detail)
       assert.equal(calledWithArgument!.id, 'test-id');
       assert.equal(calledWithArgument!.dataAttributes, undefined);
-      assert.deepEqual(calledWithArgument!.requestAttributes, requestAttributes);
+      assert.deepEqual(
+        calledWithArgument!.requestAttributes,
+        requestAttributes,
+      );
       assert.equal(calledWithArgument!.region, undefined);
       // parentSpan should be present but we don't need to check its exact value
       assert.deepEqual(
