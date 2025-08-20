@@ -90,7 +90,7 @@ function breakerForDynamo(
     {
       timeout: +env.varOrDefault(
         'TURBO_DYNAMODB_CIRCUIT_BREAKER_TIMEOUT_MS',
-        process.env.NODE_ENV === 'local' ? '10_000' : '3000',
+        process.env.NODE_ENV === 'local' ? '10000' : '3000',
       ),
       errorThresholdPercentage: +env.varOrDefault(
         'TURBO_DYNAMODB_CIRCUIT_BREAKER_ERROR_THRESHOLD_PERCENTAGE',
@@ -98,7 +98,7 @@ function breakerForDynamo(
       ),
       resetTimeout: +env.varOrDefault(
         'TURBO_DYNAMODB_CIRCUIT_BREAKER_RESET_TIMEOUT_MS',
-        '30_000',
+        '30000',
       ),
     },
   );

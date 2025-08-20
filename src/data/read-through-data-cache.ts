@@ -365,7 +365,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
       span.setAttributes({
         'upstream.fetch_duration_ms': upstreamDuration,
-        'data.source': data.sourceHost || 'upstream',
         'data.cached': data.cached,
         'data.trusted': data.trusted,
         'data.verified': data.verified ?? false,

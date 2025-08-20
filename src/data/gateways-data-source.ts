@@ -251,7 +251,6 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 trusted: true,
                 sourceContentType: response.headers['content-type'],
                 cached: false,
-                sourceHost: gatewayUrl,
                 requestAttributes: parseRequestAttributesHeaders({
                   headers: response.headers as { [key: string]: string },
                   currentHops: requestAttributesHeaders?.attributes.hops,

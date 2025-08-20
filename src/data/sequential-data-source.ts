@@ -89,7 +89,6 @@ export class SequentialDataSource implements ContiguousDataSource {
             'sequential.result.duration_ms': sourceDuration,
             'data.cached': data.cached,
             'data.trusted': data.trusted,
-            'data.source_host': data.sourceHost,
           });
 
           span.addEvent('Data source successful', {
