@@ -159,11 +159,6 @@ export class TxChunksDataSource implements ContiguousDataSource {
           });
         });
 
-        span.setStatus({
-          code: SpanStatusCode.OK,
-          message: 'Range streaming initialized',
-        });
-
         return {
           stream: rangeStream,
           size: region.size,
@@ -271,10 +266,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
         return originalRead.apply(this, args);
       };
 
-      span.setStatus({
-        code: SpanStatusCode.OK,
-        message: 'Full streaming initialized',
-      });
+      // Note: Leaving span status as UNSET per OTEL best practices for successful operations
 
       return {
         stream,
