@@ -256,11 +256,6 @@ export class TurboRedisDataSource implements ContiguousDataSource {
         const requestAttributesHeaders =
           generateRequestAttributes(requestAttributes);
 
-        span.setStatus({
-          code: SpanStatusCode.OK,
-          message: 'Nested data item returned from offsets',
-        });
-
         return {
           stream: nestedDataItemDataStream.stream,
           size: region?.size ?? payloadLength,

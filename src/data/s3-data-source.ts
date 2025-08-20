@@ -131,10 +131,6 @@ export class S3DataSource implements ContiguousDataSource {
           contentLength: head.ContentLength,
         });
 
-        span.setStatus({
-          code: SpanStatusCode.OK,
-          message: 'Zero-byte data item returned',
-        });
         return {
           stream: Readable.from([]), // Return an empty stream for zero-byte items
           size: 0,
@@ -225,10 +221,7 @@ export class S3DataSource implements ContiguousDataSource {
         });
       });
 
-      span.setStatus({
-        code: SpanStatusCode.OK,
-        message: 'S3 data retrieved successfully',
-      });
+      // Note: Leaving span status as UNSET per OTEL best practices for successful operations
 
       return {
         stream,
