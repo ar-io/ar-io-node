@@ -9,6 +9,7 @@ import { Readable, pipeline } from 'node:stream';
 import winston from 'winston';
 
 import { currentUnixTimestamp } from '../lib/time.js';
+import { tracer } from '../tracing.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { KvJsonStore } from '../store/kv-attributes-store.js';
 import {
@@ -247,14 +248,37 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       size: number;
     };
   }): Promise<ContiguousData> {
+    const span = tracer.startSpan('ReadThroughDataCache.getData', {
+      attributes: {
+        'data.id': id,
+        'data.has_attributes': dataAttributes !== undefined,
+        'data.has_region': region !== undefined,
+        'data.region_offset': region?.offset,
+        'data.region_size': region?.size,
+        'arns.name': requestAttributes?.arnsName,
+        'arns.basename': requestAttributes?.arnsBasename,
+      },
+    });
+
     this.log.debug('Checking for cached data...', {
       id,
     });
 
     try {
+      // Get data attributes if not provided
       const attributes =
         dataAttributes ??
         (await this.contiguousDataIndex.getDataAttributes(id));
+
+      if (attributes) {
+        span.setAttributes({
+          'data.size': attributes.size,
+          'data.hash': attributes.hash,
+          'data.stable': attributes.stable,
+          'data.verified': attributes.verified,
+          'data.content_type': attributes.contentType,
+        });
+      }
 
       if (attributes?.hash !== undefined) {
         const { arnsName, arnsBasename } = requestAttributes ?? {};
@@ -266,14 +290,32 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         });
       }
 
+      // Check cache
+      span.addEvent('Checking cache');
+      const cacheCheckStart = Date.now();
       const cacheData = await this.getCacheData(
         id,
         attributes?.hash,
         attributes?.size,
         region,
       );
+      const cacheCheckDuration = Date.now() - cacheCheckStart;
+      span.setAttribute(
+        'cache.operation.check_duration_ms',
+        cacheCheckDuration,
+      );
 
+      // Cache hit
       if (cacheData !== undefined) {
+        span.setAttributes({
+          'cache.operation.hit': true,
+          'data.source': 'cache',
+          'data.cached': true,
+        });
+        span.addEvent('Cache hit', {
+          'cache.check_duration_ms': cacheCheckDuration,
+        });
+
         cacheData.stream.once('error', () => {
           metrics.getDataStreamErrorsTotal.inc({
             class: this.constructor.name,
@@ -303,12 +345,37 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         };
       }
 
+      // Cache miss - fetch from upstream
+      span.setAttributes({
+        'cache.operation.hit': false,
+        'cache.operation.miss': true,
+      });
+      span.addEvent('Cache miss - fetching from upstream', {
+        'cache.check_duration_ms': cacheCheckDuration,
+      });
+
+      const upstreamStart = Date.now();
       const data = await this.dataSource.getData({
         id,
         dataAttributes,
         requestAttributes,
         region,
       });
+      const upstreamDuration = Date.now() - upstreamStart;
+
+      span.setAttributes({
+        'upstream.fetch_duration_ms': upstreamDuration,
+        'data.source': data.sourceHost || 'upstream',
+        'data.cached': data.cached,
+        'data.trusted': data.trusted,
+        'data.verified': data.verified ?? false,
+      });
+      span.addEvent('Upstream fetch completed', {
+        'upstream.operation.duration_ms': upstreamDuration,
+        'data.cached': data.cached,
+        'data.trusted': data.trusted,
+      });
+
       data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
 
       // Skip caching when data is untrusted and we don't have a local hash to
@@ -319,11 +386,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         (data.trusted === true || dataAttributes?.hash !== undefined) &&
         region === undefined
       ) {
+        span.addEvent('Starting caching process');
+        const cachingStart = Date.now();
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
         pipeline(data.stream, cacheStream, async (error: any) => {
+          const cachingDuration = Date.now() - cachingStart;
           if (error !== undefined) {
+            span.addEvent('Cache storage failed', {
+              'cache.duration_ms': cachingDuration,
+              'error.message': error.message,
+            });
+            span.setAttribute('cache.operation.storage_error', true);
             this.log.error('Error streaming or caching data:', {
               id,
               message: error.message,
@@ -341,7 +416,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 // trusted source.
                 if (data.trusted === true || dataAttributes?.hash === hash) {
                   await this.dataStore.finalize(cacheStream, hash);
+                  span.addEvent('Data cached successfully', {
+                    'cache.duration_ms': cachingDuration,
+                    'data.computed_hash': hash,
+                    'data.trusted': data.trusted,
+                  });
+                  span.setAttribute('cache.operation.stored', true);
                 } else {
+                  span.addEvent('Skipping cache storage - hash mismatch', {
+                    'data.trusted_hash': dataAttributes?.hash,
+                    'data.computed_hash': hash,
+                  });
+                  span.setAttribute('cache.operation.stored', false);
                   this.log.debug(
                     'Skipping caching of untrusted data with hash that does not match local hash',
                     {
@@ -352,6 +438,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   await this.dataStore.cleanup(cacheStream);
                 }
               } catch (error: any) {
+                span.addEvent('Cache finalization failed', {
+                  'error.message': error.message,
+                });
                 this.log.error('Error finalizing data in cache:', {
                   id,
                   message: error.message,
@@ -409,14 +498,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
       data.stream.pause();
 
+      span.addEvent('Returning data from upstream');
       return data;
-    } catch (error) {
+    } catch (error: any) {
+      span.recordException(error);
+      span.setAttribute('data.error', error.message);
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
         source: 'cache',
       });
 
       throw error;
+    } finally {
+      span.end();
     }
   }
 }

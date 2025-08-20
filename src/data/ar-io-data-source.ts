@@ -21,6 +21,7 @@ import {
   validateHopCount,
 } from '../lib/request-attributes.js';
 import { headerNames } from '../constants.js';
+import { tracer } from '../tracing.js';
 
 import * as metrics from '../metrics.js';
 
@@ -131,74 +132,145 @@ export class ArIODataSource implements ContiguousDataSource {
     region?: Region;
     retryCount?: number;
   }): Promise<ContiguousData> {
-    const log = this.log.child({ method: 'getData' });
-    const totalRetryCount =
-      retryCount ??
-      Math.min(Math.max(Object.keys(this.peerManager.getPeers()).length, 1), 3);
-
-    log.debug('Fetching contiguous data from ArIO peer', {
-      id,
-      totalRetryCount,
+    const span = tracer.startSpan('ArIODataSource.getData', {
+      attributes: {
+        'data.id': id,
+        'data.has_attributes': dataAttributes !== undefined,
+        'data.region.has_region': region !== undefined,
+        'data.region.offset': region?.offset,
+        'data.region.size': region?.size,
+        'arns.name': requestAttributes?.arnsName,
+        'arns.basename': requestAttributes?.arnsBasename,
+        'ario.config.max_hops_allowed': this.maxHopsAllowed,
+        'ario.config.request_timeout_ms': this.requestTimeoutMs,
+      },
     });
 
-    if (requestAttributes !== undefined) {
-      validateHopCount(requestAttributes.hops, this.maxHopsAllowed);
-    }
+    try {
+      const log = this.log.child({ method: 'getData' });
+      const totalRetryCount =
+        retryCount ??
+        Math.min(
+          Math.max(Object.keys(this.peerManager.getPeers()).length, 1),
+          3,
+        );
 
-    const randomPeers = this.selectPeers(totalRetryCount);
+      span.setAttributes({
+        'ario.request.retry_count': totalRetryCount,
+        'ario.peers.available_count': Object.keys(this.peerManager.getPeers())
+          .length,
+      });
 
-    const requestAttributesHeaders =
-      generateRequestAttributes(requestAttributes);
-    for (const currentPeer of randomPeers) {
-      try {
-        const requestStartTime = Date.now();
-        const response = await this.request({
-          peerAddress: currentPeer,
-          id,
-          headers: {
-            ...(requestAttributesHeaders?.headers || {}),
-            ...(dataAttributes?.hash !== undefined
-              ? {
-                  [headerNames.expectedDigest]: dataAttributes.hash,
-                }
-              : {}),
-            ...(region
-              ? {
-                  Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
-                }
-              : {}),
-          },
-          requestAttributesHeaders,
-        });
-        const ttfb = Date.now() - requestStartTime;
+      log.debug('Fetching contiguous data from ArIO peer', {
+        id,
+        totalRetryCount,
+      });
 
-        const parsedRequestAttributes = parseRequestAttributesHeaders({
-          headers: response.headers as { [key: string]: string },
-          currentHops: requestAttributesHeaders?.attributes.hops,
-        });
-
-        return this.parseResponse({
-          response,
-          requestAttributes: parsedRequestAttributes,
-          requestStartTime,
-          peer: currentPeer,
-          ttfb,
-          expectedHash: dataAttributes?.hash,
-        });
-      } catch (error: any) {
-        metrics.getDataErrorsTotal.inc({
-          class: this.constructor.name,
-          source: currentPeer,
-        });
-        log.error('Failed to fetch contiguous data from ArIO peer', {
-          currentPeer,
-          message: error.message,
-          stack: error.stack,
-        });
+      if (requestAttributes !== undefined) {
+        validateHopCount(requestAttributes.hops, this.maxHopsAllowed);
+        span.setAttribute('ario.request.hops', requestAttributes.hops);
       }
-    }
 
-    throw new Error('Failed to fetch contiguous data from ArIO peers');
+      const randomPeers = this.selectPeers(totalRetryCount);
+      span.addEvent('Selected peers for request');
+
+      const requestAttributesHeaders =
+        generateRequestAttributes(requestAttributes);
+
+      for (let i = 0; i < randomPeers.length; i++) {
+        const currentPeer = randomPeers[i];
+        const peerRequestStart = Date.now();
+
+        span.addEvent('Attempting peer request', {
+          'ario.peer.url': currentPeer,
+          'ario.peer.index': i,
+        });
+
+        try {
+          const requestStartTime = Date.now();
+          const response = await this.request({
+            peerAddress: currentPeer,
+            id,
+            headers: {
+              ...(requestAttributesHeaders?.headers || {}),
+              ...(dataAttributes?.hash !== undefined
+                ? {
+                    [headerNames.expectedDigest]: dataAttributes.hash,
+                  }
+                : {}),
+              ...(region
+                ? {
+                    Range: `bytes=${region.offset}-${region.offset + region.size - 1}`,
+                  }
+                : {}),
+            },
+            requestAttributesHeaders,
+          });
+          const ttfb = Date.now() - requestStartTime;
+          const peerRequestDuration = Date.now() - peerRequestStart;
+
+          span.setAttributes({
+            'ario.peer.successful_url': currentPeer,
+            'ario.peer.successful_index': i,
+            'ario.request.duration_ms': peerRequestDuration,
+            'ario.request.ttfb_ms': ttfb,
+            'http.status_code': response.status,
+          });
+
+          span.addEvent('Peer request successful', {
+            'ario.peer.url': currentPeer,
+            'ario.peer.index': i,
+          });
+
+          const parsedRequestAttributes = parseRequestAttributesHeaders({
+            headers: response.headers as { [key: string]: string },
+            currentHops: requestAttributesHeaders?.attributes.hops,
+          });
+
+          return this.parseResponse({
+            response,
+            requestAttributes: parsedRequestAttributes,
+            requestStartTime,
+            peer: currentPeer,
+            ttfb,
+            expectedHash: dataAttributes?.hash,
+          });
+        } catch (error: any) {
+          const peerRequestDuration = Date.now() - peerRequestStart;
+
+          span.addEvent('Peer request failed', {
+            'ario.peer.url': currentPeer,
+            'ario.peer.index': i,
+            'ario.request.error': error.message,
+          });
+
+          metrics.getDataErrorsTotal.inc({
+            class: this.constructor.name,
+            source: currentPeer,
+          });
+          log.error('Failed to fetch contiguous data from ArIO peer', {
+            currentPeer,
+            message: error.message,
+            stack: error.stack,
+          });
+        }
+      }
+
+      span.recordException(
+        new Error('Failed to fetch contiguous data from ArIO peers'),
+      );
+      span.setStatus({
+        code: 2,
+        message: 'Failed to fetch contiguous data from ArIO peers',
+      });
+      throw new Error('Failed to fetch contiguous data from ArIO peers');
+    } catch (error: any) {
+      span.recordException(error);
+      span.setStatus({ code: 2, message: error.message });
+      throw error;
+    } finally {
+      span.end();
+    }
   }
 
   private parseResponse({

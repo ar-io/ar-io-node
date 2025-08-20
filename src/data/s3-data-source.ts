@@ -16,6 +16,7 @@ import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { Readable } from 'node:stream';
 import { AwsLiteClient } from '@aws-lite/client';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
+import { tracer } from '../tracing.js';
 import * as metrics from '../metrics.js';
 
 export class S3DataSource implements ContiguousDataSource {
@@ -56,18 +57,46 @@ export class S3DataSource implements ContiguousDataSource {
     requestAttributes?: RequestAttributes;
     region?: Region;
   }): Promise<ContiguousData> {
-    const log = this.log.child({ method: 'getData', id });
-    log.debug('Fetching contiguous data from S3', {
-      bucket: this.s3Bucket,
-      prefix: this.s3Prefix,
-      region,
+    const span = tracer.startSpan('S3DataSource.getData', {
+      attributes: {
+        'data.id': id,
+        'data.region.has_region': region !== undefined,
+        'data.region.offset': region?.offset,
+        'data.region.size': region?.size,
+        'arns.name': requestAttributes?.arnsName,
+        'arns.basename': requestAttributes?.arnsBasename,
+        's3.config.bucket': this.s3Bucket,
+        's3.config.prefix': this.s3Prefix,
+      },
     });
 
+    const log = this.log.child({ method: 'getData', id });
     try {
+      log.debug('Fetching contiguous data from S3', {
+        bucket: this.s3Bucket,
+        prefix: this.s3Prefix,
+        region,
+      });
+
+      const objectKey = `${this.s3Prefix}/${id}`;
+      span.setAttribute('s3.request.object_key', objectKey);
+      span.addEvent('Starting S3 head request');
+      const headRequestStart = Date.now();
+
       const head = await this.awsClient.S3.HeadObject({
         Bucket: this.s3Bucket,
-        Key: `${this.s3Prefix}/${id}`,
+        Key: objectKey,
       });
+
+      const headRequestDuration = Date.now() - headRequestStart;
+
+      span.setAttributes({
+        's3.head.request_duration_ms': headRequestDuration,
+        's3.head.content_length': head.ContentLength,
+        's3.head.content_type': head.ContentType,
+      });
+
+      span.addEvent('S3 head request completed');
 
       log.debug('S3 head response', {
         response: {
@@ -83,14 +112,25 @@ export class S3DataSource implements ContiguousDataSource {
       // Handle zero-byte data items
       const payloadDataStart = head.Metadata?.['payload-data-start'];
       const payloadContentType = head.Metadata?.['payload-content-type'];
+
+      span.setAttributes({
+        's3.metadata.payload_data_start':
+          payloadDataStart !== undefined ? +payloadDataStart : undefined,
+        's3.metadata.payload_content_type': payloadContentType,
+      });
+
       if (
         payloadDataStart !== undefined &&
         +payloadDataStart === head.ContentLength
       ) {
+        span.addEvent('Returning empty stream for zero-byte data item');
+
         log.debug('Returning empty stream for zero-byte data item', {
           payloadDataStart,
           contentLength: head.ContentLength,
         });
+
+        span.setStatus({ code: 1, message: 'Zero-byte data item returned' });
         return {
           stream: Readable.from([]), // Return an empty stream for zero-byte items
           size: 0,
@@ -106,14 +146,33 @@ export class S3DataSource implements ContiguousDataSource {
       const startOffset = +(payloadDataStart ?? 0) + +(region?.offset ?? 0);
       const range = `bytes=${startOffset}-${region?.size !== undefined ? startOffset + region.size - 1 : ''}`;
 
+      span.setAttributes({
+        's3.request.start_offset': startOffset,
+        's3.request.range': range,
+      });
+
+      span.addEvent('Starting S3 GetObject request');
+
+      const getObjectStart = Date.now();
       const response = await this.s3Client.GetObject({
         Bucket: this.s3Bucket,
-        Key: `${this.s3Prefix}/${id}`,
+        Key: objectKey,
         Range: range,
         streamResponsePayload: true,
       });
 
+      const getObjectDuration = Date.now() - getObjectStart;
       const sourceContentType = payloadContentType ?? response.ContentType;
+
+      span.setAttributes({
+        's3.get_object.duration_ms': getObjectDuration,
+        's3.response.content_length': response.ContentLength,
+        's3.response.content_type': response.ContentType,
+        's3.response.content_range': response.ContentRange,
+        's3.response.source_content_type': sourceContentType,
+      });
+
+      span.addEvent('S3 GetObject request completed');
 
       log.debug('S3 response', {
         response: {
@@ -137,6 +196,17 @@ export class S3DataSource implements ContiguousDataSource {
 
       const stream = response.Body as Readable;
 
+      const finalSize =
+        contentSizeFromContentRange(response.ContentRange) ??
+        response.ContentLength;
+
+      span.setAttributes({
+        's3.response.final_size': finalSize,
+        's3.data.verified': false,
+        's3.data.trusted': true,
+        's3.data.cached': false,
+      });
+
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
@@ -151,11 +221,11 @@ export class S3DataSource implements ContiguousDataSource {
         });
       });
 
+      span.setStatus({ code: 1, message: 'S3 data retrieved successfully' });
+
       return {
         stream,
-        size:
-          contentSizeFromContentRange(response.ContentRange) ??
-          response.ContentLength,
+        size: finalSize,
         verified: false,
         trusted: true, // we only cache trusted data
         sourceContentType,
@@ -163,6 +233,9 @@ export class S3DataSource implements ContiguousDataSource {
         requestAttributes: requestAttributesHeaders?.attributes,
       };
     } catch (error: any) {
+      span.recordException(error);
+      span.setStatus({ code: 2, message: error.message });
+
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
         source: 's3',
@@ -173,6 +246,8 @@ export class S3DataSource implements ContiguousDataSource {
         stack: error.stack,
       });
       throw error;
+    } finally {
+      span.end();
     }
   }
 }
