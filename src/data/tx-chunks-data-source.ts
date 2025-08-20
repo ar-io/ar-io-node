@@ -110,10 +110,16 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
         const rangeStream = Readable.from(rangeResult.stream);
 
-        // Track metrics timing
-        const firstChunkTime = Date.now() - rangeStartTime;
+        let firstChunkTime = 0;
 
-        span.setAttribute('chunks.first_chunk_time_ms', firstChunkTime);
+        // Measure actual TTFB on first data event
+        rangeStream.once('data', () => {
+          firstChunkTime = Date.now() - rangeStartTime;
+          span.setAttribute(
+            'chunks.streaming.first_chunk_time_ms',
+            firstChunkTime,
+          );
+        });
 
         rangeStream.on('end', () => {
           const chunksFetched = rangeResult.getChunksFetched();
@@ -139,14 +145,16 @@ export class TxChunksDataSource implements ContiguousDataSource {
             chunksFetched,
           );
 
-          metrics.dataRequestFirstChunkLatency.observe(
-            {
-              class: this.constructor.name,
-              source: 'chunks',
-              request_type: 'range',
-            },
-            firstChunkTime,
-          );
+          if (firstChunkTime > 0) {
+            metrics.dataRequestFirstChunkLatency.observe(
+              {
+                class: this.constructor.name,
+                source: 'chunks',
+                request_type: 'range',
+              },
+              firstChunkTime,
+            );
+          }
         });
 
         rangeStream.on('error', (error) => {
@@ -197,13 +205,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       // await the first chunk promise so that it throws and returns 404 if no
       // chunk data is found.
-      const firstChunkStart = Date.now();
       await chunkDataPromise;
-      const firstChunkTime = Date.now() - firstChunkStart;
 
-      span.setAttributes({
-        'chunks.streaming.first_chunk_time_ms': firstChunkTime,
-      });
+      const streamStartTime = Date.now();
 
       const stream = new Readable({
         autoDestroy: true,
@@ -216,6 +220,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
             const chunkData = await chunkDataPromise;
             this.push(chunkData.chunk);
+            totalChunks++;
             bytes += chunkData.chunk.length;
 
             if (bytes < size) {
@@ -234,6 +239,15 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
 
       let totalChunks = 0;
+
+      // Measure actual TTFB on first data event
+      stream.once('data', () => {
+        const firstChunkTime = Date.now() - streamStartTime;
+        span.setAttribute(
+          'chunks.streaming.first_chunk_time_ms',
+          firstChunkTime,
+        );
+      });
 
       stream.on('error', (error) => {
         span.recordException(error);
@@ -258,15 +272,6 @@ export class TxChunksDataSource implements ContiguousDataSource {
           request_type: 'full',
         });
       });
-
-      // Increment chunk counter on each chunk read
-      const originalRead = stream._read;
-      stream._read = function (...args) {
-        totalChunks++;
-        return originalRead.apply(this, args);
-      };
-
-      // Note: Leaving span status as UNSET per OTEL best practices for successful operations
 
       return {
         stream,

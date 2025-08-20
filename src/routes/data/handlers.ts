@@ -517,7 +517,7 @@ export const createRawDataHandler = ({
         try {
           if (await dataBlockListValidator.isHashBlocked(dataAttributes.hash)) {
             span.setAttribute('http.status_code', 404);
-            span.setAttribute('data.request.error', 'hash_blocked');
+            span.setAttribute('data.error', 'hash_blocked');
             sendNotFound(res);
             return;
           }
@@ -804,6 +804,8 @@ export const createDataHandler = ({
       },
     });
 
+    let data: ContiguousData | undefined;
+
     try {
       // TODO: remove regex match if possible
       // Ensure this is a valid id
@@ -837,7 +839,6 @@ export const createDataHandler = ({
         });
       }
 
-      let data: ContiguousData | undefined;
       let dataAttributes: ContiguousDataAttributes | undefined;
 
       // Retrieve authoritative data attributes if available
@@ -883,7 +884,7 @@ export const createDataHandler = ({
         try {
           if (await dataBlockListValidator.isHashBlocked(dataAttributes.hash)) {
             span.setAttribute('http.status_code', 404);
-            span.setAttribute('data.request.error', 'hash_blocked');
+            span.setAttribute('data.error', 'hash_blocked');
             sendNotFound(res);
             return;
           }
@@ -907,10 +908,15 @@ export const createDataHandler = ({
         );
         const manifestDuration = Date.now() - manifestStartTime;
         span.setAttribute('manifest.resolution_duration_ms', manifestDuration);
-        span.setAttribute(
-          'manifest.resolved_id',
-          manifestResolution.resolvedId,
-        );
+        if (
+          manifestResolution.resolvedId !== undefined &&
+          manifestResolution.resolvedId !== ''
+        ) {
+          span.setAttribute(
+            'manifest.resolved_id',
+            manifestResolution.resolvedId,
+          );
+        }
 
         // Send response based on manifest resolution (data ID and
         // completeness)

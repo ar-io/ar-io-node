@@ -237,8 +237,6 @@ export class ArIODataSource implements ContiguousDataSource {
             expectedHash: dataAttributes?.hash,
           });
         } catch (error: any) {
-          const peerRequestDuration = Date.now() - peerRequestStart;
-
           span.addEvent('Peer request failed', {
             'ario.peer.url': currentPeer,
             'ario.peer.index': i,
@@ -257,13 +255,6 @@ export class ArIODataSource implements ContiguousDataSource {
         }
       }
 
-      span.recordException(
-        new Error('Failed to fetch contiguous data from ArIO peers'),
-      );
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: 'Failed to fetch contiguous data from ArIO peers',
-      });
       throw new Error('Failed to fetch contiguous data from ArIO peers');
     } catch (error: any) {
       span.recordException(error);

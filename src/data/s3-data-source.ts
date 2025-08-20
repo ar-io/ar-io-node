@@ -202,9 +202,6 @@ export class S3DataSource implements ContiguousDataSource {
 
       span.setAttributes({
         's3.response.final_size': finalSize,
-        's3.data.verified': false,
-        's3.data.trusted': true,
-        's3.data.cached': false,
       });
 
       stream.on('error', () => {
@@ -220,8 +217,6 @@ export class S3DataSource implements ContiguousDataSource {
           source: 's3',
         });
       });
-
-      // Note: Leaving span status as UNSET per OTEL best practices for successful operations
 
       return {
         stream,
