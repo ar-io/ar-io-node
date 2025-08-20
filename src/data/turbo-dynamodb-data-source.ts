@@ -18,6 +18,7 @@ import winston from 'winston';
 import { bufferToStream, ByteRangeTransform } from '../lib/stream.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { tracer } from '../tracing.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 import {
   ContiguousData,
@@ -326,7 +327,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           generateRequestAttributes(requestAttributes);
 
         span.setStatus({
-          code: 1,
+          code: SpanStatusCode.OK,
           message: 'Nested data item returned from offsets',
         });
 
@@ -371,7 +372,10 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           requestAttributes,
         });
 
-        span.setStatus({ code: 1, message: 'Raw data item returned' });
+        span.setStatus({
+          code: SpanStatusCode.OK,
+          message: 'Raw data item returned',
+        });
         return result;
       }
 
@@ -384,7 +388,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       throw new Error(`Data item ${id} not found in DynamoDB`);
     } catch (error: any) {
       span.recordException(error);
-      span.setStatus({ code: 2, message: error.message });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
 
       this.log.error(
         `Turbo DynamoDB error retrieving payload data for ${id}`,

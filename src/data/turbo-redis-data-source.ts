@@ -17,6 +17,7 @@ import CircuitBreaker from 'opossum';
 import { bufferToStream, ByteRangeTransform } from '../lib/stream.js';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { tracer } from '../tracing.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 
 // A helper type that will allow us to pass around closures involving CacheService activities
@@ -256,7 +257,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
           generateRequestAttributes(requestAttributes);
 
         span.setStatus({
-          code: 1,
+          code: SpanStatusCode.OK,
           message: 'Nested data item returned from offsets',
         });
 
@@ -339,7 +340,7 @@ export class TurboRedisDataSource implements ContiguousDataSource {
       throw new Error(`Data item ${id} not found in Redis`);
     } catch (error: any) {
       span.recordException(error);
-      span.setStatus({ code: 2, message: error.message });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
 
       this.log.error(
         `Turbo Elasticache error retrieving payload data for ${id}`,

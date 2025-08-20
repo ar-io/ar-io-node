@@ -17,6 +17,7 @@ import { Readable } from 'node:stream';
 import { AwsLiteClient } from '@aws-lite/client';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { tracer } from '../tracing.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 import * as metrics from '../metrics.js';
 
 export class S3DataSource implements ContiguousDataSource {
@@ -130,7 +131,10 @@ export class S3DataSource implements ContiguousDataSource {
           contentLength: head.ContentLength,
         });
 
-        span.setStatus({ code: 1, message: 'Zero-byte data item returned' });
+        span.setStatus({
+          code: SpanStatusCode.OK,
+          message: 'Zero-byte data item returned',
+        });
         return {
           stream: Readable.from([]), // Return an empty stream for zero-byte items
           size: 0,
@@ -221,7 +225,10 @@ export class S3DataSource implements ContiguousDataSource {
         });
       });
 
-      span.setStatus({ code: 1, message: 'S3 data retrieved successfully' });
+      span.setStatus({
+        code: SpanStatusCode.OK,
+        message: 'S3 data retrieved successfully',
+      });
 
       return {
         stream,
@@ -234,7 +241,7 @@ export class S3DataSource implements ContiguousDataSource {
       };
     } catch (error: any) {
       span.recordException(error);
-      span.setStatus({ code: 2, message: error.message });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
 
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,
