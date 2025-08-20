@@ -9,6 +9,7 @@ import winston from 'winston';
 import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { streamRangeData } from '../lib/stream-tx-range.js';
 import { tracer } from '../tracing.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 import {
   ChainSource,
@@ -158,7 +159,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
           });
         });
 
-        span.setStatus({ code: 1, message: 'Range streaming initialized' });
+        span.setStatus({
+          code: SpanStatusCode.OK,
+          message: 'Range streaming initialized',
+        });
 
         return {
           stream: rangeStream,
@@ -267,7 +271,10 @@ export class TxChunksDataSource implements ContiguousDataSource {
         return originalRead.apply(this, args);
       };
 
-      span.setStatus({ code: 1, message: 'Full streaming initialized' });
+      span.setStatus({
+        code: SpanStatusCode.OK,
+        message: 'Full streaming initialized',
+      });
 
       return {
         stream,
@@ -280,7 +287,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
       };
     } catch (error: any) {
       span.recordException(error);
-      span.setStatus({ code: 2, message: error.message });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
 
       metrics.getDataErrorsTotal.inc({
         class: this.constructor.name,

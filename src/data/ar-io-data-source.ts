@@ -22,6 +22,7 @@ import {
 } from '../lib/request-attributes.js';
 import { headerNames } from '../constants.js';
 import { tracer } from '../tracing.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 import * as metrics from '../metrics.js';
 
@@ -260,13 +261,13 @@ export class ArIODataSource implements ContiguousDataSource {
         new Error('Failed to fetch contiguous data from ArIO peers'),
       );
       span.setStatus({
-        code: 2,
+        code: SpanStatusCode.ERROR,
         message: 'Failed to fetch contiguous data from ArIO peers',
       });
       throw new Error('Failed to fetch contiguous data from ArIO peers');
     } catch (error: any) {
       span.recordException(error);
-      span.setStatus({ code: 2, message: error.message });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
       throw error;
     } finally {
       span.end();
