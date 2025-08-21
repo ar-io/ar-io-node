@@ -252,7 +252,7 @@ export const readBytes = async (
   return readBytes(reader, newBuffer, length);
 };
 
-async function* getReader(s: Readable): AsyncGenerator<Buffer> {
+export async function* getReader(s: Readable): AsyncGenerator<Buffer> {
   for await (const chunk of s) {
     yield chunk;
   }

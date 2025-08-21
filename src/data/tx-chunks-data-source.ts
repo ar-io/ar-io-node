@@ -209,11 +209,21 @@ export class TxChunksDataSource implements ContiguousDataSource {
         bytes,
       );
 
+      this.log.debug('Fetching first chunk', {
+        startOffset,
+        txDataRoot,
+        bytes,
+        size,
+      });
+
       // await the first chunk promise so that it throws and returns 404 if no
       // chunk data is found.
       await chunkDataPromise;
 
       const streamStartTime = Date.now();
+
+      // Store reference to log for use inside stream
+      //const log = this.log;
 
       const stream = new Readable({
         autoDestroy: true,
@@ -225,6 +235,13 @@ export class TxChunksDataSource implements ContiguousDataSource {
             }
 
             const chunkData = await chunkDataPromise;
+            //log.debug('Pushing chunk to stream', {
+            //  chunkNumber: totalChunks + 1,
+            //  chunkSize: chunkData.chunk.length,
+            //  bytesBeforePush: bytes,
+            //  bytesAfterPush: bytes + chunkData.chunk.length,
+            //  totalSize: size,
+            //});
             this.push(chunkData.chunk);
             totalChunks++;
             bytes += chunkData.chunk.length;
@@ -278,6 +295,8 @@ export class TxChunksDataSource implements ContiguousDataSource {
           request_type: 'full',
         });
       });
+
+      stream.pause();
 
       return {
         stream,

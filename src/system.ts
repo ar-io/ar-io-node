@@ -16,6 +16,8 @@ import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
+import { RootParentDataSource } from './data/root-parent-data-source.js';
+import { Ans104OffsetSource } from './data/ans104-offset-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -142,6 +144,20 @@ export const db = new StandaloneSqliteDatabase({
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
   tagSelectivity: config.TAG_SELECTIVITY,
+});
+
+// Create composite root TX index that tries local DB first, then falls back to GraphQL
+// This needs to be created early so it can be used by RootParentDataSource
+export const rootTxIndex = new CompositeRootTxIndex({
+  log,
+  indexes: [
+    db, // Try local database first (fast)
+    new GraphQLRootTxIndex({
+      // Fall back to GraphQL if not in DB
+      log,
+      trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+    }),
+  ],
 });
 
 export const chainIndex: ChainIndex = db;
@@ -428,10 +444,26 @@ export const chunkSource = new FullChunkSource(
   chunkDataSource,
 );
 
-const txChunksDataSource = new TxChunksDataSource({
+// Create the base TX chunks data source
+const baseTxChunksDataSource = new TxChunksDataSource({
   log,
   chainSource: arweaveClient,
   chunkSource,
+});
+
+// Create ANS-104 offset source for parsing bundle headers
+const ans104OffsetSource = new Ans104OffsetSource({
+  log,
+  dataSource: baseTxChunksDataSource,
+});
+
+// Wrap the TX chunks data source with RootParentDataSource
+// This enables resolution of data items within ANS-104 bundles
+const txChunksDataSource: ContiguousDataSource = new RootParentDataSource({
+  log,
+  dataSource: baseTxChunksDataSource,
+  dataItemRootTxIndex: rootTxIndex,
+  ans104OffsetSource,
 });
 
 const s3DataSource =
@@ -888,19 +920,6 @@ const dataSqliteWalCleanupWorker = config.ENABLE_DATA_DB_WAL_CLEANUP
 if (dataSqliteWalCleanupWorker !== undefined) {
   dataSqliteWalCleanupWorker.start();
 }
-
-// Create composite root TX index that tries local DB first, then falls back to GraphQL
-const rootTxIndex = new CompositeRootTxIndex({
-  log,
-  indexes: [
-    db, // Try local database first (fast)
-    new GraphQLRootTxIndex({
-      // Fall back to GraphQL if not in DB
-      log,
-      trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
-    }),
-  ],
-});
 
 const dataVerificationWorker = config.ENABLE_BACKGROUND_DATA_VERIFICATION
   ? new DataVerificationWorker({
