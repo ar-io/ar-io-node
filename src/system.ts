@@ -457,14 +457,9 @@ const ans104OffsetSource = new Ans104OffsetSource({
   dataSource: baseTxChunksDataSource,
 });
 
-// Wrap the TX chunks data source with RootParentDataSource
-// This enables resolution of data items within ANS-104 bundles
-const txChunksDataSource: ContiguousDataSource = new RootParentDataSource({
-  log,
-  dataSource: baseTxChunksDataSource,
-  dataItemRootTxIndex: rootTxIndex,
-  ans104OffsetSource,
-});
+// Use the base TX chunks data source directly for now
+// We'll enable RootParentDataSource when other offset sources are available
+const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
 
 const s3DataSource =
   awsClient !== undefined && config.AWS_S3_CONTIGUOUS_DATA_BUCKET !== undefined
