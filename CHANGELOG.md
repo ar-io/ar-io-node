@@ -6,11 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+This is an optional release that lays the groundwork for the gateway network to 
+become completely independent of the legacy arweave.net gateway by enabling 
+data item retrieval directly from chunks using root transaction ID lookups. It 
+also introduces comprehensive distributed tracing for improved observability.
+
 ### Added
+
+- Added comprehensive OpenTelemetry distributed tracing with proper span linking
+  across all data request operations, providing end-to-end visibility from HTTP
+  requests through data source failovers, cache operations, and peer retrievals
+  with hierarchical parent-child span relationships.
+- Added `RootParentDataSource` and `Ans104OffsetSource` to enable retrieving
+  data items by ID directly from chunks when only the root transaction ID is
+  indexed, transparently resolving data items to their root transactions and
+  calculating correct byte ranges within ANS-104 bundles (temporarily disabled
+  pending additional offset sources).
 
 ### Changed
 
 ### Fixed
+
+- Removed incorrect `Content-Digest` header from chunk endpoint which was
+  misleadingly representing only chunk data hash instead of complete JSON
+  response body hash (will be reintroduced with correct semantics).
 
 ## [Release 46] - 2025-08-18
 
