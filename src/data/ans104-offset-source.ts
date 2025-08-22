@@ -32,6 +32,15 @@ export class Ans104OffsetSource {
     this.dataSource = dataSource;
   }
 
+  /**
+   * Finds the offset and size of a data item within an ANS-104 bundle.
+   * Searches recursively through nested bundles if necessary.
+   *
+   * @param dataItemId - The ID of the data item to find
+   * @param rootBundleId - The ID of the root bundle to search within
+   * @returns Object with offset and size if found, null otherwise
+   * @throws Error if bundle parsing fails
+   */
   async getDataItemOffset(
     dataItemId: string,
     rootBundleId: string,

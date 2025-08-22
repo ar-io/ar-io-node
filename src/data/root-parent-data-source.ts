@@ -18,12 +18,23 @@ import {
 import { startChildSpan } from '../tracing.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
 
+/**
+ * Data source that resolves data items to their root bundles before fetching data.
+ * Handles ANS-104 bundles by coordinating root transaction lookup and offset resolution.
+ */
 export class RootParentDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
   private dataItemRootTxIndex: DataItemRootTxIndex;
   private ans104OffsetSource: Ans104OffsetSource;
 
+  /**
+   * Creates a new RootParentDataSource instance.
+   * @param log - Winston logger for debugging and error reporting
+   * @param dataSource - Underlying data source for fetching actual data
+   * @param dataItemRootTxIndex - Index for resolving data items to root transactions
+   * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles
+   */
   constructor({
     log,
     dataSource,
