@@ -222,9 +222,6 @@ export class TxChunksDataSource implements ContiguousDataSource {
 
       const streamStartTime = Date.now();
 
-      // Store reference to log for use inside stream
-      //const log = this.log;
-
       const stream = new Readable({
         autoDestroy: true,
         read: async function () {
@@ -235,13 +232,6 @@ export class TxChunksDataSource implements ContiguousDataSource {
             }
 
             const chunkData = await chunkDataPromise;
-            //log.debug('Pushing chunk to stream', {
-            //  chunkNumber: totalChunks + 1,
-            //  chunkSize: chunkData.chunk.length,
-            //  bytesBeforePush: bytes,
-            //  bytesAfterPush: bytes + chunkData.chunk.length,
-            //  totalSize: size,
-            //});
             this.push(chunkData.chunk);
             totalChunks++;
             bytes += chunkData.chunk.length;

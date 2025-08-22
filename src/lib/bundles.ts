@@ -252,6 +252,11 @@ export const readBytes = async (
   return readBytes(reader, newBuffer, length);
 };
 
+/**
+ * Async generator over Buffer chunks from a Node.js Readable stream.
+ * @param s - Readable stream to iterate over
+ * @returns AsyncGenerator yielding Buffer chunks
+ */
 export async function* getReader(s: Readable): AsyncGenerator<Buffer> {
   for await (const chunk of s) {
     yield chunk;

@@ -16,8 +16,9 @@ import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
-import { RootParentDataSource } from './data/root-parent-data-source.js';
-import { Ans104OffsetSource } from './data/ans104-offset-source.js';
+// Temporarily disabled - will be re-enabled when other offset sources are available
+// import { RootParentDataSource } from './data/root-parent-data-source.js';
+// import { Ans104OffsetSource } from './data/ans104-offset-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -451,11 +452,11 @@ const baseTxChunksDataSource = new TxChunksDataSource({
   chunkSource,
 });
 
-// Create ANS-104 offset source for parsing bundle headers
-const ans104OffsetSource = new Ans104OffsetSource({
-  log,
-  dataSource: baseTxChunksDataSource,
-});
+// ANS-104 offset source for parsing bundle headers - temporarily disabled
+// const ans104OffsetSource = new Ans104OffsetSource({
+//   log,
+//   dataSource: baseTxChunksDataSource,
+// });
 
 // Use the base TX chunks data source directly for now
 // We'll enable RootParentDataSource when other offset sources are available
