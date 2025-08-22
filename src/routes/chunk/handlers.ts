@@ -15,7 +15,6 @@ import {
 } from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { toB64Url } from '../../lib/encoding.js';
-import { formatContentDigest } from '../../lib/digest.js';
 import { Chunk, ChunkByAnySource } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
@@ -190,18 +189,14 @@ export const createChunkOffsetHandler = ({
       response.setHeader(headerNames.cache, cacheStatus);
       span.setAttribute('chunk.cache_status', cacheStatus);
 
-      // Add ETag and digest headers when hash is available
-      // Only add these when data is cached OR it's a HEAD request (to prevent incorrect hashes on streamed data)
+      // Add ETag header when hash is available
+      // Only add when data is cached OR it's a HEAD request (to prevent incorrect hashes on streamed data)
       if (
         chunk.hash !== undefined &&
         (chunk.source === 'cache' || request.method === 'HEAD')
       ) {
         const hashString = toB64Url(chunk.hash);
         response.setHeader('ETag', `"${hashString}"`);
-        response.setHeader(
-          headerNames.contentDigest,
-          formatContentDigest(hashString),
-        );
         span.setAttribute('chunk.hash', hashString);
       }
 

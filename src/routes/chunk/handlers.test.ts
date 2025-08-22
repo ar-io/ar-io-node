@@ -371,10 +371,6 @@ describe('Chunk routes', () => {
         .expect(200)
         .then((res: any) => {
           assert.strictEqual(res.header['etag'], '"abc123def456"');
-          assert.strictEqual(
-            res.header['content-digest'],
-            'sha-256=:abc123def456:',
-          );
         });
     });
 
@@ -411,10 +407,6 @@ describe('Chunk routes', () => {
         .expect(200)
         .then((res: any) => {
           assert.strictEqual(res.header['etag'], '"abc123def456"');
-          assert.strictEqual(
-            res.header['content-digest'],
-            'sha-256=:abc123def456:',
-          );
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
@@ -453,7 +445,6 @@ describe('Chunk routes', () => {
         .then((res: any) => {
           // Express may set a weak ETag automatically, but we should not have our strong ETag
           assert.ok(!res.header['etag'] || res.header['etag'].startsWith('W/'));
-          assert.strictEqual(res.header['content-digest'], undefined);
         });
     });
 
@@ -491,7 +482,6 @@ describe('Chunk routes', () => {
         .then((res: any) => {
           // No strong ETag for streamed network data on GET (Express may add weak ETag)
           assert.ok(!res.header['etag'] || res.header['etag'].startsWith('W/'));
-          assert.strictEqual(res.header['content-digest'], undefined);
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
