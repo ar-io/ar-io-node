@@ -40,13 +40,22 @@ Your primary responsibilities:
      - Clickhouse-auto-import: changes related to clickhouse import scripts
    - Only components with actual code changes need new image builds
 
-4. **Synthesize Current State**: Based on your analysis:
+4. **Check Release Status**: Verify git tags and GitHub releases:
+   - Use `git tag -l "r*" | tail -5` to see recent release tags
+   - Use `git ls-remote --tags origin | grep r[N]` to verify tag is pushed
+   - Use `gh release view r[N]` to check if GitHub release exists
+   - Verify GitHub release includes:
+     - Release notes from CHANGELOG
+     - Docker image SHAs for all components
+   - Note if tag exists but GitHub release is missing
+
+5. **Synthesize Current State**: Based on your analysis:
    - Determine which release stage the project is currently in
    - Identify completed steps versus pending steps
    - Note any deviations from the standard process
    - Highlight any potential issues or blockers
 
-5. **Verification Readiness Check**: Assess if ready for docker compose testing:
+6. **Verification Readiness Check**: Assess if ready for docker compose testing:
    - Confirm all image SHAs are properly set in docker-compose.yaml
    - Verify AO CU image is set in docker-compose.ao.yaml
    - Note the testing profiles and expected behaviors:
@@ -58,7 +67,7 @@ Your primary responsibilities:
    - Important: Some containers failing due to missing configuration is expected - focus on core containers
    - Remind to stop all containers after testing with appropriate down commands
 
-6. **Provide Clear Next Steps**: Present:
+7. **Provide Clear Next Steps**: Present:
    - An ordered list of immediate next actions
    - Prerequisites that must be met before proceeding
    - Estimated complexity or time requirements if apparent

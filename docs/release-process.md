@@ -26,8 +26,17 @@
      - AO CU may restart if not configured (expected behavior)
    - Verify core containers stay running: `docker ps | grep -E "envoy|core|redis|observer"`
    - After testing, stop all: `docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down`
-10. Tag the release in git.
-11. Merge to `main`.
+10. Tag the release in git: `git tag r47` (replace with appropriate release number)
+11. Push the tag: `git push origin r47`
+12. Create GitHub release using the tag:
+    ```bash
+    gh release create r[N] \
+      --title "Release [N]" \
+      --notes "Release notes from CHANGELOG with docker image SHAs"
+    ```
+    - Include the release summary from CHANGELOG
+    - List all docker images with their specific SHAs
+13. Merge to `main`.
 
 ## Post Release
 
