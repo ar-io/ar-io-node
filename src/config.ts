@@ -241,7 +241,9 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 //
 
 // On-demand data retrieval priority order
-// Available sources: 'ar-io-network', 'trusted-gateways', 'chunks', 'tx-data', 's3', 'turbo-s3', 'turbo-elasticache', 'turbo-dynamodb'
+// Available sources: 'ar-io-network', 'trusted-gateways', 'chunks', 'chunks-data-item', 'tx-data', 's3', 'turbo-s3', 'turbo-elasticache', 'turbo-dynamodb'
+// - 'chunks': Standard chunk retrieval for transactions
+// - 'chunks-data-item': Chunk retrieval with automatic data item resolution (finds data items within bundles)
 // Legacy sources: 'ar-io-peers', 'ario-peer' (use 'ar-io-network' instead)
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(

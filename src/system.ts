@@ -16,9 +16,8 @@ import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
-// Temporarily disabled - will be re-enabled when other offset sources are available
-// import { RootParentDataSource } from './data/root-parent-data-source.js';
-// import { Ans104OffsetSource } from './data/ans104-offset-source.js';
+import { RootParentDataSource } from './data/root-parent-data-source.js';
+import { Ans104OffsetSource } from './data/ans104-offset-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -452,15 +451,22 @@ const baseTxChunksDataSource = new TxChunksDataSource({
   chunkSource,
 });
 
-// ANS-104 offset source for parsing bundle headers - temporarily disabled
-// const ans104OffsetSource = new Ans104OffsetSource({
-//   log,
-//   dataSource: baseTxChunksDataSource,
-// });
+// ANS-104 offset source for parsing bundle headers
+const ans104OffsetSource = new Ans104OffsetSource({
+  log,
+  dataSource: baseTxChunksDataSource,
+});
 
-// Use the base TX chunks data source directly for now
-// We'll enable RootParentDataSource when other offset sources are available
+// Regular chunks data source (no data item resolution)
 const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
+
+// Chunks data source with data item resolution
+const txChunksDataItemSource = new RootParentDataSource({
+  log,
+  dataSource: baseTxChunksDataSource,
+  dataItemRootTxIndex: rootTxIndex,
+  ans104OffsetSource,
+});
 
 const s3DataSource =
   awsClient !== undefined && config.AWS_S3_CONTIGUOUS_DATA_BUCKET !== undefined
@@ -562,6 +568,8 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return gatewaysDataSource;
     case 'chunks':
       return txChunksDataSource;
+    case 'chunks-data-item':
+      return txChunksDataItemSource;
     case 'tx-data':
       return arweaveClient;
     default:

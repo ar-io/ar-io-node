@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added `chunks-data-item` data source option for retrieval orders that enables
+  automatic data item resolution within ANS-104 bundles. When used in
+  `ON_DEMAND_RETRIEVAL_ORDER` or `BACKGROUND_RETRIEVAL_ORDER`, this source
+  transparently resolves data items to their root transactions and calculates
+  correct byte ranges, allowing direct retrieval of data items from chunks
+  without requiring separate data item indexing.
+
 ### Changed
 
 ### Fixed
