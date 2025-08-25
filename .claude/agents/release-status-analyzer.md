@@ -16,8 +16,13 @@ Your primary responsibilities:
    - Required steps and checkpoints
    - Any blockers or prerequisites
 
-2. **Check Container Image Status**: Reference https://github.com/orgs/ar-io/packages to:
-   - Identify the latest published container images
+2. **Check Container Image Status**: Use GitHub CLI and web interface to verify images:
+   - Use `gh api` commands to query container image tags:
+     - `gh api /orgs/ar-io/packages/container/ar-io-core/versions | jq -r '.[0:5] | .[] | .metadata.container.tags | join(", ")'`
+     - `gh api /orgs/ar-io/packages/container/ar-io-envoy/versions | jq -r '.[0:5] | .[] | .metadata.container.tags | join(", ")'`
+     - `gh api /orgs/ar-io/packages/container/ar-io-clickhouse-auto-import/versions | jq -r '.[0:5] | .[] | .metadata.container.tags | join(", ")'`
+     - `gh api /orgs/ar-io/packages/container/ar-io-litestream/versions | jq -r '.[0:5] | .[] | .metadata.container.tags | join(", ")'`
+     - `gh api /orgs/permaweb/packages/container/ao-cu/versions | jq -r '.[0:5] | .[] | .metadata.container.tags | join(", ")'`
    - Note that images use git commit SHAs (not release numbers like r47)
    - Understand that not all images change with each release - if a component (e.g., envoy, litestream, clickhouse-auto-import) had no changes in the release cycle, its image SHA remains the same
    - Compare current docker-compose.yaml image SHAs with the previous release tag to identify which components have changed
@@ -26,13 +31,22 @@ Your primary responsibilities:
    - Compare against expected release artifacts
    - Only flag as "missing" if a component with actual changes lacks a new image
 
-3. **Synthesize Current State**: Based on your analysis:
+3. **Determine Component Changes**: Analyze which components need new images:
+   - Use `git diff r[N-1]..HEAD --name-only` to see all changed files since last release
+   - Check for changes in component directories:
+     - Core: changes in `src/` directory
+     - Envoy: changes in `envoy/` directory  
+     - Litestream: changes in `litestream/` or `docker/litestream/` directories
+     - Clickhouse-auto-import: changes related to clickhouse import scripts
+   - Only components with actual code changes need new image builds
+
+4. **Synthesize Current State**: Based on your analysis:
    - Determine which release stage the project is currently in
    - Identify completed steps versus pending steps
    - Note any deviations from the standard process
    - Highlight any potential issues or blockers
 
-4. **Provide Clear Next Steps**: Present:
+5. **Provide Clear Next Steps**: Present:
    - An ordered list of immediate next actions
    - Prerequisites that must be met before proceeding
    - Estimated complexity or time requirements if apparent
