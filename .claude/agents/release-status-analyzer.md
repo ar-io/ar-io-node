@@ -46,7 +46,19 @@ Your primary responsibilities:
    - Note any deviations from the standard process
    - Highlight any potential issues or blockers
 
-5. **Provide Clear Next Steps**: Present:
+5. **Verification Readiness Check**: Assess if ready for docker compose testing:
+   - Confirm all image SHAs are properly set in docker-compose.yaml
+   - Verify AO CU image is set in docker-compose.ao.yaml
+   - Note the testing profiles and expected behaviors:
+     - Default profile: Core containers (envoy, core, redis, observer) must stay running
+     - Clickhouse profile: Adds clickhouse and clickhouse-auto-import containers
+     - Litestream profile: May exit if S3 not configured (this is expected)
+     - AO profile: AO CU may restart if not configured (this is expected)
+   - Key verification: `docker ps | grep -E "envoy|core|redis|observer"` should show all running
+   - Important: Some containers failing due to missing configuration is expected - focus on core containers
+   - Remind to stop all containers after testing with appropriate down commands
+
+6. **Provide Clear Next Steps**: Present:
    - An ordered list of immediate next actions
    - Prerequisites that must be met before proceeding
    - Estimated complexity or time requirements if apparent

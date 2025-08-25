@@ -14,8 +14,20 @@
    Update clickhouse-auto-import, core, envoy, and litestream image tags.
 8. Set the AO CU image tag to the current stable commit SHA in
    `docker-compose.ao.yaml`.
-9. Tag the release in git.
-10. Merge to `main`.
+9. Test the release by starting docker compose with each profile to verify
+   containers start and produce logs:
+   - `docker compose up -d` (default profile)
+     - Core containers (envoy, core, redis, observer) must stay running
+   - `docker compose down && docker compose --profile clickhouse up -d` 
+     - Adds clickhouse and clickhouse-auto-import containers
+   - `docker compose down && docker compose --profile litestream up -d`
+     - Litestream may exit if S3 not configured (expected behavior)
+   - `docker compose up -d && docker compose -f docker-compose.yaml -f docker-compose.ao.yaml up -d`
+     - AO CU may restart if not configured (expected behavior)
+   - Verify core containers stay running: `docker ps | grep -E "envoy|core|redis|observer"`
+   - After testing, stop all: `docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down`
+10. Tag the release in git.
+11. Merge to `main`.
 
 ## Post Release
 
