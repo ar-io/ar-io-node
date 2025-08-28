@@ -1,0 +1,34 @@
+@startuml
+skinparam dpi 200
+skinparam backgroundColor white
+
+title Release 47 Contiguous Data Retrieval
+
+actor Client
+participant "AR.IO Node" as Node
+database "Local Cache" as Cache
+participant "Offset Source" as Offset
+participant "Chunk Sources" as Chunks
+participant "Root Transaction" as Root
+
+Client -> Node: GET /tx/{id}/data
+Node -> Cache: Check local cache
+Cache --> Node: Cache miss
+
+Node -> Offset: Get root parent offset
+Offset --> Node: Root transaction ID + offset
+
+note right of Offset: Could be local index\nor found in network\n(AR.IO peers, gateways)
+
+Node -> Root: Get transaction metadata
+Root --> Node: TX size, data root
+
+Node -> Chunks: Fetch chunks for range\n(using offset + requested range)
+Chunks --> Node: Chunk data
+
+Node -> Node: Assemble chunks into\ncontiguous data
+
+Node -> Cache: Store assembled data
+Node -> Client: Stream response
+
+@enduml
