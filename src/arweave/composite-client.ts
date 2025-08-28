@@ -142,6 +142,7 @@ export class ArweaveCompositeClient
 
   // New peer-based chunk POST system
   private preferredChunkPostUrls: string[];
+  private resolvedChunkPostUrls: string[];
   private peerChunkQueues: Map<string, PeerChunkQueue> = new Map();
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
 
@@ -222,6 +223,8 @@ export class ArweaveCompositeClient
     this.preferredChunkPostUrls = config.PREFERRED_CHUNK_POST_NODE_URLS.map(
       (url) => url.replace(/\/$/, ''),
     );
+    // Initialize with unresolved URLs first
+    this.resolvedChunkPostUrls = this.preferredChunkPostUrls;
     this.initializeChunkPostPeers();
 
     // Initialize memoized sorting function for chunk POST peers
@@ -362,19 +365,34 @@ export class ArweaveCompositeClient
   }
 
   async initializeDnsResolution(): Promise<void> {
-    if (!this.dnsResolver || this.preferredChunkGetUrls.length === 0) {
+    if (!this.dnsResolver) {
+      return;
+    }
+
+    const hasGetUrls = this.preferredChunkGetUrls.length > 0;
+    const hasPostUrls = this.preferredChunkPostUrls.length > 0;
+
+    if (!hasGetUrls && !hasPostUrls) {
       return;
     }
 
     const log = this.log.child({ method: 'initializeDnsResolution' });
 
+    // Combine both GET and POST URLs for resolution
+    const allUrls = [
+      ...this.preferredChunkGetUrls,
+      ...this.preferredChunkPostUrls,
+    ];
+
     // Perform initial DNS resolution
     const resolveStart = Date.now();
-    log.info('Resolving DNS for preferred chunk GET nodes...', {
-      urlCount: this.preferredChunkGetUrls.length,
+    log.info('Resolving DNS for preferred chunk nodes...', {
+      getUrlCount: this.preferredChunkGetUrls.length,
+      postUrlCount: this.preferredChunkPostUrls.length,
+      totalUrlCount: allUrls.length,
     });
 
-    await this.dnsResolver.resolveUrls(this.preferredChunkGetUrls);
+    await this.dnsResolver.resolveUrls(allUrls);
 
     const resolvedUrls = this.dnsResolver.getAllResolvedUrls();
     const successCount = resolvedUrls.filter(
@@ -382,12 +400,15 @@ export class ArweaveCompositeClient
     ).length;
 
     log.info('DNS resolution complete', {
-      totalUrls: this.preferredChunkGetUrls.length,
+      totalUrls: allUrls.length,
       successfulResolutions: successCount,
-      failedResolutions: this.preferredChunkGetUrls.length - successCount,
+      failedResolutions: allUrls.length - successCount,
       durationMs: Date.now() - resolveStart,
-      usingDefaults: this.preferredChunkGetUrls.some(
+      usingDefaultGets: this.preferredChunkGetUrls.some(
         (url) => url.includes('data-') && url.includes('.arweave.xyz'),
+      ),
+      usingDefaultPosts: this.preferredChunkPostUrls.some(
+        (url) => url.includes('tip-') && url.includes('.arweave.xyz'),
       ),
     });
 
@@ -414,9 +435,9 @@ export class ArweaveCompositeClient
 
     // Start periodic DNS re-resolution
     if (config.DNS_RESOLUTION_INTERVAL_SECONDS > 0) {
-      // Start the DNS resolver's periodic resolution
+      // Start the DNS resolver's periodic resolution for all URLs
       this.dnsResolver.startPeriodicResolution(
-        this.preferredChunkGetUrls,
+        allUrls,
         config.DNS_RESOLUTION_INTERVAL_SECONDS * 1000,
       );
 
@@ -439,25 +460,26 @@ export class ArweaveCompositeClient
       return;
     }
 
-    const newResolvedUrls = this.dnsResolver.getResolvedUrlStrings(
+    // Update GET URLs
+    const newResolvedGetUrls = this.dnsResolver.getResolvedUrlStrings(
       this.preferredChunkGetUrls,
     );
 
-    // Check if URLs have changed
-    const urlsChanged =
-      JSON.stringify(newResolvedUrls) !==
+    // Check if GET URLs have changed
+    const getUrlsChanged =
+      JSON.stringify(newResolvedGetUrls) !==
       JSON.stringify(this.resolvedChunkGetUrls);
 
-    if (urlsChanged) {
+    if (getUrlsChanged) {
       this.log.info(
         'DNS resolution changed, updating preferred chunk GET URLs',
         {
           oldUrls: this.resolvedChunkGetUrls,
-          newUrls: newResolvedUrls,
+          newUrls: newResolvedGetUrls,
         },
       );
 
-      this.resolvedChunkGetUrls = newResolvedUrls;
+      this.resolvedChunkGetUrls = newResolvedGetUrls;
 
       // Update the weighted peers list with new resolved URLs
       const preferredPeers = this.resolvedChunkGetUrls.map((peerUrl) => ({
@@ -474,6 +496,46 @@ export class ArweaveCompositeClient
 
       this.weightedGetChunkPeers = [...preferredPeers, ...nonPreferredPeers];
     }
+
+    // Update POST URLs
+    const newResolvedPostUrls = this.dnsResolver.getResolvedUrlStrings(
+      this.preferredChunkPostUrls,
+    );
+
+    // Check if POST URLs have changed
+    const postUrlsChanged =
+      JSON.stringify(newResolvedPostUrls) !==
+      JSON.stringify(this.resolvedChunkPostUrls);
+
+    if (postUrlsChanged) {
+      this.log.info(
+        'DNS resolution changed, updating preferred chunk POST URLs',
+        {
+          oldUrls: this.resolvedChunkPostUrls,
+          newUrls: newResolvedPostUrls,
+        },
+      );
+
+      this.resolvedChunkPostUrls = newResolvedPostUrls;
+
+      // Update the weighted POST peers list with new resolved URLs
+      const preferredPostPeers = this.resolvedChunkPostUrls.map((peerUrl) => ({
+        id: peerUrl,
+        weight: config.PREFERRED_CHUNK_POST_WEIGHT,
+      }));
+
+      // Preserve non-preferred POST peers
+      const nonPreferredPostPeers = this.weightedPostChunkPeers.filter(
+        (peer) =>
+          !this.resolvedChunkPostUrls.includes(peer.id) &&
+          !this.preferredChunkPostUrls.includes(peer.id),
+      );
+
+      this.weightedPostChunkPeers = [
+        ...preferredPostPeers,
+        ...nonPreferredPostPeers,
+      ];
+    }
   }
 
   stopDnsResolution(): void {
@@ -487,13 +549,11 @@ export class ArweaveCompositeClient
   }
 
   private initializeChunkPostPeers(): void {
-    // Initialize weightedPostChunkPeers with preferred URLs at high weight
-    this.weightedPostChunkPeers = this.preferredChunkPostUrls.map(
-      (peerUrl) => ({
-        id: peerUrl,
-        weight: config.PREFERRED_CHUNK_POST_WEIGHT,
-      }),
-    );
+    // Initialize weightedPostChunkPeers with resolved URLs at high weight
+    this.weightedPostChunkPeers = this.resolvedChunkPostUrls.map((peerUrl) => ({
+      id: peerUrl,
+      weight: config.PREFERRED_CHUNK_POST_WEIGHT,
+    }));
   }
 
   private getOrCreatePeerQueue(peer: string): PeerChunkQueue {
@@ -532,7 +592,10 @@ export class ArweaveCompositeClient
   }
 
   private isPreferredPeer(peer: string): boolean {
-    return this.preferredChunkPostUrls.includes(peer);
+    return (
+      this.preferredChunkPostUrls.includes(peer) ||
+      this.resolvedChunkPostUrls.includes(peer)
+    );
   }
 
   private updateChunkPostPeerWeight(peer: string, success: boolean): void {
@@ -780,7 +843,9 @@ export class ArweaveCompositeClient
 
       // Update POST chunk peers (preserve preferred URLs)
       const preferredChunkPostEntries = this.weightedPostChunkPeers.filter(
-        (peer) => this.preferredChunkPostUrls.includes(peer.id),
+        (peer) =>
+          this.preferredChunkPostUrls.includes(peer.id) ||
+          this.resolvedChunkPostUrls.includes(peer.id),
       );
 
       // Add discovered peers for chunk POST
