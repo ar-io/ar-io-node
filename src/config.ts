@@ -160,14 +160,30 @@ export const GATEWAY_PEERS_REQUEST_WINDOW_COUNT = +env.varOrDefault(
 export const ARWEAVE_NODE_IGNORE_URLS: string[] =
   env.varOrUndefined('ARWEAVE_NODE_IGNORE_URLS')?.split(',') ?? [];
 
+// Default preferred chunk POST nodes (tip-2 through tip-4.arweave.xyz)
+const DEFAULT_PREFERRED_CHUNK_POST_NODE_URLS = [
+  'http://tip-2.arweave.xyz:1984',
+  'http://tip-3.arweave.xyz:1984',
+  'http://tip-4.arweave.xyz:1984',
+];
+
 // Preferred chunk POST URLs (prioritized over discovered peers)
 const PREFERRED_CHUNK_POST_NODE_URLS_STRING = env.varOrUndefined(
   'PREFERRED_CHUNK_POST_NODE_URLS',
 );
 export const PREFERRED_CHUNK_POST_NODE_URLS =
   PREFERRED_CHUNK_POST_NODE_URLS_STRING !== undefined
-    ? PREFERRED_CHUNK_POST_NODE_URLS_STRING.split(',')
-    : [];
+    ? PREFERRED_CHUNK_POST_NODE_URLS_STRING.split(',').map((url) => url.trim())
+    : DEFAULT_PREFERRED_CHUNK_POST_NODE_URLS;
+
+// Validate preferred chunk POST URLs
+PREFERRED_CHUNK_POST_NODE_URLS.forEach((url) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in PREFERRED_CHUNK_POST_NODE_URLS: ${url}`);
+  }
+});
 
 // Maximum queue depth before skipping a peer for chunk POST
 export const CHUNK_POST_QUEUE_DEPTH_THRESHOLD = +env.varOrDefault(
