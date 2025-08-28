@@ -343,7 +343,7 @@ export class ArweaveCompositeClient
   private initializePreferredChunkGetUrls(): void {
     // Initialize weightedGetChunkPeers with resolved URLs at high weight
     this.weightedGetChunkPeers = this.resolvedChunkGetUrls.map(
-      (peerUrl, index) => ({
+      (peerUrl) => ({
         id: peerUrl,
         weight: 100, // High weight for preferred chunk GET URLs
       }),
