@@ -342,12 +342,10 @@ export class ArweaveCompositeClient
 
   private initializePreferredChunkGetUrls(): void {
     // Initialize weightedGetChunkPeers with resolved URLs at high weight
-    this.weightedGetChunkPeers = this.resolvedChunkGetUrls.map(
-      (peerUrl) => ({
-        id: peerUrl,
-        weight: 100, // High weight for preferred chunk GET URLs
-      }),
-    );
+    this.weightedGetChunkPeers = this.resolvedChunkGetUrls.map((peerUrl) => ({
+      id: peerUrl,
+      weight: 100, // High weight for preferred chunk GET URLs
+    }));
 
     // Log URL resolution for debugging
     if (this.dnsResolver && this.preferredChunkGetUrls.length > 0) {
