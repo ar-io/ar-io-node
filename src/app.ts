@@ -20,6 +20,9 @@ import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import * as system from './system.js';
 
+// Initialize DNS resolution for preferred chunk GET nodes
+await system.arweaveClient.initializeDnsResolution();
+
 system.arweaveClient.refreshPeers();
 
 system.headerFsCacheCleanupWorker?.start();

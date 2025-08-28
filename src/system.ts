@@ -24,6 +24,7 @@ import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
 import * as events from './events.js';
 import { MatchTags, TagMatch } from './filters.js';
 import { UniformFailureSimulator } from './lib/chaos.js';
+import { DnsResolver } from './lib/dns-resolver.js';
 import {
   makeBlockStore,
   makeTxStore,
@@ -115,12 +116,19 @@ const networkProcess = ARIO.init({
   }),
 });
 
+// Initialize DNS resolver for preferred chunk GET nodes if configured
+const dnsResolver =
+  config.PREFERRED_CHUNK_GET_NODE_URLS.length > 0
+    ? new DnsResolver({ log })
+    : undefined;
+
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
   skipCache: config.SKIP_CACHE,
   preferredChunkGetUrls: config.PREFERRED_CHUNK_GET_NODE_URLS,
+  dnsResolver,
   blockStore: makeBlockStore({
     log,
     type: config.CHAIN_CACHE_TYPE,

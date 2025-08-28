@@ -67,6 +67,22 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
+// Default preferred chunk GET nodes (data-1 through data-12.arweave.xyz)
+const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
+  'http://data-1.arweave.xyz:1984',
+  'http://data-2.arweave.xyz:1984',
+  'http://data-3.arweave.xyz:1984',
+  'http://data-4.arweave.xyz:1984',
+  'http://data-5.arweave.xyz:1984',
+  'http://data-6.arweave.xyz:1984',
+  'http://data-7.arweave.xyz:1984',
+  'http://data-8.arweave.xyz:1984',
+  'http://data-9.arweave.xyz:1984',
+  'http://data-10.arweave.xyz:1984',
+  'http://data-11.arweave.xyz:1984',
+  'http://data-12.arweave.xyz:1984',
+];
+
 // Preferred URLs for chunk GET requests (comma-separated URLs)
 const PREFERRED_CHUNK_GET_NODE_URLS_STRING = env.varOrUndefined(
   'PREFERRED_CHUNK_GET_NODE_URLS',
@@ -74,7 +90,7 @@ const PREFERRED_CHUNK_GET_NODE_URLS_STRING = env.varOrUndefined(
 export const PREFERRED_CHUNK_GET_NODE_URLS =
   PREFERRED_CHUNK_GET_NODE_URLS_STRING !== undefined
     ? PREFERRED_CHUNK_GET_NODE_URLS_STRING.split(',').map((url) => url.trim())
-    : [];
+    : DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS;
 
 // Validate preferred chunk GET URLs
 PREFERRED_CHUNK_GET_NODE_URLS.forEach((url) => {
@@ -84,6 +100,12 @@ PREFERRED_CHUNK_GET_NODE_URLS.forEach((url) => {
     throw new Error(`Invalid URL in PREFERRED_CHUNK_GET_NODE_URLS: ${url}`);
   }
 });
+
+// DNS resolution interval for preferred chunk GET nodes (in seconds)
+export const DNS_RESOLUTION_INTERVAL_SECONDS = +env.varOrDefault(
+  'DNS_RESOLUTION_INTERVAL_SECONDS',
+  '3600', // 1 hour by default
+);
 
 // Trusted gateway URL (for retrieving contiguous data)
 export const TRUSTED_GATEWAY_URL = env.varOrUndefined('TRUSTED_GATEWAY_URL');
