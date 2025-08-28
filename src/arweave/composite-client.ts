@@ -19,6 +19,7 @@ import { context, trace, Span } from '@opentelemetry/api';
 import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
 
 import { FailureSimulator } from '../lib/chaos.js';
+import { DnsResolver } from '../lib/dns-resolver.js';
 import { fromB64Url } from '../lib/encoding.js';
 import {
   WeightedElement,
@@ -124,6 +125,8 @@ export class ArweaveCompositeClient
   private blockStore: PartialJsonBlockStore;
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
   private skipCache: boolean;
+  private dnsResolver?: DnsResolver;
+  private dnsUpdateInterval?: NodeJS.Timeout;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -132,6 +135,7 @@ export class ArweaveCompositeClient
   // Peers
   private peers: Record<string, Peer> = {};
   private preferredChunkGetUrls: string[];
+  private resolvedChunkGetUrls: string[];
   private weightedChainPeers: WeightedElement<string>[] = [];
   private weightedGetChunkPeers: WeightedElement<string>[] = [];
   private weightedPostChunkPeers: WeightedElement<string>[] = [];
@@ -182,6 +186,7 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
     preferredChunkGetUrls = [],
+    dnsResolver,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -198,6 +203,7 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
     preferredChunkGetUrls?: string[];
+    dnsResolver?: DnsResolver;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
@@ -205,6 +211,10 @@ export class ArweaveCompositeClient
     this.preferredChunkGetUrls = preferredChunkGetUrls.map((url) =>
       url.replace(/\/$/, ''),
     );
+    this.dnsResolver = dnsResolver;
+
+    // Initialize with unresolved URLs first
+    this.resolvedChunkGetUrls = this.preferredChunkGetUrls;
 
     // TODO: use defaults in constructor instead of referencing config here
 
@@ -328,11 +338,152 @@ export class ArweaveCompositeClient
   }
 
   private initializePreferredChunkGetUrls(): void {
-    // Initialize weightedGetChunkPeers with preferred URLs at high weight
-    this.weightedGetChunkPeers = this.preferredChunkGetUrls.map((peerUrl) => ({
-      id: peerUrl,
-      weight: 100, // High weight for preferred chunk GET URLs
-    }));
+    // Initialize weightedGetChunkPeers with resolved URLs at high weight
+    this.weightedGetChunkPeers = this.resolvedChunkGetUrls.map(
+      (peerUrl, index) => ({
+        id: peerUrl,
+        weight: 100, // High weight for preferred chunk GET URLs
+      }),
+    );
+
+    // Log URL resolution for debugging
+    if (this.dnsResolver && this.preferredChunkGetUrls.length > 0) {
+      this.log.info(
+        'Initialized preferred chunk GET URLs with DNS resolution',
+        {
+          originalUrls: this.preferredChunkGetUrls.length,
+          resolvedUrls: this.resolvedChunkGetUrls.length,
+          usingDefaults: this.preferredChunkGetUrls.some(
+            (url) => url.includes('data-') && url.includes('.arweave.xyz'),
+          ),
+        },
+      );
+    }
+  }
+
+  async initializeDnsResolution(): Promise<void> {
+    if (!this.dnsResolver || this.preferredChunkGetUrls.length === 0) {
+      return;
+    }
+
+    const log = this.log.child({ method: 'initializeDnsResolution' });
+
+    // Perform initial DNS resolution
+    const resolveStart = Date.now();
+    log.info('Resolving DNS for preferred chunk GET nodes...', {
+      urlCount: this.preferredChunkGetUrls.length,
+    });
+
+    await this.dnsResolver.resolveUrls(this.preferredChunkGetUrls);
+
+    const resolvedUrls = this.dnsResolver.getAllResolvedUrls();
+    const successCount = resolvedUrls.filter(
+      (r) => r.resolutionError === undefined,
+    ).length;
+
+    log.info('DNS resolution complete', {
+      totalUrls: this.preferredChunkGetUrls.length,
+      successfulResolutions: successCount,
+      failedResolutions: this.preferredChunkGetUrls.length - successCount,
+      durationMs: Date.now() - resolveStart,
+      usingDefaults: this.preferredChunkGetUrls.some(
+        (url) => url.includes('data-') && url.includes('.arweave.xyz'),
+      ),
+    });
+
+    // Log resolved URLs for debugging
+    resolvedUrls.forEach((result) => {
+      if (result.resolutionError !== undefined) {
+        log.warn('Failed to resolve URL', {
+          hostname: result.hostname,
+          originalUrl: result.originalUrl,
+          error: result.resolutionError,
+        });
+      } else {
+        log.debug('Resolved URL', {
+          hostname: result.hostname,
+          originalUrl: result.originalUrl,
+          resolvedUrl: result.resolvedUrl,
+          ips: result.ips,
+        });
+      }
+    });
+
+    // Update resolved URLs
+    this.updateResolvedUrls();
+
+    // Start periodic DNS re-resolution
+    if (config.DNS_RESOLUTION_INTERVAL_SECONDS > 0) {
+      // Start the DNS resolver's periodic resolution
+      this.dnsResolver.startPeriodicResolution(
+        this.preferredChunkGetUrls,
+        config.DNS_RESOLUTION_INTERVAL_SECONDS * 1000,
+      );
+
+      // Set up our own interval to check for updates
+      this.dnsUpdateInterval = setInterval(() => {
+        this.updateResolvedUrls();
+      }, config.DNS_RESOLUTION_INTERVAL_SECONDS * 1000);
+
+      // Don't block the event loop
+      this.dnsUpdateInterval.unref();
+
+      log.info('Started periodic DNS re-resolution', {
+        intervalSeconds: config.DNS_RESOLUTION_INTERVAL_SECONDS,
+      });
+    }
+  }
+
+  private updateResolvedUrls(): void {
+    if (!this.dnsResolver) {
+      return;
+    }
+
+    const newResolvedUrls = this.dnsResolver.getResolvedUrlStrings(
+      this.preferredChunkGetUrls,
+    );
+
+    // Check if URLs have changed
+    const urlsChanged =
+      JSON.stringify(newResolvedUrls) !==
+      JSON.stringify(this.resolvedChunkGetUrls);
+
+    if (urlsChanged) {
+      this.log.info(
+        'DNS resolution changed, updating preferred chunk GET URLs',
+        {
+          oldUrls: this.resolvedChunkGetUrls,
+          newUrls: newResolvedUrls,
+        },
+      );
+
+      this.resolvedChunkGetUrls = newResolvedUrls;
+
+      // Update the weighted peers list with new resolved URLs
+      const preferredPeers = this.resolvedChunkGetUrls.map((peerUrl) => ({
+        id: peerUrl,
+        weight: 100,
+      }));
+
+      // Preserve non-preferred peers
+      const nonPreferredPeers = this.weightedGetChunkPeers.filter(
+        (peer) =>
+          !this.resolvedChunkGetUrls.includes(peer.id) &&
+          !this.preferredChunkGetUrls.includes(peer.id),
+      );
+
+      this.weightedGetChunkPeers = [...preferredPeers, ...nonPreferredPeers];
+    }
+  }
+
+  stopDnsResolution(): void {
+    if (this.dnsUpdateInterval) {
+      clearInterval(this.dnsUpdateInterval);
+      this.dnsUpdateInterval = undefined;
+    }
+    if (this.dnsResolver) {
+      this.dnsResolver.stopPeriodicResolution();
+    }
   }
 
   private initializeChunkPostPeers(): void {
@@ -598,9 +749,9 @@ export class ArweaveCompositeClient
         });
       }
 
-      // Update GET chunk peers (preserve preferred URLs)
+      // Update GET chunk peers (preserve resolved preferred URLs)
       const preferredChunkGetEntries = this.weightedGetChunkPeers.filter(
-        (peer) => this.preferredChunkGetUrls.includes(peer.id),
+        (peer) => this.resolvedChunkGetUrls.includes(peer.id),
       );
 
       // Add discovered peers for chunk GET
