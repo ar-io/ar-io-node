@@ -11,6 +11,11 @@ import { LRUCache } from 'lru-cache';
 import { DataItemRootTxIndex } from '../types.js';
 import * as config from '../config.js';
 
+type CachedRootTx = { bundleId?: string };
+
+// Special symbol to indicate item was not found (vs being a root tx)
+const NOT_FOUND = Symbol('NOT_FOUND');
+
 interface TurboStatusResponse {
   status: string;
   bundleId?: string;
@@ -26,7 +31,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private readonly axiosInstance: AxiosInstance;
   private readonly turboEndpoint: string;
-  private readonly cache?: LRUCache<string, string | null>;
+  private readonly cache?: LRUCache<string, CachedRootTx>;
 
   constructor({
     log,
@@ -39,7 +44,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     turboEndpoint?: string;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
-    cache?: LRUCache<string, string | null>;
+    cache?: LRUCache<string, CachedRootTx>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.turboEndpoint = turboEndpoint;
@@ -92,16 +97,21 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       visited.add(currentId);
       depth++;
 
-      const bundleId = await this.queryBundleId(currentId, log);
+      const queryResult = await this.queryBundleId(currentId, log);
 
-      if (bundleId === undefined) {
-        // Transaction/data item not found
+      // queryResult can be:
+      // - undefined: item is a root transaction (not bundled)
+      // - string: the bundle ID that contains this item
+      // - NOT_FOUND: item not found
+
+      if (queryResult === NOT_FOUND) {
+        // Item not found
         log.debug('Item not found in Turbo', { id: currentId });
         return undefined;
       }
 
-      if (bundleId === null) {
-        // No more parents, currentId is the root
+      if (queryResult === undefined) {
+        // This is a root transaction (not bundled)
         log.debug('Found root transaction', {
           originalId: id,
           rootTxId: currentId,
@@ -111,7 +121,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       }
 
       // Continue following the chain
-      currentId = bundleId;
+      currentId = queryResult;
     }
 
     if (depth >= MAX_DEPTH) {
@@ -136,12 +146,15 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
   private async queryBundleId(
     id: string,
     log: winston.Logger,
-  ): Promise<string | null | undefined> {
+  ): Promise<string | undefined | typeof NOT_FOUND> {
     // Check cache first
     if (this.cache?.has(id)) {
       const cached = this.cache.get(id);
-      log.debug('Cache hit for Turbo lookup', { id, bundleId: cached });
-      return cached;
+      log.debug('Cache hit for Turbo lookup', {
+        id,
+        bundleId: cached?.bundleId,
+      });
+      return cached?.bundleId;
     }
 
     try {
@@ -159,11 +172,11 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
 
         // bundleId will be undefined if this is a root transaction
         // or a string if this item is bundled
-        const result = bundleId !== undefined ? bundleId : null;
+        const result = bundleId;
 
         // Cache the result
         if (this.cache) {
-          this.cache.set(id, result);
+          this.cache.set(id, { bundleId: result });
           log.debug('Cached Turbo lookup result', { id, bundleId: result });
         }
 
@@ -188,7 +201,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
         log.debug('Item not found in Turbo (404)', { id });
 
         // Don't cache 404s as the item might appear later
-        return undefined;
+        return NOT_FOUND;
       }
 
       // Other errors (network, timeout, etc.)
