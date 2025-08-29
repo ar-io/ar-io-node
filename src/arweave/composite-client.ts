@@ -341,20 +341,27 @@ export class ArweaveCompositeClient
     this.blockTxPrefetchCount = blockTxPrefetchCount;
   }
 
+  /**
+   * Initializes the weighted GET chunk peers with preferred URLs.
+   * Sets high initial weight (100) for all preferred GET URLs.
+   * Deduplicates URLs to prevent over-representation.
+   * @private
+   */
   private initializePreferredChunkGetUrls(): void {
-    // Initialize weightedGetChunkPeers with resolved URLs at high weight
-    this.weightedGetChunkPeers = this.resolvedChunkGetUrls.map((peerUrl) => ({
+    // Deduplicate and initialize weightedGetChunkPeers with resolved URLs at high weight
+    const uniqueUrls = [...new Set(this.resolvedChunkGetUrls)];
+    this.weightedGetChunkPeers = uniqueUrls.map((peerUrl) => ({
       id: peerUrl,
       weight: 100, // High weight for preferred chunk GET URLs
     }));
 
     // Log URL resolution for debugging
     if (this.dnsResolver && this.preferredChunkGetUrls.length > 0) {
-      this.log.info(
+      this.log.debug(
         'Initialized preferred chunk GET URLs with DNS resolution',
         {
           originalUrls: this.preferredChunkGetUrls.length,
-          resolvedUrls: this.resolvedChunkGetUrls.length,
+          resolvedUrls: uniqueUrls.length,
           usingDefaults: this.preferredChunkGetUrls.some(
             (url) => url.includes('data-') && url.includes('.arweave.xyz'),
           ),
@@ -468,6 +475,11 @@ export class ArweaveCompositeClient
     }
   }
 
+  /**
+   * Updates the resolved URLs for both GET and POST peers based on current DNS resolution.
+   * Detects changes and updates weighted peer lists accordingly.
+   * @private
+   */
   private updateResolvedUrls(): void {
     if (!this.dnsResolver) {
       return;
@@ -485,7 +497,7 @@ export class ArweaveCompositeClient
     );
 
     if (getUrlsChanged) {
-      this.log.info(
+      this.log.debug(
         'DNS resolution changed, updating preferred chunk GET URLs',
         {
           oldUrls: this.resolvedChunkGetUrls,
@@ -493,7 +505,8 @@ export class ArweaveCompositeClient
         },
       );
 
-      this.resolvedChunkGetUrls = newResolvedGetUrls;
+      // Deduplicate resolved URLs to prevent over-representation
+      this.resolvedChunkGetUrls = [...new Set(newResolvedGetUrls)];
 
       // Update the weighted peers list with new resolved URLs
       const preferredPeers = this.resolvedChunkGetUrls.map((peerUrl) => ({
@@ -523,7 +536,7 @@ export class ArweaveCompositeClient
     );
 
     if (postUrlsChanged) {
-      this.log.info(
+      this.log.debug(
         'DNS resolution changed, updating preferred chunk POST URLs',
         {
           oldUrls: this.resolvedChunkPostUrls,
@@ -531,7 +544,8 @@ export class ArweaveCompositeClient
         },
       );
 
-      this.resolvedChunkPostUrls = newResolvedPostUrls;
+      // Deduplicate resolved URLs to prevent over-representation
+      this.resolvedChunkPostUrls = [...new Set(newResolvedPostUrls)];
 
       // Update the weighted POST peers list with new resolved URLs
       const preferredPostPeers = this.resolvedChunkPostUrls.map((peerUrl) => ({
@@ -553,6 +567,10 @@ export class ArweaveCompositeClient
     }
   }
 
+  /**
+   * Stops the periodic DNS resolution timer if running.
+   * Safe to call multiple times.
+   */
   stopDnsResolution(): void {
     if (this.dnsUpdateInterval) {
       clearInterval(this.dnsUpdateInterval);
@@ -560,9 +578,16 @@ export class ArweaveCompositeClient
     }
   }
 
+  /**
+   * Initializes the weighted POST chunk peers with preferred URLs.
+   * Sets weight from config for all preferred POST URLs.
+   * Deduplicates URLs to prevent over-representation.
+   * @private
+   */
   private initializeChunkPostPeers(): void {
-    // Initialize weightedPostChunkPeers with resolved URLs at high weight
-    this.weightedPostChunkPeers = this.resolvedChunkPostUrls.map((peerUrl) => ({
+    // Deduplicate and initialize weightedPostChunkPeers with resolved URLs at high weight
+    const uniqueUrls = [...new Set(this.resolvedChunkPostUrls)];
+    this.weightedPostChunkPeers = uniqueUrls.map((peerUrl) => ({
       id: peerUrl,
       weight: config.PREFERRED_CHUNK_POST_WEIGHT,
     }));
