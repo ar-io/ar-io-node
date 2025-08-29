@@ -439,15 +439,22 @@ export class ArweaveCompositeClient
 
     // Start periodic DNS re-resolution
     if (config.DNS_RESOLUTION_INTERVAL_SECONDS > 0) {
-      // Start the DNS resolver's periodic resolution for all URLs
-      this.dnsResolver.startPeriodicResolution(
-        allUrls,
-        config.DNS_RESOLUTION_INTERVAL_SECONDS * 1000,
-      );
+      // Single interval that handles both DNS resolution and updates
+      this.dnsUpdateInterval = setInterval(async () => {
+        try {
+          log.debug('Running periodic DNS re-resolution');
 
-      // Set up our own interval to check for updates
-      this.dnsUpdateInterval = setInterval(() => {
-        this.updateResolvedUrls();
+          // Trigger fresh DNS resolution
+          await this.dnsResolver.resolveUrls(allUrls);
+
+          // Update our peer lists with the new results
+          this.updateResolvedUrls();
+        } catch (error: any) {
+          log.error('Error during periodic DNS resolution', {
+            error: error.message,
+            stack: error.stack,
+          });
+        }
       }, config.DNS_RESOLUTION_INTERVAL_SECONDS * 1000);
 
       // Don't block the event loop
@@ -546,9 +553,6 @@ export class ArweaveCompositeClient
     if (this.dnsUpdateInterval) {
       clearInterval(this.dnsUpdateInterval);
       this.dnsUpdateInterval = undefined;
-    }
-    if (this.dnsResolver) {
-      this.dnsResolver.stopPeriodicResolution();
     }
   }
 
