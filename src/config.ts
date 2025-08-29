@@ -101,11 +101,12 @@ PREFERRED_CHUNK_GET_NODE_URLS.forEach((url) => {
   }
 });
 
-// DNS resolution interval for preferred chunk GET nodes (in seconds)
-export const DNS_RESOLUTION_INTERVAL_SECONDS = +env.varOrDefault(
-  'DNS_RESOLUTION_INTERVAL_SECONDS',
-  '3600', // 1 hour by default
-);
+// DNS resolution interval for preferred chunk nodes (in seconds)
+export const PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS =
+  +env.varOrDefault(
+    'PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS',
+    '3600', // 1 hour by default
+  );
 
 // Trusted gateway URL (for retrieving contiguous data)
 export const TRUSTED_GATEWAY_URL = env.varOrUndefined('TRUSTED_GATEWAY_URL');

@@ -438,14 +438,14 @@ export class ArweaveCompositeClient
     this.updateResolvedUrls();
 
     // Start periodic DNS re-resolution
-    if (config.DNS_RESOLUTION_INTERVAL_SECONDS > 0) {
+    if (config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS > 0) {
       // Single interval that handles both DNS resolution and updates
       this.dnsUpdateInterval = setInterval(async () => {
         try {
           log.debug('Running periodic DNS re-resolution');
 
           // Trigger fresh DNS resolution
-          await this.dnsResolver.resolveUrls(allUrls);
+          await this.dnsResolver?.resolveUrls(allUrls);
 
           // Update our peer lists with the new results
           this.updateResolvedUrls();
@@ -455,13 +455,14 @@ export class ArweaveCompositeClient
             stack: error.stack,
           });
         }
-      }, config.DNS_RESOLUTION_INTERVAL_SECONDS * 1000);
+      }, config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS * 1000);
 
       // Don't block the event loop
       this.dnsUpdateInterval.unref();
 
       log.info('Started periodic DNS re-resolution', {
-        intervalSeconds: config.DNS_RESOLUTION_INTERVAL_SECONDS,
+        intervalSeconds:
+          config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS,
       });
     }
   }
