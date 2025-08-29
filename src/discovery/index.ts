@@ -6,3 +6,4 @@
  */
 export * from './graphql-root-tx-index.js';
 export * from './composite-root-tx-index.js';
+export * from './turbo-root-tx-index.js';
