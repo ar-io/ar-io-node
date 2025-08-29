@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { promises as dns } from 'node:dns';
+import { isIP } from 'node:net';
 import { URL } from 'node:url';
 import * as winston from 'winston';
 
@@ -21,6 +22,7 @@ export class DnsResolver {
   private log: winston.Logger;
   private resolvedUrls: Map<string, ResolvedUrl> = new Map();
   private resolutionTimer?: NodeJS.Timeout;
+  private isResolving = false;
 
   constructor({ log }: { log: winston.Logger }) {
     this.log = log.child({ class: 'DnsResolver' });
@@ -32,10 +34,29 @@ export class DnsResolver {
   async resolveUrl(urlString: string): Promise<ResolvedUrl> {
     const log = this.log.child({ method: 'resolveUrl', url: urlString });
 
+    // Parse URL first - if this fails, we can't proceed
+    let url: URL;
+    let hostname: string;
     try {
-      const url = new URL(urlString);
-      const hostname = url.hostname;
+      url = new URL(urlString);
+      hostname = url.hostname;
+    } catch (error: any) {
+      log.warn('Invalid URL provided for resolution', {
+        url: urlString,
+        error: error.message,
+      });
+      // Return unresolved result for invalid URLs (don't cache)
+      return {
+        hostname: urlString,
+        originalUrl: urlString,
+        resolvedUrl: urlString,
+        ips: [],
+        lastResolved: Date.now(),
+        resolutionError: `Invalid URL: ${error.message}`,
+      };
+    }
 
+    try {
       // Skip resolution for IP addresses
       if (this.isIpAddress(hostname)) {
         log.debug('URL already uses IP address, skipping resolution');
@@ -77,7 +98,7 @@ export class DnsResolver {
 
       // Use the first IP address
       const selectedIp = ips[0];
-      // IPv6 addresses need brackets in URLs
+      // IPv6 addresses need brackets when setting hostname
       if (selectedIp.includes(':')) {
         url.hostname = `[${selectedIp}]`;
       } else {
@@ -108,9 +129,8 @@ export class DnsResolver {
       });
 
       // Return original URL on failure
-      const url = new URL(urlString);
       const result: ResolvedUrl = {
-        hostname: url.hostname,
+        hostname,
         originalUrl: urlString,
         resolvedUrl: urlString,
         ips: [],
@@ -118,7 +138,7 @@ export class DnsResolver {
         resolutionError: error.message,
       };
 
-      this.resolvedUrls.set(url.hostname, result);
+      this.resolvedUrls.set(hostname, result);
       return result;
     }
   }
@@ -179,14 +199,23 @@ export class DnsResolver {
 
     // Set up periodic resolution
     this.resolutionTimer = setInterval(async () => {
+      // Prevent overlapping resolutions
+      if (this.isResolving) {
+        log.debug('Skipping periodic resolution - already in progress');
+        return;
+      }
+
+      this.isResolving = true;
       log.debug('Running periodic DNS re-resolution');
 
       try {
+        // Take a snapshot before updating
+        const previousResults = new Map(this.resolvedUrls);
         const newResults = await this.resolveUrls(urls);
 
-        // Check for changes
+        // Check for changes against the snapshot
         for (const result of newResults) {
-          const previous = this.resolvedUrls.get(result.hostname);
+          const previous = previousResults.get(result.hostname);
           if (previous && previous.resolvedUrl !== result.resolvedUrl) {
             log.info('DNS resolution changed for host', {
               hostname: result.hostname,
@@ -200,6 +229,8 @@ export class DnsResolver {
           error: error.message,
           stack: error.stack,
         });
+      } finally {
+        this.isResolving = false;
       }
     }, intervalMs);
 
@@ -222,12 +253,9 @@ export class DnsResolver {
    * Check if a string is an IP address
    */
   private isIpAddress(hostname: string): boolean {
-    // IPv4 pattern
-    const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
-    // Basic IPv6 pattern (including with brackets)
-    const ipv6Pattern = /^(\[)?([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}(\])?$/;
-
-    return ipv4Pattern.test(hostname) || ipv6Pattern.test(hostname);
+    // Remove brackets if present for IPv6
+    const unbracketed = hostname.replace(/^\[|\]$/g, '');
+    return isIP(unbracketed) !== 0;
   }
 
   /**
