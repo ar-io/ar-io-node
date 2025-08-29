@@ -15,6 +15,7 @@ import { default as wait } from 'wait';
 import * as winston from 'winston';
 import pLimit from 'p-limit';
 import memoize from 'memoizee';
+import { isDeepStrictEqual } from 'node:util';
 import { context, trace, Span } from '@opentelemetry/api';
 import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
 
@@ -478,9 +479,10 @@ export class ArweaveCompositeClient
     );
 
     // Check if GET URLs have changed
-    const getUrlsChanged =
-      JSON.stringify(newResolvedGetUrls) !==
-      JSON.stringify(this.resolvedChunkGetUrls);
+    const getUrlsChanged = !isDeepStrictEqual(
+      newResolvedGetUrls,
+      this.resolvedChunkGetUrls,
+    );
 
     if (getUrlsChanged) {
       this.log.info(
@@ -515,9 +517,10 @@ export class ArweaveCompositeClient
     );
 
     // Check if POST URLs have changed
-    const postUrlsChanged =
-      JSON.stringify(newResolvedPostUrls) !==
-      JSON.stringify(this.resolvedChunkPostUrls);
+    const postUrlsChanged = !isDeepStrictEqual(
+      newResolvedPostUrls,
+      this.resolvedChunkPostUrls,
+    );
 
     if (postUrlsChanged) {
       this.log.info(
