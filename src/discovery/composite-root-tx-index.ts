@@ -22,12 +22,12 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     log,
     indexes,
     circuitBreakerOptions = {
-      timeout: config.CIRCUIT_BREAKER_TIMEOUT_MS,
+      timeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS,
       errorThresholdPercentage: Math.round(
-        (config.CIRCUIT_BREAKER_FAILURE_THRESHOLD / 100) * 100,
+        (config.ROOT_TX_INDEX_CIRCUIT_BREAKER_FAILURE_THRESHOLD / 100) * 100,
       ),
-      resetTimeout: config.CIRCUIT_BREAKER_TIMEOUT_MS,
-      rollingCountTimeout: config.CIRCUIT_BREAKER_TIMEOUT_MS * 2,
+      resetTimeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS,
+      rollingCountTimeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS * 2,
     },
   }: {
     log: winston.Logger;
