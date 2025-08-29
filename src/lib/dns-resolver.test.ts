@@ -20,7 +20,6 @@ describe('DnsResolver', () => {
   });
 
   afterEach(() => {
-    dnsResolver.stopPeriodicResolution();
     mock.restoreAll();
   });
 
@@ -227,34 +226,8 @@ describe('DnsResolver', () => {
     });
   });
 
-  describe('periodic resolution', () => {
-    it('should start and stop periodic resolution', async () => {
-      const mockResolve4 = mock.fn(async () => ['10.0.0.1']);
-      mock.method(dns, 'resolve4', mockResolve4);
-
-      const urls = ['https://example.com/path'];
-
-      // Start periodic resolution with a very short interval for testing
-      dnsResolver.startPeriodicResolution(urls, 50);
-
-      // Wait for at least one interval
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Should have been called at least once
-      assert(mockResolve4.mock.calls.length >= 1);
-
-      // Stop periodic resolution
-      dnsResolver.stopPeriodicResolution();
-
-      const callCount = mockResolve4.mock.calls.length;
-
-      // Wait to ensure no more calls
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      assert.equal(mockResolve4.mock.calls.length, callCount);
-    });
-
-    it('should detect changes in DNS resolution', async () => {
+  describe('change detection', () => {
+    it('should detect changes in DNS resolution when resolveUrls is called', async () => {
       let callCount = 0;
       const mockResolve4 = mock.fn(async () => {
         callCount++;
@@ -267,11 +240,8 @@ describe('DnsResolver', () => {
       const initial = dnsResolver.getResolvedUrl('example.com');
       assert.equal(initial?.resolvedUrl, 'https://10.0.0.1/path');
 
-      // Start periodic resolution
-      dnsResolver.startPeriodicResolution(['https://example.com/path'], 50);
-
-      // Wait for re-resolution
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Re-resolve URLs - should detect change
+      await dnsResolver.resolveUrls(['https://example.com/path']);
 
       const updated = dnsResolver.getResolvedUrl('example.com');
       assert.equal(updated?.resolvedUrl, 'https://10.0.0.2/path');

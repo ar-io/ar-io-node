@@ -21,8 +21,6 @@ export interface ResolvedUrl {
 export class DnsResolver {
   private log: winston.Logger;
   private resolvedUrls: Map<string, ResolvedUrl> = new Map();
-  private resolutionTimer?: NodeJS.Timeout;
-  private isResolving = false;
 
   constructor({ log }: { log: winston.Logger }) {
     this.log = log.child({ class: 'DnsResolver' });
@@ -150,7 +148,22 @@ export class DnsResolver {
     const log = this.log.child({ method: 'resolveUrls', count: urls.length });
     log.info('Resolving multiple URLs');
 
+    // Take a snapshot before updating for change detection
+    const previousResults = new Map(this.resolvedUrls);
+
     const results = await Promise.all(urls.map((url) => this.resolveUrl(url)));
+
+    // Check for changes and log them
+    for (const result of results) {
+      const previous = previousResults.get(result.hostname);
+      if (previous && previous.resolvedUrl !== result.resolvedUrl) {
+        log.info('DNS resolution changed for host', {
+          hostname: result.hostname,
+          oldIp: previous.ips[0],
+          newIp: result.ips[0],
+        });
+      }
+    }
 
     const successCount = results.filter(
       (r) => r.resolutionError === undefined,
@@ -176,77 +189,6 @@ export class DnsResolver {
    */
   getAllResolvedUrls(): ResolvedUrl[] {
     return Array.from(this.resolvedUrls.values());
-  }
-
-  /**
-   * Start periodic DNS re-resolution
-   */
-  startPeriodicResolution(urls: string[], intervalMs: number): void {
-    const log = this.log.child({
-      method: 'startPeriodicResolution',
-      intervalMs,
-      urlCount: urls.length,
-    });
-
-    if (this.resolutionTimer) {
-      log.debug('Stopping existing resolution timer');
-      this.stopPeriodicResolution();
-    }
-
-    log.info('Starting periodic DNS resolution', {
-      intervalSeconds: intervalMs / 1000,
-    });
-
-    // Set up periodic resolution
-    this.resolutionTimer = setInterval(async () => {
-      // Prevent overlapping resolutions
-      if (this.isResolving) {
-        log.debug('Skipping periodic resolution - already in progress');
-        return;
-      }
-
-      this.isResolving = true;
-      log.debug('Running periodic DNS re-resolution');
-
-      try {
-        // Take a snapshot before updating
-        const previousResults = new Map(this.resolvedUrls);
-        const newResults = await this.resolveUrls(urls);
-
-        // Check for changes against the snapshot
-        for (const result of newResults) {
-          const previous = previousResults.get(result.hostname);
-          if (previous && previous.resolvedUrl !== result.resolvedUrl) {
-            log.info('DNS resolution changed for host', {
-              hostname: result.hostname,
-              oldIp: previous.ips[0],
-              newIp: result.ips[0],
-            });
-          }
-        }
-      } catch (error: any) {
-        log.error('Error during periodic DNS resolution', {
-          error: error.message,
-          stack: error.stack,
-        });
-      } finally {
-        this.isResolving = false;
-      }
-    }, intervalMs);
-
-    // Don't block the event loop
-    this.resolutionTimer.unref();
-  }
-
-  /**
-   * Stop periodic DNS resolution
-   */
-  stopPeriodicResolution(): void {
-    if (this.resolutionTimer) {
-      clearInterval(this.resolutionTimer);
-      this.resolutionTimer = undefined;
-      this.log.info('Stopped periodic DNS resolution');
-    }
   }
 
   /**
