@@ -171,19 +171,22 @@ export const TURBO_REQUEST_RETRY_COUNT = +env.varOrDefault(
   '3',
 );
 
-// Circuit breaker configuration
-export const CIRCUIT_BREAKER_FAILURE_THRESHOLD = +env.varOrDefault(
-  'CIRCUIT_BREAKER_FAILURE_THRESHOLD',
-  '5',
+// Circuit breaker configuration for root TX index lookups
+// Support both old and new environment variable names for backward compatibility
+export const ROOT_TX_INDEX_CIRCUIT_BREAKER_FAILURE_THRESHOLD =
+  +env.varOrDefault(
+    'ROOT_TX_INDEX_CIRCUIT_BREAKER_FAILURE_THRESHOLD',
+    env.varOrDefault('CIRCUIT_BREAKER_FAILURE_THRESHOLD', '5'),
+  );
+export const ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
+  'ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS',
+  env.varOrDefault('CIRCUIT_BREAKER_TIMEOUT_MS', '60000'), // 1 minute
 );
-export const CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
-  'CIRCUIT_BREAKER_TIMEOUT_MS',
-  '60000', // 1 minute
-);
-export const CIRCUIT_BREAKER_SUCCESS_THRESHOLD = +env.varOrDefault(
-  'CIRCUIT_BREAKER_SUCCESS_THRESHOLD',
-  '2',
-);
+export const ROOT_TX_INDEX_CIRCUIT_BREAKER_SUCCESS_THRESHOLD =
+  +env.varOrDefault(
+    'ROOT_TX_INDEX_CIRCUIT_BREAKER_SUCCESS_THRESHOLD',
+    env.varOrDefault('CIRCUIT_BREAKER_SUCCESS_THRESHOLD', '2'),
+  );
 
 export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   'WEIGHTED_PEERS_TEMPERATURE_DELTA',
