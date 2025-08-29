@@ -5,31 +5,34 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import winston from 'winston';
+import CircuitBreaker from 'opossum';
 import { DataItemRootTxIndex } from '../types.js';
-import { CircuitBreaker } from './circuit-breaker.js';
 import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 export class CompositeRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private indexes: DataItemRootTxIndex[];
-  private circuitBreakers: Map<string, CircuitBreaker>;
+  private circuitBreakers: Map<
+    string,
+    CircuitBreaker<[string], string | undefined>
+  >;
 
   constructor({
     log,
     indexes,
-    circuitBreakerConfig = {
-      failureThreshold: config.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-      successThreshold: config.CIRCUIT_BREAKER_SUCCESS_THRESHOLD,
-      timeoutMs: config.CIRCUIT_BREAKER_TIMEOUT_MS,
+    circuitBreakerOptions = {
+      timeout: config.CIRCUIT_BREAKER_TIMEOUT_MS,
+      errorThresholdPercentage: Math.round(
+        (config.CIRCUIT_BREAKER_FAILURE_THRESHOLD / 100) * 100,
+      ),
+      resetTimeout: config.CIRCUIT_BREAKER_TIMEOUT_MS,
+      rollingCountTimeout: config.CIRCUIT_BREAKER_TIMEOUT_MS * 2,
     },
   }: {
     log: winston.Logger;
     indexes: DataItemRootTxIndex[];
-    circuitBreakerConfig?: {
-      failureThreshold: number;
-      successThreshold: number;
-      timeoutMs: number;
-    };
+    circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
 
@@ -43,14 +46,31 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     this.circuitBreakers = new Map();
     for (const index of indexes) {
       const name = index.constructor.name;
-      this.circuitBreakers.set(
-        name,
-        new CircuitBreaker({
+      const breaker = new CircuitBreaker(
+        (id: string) => index.getRootTxId(id),
+        {
+          ...circuitBreakerOptions,
           name,
-          log,
-          ...circuitBreakerConfig,
-        }),
+        },
       );
+
+      // Register metrics for this circuit breaker
+      // Map class names to BreakerSource values
+      const breakerSourceName = name
+        .replace('RootTxIndex', '-root-tx-index')
+        .replace(/([A-Z])/g, '-$1')
+        .toLowerCase()
+        .replace(/^-/, '') as metrics.BreakerSource;
+
+      // Use both deprecated and new metrics setup for compatibility
+      metrics.circuitBreakerMetrics.add(breaker);
+      metrics.setUpCircuitBreakerListenerMetrics(
+        breakerSourceName,
+        breaker,
+        log,
+      );
+
+      this.circuitBreakers.set(name, breaker);
     }
   }
 
@@ -63,11 +83,11 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
       const circuitBreaker = this.circuitBreakers.get(indexName)!;
 
       // Skip if circuit is open
-      if (circuitBreaker.isOpen()) {
+      if (circuitBreaker.opened) {
         log.debug('Skipping index due to open circuit', {
           indexNumber: i + 1,
           indexClass: indexName,
-          circuitState: circuitBreaker.getState(),
+          circuitState: 'OPEN',
         });
         continue;
       }
@@ -77,13 +97,11 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
           indexNumber: i + 1,
           totalIndexes: this.indexes.length,
           indexClass: indexName,
-          circuitState: circuitBreaker.getState(),
+          circuitState: circuitBreaker.opened ? 'OPEN' : 'CLOSED',
         });
 
         // Execute with circuit breaker protection
-        const rootTxId = await circuitBreaker.execute(() =>
-          index.getRootTxId(id),
-        );
+        const rootTxId = await circuitBreaker.fire(id);
 
         if (rootTxId !== undefined) {
           log.debug('Found root TX ID', {
@@ -103,7 +121,7 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
           indexNumber: i + 1,
           indexClass: indexName,
           error: error.message,
-          circuitState: circuitBreaker.getState(),
+          circuitState: circuitBreaker.opened ? 'OPEN' : 'CLOSED',
         });
         // Continue to next index
       }

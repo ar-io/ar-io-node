@@ -12,6 +12,8 @@ import { DataItemRootTxIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import * as config from '../config.js';
 
+type CachedRootTx = { bundleId?: string };
+
 const GRAPHQL_QUERY = `
   query getRootTxId($id: ID!) {
     transaction(id: $id) {
@@ -29,7 +31,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
   private readonly axiosInstance: AxiosInstance;
-  private readonly cache?: LRUCache<string, string | null>;
+  private readonly cache?: LRUCache<string, CachedRootTx>;
 
   constructor({
     log,
@@ -42,7 +44,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
     trustedGatewaysUrls: Record<string, number>;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
-    cache?: LRUCache<string, string | null>;
+    cache?: LRUCache<string, CachedRootTx>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.cache = cache;
@@ -114,8 +116,8 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
         return undefined;
       }
 
-      if (bundleId === null) {
-        // No more parents, currentId is the root
+      if (bundleId === undefined && depth > 1) {
+        // No more parents in chain, currentId is the root
         log.debug('Found root transaction', {
           originalId: id,
           rootTxId: currentId,
@@ -150,12 +152,15 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
   private async queryBundleId(
     id: string,
     log: winston.Logger,
-  ): Promise<string | null | undefined> {
+  ): Promise<string | undefined> {
     // Check cache first
     if (this.cache?.has(id)) {
       const cached = this.cache.get(id);
-      log.debug('Cache hit for GraphQL lookup', { id, bundleId: cached });
-      return cached;
+      log.debug('Cache hit for GraphQL lookup', {
+        id,
+        bundleId: cached?.bundleId,
+      });
+      return cached?.bundleId;
     }
 
     // lower number = higher priority
@@ -184,12 +189,12 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
             if (response.data?.data?.transaction) {
               const transaction = response.data.data.transaction;
 
-              // Return the bundle ID if exists, null if not bundled
-              const bundleId = transaction.bundledIn?.id || null;
+              // Return the bundle ID if exists, undefined if not bundled
+              const bundleId = transaction.bundledIn?.id;
 
               // Cache the result
               if (this.cache) {
-                this.cache.set(id, bundleId);
+                this.cache.set(id, { bundleId });
                 log.debug('Cached GraphQL lookup result', { id, bundleId });
               }
 
@@ -202,12 +207,12 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
               return bundleId;
             }
 
-            // Transaction not found
+            // Transaction not found in this gateway - don't cache and try next
             log.debug('Transaction not found', {
               id,
               gateway: gatewayUrl,
             });
-            return undefined;
+            // Continue to next gateway instead of returning
           } catch (error: any) {
             lastError = error;
             log.debug('Failed to query gateway', {
