@@ -9,56 +9,41 @@ import * as rax from 'retry-axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { DataItemRootTxIndex } from '../types.js';
-import { shuffleArray } from '../lib/random.js';
 import * as config from '../config.js';
 
-const GRAPHQL_QUERY = `
-  query getRootTxId($id: ID!) {
-    transaction(id: $id) {
-      id
-      bundledIn {
-        id
-      }
-    }
-  }
-`;
+interface TurboStatusResponse {
+  status: string;
+  bundleId?: string;
+  info?: string;
+  rawContentLength?: number;
+  payloadContentType?: string;
+  payloadDataStart?: number;
+  payloadContentLength?: number;
+  winc?: string;
+}
 
-const DEFAULT_REQUEST_RETRY_COUNT = 3;
-
-export class GraphQLRootTxIndex implements DataItemRootTxIndex {
+export class TurboRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
-  private trustedGateways: Map<number, string[]>;
   private readonly axiosInstance: AxiosInstance;
+  private readonly turboEndpoint: string;
   private readonly cache?: LRUCache<string, string | null>;
 
   constructor({
     log,
-    trustedGatewaysUrls,
-    requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
-    requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
+    turboEndpoint = config.TURBO_ENDPOINT,
+    requestTimeoutMs = config.TURBO_REQUEST_TIMEOUT_MS,
+    requestRetryCount = config.TURBO_REQUEST_RETRY_COUNT,
     cache,
   }: {
     log: winston.Logger;
-    trustedGatewaysUrls: Record<string, number>;
+    turboEndpoint?: string;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
     cache?: LRUCache<string, string | null>;
   }) {
     this.log = log.child({ class: this.constructor.name });
+    this.turboEndpoint = turboEndpoint;
     this.cache = cache;
-
-    if (Object.keys(trustedGatewaysUrls).length === 0) {
-      throw new Error('At least one gateway URL must be provided');
-    }
-
-    // lower number = higher priority
-    this.trustedGateways = new Map();
-    for (const [url, priority] of Object.entries(trustedGatewaysUrls)) {
-      if (!this.trustedGateways.has(priority)) {
-        this.trustedGateways.set(priority, []);
-      }
-      this.trustedGateways.get(priority)?.push(url);
-    }
 
     // Initialize axios instance with retry configuration
     this.axiosInstance = axios.create({
@@ -82,7 +67,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
         const attempt = cfg?.currentRetryAttempt ?? 1;
         const status = error?.response?.status;
 
-        log.debug('Retrying GraphQL request', {
+        log.debug('Retrying Turbo request', {
           attempt,
           status,
           maxRetries: requestRetryCount,
@@ -110,7 +95,8 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       const bundleId = await this.queryBundleId(currentId, log);
 
       if (bundleId === undefined) {
-        // Transaction not found
+        // Transaction/data item not found
+        log.debug('Item not found in Turbo', { id: currentId });
         return undefined;
       }
 
@@ -154,78 +140,65 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
     // Check cache first
     if (this.cache?.has(id)) {
       const cached = this.cache.get(id);
-      log.debug('Cache hit for GraphQL lookup', { id, bundleId: cached });
+      log.debug('Cache hit for Turbo lookup', { id, bundleId: cached });
       return cached;
     }
 
-    // lower number = higher priority
-    const priorities = Array.from(this.trustedGateways.keys()).sort(
-      (a, b) => a - b,
-    );
+    try {
+      const url = `${this.turboEndpoint}/tx/${id}/status`;
+      log.debug('Querying Turbo status endpoint', { url });
 
-    let lastError: Error | null = null;
+      const response = await this.axiosInstance.get<TurboStatusResponse>(url);
 
-    for (const priority of priorities) {
-      const gatewaysInTier = this.trustedGateways.get(priority);
+      if (
+        response.status === 200 &&
+        response.data !== null &&
+        response.data !== undefined
+      ) {
+        const { bundleId } = response.data;
 
-      if (gatewaysInTier) {
-        const shuffledGateways = shuffleArray([...gatewaysInTier]);
+        // bundleId will be undefined if this is a root transaction
+        // or a string if this item is bundled
+        const result = bundleId !== undefined ? bundleId : null;
 
-        for (const gatewayUrl of shuffledGateways) {
-          try {
-            const response = await this.axiosInstance.post(
-              `${gatewayUrl}/graphql`,
-              {
-                query: GRAPHQL_QUERY,
-                variables: { id },
-              },
-            );
-
-            if (response.data?.data?.transaction) {
-              const transaction = response.data.data.transaction;
-
-              // Return the bundle ID if exists, null if not bundled
-              const bundleId = transaction.bundledIn?.id || null;
-
-              // Cache the result
-              if (this.cache) {
-                this.cache.set(id, bundleId);
-                log.debug('Cached GraphQL lookup result', { id, bundleId });
-              }
-
-              log.debug('Transaction query result', {
-                id,
-                bundledIn: bundleId,
-                gateway: gatewayUrl,
-              });
-
-              return bundleId;
-            }
-
-            // Transaction not found
-            log.debug('Transaction not found', {
-              id,
-              gateway: gatewayUrl,
-            });
-            return undefined;
-          } catch (error: any) {
-            lastError = error;
-            log.debug('Failed to query gateway', {
-              gateway: gatewayUrl,
-              error: error.message,
-            });
-            // Continue to next gateway
-          }
+        // Cache the result
+        if (this.cache) {
+          this.cache.set(id, result);
+          log.debug('Cached Turbo lookup result', { id, bundleId: result });
         }
+
+        log.debug('Turbo status query result', {
+          id,
+          bundledIn: result,
+          status: response.data.status,
+        });
+
+        return result;
       }
+
+      // Unexpected response status
+      log.debug('Unexpected response from Turbo', {
+        id,
+        status: response.status,
+      });
+      return undefined;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        // Item not found in Turbo
+        log.debug('Item not found in Turbo (404)', { id });
+
+        // Don't cache 404s as the item might appear later
+        return undefined;
+      }
+
+      // Other errors (network, timeout, etc.)
+      log.debug('Failed to query Turbo', {
+        id,
+        error: error.message,
+        status: error.response?.status,
+      });
+
+      throw error; // Re-throw to trigger circuit breaker
     }
-
-    // All gateways failed
-    log.warn('Failed to query transaction from all gateways', {
-      id,
-      error: lastError?.message,
-    });
-
-    return undefined;
   }
 }

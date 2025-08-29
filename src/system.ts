@@ -33,7 +33,12 @@ import {
   makeDataItemAttributesStore,
   makeTransactionAttributesStore,
 } from './init/header-stores.js';
-import { CompositeRootTxIndex, GraphQLRootTxIndex } from './discovery/index.js';
+import {
+  CompositeRootTxIndex,
+  GraphQLRootTxIndex,
+  TurboRootTxIndex,
+} from './discovery/index.js';
+import { LRUCache } from 'lru-cache';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
 import { currentUnixTimestamp } from './lib/time.js';
 import log from './log.js';
@@ -44,6 +49,7 @@ import {
   DataBlockListValidator,
   NameBlockListValidator,
   BundleIndex,
+  DataItemRootTxIndex,
   ChainIndex,
   ChainOffsetIndex,
   ContiguousDataIndex,
@@ -154,18 +160,66 @@ export const db = new StandaloneSqliteDatabase({
   tagSelectivity: config.TAG_SELECTIVITY,
 });
 
-// Create composite root TX index that tries local DB first, then falls back to GraphQL
+// Create shared cache for root TX lookups
+const rootTxCache = new LRUCache<string, string | null>({
+  max: config.ROOT_TX_CACHE_MAX_SIZE,
+  ttl: config.ROOT_TX_CACHE_TTL_MS,
+});
+
+// Build indexes based on configuration
+const rootTxIndexes: DataItemRootTxIndex[] = [];
+
+for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
+  switch (sourceName.toLowerCase()) {
+    case 'db':
+      // Database is always available and doesn't need cache
+      rootTxIndexes.push(db);
+      break;
+
+    case 'turbo':
+      rootTxIndexes.push(
+        new TurboRootTxIndex({
+          log,
+          turboEndpoint: config.TURBO_ENDPOINT,
+          requestTimeoutMs: config.TURBO_REQUEST_TIMEOUT_MS,
+          requestRetryCount: config.TURBO_REQUEST_RETRY_COUNT,
+          cache: rootTxCache,
+        }),
+      );
+      break;
+
+    case 'graphql':
+      if (Object.keys(config.TRUSTED_GATEWAYS_URLS).length > 0) {
+        rootTxIndexes.push(
+          new GraphQLRootTxIndex({
+            log,
+            trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+            cache: rootTxCache,
+          }),
+        );
+      } else {
+        log.warn('GraphQL source configured but no trusted gateways defined');
+      }
+      break;
+
+    default:
+      log.warn('Unknown root TX source in configuration', {
+        source: sourceName,
+      });
+  }
+}
+
+// Fallback if no valid sources configured
+if (rootTxIndexes.length === 0) {
+  log.warn('No valid root TX sources configured, using default (db only)');
+  rootTxIndexes.push(db);
+}
+
+// Create composite root TX index with circuit breakers
 // This needs to be created early so it can be used by RootParentDataSource
 export const rootTxIndex = new CompositeRootTxIndex({
   log,
-  indexes: [
-    db, // Try local database first (fast)
-    new GraphQLRootTxIndex({
-      // Fall back to GraphQL if not in DB
-      log,
-      trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
-    }),
-  ],
+  indexes: rootTxIndexes,
 });
 
 export const chainIndex: ChainIndex = db;

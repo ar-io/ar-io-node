@@ -140,6 +140,51 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// Root TX index lookup order configuration
+export const ROOT_TX_LOOKUP_ORDER = env
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+// Shared root TX cache configuration
+export const ROOT_TX_CACHE_MAX_SIZE = +env.varOrDefault(
+  'ROOT_TX_CACHE_MAX_SIZE',
+  '10000',
+);
+export const ROOT_TX_CACHE_TTL_MS = +env.varOrDefault(
+  'ROOT_TX_CACHE_TTL_MS',
+  '300000', // 5 minutes
+);
+
+// Turbo endpoint configuration
+export const TURBO_ENDPOINT = env.varOrDefault(
+  'TURBO_ENDPOINT',
+  'https://turbo.ardrive.io',
+);
+export const TURBO_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'TURBO_REQUEST_TIMEOUT_MS',
+  '10000',
+);
+export const TURBO_REQUEST_RETRY_COUNT = +env.varOrDefault(
+  'TURBO_REQUEST_RETRY_COUNT',
+  '3',
+);
+
+// Circuit breaker configuration
+export const CIRCUIT_BREAKER_FAILURE_THRESHOLD = +env.varOrDefault(
+  'CIRCUIT_BREAKER_FAILURE_THRESHOLD',
+  '5',
+);
+export const CIRCUIT_BREAKER_TIMEOUT_MS = +env.varOrDefault(
+  'CIRCUIT_BREAKER_TIMEOUT_MS',
+  '60000', // 1 minute
+);
+export const CIRCUIT_BREAKER_SUCCESS_THRESHOLD = +env.varOrDefault(
+  'CIRCUIT_BREAKER_SUCCESS_THRESHOLD',
+  '2',
+);
+
 export const WEIGHTED_PEERS_TEMPERATURE_DELTA = +env.varOrDefault(
   'WEIGHTED_PEERS_TEMPERATURE_DELTA',
   '2',
