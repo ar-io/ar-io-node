@@ -87,7 +87,7 @@ describe('ArweaveCompositeClient', () => {
       assert.equal(weightedGetChunkPeers[1].weight, 100);
     });
 
-    it('should only affect chunk GET peers, not chain or post peers', () => {
+    it('should only affect chunk GET peers, not chain peers', () => {
       const preferredChunkGetUrls = [
         'http://peer1.example.com',
         'http://peer2.example.com',
@@ -103,7 +103,8 @@ describe('ArweaveCompositeClient', () => {
       // Only chunk GET peers should be initialized with preferred URLs
       assert.equal(weightedGetChunkPeers.length, 2);
       assert.equal(weightedChainPeers.length, 0);
-      assert.equal(weightedPostChunkPeers.length, 0);
+      // POST peers now have defaults (tip-2, tip-3, tip-4)
+      assert.equal(weightedPostChunkPeers.length, 3);
     });
 
     it('should work without preferred chunk GET URLs', () => {

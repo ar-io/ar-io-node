@@ -362,10 +362,16 @@ export class ArweaveCompositeClient
     }
   }
 
+  /**
+   * Initializes DNS resolution for preferred GET/POST URLs. Idempotent - safe to call multiple times.
+   */
   async initializeDnsResolution(): Promise<void> {
     if (!this.dnsResolver) {
       return;
     }
+
+    // Clear any existing timers to prevent orphaned intervals
+    this.stopDnsResolution();
 
     const hasGetUrls = this.preferredChunkGetUrls.length > 0;
     const hasPostUrls = this.preferredChunkPostUrls.length > 0;

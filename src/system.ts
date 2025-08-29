@@ -990,6 +990,8 @@ export const shutdown = async (exitCode = 0) => {
       await contiguousDataFsCacheCleanupWorker?.stop();
       await chunkDataFsCacheCleanupWorker?.stop();
       await dataVerificationWorker?.stop();
+      // Stop DNS periodic re-resolution if running
+      arweaveClient.stopDnsResolution();
       await db.stop();
       process.exit(exitCode);
     });
