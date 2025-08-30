@@ -10,6 +10,7 @@ import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { DataItemRootTxIndex } from '../types.js';
 import * as config from '../config.js';
+import { isValidTxId } from '../lib/validation.js';
 
 type CachedRootTx = { bundleId?: string };
 
@@ -97,7 +98,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       visited.add(currentId);
       depth++;
 
-      const queryResult = await this.queryBundleId(currentId, log);
+      const queryResult = await this.queryBundleId(currentId, depth, log);
 
       // queryResult can be:
       // - undefined: item is a root transaction (not bundled)
@@ -145,6 +146,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
 
   private async queryBundleId(
     id: string,
+    depth: number,
     log: winston.Logger,
   ): Promise<string | undefined | typeof NOT_FOUND> {
     // Check cache first
@@ -197,6 +199,17 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       return undefined;
     } catch (error: any) {
       if (error.response?.status === 404) {
+        // Check if this could be an L1 transaction (Turbo doesn't index L1 txs)
+        // Only do this check after the first lookup (depth > 1) to avoid false positives
+        if (depth > 1 && isValidTxId(id)) {
+          log.debug('Treating as potential L1 transaction after Turbo 404', {
+            id,
+            depth,
+          });
+          // Return undefined to indicate this is a root transaction
+          return undefined;
+        }
+
         // Item not found in Turbo
         log.debug('Item not found in Turbo (404)', { id });
 
