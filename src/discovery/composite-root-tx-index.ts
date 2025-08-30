@@ -5,18 +5,34 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import winston from 'winston';
+import CircuitBreaker from 'opossum';
 import { DataItemRootTxIndex } from '../types.js';
+import * as config from '../config.js';
+import * as metrics from '../metrics.js';
 
 export class CompositeRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private indexes: DataItemRootTxIndex[];
+  private circuitBreakers: Map<
+    string,
+    CircuitBreaker<[string], string | undefined>
+  >;
 
   constructor({
     log,
     indexes,
+    circuitBreakerOptions = {
+      timeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS,
+      errorThresholdPercentage: Math.round(
+        (config.ROOT_TX_INDEX_CIRCUIT_BREAKER_FAILURE_THRESHOLD / 100) * 100,
+      ),
+      resetTimeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS,
+      rollingCountTimeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS * 2,
+    },
   }: {
     log: winston.Logger;
     indexes: DataItemRootTxIndex[];
+    circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
 
@@ -25,6 +41,37 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     }
 
     this.indexes = indexes;
+
+    // Create a circuit breaker for each index
+    this.circuitBreakers = new Map();
+    for (const index of indexes) {
+      const name = index.constructor.name;
+      const breaker = new CircuitBreaker(
+        (id: string) => index.getRootTxId(id),
+        {
+          ...circuitBreakerOptions,
+          name,
+        },
+      );
+
+      // Register metrics for this circuit breaker
+      // Map class names to BreakerSource values
+      const breakerSourceName = name
+        .replace('RootTxIndex', '-root-tx-index')
+        .replace(/([A-Z])/g, '-$1')
+        .toLowerCase()
+        .replace(/^-/, '') as metrics.BreakerSource;
+
+      // Use both deprecated and new metrics setup for compatibility
+      metrics.circuitBreakerMetrics.add(breaker);
+      metrics.setUpCircuitBreakerListenerMetrics(
+        breakerSourceName,
+        breaker,
+        log,
+      );
+
+      this.circuitBreakers.set(name, breaker);
+    }
   }
 
   async getRootTxId(id: string): Promise<string | undefined> {
@@ -32,34 +79,49 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
 
     for (let i = 0; i < this.indexes.length; i++) {
       const index = this.indexes[i];
+      const indexName = index.constructor.name;
+      const circuitBreaker = this.circuitBreakers.get(indexName)!;
+
+      // Skip if circuit is open
+      if (circuitBreaker.opened) {
+        log.debug('Skipping index due to open circuit', {
+          indexNumber: i + 1,
+          indexClass: indexName,
+          circuitState: 'OPEN',
+        });
+        continue;
+      }
 
       try {
         log.debug('Trying index', {
           indexNumber: i + 1,
           totalIndexes: this.indexes.length,
-          indexClass: index.constructor.name,
+          indexClass: indexName,
+          circuitState: circuitBreaker.opened ? 'OPEN' : 'CLOSED',
         });
 
-        const rootTxId = await index.getRootTxId(id);
+        // Execute with circuit breaker protection
+        const rootTxId = await circuitBreaker.fire(id);
 
         if (rootTxId !== undefined) {
           log.debug('Found root TX ID', {
             rootTxId,
             indexNumber: i + 1,
-            indexClass: index.constructor.name,
+            indexClass: indexName,
           });
           return rootTxId;
         }
 
         log.debug('Index returned undefined', {
           indexNumber: i + 1,
-          indexClass: index.constructor.name,
+          indexClass: indexName,
         });
       } catch (error: any) {
         log.debug('Index failed with error', {
           indexNumber: i + 1,
-          indexClass: index.constructor.name,
+          indexClass: indexName,
           error: error.message,
+          circuitState: circuitBreaker.opened ? 'OPEN' : 'CLOSED',
         });
         // Continue to next index
       }

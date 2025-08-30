@@ -162,6 +162,18 @@ piece of data. Used with exponential backoff to manage retries.
 
 ## Resolution
 
+**Circuit Breaker** - A fault tolerance pattern that prevents cascading failures
+by temporarily blocking requests to failing services. Opens after threshold
+failures, enters half-open state after timeout, and closes after successful
+requests.
+
+**Root Transaction Index** - Service that resolves data items to their root
+bundle transactions by following parent chain relationships.
+
+**Turbo** - External service (turbo.ardrive.io) that provides metadata about
+data items including their bundle IDs, enabling resolution of data items to
+their root transactions.
+
 **Name Resolution** - The process of converting names or identifiers to
 [item IDs](#item-id). The primary type is ArNS resolution, which maps
 human-readable names (like "my-app") to their corresponding Arweave
