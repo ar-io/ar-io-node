@@ -42,15 +42,15 @@ The ar.io gateway implements a sophisticated multi-tier data fetching architectu
 The gateway implements two distinct retrieval orders configured via environment variables:
 
 #### On-Demand Retrieval (User-Facing)
-- **Configuration**: `ON_DEMAND_RETRIEVAL_ORDER` (src/config.ts:402)
-- **Default Order**: `'s3,trusted-gateways,chunks,tx-data,ar-io-peers'`
+- **Configuration**: `ON_DEMAND_RETRIEVAL_ORDER` (src/config.ts:296)
+- **Default Order**: `'trusted-gateways,ar-io-network,chunks-data-item,tx-data'`
 - **Implementation**: `SequentialDataSource` (src/data/sequential-data-source.ts)
 - **Purpose**: Optimized for latency and user experience
 - **Certainty**: 100% - Directly observed in code
 
 #### Background Retrieval (Verification/Import)
-- **Configuration**: `BACKGROUND_RETRIEVAL_ORDER` (src/config.ts:408)
-- **Default Order**: `'chunks,s3'`
+- **Configuration**: `BACKGROUND_RETRIEVAL_ORDER` (src/config.ts:304)
+- **Default Order**: `'chunks'`
 - **Purpose**: Used by DataImporter and verification workers
 - **Focus**: Data integrity over speed
 - **Certainty**: 100% - Explicitly documented in code
@@ -959,8 +959,8 @@ Circuit breakers prevent cascade failures with configurable thresholds:
 #### Data Retrieval
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ON_DEMAND_RETRIEVAL_ORDER` | `s3,trusted-gateways,chunks,tx-data,ar-io-peers` | User request sources |
-| `BACKGROUND_RETRIEVAL_ORDER` | `chunks,s3` | Background processing sources |
+| `ON_DEMAND_RETRIEVAL_ORDER` | `trusted-gateways,ar-io-network,chunks-data-item,tx-data` | User request sources |
+| `BACKGROUND_RETRIEVAL_ORDER` | `chunks` | Background processing sources |
 | `TRUSTED_NODE_URL` | `https://arweave.net` | Primary Arweave node |
 | `TRUSTED_GATEWAYS_URLS` | - | JSON gateway map |
 
