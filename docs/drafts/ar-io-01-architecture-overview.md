@@ -33,13 +33,12 @@ The gateway connects to Arweave through the `ArweaveCompositeClient` (`src/arwea
    - Resolves manifest paths for directory-style requests
 
 ### Hierarchical Data Retrieval (`ON_DEMAND_RETRIEVAL_ORDER`)
-Default order: `s3,trusted-gateways,chunks,tx-data,ar-io-peers`
+Default order: `trusted-gateways,ar-io-network,chunks-data-item,tx-data`
 
-1. **S3 Storage**: AWS S3 bucket storage (if configured)
-2. **Trusted Gateways**: Configured gateway URLs with priority weights
-3. **Chunks**: Direct chunk retrieval from Arweave nodes
-4. **TX Data**: Transaction data from the chain
-5. **AR.IO Peers**: Other AR.IO network peers
+1. **Trusted Gateways**: Configured gateway URLs with priority weights
+2. **AR.IO Network**: Other AR.IO network peers
+3. **Chunks-Data-Item**: Chunk retrieval with automatic data item resolution
+4. **TX Data**: Complete transaction data from the chain
 
 ### Caching Mechanisms
 - **ReadThroughDataCache**: Primary caching layer with metadata tracking

@@ -335,7 +335,7 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
-    'trusted-gateways,chunks,tx-data,ar-io-network',
+    'trusted-gateways,ar-io-network,chunks-data-item,tx-data',
   )
   .split(',');
 

@@ -439,7 +439,7 @@ Prevents cascade failures:
 
 ```typescript
 // Sequential fallback through multiple sources
-ON_DEMAND_RETRIEVAL_ORDER='s3,trusted-gateways,chunks,tx-data,ar-io-peers'
+ON_DEMAND_RETRIEVAL_ORDER='trusted-gateways,ar-io-network,chunks-data-item,tx-data'
 ```
 
 ### 4. Caching Layers
