@@ -55,8 +55,10 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
 
       // Register metrics for this circuit breaker
       // Map class names to BreakerSource values
+      // Handle GraphQL as a special case to keep it as one word
       const breakerSourceName = name
         .replace('RootTxIndex', '')
+        .replace('GraphQL', 'Graphql')
         .replace(/([A-Z])/g, '-$1')
         .toLowerCase()
         .replace(/^-/, '')
