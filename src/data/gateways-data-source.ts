@@ -114,6 +114,9 @@ export class GatewaysDataSource implements ContiguousDataSource {
             const gatewayAxios = axios.create({
               baseURL: gatewayUrl,
               timeout: this.requestTimeoutMs,
+              headers: {
+                'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
+              },
             });
 
             gatewayAxios.interceptors.request.use((config) => {

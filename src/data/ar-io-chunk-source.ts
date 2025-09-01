@@ -231,7 +231,10 @@ export class ArIOChunkSource
               `${selectedPeer}/chunk/${params.absoluteOffset}`,
               {
                 method: 'GET',
-                headers,
+                headers: {
+                  'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
+                  ...headers,
+                },
                 signal: AbortSignal.timeout(10000), // 10 second timeout
               },
             );
