@@ -12,7 +12,7 @@ import { DataItemRootTxIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import * as config from '../config.js';
 
-type CachedRootTx = { bundleId?: string };
+type CachedParentBundle = { bundleId?: string };
 
 const GRAPHQL_QUERY = `
   query getRootTxId($id: ID!) {
@@ -31,7 +31,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
   private readonly axiosInstance: AxiosInstance;
-  private readonly cache?: LRUCache<string, CachedRootTx>;
+  private readonly cache?: LRUCache<string, CachedParentBundle>;
 
   constructor({
     log,
@@ -44,7 +44,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
     trustedGatewaysUrls: Record<string, number>;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
-    cache?: LRUCache<string, CachedRootTx>;
+    cache?: LRUCache<string, CachedParentBundle>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.cache = cache;
