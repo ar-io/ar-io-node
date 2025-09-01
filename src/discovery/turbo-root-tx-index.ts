@@ -12,7 +12,7 @@ import { DataItemRootTxIndex } from '../types.js';
 import * as config from '../config.js';
 import { isValidTxId } from '../lib/validation.js';
 
-type CachedRootTx = { bundleId?: string };
+type CachedParentBundle = { bundleId?: string };
 
 // Special symbol to indicate item was not found (vs being a root tx)
 const NOT_FOUND = Symbol('NOT_FOUND');
@@ -32,7 +32,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private readonly axiosInstance: AxiosInstance;
   private readonly turboEndpoint: string;
-  private readonly cache?: LRUCache<string, CachedRootTx>;
+  private readonly cache?: LRUCache<string, CachedParentBundle>;
 
   constructor({
     log,
@@ -45,7 +45,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     turboEndpoint?: string;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
-    cache?: LRUCache<string, CachedRootTx>;
+    cache?: LRUCache<string, CachedParentBundle>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.turboEndpoint = turboEndpoint;

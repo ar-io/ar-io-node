@@ -162,8 +162,8 @@ export const db = new StandaloneSqliteDatabase({
 
 // Create shared cache for root TX lookups
 // LRUCache v11 requires values to be objects, not primitives with undefined
-type CachedRootTx = { bundleId?: string };
-const rootTxCache = new LRUCache<string, CachedRootTx>({
+type CachedParentBundle = { bundleId?: string };
+const rootTxCache = new LRUCache<string, CachedParentBundle>({
   max: config.ROOT_TX_CACHE_MAX_SIZE,
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
