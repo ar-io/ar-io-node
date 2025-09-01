@@ -232,7 +232,9 @@ export class ArIOChunkSource
               {
                 method: 'GET',
                 headers: {
-                  'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
+                  ...(config.AR_IO_NODE_RELEASE !== undefined
+                    ? { 'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE }
+                    : {}),
                   ...headers,
                 },
                 signal: AbortSignal.timeout(10000), // 10 second timeout

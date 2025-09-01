@@ -14,6 +14,9 @@ import * as config from '../config.js';
 
 type CachedParentBundle = { bundleId?: string };
 
+// Special symbol to indicate item was not found (vs being a root tx)
+const NOT_FOUND = Symbol('NOT_FOUND');
+
 const GRAPHQL_QUERY = `
   query getRootTxId($id: ID!) {
     transaction(id: $id) {
@@ -110,15 +113,21 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       visited.add(currentId);
       depth++;
 
-      const bundleId = await this.queryBundleId(currentId, log);
+      const queryResult = await this.queryBundleId(currentId, log);
 
-      if (bundleId === undefined) {
-        // Transaction not found
+      // queryResult can be:
+      // - undefined: item is a root transaction (not bundled)
+      // - string: the bundle ID that contains this item
+      // - NOT_FOUND: item not found
+
+      if (queryResult === NOT_FOUND) {
+        // Item not found
+        log.debug('Item not found in GraphQL', { id: currentId });
         return undefined;
       }
 
-      if (bundleId === undefined && depth > 1) {
-        // No more parents in chain, currentId is the root
+      if (queryResult === undefined) {
+        // This is a root transaction (not bundled)
         log.debug('Found root transaction', {
           originalId: id,
           rootTxId: currentId,
@@ -128,7 +137,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       }
 
       // Continue following the chain
-      currentId = bundleId;
+      currentId = queryResult;
     }
 
     if (depth >= MAX_DEPTH) {
@@ -153,7 +162,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
   private async queryBundleId(
     id: string,
     log: winston.Logger,
-  ): Promise<string | undefined> {
+  ): Promise<string | undefined | typeof NOT_FOUND> {
     // Check cache first
     if (this.cache?.has(id)) {
       const cached = this.cache.get(id);
@@ -226,12 +235,12 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       }
     }
 
-    // All gateways failed
+    // All gateways failed - return NOT_FOUND to indicate item wasn't found
     log.warn('Failed to query transaction from all gateways', {
       id,
       error: lastError?.message,
     });
 
-    return undefined;
+    return NOT_FOUND;
   }
 }
