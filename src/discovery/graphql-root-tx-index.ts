@@ -67,6 +67,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       timeout: requestTimeoutMs,
       headers: {
         'Content-Type': 'application/json',
+        'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },
     });
 

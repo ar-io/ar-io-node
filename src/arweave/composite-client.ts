@@ -289,6 +289,9 @@ export class ArweaveCompositeClient
     this.trustedNodeAxios = axios.create({
       baseURL: this.trustedNodeUrl,
       timeout: requestTimeout,
+      headers: {
+        'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
+      },
     });
     this.trustedNodeAxios.defaults.raxConfig = {
       retry: requestRetryCount,

@@ -25,6 +25,7 @@ import { startChildSpan } from '../tracing.js';
 import { SpanStatusCode, Span } from '@opentelemetry/api';
 
 import * as metrics from '../metrics.js';
+import * as config from '../config.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const MAX_DATA_HOPS = 3;
@@ -98,6 +99,7 @@ export class ArIODataSource implements ContiguousDataSource {
     const response = await axios.get(`${peerAddress}${path}`, {
       headers: {
         'Accept-Encoding': 'identity',
+        'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
         ...headers,
       },
       responseType: 'stream',
