@@ -24,7 +24,7 @@ describe('TurboRootTxIndex', () => {
     });
 
     it('should accept cache in constructor', () => {
-      const cache = new LRUCache<string, string | null>({
+      const cache = new LRUCache<string, { bundleId?: string }>({
         max: 100,
         ttl: 1000 * 60 * 5,
       });

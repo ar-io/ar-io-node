@@ -23,9 +23,8 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     indexes,
     circuitBreakerOptions = {
       timeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS,
-      errorThresholdPercentage: Math.round(
-        (config.ROOT_TX_INDEX_CIRCUIT_BREAKER_FAILURE_THRESHOLD / 100) * 100,
-      ),
+      errorThresholdPercentage:
+        config.ROOT_TX_INDEX_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
       resetTimeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS,
       rollingCountTimeout: config.ROOT_TX_INDEX_CIRCUIT_BREAKER_TIMEOUT_MS * 2,
     },
@@ -57,10 +56,11 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
       // Register metrics for this circuit breaker
       // Map class names to BreakerSource values
       const breakerSourceName = name
-        .replace('RootTxIndex', '-root-tx-index')
+        .replace('RootTxIndex', '')
         .replace(/([A-Z])/g, '-$1')
         .toLowerCase()
-        .replace(/^-/, '') as metrics.BreakerSource;
+        .replace(/^-/, '')
+        .concat('-root-tx-index') as metrics.BreakerSource;
 
       // Use both deprecated and new metrics setup for compatibility
       metrics.circuitBreakerMetrics.add(breaker);
