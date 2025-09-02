@@ -4,26 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 48] - 2025-09-02
+
+This is an optional release that introduces Turbo root transaction ID lookups,
+DNS resolution for preferred chunk nodes, and automatic data item resolution
+from chunks. These features continue the network's journey toward complete
+independence from legacy infrastructure while improving retrieval performance
+and reliability.
 
 ### Added
 
+- Added Turbo root transaction ID source with configurable lookup order and
+  circuit breakers (configurable via `ROOT_TX_INDEX_` environment variables),
+  enabling efficient data item to root transaction resolution via Turbo's
+  API with automatic failover handling.
 - Added `chunks-data-item` data source option for retrieval orders that enables
   automatic data item resolution within ANS-104 bundles. When used in
   `ON_DEMAND_RETRIEVAL_ORDER` or `BACKGROUND_RETRIEVAL_ORDER`, this source
   transparently resolves data items to their root transactions and calculates
   correct byte ranges, allowing direct retrieval of data items from chunks
   without requiring separate data item indexing.
+- Added DNS resolution for preferred chunk GET and POST nodes with automatic
+  failover, enabling dynamic resolution of node hostnames to IP addresses with
+  configurable refresh intervals.
+- Added `X-AR-IO-Node-Release` header to all outbound HTTP requests for better
+  network observability and version tracking.
 
 ### Changed
 
-### Fixed
+- Updated default `ON_DEMAND_RETRIEVAL_ORDER` from
+  `trusted-gateways,chunks,tx-data,ar-io-network` to
+  `trusted-gateways,ar-io-network,chunks-data-item,tx-data`, removing the
+  deprecated `chunks` source and prioritizing AR.IO network retrieval.
 
 ## [Release 47] - 2025-08-25
 
-This is an optional release that lays the groundwork for the gateway network to 
-become completely independent of the legacy arweave.net gateway by enabling 
-data item retrieval directly from chunks using root transaction ID lookups. It 
+This is an optional release that lays the groundwork for the gateway network to
+become completely independent of the legacy arweave.net gateway by enabling
+data item retrieval directly from chunks using root transaction ID lookups. It
 also introduces comprehensive distributed tracing for improved observability.
 
 ### Added
@@ -48,10 +66,10 @@ also introduces comprehensive distributed tracing for improved observability.
 
 ## [Release 46] - 2025-08-18
 
-This is a recommended release that introduces AR.IO network chunk retrieval with 
-cryptographic validation and enhanced observability. Gateway operators can now 
-retrieve chunks directly from AR.IO peers with the same security guarantees as 
-Arweave network chunks, significantly improving chunk caching and retrieval 
+This is a recommended release that introduces AR.IO network chunk retrieval with
+cryptographic validation and enhanced observability. Gateway operators can now
+retrieve chunks directly from AR.IO peers with the same security guarantees as
+Arweave network chunks, significantly improving chunk caching and retrieval
 performance.
 
 ### Added
@@ -89,9 +107,9 @@ performance.
 
 ## [Release 45] - 2025-08-11
 
-This is an optional release that enhances chunk broadcasting with improved preferred 
-peer management, adds a hash-based partitioning filter for distributed data processing, 
-fixes ArNS basename cache refresh issues, and includes comprehensive documentation 
+This is an optional release that enhances chunk broadcasting with improved preferred
+peer management, adds a hash-based partitioning filter for distributed data processing,
+fixes ArNS basename cache refresh issues, and includes comprehensive documentation
 improvements with a new glossary of AR.IO Node terminology.
 
 ### Added
