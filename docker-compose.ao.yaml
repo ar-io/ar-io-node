@@ -1,6 +1,6 @@
 services:
   ao-cu:
-    image: ghcr.io/permaweb/ao-cu:latest
+    image: ghcr.io/permaweb/ao-cu:08436a88233f0247f3eb35979dd55163fd51a153
     restart: unless-stopped
     environment:
       NODE_CONFIG_ENV: ${NODE_CONFIG_ENV:-development}
