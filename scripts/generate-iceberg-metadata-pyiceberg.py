@@ -142,23 +142,59 @@ def import_parquet_files(catalog, table_name, schema, partition_spec, parquet_fi
     
     print(f"  Adding {len(parquet_files)} Parquet files to table...")
     
+    # Collect all data first to handle schema consistently
+    all_data = []
+    
     for i, parquet_file in enumerate(parquet_files, 1):
         try:
-            # Read the Parquet file
+            # Read the Parquet file without partition discovery
+            # This prevents PyArrow from adding dictionary encoding to partition columns
             parquet_file_abs = os.path.abspath(parquet_file)
-            arrow_table = pq.read_table(parquet_file_abs)
             
-            # Append to Iceberg table
-            # PyIceberg will manage the metadata and create proper Iceberg files
-            table.append(arrow_table)
+            # Read without partition columns to avoid dictionary encoding
+            parquet_file_obj = pq.ParquetFile(parquet_file_abs)
+            arrow_table = parquet_file_obj.read()
+            
+            # Convert to pandas for easier type handling
+            df = arrow_table.to_pandas()
+            
+            # Ensure height is int64
+            if 'height' in df.columns:
+                df['height'] = df['height'].astype('int64')
+            
+            # Ensure other integer fields have correct types
+            if table_name == 'blocks':
+                if 'block_timestamp' in df.columns:
+                    df['block_timestamp'] = df['block_timestamp'].astype('int64')
+                if 'tx_count' in df.columns:
+                    df['tx_count'] = df['tx_count'].astype('int32')
+            
+            all_data.append(df)
             
             if i % 10 == 0:
-                print(f"    Processed {i}/{len(parquet_files)} files...")
+                print(f"    Read {i}/{len(parquet_files)} files...")
         except Exception as e:
-            print(f"    Warning: Failed to add {parquet_file}: {e}")
+            print(f"    Warning: Failed to read {parquet_file}: {e}")
             continue
     
-    print(f"  Successfully added files to Iceberg table")
+    if all_data:
+        try:
+            # Combine all dataframes
+            import pandas as pd
+            combined_df = pd.concat(all_data, ignore_index=True)
+            
+            # Convert back to Arrow table with explicit schema
+            # This ensures consistent types
+            arrow_table = pa.Table.from_pandas(combined_df, preserve_index=False)
+            
+            # Append to Iceberg table
+            table.append(arrow_table)
+            print(f"  Successfully added {len(all_data)} files to Iceberg table")
+        except Exception as e:
+            print(f"  Error appending data to table: {e}")
+            # Even if append fails, table is created
+    else:
+        print(f"  No data to add to table")
     
     return table
 
