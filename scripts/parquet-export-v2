@@ -1,0 +1,531 @@
+#!/usr/bin/env bash
+
+# AR.IO Gateway - Parquet Export with Iceberg-ready partitioning
+# Enhanced version with configurable partitioning and crash recovery
+
+if ! command -v duckdb >/dev/null 2>&1; then
+  echo "Error: duckdb CLI is required but not found in PATH" >&2
+  exit 1
+fi
+
+set -euo pipefail
+
+usage() {
+  cat <<USAGE
+Usage: $0 --outputDir DIR --startHeight N --endHeight N [options]
+
+Options:
+  --heightPartitionSize N   Number of blocks per partition (default: 1000)
+  --maxFileRows N           Max rows per file within partition (default: 1000000)
+  --includeL1Transactions   Include L1 transactions (default is to skip)
+  --includeL1Tags           Include L1 transaction tags (default is to skip)
+  --coreDb PATH             Path to core SQLite database (default: data/sqlite/core.db)
+  --bundlesDb PATH          Path to bundles SQLite database (default: data/sqlite/bundles.db)
+  --stagingDir PATH         Staging directory for temp files (default: data/staging)
+  --warehouseDir PATH       Final warehouse directory (default: data/local/warehouse)
+  --resume                  Resume from last checkpoint if export was interrupted
+
+Note: This creates Iceberg-compatible directory structure with partitioned Parquet files.
+USAGE
+}
+
+# Configuration defaults
+OUTPUT_DIR=""
+START_HEIGHT=""
+END_HEIGHT=""
+HEIGHT_PARTITION_SIZE=1000
+MAX_FILE_ROWS=1000000
+SKIP_L1_TRANSACTIONS=true
+SKIP_L1_TAGS=true
+CORE_DB_PATH="data/sqlite/core.db"
+BUNDLES_DB_PATH="data/sqlite/bundles.db"
+STAGING_DIR="data/staging"
+WAREHOUSE_DIR="data/local/warehouse"
+RESUME=false
+RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --outputDir)
+      OUTPUT_DIR=$2
+      shift 2
+      ;;
+    --startHeight)
+      START_HEIGHT=$2
+      shift 2
+      ;;
+    --endHeight)
+      END_HEIGHT=$2
+      shift 2
+      ;;
+    --heightPartitionSize)
+      HEIGHT_PARTITION_SIZE=$2
+      shift 2
+      ;;
+    --maxFileRows)
+      MAX_FILE_ROWS=$2
+      shift 2
+      ;;
+    --includeL1Transactions)
+      SKIP_L1_TRANSACTIONS=false
+      shift 1
+      ;;
+    --includeL1Tags)
+      SKIP_L1_TAGS=false
+      shift 1
+      ;;
+    --coreDb)
+      CORE_DB_PATH=$2
+      shift 2
+      ;;
+    --bundlesDb)
+      BUNDLES_DB_PATH=$2
+      shift 2
+      ;;
+    --stagingDir)
+      STAGING_DIR=$2
+      shift 2
+      ;;
+    --warehouseDir)
+      WAREHOUSE_DIR=$2
+      shift 2
+      ;;
+    --resume)
+      RESUME=true
+      shift 1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# If outputDir not specified, use warehouse structure
+if [[ -z "$OUTPUT_DIR" ]]; then
+  if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
+    echo "Error: Must specify --startHeight and --endHeight" >&2
+    usage
+    exit 1
+  fi
+  # Use warehouse directory with proper structure
+  OUTPUT_DIR="$WAREHOUSE_DIR"
+fi
+
+# Validate required arguments
+if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
+  echo "Error: Must specify --startHeight and --endHeight" >&2
+  usage
+  exit 1
+fi
+
+# Validate numeric arguments to prevent SQL injection
+for v in "$START_HEIGHT" "$END_HEIGHT" "$HEIGHT_PARTITION_SIZE" "$MAX_FILE_ROWS"; do
+  [[ $v =~ ^[0-9]+$ ]] || { echo "Error: Non-numeric argument detected: $v" >&2; exit 1; }
+done
+
+# Validate numeric bounds
+if (( START_HEIGHT > END_HEIGHT )); then
+  echo "Error: startHeight ($START_HEIGHT) cannot be greater than endHeight ($END_HEIGHT)" >&2
+  exit 1
+fi
+
+# Setup directories
+JOB_STAGING_DIR="$STAGING_DIR/job-$RUN_ID"
+CHECKPOINT_FILE="$JOB_STAGING_DIR/.checkpoint"
+
+# Cleanup function
+cleanup() {
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    if [[ -d "$JOB_STAGING_DIR" ]]; then
+      echo "Export failed. Temporary files preserved in: $JOB_STAGING_DIR"
+      echo "Run with --resume to continue from checkpoint"
+    fi
+  else
+    # Clean up on successful completion
+    rm -rf "$JOB_STAGING_DIR"
+    rm -f "$TEMP_DB" "$TEMP_DB.wal" "$SQL_INIT"
+  fi
+}
+trap cleanup EXIT
+
+# Create necessary directories
+mkdir -p "$JOB_STAGING_DIR"
+mkdir -p "$OUTPUT_DIR"/{blocks,transactions,tags}/{data,metadata}
+
+# Check for resume
+LAST_PROCESSED_HEIGHT=$((START_HEIGHT - 1))
+if $RESUME; then
+  # Find existing checkpoint
+  for dir in "$STAGING_DIR"/job-*; do
+    if [[ -f "$dir/.checkpoint" ]]; then
+      checkpoint_height=$(cat "$dir/.checkpoint")
+      # Check if this checkpoint is within our range
+      if [[ $checkpoint_height -ge $START_HEIGHT && $checkpoint_height -lt $END_HEIGHT ]]; then
+        LAST_PROCESSED_HEIGHT=$checkpoint_height
+        JOB_STAGING_DIR="$dir"
+        CHECKPOINT_FILE="$dir/.checkpoint"
+        echo "Found checkpoint at height: $checkpoint_height"
+        echo "Resuming from height: $((LAST_PROCESSED_HEIGHT + 1))"
+        break
+      fi
+    fi
+  done
+  
+  if [[ $LAST_PROCESSED_HEIGHT -eq $((START_HEIGHT - 1)) ]]; then
+    echo "No valid checkpoint found for range $START_HEIGHT-$END_HEIGHT"
+    echo "Starting fresh export"
+  fi
+fi
+
+# Setup temporary database
+TEMP_DB="$JOB_STAGING_DIR/export.duckdb"
+SQL_INIT="$JOB_STAGING_DIR/init.sql"
+
+# Function to save checkpoint
+save_checkpoint() {
+  echo "$1" > "$CHECKPOINT_FILE"
+}
+
+# Initialize database once at the start
+initialize_database() {
+  # Check if SQLite databases exist
+  if [[ ! -f "$CORE_DB_PATH" ]]; then
+    echo "Error: Core database not found at: $CORE_DB_PATH" >&2
+    exit 1
+  fi
+  
+  if [[ ! -f "$BUNDLES_DB_PATH" ]]; then
+    echo "Error: Bundles database not found at: $BUNDLES_DB_PATH" >&2
+    exit 1
+  fi
+  
+  if [[ ! -f "$TEMP_DB" ]]; then
+    echo "Initializing DuckDB database..."
+    
+    # First create the database with schema
+    if [[ ! -f "src/database/duckdb/schema.sql" ]]; then
+      echo "Error: DuckDB schema file not found at src/database/duckdb/schema.sql" >&2
+      exit 1
+    fi
+    
+    echo "Creating DuckDB schema..."
+    duckdb "$TEMP_DB" < src/database/duckdb/schema.sql
+    
+    # Then install SQLite extension and attach databases
+    echo "Attaching SQLite databases..."
+    echo "  Core DB: $CORE_DB_PATH"
+    echo "  Bundles DB: $BUNDLES_DB_PATH"
+    
+    duckdb "$TEMP_DB" <<SQL
+INSTALL sqlite;
+LOAD sqlite;
+ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
+ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
+
+-- Verify attachments by checking table existence (much faster than COUNT)
+SELECT 'Verifying core database...';
+SELECT 1 FROM core.stable_blocks LIMIT 1;
+SELECT 'Verifying bundles database...';
+SELECT 1 FROM bundles.stable_data_items LIMIT 1;
+SQL
+    
+    if [[ $? -ne 0 ]]; then
+      echo "Error: Failed to initialize DuckDB or attach SQLite databases" >&2
+      exit 1
+    fi
+  else
+    echo "Reusing existing DuckDB database, re-attaching SQLite databases..."
+    duckdb "$TEMP_DB" <<SQL
+INSTALL sqlite;
+LOAD sqlite;
+ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
+ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
+
+-- Verify attachments by checking table existence (much faster than COUNT)
+SELECT 'Verifying core database...';
+SELECT 1 FROM core.stable_blocks LIMIT 1;
+SELECT 'Verifying bundles database...';
+SELECT 1 FROM bundles.stable_data_items LIMIT 1;
+SQL
+    
+    if [[ $? -ne 0 ]]; then
+      echo "Error: Failed to re-attach SQLite databases" >&2
+      exit 1
+    fi
+  fi
+}
+
+# Function to import data for a height range
+import_height_range() {
+  local start_h=$1
+  local end_h=$2
+  
+  echo "Importing data for height range: $start_h to $end_h"
+  
+  # Build and execute import SQL
+  {
+    
+    # Import blocks for this range
+    echo "INSERT INTO blocks"
+    echo "SELECT indep_hash, height, previous_block, nonce, hash, block_timestamp, tx_count, block_size"
+    echo "FROM core.stable_blocks"
+    echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+    
+    # Import L1 transactions if enabled
+    if ! $SKIP_L1_TRANSACTIONS; then
+      cat <<EOS
+INSERT INTO transactions
+SELECT
+  st.id,
+  NULL AS indexed_at,
+  st.block_transaction_index,
+  0 AS is_data_item,
+  st.target,
+  st.quantity,
+  st.reward,
+  st.last_tx as anchor,
+  st.data_size,
+  st.content_type,
+  st.format,
+  st.height,
+  st.owner_address,
+  st.data_root,
+  NULL AS parent,
+  st."offset",
+  NULL AS size,
+  NULL AS data_offset,
+  NULL AS owner_offset,
+  NULL AS owner_size,
+  CASE
+    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
+    ELSE NULL
+  END AS owner,
+  NULL AS signature_offset,
+  NULL AS signature_size,
+  NULL AS signature_type,
+  NULL AS root_transaction_id,
+  NULL AS root_parent_offset
+FROM core.stable_transactions st
+LEFT JOIN core.wallets w ON st.owner_address = w.address
+WHERE st.height BETWEEN ${start_h} AND ${end_h};
+EOS
+    fi
+    
+    # Import data items
+    cat <<EOS
+INSERT INTO transactions
+SELECT
+  sdi.id,
+  sdi.indexed_at,
+  block_transaction_index,
+  1 AS is_data_item,
+  sdi.target,
+  NULL AS quantity,
+  NULL AS reward,
+  sdi.anchor,
+  sdi.data_size,
+  sdi.content_type,
+  NULL AS format,
+  sdi.height,
+  sdi.owner_address,
+  NULL AS data_root,
+  sdi.parent_id AS parent,
+  sdi."offset",
+  sdi.size,
+  sdi.data_offset,
+  sdi.owner_offset,
+  sdi.owner_size,
+  CASE
+    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
+    ELSE NULL
+  END AS owner,
+  sdi.signature_offset,
+  sdi.signature_size,
+  sdi.signature_type,
+  sdi.root_transaction_id,
+  sdi.root_parent_offset
+FROM bundles.stable_data_items sdi
+LEFT JOIN bundles.wallets w ON sdi.owner_address = w.address
+WHERE sdi.height BETWEEN ${start_h} AND ${end_h};
+EOS
+    
+    # Import L1 tags if enabled
+    if ! $SKIP_L1_TAGS; then
+      cat <<EOS
+INSERT INTO tags
+SELECT
+  st.height,
+  st.id,
+  stt.transaction_tag_index AS tag_index,
+  NULL AS indexed_at,
+  tn.name AS tag_name,
+  tv.value AS tag_value,
+  0 AS is_data_item
+FROM core.stable_transactions st
+CROSS JOIN core.stable_transaction_tags stt
+CROSS JOIN core.tag_names tn
+CROSS JOIN core.tag_values tv
+WHERE st.id = stt.transaction_id
+  AND stt.tag_name_hash = tn.hash
+  AND stt.tag_value_hash = tv.hash
+  AND st.height BETWEEN ${start_h} AND ${end_h};
+EOS
+    fi
+    
+    # Import data item tags
+    cat <<EOS
+INSERT INTO tags
+SELECT
+  sdi.height,
+  sdi.id,
+  sdit.data_item_tag_index AS tag_index,
+  sdi.indexed_at,
+  tn.name AS tag_name,
+  tv.value AS tag_value,
+  1 AS is_data_item
+FROM bundles.stable_data_items sdi
+CROSS JOIN bundles.stable_data_item_tags sdit
+CROSS JOIN bundles.tag_names tn
+CROSS JOIN bundles.tag_values tv
+WHERE sdi.id = sdit.data_item_id
+  AND sdit.tag_name_hash = tn.hash
+  AND sdit.tag_value_hash = tv.hash
+  AND sdi.height BETWEEN ${start_h} AND ${end_h};
+EOS
+  } > "$SQL_INIT"
+  
+  # Create a full SQL script with attachments and imports
+  {
+    echo "INSTALL sqlite;"
+    echo "LOAD sqlite;"
+    echo "ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);"
+    echo "ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);"
+    echo ""
+    cat "$SQL_INIT"
+  } > "${SQL_INIT}.with_attach"
+  
+  # Execute the SQL to import data
+  if ! duckdb "$TEMP_DB" < "${SQL_INIT}.with_attach"; then
+    echo "Error: Failed to import data for height range $start_h to $end_h" >&2
+    exit 1
+  fi
+}
+
+# Function to export partition to parquet
+export_partition() {
+  local partition_start=$1
+  local partition_end=$2
+  local partition_dir="height=${partition_start}-${partition_end}"
+  
+  echo "Exporting partition: $partition_dir"
+  
+  # Create partition directories
+  mkdir -p "$JOB_STAGING_DIR"/{blocks,transactions,tags}/"$partition_dir"
+  
+  # Export blocks
+  local block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $partition_start AND height <= $partition_end;")
+  if [[ $block_count -gt 0 ]]; then
+    local block_file="$JOB_STAGING_DIR/blocks/$partition_dir/blocks_${partition_start}_${partition_end}.parquet"
+    duckdb "$TEMP_DB" -c "COPY (SELECT * FROM blocks WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, indep_hash) TO '$block_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+  fi
+  
+  # Export transactions with file splitting if needed
+  local tx_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM transactions WHERE height >= $partition_start AND height <= $partition_end;")
+  if [[ $tx_count -gt 0 ]]; then
+    if [[ $tx_count -le $MAX_FILE_ROWS ]]; then
+      # Single file
+      local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}.parquet"
+      duckdb "$TEMP_DB" -c "COPY (SELECT * FROM transactions WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+    else
+      # Multiple files needed
+      local file_num=0
+      local offset=0
+      while [[ $offset -lt $tx_count ]]; do
+        local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}_${file_num}.parquet"
+        duckdb "$TEMP_DB" -c "COPY (SELECT * FROM transactions WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id LIMIT $MAX_FILE_ROWS OFFSET $offset) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+        offset=$((offset + MAX_FILE_ROWS))
+        file_num=$((file_num + 1))
+      done
+    fi
+  fi
+  
+  # Export tags with file splitting if needed
+  local tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM tags WHERE height >= $partition_start AND height <= $partition_end;")
+  if [[ $tag_count -gt 0 ]]; then
+    if [[ $tag_count -le $MAX_FILE_ROWS ]]; then
+      # Single file
+      local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}.parquet"
+      duckdb "$TEMP_DB" -c "COPY (SELECT * FROM tags WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id, tag_index) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+    else
+      # Multiple files needed
+      local file_num=0
+      local offset=0
+      while [[ $offset -lt $tag_count ]]; do
+        local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}_${file_num}.parquet"
+        duckdb "$TEMP_DB" -c "COPY (SELECT * FROM tags WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id, tag_index LIMIT $MAX_FILE_ROWS OFFSET $offset) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+        offset=$((offset + MAX_FILE_ROWS))
+        file_num=$((file_num + 1))
+      done
+    fi
+  fi
+  
+  # Clear DuckDB tables for next partition to save memory
+  duckdb "$TEMP_DB" -c "DELETE FROM blocks WHERE height >= $partition_start AND height <= $partition_end;"
+  duckdb "$TEMP_DB" -c "DELETE FROM transactions WHERE height >= $partition_start AND height <= $partition_end;"
+  duckdb "$TEMP_DB" -c "DELETE FROM tags WHERE height >= $partition_start AND height <= $partition_end;"
+}
+
+# Main export loop with partitioning
+echo "Starting Parquet export with Iceberg-compatible partitioning"
+echo "Height range: $START_HEIGHT to $END_HEIGHT"
+echo "Partition size: $HEIGHT_PARTITION_SIZE blocks"
+echo "Max file rows: $MAX_FILE_ROWS"
+
+# Initialize database once before processing
+initialize_database
+
+# Process in partitions
+current_partition_start=$((LAST_PROCESSED_HEIGHT + 1))
+
+while [[ $current_partition_start -le $END_HEIGHT ]]; do
+  current_partition_end=$((current_partition_start + HEIGHT_PARTITION_SIZE - 1))
+  if [[ $current_partition_end -gt $END_HEIGHT ]]; then
+    current_partition_end=$END_HEIGHT
+  fi
+  
+  # Import and export this partition
+  import_height_range $current_partition_start $current_partition_end
+  export_partition $current_partition_start $current_partition_end
+  
+  # Save checkpoint
+  save_checkpoint $current_partition_end
+  
+  # Move to warehouse (atomic operation)
+  partition_dir="height=${current_partition_start}-${current_partition_end}"
+  for table in blocks transactions tags; do
+    if [[ -d "$JOB_STAGING_DIR/$table/$partition_dir" ]]; then
+      mkdir -p "$OUTPUT_DIR/$table/data/$partition_dir"
+      mv "$JOB_STAGING_DIR/$table/$partition_dir"/* "$OUTPUT_DIR/$table/data/$partition_dir/" 2>/dev/null || true
+      rmdir "$JOB_STAGING_DIR/$table/$partition_dir" 2>/dev/null || true
+    fi
+  done
+  
+  echo "Completed partition: height=$current_partition_start-$current_partition_end"
+  
+  current_partition_start=$((current_partition_end + 1))
+done
+
+echo "Export completed successfully!"
+echo "Output directory: $OUTPUT_DIR"
+echo "Data is ready for Iceberg schema generation"
+echo ""
+echo "To generate Iceberg metadata, run:"
+echo "  python3 scripts/generate-iceberg-metadata.py --warehouse-dir $OUTPUT_DIR"
