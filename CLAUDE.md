@@ -84,3 +84,25 @@ When adding a new database method:
 
 - After making changes be sure to run 'yarn lint:check'.
 - If lint issues are found, run 'yarn lint:fix' to fix them.
+
+## Reference Repositories
+
+The project includes reference repositories managed by `mr` (myrepos) in the `repos/` directory. These can be used for understanding Arweave internals and related protocols:
+
+- **repos/arweave** - Core Arweave node implementation (Erlang)
+  - Source: https://github.com/ArweaveTeam/arweave
+  - Reference for: Block structure, transaction formats, mining protocols, network protocols
+  
+- **repos/arweave-js** - JavaScript/TypeScript client library for Arweave
+  - Source: https://github.com/ArweaveTeam/arweave-js
+  - Reference for: Transaction creation, signing, API interactions, data formatting
+  
+- **repos/HyperBEAM** - Erlang BEAM VM running in WebAssembly
+  - Source: https://github.com/permaweb/HyperBEAM
+  - Reference for: AO process execution, WASM integration
+  
+- **repos/ao** - The AO computer - Actor Oriented smart contracts on Arweave
+  - Source: https://github.com/permaweb/ao
+  - Reference for: AO protocol, message passing, process scheduling, compute units
+
+Use `mr update` to clone/update these repositories. They are excluded from git tracking via `.gitignore`.

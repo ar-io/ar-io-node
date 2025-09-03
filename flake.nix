@@ -26,6 +26,7 @@
               duckdb
               gnumake
               graphviz
+              mr
               nodePackages.typescript-language-server
               nodejs_20
               openjdk
