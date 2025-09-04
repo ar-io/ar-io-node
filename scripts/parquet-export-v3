@@ -434,7 +434,7 @@ verify_partition_counts() {
     # Check blocks parquet
     if ls "$JOB_STAGING_DIR/blocks/$partition_dir"/*.parquet 1>/dev/null 2>&1; then
       local parquet_blocks=$(duckdb -csv -noheader -c "
-        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/blocks/$partition_dir/*.parquet');
+        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/blocks/$partition_dir/*.parquet', hive_partitioning=false);
       ")
       
       if [[ "$parquet_blocks" != "$duckdb_blocks" ]]; then
@@ -442,6 +442,51 @@ verify_partition_counts() {
         verification_passed=false
       else
         echo "    ✓ Blocks Parquet: $parquet_blocks rows"
+      fi
+      
+      # Verify block uniqueness
+      echo "  Verifying block uniqueness..."
+      
+      # Check block hash uniqueness
+      local hash_dups=$(duckdb -csv -noheader -c "
+        WITH hash_counts AS (
+          SELECT hash, COUNT(*) as cnt
+          FROM read_parquet('$JOB_STAGING_DIR/blocks/$partition_dir/*.parquet', hive_partitioning=false)
+          WHERE hash IS NOT NULL
+          GROUP BY hash
+          HAVING COUNT(*) > 1
+        )
+        SELECT COUNT(*) FROM hash_counts;
+      " 2>/dev/null || echo "error")
+      
+      if [[ "$hash_dups" == "error" ]]; then
+        echo "    ⚠ Could not verify block hash uniqueness"
+      elif [[ "$hash_dups" == "0" ]] || [[ -z "$hash_dups" ]]; then
+        echo "    ✓ All block hashes are unique"
+      else
+        echo "    ✗ Found $hash_dups duplicate block hashes"
+        verification_passed=false
+      fi
+      
+      # Check indep_hash uniqueness
+      local indep_dups=$(duckdb -csv -noheader -c "
+        WITH hash_counts AS (
+          SELECT indep_hash, COUNT(*) as cnt
+          FROM read_parquet('$JOB_STAGING_DIR/blocks/$partition_dir/*.parquet', hive_partitioning=false)
+          WHERE indep_hash IS NOT NULL
+          GROUP BY indep_hash
+          HAVING COUNT(*) > 1
+        )
+        SELECT COUNT(*) FROM hash_counts;
+      " 2>/dev/null || echo "error")
+      
+      if [[ "$indep_dups" == "error" ]]; then
+        echo "    ⚠ Could not verify indep_hash uniqueness"
+      elif [[ "$indep_dups" == "0" ]] || [[ -z "$indep_dups" ]]; then
+        echo "    ✓ All block indep_hashes are unique"
+      else
+        echo "    ✗ Found $indep_dups duplicate indep_hashes"
+        verification_passed=false
       fi
     else
       echo "    WARNING: No blocks Parquet files found!" >&2
@@ -457,18 +502,48 @@ verify_partition_counts() {
     # Check if any parquet files exist
     if ls "$JOB_STAGING_DIR/transactions/$partition_dir"/*.parquet 1>/dev/null 2>&1; then
       local parquet_tx=$(duckdb -csv -noheader -c "
-        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/transactions/$partition_dir/*.parquet');
+        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/transactions/$partition_dir/*.parquet', hive_partitioning=false);
       ")
+      
+      if [[ "$parquet_tx" != "$expected_tx_count" ]]; then
+        echo "    ERROR: Transactions Parquet count mismatch! Expected: $expected_tx_count, Found: $parquet_tx" >&2
+        verification_passed=false
+      else
+        echo "    ✓ Transactions Parquet: $parquet_tx rows"
+      fi
+      
+      # Verify transaction ID uniqueness if there are transactions
+      if [[ "$parquet_tx" != "0" ]]; then
+        echo "  Verifying transaction uniqueness..."
+        local id_dups=$(duckdb -csv -noheader -c "
+          WITH id_counts AS (
+            SELECT id, COUNT(*) as cnt
+            FROM read_parquet('$JOB_STAGING_DIR/transactions/$partition_dir/*.parquet', hive_partitioning=false)
+            WHERE id IS NOT NULL
+            GROUP BY id
+            HAVING COUNT(*) > 1
+          )
+          SELECT COUNT(*) FROM id_counts;
+        " 2>/dev/null || echo "error")
+        
+        if [[ "$id_dups" == "error" ]]; then
+          echo "    ⚠ Could not verify transaction ID uniqueness"
+        elif [[ "$id_dups" == "0" ]] || [[ -z "$id_dups" ]]; then
+          echo "    ✓ All transaction IDs are unique"
+        else
+          echo "    ✗ Found $id_dups duplicate transaction IDs"
+          verification_passed=false
+        fi
+      fi
     else
       # No files means 0 rows (which is valid if expected_tx_count is also 0)
       local parquet_tx=0
-    fi
-    
-    if [[ "$parquet_tx" != "$expected_tx_count" ]]; then
-      echo "    ERROR: Transactions Parquet count mismatch! Expected: $expected_tx_count, Found: $parquet_tx" >&2
-      verification_passed=false
-    else
-      echo "    ✓ Transactions Parquet: $parquet_tx rows"
+      if [[ "$parquet_tx" != "$expected_tx_count" ]]; then
+        echo "    ERROR: Transactions Parquet count mismatch! Expected: $expected_tx_count, Found: $parquet_tx" >&2
+        verification_passed=false
+      else
+        echo "    ✓ Transactions Parquet: $parquet_tx rows"
+      fi
     fi
     
     # Check tags parquet
@@ -480,7 +555,7 @@ verify_partition_counts() {
     # Check if any parquet files exist
     if ls "$JOB_STAGING_DIR/tags/$partition_dir"/*.parquet 1>/dev/null 2>&1; then
       local parquet_tags=$(duckdb -csv -noheader -c "
-        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/tags/$partition_dir/*.parquet');
+        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/tags/$partition_dir/*.parquet', hive_partitioning=false);
       ")
     else
       # No files means 0 rows (which is valid if expected_tags_count is also 0)
