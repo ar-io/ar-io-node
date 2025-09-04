@@ -38,8 +38,8 @@ echo "Test 1: Running parquet-export with ClickHouse integration..."
     --endHeight "$END_HEIGHT" \
     --heightPartitionSize "$PARTITION_SIZE" \
     --outputDir "$TEST_DIR" \
-    --includeL2Transactions \
-    --includeL2Tags \
+    --includeL1Transactions \
+    --includeL1Tags \
     --enableClickhouse \
     --clickhouseHost "$CLICKHOUSE_HOST" \
     --clickhousePort "$CLICKHOUSE_PORT" \
@@ -110,8 +110,8 @@ echo "Running export again (should resume from checkpoint)..."
     --endHeight "$END_HEIGHT" \
     --heightPartitionSize "$PARTITION_SIZE" \
     --outputDir "$TEST_DIR" \
-    --includeL2Transactions \
-    --includeL2Tags \
+    --includeL1Transactions \
+    --includeL1Tags \
     --enableClickhouse \
     --clickhouseHost "$CLICKHOUSE_HOST" \
     --clickhousePort "$CLICKHOUSE_PORT" \
