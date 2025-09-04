@@ -8,7 +8,7 @@ echo
 rm -rf data/test-timing
 
 # Test with timing enabled for a small range
-./scripts/parquet-export-v3 \
+./scripts/parquet-export \
   --startHeight 1718100 \
   --endHeight 1718105 \
   --heightPartitionSize 2 \
