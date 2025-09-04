@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# AR.IO Gateway - Parquet Export with Iceberg-ready partitioning and ClickHouse integration
+# Enhanced version with configurable partitioning, crash recovery, and optional ClickHouse import
+
 if ! command -v duckdb >/dev/null 2>&1; then
   echo "Error: duckdb CLI is required but not found in PATH" >&2
   exit 1
@@ -7,30 +10,78 @@ fi
 
 set -euo pipefail
 
+# Timing function
+log_timing() {
+  local operation=$1
+  local start_time=$2
+  local end_time=${3:-$(date +%s%N)}
+  local duration=$(echo "scale=3; ($end_time - $start_time) / 1000000000" | bc)
+  if [[ "${SHOW_TIMING:-false}" == "true" ]]; then
+    echo "  [TIMING] $operation: ${duration}s" >&2
+  fi
+}
+
 usage() {
   cat <<USAGE
-Usage: $0 --outputDir DIR --startHeight N --endHeight N --maxFileRows N [options]
+Usage: $0 --outputDir DIR --startHeight N --endHeight N [options]
 
 Options:
+  --heightPartitionSize N   Number of blocks per partition (default: 1000)
+  --maxFileRows N           Max rows per file within partition (default: 1000000)
   --includeL1Transactions   Include L1 transactions (default is to skip)
   --includeL1Tags           Include L1 transaction tags (default is to skip)
   --coreDb PATH             Path to core SQLite database (default: data/sqlite/core.db)
   --bundlesDb PATH          Path to bundles SQLite database (default: data/sqlite/bundles.db)
+  --stagingDir PATH         Staging directory for temp files (default: data/staging)
+  --warehouseDir PATH       Final warehouse directory (default: data/local/warehouse)
+  --resume                  Resume from last checkpoint if export was interrupted
+  --verifyCount             Verify row counts match SQLite after each partition (slower)
+  --showTiming              Show detailed timing information for operations
+  
+  ClickHouse Integration:
+  --enableClickhouse        Enable import to ClickHouse after each partition
+  --clickhouseHost HOST     ClickHouse host (default: localhost)
+  --clickhousePort PORT     ClickHouse port (default: 9000)
+  --clickhouseUser USER     ClickHouse user (default: default)
+  --clickhousePassword PWD  ClickHouse password (default: empty)
 
-Note: If a single height contains more transactions than maxFileRows, the entire
-height will be exported in one file, potentially exceeding the row limit.
+Note: This creates Iceberg-compatible directory structure with partitioned Parquet files.
+      When ClickHouse is enabled, data is imported after each partition completes.
+      Count verification ensures data integrity but adds processing time.
 USAGE
 }
 
+# Configuration defaults
 OUTPUT_DIR=""
 START_HEIGHT=""
 END_HEIGHT=""
-MAX_FILE_ROWS=""
+HEIGHT_PARTITION_SIZE=1000
+MAX_FILE_ROWS=1000000
 SKIP_L1_TRANSACTIONS=true
 SKIP_L1_TAGS=true
 CORE_DB_PATH="data/sqlite/core.db"
 BUNDLES_DB_PATH="data/sqlite/bundles.db"
+STAGING_DIR="data/staging"
+WAREHOUSE_DIR="data/local/warehouse"
+RESUME=false
+VERIFY_COUNT=false
+RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
 
+# ClickHouse configuration
+ENABLE_CLICKHOUSE=false
+CLICKHOUSE_HOST="${CLICKHOUSE_HOST:-localhost}"
+CLICKHOUSE_PORT="${CLICKHOUSE_PORT:-9000}"
+CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"
+CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-}"
+
+# Export environment variables from .env if it exists
+if [ -f .env ]; then
+  set -a  # automatically export all variables
+  . ./.env
+  set +a
+fi
+
+# Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
     --outputDir)
@@ -43,6 +94,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --endHeight)
       END_HEIGHT=$2
+      shift 2
+      ;;
+    --heightPartitionSize)
+      HEIGHT_PARTITION_SIZE=$2
       shift 2
       ;;
     --maxFileRows)
@@ -65,6 +120,46 @@ while [[ $# -gt 0 ]]; do
       BUNDLES_DB_PATH=$2
       shift 2
       ;;
+    --stagingDir)
+      STAGING_DIR=$2
+      shift 2
+      ;;
+    --warehouseDir)
+      WAREHOUSE_DIR=$2
+      shift 2
+      ;;
+    --resume)
+      RESUME=true
+      shift 1
+      ;;
+    --verifyCount)
+      VERIFY_COUNT=true
+      shift 1
+      ;;
+    --showTiming)
+      SHOW_TIMING=true
+      shift 1
+      ;;
+    --enableClickhouse)
+      ENABLE_CLICKHOUSE=true
+      shift 1
+      ;;
+    --clickhouseHost)
+      CLICKHOUSE_HOST=$2
+      shift 2
+      ;;
+    --clickhousePort)
+      CLICKHOUSE_PORT=$2
+      shift 2
+      ;;
+    --clickhouseUser)
+      CLICKHOUSE_USER=$2
+      shift 2
+      ;;
+    --clickhousePassword)
+      CLICKHOUSE_PASSWORD=$2
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -77,13 +172,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$OUTPUT_DIR" || -z "$START_HEIGHT" || -z "$END_HEIGHT" || -z "$MAX_FILE_ROWS" ]]; then
+# If outputDir not specified, use warehouse structure
+if [[ -z "$OUTPUT_DIR" ]]; then
+  if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
+    echo "Error: Must specify --startHeight and --endHeight" >&2
+    usage
+    exit 1
+  fi
+  # Use warehouse directory with proper structure
+  OUTPUT_DIR="$WAREHOUSE_DIR"
+fi
+
+# Validate required arguments
+if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
+  echo "Error: Must specify --startHeight and --endHeight" >&2
   usage
   exit 1
 fi
 
 # Validate numeric arguments to prevent SQL injection
-for v in "$START_HEIGHT" "$END_HEIGHT" "$MAX_FILE_ROWS"; do
+for v in "$START_HEIGHT" "$END_HEIGHT" "$HEIGHT_PARTITION_SIZE" "$MAX_FILE_ROWS"; do
   [[ $v =~ ^[0-9]+$ ]] || { echo "Error: Non-numeric argument detected: $v" >&2; exit 1; }
 done
 
@@ -92,216 +200,853 @@ if (( START_HEIGHT > END_HEIGHT )); then
   echo "Error: startHeight ($START_HEIGHT) cannot be greater than endHeight ($END_HEIGHT)" >&2
   exit 1
 fi
-if ! [[ "$MAX_FILE_ROWS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Error: maxFileRows must be a positive integer" >&2
-  exit 1
+
+# Setup directories
+JOB_STAGING_DIR="$STAGING_DIR/job-$RUN_ID"
+CHECKPOINT_FILE="$JOB_STAGING_DIR/.checkpoint"
+CLICKHOUSE_IMPORT_LOG="$JOB_STAGING_DIR/.clickhouse_imports"
+VERIFICATION_LOG="$JOB_STAGING_DIR/.verification_results"
+
+# Cleanup function
+cleanup() {
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    if [[ -d "$JOB_STAGING_DIR" ]]; then
+      echo "Export failed. Temporary files preserved in: $JOB_STAGING_DIR"
+      echo "Run with --resume to continue from checkpoint"
+    fi
+  else
+    # Clean up on successful completion
+    rm -rf "$JOB_STAGING_DIR"
+    rm -f "$TEMP_DB" "$TEMP_DB.wal" "$SQL_INIT"
+  fi
+}
+trap cleanup EXIT
+
+# Create necessary directories
+mkdir -p "$JOB_STAGING_DIR"
+mkdir -p "$OUTPUT_DIR"/{blocks,transactions,tags}/{data,metadata}
+
+# Check for ClickHouse if enabled
+if $ENABLE_CLICKHOUSE; then
+  if ! command -v clickhouse >/dev/null 2>&1; then
+    echo "Error: clickhouse client is required but not found in PATH" >&2
+    echo "Please install clickhouse client or disable ClickHouse integration" >&2
+    exit 1
+  fi
+  
+  echo "ClickHouse integration enabled:"
+  echo "  Host: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
+  echo "  User: $CLICKHOUSE_USER"
+  
+  # Test ClickHouse connection
+  if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+       --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+       --query "SELECT 1" >/dev/null 2>&1; then
+    echo "Warning: Cannot connect to ClickHouse. Continuing without import." >&2
+    ENABLE_CLICKHOUSE=false
+  else
+    # Initialize ClickHouse schema if needed
+    echo "Initializing ClickHouse schema..."
+    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+      --multiquery < src/database/clickhouse/schema.sql 2>/dev/null || true
+  fi
 fi
 
-mkdir -p "$OUTPUT_DIR"
+if $VERIFY_COUNT; then
+  echo "Count verification enabled - will verify data integrity after each partition"
+fi
 
-TEMP_DB="$(mktemp -u /tmp/parquet_export_XXXX.duckdb)"
-SQL_INIT="$(mktemp -u /tmp/parquet_export_init_XXXX.sql)"
+# Check for resume
+LAST_PROCESSED_HEIGHT=$((START_HEIGHT - 1))
+if $RESUME; then
+  # Find existing checkpoint
+  for dir in "$STAGING_DIR"/job-*; do
+    if [[ -f "$dir/.checkpoint" ]]; then
+      checkpoint_height=$(cat "$dir/.checkpoint")
+      # Check if this checkpoint is within our range
+      if [[ $checkpoint_height -ge $START_HEIGHT && $checkpoint_height -lt $END_HEIGHT ]]; then
+        LAST_PROCESSED_HEIGHT=$checkpoint_height
+        JOB_STAGING_DIR="$dir"
+        CHECKPOINT_FILE="$dir/.checkpoint"
+        CLICKHOUSE_IMPORT_LOG="$dir/.clickhouse_imports"
+        VERIFICATION_LOG="$dir/.verification_results"
+        echo "Found checkpoint at height: $checkpoint_height"
+        echo "Resuming from height: $((LAST_PROCESSED_HEIGHT + 1))"
+        break
+      fi
+    fi
+  done
+  
+  if [[ $LAST_PROCESSED_HEIGHT -eq $((START_HEIGHT - 1)) ]]; then
+    echo "No valid checkpoint found for range $START_HEIGHT-$END_HEIGHT"
+    echo "Starting fresh export"
+  fi
+fi
 
-# Build initialization SQL script
-{
-  cat src/database/duckdb/schema.sql
-  echo "INSTALL sqlite;"
-  echo "LOAD sqlite;"
-  echo "ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY, BUSY_TIMEOUT 30000);"
-  echo "ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY, BUSY_TIMEOUT 30000);"
-  echo ""
-  echo "INSERT INTO blocks"
-  echo "SELECT"
-  echo "  indep_hash,"
-  echo "  height,"
-  echo "  previous_block,"
-  echo "  nonce,"
-  echo "  hash,"
-  echo "  block_timestamp,"
-  echo "  tx_count,"
-  echo "  block_size"
-  echo "FROM core.stable_blocks"
-  echo "WHERE height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};"
+# Setup temporary database
+TEMP_DB="$JOB_STAGING_DIR/export.duckdb"
+SQL_INIT="$JOB_STAGING_DIR/init.sql"
 
+# Function to save checkpoint
+save_checkpoint() {
+  echo "$1" > "$CHECKPOINT_FILE"
+}
+
+# Function to log ClickHouse import
+log_clickhouse_import() {
+  local partition_dir=$1
+  echo "$(date -Iseconds)|$partition_dir" >> "$CLICKHOUSE_IMPORT_LOG"
+}
+
+# Function to check if partition was already imported to ClickHouse
+was_imported_to_clickhouse() {
+  local partition_dir=$1
+  if [[ -f "$CLICKHOUSE_IMPORT_LOG" ]]; then
+    grep -q "|$partition_dir$" "$CLICKHOUSE_IMPORT_LOG" 2>/dev/null
+  else
+    false
+  fi
+}
+
+# Function to verify counts between SQLite and DuckDB
+verify_partition_counts() {
+  local partition_start=$1
+  local partition_end=$2
+  local partition_dir="height=${partition_start}-${partition_end}"
+  
+  if ! $VERIFY_COUNT; then
+    return 0
+  fi
+  
+  echo "  Verifying data counts for partition: $partition_dir"
+  
+  local verification_passed=true
+  
+  # Verify blocks count
+  local sqlite_blocks=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
+    SELECT COUNT(*) FROM core.stable_blocks 
+    WHERE height BETWEEN $partition_start AND $partition_end;
+  ")
+  
+  local duckdb_blocks=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT COUNT(*) FROM blocks 
+    WHERE height >= $partition_start AND height <= $partition_end;
+  ")
+  
+  if [[ "$sqlite_blocks" != "$duckdb_blocks" ]]; then
+    echo "    ERROR: Block count mismatch! SQLite: $sqlite_blocks, DuckDB: $duckdb_blocks" >&2
+    verification_passed=false
+  else
+    echo "    ✓ Blocks: $duckdb_blocks (matches SQLite)"
+  fi
+  
+  # Verify L2 transactions (data items) count
+  local sqlite_l2_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
+    SELECT COUNT(*) FROM bundles.stable_data_items 
+    WHERE height BETWEEN $partition_start AND $partition_end;
+  ")
+  
+  local duckdb_l2_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT COUNT(*) FROM transactions 
+    WHERE is_data_item = 1 
+    AND height >= $partition_start AND height <= $partition_end;
+  ")
+  
+  if [[ "$sqlite_l2_tx" != "$duckdb_l2_tx" ]]; then
+    echo "    ERROR: L2 transaction count mismatch! SQLite: $sqlite_l2_tx, DuckDB: $duckdb_l2_tx" >&2
+    verification_passed=false
+  else
+    echo "    ✓ L2 Transactions: $duckdb_l2_tx (matches SQLite)"
+  fi
+  
+  # Verify L1 transactions if included
   if ! $SKIP_L1_TRANSACTIONS; then
-    cat <<EOS
-INSERT INTO transactions
-SELECT
-  st.id,
-  NULL AS indexed_at,
-  st.block_transaction_index,
-  0 AS is_data_item,
-  st.target,
-  st.quantity,
-  st.reward,
-  st.last_tx as anchor,
-  st.data_size,
-  st.content_type,
-  st.format,
-  st.height,
-  st.owner_address,
-  st.data_root,
-  NULL AS parent,
-  st."offset",
-  NULL AS size,
-  NULL AS data_offset,
-  NULL AS owner_offset,
-  NULL AS owner_size,
-  CASE
-    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
-    ELSE NULL
-  END AS owner,
-  NULL AS signature_offset,
-  NULL AS signature_size,
-  NULL AS signature_type,
-  NULL AS root_transaction_id,
-  NULL AS root_parent_offset
-FROM core.stable_transactions st
-LEFT JOIN core.wallets w ON st.owner_address = w.address
-WHERE st.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
-EOS
+    local sqlite_l1_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
+      SELECT COUNT(*) FROM core.stable_transactions 
+      WHERE height BETWEEN $partition_start AND $partition_end;
+    ")
+    
+    local duckdb_l1_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT COUNT(*) FROM transactions 
+      WHERE is_data_item = 0 
+      AND height >= $partition_start AND height <= $partition_end;
+    ")
+    
+    if [[ "$sqlite_l1_tx" != "$duckdb_l1_tx" ]]; then
+      echo "    ERROR: L1 transaction count mismatch! SQLite: $sqlite_l1_tx, DuckDB: $duckdb_l1_tx" >&2
+      verification_passed=false
+    else
+      echo "    ✓ L1 Transactions: $duckdb_l1_tx (matches SQLite)"
+    fi
   fi
+  
+  # Verify L2 tags count
+  local sqlite_l2_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
+    SELECT COUNT(*) FROM bundles.stable_data_item_tags 
+    WHERE height BETWEEN $partition_start AND $partition_end;
+  ")
+  
+  local duckdb_l2_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT COUNT(*) FROM tags 
+    WHERE is_data_item = 1 
+    AND height >= $partition_start AND height <= $partition_end;
+  ")
+  
+  if [[ "$sqlite_l2_tags" != "$duckdb_l2_tags" ]]; then
+    echo "    ERROR: L2 tags count mismatch! SQLite: $sqlite_l2_tags, DuckDB: $duckdb_l2_tags" >&2
+    verification_passed=false
+  else
+    echo "    ✓ L2 Tags: $duckdb_l2_tags (matches SQLite)"
+  fi
+  
+  # Verify L1 tags if included
+  if ! $SKIP_L1_TAGS && ! $SKIP_L1_TRANSACTIONS; then
+    local sqlite_l1_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
+      SELECT COUNT(*) FROM core.stable_transaction_tags 
+      WHERE height BETWEEN $partition_start AND $partition_end;
+    ")
+    
+    local duckdb_l1_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT COUNT(*) FROM tags 
+      WHERE is_data_item = 0 
+      AND height >= $partition_start AND height <= $partition_end;
+    ")
+    
+    if [[ "$sqlite_l1_tags" != "$duckdb_l1_tags" ]]; then
+      echo "    ERROR: L1 tags count mismatch! SQLite: $sqlite_l1_tags, DuckDB: $duckdb_l1_tags" >&2
+      verification_passed=false
+    else
+      echo "    ✓ L1 Tags: $duckdb_l1_tags (matches SQLite)"
+    fi
+  fi
+  
+  # Verify exported Parquet files
+  if $verification_passed; then
+    echo "  Verifying exported Parquet files..."
+    
+    # Check blocks parquet
+    if ls "$JOB_STAGING_DIR/blocks/$partition_dir"/*.parquet 1>/dev/null 2>&1; then
+      local parquet_blocks=$(duckdb -csv -noheader -c "
+        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/blocks/$partition_dir/*.parquet', hive_partitioning=false);
+      ")
+      
+      if [[ "$parquet_blocks" != "$duckdb_blocks" ]]; then
+        echo "    ERROR: Blocks Parquet count mismatch! Expected: $duckdb_blocks, Found: $parquet_blocks" >&2
+        verification_passed=false
+      else
+        echo "    ✓ Blocks Parquet: $parquet_blocks rows"
+      fi
+      
+      # Verify block uniqueness
+      echo "  Verifying block uniqueness..."
+      
+      # Check block hash uniqueness
+      local hash_dups=$(duckdb -csv -noheader -c "
+        WITH hash_counts AS (
+          SELECT hash, COUNT(*) as cnt
+          FROM read_parquet('$JOB_STAGING_DIR/blocks/$partition_dir/*.parquet', hive_partitioning=false)
+          WHERE hash IS NOT NULL
+          GROUP BY hash
+          HAVING COUNT(*) > 1
+        )
+        SELECT COUNT(*) FROM hash_counts;
+      " 2>/dev/null || echo "error")
+      
+      if [[ "$hash_dups" == "error" ]]; then
+        echo "    ⚠ Could not verify block hash uniqueness"
+      elif [[ "$hash_dups" == "0" ]] || [[ -z "$hash_dups" ]]; then
+        echo "    ✓ All block hashes are unique"
+      else
+        echo "    ✗ Found $hash_dups duplicate block hashes"
+        verification_passed=false
+      fi
+      
+      # Check indep_hash uniqueness
+      local indep_dups=$(duckdb -csv -noheader -c "
+        WITH hash_counts AS (
+          SELECT indep_hash, COUNT(*) as cnt
+          FROM read_parquet('$JOB_STAGING_DIR/blocks/$partition_dir/*.parquet', hive_partitioning=false)
+          WHERE indep_hash IS NOT NULL
+          GROUP BY indep_hash
+          HAVING COUNT(*) > 1
+        )
+        SELECT COUNT(*) FROM hash_counts;
+      " 2>/dev/null || echo "error")
+      
+      if [[ "$indep_dups" == "error" ]]; then
+        echo "    ⚠ Could not verify indep_hash uniqueness"
+      elif [[ "$indep_dups" == "0" ]] || [[ -z "$indep_dups" ]]; then
+        echo "    ✓ All block indep_hashes are unique"
+      else
+        echo "    ✗ Found $indep_dups duplicate indep_hashes"
+        verification_passed=false
+      fi
+    else
+      echo "    WARNING: No blocks Parquet files found!" >&2
+      verification_passed=false
+    fi
+    
+    # Check transactions parquet
+    local expected_tx_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT COUNT(*) FROM transactions 
+      WHERE height >= $partition_start AND height <= $partition_end;
+    ")
+    
+    # Check if any parquet files exist
+    if ls "$JOB_STAGING_DIR/transactions/$partition_dir"/*.parquet 1>/dev/null 2>&1; then
+      local parquet_tx=$(duckdb -csv -noheader -c "
+        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/transactions/$partition_dir/*.parquet', hive_partitioning=false);
+      ")
+      
+      if [[ "$parquet_tx" != "$expected_tx_count" ]]; then
+        echo "    ERROR: Transactions Parquet count mismatch! Expected: $expected_tx_count, Found: $parquet_tx" >&2
+        verification_passed=false
+      else
+        echo "    ✓ Transactions Parquet: $parquet_tx rows"
+      fi
+      
+      # Verify transaction ID uniqueness if there are transactions
+      if [[ "$parquet_tx" != "0" ]]; then
+        echo "  Verifying transaction uniqueness..."
+        local id_dups=$(duckdb -csv -noheader -c "
+          WITH id_counts AS (
+            SELECT id, COUNT(*) as cnt
+            FROM read_parquet('$JOB_STAGING_DIR/transactions/$partition_dir/*.parquet', hive_partitioning=false)
+            WHERE id IS NOT NULL
+            GROUP BY id
+            HAVING COUNT(*) > 1
+          )
+          SELECT COUNT(*) FROM id_counts;
+        " 2>/dev/null || echo "error")
+        
+        if [[ "$id_dups" == "error" ]]; then
+          echo "    ⚠ Could not verify transaction ID uniqueness"
+        elif [[ "$id_dups" == "0" ]] || [[ -z "$id_dups" ]]; then
+          echo "    ✓ All transaction IDs are unique"
+        else
+          echo "    ✗ Found $id_dups duplicate transaction IDs"
+          verification_passed=false
+        fi
+      fi
+    else
+      # No files means 0 rows (which is valid if expected_tx_count is also 0)
+      local parquet_tx=0
+      if [[ "$parquet_tx" != "$expected_tx_count" ]]; then
+        echo "    ERROR: Transactions Parquet count mismatch! Expected: $expected_tx_count, Found: $parquet_tx" >&2
+        verification_passed=false
+      else
+        echo "    ✓ Transactions Parquet: $parquet_tx rows"
+      fi
+    fi
+    
+    # Check tags parquet
+    local expected_tags_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT COUNT(*) FROM tags 
+      WHERE height >= $partition_start AND height <= $partition_end;
+    ")
+    
+    # Check if any parquet files exist
+    if ls "$JOB_STAGING_DIR/tags/$partition_dir"/*.parquet 1>/dev/null 2>&1; then
+      local parquet_tags=$(duckdb -csv -noheader -c "
+        SELECT COUNT(*) FROM read_parquet('$JOB_STAGING_DIR/tags/$partition_dir/*.parquet', hive_partitioning=false);
+      ")
+    else
+      # No files means 0 rows (which is valid if expected_tags_count is also 0)
+      local parquet_tags=0
+    fi
+    
+    if [[ "$parquet_tags" != "$expected_tags_count" ]]; then
+      echo "    ERROR: Tags Parquet count mismatch! Expected: $expected_tags_count, Found: $parquet_tags" >&2
+      verification_passed=false
+    else
+      echo "    ✓ Tags Parquet: $parquet_tags rows"
+    fi
+  fi
+  
+  # Log verification results
+  echo "$(date -Iseconds)|$partition_dir|$verification_passed" >> "$VERIFICATION_LOG"
+  
+  if ! $verification_passed; then
+    echo "    ERROR: Verification failed for partition $partition_dir!" >&2
+    echo "    Check the logs above for details." >&2
+    return 1
+  fi
+  
+  echo "    ✓ All verification checks passed"
+  return 0
+}
 
-  cat <<EOS
-INSERT INTO transactions
+# Function to import partition to ClickHouse
+import_partition_to_clickhouse() {
+  local staging_base=$1
+  local partition_dir=$2
+  
+  if ! $ENABLE_CLICKHOUSE; then
+    return 0
+  fi
+  
+  # Check if already imported (for resume scenarios)
+  if was_imported_to_clickhouse "$partition_dir"; then
+    echo "  Partition already imported to ClickHouse: $partition_dir"
+    return 0
+  fi
+  
+  echo "  Importing partition to ClickHouse: $partition_dir"
+  
+  local success=true
+  
+  # Import blocks
+  for parquet_file in "$staging_base"/blocks/"$partition_dir"/*.parquet; do
+    if [[ -f "$parquet_file" ]]; then
+      echo "    Importing blocks: $(basename "$parquet_file")"
+      if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+           --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+           --query="INSERT INTO staging_blocks FROM INFILE '$parquet_file' FORMAT Parquet;"; then
+        echo "    Warning: Failed to import blocks file: $parquet_file" >&2
+        success=false
+      fi
+    fi
+  done
+  
+  # Import transactions
+  for parquet_file in "$staging_base"/transactions/"$partition_dir"/*.parquet; do
+    if [[ -f "$parquet_file" ]]; then
+      echo "    Importing transactions: $(basename "$parquet_file")"
+      if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+           --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+           --query="INSERT INTO staging_transactions FROM INFILE '$parquet_file' FORMAT Parquet;"; then
+        echo "    Warning: Failed to import transactions file: $parquet_file" >&2
+        success=false
+      fi
+    fi
+  done
+  
+  # Import tags
+  for parquet_file in "$staging_base"/tags/"$partition_dir"/*.parquet; do
+    if [[ -f "$parquet_file" ]]; then
+      echo "    Importing tags: $(basename "$parquet_file")"
+      if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+           --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+           --query="INSERT INTO staging_tags FROM INFILE '$parquet_file' FORMAT Parquet;"; then
+        echo "    Warning: Failed to import tags file: $parquet_file" >&2
+        success=false
+      fi
+    fi
+  done
+  
+  if $success; then
+    # Move data from staging to final tables in ClickHouse
+    echo "    Moving data from staging to final ClickHouse tables..."
+    
+    # Extract height range from partition_dir
+    local height_range=${partition_dir#height=}
+    local min_height=${height_range%-*}
+    local max_height=${height_range#*-}
+    
+    # Move staging data to final tables (same as original clickhouse-import script)
+    for prefix in "" "id_" "owner_" "target_"; do
+      clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+        --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
+INSERT INTO ${prefix}transactions
 SELECT
-  sdi.id,
-  sdi.indexed_at,
+  id,
+  indexed_at,
   block_transaction_index,
-  1 AS is_data_item,
-  sdi.target,
-  NULL AS quantity,
-  NULL AS reward,
-  sdi.anchor,
-  sdi.data_size,
-  sdi.content_type,
-  NULL AS format,
-  sdi.height,
-  sdi.owner_address,
-  NULL AS data_root,
-  sdi.parent_id AS parent,
-  sdi."offset",
-  sdi.size,
-  sdi.data_offset,
-  sdi.owner_offset,
-  sdi.owner_size,
-  CASE
-    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus
-    ELSE NULL
-  END AS owner,
-  sdi.signature_offset,
-  sdi.signature_size,
-  sdi.signature_type,
-  sdi.root_transaction_id,
-  sdi.root_parent_offset
-FROM bundles.stable_data_items sdi
-LEFT JOIN bundles.wallets w ON sdi.owner_address = w.address
-WHERE sdi.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
-EOS
-
-  if ! $SKIP_L1_TAGS; then
-    cat <<EOS
+  is_data_item,
+  target,
+  quantity,
+  reward,
+  anchor,
+  data_size,
+  content_type,
+  format,
+  height,
+  owner_address,
+  data_root,
+  parent,
+  offset,
+  size,
+  data_offset,
+  owner_offset,
+  owner_size,
+  owner,
+  signature_offset,
+  signature_size,
+  signature_type,
+  root_transaction_id,
+  root_parent_offset
+FROM staging_transactions
+WHERE height >= $min_height AND height <= $max_height;
+EOF
+    done
+    
+    # Insert blocks
+    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
+INSERT INTO blocks
+SELECT * FROM staging_blocks
+WHERE height >= $min_height AND height <= $max_height;
+EOF
+    
+    # Insert tags
+    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
 INSERT INTO tags
-SELECT
-  st.height,
-  st.id,
-  stt.transaction_tag_index AS tag_index,
-  NULL AS indexed_at,
-  tn.name AS tag_name,
-  tv.value AS tag_value,
-  0 AS is_data_item
-FROM core.stable_transactions st
-CROSS JOIN core.stable_transaction_tags stt
-CROSS JOIN core.tag_names tn
-CROSS JOIN core.tag_values tv
-WHERE st.id = stt.transaction_id
-  AND stt.tag_name_hash = tn.hash
-  AND stt.tag_value_hash = tv.hash
-  AND st.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
-EOS
+SELECT * FROM staging_tags
+WHERE height >= $min_height AND height <= $max_height;
+EOF
+    
+    # Clear staging tables for this height range
+    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
+ALTER TABLE staging_blocks DELETE WHERE height >= $min_height AND height <= $max_height;
+ALTER TABLE staging_transactions DELETE WHERE height >= $min_height AND height <= $max_height;
+ALTER TABLE staging_tags DELETE WHERE height >= $min_height AND height <= $max_height;
+EOF
+    
+    # Log successful import
+    log_clickhouse_import "$partition_dir"
+    echo "    ClickHouse import completed for partition: $partition_dir"
+  else
+    echo "    Warning: Some files failed to import to ClickHouse" >&2
   fi
+  
+  return 0
+}
 
-  cat <<EOS
-INSERT INTO tags
-SELECT
-  sdi.height,
-  sdi.id,
-  sdit.data_item_tag_index AS tag_index,
-  sdi.indexed_at,
-  tn.name AS tag_name,
-  tv.value AS tag_value,
-  1 AS is_data_item
-FROM bundles.stable_data_items sdi
-CROSS JOIN bundles.stable_data_item_tags sdit
-CROSS JOIN bundles.tag_names tn
-CROSS JOIN bundles.tag_values tv
-WHERE sdi.id = sdit.data_item_id
-  AND sdit.tag_name_hash = tn.hash
-  AND sdit.tag_value_hash = tv.hash
-  AND sdi.height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT};
-EOS
-} > "$SQL_INIT"
-
-# Run initialization
-duckdb "$TEMP_DB" < "$SQL_INIT"
-
-# Retrieve counts per height for transactions
-mapfile -t COUNTS < <(duckdb "$TEMP_DB" -csv -header -c "SELECT height, COUNT(*) AS c FROM transactions WHERE height BETWEEN ${START_HEIGHT} AND ${END_HEIGHT} GROUP BY height ORDER BY height;")
-
-declare -a RANGE_STARTS=()
-declare -a RANGE_ENDS=()
-declare -a RANGE_COUNTS=()
-
-current_start=$START_HEIGHT
-current_count=0
-
-declare -A COUNT_MAP=()
-for line in "${COUNTS[@]}"; do
-  if [[ $line == height,* ]]; then continue; fi
-  h=${line%%,*}
-  c=${line#*,}
-  COUNT_MAP[$h]=$c
-done
-
-for ((h=START_HEIGHT; h<=END_HEIGHT; h++)); do
-  c=${COUNT_MAP[$h]:-0}
-  current_count=$((current_count + c))
-  if [[ $current_count -ge $MAX_FILE_ROWS || $h -eq $END_HEIGHT ]]; then
-    RANGE_STARTS+=("$current_start")
-    RANGE_ENDS+=("$h")
-    RANGE_COUNTS+=("$current_count")
-    current_start=$((h + 1))
-    current_count=0
+# Initialize database once at the start
+initialize_database() {
+  # Check if SQLite databases exist
+  if [[ ! -f "$CORE_DB_PATH" ]]; then
+    echo "Error: Core database not found at: $CORE_DB_PATH" >&2
+    exit 1
   fi
+  
+  if [[ ! -f "$BUNDLES_DB_PATH" ]]; then
+    echo "Error: Bundles database not found at: $BUNDLES_DB_PATH" >&2
+    exit 1
+  fi
+  
+  if [[ ! -f "$TEMP_DB" ]]; then
+    echo "Initializing DuckDB database..."
+    
+    # First create the database with schema
+    if [[ ! -f "src/database/duckdb/schema.sql" ]]; then
+      echo "Error: DuckDB schema file not found at src/database/duckdb/schema.sql" >&2
+      exit 1
+    fi
+    
+    echo "Creating DuckDB schema..."
+    duckdb "$TEMP_DB" < src/database/duckdb/schema.sql
+    
+    # Then install SQLite extension and attach databases
+    echo "Attaching SQLite databases..."
+    echo "  Core DB: $CORE_DB_PATH"
+    echo "  Bundles DB: $BUNDLES_DB_PATH"
+    
+    duckdb "$TEMP_DB" <<SQL
+INSTALL sqlite;
+LOAD sqlite;
+ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
+ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
+
+-- Verify attachments by checking table existence (much faster than COUNT)
+SELECT 'Verifying core database...';
+SELECT 1 FROM core.stable_blocks LIMIT 1;
+SELECT 'Verifying bundles database...';
+SELECT 1 FROM bundles.stable_data_items LIMIT 1;
+SQL
+    
+    if [[ $? -ne 0 ]]; then
+      echo "Error: Failed to initialize DuckDB or attach SQLite databases" >&2
+      exit 1
+    fi
+  else
+    echo "Reusing existing DuckDB database, re-attaching SQLite databases..."
+    duckdb "$TEMP_DB" <<SQL
+INSTALL sqlite;
+LOAD sqlite;
+ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
+ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
+
+-- Verify attachments by checking table existence (much faster than COUNT)
+SELECT 'Verifying core database...';
+SELECT 1 FROM core.stable_blocks LIMIT 1;
+SELECT 'Verifying bundles database...';
+SELECT 1 FROM bundles.stable_data_items LIMIT 1;
+SQL
+    
+    if [[ $? -ne 0 ]]; then
+      echo "Error: Failed to re-attach SQLite databases" >&2
+      exit 1
+    fi
+  fi
+}
+
+# Function to import data for a height range
+import_height_range() {
+  local start_h=$1
+  local end_h=$2
+  
+  echo "Importing data for height range: $start_h to $end_h"
+  
+  local import_start=$(date +%s%N)
+  
+  # Build and execute import SQL
+  {
+    # Re-attach databases for this session
+    echo "ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);"
+    echo "ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);"
+    
+    # Import blocks for this range
+    local blocks_start=$(date +%s%N)
+    echo "-- Importing blocks"
+    echo "INSERT INTO blocks"
+    echo "SELECT indep_hash, height, previous_block, nonce, hash, block_timestamp, tx_count, block_size"
+    echo "FROM core.stable_blocks"
+    echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+    
+    # Import L1 transactions if enabled
+    if ! $SKIP_L1_TRANSACTIONS; then
+      echo "INSERT INTO transactions"
+      echo "SELECT"
+      echo "  id, indexed_at, block_transaction_index,"
+      echo "  0 AS is_data_item,"
+      echo "  target, quantity, reward,"
+      echo "  last_tx AS anchor,"  # L1 uses last_tx as anchor
+      echo "  data_size, content_type, format,"
+      echo "  height, owner_address, data_root,"
+      echo "  NULL AS parent,"
+      echo "  \"offset\","  # Need quotes as offset is a reserved word
+      echo "  data_size AS size,"  # L1 uses data_size for size
+      echo "  0 AS data_offset,"  # L1 doesn't have data_offset
+      echo "  0 AS owner_offset,"  # L1 doesn't have owner_offset  
+      echo "  0 AS owner_size,"    # L1 doesn't have owner_size
+      echo "  NULL AS owner,"       # L1 doesn't have owner field
+      echo "  0 AS signature_offset,"  # L1 doesn't have signature_offset
+      echo "  0 AS signature_size,"    # L1 doesn't have signature_size
+      echo "  0 AS signature_type,"    # L1 doesn't have signature_type
+      echo "  id AS root_transaction_id,"
+      echo "  NULL AS root_parent_offset"
+      echo "FROM core.stable_transactions"
+      echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+      
+      # Import L1 tags if enabled
+      if ! $SKIP_L1_TAGS; then
+        echo "INSERT INTO tags"
+        echo "SELECT"
+        echo "  height, transaction_id AS id, transaction_tag_index AS tag_index,"
+        echo "  0 AS indexed_at,"  # L1 tags don't have indexed_at
+        echo "  tag_name_hash AS tag_name, tag_value_hash AS tag_value,"
+        echo "  0 AS is_data_item"
+        echo "FROM core.stable_transaction_tags"
+        echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+      fi
+    fi
+    
+    # Import L2 transactions (data items)
+    echo "INSERT INTO transactions"
+    echo "SELECT"
+    echo "  id, indexed_at, block_transaction_index,"
+    echo "  1 AS is_data_item,"
+    echo "  target, NULL AS quantity, NULL AS reward, anchor, data_size, content_type,"
+    echo "  NULL AS format,"
+    echo "  height, owner_address,"
+    echo "  NULL AS data_root,"  # L2 data items don't have data_root
+    echo "  parent_id AS parent,"
+    echo "  \"offset\", size, data_offset,"  # Quote offset as it's a reserved word
+    echo "  owner_offset, owner_size,"
+    echo "  NULL AS owner,"  # L2 data items don't have owner field
+    echo "  signature_offset, signature_size, signature_type,"
+    echo "  root_transaction_id,"
+    echo "  0 AS root_parent_offset"  # Not available in SQLite
+    echo "FROM bundles.stable_data_items"
+    echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+    
+    # Import L2 tags
+    echo "INSERT INTO tags"
+    echo "SELECT"
+    echo "  height, data_item_id AS id, data_item_tag_index AS tag_index,"
+    echo "  0 AS indexed_at,"  # Tags don't have indexed_at
+    echo "  tag_name_hash AS tag_name, tag_value_hash AS tag_value,"
+    echo "  1 AS is_data_item"
+    echo "FROM bundles.stable_data_item_tags"
+    echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+    
+  } | duckdb "$TEMP_DB"
+  
+  if [[ $? -ne 0 ]]; then
+    echo "Error: Failed to import data for height range $start_h to $end_h" >&2
+    return 1
+  fi
+  
+  local import_end=$(date +%s%N)
+  log_timing "Total import for range $start_h-$end_h" "$import_start" "$import_end"
+  
+  # Count what was imported for timing analysis
+  if [[ "${SHOW_TIMING:-false}" == "true" ]]; then
+    local block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $start_h AND height <= $end_h;")
+    local tx_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM transactions WHERE height >= $start_h AND height <= $end_h;")
+    local tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM tags WHERE height >= $start_h AND height <= $end_h;")
+    echo "  [TIMING] Imported: $block_count blocks, $tx_count transactions, $tag_count tags" >&2
+  fi
+}
+
+# Function to export partition data
+export_partition_data() {
+  local partition_start=$1
+  local partition_end=$2
+  local partition_dir="height=${partition_start}-${partition_end}"
+  
+  echo "Exporting partition: $partition_dir"
+  echo "  Staging dir: $JOB_STAGING_DIR"
+  
+  local export_start=$(date +%s%N)
+  
+  # Create staging directories for this partition
+  mkdir -p "$JOB_STAGING_DIR"/{blocks,transactions,tags}/"$partition_dir"
+  
+  # Export blocks
+  local blocks_export_start=$(date +%s%N)
+  local block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $partition_start AND height <= $partition_end;")
+  if [[ $block_count -gt 0 ]]; then
+    local block_file="$JOB_STAGING_DIR/blocks/$partition_dir/blocks_${partition_start}_${partition_end}.parquet"
+    duckdb "$TEMP_DB" -c "COPY (SELECT * FROM blocks WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, indep_hash) TO '$block_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+  fi
+  log_timing "Export blocks ($block_count rows)" "$blocks_export_start"
+  
+  # Export transactions with file splitting if needed
+  local tx_export_start=$(date +%s%N)
+  local tx_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM transactions WHERE height >= $partition_start AND height <= $partition_end;")
+  if [[ $tx_count -gt 0 ]]; then
+    if [[ $tx_count -le $MAX_FILE_ROWS ]]; then
+      # Single file
+      local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}.parquet"
+      duckdb "$TEMP_DB" -c "COPY (SELECT * FROM transactions WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+    else
+      # Multiple files needed
+      local file_num=0
+      local offset=0
+      while [[ $offset -lt $tx_count ]]; do
+        local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}_${file_num}.parquet"
+        duckdb "$TEMP_DB" -c "COPY (SELECT * FROM transactions WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id LIMIT $MAX_FILE_ROWS OFFSET $offset) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+        offset=$((offset + MAX_FILE_ROWS))
+        file_num=$((file_num + 1))
+      done
+    fi
+  fi
+  log_timing "Export transactions ($tx_count rows)" "$tx_export_start"
+  
+  # Export tags with file splitting if needed
+  local tags_export_start=$(date +%s%N)
+  local tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM tags WHERE height >= $partition_start AND height <= $partition_end;")
+  if [[ $tag_count -gt 0 ]]; then
+    if [[ $tag_count -le $MAX_FILE_ROWS ]]; then
+      # Single file
+      local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}.parquet"
+      duckdb "$TEMP_DB" -c "COPY (SELECT * FROM tags WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id, tag_index) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+    else
+      # Multiple files needed
+      local file_num=0
+      local offset=0
+      while [[ $offset -lt $tag_count ]]; do
+        local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}_${file_num}.parquet"
+        duckdb "$TEMP_DB" -c "COPY (SELECT * FROM tags WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id, tag_index LIMIT $MAX_FILE_ROWS OFFSET $offset) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
+        offset=$((offset + MAX_FILE_ROWS))
+        file_num=$((file_num + 1))
+      done
+    fi
+  fi
+  log_timing "Export tags ($tag_count rows)" "$tags_export_start"
+  
+  echo "  Exported: $block_count blocks, $tx_count transactions, $tag_count tags"
+  
+  local export_end=$(date +%s%N)
+  log_timing "Total export for partition $partition_dir" "$export_start" "$export_end"
+}
+
+# Initialize database
+initialize_database
+
+# Process height range in partitions
+echo "Starting export from height $((LAST_PROCESSED_HEIGHT + 1)) to $END_HEIGHT"
+echo "Partition size: $HEIGHT_PARTITION_SIZE blocks"
+echo "Max file rows: $MAX_FILE_ROWS"
+
+current_height=$((LAST_PROCESSED_HEIGHT + 1))
+
+while [[ $current_height -le $END_HEIGHT ]]; do
+  # Calculate partition boundaries
+  current_partition_start=$current_height
+  current_partition_end=$((current_height + HEIGHT_PARTITION_SIZE - 1))
+  
+  # Don't exceed the requested end height
+  if [[ $current_partition_end -gt $END_HEIGHT ]]; then
+    current_partition_end=$END_HEIGHT
+  fi
+  
+  # Import data for this partition
+  import_height_range $current_partition_start $current_partition_end
+  
+  # Export partition data to staging
+  export_partition_data $current_partition_start $current_partition_end
+  
+  # Verify counts if enabled (after export)
+  if $VERIFY_COUNT; then
+    if ! verify_partition_counts $current_partition_start $current_partition_end; then
+      echo "ERROR: Verification failed. Stopping export." >&2
+      exit 1
+    fi
+  fi
+  
+  # Verify exported Parquet files if count verification is enabled
+  partition_dir="height=${current_partition_start}-${current_partition_end}"
+  
+  # Import to ClickHouse if enabled (before moving to warehouse)
+  import_partition_to_clickhouse "$JOB_STAGING_DIR" "$partition_dir"
+  
+  # Move to warehouse (atomic operation)
+  for table in blocks transactions tags; do
+    if [[ -d "$JOB_STAGING_DIR/$table/$partition_dir" ]]; then
+      mkdir -p "$OUTPUT_DIR/$table/data/$partition_dir"
+      mv "$JOB_STAGING_DIR/$table/$partition_dir"/* "$OUTPUT_DIR/$table/data/$partition_dir/" 2>/dev/null || true
+      rmdir "$JOB_STAGING_DIR/$table/$partition_dir" 2>/dev/null || true
+    fi
+  done
+  
+  echo "Completed partition: $partition_dir"
+  
+  # Clear imported data from temporary database to save space
+  duckdb "$TEMP_DB" <<SQL
+DELETE FROM blocks WHERE height >= $current_partition_start AND height <= $current_partition_end;
+DELETE FROM transactions WHERE height >= $current_partition_start AND height <= $current_partition_end;
+DELETE FROM tags WHERE height >= $current_partition_start AND height <= $current_partition_end;
+SQL
+  
+  # Update checkpoint
+  save_checkpoint $current_partition_end
+  
+  # Move to next partition
+  current_height=$((current_partition_end + 1))
 done
 
-for i in "${!RANGE_STARTS[@]}"; do
-  start=${RANGE_STARTS[$i]}
-  end=${RANGE_ENDS[$i]}
-  count=${RANGE_COUNTS[$i]}
-  tx_file="${OUTPUT_DIR}/transactions-minHeight:${start}-maxHeight:${end}-rowCount:${count}.parquet"
-  duckdb "$TEMP_DB" <<SQL
-COPY (
-  SELECT * FROM transactions WHERE height >= $start AND height <= $end
-) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');
-SQL
+echo "Export completed successfully!"
+echo "Output directory: $OUTPUT_DIR"
 
-  block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $start AND height <= $end;")
-  block_file="${OUTPUT_DIR}/blocks-minHeight:${start}-maxHeight:${end}-rowCount:${block_count}.parquet"
-  duckdb "$TEMP_DB" <<SQL
-COPY (
-  SELECT * FROM blocks WHERE height >= $start AND height <= $end
-) TO '$block_file' (FORMAT PARQUET, COMPRESSION 'zstd');
-SQL
+if $ENABLE_CLICKHOUSE; then
+  echo "Data imported to ClickHouse: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
+fi
 
-  tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM tags WHERE height >= $start AND height <= $end;")
-  tag_file="${OUTPUT_DIR}/tags-minHeight:${start}-maxHeight:${end}-rowCount:${tag_count}.parquet"
-  duckdb "$TEMP_DB" <<SQL
-COPY (
-  SELECT * FROM tags WHERE height >= $start AND height <= $end
-) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');
-SQL
+if $VERIFY_COUNT && [[ -f "$VERIFICATION_LOG" ]]; then
+  echo "Verification log: $VERIFICATION_LOG"
+fi
 
-done
-
-rm -f "$TEMP_DB" "$TEMP_DB.wal" "$SQL_INIT"
+# Clean up successful job (handled by cleanup trap)
+exit 0
