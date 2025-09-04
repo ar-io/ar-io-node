@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# AR.IO Gateway - Automated ClickHouse Import Pipeline
+# This script continuously exports data from AR.IO SQLite databases to Parquet format
+# with Iceberg-compatible structure and imports it to ClickHouse.
+# 
+# Uses the parquet-export script for both export and ClickHouse import in one operation.
+# The exported Parquet files are stored with Iceberg-compatible partitioning in the warehouse directory.
+
 set -euo pipefail
 
 # Function to log timing information
@@ -32,10 +39,14 @@ fi
 # Set local variables with defaults
 ar_io_host=${AR_IO_HOST:-localhost}
 ar_io_port=${AR_IO_PORT:-4000}
-parquet_dir=${PARQUET_DATA_PATH:-./data/parquet}
+warehouse_dir=${CLICKHOUSE_WAREHOUSE_DIR:-./data/warehouse}
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
+clickhouse_host=${CLICKHOUSE_HOST:-localhost}
+clickhouse_port=${CLICKHOUSE_PORT:-9000}
+clickhouse_user=${CLICKHOUSE_USER:-default}
+clickhouse_password=${CLICKHOUSE_PASSWORD:-}
 
 # Check critical preconditions
 if [ -z "${ADMIN_API_KEY:-}" ]; then
@@ -43,9 +54,15 @@ if [ -z "${ADMIN_API_KEY:-}" ]; then
     exit 1
 fi
 
+# Check that parquet-export script exists
+if [ ! -x "./scripts/parquet-export" ]; then
+    echo "Error: ./scripts/parquet-export not found or not executable"
+    exit 1
+fi
+
 # Create directories
-imported_dir="$parquet_dir/imported"
-mkdir -p "$parquet_dir" "$imported_dir"
+processed_dir="$warehouse_dir/.processed"
+mkdir -p "$warehouse_dir" "$processed_dir"
 
 # ------------------------------------------------------------------------------
 # SWITCH OFF 'exit on error' so the script doesn't die in the main loop
@@ -95,87 +112,47 @@ while true; do
 
         echo "Processing heights $current_height to $end_height..."
 
-        # Step 1: Export to Parquet
-        echo "Sending export request..."
+        # Step 1: Export to Parquet using parquet-export script with ClickHouse integration
+        echo "Starting Parquet export with ClickHouse integration..."
         export_start_time=$(date +%s)
-        curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet" \
-            -H "Authorization: Bearer $ADMIN_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{
-                \"outputDir\": \"$parquet_dir\",
-                \"startHeight\": $current_height,
-                \"endHeight\": $end_height,
-                \"maxFileRows\": $max_rows_per_file
-            }"
-
-        # If curl failed, break out of the height loop and move on
-        export_request_end_time=$(date +%s)
-        if [ $? -ne 0 ]; then
-            log_timing "Export request (failed)" "$export_start_time" "$export_request_end_time"
-            echo "Warning: Export request failed, skipping this range."
-            break
-        fi
-        log_timing "Export request sent" "$export_start_time" "$export_request_end_time"
-
-        # Step 2: Wait for export to complete
-        echo "Waiting for export to complete..."
-        while true; do
-            status="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" \
-                "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet/status")"
-
-            if [ $? -ne 0 ] || [ -z "$status" ]; then
-                echo "Warning: Failed to get export status. Cleaning partial files and moving on..."
-                rm -f "$parquet_dir"/*.parquet
-                break  # break out of waiting loop
-            fi
-
-            export_status="$(echo "$status" | jq -r '.status' 2>/dev/null)"
-            if [ "$export_status" = "completed" ]; then
-                echo "Export completed."
-                break
-            elif [ "$export_status" = "not_started" ]; then
-                echo "Warning: Export not started, the node may have restarted during the export."
-                break
-            elif [ "$export_status" = "errored" ]; then
-                error_msg="$(echo "$status" | jq -r '.error' 2>/dev/null)"
-                echo "Warning: Export failed: $error_msg"
-                rm -f "$parquet_dir"/*.parquet
-                break
-            fi
-
-            echo "Export in progress. Waiting 10s..."
-            sleep 10
-        done
-
+        
+        # Run parquet-export script with ClickHouse enabled
+        # The script handles both export and import in one operation
+        ./scripts/parquet-export \
+            --startHeight "$current_height" \
+            --endHeight "$end_height" \
+            --heightPartitionSize "$height_interval" \
+            --outputDir "$warehouse_dir" \
+            --maxFileRows "$max_rows_per_file" \
+            --includeL1Transactions \
+            --includeL1Tags \
+            --includeL2Transactions \
+            --includeL2Tags \
+            --enableClickhouse \
+            --clickhouseHost "$clickhouse_host" \
+            --clickhousePort "$clickhouse_port" \
+            --clickhouseUser "$clickhouse_user" \
+            --clickhousePassword "$clickhouse_password"
+        
+        export_status=$?
         export_complete_time=$(date +%s)
-        if [ "$export_status" = "completed" ]; then
-            log_timing "Export to parquet" "$export_start_time" "$export_complete_time"
-        elif [ "$export_status" = "errored" ]; then
-            log_timing "Export to parquet (failed)" "$export_start_time" "$export_complete_time"
-        fi
-
-        # Step 3: Attempt to import Parquet files
-        import_success=false
-        if compgen -G "$parquet_dir/*.parquet" > /dev/null; then
-            echo "Importing Parquet files..."
-            import_start_time=$(date +%s)
-            if ./scripts/clickhouse-import; then
-                import_success=true
-                import_end_time=$(date +%s)
-                log_timing "Clickhouse import" "$import_start_time" "$import_end_time"
-            else
-                import_end_time=$(date +%s)
-                log_timing "Clickhouse import (failed)" "$import_start_time" "$import_end_time"
-                echo "Warning: Clickhouse import failed. Moving on but preserving Parquet files in 'imported' folder..."
-            fi
-
-            # Step 4: Move processed files to imported directory
-            mv "$parquet_dir"/*.parquet "$imported_dir/" 2>/dev/null
+        
+        if [ $export_status -eq 0 ]; then
+            echo "Export and ClickHouse import completed successfully."
+            log_timing "Export to parquet and ClickHouse import" "$export_start_time" "$export_complete_time"
+            import_success=true
         else
-            echo "No Parquet files to import for this batch."
+            echo "Warning: Export or ClickHouse import failed with status $export_status"
+            log_timing "Export to parquet and ClickHouse import (failed)" "$export_start_time" "$export_complete_time"
+            import_success=false
         fi
 
-        # Step 5: Prune stable data items only if import was successful
+        # Step 2: Mark this height range as processed
+        if [ "$import_success" = true ]; then
+            touch "$processed_dir/heights_${current_height}_${end_height}.done"
+        fi
+
+        # Step 3: Prune stable data items only if import was successful
         if [ "$import_success" = true ]; then
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
