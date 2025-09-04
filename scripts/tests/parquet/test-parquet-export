@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# Test script for parquet-export-v3 with count verification
+# Test script for parquet-export with count verification
 
 set -e
 
-echo "Testing parquet-export-v3 with actual data..."
+echo "Testing parquet-export with actual data..."
 echo "============================================="
 echo
 
@@ -27,7 +27,7 @@ mkdir -p "$TEST_OUTPUT_DIR"
 
 echo "Running export WITH count verification..."
 echo "-----------------------------------------"
-./scripts/parquet-export-v3 \
+./scripts/parquet-export \
   --startHeight "$START_HEIGHT" \
   --endHeight "$END_HEIGHT" \
   --heightPartitionSize "$PARTITION_SIZE" \
@@ -98,7 +98,7 @@ if [[ "${TEST_CLICKHOUSE:-false}" == "true" ]]; then
   rm -rf "$TEST_OUTPUT_DIR"
   mkdir -p "$TEST_OUTPUT_DIR"
   
-  ./scripts/parquet-export-v3 \
+  ./scripts/parquet-export \
     --startHeight "$START_HEIGHT" \
     --endHeight "$END_HEIGHT" \
     --heightPartitionSize "$PARTITION_SIZE" \

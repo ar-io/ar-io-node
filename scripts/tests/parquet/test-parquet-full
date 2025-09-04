@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Full test script for parquet-export-v3 with larger data
+# Full test script for parquet-export with larger data
 
 set -e
 
@@ -29,7 +29,7 @@ mkdir -p "$TEST_OUTPUT_DIR"
 
 START_TIME=$(date +%s)
 
-./scripts/parquet-export-v3 \
+./scripts/parquet-export \
   --startHeight "$START_HEIGHT" \
   --endHeight "$END_HEIGHT" \
   --heightPartitionSize "$PARTITION_SIZE" \
@@ -63,7 +63,7 @@ mkdir -p "$TEST_OUTPUT_DIR"
 
 START_TIME=$(date +%s)
 
-./scripts/parquet-export-v3 \
+./scripts/parquet-export \
   --startHeight "$START_HEIGHT" \
   --endHeight "$END_HEIGHT" \
   --heightPartitionSize "$PARTITION_SIZE" \
@@ -110,7 +110,7 @@ mkdir -p "$TEST_OUTPUT_DIR"
 
 # Start export but interrupt it after 5 seconds
 echo "Starting export (will interrupt after 5 seconds)..."
-timeout 5 ./scripts/parquet-export-v3 \
+timeout 5 ./scripts/parquet-export \
   --startHeight "$START_HEIGHT" \
   --endHeight "$END_HEIGHT" \
   --heightPartitionSize "$PARTITION_SIZE" \
@@ -128,7 +128,7 @@ fi
 
 echo
 echo "Resuming export..."
-./scripts/parquet-export-v3 \
+./scripts/parquet-export \
   --startHeight "$START_HEIGHT" \
   --endHeight "$END_HEIGHT" \
   --heightPartitionSize "$PARTITION_SIZE" \

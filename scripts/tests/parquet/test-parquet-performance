@@ -29,7 +29,7 @@ for PARTITION_SIZE in 5 10 25 50; do
   
   START_TIME=$(date +%s%N)  # Nanoseconds for more precision
   
-  ./scripts/parquet-export-v3 \
+  ./scripts/parquet-export \
     --startHeight "$START_HEIGHT" \
     --endHeight "$END_HEIGHT" \
     --heightPartitionSize "$PARTITION_SIZE" \
