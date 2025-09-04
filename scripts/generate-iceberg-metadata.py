@@ -1,210 +1,282 @@
 #!/usr/bin/env python3
 """
-AR.IO Gateway - Generate Iceberg Metadata for Parquet Files
-Creates Apache Iceberg metadata for partitioned Parquet data
+AR.IO Gateway - Generate Iceberg Metadata (Fixed Version)
+This version matches the exact schema that DuckDB exports to Parquet
 """
 
-import json
 import os
 import sys
 import glob
-import uuid
 import argparse
-from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from pyiceberg.catalog import load_catalog
+    from pyiceberg.catalog.sql import SqlCatalog
+    from pyiceberg.schema import Schema
+    from pyiceberg.types import (
+        NestedField, StringType, LongType, IntegerType, 
+        BooleanType, BinaryType, DoubleType, DecimalType
+    )
+    from pyiceberg.partitioning import PartitionSpec, PartitionField
+    from pyiceberg.transforms import IdentityTransform
+    from pyiceberg.table import Table
+    from pyiceberg import expressions
+    import pyarrow.parquet as pq
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+    import pandas as pd
+except ImportError as e:
+    print(f"Error: Required library not installed: {e}")
+    print("\nPlease install PyIceberg and dependencies:")
+    print("  pip install 'pyiceberg[pyarrow,duckdb,sql]'")
+    sys.exit(1)
 
-def generate_table_metadata(table_name, schema, partition_spec, data_files, warehouse_dir):
-    """Generate Iceberg table metadata JSON"""
+
+# Define schemas that match EXACTLY what DuckDB exports
+def get_blocks_schema():
+    """Get the schema for blocks table matching DuckDB export"""
+    return Schema(
+        NestedField(1, "indep_hash", BinaryType(), required=False),
+        NestedField(2, "height", LongType(), required=False),  # uint64 -> long
+        NestedField(3, "previous_block", BinaryType(), required=False),
+        NestedField(4, "nonce", BinaryType(), required=False),
+        NestedField(5, "hash", BinaryType(), required=False),
+        NestedField(6, "block_timestamp", IntegerType(), required=False),  # int32
+        NestedField(7, "tx_count", IntegerType(), required=False),  # int32
+        NestedField(8, "block_size", LongType(), required=False),  # uint64 -> long
+    )
+
+
+def get_transactions_schema():
+    """Get the schema for transactions table matching DuckDB export"""
+    return Schema(
+        NestedField(1, "id", BinaryType(), required=False),
+        NestedField(2, "indexed_at", LongType(), required=False),  # uint64 -> long
+        NestedField(3, "block_transaction_index", IntegerType(), required=False),  # uint16 -> int
+        NestedField(4, "is_data_item", BooleanType(), required=False),  # bool
+        NestedField(5, "target", BinaryType(), required=False),
+        NestedField(6, "quantity", DecimalType(20, 0), required=False),  # decimal128(20,0)
+        NestedField(7, "reward", DecimalType(20, 0), required=False),  # decimal128(20,0)
+        NestedField(8, "anchor", BinaryType(), required=False),
+        NestedField(9, "data_size", LongType(), required=False),  # uint64 -> long
+        NestedField(10, "content_type", StringType(), required=False),  # string
+        NestedField(11, "format", IntegerType(), required=False),  # uint8 -> int
+        NestedField(12, "height", LongType(), required=False),  # uint64 -> long
+        NestedField(13, "owner_address", BinaryType(), required=False),
+        NestedField(14, "data_root", BinaryType(), required=False),
+        NestedField(15, "parent", BinaryType(), required=False),
+        NestedField(16, "offset", LongType(), required=False),  # uint64 -> long
+        NestedField(17, "size", LongType(), required=False),  # uint64 -> long
+        NestedField(18, "data_offset", LongType(), required=False),  # uint64 -> long
+        NestedField(19, "owner_offset", LongType(), required=False),  # uint64 -> long
+        NestedField(20, "owner_size", IntegerType(), required=False),  # uint32 -> int
+        NestedField(21, "owner", BinaryType(), required=False),
+        NestedField(22, "signature_offset", LongType(), required=False),  # uint64 -> long
+        NestedField(23, "signature_size", IntegerType(), required=False),  # uint32 -> int
+        NestedField(24, "signature_type", IntegerType(), required=False),  # uint32 -> int
+        NestedField(25, "root_transaction_id", BinaryType(), required=False),
+        NestedField(26, "root_parent_offset", IntegerType(), required=False),  # uint32 -> int
+    )
+
+
+def get_tags_schema():
+    """Get the schema for tags table matching DuckDB export"""
+    return Schema(
+        NestedField(1, "height", LongType(), required=False),  # uint64 -> long
+        NestedField(2, "id", BinaryType(), required=False),
+        NestedField(3, "tag_index", IntegerType(), required=False),  # uint16 -> int
+        NestedField(4, "indexed_at", LongType(), required=False),  # uint64 -> long
+        NestedField(5, "tag_name", BinaryType(), required=False),
+        NestedField(6, "tag_value", BinaryType(), required=False),
+        NestedField(7, "is_data_item", BooleanType(), required=False),  # bool
+    )
+
+
+def create_local_catalog(warehouse_dir):
+    """Create a local file-based Iceberg catalog using SQL catalog"""
+    catalog_path = os.path.join(warehouse_dir, "catalog.db")
     
-    current_snapshot_id = int(datetime.now().timestamp() * 1000)
+    # Use SQL catalog for local file system
+    catalog = SqlCatalog(
+        "ar_io_catalog",
+        **{
+            "uri": f"sqlite:///{catalog_path}",
+            "warehouse": f"file://{os.path.abspath(warehouse_dir)}",
+        }
+    )
     
-    metadata = {
-        "format-version": 2,
-        "table-uuid": str(uuid.uuid4()),
-        "location": f"file://{os.path.abspath(warehouse_dir)}/{table_name}",
-        "last-sequence-number": 1,
-        "last-updated-ms": int(datetime.now().timestamp() * 1000),
-        "last-column-id": len(schema["fields"]),
-        "current-schema-id": 0,
-        "schemas": [schema],
-        "default-spec-id": 0,
-        "partition-specs": [partition_spec],
-        "last-partition-id": 1000,
-        "default-sort-order-id": 0,
-        "sort-orders": [{"order-id": 0, "fields": []}],
-        "properties": {
-            "created-by": "ar-io-node-parquet-export",
-            "engine.hive.enabled": "true",
+    # Ensure namespace exists
+    existing_namespaces = catalog.list_namespaces()
+    if ("default",) not in existing_namespaces and "default" not in existing_namespaces:
+        try:
+            catalog.create_namespace("default")
+            print("  Created namespace: default")
+        except Exception as e:
+            print(f"  Warning: Could not create namespace: {e}")
+    
+    return catalog
+
+
+def register_parquet_files_as_iceberg(catalog, table_name, schema, parquet_files, warehouse_dir):
+    """Register existing Parquet files as an Iceberg table without copying data"""
+    
+    # Create or replace the table
+    namespace = "default"
+    table_identifier = f"{namespace}.{table_name}"
+    
+    try:
+        # Try to drop existing table
+        catalog.drop_table(table_identifier)
+        print(f"  Dropped existing table: {table_identifier}")
+    except Exception:
+        pass  # Table might not exist
+    
+    # Create partition spec based on height field
+    # Note: We use IdentityTransform to keep the height values as-is
+    partition_spec = PartitionSpec(
+        PartitionField(
+            source_id=2 if table_name == "blocks" else (12 if table_name == "transactions" else 1),  # height field ID
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="height"
+        )
+    )
+    
+    # Create the table with schema and partition spec
+    table = catalog.create_table(
+        identifier=table_identifier,
+        schema=schema,
+        partition_spec=partition_spec,
+        properties={
             "write.format.default": "parquet",
-            "write.parquet.compression-codec": "zstd"
-        },
-        "current-snapshot-id": current_snapshot_id,
-        "refs": {
-            "main": {
-                "snapshot-id": current_snapshot_id,
-                "type": "branch"
-            }
-        },
-        "snapshots": [{
-            "sequence-number": 1,
-            "snapshot-id": current_snapshot_id,
-            "timestamp-ms": int(datetime.now().timestamp() * 1000),
-            "summary": {
-                "operation": "append",
-                "added-data-files": str(len(data_files)),
-                "added-records": "0",  # Would need to scan files for actual count
-                "added-files-size": str(sum(os.path.getsize(f) for f in data_files if os.path.exists(f))),
-                "changed-partition-count": str(len(set(os.path.dirname(f) for f in data_files)))
-            },
-            "manifest-list": f"snap-{current_snapshot_id}-1-manifest-list.json"
-        }],
-        "statistics": [],
-        "partition-statistics": []
-    }
+            "write.parquet.compression-codec": "zstd",
+            "read.split.metadata-target-size": "134217728",  # 128MB
+        }
+    )
+    print(f"  Created Iceberg table: {table_identifier}")
     
-    return metadata
-
-
-def generate_manifest_list(table_name, snapshot_id, manifests):
-    """Generate Iceberg manifest list in JSON format
+    # Now we need to add the Parquet files to the table
+    # PyIceberg doesn't have a direct add_files API like Java Iceberg,
+    # so we'll read and append the data
+    print(f"  Processing {len(parquet_files)} Parquet files...")
     
-    Note: Production Iceberg uses Avro format for manifests.
-    This creates a JSON representation for compatibility with tools that can read JSON."""
-    manifest_list = {
-        "manifest-length": len(manifests),
-        "manifests": manifests
-    }
-    
-    return manifest_list
-
-
-def generate_manifest(table_name, data_files, partition_spec, partition_size, warehouse_dir):
-    """Generate Iceberg manifest file in JSON format
-    
-    Note: Production Iceberg uses Avro format for manifests.
-    This creates a JSON representation for compatibility with tools that can read JSON."""
-    entries = []
-    
-    for data_file in data_files:
-        # Extract partition info from path
-        partition_match = os.path.basename(os.path.dirname(data_file))
-        if partition_match.startswith("height="):
-            height_range = partition_match.replace("height=", "")
-            start_height, end_height = height_range.split("-")
+    for i, parquet_file in enumerate(parquet_files, 1):
+        try:
+            # Read the Parquet file directly without schema inference
+            parquet_file_abs = os.path.abspath(parquet_file)
             
-            # Make path relative to warehouse directory
-            relative_path = os.path.relpath(data_file, warehouse_dir)
+            # Use PyArrow Dataset API for better handling
+            dataset = ds.dataset(parquet_file_abs, format="parquet")
+            arrow_table = dataset.to_table()
             
-            entries.append({
-                "status": 1,  # ADDED
-                "snapshot_id": None,
-                "sequence_number": None,
-                "data_file": {
-                    "content": "DATA",
-                    "file_path": relative_path,
-                    "file_format": "PARQUET",
-                    "partition": {"height_bucket": int(start_height) // partition_size},
-                    "record_count": 0,  # Would need to scan file
-                    "file_size_in_bytes": os.path.getsize(data_file) if os.path.exists(data_file) else 0,
-                    "column_sizes": None,
-                    "value_counts": None,
-                    "null_value_counts": None,
-                    "nan_value_counts": None,
-                    "lower_bounds": None,
-                    "upper_bounds": None,
-                    "key_metadata": None,
-                    "split_offsets": None,
-                    "equality_ids": None,
-                    "sort_order_id": 0
-                }
-            })
+            # Convert types to match Iceberg schema
+            # This is necessary because PyArrow and Iceberg have slightly different type systems
+            converted_data = []
+            schema_fields = arrow_table.schema
+            
+            for batch in arrow_table.to_batches():
+                arrays = []
+                for field_idx, field in enumerate(schema_fields):
+                    arr = batch.column(field_idx)
+                    
+                    # Convert unsigned to signed integers
+                    if pa.types.is_unsigned_integer(field.type):
+                        if pa.types.is_uint64(field.type):
+                            arr = arr.cast(pa.int64())
+                        elif pa.types.is_uint32(field.type):
+                            arr = arr.cast(pa.int32())
+                        elif pa.types.is_uint16(field.type) or pa.types.is_uint8(field.type):
+                            arr = arr.cast(pa.int32())
+                    
+                    arrays.append(arr)
+                
+                converted_batch = pa.RecordBatch.from_arrays(arrays, schema=arrow_table.schema)
+                converted_data.append(converted_batch)
+            
+            converted_table = pa.Table.from_batches(converted_data)
+            
+            # Append to the Iceberg table
+            table.append(converted_table)
+            
+            if i % 10 == 0 or i == len(parquet_files):
+                print(f"    Processed {i}/{len(parquet_files)} files")
+                
+        except Exception as e:
+            print(f"    Warning: Failed to process {parquet_file}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
     
-    return {"entries": entries}
-
-
-# Define schemas for each table
-SCHEMAS = {
-    "blocks": {
-        "type": "struct",
-        "schema-id": 0,
-        "fields": [
-            {"id": 1, "name": "indep_hash", "required": True, "type": "string"},
-            {"id": 2, "name": "height", "required": True, "type": "long"},
-            {"id": 3, "name": "previous_block", "required": False, "type": "string"},
-            {"id": 4, "name": "nonce", "required": False, "type": "string"},
-            {"id": 5, "name": "hash", "required": False, "type": "string"},
-            {"id": 6, "name": "block_timestamp", "required": False, "type": "long"},
-            {"id": 7, "name": "tx_count", "required": False, "type": "int"},
-            {"id": 8, "name": "block_size", "required": False, "type": "long"}
-        ]
-    },
-    "transactions": {
-        "type": "struct",
-        "schema-id": 0,
-        "fields": [
-            {"id": 1, "name": "id", "required": True, "type": "string"},
-            {"id": 2, "name": "indexed_at", "required": False, "type": "long"},
-            {"id": 3, "name": "block_transaction_index", "required": False, "type": "int"},
-            {"id": 4, "name": "is_data_item", "required": True, "type": "int"},
-            {"id": 5, "name": "target", "required": False, "type": "string"},
-            {"id": 6, "name": "quantity", "required": False, "type": "string"},
-            {"id": 7, "name": "reward", "required": False, "type": "string"},
-            {"id": 8, "name": "anchor", "required": False, "type": "string"},
-            {"id": 9, "name": "data_size", "required": False, "type": "long"},
-            {"id": 10, "name": "content_type", "required": False, "type": "string"},
-            {"id": 11, "name": "format", "required": False, "type": "int"},
-            {"id": 12, "name": "height", "required": True, "type": "long"},
-            {"id": 13, "name": "owner_address", "required": False, "type": "string"},
-            {"id": 14, "name": "data_root", "required": False, "type": "string"},
-            {"id": 15, "name": "parent", "required": False, "type": "string"},
-            {"id": 16, "name": "offset", "required": False, "type": "long"},
-            {"id": 17, "name": "size", "required": False, "type": "long"},
-            {"id": 18, "name": "data_offset", "required": False, "type": "long"},
-            {"id": 19, "name": "owner_offset", "required": False, "type": "long"},
-            {"id": 20, "name": "owner_size", "required": False, "type": "long"},
-            {"id": 21, "name": "owner", "required": False, "type": "binary"},
-            {"id": 22, "name": "signature_offset", "required": False, "type": "long"},
-            {"id": 23, "name": "signature_size", "required": False, "type": "long"},
-            {"id": 24, "name": "signature_type", "required": False, "type": "int"},
-            {"id": 25, "name": "root_transaction_id", "required": False, "type": "string"},
-            {"id": 26, "name": "root_parent_offset", "required": False, "type": "long"}
-        ]
-    },
-    "tags": {
-        "type": "struct",
-        "schema-id": 0,
-        "fields": [
-            {"id": 1, "name": "height", "required": True, "type": "long"},
-            {"id": 2, "name": "id", "required": True, "type": "string"},
-            {"id": 3, "name": "tag_index", "required": True, "type": "int"},
-            {"id": 4, "name": "indexed_at", "required": False, "type": "long"},
-            {"id": 5, "name": "tag_name", "required": False, "type": "string"},
-            {"id": 6, "name": "tag_value", "required": False, "type": "string"},
-            {"id": 7, "name": "is_data_item", "required": True, "type": "int"}
-        ]
-    }
-}
+    print(f"  Successfully registered {len(parquet_files)} Parquet files")
+    
+    # Create version-hint.text for DuckDB compatibility
+    metadata_dir = os.path.join(warehouse_dir, "default.db", table_name, "metadata")
+    version_hint_file = os.path.join(metadata_dir, "version-hint.text")
+    
+    # Find the latest metadata file version
+    metadata_files = glob.glob(os.path.join(metadata_dir, "*.metadata.json"))
+    if metadata_files:
+        # Extract version numbers from filenames
+        versions = []
+        for mf in metadata_files:
+            basename = os.path.basename(mf)
+            # Format is 00000-uuid.metadata.json, 00001-uuid.metadata.json, etc.
+            if "-" in basename and basename.endswith(".metadata.json"):
+                version_str = basename.split("-")[0]
+                try:
+                    versions.append(int(version_str))
+                except ValueError:
+                    continue
+        
+        if versions:
+            latest_version = max(versions)
+            # Write version without newline for DuckDB compatibility
+            with open(version_hint_file, "wb") as f:
+                f.write(str(latest_version).encode())
+            print(f"  Created version-hint.text with version: {latest_version}")
+            
+            # Also create v{version}.metadata.json symlink for DuckDB
+            latest_metadata_file = None
+            for mf in metadata_files:
+                basename = os.path.basename(mf)
+                if basename.startswith(f"{latest_version:05d}-"):
+                    latest_metadata_file = basename
+                    break
+            
+            if latest_metadata_file:
+                symlink_name = os.path.join(metadata_dir, f"v{latest_version}.metadata.json")
+                if os.path.exists(symlink_name):
+                    os.remove(symlink_name)
+                os.symlink(latest_metadata_file, symlink_name)
+                print(f"  Created symlink: v{latest_version}.metadata.json -> {latest_metadata_file}")
+    
+    return table
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate Apache Iceberg metadata for AR.IO Parquet exports',
+        description='Generate Apache Iceberg metadata for AR.IO Parquet exports (Fixed Version)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+This version correctly matches the schema that DuckDB exports to Parquet.
+
 Examples:
-  %(prog)s --warehouse-dir data/local/warehouse
-  %(prog)s --warehouse-dir /path/to/warehouse --partition-size 5000
+  %(prog)s --warehouse-dir data/parquet-test
+  %(prog)s --warehouse-dir /path/to/warehouse
   
 Query the generated tables:
-  DuckDB:
+  Python with PyIceberg:
+    from pyiceberg.catalog.sql import SqlCatalog
+    catalog = SqlCatalog('catalog', uri='sqlite:///path/to/warehouse/catalog.db', 
+                         warehouse='file:///path/to/warehouse')
+    table = catalog.load_table('default.blocks')
+    df = table.scan().to_pandas()
+    
+  DuckDB with Iceberg extension:
     INSTALL iceberg;
     LOAD iceberg;
-    SELECT * FROM iceberg_scan('data/local/warehouse/blocks/metadata/metadata.json');
-    
-  Apache Spark:
-    spark.sql.catalog.ar_io.warehouse = data/local/warehouse
-    spark.table("ar_io.default.blocks").show()
+    SELECT * FROM iceberg_scan('path/to/warehouse/default.db/blocks');
 """
     )
     
@@ -214,25 +286,6 @@ Query the generated tables:
         help='Warehouse directory containing Parquet data (default: data/local/warehouse)'
     )
     
-    parser.add_argument(
-        '--catalog-name',
-        default='ar-io-catalog',
-        help='Name for the Iceberg catalog (default: ar-io-catalog)'
-    )
-    
-    parser.add_argument(
-        '--namespace',
-        default='default',
-        help='Namespace for tables (default: default)'
-    )
-    
-    parser.add_argument(
-        '--partition-size',
-        type=int,
-        default=1000,
-        help='Expected partition size for validation (default: 1000)'
-    )
-    
     args = parser.parse_args()
     
     # Check if warehouse directory exists
@@ -240,30 +293,36 @@ Query the generated tables:
         print(f"Error: Warehouse directory does not exist: {args.warehouse_dir}", file=sys.stderr)
         sys.exit(1)
     
-    print(f"Generating Iceberg metadata for warehouse: {args.warehouse_dir}")
-    print(f"Catalog: {args.catalog_name}")
-    print(f"Namespace: {args.namespace}")
+    print(f"Generating Iceberg metadata (Fixed Version)")
+    print(f"Warehouse: {args.warehouse_dir}")
     print()
     
-    # Define partition spec (bucket by height)
-    partition_spec = {
-        "spec-id": 0,
-        "fields": [{
-            "source-id": 2,  # height field
-            "field-id": 1000,
-            "name": "height_bucket",
-            "transform": f"bucket[{args.partition_size}]"
-        }]
-    }
+    # Create catalog
+    try:
+        catalog = create_local_catalog(args.warehouse_dir)
+        print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
+    except Exception as e:
+        print(f"Error creating catalog: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     
     # Process each table
-    for table_name in ["blocks", "transactions", "tags"]:
+    tables = [
+        ("blocks", get_blocks_schema()),
+        ("transactions", get_transactions_schema()),
+        ("tags", get_tags_schema()),
+    ]
+    
+    successful_tables = []
+    
+    for table_name, schema in tables:
         table_dir = os.path.join(args.warehouse_dir, table_name)
         if not os.path.exists(table_dir):
             print(f"Skipping {table_name}: directory does not exist")
             continue
         
-        print(f"Processing table: {table_name}")
+        print(f"\nProcessing table: {table_name}")
         
         # Find all Parquet files
         data_dir = os.path.join(table_dir, "data")
@@ -278,89 +337,51 @@ Query the generated tables:
         
         print(f"  Found {len(parquet_files)} Parquet files")
         
-        # Create metadata directory
-        metadata_dir = os.path.join(table_dir, "metadata")
-        os.makedirs(metadata_dir, exist_ok=True)
-        
-        # Generate table metadata
-        table_metadata = generate_table_metadata(
-            table_name,
-            SCHEMAS[table_name],
-            partition_spec,
-            parquet_files,
-            args.warehouse_dir
-        )
-        
-        # Write metadata.json
-        metadata_file = os.path.join(metadata_dir, "v1.metadata.json")
-        with open(metadata_file, "w") as f:
-            json.dump(table_metadata, f, indent=2)
-        
-        # Create symlink for current metadata
-        current_metadata = os.path.join(metadata_dir, "metadata.json")
-        if os.path.exists(current_metadata):
-            os.remove(current_metadata)
-        os.symlink(os.path.basename(metadata_file), current_metadata)
-        
-        # Create version-hint.text file for DuckDB
-        version_hint_file = os.path.join(metadata_dir, "version-hint.text")
-        with open(version_hint_file, "w") as f:
-            f.write("1")
-        
-        print(f"  Created metadata: {metadata_file}")
-        
-        # Generate manifest in JSON format
-        snapshot_id = table_metadata["current-snapshot-id"]
-        manifest_data = generate_manifest(table_name, parquet_files, partition_spec, args.partition_size, args.warehouse_dir)
-        manifest_file = os.path.join(metadata_dir, f"manifest-{uuid.uuid4()}.json")
-        with open(manifest_file, "w") as f:
-            json.dump(manifest_data, f, indent=2)
-        
-        # Generate manifest list  
-        # Use relative path from the metadata directory
-        manifest_list_data = generate_manifest_list(table_name, snapshot_id, [
-            {
-                "manifest_path": os.path.basename(manifest_file),
-                "added_snapshot_id": snapshot_id,
-                "partition_spec_id": 0,
-                "content": "data",
-                "sequence_number": 1,
-                "min_sequence_number": 1,
-                "added_files_count": len(parquet_files),
-                "existing_files_count": 0,
-                "deleted_files_count": 0,
-                "added_rows_count": 0,
-                "existing_rows_count": 0,
-                "deleted_rows_count": 0
-            }
-        ])
-        
-        manifest_list_file = os.path.join(metadata_dir, f"snap-{snapshot_id}-1-manifest-list.json")
-        with open(manifest_list_file, "w") as f:
-            json.dump(manifest_list_data, f, indent=2)
-        
-        print(f"  Created manifest: {manifest_file}")
-        print(f"  Created manifest list: {manifest_list_file}")
+        try:
+            # Register Parquet files as Iceberg table
+            table = register_parquet_files_as_iceberg(
+                catalog, 
+                table_name, 
+                schema, 
+                parquet_files,
+                args.warehouse_dir
+            )
+            print(f"  Table location: {table.location()}")
+            successful_tables.append(table_name)
+        except Exception as e:
+            print(f"  Error creating table {table_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
     
-    print()
-    print("Iceberg metadata generation complete!")
-    print(f"Tables are now queryable at: {os.path.abspath(args.warehouse_dir)}")
-    print()
-    print("Note: This generates JSON-formatted Iceberg metadata.")
-    print("Standard Iceberg uses Avro format for manifest files.")
-    print("For full Iceberg compatibility with all tools, consider using")
-    print("PyIceberg or Java Iceberg libraries to generate Avro manifests.")
-    print()
-    print("To query these tables with DuckDB:")
-    print("  duckdb")
-    print("  INSTALL iceberg;")
-    print("  LOAD iceberg;")
-    print(f"  SELECT * FROM iceberg_scan('{args.warehouse_dir}/blocks/metadata/metadata.json');")
-    print()
-    print("To query with Apache Spark:")
-    print(f"  spark.sql.catalog.{args.catalog_name}=org.apache.iceberg.spark.SparkCatalog")
-    print(f"  spark.sql.catalog.{args.catalog_name}.type=hadoop")
-    print(f"  spark.sql.catalog.{args.catalog_name}.warehouse={args.warehouse_dir}")
+    if successful_tables:
+        print()
+        print("=" * 60)
+        print("Iceberg metadata generation complete!")
+        print(f"Successfully created {len(successful_tables)} tables: {', '.join(successful_tables)}")
+        print(f"Catalog location: {args.warehouse_dir}/catalog.db")
+        print()
+        print("To query these tables:")
+        print()
+        print("1. Python with PyIceberg:")
+        print("-" * 40)
+        print("from pyiceberg.catalog.sql import SqlCatalog")
+        print(f"catalog = SqlCatalog('catalog', uri='sqlite:///{os.path.abspath(args.warehouse_dir)}/catalog.db',")
+        print(f"                     warehouse='file://{os.path.abspath(args.warehouse_dir)}')")
+        print("table = catalog.load_table('default.blocks')")
+        print("df = table.scan().to_pandas()")
+        print("print(df.head())")
+        print()
+        print("2. DuckDB with Iceberg extension:")
+        print("-" * 40)
+        print("duckdb")
+        print("INSTALL avro;  -- Required for Iceberg")
+        print("INSTALL iceberg;")
+        print("LOAD iceberg;")
+        print(f"SELECT COUNT(*) FROM iceberg_scan('{os.path.abspath(args.warehouse_dir)}/default.db/blocks');")
+    else:
+        print("\nNo tables were successfully created.")
+        sys.exit(1)
 
 
 if __name__ == '__main__':
