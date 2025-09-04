@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+# Performance test script comparing different partition sizes
+
+set -e
+
+echo "Parquet Export Performance Test"
+echo "================================"
+echo
+
+# Test parameters
+START_HEIGHT=1718100
+END_HEIGHT=1718150  # Just 51 blocks for performance testing
+
+echo "Testing different partition sizes for heights $START_HEIGHT-$END_HEIGHT"
+echo
+
+# Test different partition sizes
+for PARTITION_SIZE in 5 10 25 50; do
+  echo "Testing partition size: $PARTITION_SIZE blocks"
+  echo "----------------------------------------"
+  
+  TEST_OUTPUT_DIR="data/test-parquet-perf-$PARTITION_SIZE"
+  rm -rf "$TEST_OUTPUT_DIR"
+  mkdir -p "$TEST_OUTPUT_DIR"
+  
+  # Clean staging to ensure fair comparison
+  rm -rf data/staging/job-*
+  
+  START_TIME=$(date +%s%N)  # Nanoseconds for more precision
+  
+  ./scripts/parquet-export-v3 \
+    --startHeight "$START_HEIGHT" \
+    --endHeight "$END_HEIGHT" \
+    --heightPartitionSize "$PARTITION_SIZE" \
+    --outputDir "$TEST_OUTPUT_DIR" \
+    --includeL1Transactions \
+    --includeL1Tags \
+    2>&1 | grep -E "(Exporting partition|Completed partition)" | tail -5
+  
+  END_TIME=$(date +%s%N)
+  DURATION_MS=$(( (END_TIME - START_TIME) / 1000000 ))
+  
+  # Count results
+  partition_count=$(find "$TEST_OUTPUT_DIR" -type d -name "height=*" | wc -l)
+  file_count=$(find "$TEST_OUTPUT_DIR" -name "*.parquet" | wc -l)
+  total_size=$(du -sh "$TEST_OUTPUT_DIR" 2>/dev/null | cut -f1)
+  
+  echo "  Duration: ${DURATION_MS}ms"
+  echo "  Partitions created: $((partition_count / 3))"  # Divide by 3 tables
+  echo "  Total Parquet files: $file_count"
+  echo "  Total size: $total_size"
+  echo
+done
+
+echo "Performance comparison complete!"
+echo
+echo "Results saved in data/test-parquet-perf-*/"
