@@ -640,66 +640,74 @@ import_partition_to_clickhouse() {
     local min_height=${height_range%-*}
     local max_height=${height_range#*-}
     
-    # Move staging data to final tables (same as original clickhouse-import script)
+    # Move staging data to final tables (using JOIN logic from original clickhouse-import)
     for prefix in "" "id_" "owner_" "target_"; do
       clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
         --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
 INSERT INTO ${prefix}transactions
 SELECT
-  id,
-  indexed_at,
-  block_transaction_index,
-  is_data_item,
-  target,
-  quantity,
-  reward,
-  anchor,
-  data_size,
-  content_type,
-  format,
-  height,
-  owner_address,
-  data_root,
-  parent,
-  offset,
-  size,
-  data_offset,
-  owner_offset,
-  owner_size,
-  owner,
-  signature_offset,
-  signature_size,
-  signature_type,
-  root_transaction_id,
-  root_parent_offset
-FROM staging_transactions
-WHERE height >= $min_height AND height <= $max_height;
+  txs.height,
+  txs.block_transaction_index,
+  txs.is_data_item,
+  txs.id,
+  txs.anchor,
+  txs.owner_address,
+  txs.target,
+  txs.quantity,
+  txs.reward,
+  txs.data_size,
+  txs.content_type,
+  txs.format,
+  txs.data_root,
+  txs.parent AS parent_id,
+  blocks.indep_hash AS block_indep_hash,
+  blocks.block_timestamp,
+  blocks.previous_block AS block_previous_block,
+  txs.indexed_at,
+  now() AS inserted_at,
+  txs.offset,
+  txs.size,
+  txs.data_offset,
+  txs.owner_offset,
+  txs.owner_size,
+  txs.owner,
+  txs.signature_offset,
+  txs.signature_size,
+  txs.signature_type,
+  txs.root_transaction_id,
+  txs.root_parent_offset,
+  CASE
+    WHEN tags.id IS NOT NULL THEN
+      arrayMap((x) -> (x.2, x.3), arraySort((x) -> x.1, groupArray((tag_index, tag_name, tag_value))))
+    ELSE []
+  END AS tags,
+  CASE
+    WHEN tags.id IS NOT NULL THEN COUNT(*)
+    ELSE 0
+  END AS tags_count
+FROM staging_transactions txs
+LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
+JOIN staging_blocks blocks ON txs.height = blocks.height
+WHERE txs.height >= $min_height AND txs.height <= $max_height
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, tags.id;
 EOF
     done
     
-    # Insert blocks
-    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
-INSERT INTO blocks
-SELECT * FROM staging_blocks
-WHERE height >= $min_height AND height <= $max_height;
-EOF
-    
-    # Insert tags
-    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
-INSERT INTO tags
-SELECT * FROM staging_tags
-WHERE height >= $min_height AND height <= $max_height;
-EOF
+    # Skip blocks table insertion - not used by GraphQL implementation
+    # Skip tags table insertion - tags are aggregated into transactions table
     
     # Clear staging tables for this height range
     clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
-ALTER TABLE staging_blocks DELETE WHERE height >= $min_height AND height <= $max_height;
-ALTER TABLE staging_transactions DELETE WHERE height >= $min_height AND height <= $max_height;
-ALTER TABLE staging_tags DELETE WHERE height >= $min_height AND height <= $max_height;
-EOF
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+      --query "ALTER TABLE staging_blocks DELETE WHERE height >= $min_height AND height <= $max_height;"
+    
+    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+      --query "ALTER TABLE staging_transactions DELETE WHERE height >= $min_height AND height <= $max_height;"
+    
+    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+      --query "ALTER TABLE staging_tags DELETE WHERE height >= $min_height AND height <= $max_height;"
     
     # Log successful import
     log_clickhouse_import "$partition_dir"
