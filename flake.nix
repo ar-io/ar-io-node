@@ -29,6 +29,7 @@
           default = pkgs.mkShell {
             name = "ar-io-node-shell";
             buildInputs = with pkgs; [
+              bc
               clickhouse
               duckdb
               gnumake
