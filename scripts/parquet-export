@@ -676,20 +676,46 @@ SELECT
   txs.signature_type,
   txs.root_transaction_id,
   txs.root_parent_offset,
-  CASE
-    WHEN tags.id IS NOT NULL THEN
-      arrayMap((x) -> (x.2, x.3), arraySort((x) -> x.1, groupArray((tag_index, tag_name, tag_value))))
-    ELSE []
-  END AS tags,
-  CASE
-    WHEN tags.id IS NOT NULL THEN COUNT(*)
-    ELSE 0
-  END AS tags_count
+  arrayMap(x -> (x.1, x.2), 
+    arraySort(x -> x.3,
+      groupArrayIf((tag_name, tag_value, tag_index), tag_name != '')
+    )
+  ) AS tags,
+  COUNT(CASE WHEN tags.tag_name != '' THEN 1 END) AS tags_count
 FROM staging_transactions txs
 LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
 JOIN staging_blocks blocks ON txs.height = blocks.height
 WHERE txs.height >= $min_height AND txs.height <= $max_height
-GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, tags.id;
+GROUP BY 
+  txs.height,
+  txs.block_transaction_index,
+  txs.is_data_item,
+  txs.id,
+  txs.anchor,
+  txs.owner_address,
+  txs.target,
+  txs.quantity,
+  txs.reward,
+  txs.data_size,
+  txs.content_type,
+  txs.format,
+  txs.data_root,
+  txs.parent,
+  blocks.indep_hash,
+  blocks.block_timestamp,
+  blocks.previous_block,
+  txs.indexed_at,
+  txs.offset,
+  txs.size,
+  txs.data_offset,
+  txs.owner_offset,
+  txs.owner_size,
+  txs.owner,
+  txs.signature_offset,
+  txs.signature_size,
+  txs.signature_type,
+  txs.root_transaction_id,
+  txs.root_parent_offset;
 EOF
     done
     
