@@ -41,6 +41,9 @@ Options:
   --clickhousePort PORT     ClickHouse port (default: 9000)
   --clickhouseUser USER     ClickHouse user (default: default)
   --clickhousePassword PWD  ClickHouse password (default: empty)
+  
+  Iceberg Metadata:
+  --generateIceberg         Generate Apache Iceberg metadata after export (requires PyIceberg)
 
 Note: This creates Iceberg-compatible directory structure with partitioned Parquet files.
       When ClickHouse is enabled, data is imported after each partition completes.
@@ -70,6 +73,9 @@ load_clickhouse_config
 
 # ClickHouse integration flag
 ENABLE_CLICKHOUSE=false
+
+# Iceberg metadata generation flag
+GENERATE_ICEBERG=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -149,6 +155,10 @@ while [[ $# -gt 0 ]]; do
     --clickhousePassword)
       CLICKHOUSE_PASSWORD=$2
       shift 2
+      ;;
+    --generateIceberg)
+      GENERATE_ICEBERG=true
+      shift 1
       ;;
     -h|--help)
       usage
@@ -1070,6 +1080,24 @@ fi
 
 if $VERIFY_COUNT && [[ -f "$VERIFICATION_LOG" ]]; then
   echo "Verification log: $VERIFICATION_LOG"
+fi
+
+# Generate Iceberg metadata if requested
+if [ "$GENERATE_ICEBERG" = true ]; then
+  echo "Generating Apache Iceberg metadata..."
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 -c "import pyiceberg" 2>/dev/null; then
+      if python3 "$SCRIPT_DIR/generate-iceberg-metadata" --warehouse-dir "$OUTPUT_DIR"; then
+        echo "  ✓ Iceberg metadata generated successfully"
+      else
+        echo "  ⚠ Warning: Iceberg metadata generation failed, but export data is intact"
+      fi
+    else
+      echo "  ⚠ Warning: PyIceberg not installed. Run: pip install 'pyiceberg[pyarrow,duckdb,sql]'"
+    fi
+  else
+    echo "  ⚠ Warning: Python3 not available, cannot generate Iceberg metadata"
+  fi
 fi
 
 # Clean up successful job (handled by cleanup trap)
