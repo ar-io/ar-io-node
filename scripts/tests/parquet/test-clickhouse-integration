@@ -2,28 +2,23 @@
 
 # Test script for ClickHouse integration with parquet-export
 
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../lib/common.sh"
+
 echo "Testing ClickHouse Integration with Parquet Export"
 echo "=================================================="
 echo
 
-# Source environment
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
+# Load environment and ClickHouse configuration
+load_env
+load_clickhouse_config
 
 # Configuration
 TEST_DIR="data/test-clickhouse-integration"
 START_HEIGHT=1718100
 END_HEIGHT=1718102
 PARTITION_SIZE=5
-
-# ClickHouse settings
-CLICKHOUSE_HOST="${CLICKHOUSE_HOST:-localhost}"
-CLICKHOUSE_PORT="${CLICKHOUSE_PORT:-9000}"
-CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"
-CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-}"
 
 echo "Configuration:"
 echo "  Test directory: $TEST_DIR"

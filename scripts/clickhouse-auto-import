@@ -7,34 +7,16 @@
 # Uses the parquet-export script for both export and ClickHouse import in one operation.
 # The exported Parquet files are stored with Iceberg-compatible partitioning in the warehouse directory.
 
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
 set -euo pipefail
 
-# Function to log timing information
-log_timing() {
-    # Only log timing when DEBUG is set
-    if [ -n "${DEBUG:-}" ]; then
-        local step_name=$1
-        local start_time=$2
-        local end_time=$3
-        local duration_s=$(( end_time - start_time ))
-        local duration_min=$(( duration_s / 60 ))
-        local duration_sec=$(( duration_s % 60 ))
-
-        echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
-    fi
-}
-
-# Export environment variables from .env if it exists
-if [ -f .env ]; then
-    set -a # automatically export all variables
-    source .env
-    set +a
-fi
-
-# If ADMIN_API_KEY_FILE is set, read its contents (trimming any trailing newline) into ADMIN_API_KEY
-if [ -n "${ADMIN_API_KEY_FILE:-}" ]; then
-    ADMIN_API_KEY="$(tr -d '\n' < "${ADMIN_API_KEY_FILE}")"
-fi
+# Load environment and API key
+load_env
+load_admin_api_key
+load_clickhouse_config
 
 # Set local variables with defaults
 ar_io_host=${AR_IO_HOST:-localhost}
@@ -43,10 +25,6 @@ warehouse_dir=${CLICKHOUSE_WAREHOUSE_DIR:-./data/warehouse}
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
-clickhouse_host=${CLICKHOUSE_HOST:-localhost}
-clickhouse_port=${CLICKHOUSE_PORT:-9000}
-clickhouse_user=${CLICKHOUSE_USER:-default}
-clickhouse_password=${CLICKHOUSE_PASSWORD:-}
 
 # Check critical preconditions
 if [ -z "${ADMIN_API_KEY:-}" ]; then
@@ -129,10 +107,10 @@ while true; do
             --includeL2Transactions \
             --includeL2Tags \
             --enableClickhouse \
-            --clickhouseHost "$clickhouse_host" \
-            --clickhousePort "$clickhouse_port" \
-            --clickhouseUser "$clickhouse_user" \
-            --clickhousePassword "$clickhouse_password"
+            --clickhouseHost "$CLICKHOUSE_HOST" \
+            --clickhousePort "$CLICKHOUSE_PORT" \
+            --clickhouseUser "$CLICKHOUSE_USER" \
+            --clickhousePassword "$CLICKHOUSE_PASSWORD"
         
         export_status=$?
         export_complete_time=$(date +%s)

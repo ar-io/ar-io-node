@@ -5,12 +5,12 @@
 # Flush stable chain and data item tables using existing SQL queries
 # mirrors the logic of StandaloneSqliteDatabase.flushStableDataItems
 
-# Export environment variables from .env if it exists
-if [ -f .env ]; then
-  set -a  # automatically export all variables
-  . ./.env
-  set +a
-fi
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+# Load environment
+load_env
 
 set -euo pipefail
 

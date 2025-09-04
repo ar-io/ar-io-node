@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
 
-# AR.IO Gateway - Parquet Export with Iceberg-ready partitioning and ClickHouse integration
-# Enhanced version with configurable partitioning, crash recovery, and optional ClickHouse import
+# AR.IO Gateway - Production Parquet Export Script
+# Features: Iceberg-compatible partitioning, data integrity verification, ClickHouse integration,
+# resume capability, performance timing, and comprehensive error handling
 
-if ! command -v duckdb >/dev/null 2>&1; then
-  echo "Error: duckdb CLI is required but not found in PATH" >&2
-  exit 1
-fi
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
 
 set -euo pipefail
 
-# Timing function
+# Check required commands
+require_commands duckdb || exit 1
+
+# Override log_timing with millisecond precision version for this script
 log_timing() {
-  local operation=$1
-  local start_time=$2
-  local end_time=${3:-$(date +%s%N)}
-  local duration=$(echo "scale=3; ($end_time - $start_time) / 1000000000" | bc)
-  if [[ "${SHOW_TIMING:-false}" == "true" ]]; then
-    echo "  [TIMING] $operation: ${duration}s" >&2
-  fi
+  log_timing_ms "$1" "$2" "${3:-$(date +%s%N)}" "${SHOW_TIMING:-false}"
 }
 
 usage() {
@@ -67,19 +64,12 @@ RESUME=false
 VERIFY_COUNT=false
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
 
-# ClickHouse configuration
-ENABLE_CLICKHOUSE=false
-CLICKHOUSE_HOST="${CLICKHOUSE_HOST:-localhost}"
-CLICKHOUSE_PORT="${CLICKHOUSE_PORT:-9000}"
-CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"
-CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-}"
+# Load environment and ClickHouse configuration
+load_env
+load_clickhouse_config
 
-# Export environment variables from .env if it exists
-if [ -f .env ]; then
-  set -a  # automatically export all variables
-  . ./.env
-  set +a
-fi
+# ClickHouse integration flag
+ENABLE_CLICKHOUSE=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
