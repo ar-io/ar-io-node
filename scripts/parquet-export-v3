@@ -10,6 +10,17 @@ fi
 
 set -euo pipefail
 
+# Timing function
+log_timing() {
+  local operation=$1
+  local start_time=$2
+  local end_time=${3:-$(date +%s%N)}
+  local duration=$(echo "scale=3; ($end_time - $start_time) / 1000000000" | bc)
+  if [[ "${SHOW_TIMING:-false}" == "true" ]]; then
+    echo "  [TIMING] $operation: ${duration}s" >&2
+  fi
+}
+
 usage() {
   cat <<USAGE
 Usage: $0 --outputDir DIR --startHeight N --endHeight N [options]
@@ -25,6 +36,7 @@ Options:
   --warehouseDir PATH       Final warehouse directory (default: data/local/warehouse)
   --resume                  Resume from last checkpoint if export was interrupted
   --verifyCount             Verify row counts match SQLite after each partition (slower)
+  --showTiming              Show detailed timing information for operations
   
   ClickHouse Integration:
   --enableClickhouse        Enable import to ClickHouse after each partition
@@ -122,6 +134,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verifyCount)
       VERIFY_COUNT=true
+      shift 1
+      ;;
+    --showTiming)
+      SHOW_TIMING=true
       shift 1
       ;;
     --enableClickhouse)
@@ -706,6 +722,8 @@ import_height_range() {
   
   echo "Importing data for height range: $start_h to $end_h"
   
+  local import_start=$(date +%s%N)
+  
   # Build and execute import SQL
   {
     # Re-attach databases for this session
@@ -713,6 +731,8 @@ import_height_range() {
     echo "ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);"
     
     # Import blocks for this range
+    local blocks_start=$(date +%s%N)
+    echo "-- Importing blocks"
     echo "INSERT INTO blocks"
     echo "SELECT indep_hash, height, previous_block, nonce, hash, block_timestamp, tx_count, block_size"
     echo "FROM core.stable_blocks"
@@ -791,6 +811,17 @@ import_height_range() {
     echo "Error: Failed to import data for height range $start_h to $end_h" >&2
     return 1
   fi
+  
+  local import_end=$(date +%s%N)
+  log_timing "Total import for range $start_h-$end_h" "$import_start" "$import_end"
+  
+  # Count what was imported for timing analysis
+  if [[ "${SHOW_TIMING:-false}" == "true" ]]; then
+    local block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $start_h AND height <= $end_h;")
+    local tx_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM transactions WHERE height >= $start_h AND height <= $end_h;")
+    local tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM tags WHERE height >= $start_h AND height <= $end_h;")
+    echo "  [TIMING] Imported: $block_count blocks, $tx_count transactions, $tag_count tags" >&2
+  fi
 }
 
 # Function to export partition data
@@ -802,17 +833,22 @@ export_partition_data() {
   echo "Exporting partition: $partition_dir"
   echo "  Staging dir: $JOB_STAGING_DIR"
   
+  local export_start=$(date +%s%N)
+  
   # Create staging directories for this partition
   mkdir -p "$JOB_STAGING_DIR"/{blocks,transactions,tags}/"$partition_dir"
   
   # Export blocks
+  local blocks_export_start=$(date +%s%N)
   local block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $partition_start AND height <= $partition_end;")
   if [[ $block_count -gt 0 ]]; then
     local block_file="$JOB_STAGING_DIR/blocks/$partition_dir/blocks_${partition_start}_${partition_end}.parquet"
     duckdb "$TEMP_DB" -c "COPY (SELECT * FROM blocks WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, indep_hash) TO '$block_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
   fi
+  log_timing "Export blocks ($block_count rows)" "$blocks_export_start"
   
   # Export transactions with file splitting if needed
+  local tx_export_start=$(date +%s%N)
   local tx_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM transactions WHERE height >= $partition_start AND height <= $partition_end;")
   if [[ $tx_count -gt 0 ]]; then
     if [[ $tx_count -le $MAX_FILE_ROWS ]]; then
@@ -831,8 +867,10 @@ export_partition_data() {
       done
     fi
   fi
+  log_timing "Export transactions ($tx_count rows)" "$tx_export_start"
   
   # Export tags with file splitting if needed
+  local tags_export_start=$(date +%s%N)
   local tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM tags WHERE height >= $partition_start AND height <= $partition_end;")
   if [[ $tag_count -gt 0 ]]; then
     if [[ $tag_count -le $MAX_FILE_ROWS ]]; then
@@ -851,8 +889,12 @@ export_partition_data() {
       done
     fi
   fi
+  log_timing "Export tags ($tag_count rows)" "$tags_export_start"
   
   echo "  Exported: $block_count blocks, $tx_count transactions, $tag_count tags"
+  
+  local export_end=$(date +%s%N)
+  log_timing "Total export for partition $partition_dir" "$export_start" "$export_end"
 }
 
 # Initialize database
