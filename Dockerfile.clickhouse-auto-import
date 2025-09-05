@@ -32,6 +32,7 @@ RUN mkdir -p data/parquet/imported
 
 # Copy the necessary scripts and libraries
 COPY src/database/clickhouse/schema.sql /app/src/database/clickhouse/schema.sql
+COPY src/database/duckdb/schema.sql /app/src/database/duckdb/schema.sql
 COPY scripts/clickhouse-auto-import /app/scripts/
 COPY scripts/parquet-export /app/scripts/
 COPY scripts/generate-iceberg-metadata /app/scripts/
