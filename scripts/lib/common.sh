@@ -158,6 +158,31 @@ get_script_dir() {
     cd -P "$(dirname "$source")" && pwd
 }
 
+# Validate integer input
+# Usage: validate_integer "value" "parameter_name"
+validate_integer() {
+    local value="$1"
+    local name="$2"
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        log_error "$name must be a positive integer, got: $value"
+        return 1
+    fi
+}
+
+# Run command with timeout
+# Usage: run_with_timeout timeout_seconds command [args...]
+run_with_timeout() {
+    local timeout_sec="$1"
+    shift
+    timeout "$timeout_sec" "$@" || {
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            log_error "Command timed out after ${timeout_sec} seconds: $*"
+        fi
+        return $exit_code
+    }
+}
+
 # Export common paths
 export SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PROJECT_ROOT="$(cd "$SCRIPTS_DIR/.." && pwd)"

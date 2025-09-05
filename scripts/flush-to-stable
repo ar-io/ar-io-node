@@ -47,16 +47,17 @@ TX_CLEANUP_THRESHOLD=$(( MAX_STABLE_TS - NEW_TX_CLEANUP_WAIT_SECS ))
 DATA_CLEANUP_THRESHOLD=$(( MAX_STABLE_TS - NEW_DATA_ITEM_CLEANUP_WAIT_SECS ))
 
 # Flush core (blocks and transactions)
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 sqlite3 "$CORE_DB_PATH" <<SQL
 .parameter set end_height $END_HEIGHT
 BEGIN TRANSACTION;
-.read 'src/database/sql/core/flush.sql'
+.read '$REPO_ROOT/src/database/sql/core/flush.sql'
 COMMIT;
 .parameter clear
 .parameter set height_threshold $END_HEIGHT
 .parameter set indexed_at_threshold $TX_CLEANUP_THRESHOLD
 BEGIN TRANSACTION;
-.read 'src/database/sql/core/cleanup.sql'
+.read '$REPO_ROOT/src/database/sql/core/cleanup.sql'
 COMMIT;
 .parameter clear
 SQL
@@ -66,13 +67,13 @@ sqlite3 "$BUNDLES_DB_PATH" <<SQL
 ATTACH DATABASE '$CORE_DB_PATH' AS core;
 .parameter set end_height $END_HEIGHT
 BEGIN TRANSACTION;
-.read 'src/database/sql/bundles/flush.sql'
+.read '$REPO_ROOT/src/database/sql/bundles/flush.sql'
 COMMIT;
 .parameter clear
 .parameter set height_threshold $END_HEIGHT
 .parameter set indexed_at_threshold $DATA_CLEANUP_THRESHOLD
 BEGIN TRANSACTION;
-.read 'src/database/sql/bundles/cleanup.sql'
+.read '$REPO_ROOT/src/database/sql/bundles/cleanup.sql'
 COMMIT;
 .parameter clear
 DETACH DATABASE core;

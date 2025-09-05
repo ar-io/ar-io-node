@@ -22,6 +22,7 @@ load_clickhouse_config
 ar_io_host=${AR_IO_HOST:-localhost}
 ar_io_port=${AR_IO_PORT:-4000}
 warehouse_dir=${CLICKHOUSE_WAREHOUSE_DIR:-./data/warehouse/default}
+staging_dir=${CLICKHOUSE_STAGING_DIR:-./data/staging}
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
@@ -102,6 +103,7 @@ while true; do
             --endHeight "$end_height" \
             --heightPartitionSize "$height_interval" \
             --outputDir "$warehouse_dir" \
+            --stagingDir "$staging_dir" \
             --maxFileRows "$max_rows_per_file" \
             --includeL1Transactions \
             --includeL1Tags \
