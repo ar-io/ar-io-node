@@ -226,6 +226,9 @@ services:
     restart: unless-stopped
     volumes:
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
+      - ./data/sqlite:/app/data/sqlite:ro
+      - ${CLICKHOUSE_WAREHOUSE_DIR:-./data/warehouse}:/app/data/warehouse
+      - ./data/staging:/app/data/staging
     environment:
       - DEBUG=${CLICKHOUSE_DEBUG:-}
       - AR_IO_HOST=core
@@ -235,6 +238,7 @@ services:
       - CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-} # defaults to 9000 in scripts
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-} # defaults to 'default' in scripts
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-} # must be set, no default
+      - CLICKHOUSE_WAREHOUSE_DIR=/app/data/warehouse
       - CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-}
       - CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-}
       - CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-}
