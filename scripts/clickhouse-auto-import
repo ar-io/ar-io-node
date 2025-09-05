@@ -96,6 +96,7 @@ while true; do
         
         # Run parquet-export script with ClickHouse enabled
         # The script handles both export and import in one operation
+        # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
         ./scripts/parquet-export \
             --startHeight "$current_height" \
             --endHeight "$end_height" \
@@ -104,8 +105,6 @@ while true; do
             --maxFileRows "$max_rows_per_file" \
             --includeL1Transactions \
             --includeL1Tags \
-            --includeL2Transactions \
-            --includeL2Tags \
             --enableClickhouse \
             --clickhouseHost "$CLICKHOUSE_HOST" \
             --clickhousePort "$CLICKHOUSE_PORT" \
