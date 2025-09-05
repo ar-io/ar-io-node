@@ -21,7 +21,7 @@ load_clickhouse_config
 # Set local variables with defaults
 ar_io_host=${AR_IO_HOST:-localhost}
 ar_io_port=${AR_IO_PORT:-4000}
-warehouse_dir=${CLICKHOUSE_WAREHOUSE_DIR:-./data/warehouse}
+warehouse_dir=${CLICKHOUSE_WAREHOUSE_DIR:-./data/warehouse/default}
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}

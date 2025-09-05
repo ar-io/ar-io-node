@@ -410,8 +410,8 @@ Query the generated tables:
     
     parser.add_argument(
         '--warehouse-dir',
-        default='data/local/warehouse',
-        help='Warehouse directory containing Parquet data (default: data/local/warehouse)'
+        default='data/warehouse/default',
+        help='Warehouse directory containing Parquet data (default: data/warehouse/default)'
     )
     
     parser.add_argument(
