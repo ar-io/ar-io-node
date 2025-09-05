@@ -865,14 +865,14 @@ import_height_range() {
       echo "  height, owner_address, data_root,"
       echo "  NULL AS parent,"
       echo "  \"offset\","  # Need quotes as offset is a reserved word
-      echo "  data_size AS size,"  # L1 uses data_size for size
-      echo "  0 AS data_offset,"  # L1 doesn't have data_offset
-      echo "  0 AS owner_offset,"  # L1 doesn't have owner_offset  
-      echo "  0 AS owner_size,"    # L1 doesn't have owner_size
+      echo "  NULL AS size,"  # L1 transactions don't have size field
+      echo "  NULL AS data_offset,"  # L1 doesn't have data_offset
+      echo "  NULL AS owner_offset,"  # L1 doesn't have owner_offset  
+      echo "  NULL AS owner_size,"    # L1 doesn't have owner_size
       echo "  NULL AS owner,"       # L1 doesn't have owner field
-      echo "  0 AS signature_offset,"  # L1 doesn't have signature_offset
-      echo "  0 AS signature_size,"    # L1 doesn't have signature_size
-      echo "  0 AS signature_type,"    # L1 doesn't have signature_type
+      echo "  NULL AS signature_offset,"  # L1 doesn't have signature_offset
+      echo "  NULL AS signature_size,"    # L1 doesn't have signature_size
+      echo "  NULL AS signature_type,"    # L1 doesn't have signature_type
       echo "  id AS root_transaction_id,"
       echo "  NULL AS root_parent_offset"
       echo "FROM core.stable_transactions"
@@ -906,7 +906,7 @@ import_height_range() {
     echo "  NULL AS owner,"  # L2 data items don't have owner field
     echo "  signature_offset, signature_size, signature_type,"
     echo "  root_transaction_id,"
-    echo "  0 AS root_parent_offset"  # Not available in SQLite
+    echo "  root_parent_offset"
     echo "FROM bundles.stable_data_items"
     echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
     
