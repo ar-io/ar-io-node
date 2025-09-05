@@ -983,7 +983,7 @@ export_partition_data() {
   local blocks_export_start=$(date +%s%N)
   local block_count=$(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM blocks WHERE height >= $partition_start AND height <= $partition_end;")
   if [[ $block_count -gt 0 ]]; then
-    local block_file="$JOB_STAGING_DIR/blocks/$partition_dir/blocks_${partition_start}_${partition_end}.parquet"
+    local block_file="$JOB_STAGING_DIR/blocks/$partition_dir/blocks_${partition_start}_${partition_end}_${RUN_ID}.parquet"
     duckdb "$TEMP_DB" -c "COPY (SELECT * FROM blocks WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, indep_hash) TO '$block_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
   fi
   log_timing "Export blocks ($block_count rows)" "$blocks_export_start"
@@ -994,14 +994,14 @@ export_partition_data() {
   if [[ $tx_count -gt 0 ]]; then
     if [[ $tx_count -le $MAX_FILE_ROWS ]]; then
       # Single file
-      local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}.parquet"
+      local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}_${RUN_ID}.parquet"
       duckdb "$TEMP_DB" -c "COPY (SELECT * FROM transactions WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
     else
       # Multiple files needed
       local file_num=0
       local offset=0
       while [[ $offset -lt $tx_count ]]; do
-        local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}_${file_num}.parquet"
+        local tx_file="$JOB_STAGING_DIR/transactions/$partition_dir/transactions_${partition_start}_${partition_end}_${file_num}_${RUN_ID}.parquet"
         duckdb "$TEMP_DB" -c "COPY (SELECT * FROM transactions WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id LIMIT $MAX_FILE_ROWS OFFSET $offset) TO '$tx_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
         offset=$((offset + MAX_FILE_ROWS))
         file_num=$((file_num + 1))
@@ -1016,14 +1016,14 @@ export_partition_data() {
   if [[ $tag_count -gt 0 ]]; then
     if [[ $tag_count -le $MAX_FILE_ROWS ]]; then
       # Single file
-      local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}.parquet"
+      local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}_${RUN_ID}.parquet"
       duckdb "$TEMP_DB" -c "COPY (SELECT * FROM tags WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id, tag_index) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
     else
       # Multiple files needed
       local file_num=0
       local offset=0
       while [[ $offset -lt $tag_count ]]; do
-        local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}_${file_num}.parquet"
+        local tag_file="$JOB_STAGING_DIR/tags/$partition_dir/tags_${partition_start}_${partition_end}_${file_num}_${RUN_ID}.parquet"
         duckdb "$TEMP_DB" -c "COPY (SELECT * FROM tags WHERE height >= $partition_start AND height <= $partition_end ORDER BY height, id, tag_index LIMIT $MAX_FILE_ROWS OFFSET $offset) TO '$tag_file' (FORMAT PARQUET, COMPRESSION 'zstd');"
         offset=$((offset + MAX_FILE_ROWS))
         file_num=$((file_num + 1))
