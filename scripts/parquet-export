@@ -857,68 +857,94 @@ import_height_range() {
     if ! $SKIP_L1_TRANSACTIONS; then
       echo "INSERT INTO transactions"
       echo "SELECT"
-      echo "  id, indexed_at, block_transaction_index,"
+      echo "  st.id, NULL AS indexed_at, st.block_transaction_index,"
       echo "  0 AS is_data_item,"
-      echo "  target, quantity, reward,"
-      echo "  last_tx AS anchor,"  # L1 uses last_tx as anchor
-      echo "  data_size, content_type, format,"
-      echo "  height, owner_address, data_root,"
+      echo "  st.target, st.quantity, st.reward,"
+      echo "  st.last_tx AS anchor,"  # L1 uses last_tx as anchor
+      echo "  st.data_size, st.content_type, st.format,"
+      echo "  st.height, st.owner_address, st.data_root,"
       echo "  NULL AS parent,"
-      echo "  \"offset\","  # Need quotes as offset is a reserved word
+      echo "  st.\"offset\","  # Need quotes as offset is a reserved word
       echo "  NULL AS size,"  # L1 transactions don't have size field
       echo "  NULL AS data_offset,"  # L1 doesn't have data_offset
       echo "  NULL AS owner_offset,"  # L1 doesn't have owner_offset  
       echo "  NULL AS owner_size,"    # L1 doesn't have owner_size
-      echo "  NULL AS owner,"       # L1 doesn't have owner field
+      echo "  CASE"
+      echo "    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus"
+      echo "    ELSE NULL"
+      echo "  END AS owner,"
       echo "  NULL AS signature_offset,"  # L1 doesn't have signature_offset
       echo "  NULL AS signature_size,"    # L1 doesn't have signature_size
       echo "  NULL AS signature_type,"    # L1 doesn't have signature_type
-      echo "  id AS root_transaction_id,"
+      echo "  st.id AS root_transaction_id,"
       echo "  NULL AS root_parent_offset"
-      echo "FROM core.stable_transactions"
-      echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+      echo "FROM core.stable_transactions st"
+      echo "LEFT JOIN core.wallets w ON st.owner_address = w.address"
+      echo "WHERE st.height BETWEEN ${start_h} AND ${end_h};"
       
       # Import L1 tags if enabled
       if ! $SKIP_L1_TAGS; then
         echo "INSERT INTO tags"
         echo "SELECT"
-        echo "  height, transaction_id AS id, transaction_tag_index AS tag_index,"
-        echo "  0 AS indexed_at,"  # L1 tags don't have indexed_at
-        echo "  tag_name_hash AS tag_name, tag_value_hash AS tag_value,"
+        echo "  st.height,"
+        echo "  st.id,"
+        echo "  stt.transaction_tag_index AS tag_index,"
+        echo "  NULL AS indexed_at,"
+        echo "  tn.name AS tag_name,"
+        echo "  tv.value AS tag_value,"
         echo "  0 AS is_data_item"
-        echo "FROM core.stable_transaction_tags"
-        echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+        echo "FROM core.stable_transactions st"
+        echo "CROSS JOIN core.stable_transaction_tags stt"
+        echo "CROSS JOIN core.tag_names tn"
+        echo "CROSS JOIN core.tag_values tv"
+        echo "WHERE st.id = stt.transaction_id"
+        echo "  AND stt.tag_name_hash = tn.hash"
+        echo "  AND stt.tag_value_hash = tv.hash"
+        echo "  AND st.height BETWEEN ${start_h} AND ${end_h};"
       fi
     fi
     
     # Import L2 transactions (data items)
     echo "INSERT INTO transactions"
     echo "SELECT"
-    echo "  id, indexed_at, block_transaction_index,"
+    echo "  sdi.id, sdi.indexed_at, sdi.block_transaction_index,"
     echo "  1 AS is_data_item,"
-    echo "  target, NULL AS quantity, NULL AS reward, anchor, data_size, content_type,"
+    echo "  sdi.target, NULL AS quantity, NULL AS reward, sdi.anchor, sdi.data_size, sdi.content_type,"
     echo "  NULL AS format,"
-    echo "  height, owner_address,"
+    echo "  sdi.height, sdi.owner_address,"
     echo "  NULL AS data_root,"  # L2 data items don't have data_root
-    echo "  parent_id AS parent,"
-    echo "  \"offset\", size, data_offset,"  # Quote offset as it's a reserved word
-    echo "  owner_offset, owner_size,"
-    echo "  NULL AS owner,"  # L2 data items don't have owner field
-    echo "  signature_offset, signature_size, signature_type,"
-    echo "  root_transaction_id,"
-    echo "  root_parent_offset"
-    echo "FROM bundles.stable_data_items"
-    echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+    echo "  sdi.parent_id AS parent,"
+    echo "  sdi.\"offset\", sdi.size, sdi.data_offset,"  # Quote offset as it's a reserved word
+    echo "  sdi.owner_offset, sdi.owner_size,"
+    echo "  CASE"
+    echo "    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus"
+    echo "    ELSE NULL"
+    echo "  END AS owner,"
+    echo "  sdi.signature_offset, sdi.signature_size, sdi.signature_type,"
+    echo "  sdi.root_transaction_id,"
+    echo "  sdi.root_parent_offset"
+    echo "FROM bundles.stable_data_items sdi"
+    echo "LEFT JOIN bundles.wallets w ON sdi.owner_address = w.address"
+    echo "WHERE sdi.height BETWEEN ${start_h} AND ${end_h};"
     
     # Import L2 tags
     echo "INSERT INTO tags"
     echo "SELECT"
-    echo "  height, data_item_id AS id, data_item_tag_index AS tag_index,"
-    echo "  0 AS indexed_at,"  # Tags don't have indexed_at
-    echo "  tag_name_hash AS tag_name, tag_value_hash AS tag_value,"
+    echo "  sdi.height,"
+    echo "  sdi.id,"
+    echo "  sdit.data_item_tag_index AS tag_index,"
+    echo "  sdi.indexed_at,"
+    echo "  tn.name AS tag_name,"
+    echo "  tv.value AS tag_value,"
     echo "  1 AS is_data_item"
-    echo "FROM bundles.stable_data_item_tags"
-    echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
+    echo "FROM bundles.stable_data_items sdi"
+    echo "CROSS JOIN bundles.stable_data_item_tags sdit"
+    echo "CROSS JOIN bundles.tag_names tn"
+    echo "CROSS JOIN bundles.tag_values tv"
+    echo "WHERE sdi.id = sdit.data_item_id"
+    echo "  AND sdit.tag_name_hash = tn.hash"
+    echo "  AND sdit.tag_value_hash = tv.hash"
+    echo "  AND sdi.height BETWEEN ${start_h} AND ${end_h};"
     
   } | duckdb "$TEMP_DB"
   
