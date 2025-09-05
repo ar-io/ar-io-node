@@ -125,16 +125,20 @@ def create_local_catalog(warehouse_dir):
 
 
 def update_metadata_locations(warehouse_dir, warehouse_root):
-    """Update location fields in metadata files to use custom warehouse root
+    """Update location fields in metadata files and catalog to use custom warehouse root
     
     Args:
         warehouse_dir: Local directory containing the metadata
         warehouse_root: Custom warehouse root URI to use in metadata
     """
     import json
+    import sqlite3
     
     # Clean up the warehouse root
     warehouse_root = warehouse_root.rstrip('/')
+    
+    # Track metadata file path mappings for catalog update
+    metadata_path_mapping = {}
     
     # Find all metadata JSON files
     metadata_files = []
@@ -167,6 +171,13 @@ def update_metadata_locations(warehouse_dir, warehouse_root):
                     with open(metadata_file, 'w') as f:
                         json.dump(metadata, f, separators=(',', ':'))
                     
+                    # Track the mapping for catalog update
+                    original_metadata_path = f"file://{os.path.abspath(metadata_file)}"
+                    # Update metadata path to use warehouse root
+                    metadata_relative_path = os.path.abspath(metadata_file)[len(warehouse_abs_path):].lstrip('/')
+                    new_metadata_path = f"{warehouse_root}/{metadata_relative_path}"
+                    metadata_path_mapping[original_metadata_path] = new_metadata_path
+                    
                     updated_count += 1
                     print(f"    Updated: {os.path.basename(metadata_file)}")
         except Exception as e:
@@ -174,6 +185,61 @@ def update_metadata_locations(warehouse_dir, warehouse_root):
     
     if updated_count > 0:
         print(f"  Updated {updated_count} metadata files with warehouse root: {warehouse_root}")
+    
+    # Update the SQLite catalog if needed
+    catalog_path = os.path.join(warehouse_dir, "catalog.db")
+    if os.path.exists(catalog_path):
+        try:
+            conn = sqlite3.connect(catalog_path)
+            cursor = conn.cursor()
+            
+            # Get current catalog entries
+            cursor.execute("SELECT table_name, metadata_location, previous_metadata_location FROM iceberg_tables")
+            catalog_entries = cursor.fetchall()
+            
+            catalog_updates = 0
+            for table_name, metadata_location, previous_location in catalog_entries:
+                # Update metadata_location if it's a file:// URI
+                if metadata_location and metadata_location.startswith('file://'):
+                    local_path = metadata_location.replace('file://', '')
+                    relative_path = local_path[len(os.path.abspath(warehouse_dir)):].lstrip('/')
+                    new_metadata_location = f"{warehouse_root}/{relative_path}"
+                    
+                    cursor.execute("""
+                        UPDATE iceberg_tables 
+                        SET metadata_location = ?
+                        WHERE table_name = ? AND metadata_location = ?
+                    """, (new_metadata_location, table_name, metadata_location))
+                    catalog_updates += 1
+                
+                # Update previous_metadata_location if it exists and is a file:// URI
+                if previous_location and previous_location.startswith('file://'):
+                    local_path = previous_location.replace('file://', '')
+                    relative_path = local_path[len(os.path.abspath(warehouse_dir)):].lstrip('/')
+                    new_previous_location = f"{warehouse_root}/{relative_path}"
+                    
+                    cursor.execute("""
+                        UPDATE iceberg_tables 
+                        SET previous_metadata_location = ?
+                        WHERE table_name = ? AND previous_metadata_location = ?
+                    """, (new_previous_location, table_name, previous_location))
+            
+            conn.commit()
+            
+            if catalog_updates > 0:
+                # Verify the updates
+                cursor.execute("SELECT table_name, metadata_location FROM iceberg_tables")
+                updated_entries = cursor.fetchall()
+                
+                print(f"  Updated {catalog_updates} catalog entries:")
+                for table_name, location in updated_entries:
+                    if location.startswith(warehouse_root):
+                        short_location = location if len(location) <= 80 else location[:77] + "..."
+                        print(f"    {table_name}: {short_location}")
+            
+            conn.close()
+        except Exception as e:
+            print(f"  Warning: Failed to update catalog database: {e}")
     
     return updated_count
 
