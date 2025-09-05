@@ -30,7 +30,7 @@ Options:
   --coreDb PATH             Path to core SQLite database (default: data/sqlite/core.db)
   --bundlesDb PATH          Path to bundles SQLite database (default: data/sqlite/bundles.db)
   --stagingDir PATH         Staging directory for temp files (default: data/staging)
-  --warehouseDir PATH       Final warehouse directory (default: data/local/warehouse)
+  --warehouseDir PATH       Final warehouse directory (default: data/warehouse/default)
   --resume                  Resume from last checkpoint if export was interrupted
   --verifyCount             Verify row counts match SQLite after each partition (slower)
   --showTiming              Show detailed timing information for operations
@@ -63,7 +63,7 @@ SKIP_L1_TAGS=true
 CORE_DB_PATH="data/sqlite/core.db"
 BUNDLES_DB_PATH="data/sqlite/bundles.db"
 STAGING_DIR="data/staging"
-WAREHOUSE_DIR="data/local/warehouse"
+WAREHOUSE_DIR="data/warehouse/default"
 RESUME=false
 VERIFY_COUNT=false
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
