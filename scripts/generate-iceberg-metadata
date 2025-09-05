@@ -93,39 +93,17 @@ def get_tags_schema():
     )
 
 
-def create_local_catalog(warehouse_dir, warehouse_root=None):
+def create_local_catalog(warehouse_dir):
     """Create a local file-based Iceberg catalog using SQL catalog
     
     Args:
         warehouse_dir: Local directory path for the warehouse
-        warehouse_root: Optional custom warehouse URI for metadata references.
-                       This sets where the metadata claims the data files are located.
-                       For remote URIs (https://, s3://), the catalog still writes locally,
-                       but metadata will reference the remote location.
     """
     catalog_path = os.path.join(warehouse_dir, "catalog.db")
     
-    # Determine warehouse URI for metadata
-    if warehouse_root:
-        # Custom warehouse root - this is what will be written to metadata
-        warehouse_uri = warehouse_root.rstrip('/')
-        
-        # Special handling for certain cases
-        if warehouse_uri in ('file:', 'file://'):
-            # Just file:// without path - use absolute local path
-            warehouse_uri = f"file://{os.path.abspath(warehouse_dir)}"
-        elif not any(warehouse_uri.startswith(p) for p in ['file://', 'https://', 's3://', 'hdfs://', 'gs://', 'abfs://', 'wasb://']):
-            # No recognized protocol - assume it's a local path
-            if os.path.isabs(warehouse_root):
-                warehouse_uri = f"file://{warehouse_root}"
-            else:
-                warehouse_uri = f"file://{os.path.abspath(warehouse_root)}"
-    else:
-        # Default to file:// with absolute path
-        warehouse_uri = f"file://{os.path.abspath(warehouse_dir)}"
+    # Always use local file:// URI for actual catalog operations
+    warehouse_uri = f"file://{os.path.abspath(warehouse_dir)}"
     
-    # Note: For non-file:// schemes, we still create a local catalog
-    # but the metadata will reference the custom warehouse_uri
     catalog = SqlCatalog(
         "ar_io_catalog",
         **{
@@ -144,6 +122,60 @@ def create_local_catalog(warehouse_dir, warehouse_root=None):
             print(f"  Warning: Could not create namespace: {e}")
     
     return catalog
+
+
+def update_metadata_locations(warehouse_dir, warehouse_root):
+    """Update location fields in metadata files to use custom warehouse root
+    
+    Args:
+        warehouse_dir: Local directory containing the metadata
+        warehouse_root: Custom warehouse root URI to use in metadata
+    """
+    import json
+    
+    # Clean up the warehouse root
+    warehouse_root = warehouse_root.rstrip('/')
+    
+    # Find all metadata JSON files
+    metadata_files = []
+    for table_name in ["blocks", "transactions", "tags"]:
+        table_metadata_dir = os.path.join(warehouse_dir, "default.db", table_name, "metadata")
+        if os.path.exists(table_metadata_dir):
+            for filename in os.listdir(table_metadata_dir):
+                if filename.endswith('.metadata.json') and not filename.startswith('v'):
+                    metadata_files.append(os.path.join(table_metadata_dir, filename))
+    
+    updated_count = 0
+    for metadata_file in metadata_files:
+        try:
+            # Read the metadata
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Update the location field
+            original_location = metadata.get('location', '')
+            if original_location.startswith('file://'):
+                # Extract the relative path from the original location
+                local_abs_path = original_location.replace('file://', '')
+                warehouse_abs_path = os.path.abspath(warehouse_dir)
+                if local_abs_path.startswith(warehouse_abs_path):
+                    relative_path = local_abs_path[len(warehouse_abs_path):].lstrip('/')
+                    new_location = f"{warehouse_root}/{relative_path}"
+                    metadata['location'] = new_location
+                    
+                    # Write the updated metadata back
+                    with open(metadata_file, 'w') as f:
+                        json.dump(metadata, f, separators=(',', ':'))
+                    
+                    updated_count += 1
+                    print(f"    Updated: {os.path.basename(metadata_file)}")
+        except Exception as e:
+            print(f"    Warning: Failed to update {metadata_file}: {e}")
+    
+    if updated_count > 0:
+        print(f"  Updated {updated_count} metadata files with warehouse root: {warehouse_root}")
+    
+    return updated_count
 
 
 def register_parquet_files_as_iceberg(catalog, table_name, schema, parquet_files, warehouse_dir):
@@ -336,14 +368,8 @@ Query the generated tables:
     
     # Create catalog
     try:
-        catalog = create_local_catalog(args.warehouse_dir, args.warehouse_root)
-        if args.warehouse_root:
-            print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
-            print(f"Metadata will reference warehouse root: {args.warehouse_root}")
-            if not args.warehouse_root.startswith('file://'):
-                print(f"Note: Catalog and metadata are written locally, but table locations reference remote URI")
-        else:
-            print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
+        catalog = create_local_catalog(args.warehouse_dir)
+        print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
     except Exception as e:
         print(f"Error creating catalog: {e}", file=sys.stderr)
         import traceback
@@ -398,11 +424,19 @@ Query the generated tables:
             continue
     
     if successful_tables:
+        # Post-process metadata if custom warehouse root is specified
+        if args.warehouse_root:
+            print()
+            print("Updating metadata with custom warehouse root...")
+            update_metadata_locations(args.warehouse_dir, args.warehouse_root)
+        
         print()
         print("=" * 60)
         print("Iceberg metadata generation complete!")
         print(f"Successfully created {len(successful_tables)} tables: {', '.join(successful_tables)}")
         print(f"Catalog location: {args.warehouse_dir}/catalog.db")
+        if args.warehouse_root:
+            print(f"Metadata references warehouse root: {args.warehouse_root}")
         print()
         print("To query these tables:")
         print()
