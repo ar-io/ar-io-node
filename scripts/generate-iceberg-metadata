@@ -93,16 +93,44 @@ def get_tags_schema():
     )
 
 
-def create_local_catalog(warehouse_dir):
-    """Create a local file-based Iceberg catalog using SQL catalog"""
+def create_local_catalog(warehouse_dir, warehouse_root=None):
+    """Create a local file-based Iceberg catalog using SQL catalog
+    
+    Args:
+        warehouse_dir: Local directory path for the warehouse
+        warehouse_root: Optional custom warehouse URI for metadata references.
+                       This sets where the metadata claims the data files are located.
+                       For remote URIs (https://, s3://), the catalog still writes locally,
+                       but metadata will reference the remote location.
+    """
     catalog_path = os.path.join(warehouse_dir, "catalog.db")
     
-    # Use SQL catalog for local file system
+    # Determine warehouse URI for metadata
+    if warehouse_root:
+        # Custom warehouse root - this is what will be written to metadata
+        warehouse_uri = warehouse_root.rstrip('/')
+        
+        # Special handling for certain cases
+        if warehouse_uri in ('file:', 'file://'):
+            # Just file:// without path - use absolute local path
+            warehouse_uri = f"file://{os.path.abspath(warehouse_dir)}"
+        elif not any(warehouse_uri.startswith(p) for p in ['file://', 'https://', 's3://', 'hdfs://', 'gs://', 'abfs://', 'wasb://']):
+            # No recognized protocol - assume it's a local path
+            if os.path.isabs(warehouse_root):
+                warehouse_uri = f"file://{warehouse_root}"
+            else:
+                warehouse_uri = f"file://{os.path.abspath(warehouse_root)}"
+    else:
+        # Default to file:// with absolute path
+        warehouse_uri = f"file://{os.path.abspath(warehouse_dir)}"
+    
+    # Note: For non-file:// schemes, we still create a local catalog
+    # but the metadata will reference the custom warehouse_uri
     catalog = SqlCatalog(
         "ar_io_catalog",
         **{
             "uri": f"sqlite:///{catalog_path}",
-            "warehouse": f"file://{os.path.abspath(warehouse_dir)}",
+            "warehouse": warehouse_uri,
         }
     )
     
@@ -264,6 +292,8 @@ This version correctly matches the schema that DuckDB exports to Parquet.
 Examples:
   %(prog)s --warehouse-dir data/parquet-test
   %(prog)s --warehouse-dir /path/to/warehouse
+  %(prog)s --warehouse-dir data/export --warehouse-root https://example.com/warehouse
+  %(prog)s --warehouse-dir /local/data --warehouse-root s3://my-bucket/iceberg
   
 Query the generated tables:
   Python with PyIceberg:
@@ -286,6 +316,13 @@ Query the generated tables:
         help='Warehouse directory containing Parquet data (default: data/local/warehouse)'
     )
     
+    parser.add_argument(
+        '--warehouse-root',
+        help='Optional warehouse root URI for metadata references (e.g., file:///path, https://example.com/warehouse, s3://bucket/prefix). '
+             'Note: For remote URIs, metadata is still written locally but references will point to the remote location. '
+             'If not provided, defaults to file:// with absolute path to warehouse-dir'
+    )
+    
     args = parser.parse_args()
     
     # Check if warehouse directory exists
@@ -299,8 +336,14 @@ Query the generated tables:
     
     # Create catalog
     try:
-        catalog = create_local_catalog(args.warehouse_dir)
-        print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
+        catalog = create_local_catalog(args.warehouse_dir, args.warehouse_root)
+        if args.warehouse_root:
+            print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
+            print(f"Metadata will reference warehouse root: {args.warehouse_root}")
+            if not args.warehouse_root.startswith('file://'):
+                print(f"Note: Catalog and metadata are written locally, but table locations reference remote URI")
+        else:
+            print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
     except Exception as e:
         print(f"Error creating catalog: {e}", file=sys.stderr)
         import traceback
