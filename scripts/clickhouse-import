@@ -487,7 +487,7 @@ find_partitions() {
   local input_dir=$1
   local partitions=()
   
-  # Look for height=* directories in the data subdirectories
+  # Check for the expected structure: {blocks,transactions,tags}/data/height=*
   for table_dir in "$input_dir"/{blocks,transactions,tags}; do
     if [[ -d "$table_dir/data" ]]; then
       for partition_dir in "$table_dir/data"/height=*; do
@@ -502,8 +502,23 @@ find_partitions() {
     fi
   done
   
-  # Sort partitions
-  printf '%s\n' "${partitions[@]}" | sort
+  # If no partitions found in the expected structure, provide helpful error message
+  if [[ ${#partitions[@]} -eq 0 ]]; then
+    # Check if user might have passed a table-specific directory
+    for partition_dir in "$input_dir"/height=*; do
+      if [[ -d "$partition_dir" ]]; then
+        echo "Error: Found partitions in $input_dir but expected base directory structure." >&2
+        echo "For --all-partitions, provide the base directory containing {blocks,transactions,tags} subdirectories." >&2
+        echo "Example: --input-dir data/datasets/default (not data/datasets/default/transactions/data)" >&2
+        exit 1
+      fi
+    done
+  fi
+  
+  # Sort partitions (only if we have any)
+  if [[ ${#partitions[@]} -gt 0 ]]; then
+    printf '%s\n' "${partitions[@]}" | sort
+  fi
 }
 
 # Main execution
