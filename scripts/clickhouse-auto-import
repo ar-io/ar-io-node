@@ -4,7 +4,10 @@
 # This script continuously exports data from AR.IO SQLite databases to Parquet format
 # with Iceberg-compatible structure and imports it to ClickHouse.
 # 
-# Uses the parquet-export script for both export and ClickHouse import in one operation.
+# Uses a two-step approach:
+# 1. parquet-export script to export data to Parquet files with Iceberg-compatible partitioning
+# 2. clickhouse-import script to import the Parquet files to ClickHouse database
+# 
 # The exported Parquet files are stored with Iceberg-compatible partitioning in the warehouse directory.
 
 # Load common library
@@ -91,12 +94,11 @@ while true; do
 
         echo "Processing heights $current_height to $end_height..."
 
-        # Step 1: Export to Parquet using parquet-export script with ClickHouse integration
-        echo "Starting Parquet export with ClickHouse integration..."
+        # Step 1: Export to Parquet format
+        echo "Starting Parquet export..."
         export_start_time=$(date +%s)
         
-        # Run parquet-export script with ClickHouse enabled
-        # The script handles both export and import in one operation
+        # Run parquet-export script (export only, no ClickHouse integration)
         # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
         ./scripts/parquet-export \
             --start-height "$current_height" \
@@ -106,32 +108,61 @@ while true; do
             --staging-dir "$staging_dir" \
             --max-file-rows "$max_rows_per_file" \
             --include-l1-transactions \
-            --include-l1-tags \
-            --enable-clickhouse \
-            --clickhouse-host "$CLICKHOUSE_HOST" \
-            --clickhouse-port "$CLICKHOUSE_PORT" \
-            --clickhouse-user "$CLICKHOUSE_USER" \
-            --clickhouse-password "$CLICKHOUSE_PASSWORD"
+            --include-l1-tags
         
         export_status=$?
         export_complete_time=$(date +%s)
         
         if [ $export_status -eq 0 ]; then
-            echo "Export and ClickHouse import completed successfully."
-            log_timing "Export to parquet and ClickHouse import" "$export_start_time" "$export_complete_time"
-            import_success=true
+            echo "Parquet export completed successfully."
+            log_timing "Export to parquet" "$export_start_time" "$export_complete_time"
+            export_success=true
         else
-            echo "Warning: Export or ClickHouse import failed with status $export_status"
-            log_timing "Export to parquet and ClickHouse import (failed)" "$export_start_time" "$export_complete_time"
+            echo "Warning: Parquet export failed with status $export_status"
+            log_timing "Export to parquet (failed)" "$export_start_time" "$export_complete_time"
+            export_success=false
+        fi
+
+        # Step 2: Import to ClickHouse if export succeeded
+        if [ "$export_success" = true ]; then
+            echo "Starting ClickHouse import..."
+            import_start_time=$(date +%s)
+            
+            # Generate partition name matching the height range format
+            partition_name="height=${current_height}-$((end_height - 1))"
+            
+            ./scripts/clickhouse-import \
+                --input-dir "$dataset_dir" \
+                --partition "$partition_name" \
+                --clickhouse-host "$CLICKHOUSE_HOST" \
+                --clickhouse-port "$CLICKHOUSE_PORT" \
+                --clickhouse-user "$CLICKHOUSE_USER" \
+                --clickhouse-password "$CLICKHOUSE_PASSWORD" \
+                --resume
+            
+            import_status=$?
+            import_complete_time=$(date +%s)
+            
+            if [ $import_status -eq 0 ]; then
+                echo "ClickHouse import completed successfully."
+                log_timing "ClickHouse import" "$import_start_time" "$import_complete_time"
+                import_success=true
+            else
+                echo "Warning: ClickHouse import failed with status $import_status"
+                log_timing "ClickHouse import (failed)" "$import_start_time" "$import_complete_time"
+                import_success=false
+            fi
+        else
+            echo "Skipping ClickHouse import because Parquet export failed."
             import_success=false
         fi
 
-        # Step 2: Mark this height range as processed
+        # Step 3: Mark this height range as processed
         if [ "$import_success" = true ]; then
             touch "$processed_dir/heights_${current_height}_${end_height}.done"
         fi
 
-        # Step 3: Prune stable data items only if import was successful
+        # Step 4: Prune stable data items only if import was successful
         if [ "$import_success" = true ]; then
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)
