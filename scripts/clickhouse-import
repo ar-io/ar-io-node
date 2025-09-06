@@ -1,0 +1,578 @@
+#!/usr/bin/env bash
+
+# AR.IO Gateway - ClickHouse Import Script
+# Imports Parquet files from warehouse structure to ClickHouse database
+
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+set -euo pipefail
+
+# Check required commands
+if ! require_commands clickhouse; then
+  exit 1
+fi
+
+usage() {
+  cat <<USAGE
+Usage: $0 --input-dir DIR [--partition NAME | --partitions LIST | --all-partitions] [options]
+
+Import Modes:
+  --partition NAME          Import single partition (e.g., height=1000-1999)
+  --partitions LIST         Import multiple partitions (comma-separated)
+  --all-partitions          Import all partitions found in input directory
+  --parquet-file FILE       Import single Parquet file to specific table
+
+Required:
+  --input-dir DIR           Directory containing partitioned Parquet files
+
+ClickHouse Options:
+  --clickhouse-host HOST    ClickHouse host (default: localhost)
+  --clickhouse-port PORT    ClickHouse port (default: 9000)
+  --clickhouse-user USER    ClickHouse user (default: default)
+  --clickhouse-password PWD ClickHouse password (default: empty)
+
+Additional Options:
+  --table NAME              Table name for single file import (required with --parquet-file)
+  --resume                  Skip partitions that were already imported successfully
+  --dry-run                 Show what would be imported without actually doing it
+  --show-timing             Show detailed timing information
+
+Examples:
+  # Import single partition
+  $0 --input-dir ./data/datasets/default --partition height=1000-1999
+
+  # Import multiple partitions
+  $0 --input-dir ./data/datasets/default --partitions "height=1000-1999,height=2000-2999"
+
+  # Import all partitions with resume
+  $0 --input-dir ./data/datasets/default --all-partitions --resume
+
+  # Import single file
+  $0 --parquet-file ./blocks.parquet --table staging_blocks
+
+USAGE
+}
+
+# Configuration defaults
+INPUT_DIR=""
+PARTITION=""
+PARTITIONS=""
+ALL_PARTITIONS=false
+PARQUET_FILE=""
+TABLE=""
+RESUME=false
+DRY_RUN=false
+SHOW_TIMING=false
+
+# Load environment and ClickHouse configuration
+load_env
+load_clickhouse_config
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --input-dir)
+      INPUT_DIR=$2
+      shift 2
+      ;;
+    --partition)
+      PARTITION=$2
+      shift 2
+      ;;
+    --partitions)
+      PARTITIONS=$2
+      shift 2
+      ;;
+    --all-partitions)
+      ALL_PARTITIONS=true
+      shift 1
+      ;;
+    --parquet-file)
+      PARQUET_FILE=$2
+      shift 2
+      ;;
+    --table)
+      TABLE=$2
+      shift 2
+      ;;
+    --clickhouse-host)
+      CLICKHOUSE_HOST=$2
+      shift 2
+      ;;
+    --clickhouse-port)
+      CLICKHOUSE_PORT=$2
+      shift 2
+      ;;
+    --clickhouse-user)
+      CLICKHOUSE_USER=$2
+      shift 2
+      ;;
+    --clickhouse-password)
+      CLICKHOUSE_PASSWORD=$2
+      shift 2
+      ;;
+    --resume)
+      RESUME=true
+      shift 1
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift 1
+      ;;
+    --show-timing)
+      SHOW_TIMING=true
+      shift 1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# Override log_timing with millisecond precision version if timing enabled
+if [[ "${SHOW_TIMING:-false}" == "true" ]]; then
+  log_timing() {
+    log_timing_ms "$1" "$2" "${3:-$(date +%s%N)}" "true"
+  }
+fi
+
+# Validation
+if [[ -z "$PARQUET_FILE" ]]; then
+  # Partition mode validation
+  if [[ -z "$INPUT_DIR" ]]; then
+    echo "Error: Must specify --input-dir" >&2
+    usage
+    exit 1
+  fi
+  
+  if [[ ! -d "$INPUT_DIR" ]]; then
+    echo "Error: Input directory does not exist: $INPUT_DIR" >&2
+    exit 1
+  fi
+  
+  # Check that exactly one import mode is specified
+  import_modes=0
+  [[ -n "$PARTITION" ]] && import_modes=$((import_modes + 1))
+  [[ -n "$PARTITIONS" ]] && import_modes=$((import_modes + 1))
+  [[ "$ALL_PARTITIONS" == "true" ]] && import_modes=$((import_modes + 1))
+  if [[ $import_modes -eq 0 ]]; then
+    echo "Error: Must specify one of --partition, --partitions, or --all-partitions" >&2
+    usage
+    exit 1
+  elif [[ $import_modes -gt 1 ]]; then
+    echo "Error: Can only specify one of --partition, --partitions, or --all-partitions" >&2
+    usage
+    exit 1
+  fi
+else
+  # File mode validation
+  if [[ ! -f "$PARQUET_FILE" ]]; then
+    echo "Error: Parquet file does not exist: $PARQUET_FILE" >&2
+    exit 1
+  fi
+  
+  if [[ -z "$TABLE" ]]; then
+    echo "Error: Must specify --table when using --parquet-file" >&2
+    usage
+    exit 1
+  fi
+fi
+
+# Set up import tracking
+if [[ -n "$INPUT_DIR" ]]; then
+  IMPORT_LOG="$INPUT_DIR/.clickhouse_imports"
+fi
+
+echo "ClickHouse Import Configuration:"
+echo "  Host: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
+echo "  User: $CLICKHOUSE_USER"
+
+# Test ClickHouse connection
+test_clickhouse_connection() {
+  echo "  Testing ClickHouse connection..." >&2
+  if ! timeout 10 clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+       --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+       --query "SELECT 1" >/dev/null 2>&1; then
+    echo "Error: Cannot connect to ClickHouse at $CLICKHOUSE_HOST:$CLICKHOUSE_PORT" >&2
+    echo "Please check connection settings and ensure ClickHouse is running" >&2
+    echo "Debug: CLICKHOUSE_PASSWORD is ${#CLICKHOUSE_PASSWORD} characters long" >&2
+    exit 1
+  fi
+  echo "  ✓ Connection successful"
+}
+
+# Initialize ClickHouse schema if needed
+initialize_clickhouse_schema() {
+  echo "Initializing ClickHouse schema..."
+  if [[ ! -f "src/database/clickhouse/schema.sql" ]]; then
+    echo "Error: ClickHouse schema file not found at src/database/clickhouse/schema.sql" >&2
+    exit 1
+  fi
+  
+  clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+    --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+    --multiquery < src/database/clickhouse/schema.sql 2>/dev/null || {
+    echo "Warning: Schema initialization may have failed (this is normal if schema already exists)" >&2
+  }
+}
+
+# Check if partition was already imported
+was_imported() {
+  local partition=$1
+  if [[ -f "$IMPORT_LOG" ]]; then
+    grep -q "|$partition$" "$IMPORT_LOG" 2>/dev/null
+  else
+    false
+  fi
+}
+
+# Log successful import
+log_import() {
+  local partition=$1
+  if [[ -n "$INPUT_DIR" ]]; then
+    echo "$(date -Iseconds)|$partition" >> "$IMPORT_LOG"
+  fi
+}
+
+# Import a single Parquet file to ClickHouse table
+import_parquet_file() {
+  local parquet_file=$1
+  local table=$2
+  
+  echo "  Importing file: $(basename "$parquet_file") -> $table"
+  
+  if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+       --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+       --query="INSERT INTO $table FROM INFILE '$parquet_file' FORMAT Parquet;"; then
+    echo "    Error: Failed to import file: $parquet_file" >&2
+    return 1
+  fi
+  
+  return 0
+}
+
+# Import all Parquet files for a partition
+import_partition_files() {
+  local partition_base_dir=$1
+  local partition_name=$2
+  
+  echo "  Importing partition files for: $partition_name"
+  local import_start=$(date +%s%N)
+  local success=true
+  
+  # Import blocks
+  for parquet_file in "$partition_base_dir"/blocks/data/"$partition_name"/*.parquet; do
+    if [[ -f "$parquet_file" ]]; then
+      if ! import_parquet_file "$parquet_file" "staging_blocks"; then
+        success=false
+      fi
+    fi
+  done
+  
+  # Import transactions
+  for parquet_file in "$partition_base_dir"/transactions/data/"$partition_name"/*.parquet; do
+    if [[ -f "$parquet_file" ]]; then
+      if ! import_parquet_file "$parquet_file" "staging_transactions"; then
+        success=false
+      fi
+    fi
+  done
+  
+  # Import tags
+  for parquet_file in "$partition_base_dir"/tags/data/"$partition_name"/*.parquet; do
+    if [[ -f "$parquet_file" ]]; then
+      if ! import_parquet_file "$parquet_file" "staging_tags"; then
+        success=false
+      fi
+    fi
+  done
+  
+  local import_end=$(date +%s%N)
+  log_timing "Import partition files for $partition_name" "$import_start" "$import_end"
+  
+  if ! $success; then
+    echo "    Warning: Some files failed to import for partition: $partition_name" >&2
+    return 1
+  fi
+  
+  return 0
+}
+
+# Move data from staging to final tables
+migrate_staging_to_final() {
+  local partition_name=$1
+  
+  echo "  Moving data from staging to final ClickHouse tables for: $partition_name"
+  local migrate_start=$(date +%s%N)
+  
+  # Extract height range from partition_name
+  local height_range=${partition_name#height=}
+  local min_height=${height_range%-*}
+  local max_height=${height_range#*-}
+  
+  # Move staging data to final tables (using JOIN logic from original implementation)
+  for prefix in "" "id_" "owner_" "target_"; do
+    echo "    Migrating data to ${prefix}transactions table..."
+    
+    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+      --query "INSERT INTO ${prefix}transactions
+SELECT
+  txs.height,
+  txs.block_transaction_index,
+  txs.is_data_item,
+  txs.id,
+  txs.anchor,
+  txs.owner_address,
+  txs.target,
+  txs.quantity,
+  txs.reward,
+  txs.data_size,
+  txs.content_type,
+  txs.format,
+  txs.data_root,
+  txs.parent AS parent_id,
+  blocks.indep_hash AS block_indep_hash,
+  blocks.block_timestamp,
+  blocks.previous_block AS block_previous_block,
+  txs.indexed_at,
+  now() AS inserted_at,
+  txs.offset,
+  txs.size,
+  txs.data_offset,
+  txs.owner_offset,
+  txs.owner_size,
+  txs.owner,
+  txs.signature_offset,
+  txs.signature_size,
+  txs.signature_type,
+  txs.root_transaction_id,
+  txs.root_parent_offset,
+  arrayMap(x -> (x.1, x.2), 
+    arraySort(x -> x.3,
+      groupArrayIf((tag_name, tag_value, tag_index), tag_name != '')
+    )
+  ) AS tags,
+  COUNT(CASE WHEN tags.tag_name != '' THEN 1 END) AS tags_count
+FROM staging_transactions txs
+LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
+JOIN staging_blocks blocks ON txs.height = blocks.height
+WHERE txs.height >= ${min_height} AND txs.height <= ${max_height}
+GROUP BY 
+  txs.height,
+  txs.block_transaction_index,
+  txs.is_data_item,
+  txs.id,
+  txs.anchor,
+  txs.owner_address,
+  txs.target,
+  txs.quantity,
+  txs.reward,
+  txs.data_size,
+  txs.content_type,
+  txs.format,
+  txs.data_root,
+  txs.parent,
+  blocks.indep_hash,
+  blocks.block_timestamp,
+  blocks.previous_block,
+  txs.indexed_at,
+  txs.offset,
+  txs.size,
+  txs.data_offset,
+  txs.owner_offset,
+  txs.owner_size,
+  txs.owner,
+  txs.signature_offset,
+  txs.signature_size,
+  txs.signature_type,
+  txs.root_transaction_id,
+  txs.root_parent_offset;" || {
+      echo "    Warning: Failed to migrate data to ${prefix}transactions table" >&2
+      return 1
+    }
+  done
+  
+  local migrate_end=$(date +%s%N)
+  log_timing "Migrate staging to final for $partition_name" "$migrate_start" "$migrate_end"
+  
+  return 0
+}
+
+# Clean up staging tables for a height range
+cleanup_staging_tables() {
+  local partition_name=$1
+  
+  echo "  Cleaning up staging tables for: $partition_name"
+  
+  # Extract height range
+  local height_range=${partition_name#height=}
+  local min_height=${height_range%-*}
+  local max_height=${height_range#*-}
+  
+  # Clear staging tables for this height range
+  clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+    --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+    --query "ALTER TABLE staging_blocks DELETE WHERE height >= $min_height AND height <= $max_height;" || {
+    echo "    Warning: Failed to clean staging_blocks" >&2
+  }
+  
+  clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+    --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+    --query "ALTER TABLE staging_transactions DELETE WHERE height >= $min_height AND height <= $max_height;" || {
+    echo "    Warning: Failed to clean staging_transactions" >&2
+  }
+  
+  clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+    --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
+    --query "ALTER TABLE staging_tags DELETE WHERE height >= $min_height AND height <= $max_height;" || {
+    echo "    Warning: Failed to clean staging_tags" >&2
+  }
+}
+
+# Import a single partition
+import_partition() {
+  local partition_name=$1
+  
+  echo "Importing partition: $partition_name"
+  
+  # Check if already imported and resume is enabled
+  if $RESUME && was_imported "$partition_name"; then
+    echo "  Partition already imported (skipping due to --resume): $partition_name"
+    return 0
+  fi
+  
+  if $DRY_RUN; then
+    echo "  [DRY RUN] Would import partition: $partition_name"
+    return 0
+  fi
+  
+  local partition_start=$(date +%s%N)
+  
+  # Import partition files to staging tables
+  if ! import_partition_files "$INPUT_DIR" "$partition_name"; then
+    echo "  Error: Failed to import files for partition: $partition_name" >&2
+    return 1
+  fi
+  
+  # Move data from staging to final tables
+  if ! migrate_staging_to_final "$partition_name"; then
+    echo "  Error: Failed to migrate data for partition: $partition_name" >&2
+    return 1
+  fi
+  
+  # Clean up staging tables
+  cleanup_staging_tables "$partition_name"
+  
+  # Log successful import
+  log_import "$partition_name"
+  
+  local partition_end=$(date +%s%N)
+  log_timing "Complete partition import for $partition_name" "$partition_start" "$partition_end"
+  
+  echo "  ✓ Successfully imported partition: $partition_name"
+  return 0
+}
+
+# Find all partitions in input directory
+find_partitions() {
+  local input_dir=$1
+  local partitions=()
+  
+  # Look for height=* directories in the data subdirectories
+  for table_dir in "$input_dir"/{blocks,transactions,tags}; do
+    if [[ -d "$table_dir/data" ]]; then
+      for partition_dir in "$table_dir/data"/height=*; do
+        if [[ -d "$partition_dir" ]]; then
+          local partition_name=$(basename "$partition_dir")
+          # Add to array if not already present
+          if [[ ! " ${partitions[*]} " =~ " ${partition_name} " ]]; then
+            partitions+=("$partition_name")
+          fi
+        fi
+      done
+    fi
+  done
+  
+  # Sort partitions
+  printf '%s\n' "${partitions[@]}" | sort
+}
+
+# Main execution
+main() {
+  test_clickhouse_connection
+  initialize_clickhouse_schema
+  
+  if [[ -n "$PARQUET_FILE" ]]; then
+    # Single file import mode
+    echo "Importing single file: $PARQUET_FILE -> $TABLE"
+    if $DRY_RUN; then
+      echo "[DRY RUN] Would import file: $PARQUET_FILE to table: $TABLE"
+    else
+      if import_parquet_file "$PARQUET_FILE" "$TABLE"; then
+        echo "✓ Successfully imported file to ClickHouse"
+      else
+        echo "Error: Failed to import file" >&2
+        exit 1
+      fi
+    fi
+  else
+    # Partition import mode
+    local partitions_to_import=()
+    
+    if [[ -n "$PARTITION" ]]; then
+      partitions_to_import=("$PARTITION")
+    elif [[ -n "$PARTITIONS" ]]; then
+      IFS=',' read -ra partitions_to_import <<< "$PARTITIONS"
+    elif [[ "$ALL_PARTITIONS" == "true" ]]; then
+      readarray -t partitions_to_import < <(find_partitions "$INPUT_DIR")
+    fi
+    
+    if [[ ${#partitions_to_import[@]} -eq 0 ]]; then
+      echo "No partitions found to import" >&2
+      exit 1
+    fi
+    
+    echo "Found ${#partitions_to_import[@]} partition(s) to import:"
+    printf '  %s\n' "${partitions_to_import[@]}"
+    echo
+    
+    local success_count=0
+    local total_count=${#partitions_to_import[@]}
+    
+    for partition in "${partitions_to_import[@]}"; do
+      if import_partition "$partition"; then
+        ((success_count++))
+      else
+        echo "Warning: Failed to import partition: $partition" >&2
+      fi
+    done
+    
+    echo
+    echo "Import Summary:"
+    echo "  Total partitions: $total_count"
+    echo "  Successful: $success_count"
+    echo "  Failed: $((total_count - success_count))"
+    
+    if [[ $success_count -eq $total_count ]]; then
+      echo "✓ All partitions imported successfully"
+    elif [[ $success_count -gt 0 ]]; then
+      echo "⚠ Some partitions imported successfully, but some failed"
+      exit 1
+    else
+      echo "✗ No partitions were imported successfully"
+      exit 1
+    fi
+  fi
+}
+
+# Run main function
+main

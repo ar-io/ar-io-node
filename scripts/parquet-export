@@ -244,20 +244,6 @@ if $ENABLE_CLICKHOUSE; then
   echo "ClickHouse integration enabled:"
   echo "  Host: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
   echo "  User: $CLICKHOUSE_USER"
-  
-  # Test ClickHouse connection
-  if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-       --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-       --query "SELECT 1" >/dev/null 2>&1; then
-    echo "Warning: Cannot connect to ClickHouse. Continuing without import." >&2
-    ENABLE_CLICKHOUSE=false
-  else
-    # Initialize ClickHouse schema if needed
-    echo "Initializing ClickHouse schema..."
-    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-      --multiquery < src/database/clickhouse/schema.sql 2>/dev/null || true
-  fi
 fi
 
 if $VERIFY_COUNT; then
@@ -300,21 +286,6 @@ save_checkpoint() {
   echo "$1" > "$CHECKPOINT_FILE"
 }
 
-# Function to log ClickHouse import
-log_clickhouse_import() {
-  local partition_dir=$1
-  echo "$(date -Iseconds)|$partition_dir" >> "$CLICKHOUSE_IMPORT_LOG"
-}
-
-# Function to check if partition was already imported to ClickHouse
-was_imported_to_clickhouse() {
-  local partition_dir=$1
-  if [[ -f "$CLICKHOUSE_IMPORT_LOG" ]]; then
-    grep -q "|$partition_dir$" "$CLICKHOUSE_IMPORT_LOG" 2>/dev/null
-  else
-    false
-  fi
-}
 
 # Function to verify counts between SQLite and DuckDB
 verify_partition_counts() {
@@ -589,177 +560,6 @@ verify_partition_counts() {
   return 0
 }
 
-# Function to import partition to ClickHouse
-import_partition_to_clickhouse() {
-  local staging_base=$1
-  local partition_dir=$2
-  
-  if ! $ENABLE_CLICKHOUSE; then
-    return 0
-  fi
-  
-  # Check if already imported (for resume scenarios)
-  if was_imported_to_clickhouse "$partition_dir"; then
-    echo "  Partition already imported to ClickHouse: $partition_dir"
-    return 0
-  fi
-  
-  echo "  Importing partition to ClickHouse: $partition_dir"
-  
-  local success=true
-  
-  # Import blocks
-  for parquet_file in "$staging_base"/blocks/"$partition_dir"/*.parquet; do
-    if [[ -f "$parquet_file" ]]; then
-      echo "    Importing blocks: $(basename "$parquet_file")"
-      if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-           --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-           --query="INSERT INTO staging_blocks FROM INFILE '$parquet_file' FORMAT Parquet;"; then
-        echo "    Warning: Failed to import blocks file: $parquet_file" >&2
-        success=false
-      fi
-    fi
-  done
-  
-  # Import transactions
-  for parquet_file in "$staging_base"/transactions/"$partition_dir"/*.parquet; do
-    if [[ -f "$parquet_file" ]]; then
-      echo "    Importing transactions: $(basename "$parquet_file")"
-      if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-           --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-           --query="INSERT INTO staging_transactions FROM INFILE '$parquet_file' FORMAT Parquet;"; then
-        echo "    Warning: Failed to import transactions file: $parquet_file" >&2
-        success=false
-      fi
-    fi
-  done
-  
-  # Import tags
-  for parquet_file in "$staging_base"/tags/"$partition_dir"/*.parquet; do
-    if [[ -f "$parquet_file" ]]; then
-      echo "    Importing tags: $(basename "$parquet_file")"
-      if ! clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-           --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-           --query="INSERT INTO staging_tags FROM INFILE '$parquet_file' FORMAT Parquet;"; then
-        echo "    Warning: Failed to import tags file: $parquet_file" >&2
-        success=false
-      fi
-    fi
-  done
-  
-  if $success; then
-    # Move data from staging to final tables in ClickHouse
-    echo "    Moving data from staging to final ClickHouse tables..."
-    
-    # Extract height range from partition_dir
-    local height_range=${partition_dir#height=}
-    local min_height=${height_range%-*}
-    local max_height=${height_range#*-}
-    
-    # Move staging data to final tables (using JOIN logic from original clickhouse-import)
-    for prefix in "" "id_" "owner_" "target_"; do
-      clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-        --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" <<EOF
-INSERT INTO ${prefix}transactions
-SELECT
-  txs.height,
-  txs.block_transaction_index,
-  txs.is_data_item,
-  txs.id,
-  txs.anchor,
-  txs.owner_address,
-  txs.target,
-  txs.quantity,
-  txs.reward,
-  txs.data_size,
-  txs.content_type,
-  txs.format,
-  txs.data_root,
-  txs.parent AS parent_id,
-  blocks.indep_hash AS block_indep_hash,
-  blocks.block_timestamp,
-  blocks.previous_block AS block_previous_block,
-  txs.indexed_at,
-  now() AS inserted_at,
-  txs.offset,
-  txs.size,
-  txs.data_offset,
-  txs.owner_offset,
-  txs.owner_size,
-  txs.owner,
-  txs.signature_offset,
-  txs.signature_size,
-  txs.signature_type,
-  txs.root_transaction_id,
-  txs.root_parent_offset,
-  arrayMap(x -> (x.1, x.2), 
-    arraySort(x -> x.3,
-      groupArrayIf((tag_name, tag_value, tag_index), tag_name != '')
-    )
-  ) AS tags,
-  COUNT(CASE WHEN tags.tag_name != '' THEN 1 END) AS tags_count
-FROM staging_transactions txs
-LEFT JOIN staging_tags tags ON txs.height = tags.height AND txs.id = tags.id
-JOIN staging_blocks blocks ON txs.height = blocks.height
-WHERE txs.height >= $min_height AND txs.height <= $max_height
-GROUP BY 
-  txs.height,
-  txs.block_transaction_index,
-  txs.is_data_item,
-  txs.id,
-  txs.anchor,
-  txs.owner_address,
-  txs.target,
-  txs.quantity,
-  txs.reward,
-  txs.data_size,
-  txs.content_type,
-  txs.format,
-  txs.data_root,
-  txs.parent,
-  blocks.indep_hash,
-  blocks.block_timestamp,
-  blocks.previous_block,
-  txs.indexed_at,
-  txs.offset,
-  txs.size,
-  txs.data_offset,
-  txs.owner_offset,
-  txs.owner_size,
-  txs.owner,
-  txs.signature_offset,
-  txs.signature_size,
-  txs.signature_type,
-  txs.root_transaction_id,
-  txs.root_parent_offset;
-EOF
-    done
-    
-    # Skip blocks table insertion - not used by GraphQL implementation
-    # Skip tags table insertion - tags are aggregated into transactions table
-    
-    # Clear staging tables for this height range
-    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-      --query "ALTER TABLE staging_blocks DELETE WHERE height >= $min_height AND height <= $max_height;"
-    
-    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-      --query "ALTER TABLE staging_transactions DELETE WHERE height >= $min_height AND height <= $max_height;"
-    
-    clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
-      --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-      --query "ALTER TABLE staging_tags DELETE WHERE height >= $min_height AND height <= $max_height;"
-    
-    # Log successful import
-    log_clickhouse_import "$partition_dir"
-    echo "    ClickHouse import completed for partition: $partition_dir"
-  else
-    echo "    Warning: Some files failed to import to ClickHouse" >&2
-  fi
-  
-  return 0
-}
 
 # Initialize database once at the start
 initialize_database() {
@@ -1076,7 +876,20 @@ while [[ $current_height -le $END_HEIGHT ]]; do
   partition_dir="height=${current_partition_start}-${current_partition_end}"
   
   # Import to ClickHouse if enabled (before moving to warehouse)
-  import_partition_to_clickhouse "$JOB_STAGING_DIR" "$partition_dir"
+  if $ENABLE_CLICKHOUSE; then
+    echo "  Importing partition to ClickHouse: $partition_dir"
+    if "$SCRIPT_DIR/clickhouse-import" \
+      --input-dir "$JOB_STAGING_DIR" \
+      --partition "$partition_dir" \
+      --clickhouse-host "$CLICKHOUSE_HOST" \
+      --clickhouse-port "$CLICKHOUSE_PORT" \
+      --clickhouse-user "$CLICKHOUSE_USER" \
+      --clickhouse-password "$CLICKHOUSE_PASSWORD"; then
+      echo "  ✓ ClickHouse import completed for partition: $partition_dir"
+    else
+      echo "  Warning: ClickHouse import failed for partition: $partition_dir" >&2
+    fi
+  fi
   
   # Move to warehouse (atomic operation)
   for table in blocks transactions tags; do
