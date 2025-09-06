@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # AR.IO Gateway - Production Parquet Export Script
-# Features: Iceberg-compatible partitioning, data integrity verification, ClickHouse integration,
-# resume capability, performance timing, and comprehensive error handling
+# Features: Iceberg-compatible partitioning, data integrity verification, resume capability,
+# performance timing, and comprehensive error handling
 
 # Load common library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,19 +35,11 @@ Options:
   --verify-count            Verify row counts match SQLite after each partition (slower)
   --show-timing             Show detailed timing information for operations
   
-  ClickHouse Integration:
-  --enable-clickhouse       Enable import to ClickHouse after each partition
-  --clickhouse-host HOST    ClickHouse host (default: localhost)
-  --clickhouse-port PORT    ClickHouse port (default: 9000)
-  --clickhouse-user USER    ClickHouse user (default: default)
-  --clickhouse-password PWD ClickHouse password (default: empty)
-  
   Iceberg Metadata:
   --generate-iceberg        Generate Apache Iceberg metadata after export (requires PyIceberg)
   --iceberg-root <URI>      Warehouse root URI for Iceberg metadata (e.g., s3://bucket/path, https://host/path)
 
 Note: This creates Iceberg-compatible directory structure with partitioned Parquet files.
-      When ClickHouse is enabled, data is imported after each partition completes.
       Count verification ensures data integrity but adds processing time.
 USAGE
 }
@@ -68,12 +60,9 @@ RESUME=false
 VERIFY_COUNT=false
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
 
-# Load environment and ClickHouse configuration
+# Load environment configuration
 load_env
-load_clickhouse_config
 
-# ClickHouse integration flag
-ENABLE_CLICKHOUSE=false
 
 # Iceberg metadata generation flag
 GENERATE_ICEBERG=false
@@ -138,26 +127,6 @@ while [[ $# -gt 0 ]]; do
       SHOW_TIMING=true
       shift 1
       ;;
-    --enable-clickhouse)
-      ENABLE_CLICKHOUSE=true
-      shift 1
-      ;;
-    --clickhouse-host)
-      CLICKHOUSE_HOST=$2
-      shift 2
-      ;;
-    --clickhouse-port)
-      CLICKHOUSE_PORT=$2
-      shift 2
-      ;;
-    --clickhouse-user)
-      CLICKHOUSE_USER=$2
-      shift 2
-      ;;
-    --clickhouse-password)
-      CLICKHOUSE_PASSWORD=$2
-      shift 2
-      ;;
     --generate-iceberg)
       GENERATE_ICEBERG=true
       shift 1
@@ -210,7 +179,6 @@ fi
 # Setup directories
 JOB_STAGING_DIR="$STAGING_DIR/job-$RUN_ID"
 CHECKPOINT_FILE="$JOB_STAGING_DIR/.checkpoint"
-CLICKHOUSE_IMPORT_LOG="$JOB_STAGING_DIR/.clickhouse_imports"
 VERIFICATION_LOG="$JOB_STAGING_DIR/.verification_results"
 
 # Cleanup function
@@ -233,18 +201,6 @@ trap cleanup EXIT
 mkdir -p "$JOB_STAGING_DIR"
 mkdir -p "$OUTPUT_DIR"/{blocks,transactions,tags}/{data,metadata}
 
-# Check for ClickHouse if enabled
-if $ENABLE_CLICKHOUSE; then
-  if ! command -v clickhouse >/dev/null 2>&1; then
-    echo "Error: clickhouse client is required but not found in PATH" >&2
-    echo "Please install clickhouse client or disable ClickHouse integration" >&2
-    exit 1
-  fi
-  
-  echo "ClickHouse integration enabled:"
-  echo "  Host: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
-  echo "  User: $CLICKHOUSE_USER"
-fi
 
 if $VERIFY_COUNT; then
   echo "Count verification enabled - will verify data integrity after each partition"
@@ -262,7 +218,6 @@ if $RESUME; then
         LAST_PROCESSED_HEIGHT=$checkpoint_height
         JOB_STAGING_DIR="$dir"
         CHECKPOINT_FILE="$dir/.checkpoint"
-        CLICKHOUSE_IMPORT_LOG="$dir/.clickhouse_imports"
         VERIFICATION_LOG="$dir/.verification_results"
         echo "Found checkpoint at height: $checkpoint_height"
         echo "Resuming from height: $((LAST_PROCESSED_HEIGHT + 1))"
@@ -875,21 +830,6 @@ while [[ $current_height -le $END_HEIGHT ]]; do
   # Verify exported Parquet files if count verification is enabled
   partition_dir="height=${current_partition_start}-${current_partition_end}"
   
-  # Import to ClickHouse if enabled (before moving to warehouse)
-  if $ENABLE_CLICKHOUSE; then
-    echo "  Importing partition to ClickHouse: $partition_dir"
-    if "$SCRIPT_DIR/clickhouse-import" \
-      --input-dir "$JOB_STAGING_DIR" \
-      --partition "$partition_dir" \
-      --clickhouse-host "$CLICKHOUSE_HOST" \
-      --clickhouse-port "$CLICKHOUSE_PORT" \
-      --clickhouse-user "$CLICKHOUSE_USER" \
-      --clickhouse-password "$CLICKHOUSE_PASSWORD"; then
-      echo "  ✓ ClickHouse import completed for partition: $partition_dir"
-    else
-      echo "  Warning: ClickHouse import failed for partition: $partition_dir" >&2
-    fi
-  fi
   
   # Move to warehouse (atomic operation)
   for table in blocks transactions tags; do
@@ -919,9 +859,6 @@ done
 echo "Export completed successfully!"
 echo "Output directory: $OUTPUT_DIR"
 
-if $ENABLE_CLICKHOUSE; then
-  echo "Data imported to ClickHouse: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
-fi
 
 if $VERIFY_COUNT && [[ -f "$VERIFICATION_LOG" ]]; then
   echo "Verification log: $VERIFICATION_LOG"
