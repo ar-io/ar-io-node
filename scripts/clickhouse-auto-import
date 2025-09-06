@@ -21,8 +21,8 @@ load_clickhouse_config
 # Set local variables with defaults
 ar_io_host=${AR_IO_HOST:-localhost}
 ar_io_port=${AR_IO_PORT:-4000}
-warehouse_dir=${CLICKHOUSE_WAREHOUSE_DIR:-./data/warehouse/default}
-staging_dir=${CLICKHOUSE_STAGING_DIR:-./data/staging}
+dataset_dir="${LOCAL_DATASETS_PATH:-./data/datasets}/default"
+staging_dir="${ETL_STAGING_PATH:-./data/etl/staging}"
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
@@ -40,8 +40,8 @@ if [ ! -x "./scripts/parquet-export" ]; then
 fi
 
 # Create directories
-processed_dir="$warehouse_dir/.processed"
-mkdir -p "$warehouse_dir" "$processed_dir"
+processed_dir="$dataset_dir/.processed"
+mkdir -p "$dataset_dir" "$processed_dir"
 
 # ------------------------------------------------------------------------------
 # SWITCH OFF 'exit on error' so the script doesn't die in the main loop
@@ -102,7 +102,7 @@ while true; do
             --startHeight "$current_height" \
             --endHeight "$end_height" \
             --heightPartitionSize "$height_interval" \
-            --outputDir "$warehouse_dir" \
+            --outputDir "$dataset_dir" \
             --stagingDir "$staging_dir" \
             --maxFileRows "$max_rows_per_file" \
             --includeL1Transactions \

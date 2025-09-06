@@ -29,8 +29,8 @@ Options:
   --includeL1Tags           Include L1 transaction tags (default is to skip)
   --coreDb PATH             Path to core SQLite database (default: data/sqlite/core.db)
   --bundlesDb PATH          Path to bundles SQLite database (default: data/sqlite/bundles.db)
-  --stagingDir PATH         Staging directory for temp files (default: data/staging)
-  --warehouseDir PATH       Final warehouse directory (default: data/warehouse/default)
+  --stagingDir PATH         Staging directory for temp files (default: data/etl/staging)
+  --datasetDir PATH         Final dataset directory (default: data/datasets/default)
   --resume                  Resume from last checkpoint if export was interrupted
   --verifyCount             Verify row counts match SQLite after each partition (slower)
   --showTiming              Show detailed timing information for operations
@@ -62,8 +62,8 @@ SKIP_L1_TRANSACTIONS=true
 SKIP_L1_TAGS=true
 CORE_DB_PATH="data/sqlite/core.db"
 BUNDLES_DB_PATH="data/sqlite/bundles.db"
-STAGING_DIR="${ETL_STAGING_DATA_PATH:-data/staging}"
-WAREHOUSE_DIR="data/warehouse/default"
+STAGING_DIR="${ETL_STAGING_PATH:-data/etl/staging}"
+DATASET_DIR="${LOCAL_DATASETS_PATH:-data/datasets}/default"
 RESUME=false
 VERIFY_COUNT=false
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
@@ -122,8 +122,8 @@ while [[ $# -gt 0 ]]; do
       STAGING_DIR=$2
       shift 2
       ;;
-    --warehouseDir)
-      WAREHOUSE_DIR=$2
+    --datasetDir)
+      DATASET_DIR=$2
       shift 2
       ;;
     --resume)
@@ -185,8 +185,8 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     usage
     exit 1
   fi
-  # Use warehouse directory with proper structure
-  OUTPUT_DIR="$WAREHOUSE_DIR"
+  # Use dataset directory with proper structure
+  OUTPUT_DIR="$DATASET_DIR"
 fi
 
 # Validate required arguments
