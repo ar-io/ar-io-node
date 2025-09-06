@@ -227,8 +227,8 @@ services:
     volumes:
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
       - ./data/sqlite:/app/data/sqlite:ro
-      - ${LOCAL_WAREHOUSE_DATA_PATH:-./data/warehouse}:/app/data/warehouse
-      - ${ETL_STAGING_DATA_PATH:-./data/staging}:/app/data/staging
+      - ${LOCAL_DATASETS_PATH:-./data/datasets}:/app/data/datasets
+      - ${ETL_STAGING_PATH:-./data/etl/staging}:/app/data/etl/staging
     environment:
       - DEBUG=${CLICKHOUSE_DEBUG:-}
       - AR_IO_HOST=core
