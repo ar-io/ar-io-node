@@ -20,31 +20,31 @@ log_timing() {
 
 usage() {
   cat <<USAGE
-Usage: $0 --outputDir DIR --startHeight N --endHeight N [options]
+Usage: $0 --output-dir DIR --start-height N --end-height N [options]
 
 Options:
-  --heightPartitionSize N   Number of blocks per partition (default: 1000)
-  --maxFileRows N           Max rows per file within partition (default: 1000000)
-  --includeL1Transactions   Include L1 transactions (default is to skip)
-  --includeL1Tags           Include L1 transaction tags (default is to skip)
-  --coreDb PATH             Path to core SQLite database (default: data/sqlite/core.db)
-  --bundlesDb PATH          Path to bundles SQLite database (default: data/sqlite/bundles.db)
-  --stagingDir PATH         Staging directory for temp files (default: data/etl/staging)
-  --datasetDir PATH         Final dataset directory (default: data/datasets/default)
+  --height-partition-size N Number of blocks per partition (default: 1000)
+  --max-file-rows N         Max rows per file within partition (default: 1000000)
+  --include-l1-transactions Include L1 transactions (default is to skip)
+  --include-l1-tags         Include L1 transaction tags (default is to skip)
+  --core-db PATH            Path to core SQLite database (default: data/sqlite/core.db)
+  --bundles-db PATH         Path to bundles SQLite database (default: data/sqlite/bundles.db)
+  --staging-dir PATH        Staging directory for temp files (default: data/etl/staging)
+  --dataset-dir PATH        Final dataset directory (default: data/datasets/default)
   --resume                  Resume from last checkpoint if export was interrupted
-  --verifyCount             Verify row counts match SQLite after each partition (slower)
-  --showTiming              Show detailed timing information for operations
+  --verify-count            Verify row counts match SQLite after each partition (slower)
+  --show-timing             Show detailed timing information for operations
   
   ClickHouse Integration:
-  --enableClickhouse        Enable import to ClickHouse after each partition
-  --clickhouseHost HOST     ClickHouse host (default: localhost)
-  --clickhousePort PORT     ClickHouse port (default: 9000)
-  --clickhouseUser USER     ClickHouse user (default: default)
-  --clickhousePassword PWD  ClickHouse password (default: empty)
+  --enable-clickhouse       Enable import to ClickHouse after each partition
+  --clickhouse-host HOST    ClickHouse host (default: localhost)
+  --clickhouse-port PORT    ClickHouse port (default: 9000)
+  --clickhouse-user USER    ClickHouse user (default: default)
+  --clickhouse-password PWD ClickHouse password (default: empty)
   
   Iceberg Metadata:
-  --generateIceberg         Generate Apache Iceberg metadata after export (requires PyIceberg)
-  --icebergRoot <URI>       Warehouse root URI for Iceberg metadata (e.g., s3://bucket/path, https://host/path)
+  --generate-iceberg        Generate Apache Iceberg metadata after export (requires PyIceberg)
+  --iceberg-root <URI>      Warehouse root URI for Iceberg metadata (e.g., s3://bucket/path, https://host/path)
 
 Note: This creates Iceberg-compatible directory structure with partitioned Parquet files.
       When ClickHouse is enabled, data is imported after each partition completes.
@@ -82,47 +82,47 @@ ICEBERG_ROOT=""
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --outputDir)
+    --output-dir)
       OUTPUT_DIR=$2
       shift 2
       ;;
-    --startHeight)
+    --start-height)
       START_HEIGHT=$2
       shift 2
       ;;
-    --endHeight)
+    --end-height)
       END_HEIGHT=$2
       shift 2
       ;;
-    --heightPartitionSize)
+    --height-partition-size)
       HEIGHT_PARTITION_SIZE=$2
       shift 2
       ;;
-    --maxFileRows)
+    --max-file-rows)
       MAX_FILE_ROWS=$2
       shift 2
       ;;
-    --includeL1Transactions)
+    --include-l1-transactions)
       SKIP_L1_TRANSACTIONS=false
       shift 1
       ;;
-    --includeL1Tags)
+    --include-l1-tags)
       SKIP_L1_TAGS=false
       shift 1
       ;;
-    --coreDb)
+    --core-db)
       CORE_DB_PATH=$2
       shift 2
       ;;
-    --bundlesDb)
+    --bundles-db)
       BUNDLES_DB_PATH=$2
       shift 2
       ;;
-    --stagingDir)
+    --staging-dir)
       STAGING_DIR=$2
       shift 2
       ;;
-    --datasetDir)
+    --dataset-dir)
       DATASET_DIR=$2
       shift 2
       ;;
@@ -130,39 +130,39 @@ while [[ $# -gt 0 ]]; do
       RESUME=true
       shift 1
       ;;
-    --verifyCount)
+    --verify-count)
       VERIFY_COUNT=true
       shift 1
       ;;
-    --showTiming)
+    --show-timing)
       SHOW_TIMING=true
       shift 1
       ;;
-    --enableClickhouse)
+    --enable-clickhouse)
       ENABLE_CLICKHOUSE=true
       shift 1
       ;;
-    --clickhouseHost)
+    --clickhouse-host)
       CLICKHOUSE_HOST=$2
       shift 2
       ;;
-    --clickhousePort)
+    --clickhouse-port)
       CLICKHOUSE_PORT=$2
       shift 2
       ;;
-    --clickhouseUser)
+    --clickhouse-user)
       CLICKHOUSE_USER=$2
       shift 2
       ;;
-    --clickhousePassword)
+    --clickhouse-password)
       CLICKHOUSE_PASSWORD=$2
       shift 2
       ;;
-    --generateIceberg)
+    --generate-iceberg)
       GENERATE_ICEBERG=true
       shift 1
       ;;
-    --icebergRoot)
+    --iceberg-root)
       ICEBERG_ROOT="$2"
       shift 2
       ;;
@@ -181,7 +181,7 @@ done
 # If outputDir not specified, use warehouse structure
 if [[ -z "$OUTPUT_DIR" ]]; then
   if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
-    echo "Error: Must specify --startHeight and --endHeight" >&2
+    echo "Error: Must specify --start-height and --end-height" >&2
     usage
     exit 1
   fi
@@ -191,7 +191,7 @@ fi
 
 # Validate required arguments
 if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
-  echo "Error: Must specify --startHeight and --endHeight" >&2
+  echo "Error: Must specify --start-height and --end-height" >&2
   usage
   exit 1
 fi

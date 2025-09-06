@@ -99,19 +99,19 @@ while true; do
         # The script handles both export and import in one operation
         # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
         ./scripts/parquet-export \
-            --startHeight "$current_height" \
-            --endHeight "$end_height" \
-            --heightPartitionSize "$height_interval" \
-            --outputDir "$dataset_dir" \
-            --stagingDir "$staging_dir" \
-            --maxFileRows "$max_rows_per_file" \
-            --includeL1Transactions \
-            --includeL1Tags \
-            --enableClickhouse \
-            --clickhouseHost "$CLICKHOUSE_HOST" \
-            --clickhousePort "$CLICKHOUSE_PORT" \
-            --clickhouseUser "$CLICKHOUSE_USER" \
-            --clickhousePassword "$CLICKHOUSE_PASSWORD"
+            --start-height "$current_height" \
+            --end-height "$end_height" \
+            --height-partition-size "$height_interval" \
+            --output-dir "$dataset_dir" \
+            --staging-dir "$staging_dir" \
+            --max-file-rows "$max_rows_per_file" \
+            --include-l1-transactions \
+            --include-l1-tags \
+            --enable-clickhouse \
+            --clickhouse-host "$CLICKHOUSE_HOST" \
+            --clickhouse-port "$CLICKHOUSE_PORT" \
+            --clickhouse-user "$CLICKHOUSE_USER" \
+            --clickhouse-password "$CLICKHOUSE_PASSWORD"
         
         export_status=$?
         export_complete_time=$(date +%s)
