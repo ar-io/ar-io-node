@@ -739,7 +739,7 @@ SQL
   fi
   
   # Import L2 transactions
-  if [[ -f "$temp_csv_dir/l2_transactions.csv" ]]; then
+  if [[ -f "$temp_csv_dir/l2_transactions.csv" ]] && [[ -s "$temp_csv_dir/l2_transactions.csv" ]]; then
     echo "  Importing L2 transactions..."
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO transactions 
@@ -760,7 +760,7 @@ SQL
   fi
   
   # Import L1 tags if file exists
-  if [[ -f "$temp_csv_dir/l1_tags.csv" ]]; then
+  if [[ -f "$temp_csv_dir/l1_tags.csv" ]] && [[ -s "$temp_csv_dir/l1_tags.csv" ]]; then
     echo "  Importing L1 tags..."
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO tags 
@@ -774,7 +774,7 @@ SQL
   fi
   
   # Import L2 tags
-  if [[ -f "$temp_csv_dir/l2_tags.csv" ]]; then
+  if [[ -f "$temp_csv_dir/l2_tags.csv" ]] && [[ -s "$temp_csv_dir/l2_tags.csv" ]]; then
     echo "  Importing L2 tags..."
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO tags 
