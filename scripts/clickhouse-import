@@ -35,7 +35,6 @@ ClickHouse Options:
 
 Additional Options:
   --table NAME              Table name for single file import (required with --parquet-file)
-  --resume                  Skip partitions that were already imported successfully
   --dry-run                 Show what would be imported without actually doing it
   --show-timing             Show detailed timing information
 
@@ -46,8 +45,8 @@ Examples:
   # Import multiple partitions
   $0 --input-dir ./data/datasets/default --partitions "height=1000-1999,height=2000-2999"
 
-  # Import all partitions with resume
-  $0 --input-dir ./data/datasets/default --all-partitions --resume
+  # Import all partitions
+  $0 --input-dir ./data/datasets/default --all-partitions
 
   # Import single file
   $0 --parquet-file ./blocks.parquet --table staging_blocks
@@ -62,7 +61,6 @@ PARTITIONS=""
 ALL_PARTITIONS=false
 PARQUET_FILE=""
 TABLE=""
-RESUME=false
 DRY_RUN=false
 SHOW_TIMING=false
 
@@ -112,10 +110,6 @@ while [[ $# -gt 0 ]]; do
     --clickhouse-password)
       CLICKHOUSE_PASSWORD=$2
       shift 2
-      ;;
-    --resume)
-      RESUME=true
-      shift 1
       ;;
     --dry-run)
       DRY_RUN=true
@@ -186,10 +180,6 @@ else
   fi
 fi
 
-# Set up import tracking
-if [[ -n "$INPUT_DIR" ]]; then
-  IMPORT_LOG="$INPUT_DIR/.clickhouse_imports"
-fi
 
 echo "ClickHouse Import Configuration:"
 echo "  Host: $CLICKHOUSE_HOST:$CLICKHOUSE_PORT"
@@ -224,23 +214,6 @@ initialize_clickhouse_schema() {
   }
 }
 
-# Check if partition was already imported
-was_imported() {
-  local partition=$1
-  if [[ -f "$IMPORT_LOG" ]]; then
-    grep -q "|$partition$" "$IMPORT_LOG" 2>/dev/null
-  else
-    false
-  fi
-}
-
-# Log successful import
-log_import() {
-  local partition=$1
-  if [[ -n "$INPUT_DIR" ]]; then
-    echo "$(date -Iseconds)|$partition" >> "$IMPORT_LOG"
-  fi
-}
 
 # Import a single Parquet file to ClickHouse table
 import_parquet_file() {
@@ -407,33 +380,26 @@ GROUP BY
   return 0
 }
 
-# Clean up staging tables for a height range
+# Clean up staging tables
 cleanup_staging_tables() {
-  local partition_name=$1
+  echo "  Cleaning up staging tables (truncating all staging data)"
   
-  echo "  Cleaning up staging tables for: $partition_name"
-  
-  # Extract height range
-  local height_range=${partition_name#height=}
-  local min_height=${height_range%-*}
-  local max_height=${height_range#*-}
-  
-  # Clear staging tables for this height range
+  # Truncate all staging tables
   clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-    --query "ALTER TABLE staging_blocks DELETE WHERE height >= $min_height AND height <= $max_height;" || {
+    --query "TRUNCATE TABLE staging_blocks;" || {
     echo "    Warning: Failed to clean staging_blocks" >&2
   }
   
   clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-    --query "ALTER TABLE staging_transactions DELETE WHERE height >= $min_height AND height <= $max_height;" || {
+    --query "TRUNCATE TABLE staging_transactions;" || {
     echo "    Warning: Failed to clean staging_transactions" >&2
   }
   
   clickhouse client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
     --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-    --query "ALTER TABLE staging_tags DELETE WHERE height >= $min_height AND height <= $max_height;" || {
+    --query "TRUNCATE TABLE staging_tags;" || {
     echo "    Warning: Failed to clean staging_tags" >&2
   }
 }
@@ -444,11 +410,6 @@ import_partition() {
   
   echo "Importing partition: $partition_name"
   
-  # Check if already imported and resume is enabled
-  if $RESUME && was_imported "$partition_name"; then
-    echo "  Partition already imported (skipping due to --resume): $partition_name"
-    return 0
-  fi
   
   if $DRY_RUN; then
     echo "  [DRY RUN] Would import partition: $partition_name"
@@ -470,10 +431,8 @@ import_partition() {
   fi
   
   # Clean up staging tables
-  cleanup_staging_tables "$partition_name"
+  cleanup_staging_tables
   
-  # Log successful import
-  log_import "$partition_name"
   
   local partition_end=$(date +%s%N)
   log_timing "Complete partition import for $partition_name" "$partition_start" "$partition_end"
