@@ -718,7 +718,7 @@ SQL
   fi
   
   # Import L1 transactions if file exists
-  if [[ -f "$temp_csv_dir/l1_transactions.csv" ]]; then
+  if [[ -f "$temp_csv_dir/l1_transactions.csv" ]] && [[ -s "$temp_csv_dir/l1_transactions.csv" ]]; then
     echo "  Importing L1 transactions..."
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO transactions 
