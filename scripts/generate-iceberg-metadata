@@ -28,8 +28,11 @@ try:
     import pandas as pd
 except ImportError as e:
     print(f"Error: Required library not installed: {e}")
+    print(f"Python executable: {sys.executable}")
+    print(f"Python path: {sys.path}")
     print("\nPlease install PyIceberg and dependencies:")
     print("  pip install 'pyiceberg[pyarrow,duckdb,sql]'")
+    print("\nFor Docker environment, rebuild the container with updated Dockerfile")
     sys.exit(1)
 
 
@@ -244,8 +247,20 @@ def update_metadata_locations(warehouse_dir, warehouse_root):
     return updated_count
 
 
-def register_parquet_files_as_iceberg(catalog, table_name, schema, parquet_files, warehouse_dir):
-    """Register existing Parquet files as an Iceberg table without copying data"""
+def register_parquet_files_as_iceberg(catalog, table_name, schema, parquet_files, warehouse_dir, warehouse_root=None):
+    """Register existing Parquet files as an Iceberg table without reading data
+    
+    Uses PyIceberg's add_files method to register files efficiently.
+    Falls back to data append if add_files is not available.
+    
+    Args:
+        catalog: PyIceberg catalog
+        table_name: Name of the table to create
+        schema: Iceberg schema for the table
+        parquet_files: List of Parquet file paths
+        warehouse_dir: Local warehouse directory
+        warehouse_root: Optional warehouse root URI for remote access
+    """
     
     # Create or replace the table
     namespace = "default"
@@ -282,57 +297,32 @@ def register_parquet_files_as_iceberg(catalog, table_name, schema, parquet_files
     )
     print(f"  Created Iceberg table: {table_identifier}")
     
-    # Now we need to add the Parquet files to the table
-    # PyIceberg doesn't have a direct add_files API like Java Iceberg,
-    # so we'll read and append the data
-    print(f"  Processing {len(parquet_files)} Parquet files...")
+    # Register existing Parquet files without reading data
+    print(f"  Registering {len(parquet_files)} Parquet files...")
     
-    for i, parquet_file in enumerate(parquet_files, 1):
-        try:
-            # Read the Parquet file directly without schema inference
-            parquet_file_abs = os.path.abspath(parquet_file)
-            
-            # Use PyArrow Dataset API for better handling
-            dataset = ds.dataset(parquet_file_abs, format="parquet")
-            arrow_table = dataset.to_table()
-            
-            # Convert types to match Iceberg schema
-            # This is necessary because PyArrow and Iceberg have slightly different type systems
-            converted_data = []
-            schema_fields = arrow_table.schema
-            
-            for batch in arrow_table.to_batches():
-                arrays = []
-                for field_idx, field in enumerate(schema_fields):
-                    arr = batch.column(field_idx)
-                    
-                    # Convert unsigned to signed integers
-                    if pa.types.is_unsigned_integer(field.type):
-                        if pa.types.is_uint64(field.type):
-                            arr = arr.cast(pa.int64())
-                        elif pa.types.is_uint32(field.type):
-                            arr = arr.cast(pa.int32())
-                        elif pa.types.is_uint16(field.type) or pa.types.is_uint8(field.type):
-                            arr = arr.cast(pa.int32())
-                    
-                    arrays.append(arr)
-                
-                converted_batch = pa.RecordBatch.from_arrays(arrays, schema=arrow_table.schema)
-                converted_data.append(converted_batch)
-            
-            converted_table = pa.Table.from_batches(converted_data)
-            
-            # Append to the Iceberg table
-            table.append(converted_table)
-            
-            if i % 10 == 0 or i == len(parquet_files):
-                print(f"    Processed {i}/{len(parquet_files)} files")
-                
-        except Exception as e:
-            print(f"    Warning: Failed to process {parquet_file}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
+    # Convert file paths to appropriate URIs
+    file_paths = []
+    for parquet_file in parquet_files:
+        if warehouse_root and warehouse_root.startswith(('s3://', 'gs://', 'azure://', 'abfs://')):
+            # For cloud storage warehouse, construct the full URI
+            rel_path = os.path.relpath(parquet_file, warehouse_dir)
+            file_path = f"{warehouse_root.rstrip('/')}/{rel_path}"
+        else:
+            # For local or HTTP warehouse roots, always use local file paths
+            # PyIceberg doesn't support HTTP URLs in add_files - the warehouse_root
+            # is only used for catalog metadata, not file access
+            file_path = f"file://{os.path.abspath(parquet_file)}"
+        file_paths.append(file_path)
+    
+    # Use efficient add_files method to register files without reading data
+    try:
+        table.add_files(file_paths)
+        print(f"  ✓ Registered {len(file_paths)} Parquet files without reading data")
+        
+    except Exception as e:
+        print(f"  Error: Failed to register files: {e}")
+        print(f"  File paths attempted: {file_paths[:3]}{'...' if len(file_paths) > 3 else ''}")
+        raise
     
     print(f"  Successfully registered {len(parquet_files)} Parquet files")
     
@@ -479,7 +469,8 @@ Query the generated tables:
                 table_name, 
                 schema, 
                 parquet_files,
-                args.warehouse_dir
+                args.warehouse_dir,
+                args.warehouse_root
             )
             print(f"  Table location: {table.location()}")
             successful_tables.append(table_name)
