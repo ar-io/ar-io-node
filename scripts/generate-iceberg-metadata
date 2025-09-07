@@ -251,7 +251,7 @@ def register_parquet_files_as_iceberg(catalog, table_name, schema, parquet_files
     """Register existing Parquet files as an Iceberg table without reading data
     
     Uses PyIceberg's add_files method to register files efficiently.
-    Falls back to data append if add_files is not available.
+    Note: No fallback path is implemented if add_files is unavailable on the current PyIceberg version.
     
     Args:
         catalog: PyIceberg catalog
@@ -417,6 +417,14 @@ Query the generated tables:
     if not os.path.exists(args.warehouse_dir):
         print(f"Error: Warehouse directory does not exist: {args.warehouse_dir}", file=sys.stderr)
         sys.exit(1)
+    
+    # Validate warehouse_root for HTTP/HTTPS URLs
+    if args.warehouse_root and args.warehouse_root.startswith(('http://', 'https://')):
+        print("Warning: HTTP/HTTPS warehouse roots have limitations with PyIceberg's default FileIO.", file=sys.stderr)
+        print("         File paths in metadata will use file:// URIs while catalog points to HTTP URL.", file=sys.stderr)
+        print("         Remote readers will need FsspecFileIO or custom FileIO to access data files.", file=sys.stderr)
+        print("         Consider using cloud storage URIs (s3://, gs://, abfs://) for full remote support.", file=sys.stderr)
+        print()
     
     print(f"Generating Iceberg metadata (Fixed Version)")
     print(f"Warehouse: {args.warehouse_dir}")
