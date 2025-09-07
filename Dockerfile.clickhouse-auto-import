@@ -37,12 +37,13 @@ RUN mkdir -p data/parquet/imported
 COPY src/database/clickhouse/schema.sql /app/src/database/clickhouse/schema.sql
 COPY src/database/duckdb/schema.sql /app/src/database/duckdb/schema.sql
 COPY scripts/clickhouse-auto-import /app/scripts/
+COPY scripts/clickhouse-import /app/scripts/
 COPY scripts/parquet-export /app/scripts/
 COPY scripts/generate-iceberg-metadata /app/scripts/
 COPY scripts/lib /app/scripts/lib/
 
 # Make scripts executable
-RUN chmod +x /app/scripts/clickhouse-auto-import /app/scripts/parquet-export /app/scripts/generate-iceberg-metadata
+RUN chmod +x /app/scripts/clickhouse-auto-import /app/scripts/clickhouse-import /app/scripts/parquet-export /app/scripts/generate-iceberg-metadata
 
 # Environment variables
 ENV ADMIN_API_KEY=""
