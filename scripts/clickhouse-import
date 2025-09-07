@@ -565,7 +565,7 @@ main() {
     
     for partition in "${partitions_to_import[@]}"; do
       if import_partition "$partition"; then
-        ((success_count++))
+        success_count=$((success_count + 1))
       else
         echo "Warning: Failed to import partition: $partition" >&2
       fi
