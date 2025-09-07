@@ -268,11 +268,7 @@ verify_partition_counts() {
   local verification_passed=true
   
   # Verify blocks count
-  local sqlite_blocks=$(duckdb "$TEMP_DB" -csv -noheader -c "
-    ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
-    SELECT COUNT(*) FROM core.stable_blocks 
-    WHERE height BETWEEN $partition_start AND $partition_end;
-  ")
+  local sqlite_blocks=$(sqlite3 "$CORE_DB_PATH" "SELECT COUNT(*) FROM stable_blocks WHERE height BETWEEN $partition_start AND $partition_end;")
   
   local duckdb_blocks=$(duckdb "$TEMP_DB" -csv -noheader -c "
     SELECT COUNT(*) FROM blocks 
@@ -287,11 +283,7 @@ verify_partition_counts() {
   fi
   
   # Verify L2 transactions (data items) count
-  local sqlite_l2_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
-    ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
-    SELECT COUNT(*) FROM bundles.stable_data_items 
-    WHERE height BETWEEN $partition_start AND $partition_end;
-  ")
+  local sqlite_l2_tx=$(sqlite3 "$BUNDLES_DB_PATH" "SELECT COUNT(*) FROM stable_data_items WHERE height BETWEEN $partition_start AND $partition_end;")
   
   local duckdb_l2_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
     SELECT COUNT(*) FROM transactions 
@@ -308,11 +300,7 @@ verify_partition_counts() {
   
   # Verify L1 transactions if included
   if $INCLUDE_L1; then
-    local sqlite_l1_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
-      ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
-      SELECT COUNT(*) FROM core.stable_transactions 
-      WHERE height BETWEEN $partition_start AND $partition_end;
-    ")
+    local sqlite_l1_tx=$(sqlite3 "$CORE_DB_PATH" "SELECT COUNT(*) FROM stable_transactions WHERE height BETWEEN $partition_start AND $partition_end;")
     
     local duckdb_l1_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
       SELECT COUNT(*) FROM transactions 
@@ -329,10 +317,11 @@ verify_partition_counts() {
   fi
   
   # Verify L2 tags count
-  local sqlite_l2_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
-    ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
-    SELECT COUNT(*) FROM bundles.stable_data_item_tags 
-    WHERE height BETWEEN $partition_start AND $partition_end;
+  local sqlite_l2_tags=$(sqlite3 "$BUNDLES_DB_PATH" "
+    SELECT COUNT(*) 
+    FROM stable_data_items sdi 
+    JOIN stable_data_item_tags sdit ON sdi.id = sdit.data_item_id 
+    WHERE sdi.height BETWEEN $partition_start AND $partition_end;
   ")
   
   local duckdb_l2_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
@@ -350,10 +339,11 @@ verify_partition_counts() {
   
   # Verify L1 tags if included
   if $INCLUDE_L1; then
-    local sqlite_l1_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
-      ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
-      SELECT COUNT(*) FROM core.stable_transaction_tags 
-      WHERE height BETWEEN $partition_start AND $partition_end;
+    local sqlite_l1_tags=$(sqlite3 "$CORE_DB_PATH" "
+      SELECT COUNT(*) 
+      FROM stable_transactions st 
+      JOIN stable_transaction_tags stt ON st.id = stt.transaction_id 
+      WHERE st.height BETWEEN $partition_start AND $partition_end;
     ")
     
     local duckdb_l1_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
@@ -552,51 +542,255 @@ initialize_database() {
     echo "Creating DuckDB schema..."
     duckdb "$TEMP_DB" < src/database/duckdb/schema.sql
     
-    # Then install SQLite extension and attach databases
-    echo "Attaching SQLite databases..."
-    echo "  Core DB: $CORE_DB_PATH"
-    echo "  Bundles DB: $BUNDLES_DB_PATH"
-    
-    duckdb "$TEMP_DB" <<SQL
-INSTALL sqlite;
-LOAD sqlite;
-ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
-ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
-
--- Verify attachments by checking table existence (much faster than COUNT)
-SELECT 'Verifying core database...';
-SELECT 1 FROM core.stable_blocks LIMIT 1;
-SELECT 'Verifying bundles database...';
-SELECT 1 FROM bundles.stable_data_items LIMIT 1;
-SQL
-    
     if [[ $? -ne 0 ]]; then
-      echo "Error: Failed to initialize DuckDB or attach SQLite databases" >&2
+      echo "Error: Failed to initialize DuckDB database with schema" >&2
       exit 1
     fi
+    
+    echo "DuckDB database initialized successfully"
   else
-    echo "Reusing existing DuckDB database, re-attaching SQLite databases..."
-    duckdb "$TEMP_DB" <<SQL
-INSTALL sqlite;
-LOAD sqlite;
-ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
-ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);
-
--- Verify attachments by checking table existence (much faster than COUNT)
-SELECT 'Verifying core database...';
-SELECT 1 FROM core.stable_blocks LIMIT 1;
-SELECT 'Verifying bundles database...';
-SELECT 1 FROM bundles.stable_data_items LIMIT 1;
-SQL
-    
-    if [[ $? -ne 0 ]]; then
-      echo "Error: Failed to re-attach SQLite databases" >&2
-      exit 1
-    fi
+    echo "Reusing existing DuckDB database..."
   fi
+  
+  # Verify SQLite databases are accessible (we'll use sqlite3 CLI directly)
+  echo "Verifying SQLite databases..."
+  echo "  Core DB: $CORE_DB_PATH"
+  echo "  Bundles DB: $BUNDLES_DB_PATH"
+  
+  # Test core database
+  if ! sqlite3 "$CORE_DB_PATH" "SELECT 1 FROM stable_blocks LIMIT 1;" >/dev/null 2>&1; then
+    echo "Error: Cannot access core database or stable_blocks table" >&2
+    exit 1
+  fi
+  
+  # Test bundles database
+  if ! sqlite3 "$BUNDLES_DB_PATH" "SELECT 1 FROM stable_data_items LIMIT 1;" >/dev/null 2>&1; then
+    echo "Error: Cannot access bundles database or stable_data_items table" >&2
+    exit 1
+  fi
+  
+  echo "SQLite databases verified successfully"
 }
 
 # Function to import data for a height range
+# Export data from SQLite to CSV files using native SQLite queries (uses indexes efficiently)
+export_sqlite_to_csv() {
+  local start_h=$1
+  local end_h=$2
+  local temp_csv_dir="$JOB_STAGING_DIR/csv"
+  
+  # Create CSV directory
+  mkdir -p "$temp_csv_dir"
+  
+  echo "Exporting data from SQLite to CSV for height range: $start_h to $end_h"
+  
+  # Export blocks from core.db
+  echo "  Exporting blocks..."
+  sqlite3 "$CORE_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/blocks.csv"
+SELECT 
+  hex(indep_hash) AS indep_hash, 
+  height, 
+  hex(previous_block) AS previous_block, 
+  hex(nonce) AS nonce, 
+  hex(hash) AS hash, 
+  block_timestamp, 
+  tx_count, 
+  block_size
+FROM stable_blocks
+WHERE height BETWEEN $start_h AND $end_h
+ORDER BY height;
+SQL
+  
+  # Export L1 transactions if enabled
+  if $INCLUDE_L1; then
+    echo "  Exporting L1 transactions..."
+    sqlite3 "$CORE_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l1_transactions.csv"
+SELECT 
+  hex(st.id) AS id, NULL AS indexed_at, st.block_transaction_index,
+  0 AS is_data_item,
+  hex(st.target) AS target, st.quantity, st.reward,
+  hex(st.last_tx) AS anchor,
+  st.data_size, st.content_type, st.format,
+  st.height, hex(st.owner_address) AS owner_address, hex(st.data_root) AS data_root,
+  NULL AS parent,
+  st."offset",
+  NULL AS size,
+  NULL AS data_offset,
+  NULL AS owner_offset,  
+  NULL AS owner_size,
+  CASE
+    WHEN length(w.public_modulus) <= 64 THEN hex(w.public_modulus)
+    ELSE NULL
+  END AS owner,
+  NULL AS signature_offset,
+  NULL AS signature_size,
+  NULL AS signature_type,
+  hex(st.id) AS root_transaction_id,
+  NULL AS root_parent_offset
+FROM stable_transactions st
+LEFT JOIN wallets w ON st.owner_address = w.address
+WHERE st.height BETWEEN $start_h AND $end_h
+ORDER BY st.height, st.id;
+SQL
+
+    # Export L1 tags
+    echo "  Exporting L1 tags..."
+    sqlite3 "$CORE_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l1_tags.csv"
+SELECT 
+  st.height,
+  hex(st.id) AS id,
+  stt.transaction_tag_index AS tag_index,
+  '' AS indexed_at,
+  hex(tn.name) AS tag_name,
+  hex(tv.value) AS tag_value,
+  0 AS is_data_item
+FROM stable_transactions st
+JOIN stable_transaction_tags stt ON st.id = stt.transaction_id
+JOIN tag_names tn ON stt.tag_name_hash = tn.hash
+JOIN tag_values tv ON stt.tag_value_hash = tv.hash
+WHERE st.height BETWEEN $start_h AND $end_h
+ORDER BY st.height, st.id, stt.transaction_tag_index;
+SQL
+  fi
+  
+  # Export L2 transactions (data items)
+  echo "  Exporting L2 transactions..."
+  sqlite3 "$BUNDLES_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l2_transactions.csv"
+SELECT 
+  hex(sdi.id) AS id, sdi.indexed_at, sdi.block_transaction_index,
+  1 AS is_data_item,
+  hex(sdi.target) AS target, NULL AS quantity, NULL AS reward, hex(sdi.anchor) AS anchor, sdi.data_size, sdi.content_type,
+  NULL AS format,
+  sdi.height, hex(sdi.owner_address) AS owner_address,
+  NULL AS data_root,
+  hex(sdi.parent_id) AS parent,
+  sdi."offset", sdi.size, sdi.data_offset,
+  sdi.owner_offset, sdi.owner_size,
+  CASE
+    WHEN length(w.public_modulus) <= 64 THEN hex(w.public_modulus)
+    ELSE NULL
+  END AS owner,
+  sdi.signature_offset, sdi.signature_size, sdi.signature_type,
+  hex(sdi.root_transaction_id) AS root_transaction_id,
+  sdi.root_parent_offset
+FROM stable_data_items sdi
+LEFT JOIN wallets w ON sdi.owner_address = w.address
+WHERE sdi.height BETWEEN $start_h AND $end_h
+ORDER BY sdi.height, sdi.id;
+SQL
+  
+  # Export L2 tags
+  echo "  Exporting L2 tags..."
+  sqlite3 "$BUNDLES_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l2_tags.csv"
+SELECT 
+  sdi.height,
+  hex(sdi.id) AS id,
+  sdit.data_item_tag_index AS tag_index,
+  sdi.indexed_at,
+  hex(tn.name) AS tag_name,
+  hex(tv.value) AS tag_value,
+  1 AS is_data_item
+FROM stable_data_items sdi
+JOIN stable_data_item_tags sdit ON sdi.id = sdit.data_item_id
+JOIN tag_names tn ON sdit.tag_name_hash = tn.hash
+JOIN tag_values tv ON sdit.tag_value_hash = tv.hash
+WHERE sdi.height BETWEEN $start_h AND $end_h
+ORDER BY sdi.height, sdi.id, sdit.data_item_tag_index;
+SQL
+}
+
+# Import CSV files into DuckDB
+import_csv_to_duckdb() {
+  local temp_csv_dir="$JOB_STAGING_DIR/csv"
+  
+  echo "Importing CSV files into DuckDB..."
+  
+  # Import blocks
+  if [[ -f "$temp_csv_dir/blocks.csv" ]]; then
+    echo "  Importing blocks..."
+    duckdb "$TEMP_DB" <<SQL
+INSERT INTO blocks 
+SELECT 
+  unhex(indep_hash), height, unhex(previous_block), unhex(nonce), unhex(hash), 
+  block_timestamp, tx_count, block_size
+FROM read_csv_auto('$temp_csv_dir/blocks.csv');
+SQL
+  fi
+  
+  # Import L1 transactions if file exists
+  if [[ -f "$temp_csv_dir/l1_transactions.csv" ]]; then
+    echo "  Importing L1 transactions..."
+    duckdb "$TEMP_DB" <<SQL
+INSERT INTO transactions 
+SELECT 
+  unhex(id), indexed_at, block_transaction_index, is_data_item,
+  CASE WHEN target = '' THEN NULL ELSE unhex(target) END,
+  quantity, reward,
+  CASE WHEN anchor = '' OR anchor IS NULL THEN unhex('') ELSE unhex(anchor) END, data_size, content_type, format, height,
+  unhex(owner_address),
+  CASE WHEN data_root = '' THEN NULL ELSE unhex(data_root) END,
+  CASE WHEN parent = '' THEN NULL ELSE unhex(parent) END,
+  "offset", size, data_offset, owner_offset, owner_size,
+  CASE WHEN owner = '' THEN NULL ELSE unhex(owner) END,
+  signature_offset, signature_size, signature_type,
+  unhex(root_transaction_id), root_parent_offset
+FROM read_csv_auto('$temp_csv_dir/l1_transactions.csv');
+SQL
+  fi
+  
+  # Import L2 transactions
+  if [[ -f "$temp_csv_dir/l2_transactions.csv" ]]; then
+    echo "  Importing L2 transactions..."
+    duckdb "$TEMP_DB" <<SQL
+INSERT INTO transactions 
+SELECT 
+  unhex(id), indexed_at, block_transaction_index, is_data_item,
+  CASE WHEN target = '' THEN NULL ELSE unhex(target) END,
+  quantity, reward,
+  CASE WHEN anchor = '' OR anchor IS NULL THEN unhex('') ELSE unhex(anchor) END,
+  data_size, content_type, format, height,
+  unhex(owner_address), data_root,
+  CASE WHEN parent = '' THEN NULL ELSE unhex(parent) END,
+  "offset", size, data_offset, owner_offset, owner_size,
+  CASE WHEN owner = '' THEN NULL ELSE unhex(owner) END,
+  signature_offset, signature_size, signature_type,
+  unhex(root_transaction_id), root_parent_offset
+FROM read_csv_auto('$temp_csv_dir/l2_transactions.csv');
+SQL
+  fi
+  
+  # Import L1 tags if file exists
+  if [[ -f "$temp_csv_dir/l1_tags.csv" ]]; then
+    echo "  Importing L1 tags..."
+    duckdb "$TEMP_DB" <<SQL
+INSERT INTO tags 
+SELECT height, unhex(id), tag_index, 
+  CASE WHEN indexed_at = '' THEN NULL ELSE indexed_at END,
+  CASE WHEN tag_name IS NULL THEN unhex('') ELSE unhex(tag_name) END,
+  CASE WHEN tag_value IS NULL THEN unhex('') ELSE unhex(tag_value) END,
+  is_data_item
+FROM read_csv_auto('$temp_csv_dir/l1_tags.csv');
+SQL
+  fi
+  
+  # Import L2 tags
+  if [[ -f "$temp_csv_dir/l2_tags.csv" ]]; then
+    echo "  Importing L2 tags..."
+    duckdb "$TEMP_DB" <<SQL
+INSERT INTO tags 
+SELECT height, unhex(id), tag_index, indexed_at,
+  CASE WHEN tag_name IS NULL THEN unhex('') ELSE unhex(tag_name) END,
+  CASE WHEN tag_value IS NULL THEN unhex('') ELSE unhex(tag_value) END,
+  is_data_item
+FROM read_csv_auto('$temp_csv_dir/l2_tags.csv');
+SQL
+  fi
+  
+  # Clean up CSV files
+  echo "  Cleaning up CSV files..."
+  rm -rf "$temp_csv_dir"
+}
+
 import_height_range() {
   local start_h=$1
   local end_h=$2
@@ -605,115 +799,19 @@ import_height_range() {
   
   local import_start=$(date +%s%N)
   
-  # Build and execute import SQL
-  {
-    # Re-attach databases for this session
-    echo "ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);"
-    echo "ATTACH '${BUNDLES_DB_PATH}' AS bundles (TYPE SQLITE, READONLY TRUE);"
-    
-    # Import blocks for this range
-    local blocks_start=$(date +%s%N)
-    echo "-- Importing blocks"
-    echo "INSERT INTO blocks"
-    echo "SELECT indep_hash, height, previous_block, nonce, hash, block_timestamp, tx_count, block_size"
-    echo "FROM core.stable_blocks"
-    echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
-    
-    # Import L1 transactions if enabled
-    if $INCLUDE_L1; then
-      echo "INSERT INTO transactions"
-      echo "SELECT"
-      echo "  st.id, NULL AS indexed_at, st.block_transaction_index,"
-      echo "  0 AS is_data_item,"
-      echo "  st.target, st.quantity, st.reward,"
-      echo "  st.last_tx AS anchor,"  # L1 uses last_tx as anchor
-      echo "  st.data_size, st.content_type, st.format,"
-      echo "  st.height, st.owner_address, st.data_root,"
-      echo "  NULL AS parent,"
-      echo "  st.\"offset\","  # Need quotes as offset is a reserved word
-      echo "  NULL AS size,"  # L1 transactions don't have size field
-      echo "  NULL AS data_offset,"  # L1 doesn't have data_offset
-      echo "  NULL AS owner_offset,"  # L1 doesn't have owner_offset  
-      echo "  NULL AS owner_size,"    # L1 doesn't have owner_size
-      echo "  CASE"
-      echo "    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus"
-      echo "    ELSE NULL"
-      echo "  END AS owner,"
-      echo "  NULL AS signature_offset,"  # L1 doesn't have signature_offset
-      echo "  NULL AS signature_size,"    # L1 doesn't have signature_size
-      echo "  NULL AS signature_type,"    # L1 doesn't have signature_type
-      echo "  st.id AS root_transaction_id,"
-      echo "  NULL AS root_parent_offset"
-      echo "FROM core.stable_transactions st"
-      echo "LEFT JOIN core.wallets w ON st.owner_address = w.address"
-      echo "WHERE st.height BETWEEN ${start_h} AND ${end_h};"
-      
-      # Import L1 tags
-      echo "INSERT INTO tags"
-      echo "SELECT"
-      echo "  st.height,"
-      echo "  st.id,"
-      echo "  stt.transaction_tag_index AS tag_index,"
-      echo "  NULL AS indexed_at,"
-      echo "  tn.name AS tag_name,"
-      echo "  tv.value AS tag_value,"
-      echo "  0 AS is_data_item"
-      echo "FROM core.stable_transactions st"
-      echo "CROSS JOIN core.stable_transaction_tags stt"
-      echo "CROSS JOIN core.tag_names tn"
-      echo "CROSS JOIN core.tag_values tv"
-      echo "WHERE st.id = stt.transaction_id"
-      echo "  AND stt.tag_name_hash = tn.hash"
-      echo "  AND stt.tag_value_hash = tv.hash"
-      echo "  AND st.height BETWEEN ${start_h} AND ${end_h};"
-    fi
-    
-    # Import L2 transactions (data items)
-    echo "INSERT INTO transactions"
-    echo "SELECT"
-    echo "  sdi.id, sdi.indexed_at, sdi.block_transaction_index,"
-    echo "  1 AS is_data_item,"
-    echo "  sdi.target, NULL AS quantity, NULL AS reward, sdi.anchor, sdi.data_size, sdi.content_type,"
-    echo "  NULL AS format,"
-    echo "  sdi.height, sdi.owner_address,"
-    echo "  NULL AS data_root,"  # L2 data items don't have data_root
-    echo "  sdi.parent_id AS parent,"
-    echo "  sdi.\"offset\", sdi.size, sdi.data_offset,"  # Quote offset as it's a reserved word
-    echo "  sdi.owner_offset, sdi.owner_size,"
-    echo "  CASE"
-    echo "    WHEN octet_length(w.public_modulus) <= 64 THEN w.public_modulus"
-    echo "    ELSE NULL"
-    echo "  END AS owner,"
-    echo "  sdi.signature_offset, sdi.signature_size, sdi.signature_type,"
-    echo "  sdi.root_transaction_id,"
-    echo "  sdi.root_parent_offset"
-    echo "FROM bundles.stable_data_items sdi"
-    echo "LEFT JOIN bundles.wallets w ON sdi.owner_address = w.address"
-    echo "WHERE sdi.height BETWEEN ${start_h} AND ${end_h};"
-    
-    # Import L2 tags
-    echo "INSERT INTO tags"
-    echo "SELECT"
-    echo "  sdi.height,"
-    echo "  sdi.id,"
-    echo "  sdit.data_item_tag_index AS tag_index,"
-    echo "  sdi.indexed_at,"
-    echo "  tn.name AS tag_name,"
-    echo "  tv.value AS tag_value,"
-    echo "  1 AS is_data_item"
-    echo "FROM bundles.stable_data_items sdi"
-    echo "CROSS JOIN bundles.stable_data_item_tags sdit"
-    echo "CROSS JOIN bundles.tag_names tn"
-    echo "CROSS JOIN bundles.tag_values tv"
-    echo "WHERE sdi.id = sdit.data_item_id"
-    echo "  AND sdit.tag_name_hash = tn.hash"
-    echo "  AND sdit.tag_value_hash = tv.hash"
-    echo "  AND sdi.height BETWEEN ${start_h} AND ${end_h};"
-    
-  } | duckdb "$TEMP_DB"
+  # Step 1: Export from SQLite to CSV (uses SQLite indexes efficiently)
+  export_sqlite_to_csv "$start_h" "$end_h"
   
   if [[ $? -ne 0 ]]; then
-    echo "Error: Failed to import data for height range $start_h to $end_h" >&2
+    echo "Error: Failed to export SQLite data to CSV for height range $start_h to $end_h" >&2
+    return 1
+  fi
+  
+  # Step 2: Import CSV files into DuckDB (fast bulk load)
+  import_csv_to_duckdb
+  
+  if [[ $? -ne 0 ]]; then
+    echo "Error: Failed to import CSV data to DuckDB for height range $start_h to $end_h" >&2
     return 1
   fi
   
