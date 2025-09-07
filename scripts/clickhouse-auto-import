@@ -111,9 +111,7 @@ while true; do
             --staging-job-dir "$job_staging_dir" \
             --output-dir "$dataset_dir" \
             --skip-dataset-move \
-            --max-file-rows "$max_rows_per_file" \
-            --include-l1-transactions \
-            --include-l1-tags
+            --max-file-rows "$max_rows_per_file"
         
         export_status=$?
         export_complete_time=$(date +%s)
