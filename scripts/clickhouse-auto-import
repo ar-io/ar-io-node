@@ -164,6 +164,43 @@ while true; do
                 move_complete_time=$(date +%s)
                 log_timing "Move staging to dataset" "$move_start_time" "$move_complete_time"
                 
+                # Step 3.5: Update Iceberg metadata for new partitions
+                if command -v python3 >/dev/null 2>&1 && [ -f ./scripts/generate-iceberg-metadata ]; then
+                    echo "Updating Iceberg metadata..."
+                    iceberg_start_time=$(date +%s)
+                    
+                    # Build warehouse root based on ARNS_ROOT_HOST if configured
+                    iceberg_args=(
+                        "--warehouse-dir" "$dataset_dir"
+                    )
+                    
+                    # Add ARNS warehouse root if configured
+                    if [ -n "${ARNS_ROOT_HOST:-}" ]; then
+                        warehouse_root="https://${ARNS_ROOT_HOST}/local/datasets/default"
+                        iceberg_args+=("--warehouse-root" "$warehouse_root")
+                        echo "  Using ARNS warehouse root: $warehouse_root"
+                    fi
+                    
+                    # Run the metadata generation
+                    if python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}" 2>&1 | head -20; then
+                        iceberg_status=0
+                    else
+                        iceberg_status=1
+                    fi
+                    
+                    iceberg_complete_time=$(date +%s)
+                    
+                    if [ $iceberg_status -eq 0 ]; then
+                        echo "✓ Iceberg metadata updated successfully."
+                        log_timing "Iceberg metadata generation" "$iceberg_start_time" "$iceberg_complete_time"
+                    else
+                        echo "Warning: Iceberg metadata generation failed (non-critical, continuing)"
+                        log_timing "Iceberg metadata generation (failed)" "$iceberg_start_time" "$iceberg_complete_time"
+                    fi
+                else
+                    echo "Skipping Iceberg metadata update (Python3 or script not available)"
+                fi
+                
                 # Clean up staging directory after successful move
                 rm -rf "$job_staging_dir"
                 echo "Staging directory cleaned up."
