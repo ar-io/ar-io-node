@@ -31,7 +31,8 @@ RUN python3 -m venv /app/venv && \
         pyiceberg[duckdb,pyarrow,sql]==0.9.1 \
         sqlalchemy \
         psycopg2-binary \
-        pandas
+        pandas \
+        fsspec[http]
 
 # Create necessary directories
 WORKDIR /app
