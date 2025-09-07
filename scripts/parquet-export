@@ -25,8 +25,7 @@ Usage: $0 --output-dir DIR --start-height N --end-height N [options]
 Options:
   --height-partition-size N Number of blocks per partition (default: 1000)
   --max-file-rows N         Max rows per file within partition (default: 1000000)
-  --include-l1-transactions Include L1 transactions (default is to skip)
-  --include-l1-tags         Include L1 transaction tags (default is to skip)
+  --exclude-l1              Exclude L1 transactions and tags (default is to include)
   --core-db PATH            Path to core SQLite database (default: data/sqlite/core.db)
   --bundles-db PATH         Path to bundles SQLite database (default: data/sqlite/bundles.db)
   --staging-dir PATH        Staging directory for temp files (default: data/etl/staging)
@@ -52,8 +51,7 @@ START_HEIGHT=""
 END_HEIGHT=""
 HEIGHT_PARTITION_SIZE=1000
 MAX_FILE_ROWS=1000000
-SKIP_L1_TRANSACTIONS=true
-SKIP_L1_TAGS=true
+INCLUDE_L1=true
 CORE_DB_PATH="data/sqlite/core.db"
 BUNDLES_DB_PATH="data/sqlite/bundles.db"
 STAGING_DIR="${ETL_STAGING_PATH:-data/etl/staging}"
@@ -95,12 +93,8 @@ while [[ $# -gt 0 ]]; do
       MAX_FILE_ROWS=$2
       shift 2
       ;;
-    --include-l1-transactions)
-      SKIP_L1_TRANSACTIONS=false
-      shift 1
-      ;;
-    --include-l1-tags)
-      SKIP_L1_TAGS=false
+    --exclude-l1)
+      INCLUDE_L1=false
       shift 1
       ;;
     --core-db)
@@ -313,7 +307,7 @@ verify_partition_counts() {
   fi
   
   # Verify L1 transactions if included
-  if ! $SKIP_L1_TRANSACTIONS; then
+  if $INCLUDE_L1; then
     local sqlite_l1_tx=$(duckdb "$TEMP_DB" -csv -noheader -c "
       ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
       SELECT COUNT(*) FROM core.stable_transactions 
@@ -355,7 +349,7 @@ verify_partition_counts() {
   fi
   
   # Verify L1 tags if included
-  if ! $SKIP_L1_TAGS && ! $SKIP_L1_TRANSACTIONS; then
+  if $INCLUDE_L1; then
     local sqlite_l1_tags=$(duckdb "$TEMP_DB" -csv -noheader -c "
       ATTACH '${CORE_DB_PATH}' AS core (TYPE SQLITE, READONLY TRUE);
       SELECT COUNT(*) FROM core.stable_transaction_tags 
@@ -626,7 +620,7 @@ import_height_range() {
     echo "WHERE height BETWEEN ${start_h} AND ${end_h};"
     
     # Import L1 transactions if enabled
-    if ! $SKIP_L1_TRANSACTIONS; then
+    if $INCLUDE_L1; then
       echo "INSERT INTO transactions"
       echo "SELECT"
       echo "  st.id, NULL AS indexed_at, st.block_transaction_index,"
@@ -654,26 +648,24 @@ import_height_range() {
       echo "LEFT JOIN core.wallets w ON st.owner_address = w.address"
       echo "WHERE st.height BETWEEN ${start_h} AND ${end_h};"
       
-      # Import L1 tags if enabled
-      if ! $SKIP_L1_TAGS; then
-        echo "INSERT INTO tags"
-        echo "SELECT"
-        echo "  st.height,"
-        echo "  st.id,"
-        echo "  stt.transaction_tag_index AS tag_index,"
-        echo "  NULL AS indexed_at,"
-        echo "  tn.name AS tag_name,"
-        echo "  tv.value AS tag_value,"
-        echo "  0 AS is_data_item"
-        echo "FROM core.stable_transactions st"
-        echo "CROSS JOIN core.stable_transaction_tags stt"
-        echo "CROSS JOIN core.tag_names tn"
-        echo "CROSS JOIN core.tag_values tv"
-        echo "WHERE st.id = stt.transaction_id"
-        echo "  AND stt.tag_name_hash = tn.hash"
-        echo "  AND stt.tag_value_hash = tv.hash"
-        echo "  AND st.height BETWEEN ${start_h} AND ${end_h};"
-      fi
+      # Import L1 tags
+      echo "INSERT INTO tags"
+      echo "SELECT"
+      echo "  st.height,"
+      echo "  st.id,"
+      echo "  stt.transaction_tag_index AS tag_index,"
+      echo "  NULL AS indexed_at,"
+      echo "  tn.name AS tag_name,"
+      echo "  tv.value AS tag_value,"
+      echo "  0 AS is_data_item"
+      echo "FROM core.stable_transactions st"
+      echo "CROSS JOIN core.stable_transaction_tags stt"
+      echo "CROSS JOIN core.tag_names tn"
+      echo "CROSS JOIN core.tag_values tv"
+      echo "WHERE st.id = stt.transaction_id"
+      echo "  AND stt.tag_name_hash = tn.hash"
+      echo "  AND stt.tag_value_hash = tv.hash"
+      echo "  AND st.height BETWEEN ${start_h} AND ${end_h};"
     fi
     
     # Import L2 transactions (data items)
