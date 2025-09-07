@@ -30,7 +30,9 @@ Options:
   --core-db PATH            Path to core SQLite database (default: data/sqlite/core.db)
   --bundles-db PATH         Path to bundles SQLite database (default: data/sqlite/bundles.db)
   --staging-dir PATH        Staging directory for temp files (default: data/etl/staging)
+  --staging-job-dir PATH    Explicit path for job staging directory (overrides auto-generation)
   --dataset-dir PATH        Final dataset directory (default: data/datasets/default)
+  --skip-dataset-move       Skip moving files from staging to dataset directory
   --resume                  Resume from last checkpoint if export was interrupted
   --verify-count            Verify row counts match SQLite after each partition (slower)
   --show-timing             Show detailed timing information for operations
@@ -59,6 +61,8 @@ DATASET_DIR="${LOCAL_DATASETS_PATH:-data/datasets}/default"
 RESUME=false
 VERIFY_COUNT=false
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
+EXPLICIT_JOB_DIR=false
+SKIP_DATASET_MOVE=false
 
 # Load environment configuration
 load_env
@@ -131,6 +135,15 @@ while [[ $# -gt 0 ]]; do
       GENERATE_ICEBERG=true
       shift 1
       ;;
+    --staging-job-dir)
+      JOB_STAGING_DIR=$2
+      EXPLICIT_JOB_DIR=true
+      shift 2
+      ;;
+    --skip-dataset-move)
+      SKIP_DATASET_MOVE=true
+      shift 1
+      ;;
     --iceberg-root)
       ICEBERG_ROOT="$2"
       shift 2
@@ -177,7 +190,9 @@ if (( START_HEIGHT > END_HEIGHT )); then
 fi
 
 # Setup directories
-JOB_STAGING_DIR="$STAGING_DIR/job-$RUN_ID"
+if [ "$EXPLICIT_JOB_DIR" = false ]; then
+  JOB_STAGING_DIR="$STAGING_DIR/job-$RUN_ID"
+fi
 CHECKPOINT_FILE="$JOB_STAGING_DIR/.checkpoint"
 VERIFICATION_LOG="$JOB_STAGING_DIR/.verification_results"
 
@@ -191,7 +206,9 @@ cleanup() {
     fi
   else
     # Clean up on successful completion
-    rm -rf "$JOB_STAGING_DIR"
+    if [ "$SKIP_DATASET_MOVE" = false ]; then
+      rm -rf "$JOB_STAGING_DIR"
+    fi
     rm -f "$TEMP_DB" "$TEMP_DB.wal" "$SQL_INIT"
   fi
 }
@@ -831,14 +848,16 @@ while [[ $current_height -le $END_HEIGHT ]]; do
   partition_dir="height=${current_partition_start}-${current_partition_end}"
   
   
-  # Move to warehouse (atomic operation)
-  for table in blocks transactions tags; do
-    if [[ -d "$JOB_STAGING_DIR/$table/$partition_dir" ]]; then
-      mkdir -p "$OUTPUT_DIR/$table/data/$partition_dir"
-      mv "$JOB_STAGING_DIR/$table/$partition_dir"/* "$OUTPUT_DIR/$table/data/$partition_dir/" 2>/dev/null || true
-      rmdir "$JOB_STAGING_DIR/$table/$partition_dir" 2>/dev/null || true
-    fi
-  done
+  # Move to dataset directory (atomic operation) unless --skip-dataset-move is set
+  if [ "$SKIP_DATASET_MOVE" = false ]; then
+    for table in blocks transactions tags; do
+      if [[ -d "$JOB_STAGING_DIR/$table/$partition_dir" ]]; then
+        mkdir -p "$OUTPUT_DIR/$table/data/$partition_dir"
+        mv "$JOB_STAGING_DIR/$table/$partition_dir"/* "$OUTPUT_DIR/$table/data/$partition_dir/" 2>/dev/null || true
+        rmdir "$JOB_STAGING_DIR/$table/$partition_dir" 2>/dev/null || true
+      fi
+    done
+  fi
   
   echo "Completed partition: $partition_dir"
   

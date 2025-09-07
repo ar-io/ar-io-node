@@ -94,18 +94,23 @@ while true; do
 
         echo "Processing heights $current_height to $end_height..."
 
-        # Step 1: Export to Parquet format
+        # Generate job staging directory for this batch
+        job_id="$(date +%Y%m%d_%H%M%S)_$$"
+        job_staging_dir="$staging_dir/job-${current_height}-${end_height}-${job_id}"
+        
+        # Step 1: Export to Parquet format in staging
         echo "Starting Parquet export..."
         export_start_time=$(date +%s)
         
-        # Run parquet-export script (export only, no ClickHouse integration)
+        # Run parquet-export script with staging-based workflow
         # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
         ./scripts/parquet-export \
             --start-height "$current_height" \
             --end-height "$end_height" \
             --height-partition-size "$height_interval" \
+            --staging-job-dir "$job_staging_dir" \
             --output-dir "$dataset_dir" \
-            --staging-dir "$staging_dir" \
+            --skip-dataset-move \
             --max-file-rows "$max_rows_per_file" \
             --include-l1-transactions \
             --include-l1-tags
@@ -123,22 +128,21 @@ while true; do
             export_success=false
         fi
 
-        # Step 2: Import to ClickHouse if export succeeded
+        # Step 2: Import to ClickHouse from staging if export succeeded
         if [ "$export_success" = true ]; then
-            echo "Starting ClickHouse import..."
+            echo "Starting ClickHouse import from staging..."
             import_start_time=$(date +%s)
             
             # Generate partition name matching the height range format
             partition_name="height=${current_height}-$((end_height - 1))"
             
             ./scripts/clickhouse-import \
-                --input-dir "$dataset_dir" \
+                --input-dir "$job_staging_dir" \
                 --partition "$partition_name" \
                 --clickhouse-host "$CLICKHOUSE_HOST" \
                 --clickhouse-port "$CLICKHOUSE_PORT" \
                 --clickhouse-user "$CLICKHOUSE_USER" \
-                --clickhouse-password "$CLICKHOUSE_PASSWORD" \
-                --resume
+                --clickhouse-password "$CLICKHOUSE_PASSWORD"
             
             import_status=$?
             import_complete_time=$(date +%s)
@@ -147,8 +151,28 @@ while true; do
                 echo "ClickHouse import completed successfully."
                 log_timing "ClickHouse import" "$import_start_time" "$import_complete_time"
                 import_success=true
+                
+                # Step 3: Move from staging to dataset directory after successful import
+                echo "Moving files from staging to dataset directory..."
+                move_start_time=$(date +%s)
+                
+                for table in blocks transactions tags; do
+                    if [ -d "$job_staging_dir/$table" ]; then
+                        mkdir -p "$dataset_dir/$table/data"
+                        mv "$job_staging_dir/$table"/* "$dataset_dir/$table/data/" 2>/dev/null || true
+                    fi
+                done
+                
+                move_complete_time=$(date +%s)
+                log_timing "Move staging to dataset" "$move_start_time" "$move_complete_time"
+                
+                # Clean up staging directory after successful move
+                rm -rf "$job_staging_dir"
+                echo "Staging directory cleaned up."
+                
             else
                 echo "Warning: ClickHouse import failed with status $import_status"
+                echo "Staging files preserved at: $job_staging_dir"
                 log_timing "ClickHouse import (failed)" "$import_start_time" "$import_complete_time"
                 import_success=false
             fi
@@ -157,7 +181,7 @@ while true; do
             import_success=false
         fi
 
-        # Step 3: Mark this height range as processed
+        # Step 4: Mark this height range as processed
         if [ "$import_success" = true ]; then
             touch "$processed_dir/heights_${current_height}_${end_height}.done"
         fi
