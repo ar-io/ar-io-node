@@ -154,7 +154,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# If outputDir not specified, use warehouse structure
+# If outputDir not specified, use datasets structure
 if [[ -z "$OUTPUT_DIR" ]]; then
   if [[ -z "$START_HEIGHT" || -z "$END_HEIGHT" ]]; then
     echo "Error: Must specify --start-height and --end-height" >&2
@@ -880,11 +880,11 @@ if [ "$GENERATE_ICEBERG" = true ]; then
   echo "Generating Apache Iceberg metadata..."
   if command -v python3 >/dev/null 2>&1; then
     if python3 -c "import pyiceberg" 2>/dev/null; then
-      # Build the command with optional warehouse root
-      ICEBERG_CMD="python3 \"$SCRIPT_DIR/generate-iceberg-metadata\" --warehouse-dir \"$OUTPUT_DIR\""
+      # Build the command with optional datasets root
+      ICEBERG_CMD="python3 \"$SCRIPT_DIR/generate-iceberg-metadata\" --datasets-dir \"$OUTPUT_DIR\""
       if [ -n "$ICEBERG_ROOT" ]; then
-        ICEBERG_CMD="$ICEBERG_CMD --warehouse-root \"$ICEBERG_ROOT\""
-        echo "  Using warehouse root: $ICEBERG_ROOT"
+        ICEBERG_CMD="$ICEBERG_CMD --datasets-root \"$ICEBERG_ROOT\""
+        echo "  Using datasets root: $ICEBERG_ROOT"
       fi
       
       if eval $ICEBERG_CMD; then

@@ -26,6 +26,18 @@ try:
     import pyarrow as pa
     import pyarrow.dataset as ds
     import pandas as pd
+    
+    # Register fsspec HTTP filesystem for HTTPS support
+    try:
+        import fsspec
+        from fsspec.implementations.http import HTTPFileSystem
+        # Ensure HTTP/HTTPS filesystems are registered with fsspec
+        fsspec.register_implementation("http", HTTPFileSystem)
+        fsspec.register_implementation("https", HTTPFileSystem)
+    except ImportError:
+        # fsspec not available, HTTP/HTTPS support will be limited
+        pass
+        
 except ImportError as e:
     print(f"Error: Required library not installed: {e}")
     print(f"Python executable: {sys.executable}")
@@ -428,60 +440,60 @@ def main():
 This version correctly matches the schema that DuckDB exports to Parquet.
 
 Examples:
-  %(prog)s --warehouse-dir data/parquet-test
-  %(prog)s --warehouse-dir /path/to/warehouse
-  %(prog)s --warehouse-dir data/export --warehouse-root https://example.com/warehouse
-  %(prog)s --warehouse-dir /local/data --warehouse-root s3://my-bucket/iceberg
+  %(prog)s --datasets-dir data/parquet-test
+  %(prog)s --datasets-dir /path/to/datasets
+  %(prog)s --datasets-dir data/export --datasets-root https://example.com/datasets
+  %(prog)s --datasets-dir /local/data --datasets-root s3://my-bucket/iceberg
   
 Query the generated tables:
   Python with PyIceberg:
     from pyiceberg.catalog.sql import SqlCatalog
-    catalog = SqlCatalog('catalog', uri='sqlite:///path/to/warehouse/catalog.db', 
-                         warehouse='file:///path/to/warehouse')
+    catalog = SqlCatalog('catalog', uri='sqlite:///path/to/datasets/catalog.db', 
+                         warehouse='file:///path/to/datasets')
     table = catalog.load_table('default.blocks')
     df = table.scan().to_pandas()
     
   DuckDB with Iceberg extension:
     INSTALL iceberg;
     LOAD iceberg;
-    SELECT * FROM iceberg_scan('path/to/warehouse/default.db/blocks');
+    SELECT * FROM iceberg_scan('path/to/datasets/default.db/blocks');
 """
     )
     
     parser.add_argument(
-        '--warehouse-dir',
-        default='data/warehouse/default',
-        help='Warehouse directory containing Parquet data (default: data/warehouse/default)'
+        '--datasets-dir',
+        default='data/datasets/default',
+        help='Datasets directory containing Parquet data (default: data/datasets/default)'
     )
     
     parser.add_argument(
-        '--warehouse-root',
-        help='Optional warehouse root URI for metadata references (e.g., file:///path, https://example.com/warehouse, s3://bucket/prefix). '
+        '--datasets-root',
+        help='Optional datasets root URI for metadata references (e.g., file:///path, https://example.com/datasets, s3://bucket/prefix). '
              'Note: For remote URIs, metadata is still written locally but references will point to the remote location. '
-             'If not provided, defaults to file:// with absolute path to warehouse-dir'
+             'If not provided, defaults to file:// with absolute path to datasets-dir'
     )
     
     args = parser.parse_args()
     
-    # Check if warehouse directory exists
-    if not os.path.exists(args.warehouse_dir):
-        print(f"Error: Warehouse directory does not exist: {args.warehouse_dir}", file=sys.stderr)
+    # Check if datasets directory exists
+    if not os.path.exists(args.datasets_dir):
+        print(f"Error: Datasets directory does not exist: {args.datasets_dir}", file=sys.stderr)
         sys.exit(1)
     
-    # Validate warehouse_root for HTTP/HTTPS URLs
-    if args.warehouse_root and args.warehouse_root.startswith(('http://', 'https://')):
-        print("Info: HTTP/HTTPS warehouse root detected - configuring FsspecFileIO for remote access.", file=sys.stderr)
+    # Validate datasets_root for HTTP/HTTPS URLs
+    if args.datasets_root and args.datasets_root.startswith(('http://', 'https://')):
+        print("Info: HTTP/HTTPS datasets root detected - configuring FsspecFileIO for remote access.", file=sys.stderr)
         print("      Remote readers will be able to access data files via HTTP/HTTPS URLs.", file=sys.stderr)
         print()
     
     print(f"Generating Iceberg metadata (Fixed Version)")
-    print(f"Warehouse: {args.warehouse_dir}")
+    print(f"Datasets: {args.datasets_dir}")
     print()
     
     # Create catalog
     try:
-        catalog = create_local_catalog(args.warehouse_dir, args.warehouse_root)
-        print(f"Created/opened Iceberg catalog at: {args.warehouse_dir}/catalog.db")
+        catalog = create_local_catalog(args.datasets_dir, args.datasets_root)
+        print(f"Created/opened Iceberg catalog at: {args.datasets_dir}/catalog.db")
     except Exception as e:
         print(f"Error creating catalog: {e}", file=sys.stderr)
         import traceback
@@ -498,7 +510,7 @@ Query the generated tables:
     successful_tables = []
     
     for table_name, schema in tables:
-        table_dir = os.path.join(args.warehouse_dir, table_name)
+        table_dir = os.path.join(args.datasets_dir, table_name)
         if not os.path.exists(table_dir):
             print(f"Skipping {table_name}: directory does not exist")
             continue
@@ -525,8 +537,8 @@ Query the generated tables:
                 table_name, 
                 schema, 
                 parquet_files,
-                args.warehouse_dir,
-                args.warehouse_root
+                args.datasets_dir,
+                args.datasets_root
             )
             print(f"  Table location: {table.location()}")
             successful_tables.append(table_name)
@@ -538,28 +550,28 @@ Query the generated tables:
     
     if successful_tables:
         # Post-process metadata if custom warehouse root is specified
-        if args.warehouse_root:
+        if args.datasets_root:
             print()
-            print("Updating metadata with custom warehouse root...")
-            update_metadata_locations(args.warehouse_dir, args.warehouse_root)
+            print("Updating metadata with custom datasets root...")
+            update_metadata_locations(args.datasets_dir, args.datasets_root)
             # Also rewrite manifest files for complete HTTP URL support
-            rewrite_manifest_files(args.warehouse_dir, args.warehouse_root)
+            rewrite_manifest_files(args.datasets_dir, args.datasets_root)
         
         print()
         print("=" * 60)
         print("Iceberg metadata generation complete!")
         print(f"Successfully created {len(successful_tables)} tables: {', '.join(successful_tables)}")
-        print(f"Catalog location: {args.warehouse_dir}/catalog.db")
-        if args.warehouse_root:
-            print(f"Metadata references warehouse root: {args.warehouse_root}")
+        print(f"Catalog location: {args.datasets_dir}/catalog.db")
+        if args.datasets_root:
+            print(f"Metadata references datasets root: {args.datasets_root}")
         print()
         print("To query these tables:")
         print()
         print("1. Python with PyIceberg:")
         print("-" * 40)
         print("from pyiceberg.catalog.sql import SqlCatalog")
-        print(f"catalog = SqlCatalog('catalog', uri='sqlite:///{os.path.abspath(args.warehouse_dir)}/catalog.db',")
-        print(f"                     warehouse='file://{os.path.abspath(args.warehouse_dir)}')")
+        print(f"catalog = SqlCatalog('catalog', uri='sqlite:///{os.path.abspath(args.datasets_dir)}/catalog.db',")
+        print(f"                     warehouse='file://{os.path.abspath(args.datasets_dir)}')")
         print("table = catalog.load_table('default.blocks')")
         print("df = table.scan().to_pandas()")
         print("print(df.head())")
@@ -570,7 +582,7 @@ Query the generated tables:
         print("INSTALL avro;  -- Required for Iceberg")
         print("INSTALL iceberg;")
         print("LOAD iceberg;")
-        print(f"SELECT COUNT(*) FROM iceberg_scan('{os.path.abspath(args.warehouse_dir)}/default.db/blocks');")
+        print(f"SELECT COUNT(*) FROM iceberg_scan('{os.path.abspath(args.datasets_dir)}/default.db/blocks');")
     else:
         print("\nNo tables were successfully created.")
         sys.exit(1)

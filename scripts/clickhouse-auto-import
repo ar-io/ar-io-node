@@ -8,7 +8,7 @@
 # 1. parquet-export script to export data to Parquet files with Iceberg-compatible partitioning
 # 2. clickhouse-import script to import the Parquet files to ClickHouse database
 # 
-# The exported Parquet files are stored with Iceberg-compatible partitioning in the warehouse directory.
+# The exported Parquet files are stored with Iceberg-compatible partitioning in the datasets directory.
 
 # Load common library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -163,21 +163,21 @@ while true; do
                 move_complete_time=$(date +%s)
                 log_timing "Move staging to dataset" "$move_start_time" "$move_complete_time"
                 
-                # Step 3.5: Update Iceberg metadata for new partitions
-                if command -v python3 >/dev/null 2>&1 && [ -f ./scripts/generate-iceberg-metadata ]; then
+                # Step 3.5: Update Iceberg metadata for new partitions (disabled by default)
+                if [ "${ENABLE_ICEBERG_GENERATION:-false}" = "true" ] && command -v python3 >/dev/null 2>&1 && [ -f ./scripts/generate-iceberg-metadata ]; then
                     echo "Updating Iceberg metadata..."
                     iceberg_start_time=$(date +%s)
                     
-                    # Build warehouse root based on ARNS_ROOT_HOST if configured
+                    # Build datasets root based on ARNS_ROOT_HOST if configured
                     iceberg_args=(
-                        "--warehouse-dir" "$dataset_dir"
+                        "--datasets-dir" "$dataset_dir"
                     )
                     
-                    # Add ARNS warehouse root if configured
+                    # Add ARNS datasets root if configured
                     if [ -n "${ARNS_ROOT_HOST:-}" ]; then
-                        warehouse_root="https://${ARNS_ROOT_HOST}/local/datasets/default"
-                        iceberg_args+=("--warehouse-root" "$warehouse_root")
-                        echo "  Using ARNS warehouse root: $warehouse_root"
+                        datasets_root="https://${ARNS_ROOT_HOST}/local/datasets/default"
+                        iceberg_args+=("--datasets-root" "$datasets_root")
+                        echo "  Using ARNS datasets root: $datasets_root"
                     fi
                     
                     # Run the metadata generation

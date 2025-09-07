@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # AR.IO Gateway - ClickHouse Import Script
-# Imports Parquet files from warehouse structure to ClickHouse database
+# Imports Parquet files from datasets structure to ClickHouse database
 
 # Load common library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
