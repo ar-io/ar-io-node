@@ -134,13 +134,12 @@ while true; do
             # Generate partition name matching the height range format
             partition_name="height=${current_height}-$((end_height - 1))"
             
-            ./scripts/clickhouse-import \
-                --input-dir "$job_staging_dir" \
-                --partition "$partition_name" \
-                --clickhouse-host "$CLICKHOUSE_HOST" \
-                --clickhouse-port "$CLICKHOUSE_PORT" \
-                --clickhouse-user "$CLICKHOUSE_USER" \
-                --clickhouse-password "$CLICKHOUSE_PASSWORD"
+            import_args=(--input-dir "$job_staging_dir" --partition "$partition_name")
+            [ -n "${CLICKHOUSE_HOST:-}" ]     && import_args+=(--clickhouse-host "$CLICKHOUSE_HOST")
+            [ -n "${CLICKHOUSE_PORT:-}" ]     && import_args+=(--clickhouse-port "$CLICKHOUSE_PORT")
+            [ -n "${CLICKHOUSE_USER:-}" ]     && import_args+=(--clickhouse-user "$CLICKHOUSE_USER")
+            [ -n "${CLICKHOUSE_PASSWORD:-}" ] && import_args+=(--clickhouse-password "$CLICKHOUSE_PASSWORD")
+            ./scripts/clickhouse-import "${import_args[@]}"
             
             import_status=$?
             import_complete_time=$(date +%s)
@@ -182,7 +181,7 @@ while true; do
                     fi
                     
                     # Run the metadata generation
-                    if python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}" 2>&1 | head -20; then
+                    if python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}"; then
                         iceberg_status=0
                     else
                         iceberg_status=1
