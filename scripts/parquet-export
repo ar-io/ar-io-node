@@ -608,10 +608,11 @@ SQL
 SELECT 
   hex(st.id) AS id, NULL AS indexed_at, st.block_transaction_index,
   0 AS is_data_item,
-  hex(st.target) AS target, st.quantity, st.reward,
+  CASE WHEN st.target IS NULL THEN '' ELSE hex(st.target) END AS target, st.quantity, st.reward,
   hex(st.last_tx) AS anchor,
   st.data_size, st.content_type, st.format,
-  st.height, hex(st.owner_address) AS owner_address, hex(st.data_root) AS data_root,
+  st.height, hex(st.owner_address) AS owner_address, 
+  CASE WHEN st.data_root IS NULL THEN '' ELSE hex(st.data_root) END AS data_root,
   NULL AS parent,
   st."offset",
   NULL AS size,
@@ -659,11 +660,12 @@ SQL
 SELECT 
   hex(sdi.id) AS id, sdi.indexed_at, sdi.block_transaction_index,
   1 AS is_data_item,
-  hex(sdi.target) AS target, NULL AS quantity, NULL AS reward, hex(sdi.anchor) AS anchor, sdi.data_size, sdi.content_type,
+  CASE WHEN sdi.target IS NULL THEN '' ELSE hex(sdi.target) END AS target, NULL AS quantity, NULL AS reward, 
+  CASE WHEN sdi.anchor IS NULL THEN '' ELSE hex(sdi.anchor) END AS anchor, sdi.data_size, sdi.content_type,
   NULL AS format,
   sdi.height, hex(sdi.owner_address) AS owner_address,
   NULL AS data_root,
-  hex(sdi.parent_id) AS parent,
+  CASE WHEN sdi.parent_id IS NULL THEN '' ELSE hex(sdi.parent_id) END AS parent,
   sdi."offset", sdi.size, sdi.data_offset,
   sdi.owner_offset, sdi.owner_size,
   CASE
