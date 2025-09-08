@@ -217,7 +217,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-1e5db4ebf05a6f61dab43994491a97cd717d06af}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-5d06e824ce7d18764bed130025a3f493657cd39d}
     profiles:
       - clickhouse
     build:
