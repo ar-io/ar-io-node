@@ -35,6 +35,7 @@ Options:
   --resume                  Resume from last checkpoint if export was interrupted
   --verify-count            Verify row counts match SQLite after each partition (slower)
   --show-timing             Show detailed timing information for operations
+  --debug                   Enable debug logging output
   
   Iceberg Metadata:
   --generate-iceberg        Generate Apache Iceberg metadata after export (requires PyIceberg)
@@ -58,6 +59,7 @@ STAGING_DIR="${ETL_STAGING_PATH:-data/etl/staging}"
 DATASET_DIR="${LOCAL_DATASETS_PATH:-data/datasets}/default"
 RESUME=false
 VERIFY_COUNT=false
+DEBUG_MODE=false
 RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
 EXPLICIT_JOB_DIR=false
 SKIP_DATASET_MOVE=false
@@ -123,6 +125,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --show-timing)
       SHOW_TIMING=true
+      shift 1
+      ;;
+    --debug)
+      DEBUG_MODE=true
       shift 1
       ;;
     --generate-iceberg)
@@ -586,11 +592,11 @@ export_sqlite_to_csv() {
   
   # Check if there are any blocks in this range first
   local expected_blocks=$(sqlite3 "$CORE_DB_PATH" "SELECT COUNT(*) FROM stable_blocks WHERE height BETWEEN $start_h AND $end_h;")
-  echo "    [DEBUG] Expected blocks in range $start_h to $end_h: $expected_blocks"
+  debug_log "Expected blocks in range $start_h to $end_h: $expected_blocks" 2
   
   # Export blocks from core.db
   echo "  Exporting blocks..."
-  echo "    [DEBUG] Starting blocks export from core.db at $(date -Iseconds)"
+  debug_log "Starting blocks export from core.db at $(date -Iseconds)" 2
   local blocks_start=$(date +%s)
   sqlite3 "$CORE_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/blocks.csv"
 SELECT 
@@ -608,17 +614,17 @@ ORDER BY height;
 SQL
   local blocks_end=$(date +%s)
   local actual_blocks_lines=$(wc -l < "$temp_csv_dir/blocks.csv" || echo "0")
-  echo "    [DEBUG] Blocks export completed in $((blocks_end - blocks_start)) seconds at $(date -Iseconds)"
-  echo "    [DEBUG] blocks.csv created with $actual_blocks_lines lines (expected: $((expected_blocks + 1)) including header)"
-  if [[ $actual_blocks_lines -le 3 ]]; then
-    echo "    [DEBUG] blocks.csv content:"
-    cat "$temp_csv_dir/blocks.csv" || true
+  debug_log "Blocks export completed in $((blocks_end - blocks_start)) seconds at $(date -Iseconds)" 2
+  debug_log "blocks.csv created with $actual_blocks_lines lines (expected: $((expected_blocks + 1)) including header)" 2
+  if [[ "$DEBUG_MODE" == "true" ]] && [[ $actual_blocks_lines -le 3 ]]; then
+    debug_log "blocks.csv content:" 2
+    cat "$temp_csv_dir/blocks.csv" 2>&1 | sed 's/^/      /' || true
   fi
   
   # Export L1 transactions if enabled
   if $INCLUDE_L1; then
     echo "  Exporting L1 transactions..."
-    echo "    [DEBUG] Starting L1 transactions export from core.db at $(date -Iseconds)"
+    debug_log "Starting L1 transactions export from core.db at $(date -Iseconds)" 2
     local l1_tx_start=$(date +%s)
     sqlite3 "$CORE_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l1_transactions.csv"
 SELECT 
@@ -651,11 +657,11 @@ WHERE st.height BETWEEN $start_h AND $end_h
 ORDER BY st.height, st.id;
 SQL
     local l1_tx_end=$(date +%s)
-    echo "    [DEBUG] L1 transactions export completed in $((l1_tx_end - l1_tx_start)) seconds at $(date -Iseconds)"
+    debug_log "L1 transactions export completed in $((l1_tx_end - l1_tx_start)) seconds at $(date -Iseconds)" 2
 
     # Export L1 tags
     echo "  Exporting L1 tags..."
-    echo "    [DEBUG] Starting L1 tags export from core.db at $(date -Iseconds)"
+    debug_log "Starting L1 tags export from core.db at $(date -Iseconds)" 2
     local l1_tags_start=$(date +%s)
     sqlite3 "$CORE_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l1_tags.csv"
 SELECT 
@@ -674,12 +680,12 @@ WHERE st.height BETWEEN $start_h AND $end_h
 ORDER BY st.height, st.id, stt.transaction_tag_index;
 SQL
     local l1_tags_end=$(date +%s)
-    echo "    [DEBUG] L1 tags export completed in $((l1_tags_end - l1_tags_start)) seconds at $(date -Iseconds)"
+    debug_log "L1 tags export completed in $((l1_tags_end - l1_tags_start)) seconds at $(date -Iseconds)" 2
   fi
   
   # Export L2 transactions (data items)
   echo "  Exporting L2 transactions..."
-  echo "    [DEBUG] Starting L2 transactions export from bundles.db at $(date -Iseconds)"
+  debug_log "Starting L2 transactions export from bundles.db at $(date -Iseconds)" 2
   local l2_tx_start=$(date +%s)
   sqlite3 "$BUNDLES_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l2_transactions.csv"
 SELECT 
@@ -707,11 +713,11 @@ WHERE sdi.height BETWEEN $start_h AND $end_h
 ORDER BY sdi.height, sdi.id;
 SQL
   local l2_tx_end=$(date +%s)
-  echo "    [DEBUG] L2 transactions export completed in $((l2_tx_end - l2_tx_start)) seconds at $(date -Iseconds)"
+  debug_log "L2 transactions export completed in $((l2_tx_end - l2_tx_start)) seconds at $(date -Iseconds)" 2
   
   # Export L2 tags
   echo "  Exporting L2 tags..."
-  echo "    [DEBUG] Starting L2 tags export from bundles.db at $(date -Iseconds)"
+  debug_log "Starting L2 tags export from bundles.db at $(date -Iseconds)" 2
   local l2_tags_start=$(date +%s)
   sqlite3 "$BUNDLES_DB_PATH" -csv -header <<SQL > "$temp_csv_dir/l2_tags.csv"
 SELECT 
@@ -730,8 +736,8 @@ WHERE sdi.height BETWEEN $start_h AND $end_h
 ORDER BY sdi.height, sdi.id, sdit.data_item_tag_index;
 SQL
   local l2_tags_end=$(date +%s)
-  echo "    [DEBUG] L2 tags export completed in $((l2_tags_end - l2_tags_start)) seconds at $(date -Iseconds)"
-  echo "  [DEBUG] Total SQLite export completed at $(date -Iseconds)"
+  debug_log "L2 tags export completed in $((l2_tags_end - l2_tags_start)) seconds at $(date -Iseconds)" 2
+  debug_log "Total SQLite export completed at $(date -Iseconds)" 1
 }
 
 # Import CSV files into DuckDB
@@ -739,19 +745,21 @@ import_csv_to_duckdb() {
   local temp_csv_dir="$JOB_STAGING_DIR/csv"
   
   echo "Importing CSV files into DuckDB..."
-  echo "  [DEBUG] Starting DuckDB import at $(date -Iseconds)"
+  debug_log "Starting DuckDB import at $(date -Iseconds)" 1
   
   # Import blocks
   if [[ -f "$temp_csv_dir/blocks.csv" ]]; then
     echo "  Importing blocks..."
     local csv_line_count=$(wc -l < "$temp_csv_dir/blocks.csv" || echo "0")
-    echo "    [DEBUG] blocks.csv has $csv_line_count lines"
+    debug_log "blocks.csv has $csv_line_count lines" 2
     if [[ $csv_line_count -le 1 ]]; then
-      echo "    [DEBUG] Skipping blocks import - CSV is empty or header-only"
+      debug_log "Skipping blocks import - CSV is empty or header-only" 2
     else
-      echo "    [DEBUG] First few lines of blocks.csv:"
-      head -3 "$temp_csv_dir/blocks.csv" || true
-      echo "    [DEBUG] Starting blocks import to DuckDB at $(date -Iseconds)"
+      if [[ "$DEBUG_MODE" == "true" ]]; then
+        debug_log "First few lines of blocks.csv:" 2
+        head -3 "$temp_csv_dir/blocks.csv" 2>&1 | sed 's/^/      /' || true
+      fi
+      debug_log "Starting blocks import to DuckDB at $(date -Iseconds)" 2
       local blocks_import_start=$(date +%s)
       duckdb "$TEMP_DB" <<SQL
 INSERT INTO blocks 
@@ -772,10 +780,10 @@ FROM read_csv('$temp_csv_dir/blocks.csv',
   });
 SQL
       local blocks_import_end=$(date +%s)
-      echo "    [DEBUG] Blocks import completed in $((blocks_import_end - blocks_import_start)) seconds at $(date -Iseconds)"
+      debug_log "Blocks import completed in $((blocks_import_end - blocks_import_start)) seconds at $(date -Iseconds)" 2
     fi
   else
-    echo "    [DEBUG] blocks.csv not found, skipping blocks import"
+    debug_log "blocks.csv not found, skipping blocks import" 2
   fi
   
   # Import L1 transactions if file exists
@@ -860,10 +868,10 @@ SQL
   
   # Clean up CSV files
   echo "  Cleaning up CSV files..."
-  echo "    [DEBUG] Starting CSV cleanup at $(date -Iseconds)"
+  debug_log "Starting CSV cleanup at $(date -Iseconds)" 2
   rm -rf "$temp_csv_dir"
-  echo "    [DEBUG] CSV cleanup completed at $(date -Iseconds)"
-  echo "  [DEBUG] DuckDB import completed at $(date -Iseconds)"
+  debug_log "CSV cleanup completed at $(date -Iseconds)" 2
+  debug_log "DuckDB import completed at $(date -Iseconds)" 1
 }
 
 import_height_range() {
@@ -871,32 +879,32 @@ import_height_range() {
   local end_h=$2
   
   echo "Importing data for height range: $start_h to $end_h"
-  echo "[DEBUG] Starting import_height_range for $start_h to $end_h at $(date -Iseconds)"
+  debug_log "Starting import_height_range for $start_h to $end_h at $(date -Iseconds)"
   
   local import_start=$(date +%s%N)
   
   # Step 1: Export from SQLite to CSV (uses SQLite indexes efficiently)
-  echo "[DEBUG] Calling export_sqlite_to_csv for $start_h to $end_h at $(date -Iseconds)"
+  debug_log "Calling export_sqlite_to_csv for $start_h to $end_h at $(date -Iseconds)"
   export_sqlite_to_csv "$start_h" "$end_h"
   
   if [[ $? -ne 0 ]]; then
     echo "Error: Failed to export SQLite data to CSV for height range $start_h to $end_h" >&2
     return 1
   fi
-  echo "[DEBUG] export_sqlite_to_csv completed for $start_h to $end_h at $(date -Iseconds)"
+  debug_log "export_sqlite_to_csv completed for $start_h to $end_h at $(date -Iseconds)"
   
   # Step 2: Import CSV files into DuckDB (fast bulk load)
-  echo "[DEBUG] Calling import_csv_to_duckdb for $start_h to $end_h at $(date -Iseconds)"
+  debug_log "Calling import_csv_to_duckdb for $start_h to $end_h at $(date -Iseconds)"
   import_csv_to_duckdb
   
   if [[ $? -ne 0 ]]; then
     echo "Error: Failed to import CSV data to DuckDB for height range $start_h to $end_h" >&2
     return 1
   fi
-  echo "[DEBUG] import_csv_to_duckdb completed for $start_h to $end_h at $(date -Iseconds)"
+  debug_log "import_csv_to_duckdb completed for $start_h to $end_h at $(date -Iseconds)"
   
   local import_end=$(date +%s%N)
-  echo "[DEBUG] import_height_range completed for $start_h to $end_h at $(date -Iseconds)"
+  debug_log "import_height_range completed for $start_h to $end_h at $(date -Iseconds)"
   log_timing "Total import for range $start_h-$end_h" "$import_start" "$import_end"
   
   # Count what was imported for timing analysis

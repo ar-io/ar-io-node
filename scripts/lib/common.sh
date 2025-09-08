@@ -38,6 +38,20 @@ load_clickhouse_config() {
     export CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-}"
 }
 
+# Debug logging function with optional indentation
+# Usage: debug_log "message" [indent_level]
+debug_log() {
+    if [[ "${DEBUG_MODE:-false}" == "true" ]]; then
+        local message="$1"
+        local indent="${2:-0}"
+        local spaces=""
+        for ((i=0; i<indent; i++)); do
+            spaces="  $spaces"
+        done
+        echo "${spaces}[DEBUG] $message" >&2
+    fi
+}
+
 # Log timing information (simple version for DEBUG mode)
 # Usage: log_timing "operation_name" start_time_seconds end_time_seconds
 log_timing() {
