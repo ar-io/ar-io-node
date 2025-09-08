@@ -264,7 +264,10 @@ arIoRouter.post('/ar-io/admin/queue-tx', express.json(), async (req, res) => {
 
 // Queue a bundle for processing
 arIoRouter.post(
-  '/ar-io/admin/queue-bundle',
+  config.ENABLE_X_402_USDC
+    ? ['/ar-io/admin/queue-bundle', '/ar-io/queue-bundle']
+    : '/ar-io/admin/queue-bundle',
+
   express.json(),
   async (req, res) => {
     try {
