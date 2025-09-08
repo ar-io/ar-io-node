@@ -37,6 +37,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Made L1 transaction export the default behavior
   - Changed default export location from `data/parquet` to
     `data/datasets/default`
+  - **Performance**: Greatly improved query performance through better index
+    usage in the refactored pipeline
+  - **Stability**: Fixed issue where the 'core' service would occasionally
+    crash due to long-running SQLite queries
 
 ## [Release 48] - 2025-09-02
 
