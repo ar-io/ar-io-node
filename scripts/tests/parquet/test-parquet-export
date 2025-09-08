@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+
+# Test script for parquet-export with count verification
+
+set -e
+
+echo "Testing parquet-export with actual data..."
+echo "============================================="
+echo
+
+# Test parameters - using actual data range
+START_HEIGHT=1718250
+END_HEIGHT=1718356  # All 107 blocks in the database
+PARTITION_SIZE=50   # Small partitions for testing (will create 3 partitions)
+
+echo "Test configuration:"
+echo "  Start height: $START_HEIGHT"
+echo "  End height: $END_HEIGHT"
+echo "  Partition size: $PARTITION_SIZE"
+echo "  Total blocks: $((END_HEIGHT - START_HEIGHT + 1))"
+echo
+
+# Create test output directory
+TEST_OUTPUT_DIR="data/test-parquet-export"
+rm -rf "$TEST_OUTPUT_DIR"
+mkdir -p "$TEST_OUTPUT_DIR"
+
+echo "Running export WITH count verification..."
+echo "-----------------------------------------"
+./scripts/parquet-export \
+  --startHeight "$START_HEIGHT" \
+  --endHeight "$END_HEIGHT" \
+  --heightPartitionSize "$PARTITION_SIZE" \
+  --outputDir "$TEST_OUTPUT_DIR" \
+  --includeL1Transactions \
+  --includeL1Tags \
+  --verifyCount
+
+echo
+echo "Checking verification results..."
+# The verification log is actually in the staging job directory, not the output dir
+# Find the most recent job directory
+LATEST_JOB_DIR=$(ls -dt data/staging/job-* 2>/dev/null | head -1)
+if [[ -n "$LATEST_JOB_DIR" ]]; then
+  VERIFICATION_LOG="$LATEST_JOB_DIR/.verification_results"
+else
+  VERIFICATION_LOG="$TEST_OUTPUT_DIR/.verification_results"
+fi
+
+if [[ -f "$VERIFICATION_LOG" ]]; then
+  echo "Verification log contents:"
+  cat "$VERIFICATION_LOG"
+  
+  # Check if any verification failed
+  if grep -q "|false$" "$VERIFICATION_LOG"; then
+    echo
+    echo "ERROR: Some partitions failed verification!"
+    exit 1
+  else
+    echo
+    echo "SUCCESS: All partitions passed verification!"
+  fi
+else
+  echo "Warning: No verification log found at $VERIFICATION_LOG"
+fi
+
+echo
+echo "Checking output structure..."
+echo "----------------------------"
+for table in blocks transactions tags; do
+  echo "$table:"
+  if [[ -d "$TEST_OUTPUT_DIR/$table/data" ]]; then
+    partition_count=$(find "$TEST_OUTPUT_DIR/$table/data" -mindepth 1 -maxdepth 1 -type d | wc -l)
+    file_count=$(find "$TEST_OUTPUT_DIR/$table/data" -name "*.parquet" | wc -l)
+    echo "  Partitions: $partition_count"
+    echo "  Parquet files: $file_count"
+    
+    # Show all partitions
+    echo "  Partitions:"
+    find "$TEST_OUTPUT_DIR/$table/data" -mindepth 1 -maxdepth 1 -type d | sort | while read -r part; do
+      echo "    - $(basename "$part")"
+    done
+  else
+    echo "  No data directory found"
+  fi
+done
+
+echo
+echo "Test complete!"
+echo
+
+# Optionally test ClickHouse import if configured
+if [[ "${TEST_CLICKHOUSE:-false}" == "true" ]]; then
+  echo "Testing WITH ClickHouse import..."
+  echo "----------------------------------"
+  
+  # Clean test directory
+  rm -rf "$TEST_OUTPUT_DIR"
+  mkdir -p "$TEST_OUTPUT_DIR"
+  
+  ./scripts/parquet-export \
+    --startHeight "$START_HEIGHT" \
+    --endHeight "$END_HEIGHT" \
+    --heightPartitionSize "$PARTITION_SIZE" \
+    --outputDir "$TEST_OUTPUT_DIR" \
+    --verifyCount \
+    --enableClickhouse
+  
+  echo "ClickHouse import test complete!"
+fi

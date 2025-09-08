@@ -1,0 +1,13 @@
+# Repository manager configuration for ar-io-node related repositories
+
+[repos/arweave]
+checkout = git clone https://github.com/ArweaveTeam/arweave
+
+[repos/arweave-js]
+checkout = git clone https://github.com/ArweaveTeam/arweave-js
+
+[repos/HyperBEAM]
+checkout = git clone https://github.com/permaweb/HyperBEAM
+
+[repos/ao]
+checkout = git clone https://github.com/permaweb/ao

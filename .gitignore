@@ -35,5 +35,9 @@ test-results.xml
 # Local Claude instructions
 CLAUDE.local.md
 
+# Repository manager
+/repos/*
+
 # Exceptions
 !/data/.gitkeep
+!/repos/.gitkeep

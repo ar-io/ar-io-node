@@ -1,0 +1,20 @@
+services:
+  hyperbeam:
+    image: ghcr.io/dtfiedler/hyperbeam:latest
+    restart: unless-stopped
+    command: 'foreground'
+    ports:
+      - ${HB_PORT:-10000}:10000
+    environment:
+      HB_STORE: ${HB_STORE:-}
+      HB_PRINT: ${HB_PRINT:-}
+      HB_KEY: ${HB_KEY:-}
+    volumes:
+      - ${HB_CACHE_MAINNET_PATH:-./data/hyperbeam/cache-mainnet}:/opt/_build/genesis_wasm/rel/hb/cache-mainnet
+      - ${WALLETS_PATH:-./wallets}:/opt/_build/genesis_wasm/rel/hb/wallets
+    networks:
+      - ar-io-network
+
+networks:
+  ar-io-network:
+    external: true

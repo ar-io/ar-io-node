@@ -1,38 +1,31 @@
 #!/usr/bin/env bash
 
+# AR.IO Gateway - Automated ClickHouse Import Pipeline
+# This script continuously exports data from AR.IO SQLite databases to Parquet format
+# with Iceberg-compatible structure and imports it to ClickHouse.
+# 
+# Uses a two-step approach:
+# 1. parquet-export script to export data to Parquet files with Iceberg-compatible partitioning
+# 2. clickhouse-import script to import the Parquet files to ClickHouse database
+# 
+# The exported Parquet files are stored with Iceberg-compatible partitioning in the datasets directory.
+
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
 set -euo pipefail
 
-# Function to log timing information
-log_timing() {
-    # Only log timing when DEBUG is set
-    if [ -n "${DEBUG:-}" ]; then
-        local step_name=$1
-        local start_time=$2
-        local end_time=$3
-        local duration_s=$(( end_time - start_time ))
-        local duration_min=$(( duration_s / 60 ))
-        local duration_sec=$(( duration_s % 60 ))
-
-        echo "TIMING: $step_name - $duration_min min $duration_sec sec (total $duration_s seconds)"
-    fi
-}
-
-# Export environment variables from .env if it exists
-if [ -f .env ]; then
-    set -a # automatically export all variables
-    source .env
-    set +a
-fi
-
-# If ADMIN_API_KEY_FILE is set, read its contents (trimming any trailing newline) into ADMIN_API_KEY
-if [ -n "${ADMIN_API_KEY_FILE:-}" ]; then
-    ADMIN_API_KEY="$(tr -d '\n' < "${ADMIN_API_KEY_FILE}")"
-fi
+# Load environment and API key
+load_env
+load_admin_api_key
+load_clickhouse_config
 
 # Set local variables with defaults
 ar_io_host=${AR_IO_HOST:-localhost}
 ar_io_port=${AR_IO_PORT:-4000}
-parquet_dir=${PARQUET_DATA_PATH:-./data/parquet}
+dataset_dir="${LOCAL_DATASETS_PATH:-./data/datasets}/default"
+staging_dir="${ETL_STAGING_PATH:-./data/etl/staging}"
 sleep_interval=${CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL:-3600} # Export every hour by default
 height_interval=${CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL:-10000}
 max_rows_per_file=${CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE:-1000000}
@@ -43,9 +36,15 @@ if [ -z "${ADMIN_API_KEY:-}" ]; then
     exit 1
 fi
 
+# Check that parquet-export script exists
+if [ ! -x "./scripts/parquet-export" ]; then
+    echo "Error: ./scripts/parquet-export not found or not executable"
+    exit 1
+fi
+
 # Create directories
-imported_dir="$parquet_dir/imported"
-mkdir -p "$parquet_dir" "$imported_dir"
+processed_dir="$dataset_dir/.processed"
+mkdir -p "$dataset_dir" "$processed_dir"
 
 # ------------------------------------------------------------------------------
 # SWITCH OFF 'exit on error' so the script doesn't die in the main loop
@@ -95,87 +94,133 @@ while true; do
 
         echo "Processing heights $current_height to $end_height..."
 
-        # Step 1: Export to Parquet
-        echo "Sending export request..."
+        # Generate job staging directory for this batch
+        job_id="$(date +%Y%m%d_%H%M%S)_$$"
+        job_staging_dir="$staging_dir/job-${current_height}-${end_height}-${job_id}"
+        
+        # Step 1: Export to Parquet format in staging
+        echo "Starting Parquet export..."
         export_start_time=$(date +%s)
-        curl -s --fail --show-error -X POST "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet" \
-            -H "Authorization: Bearer $ADMIN_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{
-                \"outputDir\": \"$parquet_dir\",
-                \"startHeight\": $current_height,
-                \"endHeight\": $end_height,
-                \"maxFileRows\": $max_rows_per_file
-            }"
-
-        # If curl failed, break out of the height loop and move on
-        export_request_end_time=$(date +%s)
-        if [ $? -ne 0 ]; then
-            log_timing "Export request (failed)" "$export_start_time" "$export_request_end_time"
-            echo "Warning: Export request failed, skipping this range."
-            break
-        fi
-        log_timing "Export request sent" "$export_start_time" "$export_request_end_time"
-
-        # Step 2: Wait for export to complete
-        echo "Waiting for export to complete..."
-        while true; do
-            status="$(curl -s --fail --show-error -H "Authorization: Bearer $ADMIN_API_KEY" \
-                "http://${ar_io_host}:${ar_io_port}/ar-io/admin/export-parquet/status")"
-
-            if [ $? -ne 0 ] || [ -z "$status" ]; then
-                echo "Warning: Failed to get export status. Cleaning partial files and moving on..."
-                rm -f "$parquet_dir"/*.parquet
-                break  # break out of waiting loop
-            fi
-
-            export_status="$(echo "$status" | jq -r '.status' 2>/dev/null)"
-            if [ "$export_status" = "completed" ]; then
-                echo "Export completed."
-                break
-            elif [ "$export_status" = "not_started" ]; then
-                echo "Warning: Export not started, the node may have restarted during the export."
-                break
-            elif [ "$export_status" = "errored" ]; then
-                error_msg="$(echo "$status" | jq -r '.error' 2>/dev/null)"
-                echo "Warning: Export failed: $error_msg"
-                rm -f "$parquet_dir"/*.parquet
-                break
-            fi
-
-            echo "Export in progress. Waiting 10s..."
-            sleep 10
-        done
-
+        
+        # Run parquet-export script with staging-based workflow
+        # Note: L2 transactions (data items) are included by default, only L1 needs explicit inclusion
+        ./scripts/parquet-export \
+            --start-height "$current_height" \
+            --end-height "$end_height" \
+            --height-partition-size "$height_interval" \
+            --staging-job-dir "$job_staging_dir" \
+            --output-dir "$dataset_dir" \
+            --skip-dataset-move \
+            --max-file-rows "$max_rows_per_file"
+        
+        export_status=$?
         export_complete_time=$(date +%s)
-        if [ "$export_status" = "completed" ]; then
+        
+        if [ $export_status -eq 0 ]; then
+            echo "Parquet export completed successfully."
             log_timing "Export to parquet" "$export_start_time" "$export_complete_time"
-        elif [ "$export_status" = "errored" ]; then
-            log_timing "Export to parquet (failed)" "$export_start_time" "$export_complete_time"
-        fi
-
-        # Step 3: Attempt to import Parquet files
-        import_success=false
-        if compgen -G "$parquet_dir/*.parquet" > /dev/null; then
-            echo "Importing Parquet files..."
-            import_start_time=$(date +%s)
-            if ./scripts/clickhouse-import; then
-                import_success=true
-                import_end_time=$(date +%s)
-                log_timing "Clickhouse import" "$import_start_time" "$import_end_time"
-            else
-                import_end_time=$(date +%s)
-                log_timing "Clickhouse import (failed)" "$import_start_time" "$import_end_time"
-                echo "Warning: Clickhouse import failed. Moving on but preserving Parquet files in 'imported' folder..."
-            fi
-
-            # Step 4: Move processed files to imported directory
-            mv "$parquet_dir"/*.parquet "$imported_dir/" 2>/dev/null
+            export_success=true
         else
-            echo "No Parquet files to import for this batch."
+            echo "Warning: Parquet export failed with status $export_status"
+            log_timing "Export to parquet (failed)" "$export_start_time" "$export_complete_time"
+            export_success=false
         fi
 
-        # Step 5: Prune stable data items only if import was successful
+        # Step 2: Import to ClickHouse from staging if export succeeded
+        if [ "$export_success" = true ]; then
+            echo "Starting ClickHouse import from staging..."
+            import_start_time=$(date +%s)
+            
+            # Generate partition name matching the height range format
+            partition_name="height=${current_height}-$((end_height - 1))"
+            
+            import_args=(--input-dir "$job_staging_dir" --partition "$partition_name")
+            [ -n "${CLICKHOUSE_HOST:-}" ]     && import_args+=(--clickhouse-host "$CLICKHOUSE_HOST")
+            [ -n "${CLICKHOUSE_PORT:-}" ]     && import_args+=(--clickhouse-port "$CLICKHOUSE_PORT")
+            [ -n "${CLICKHOUSE_USER:-}" ]     && import_args+=(--clickhouse-user "$CLICKHOUSE_USER")
+            [ -n "${CLICKHOUSE_PASSWORD:-}" ] && import_args+=(--clickhouse-password "$CLICKHOUSE_PASSWORD")
+            ./scripts/clickhouse-import "${import_args[@]}"
+            
+            import_status=$?
+            import_complete_time=$(date +%s)
+            
+            if [ $import_status -eq 0 ]; then
+                echo "ClickHouse import completed successfully."
+                log_timing "ClickHouse import" "$import_start_time" "$import_complete_time"
+                import_success=true
+                
+                # Step 3: Move from staging to dataset directory after successful import
+                echo "Moving files from staging to dataset directory..."
+                move_start_time=$(date +%s)
+                
+                for table in blocks transactions tags; do
+                    if [ -d "$job_staging_dir/$table" ]; then
+                        mkdir -p "$dataset_dir/$table/data"
+                        mv "$job_staging_dir/$table"/* "$dataset_dir/$table/data/" 2>/dev/null || true
+                    fi
+                done
+                
+                move_complete_time=$(date +%s)
+                log_timing "Move staging to dataset" "$move_start_time" "$move_complete_time"
+                
+                # Step 3.5: Update Iceberg metadata for new partitions (disabled by default)
+                if [ "${ENABLE_ICEBERG_GENERATION:-false}" = "true" ] && command -v python3 >/dev/null 2>&1 && [ -f ./scripts/generate-iceberg-metadata ]; then
+                    echo "Updating Iceberg metadata..."
+                    iceberg_start_time=$(date +%s)
+                    
+                    # Build datasets root based on ARNS_ROOT_HOST if configured
+                    iceberg_args=(
+                        "--datasets-dir" "$dataset_dir"
+                    )
+                    
+                    # Add ARNS datasets root if configured
+                    if [ -n "${ARNS_ROOT_HOST:-}" ]; then
+                        datasets_root="https://${ARNS_ROOT_HOST}/local/datasets/default"
+                        iceberg_args+=("--datasets-root" "$datasets_root")
+                        echo "  Using ARNS datasets root: $datasets_root"
+                    fi
+                    
+                    # Run the metadata generation
+                    if python3 ./scripts/generate-iceberg-metadata "${iceberg_args[@]}"; then
+                        iceberg_status=0
+                    else
+                        iceberg_status=1
+                    fi
+                    
+                    iceberg_complete_time=$(date +%s)
+                    
+                    if [ $iceberg_status -eq 0 ]; then
+                        echo "✓ Iceberg metadata updated successfully."
+                        log_timing "Iceberg metadata generation" "$iceberg_start_time" "$iceberg_complete_time"
+                    else
+                        echo "Warning: Iceberg metadata generation failed (non-critical, continuing)"
+                        log_timing "Iceberg metadata generation (failed)" "$iceberg_start_time" "$iceberg_complete_time"
+                    fi
+                else
+                    echo "Skipping Iceberg metadata update (Python3 or script not available)"
+                fi
+                
+                # Clean up staging directory after successful move
+                rm -rf "$job_staging_dir"
+                echo "Staging directory cleaned up."
+                
+            else
+                echo "Warning: ClickHouse import failed with status $import_status"
+                echo "Staging files preserved at: $job_staging_dir"
+                log_timing "ClickHouse import (failed)" "$import_start_time" "$import_complete_time"
+                import_success=false
+            fi
+        else
+            echo "Skipping ClickHouse import because Parquet export failed."
+            import_success=false
+        fi
+
+        # Step 4: Mark this height range as processed
+        if [ "$import_success" = true ]; then
+            touch "$processed_dir/heights_${current_height}_${end_height}.done"
+        fi
+
+        # Step 4: Prune stable data items only if import was successful
         if [ "$import_success" = true ]; then
             echo "Pruning stable data items from height $current_height to $end_height..."
             prune_start_time=$(date +%s)

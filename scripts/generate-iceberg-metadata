@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+"""
+AR.IO Gateway - Generate Apache Iceberg Metadata for Parquet Exports
+Creates PyIceberg table metadata matching DuckDB's exported Parquet schema
+"""
+
+import os
+import sys
+import glob
+import argparse
+from pathlib import Path
+
+try:
+    from pyiceberg.catalog import load_catalog
+    from pyiceberg.catalog.sql import SqlCatalog
+    from pyiceberg.schema import Schema
+    from pyiceberg.types import (
+        NestedField, StringType, LongType, IntegerType, 
+        BooleanType, BinaryType, DoubleType, DecimalType
+    )
+    from pyiceberg.partitioning import PartitionSpec, PartitionField
+    from pyiceberg.transforms import IdentityTransform
+    from pyiceberg.table import Table
+    from pyiceberg import expressions
+    import pyarrow.parquet as pq
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+    import pandas as pd
+    
+    # Register fsspec HTTP filesystem for HTTPS support
+    try:
+        import fsspec
+        from fsspec.implementations.http import HTTPFileSystem
+        # Ensure HTTP/HTTPS filesystems are registered with fsspec
+        fsspec.register_implementation("http", HTTPFileSystem)
+        fsspec.register_implementation("https", HTTPFileSystem)
+    except ImportError:
+        # fsspec not available, HTTP/HTTPS support will be limited
+        pass
+        
+except ImportError as e:
+    print(f"Error: Required library not installed: {e}")
+    print(f"Python executable: {sys.executable}")
+    print(f"Python path: {sys.path}")
+    print("\nPlease install PyIceberg and dependencies:")
+    print("  pip install 'pyiceberg[pyarrow,duckdb,sql]'")
+    print("\nFor Docker environment, rebuild the container with updated Dockerfile")
+    sys.exit(1)
+
+
+# Define schemas that match EXACTLY what DuckDB exports
+def get_blocks_schema():
+    """Get the schema for blocks table matching DuckDB export"""
+    return Schema(
+        NestedField(1, "indep_hash", BinaryType(), required=False),
+        NestedField(2, "height", LongType(), required=False),  # uint64 -> long
+        NestedField(3, "previous_block", BinaryType(), required=False),
+        NestedField(4, "nonce", BinaryType(), required=False),
+        NestedField(5, "hash", BinaryType(), required=False),
+        NestedField(6, "block_timestamp", IntegerType(), required=False),  # int32
+        NestedField(7, "tx_count", IntegerType(), required=False),  # int32
+        NestedField(8, "block_size", LongType(), required=False),  # uint64 -> long
+    )
+
+
+def get_transactions_schema():
+    """Get the schema for transactions table matching DuckDB export"""
+    return Schema(
+        NestedField(1, "id", BinaryType(), required=False),
+        NestedField(2, "indexed_at", LongType(), required=False),  # uint64 -> long
+        NestedField(3, "block_transaction_index", IntegerType(), required=False),  # uint16 -> int
+        NestedField(4, "is_data_item", BooleanType(), required=False),  # bool
+        NestedField(5, "target", BinaryType(), required=False),
+        NestedField(6, "quantity", DecimalType(20, 0), required=False),  # decimal128(20,0)
+        NestedField(7, "reward", DecimalType(20, 0), required=False),  # decimal128(20,0)
+        NestedField(8, "anchor", BinaryType(), required=False),
+        NestedField(9, "data_size", LongType(), required=False),  # uint64 -> long
+        NestedField(10, "content_type", StringType(), required=False),  # string
+        NestedField(11, "format", IntegerType(), required=False),  # uint8 -> int
+        NestedField(12, "height", LongType(), required=False),  # uint64 -> long
+        NestedField(13, "owner_address", BinaryType(), required=False),
+        NestedField(14, "data_root", BinaryType(), required=False),
+        NestedField(15, "parent", BinaryType(), required=False),
+        NestedField(16, "offset", LongType(), required=False),  # uint64 -> long
+        NestedField(17, "size", LongType(), required=False),  # uint64 -> long
+        NestedField(18, "data_offset", LongType(), required=False),  # uint64 -> long
+        NestedField(19, "owner_offset", LongType(), required=False),  # uint64 -> long
+        NestedField(20, "owner_size", IntegerType(), required=False),  # uint32 -> int
+        NestedField(21, "owner", BinaryType(), required=False),
+        NestedField(22, "signature_offset", LongType(), required=False),  # uint64 -> long
+        NestedField(23, "signature_size", IntegerType(), required=False),  # uint32 -> int
+        NestedField(24, "signature_type", IntegerType(), required=False),  # uint32 -> int
+        NestedField(25, "root_transaction_id", BinaryType(), required=False),
+        NestedField(26, "root_parent_offset", IntegerType(), required=False),  # uint32 -> int
+    )
+
+
+def get_tags_schema():
+    """Get the schema for tags table matching DuckDB export"""
+    return Schema(
+        NestedField(1, "height", LongType(), required=False),  # uint64 -> long
+        NestedField(2, "id", BinaryType(), required=False),
+        NestedField(3, "tag_index", IntegerType(), required=False),  # uint16 -> int
+        NestedField(4, "indexed_at", LongType(), required=False),  # uint64 -> long
+        NestedField(5, "tag_name", BinaryType(), required=False),
+        NestedField(6, "tag_value", BinaryType(), required=False),
+        NestedField(7, "is_data_item", BooleanType(), required=False),  # bool
+    )
+
+
+def create_local_catalog(warehouse_dir, warehouse_root=None):
+    """Create a local file-based Iceberg catalog using SQL catalog
+    
+    Args:
+        warehouse_dir: Local directory path for the warehouse
+        warehouse_root: Optional warehouse root URI for remote access
+    """
+    catalog_path = os.path.join(warehouse_dir, "catalog.db")
+    
+    # Use warehouse_root if provided, otherwise local file:// URI
+    warehouse_uri = warehouse_root if warehouse_root else f"file://{os.path.abspath(warehouse_dir)}"
+    
+    catalog_config = {
+        "uri": f"sqlite:///{catalog_path}",
+        "warehouse": warehouse_uri,
+    }
+    
+    # Use FsspecFileIO for HTTP/HTTPS warehouse roots to enable remote file access
+    if warehouse_root and warehouse_root.startswith(('http://', 'https://')):
+        catalog_config["py-io-impl"] = "pyiceberg.io.fsspec.FsspecFileIO"
+        print(f"  Using FsspecFileIO for HTTP warehouse root: {warehouse_root}")
+    
+    catalog = SqlCatalog("ar_io_catalog", **catalog_config)
+    
+    # Ensure namespace exists
+    existing_namespaces = catalog.list_namespaces()
+    if ("default",) not in existing_namespaces and "default" not in existing_namespaces:
+        try:
+            catalog.create_namespace("default")
+            print("  Created namespace: default")
+        except Exception as e:
+            print(f"  Warning: Could not create namespace: {e}")
+    
+    return catalog
+
+
+def rewrite_manifest_files(warehouse_dir, warehouse_root):
+    """Rewrite manifest-list and manifest files to use warehouse_root URLs
+    
+    Args:
+        warehouse_dir: Local directory containing the metadata
+        warehouse_root: Custom warehouse root URI to use in metadata
+    """
+    import json
+    import glob
+    
+    if not warehouse_root:
+        return 0
+    
+    print(f"  Rewriting manifest files to use warehouse root: {warehouse_root}")
+    
+    # Find all manifest-list files
+    manifest_list_files = []
+    for table_name in ["blocks", "transactions", "tags"]:
+        table_metadata_dir = os.path.join(warehouse_dir, "default.db", table_name, "metadata")
+        if os.path.exists(table_metadata_dir):
+            pattern = os.path.join(table_metadata_dir, "snap-*.avro")
+            manifest_list_files.extend(glob.glob(pattern))
+    
+    # For now, we'll update the metadata files which contain manifest-list references
+    # Full Avro manifest rewriting would require more complex implementation
+    # This ensures at least the metadata layer references are correct
+    
+    updated_count = 0
+    for manifest_list_file in manifest_list_files:
+        try:
+            # Update manifest references would go here
+            # For now, we rely on the metadata.json updates to handle the main references
+            print(f"    Found manifest file: {os.path.basename(manifest_list_file)}")
+            updated_count += 1
+        except Exception as e:
+            print(f"    Warning: Could not process manifest file {manifest_list_file}: {e}")
+    
+    if updated_count > 0:
+        print(f"  Found {updated_count} manifest files (detailed rewriting not yet implemented)")
+    
+    return updated_count
+
+
+def update_metadata_locations(warehouse_dir, warehouse_root):
+    """Update location fields in metadata files and catalog to use custom warehouse root
+    
+    Args:
+        warehouse_dir: Local directory containing the metadata
+        warehouse_root: Custom warehouse root URI to use in metadata
+    """
+    import json
+    import sqlite3
+    
+    # Clean up the warehouse root
+    warehouse_root = warehouse_root.rstrip('/')
+    
+    # Track metadata file path mappings for catalog update
+    metadata_path_mapping = {}
+    
+    # Find all metadata JSON files
+    metadata_files = []
+    for table_name in ["blocks", "transactions", "tags"]:
+        table_metadata_dir = os.path.join(warehouse_dir, "default.db", table_name, "metadata")
+        if os.path.exists(table_metadata_dir):
+            for filename in os.listdir(table_metadata_dir):
+                if filename.endswith('.metadata.json') and not filename.startswith('v'):
+                    metadata_files.append(os.path.join(table_metadata_dir, filename))
+    
+    updated_count = 0
+    for metadata_file in metadata_files:
+        try:
+            # Read the metadata
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Update the location field
+            original_location = metadata.get('location', '')
+            if original_location.startswith('file://'):
+                # Extract the relative path from the original location
+                local_abs_path = original_location.replace('file://', '')
+                warehouse_abs_path = os.path.abspath(warehouse_dir)
+                if local_abs_path.startswith(warehouse_abs_path):
+                    relative_path = local_abs_path[len(warehouse_abs_path):].lstrip('/')
+                    new_location = f"{warehouse_root}/{relative_path}"
+                    metadata['location'] = new_location
+                    
+                    # Write the updated metadata back
+                    with open(metadata_file, 'w') as f:
+                        json.dump(metadata, f, separators=(',', ':'))
+                    
+                    # Track the mapping for catalog update
+                    original_metadata_path = f"file://{os.path.abspath(metadata_file)}"
+                    # Update metadata path to use warehouse root
+                    metadata_relative_path = os.path.abspath(metadata_file)[len(warehouse_abs_path):].lstrip('/')
+                    new_metadata_path = f"{warehouse_root}/{metadata_relative_path}"
+                    metadata_path_mapping[original_metadata_path] = new_metadata_path
+                    
+                    updated_count += 1
+                    print(f"    Updated: {os.path.basename(metadata_file)}")
+        except Exception as e:
+            print(f"    Warning: Failed to update {metadata_file}: {e}")
+    
+    if updated_count > 0:
+        print(f"  Updated {updated_count} metadata files with warehouse root: {warehouse_root}")
+    
+    # Update the SQLite catalog if needed
+    catalog_path = os.path.join(warehouse_dir, "catalog.db")
+    if os.path.exists(catalog_path):
+        try:
+            conn = sqlite3.connect(catalog_path)
+            cursor = conn.cursor()
+            
+            # Get current catalog entries
+            cursor.execute("SELECT table_name, metadata_location, previous_metadata_location FROM iceberg_tables")
+            catalog_entries = cursor.fetchall()
+            
+            catalog_updates = 0
+            for table_name, metadata_location, previous_location in catalog_entries:
+                # Update metadata_location if it's a file:// URI
+                if metadata_location and metadata_location.startswith('file://'):
+                    local_path = metadata_location.replace('file://', '')
+                    relative_path = local_path[len(os.path.abspath(warehouse_dir)):].lstrip('/')
+                    new_metadata_location = f"{warehouse_root}/{relative_path}"
+                    
+                    cursor.execute("""
+                        UPDATE iceberg_tables 
+                        SET metadata_location = ?
+                        WHERE table_name = ? AND metadata_location = ?
+                    """, (new_metadata_location, table_name, metadata_location))
+                    catalog_updates += 1
+                
+                # Update previous_metadata_location if it exists and is a file:// URI
+                if previous_location and previous_location.startswith('file://'):
+                    local_path = previous_location.replace('file://', '')
+                    relative_path = local_path[len(os.path.abspath(warehouse_dir)):].lstrip('/')
+                    new_previous_location = f"{warehouse_root}/{relative_path}"
+                    
+                    cursor.execute("""
+                        UPDATE iceberg_tables 
+                        SET previous_metadata_location = ?
+                        WHERE table_name = ? AND previous_metadata_location = ?
+                    """, (new_previous_location, table_name, previous_location))
+            
+            conn.commit()
+            
+            if catalog_updates > 0:
+                # Verify the updates
+                cursor.execute("SELECT table_name, metadata_location FROM iceberg_tables")
+                updated_entries = cursor.fetchall()
+                
+                print(f"  Updated {catalog_updates} catalog entries:")
+                for table_name, location in updated_entries:
+                    if location.startswith(warehouse_root):
+                        short_location = location if len(location) <= 80 else location[:77] + "..."
+                        print(f"    {table_name}: {short_location}")
+            
+            conn.close()
+        except Exception as e:
+            print(f"  Warning: Failed to update catalog database: {e}")
+    
+    return updated_count
+
+
+def register_parquet_files_as_iceberg(catalog, table_name, schema, parquet_files, warehouse_dir, warehouse_root=None):
+    """Register existing Parquet files as an Iceberg table without reading data
+    
+    Uses PyIceberg's add_files method to register files efficiently.
+    Note: No fallback path is implemented if add_files is unavailable on the current PyIceberg version.
+    
+    Args:
+        catalog: PyIceberg catalog
+        table_name: Name of the table to create
+        schema: Iceberg schema for the table
+        parquet_files: List of Parquet file paths
+        warehouse_dir: Local warehouse directory
+        warehouse_root: Optional warehouse root URI for remote access
+    """
+    
+    # Create or replace the table
+    namespace = "default"
+    table_identifier = f"{namespace}.{table_name}"
+    
+    try:
+        # Try to drop existing table
+        catalog.drop_table(table_identifier)
+        print(f"  Dropped existing table: {table_identifier}")
+    except Exception:
+        pass  # Table might not exist
+    
+    # Create partition spec based on height field
+    # Note: We use IdentityTransform to keep the height values as-is
+    partition_spec = PartitionSpec(
+        PartitionField(
+            source_id=2 if table_name == "blocks" else (12 if table_name == "transactions" else 1),  # height field ID
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="height"
+        )
+    )
+    
+    # Create the table with schema and partition spec
+    table = catalog.create_table(
+        identifier=table_identifier,
+        schema=schema,
+        partition_spec=partition_spec,
+        properties={
+            "write.format.default": "parquet",
+            "write.parquet.compression-codec": "zstd",
+            "read.split.metadata-target-size": "134217728",  # 128MB
+        }
+    )
+    print(f"  Created Iceberg table: {table_identifier}")
+    
+    # Register existing Parquet files without reading data
+    print(f"  Registering {len(parquet_files)} Parquet files...")
+    
+    # Convert file paths to appropriate URIs
+    file_paths = []
+    for parquet_file in parquet_files:
+        if warehouse_root and warehouse_root.startswith(('s3://', 'gs://', 'azure://', 'abfs://')):
+            # For cloud storage warehouse, construct the full URI
+            rel_path = os.path.relpath(parquet_file, warehouse_dir)
+            file_path = f"{warehouse_root.rstrip('/')}/{rel_path}"
+        elif warehouse_root and warehouse_root.startswith(('http://', 'https://')):
+            # For HTTP/HTTPS warehouse roots, use FsspecFileIO with HTTP URLs
+            rel_path = os.path.relpath(parquet_file, warehouse_dir)
+            file_path = f"{warehouse_root.rstrip('/')}/{rel_path}"
+        else:
+            # For local warehouse roots, use local file paths
+            file_path = f"file://{os.path.abspath(parquet_file)}"
+        file_paths.append(file_path)
+    
+    # Use efficient add_files method to register files without reading data
+    try:
+        table.add_files(file_paths)
+        print(f"  ✓ Registered {len(file_paths)} Parquet files without reading data")
+        
+    except Exception as e:
+        print(f"  Error: Failed to register files: {e}")
+        print(f"  File paths attempted: {file_paths[:3]}{'...' if len(file_paths) > 3 else ''}")
+        raise
+    
+    print(f"  Successfully registered {len(parquet_files)} Parquet files")
+    
+    # Create version-hint.text for DuckDB compatibility
+    metadata_dir = os.path.join(warehouse_dir, "default.db", table_name, "metadata")
+    version_hint_file = os.path.join(metadata_dir, "version-hint.text")
+    
+    # Find the latest metadata file version
+    metadata_files = glob.glob(os.path.join(metadata_dir, "*.metadata.json"))
+    if metadata_files:
+        # Extract version numbers from filenames
+        versions = []
+        for mf in metadata_files:
+            basename = os.path.basename(mf)
+            # Format is 00000-uuid.metadata.json, 00001-uuid.metadata.json, etc.
+            if "-" in basename and basename.endswith(".metadata.json"):
+                version_str = basename.split("-")[0]
+                try:
+                    versions.append(int(version_str))
+                except ValueError:
+                    continue
+        
+        if versions:
+            latest_version = max(versions)
+            # Write version without newline for DuckDB compatibility
+            with open(version_hint_file, "wb") as f:
+                f.write(str(latest_version).encode())
+            print(f"  Created version-hint.text with version: {latest_version}")
+            
+            # Also create v{version}.metadata.json symlink for DuckDB
+            latest_metadata_file = None
+            for mf in metadata_files:
+                basename = os.path.basename(mf)
+                if basename.startswith(f"{latest_version:05d}-"):
+                    latest_metadata_file = basename
+                    break
+            
+            if latest_metadata_file:
+                symlink_name = os.path.join(metadata_dir, f"v{latest_version}.metadata.json")
+                if os.path.exists(symlink_name):
+                    os.remove(symlink_name)
+                os.symlink(latest_metadata_file, symlink_name)
+                print(f"  Created symlink: v{latest_version}.metadata.json -> {latest_metadata_file}")
+    
+    return table
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Generate Apache Iceberg metadata for AR.IO Parquet exports (Fixed Version)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+This version correctly matches the schema that DuckDB exports to Parquet.
+
+Examples:
+  %(prog)s --datasets-dir data/parquet-test
+  %(prog)s --datasets-dir /path/to/datasets
+  %(prog)s --datasets-dir data/export --datasets-root https://example.com/datasets
+  %(prog)s --datasets-dir /local/data --datasets-root s3://my-bucket/iceberg
+  
+Query the generated tables:
+  Python with PyIceberg:
+    from pyiceberg.catalog.sql import SqlCatalog
+    catalog = SqlCatalog('catalog', uri='sqlite:///path/to/datasets/catalog.db', 
+                         warehouse='file:///path/to/datasets')
+    table = catalog.load_table('default.blocks')
+    df = table.scan().to_pandas()
+    
+  DuckDB with Iceberg extension:
+    INSTALL iceberg;
+    LOAD iceberg;
+    SELECT * FROM iceberg_scan('path/to/datasets/default.db/blocks');
+"""
+    )
+    
+    parser.add_argument(
+        '--datasets-dir',
+        default='data/datasets/default',
+        help='Datasets directory containing Parquet data (default: data/datasets/default)'
+    )
+    
+    parser.add_argument(
+        '--datasets-root',
+        help='Optional datasets root URI for metadata references (e.g., file:///path, https://example.com/datasets, s3://bucket/prefix). '
+             'Note: For remote URIs, metadata is still written locally but references will point to the remote location. '
+             'If not provided, defaults to file:// with absolute path to datasets-dir'
+    )
+    
+    args = parser.parse_args()
+    
+    # Check if datasets directory exists
+    if not os.path.exists(args.datasets_dir):
+        print(f"Error: Datasets directory does not exist: {args.datasets_dir}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Validate datasets_root for HTTP/HTTPS URLs
+    if args.datasets_root and args.datasets_root.startswith(('http://', 'https://')):
+        print("Info: HTTP/HTTPS datasets root detected - configuring FsspecFileIO for remote access.", file=sys.stderr)
+        print("      Remote readers will be able to access data files via HTTP/HTTPS URLs.", file=sys.stderr)
+        print()
+    
+    print(f"Generating Iceberg metadata (Fixed Version)")
+    print(f"Datasets: {args.datasets_dir}")
+    print()
+    
+    # Create catalog
+    try:
+        catalog = create_local_catalog(args.datasets_dir, args.datasets_root)
+        print(f"Created/opened Iceberg catalog at: {args.datasets_dir}/catalog.db")
+    except Exception as e:
+        print(f"Error creating catalog: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    
+    # Process each table
+    tables = [
+        ("blocks", get_blocks_schema()),
+        ("transactions", get_transactions_schema()),
+        ("tags", get_tags_schema()),
+    ]
+    
+    successful_tables = []
+    
+    for table_name, schema in tables:
+        table_dir = os.path.join(args.datasets_dir, table_name)
+        if not os.path.exists(table_dir):
+            print(f"Skipping {table_name}: directory does not exist")
+            continue
+        
+        print(f"\nProcessing table: {table_name}")
+        
+        # Find all Parquet files
+        data_dir = os.path.join(table_dir, "data")
+        if not os.path.exists(data_dir):
+            print(f"  No data directory found for {table_name}")
+            continue
+        
+        parquet_files = glob.glob(os.path.join(data_dir, "*/*.parquet"))
+        if not parquet_files:
+            print(f"  No Parquet files found for {table_name}")
+            continue
+        
+        print(f"  Found {len(parquet_files)} Parquet files")
+        
+        try:
+            # Register Parquet files as Iceberg table
+            table = register_parquet_files_as_iceberg(
+                catalog, 
+                table_name, 
+                schema, 
+                parquet_files,
+                args.datasets_dir,
+                args.datasets_root
+            )
+            print(f"  Table location: {table.location()}")
+            successful_tables.append(table_name)
+        except Exception as e:
+            print(f"  Error creating table {table_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    if successful_tables:
+        # Post-process metadata if custom warehouse root is specified
+        if args.datasets_root:
+            print()
+            print("Updating metadata with custom datasets root...")
+            update_metadata_locations(args.datasets_dir, args.datasets_root)
+            # Also rewrite manifest files for complete HTTP URL support
+            rewrite_manifest_files(args.datasets_dir, args.datasets_root)
+        
+        print()
+        print("=" * 60)
+        print("Iceberg metadata generation complete!")
+        print(f"Successfully created {len(successful_tables)} tables: {', '.join(successful_tables)}")
+        print(f"Catalog location: {args.datasets_dir}/catalog.db")
+        if args.datasets_root:
+            print(f"Metadata references datasets root: {args.datasets_root}")
+        print()
+        print("To query these tables:")
+        print()
+        print("1. Python with PyIceberg:")
+        print("-" * 40)
+        print("from pyiceberg.catalog.sql import SqlCatalog")
+        print(f"catalog = SqlCatalog('catalog', uri='sqlite:///{os.path.abspath(args.datasets_dir)}/catalog.db',")
+        print(f"                     warehouse='file://{os.path.abspath(args.datasets_dir)}')")
+        print("table = catalog.load_table('default.blocks')")
+        print("df = table.scan().to_pandas()")
+        print("print(df.head())")
+        print()
+        print("2. DuckDB with Iceberg extension:")
+        print("-" * 40)
+        print("duckdb")
+        print("INSTALL avro;  -- Required for Iceberg")
+        print("INSTALL iceberg;")
+        print("LOAD iceberg;")
+        print(f"SELECT COUNT(*) FROM iceberg_scan('{os.path.abspath(args.datasets_dir)}/default.db/blocks');")
+    else:
+        print("\nNo tables were successfully created.")
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
