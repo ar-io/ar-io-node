@@ -584,6 +584,10 @@ export_sqlite_to_csv() {
   
   echo "Exporting data from SQLite to CSV for height range: $start_h to $end_h"
   
+  # Check if there are any blocks in this range first
+  local expected_blocks=$(sqlite3 "$CORE_DB_PATH" "SELECT COUNT(*) FROM stable_blocks WHERE height BETWEEN $start_h AND $end_h;")
+  echo "    [DEBUG] Expected blocks in range $start_h to $end_h: $expected_blocks"
+  
   # Export blocks from core.db
   echo "  Exporting blocks..."
   echo "    [DEBUG] Starting blocks export from core.db at $(date -Iseconds)"
@@ -603,7 +607,13 @@ WHERE height BETWEEN $start_h AND $end_h
 ORDER BY height;
 SQL
   local blocks_end=$(date +%s)
+  local actual_blocks_lines=$(wc -l < "$temp_csv_dir/blocks.csv" || echo "0")
   echo "    [DEBUG] Blocks export completed in $((blocks_end - blocks_start)) seconds at $(date -Iseconds)"
+  echo "    [DEBUG] blocks.csv created with $actual_blocks_lines lines (expected: $((expected_blocks + 1)) including header)"
+  if [[ $actual_blocks_lines -le 3 ]]; then
+    echo "    [DEBUG] blocks.csv content:"
+    cat "$temp_csv_dir/blocks.csv" || true
+  fi
   
   # Export L1 transactions if enabled
   if $INCLUDE_L1; then
@@ -734,17 +744,27 @@ import_csv_to_duckdb() {
   # Import blocks
   if [[ -f "$temp_csv_dir/blocks.csv" ]]; then
     echo "  Importing blocks..."
-    echo "    [DEBUG] Starting blocks import to DuckDB at $(date -Iseconds)"
-    local blocks_import_start=$(date +%s)
-    duckdb "$TEMP_DB" <<SQL
+    local csv_line_count=$(wc -l < "$temp_csv_dir/blocks.csv" || echo "0")
+    echo "    [DEBUG] blocks.csv has $csv_line_count lines"
+    if [[ $csv_line_count -le 1 ]]; then
+      echo "    [DEBUG] Skipping blocks import - CSV is empty or header-only"
+    else
+      echo "    [DEBUG] First few lines of blocks.csv:"
+      head -3 "$temp_csv_dir/blocks.csv" || true
+      echo "    [DEBUG] Starting blocks import to DuckDB at $(date -Iseconds)"
+      local blocks_import_start=$(date +%s)
+      duckdb "$TEMP_DB" <<SQL
 INSERT INTO blocks 
 SELECT 
   unhex(indep_hash), height::UBIGINT, unhex(previous_block), unhex(nonce), unhex(hash), 
   block_timestamp::INTEGER, tx_count::INTEGER, block_size::UBIGINT
 FROM read_csv('$temp_csv_dir/blocks.csv', header=true);
 SQL
-    local blocks_import_end=$(date +%s)
-    echo "    [DEBUG] Blocks import completed in $((blocks_import_end - blocks_import_start)) seconds at $(date -Iseconds)"
+      local blocks_import_end=$(date +%s)
+      echo "    [DEBUG] Blocks import completed in $((blocks_import_end - blocks_import_start)) seconds at $(date -Iseconds)"
+    fi
+  else
+    echo "    [DEBUG] blocks.csv not found, skipping blocks import"
   fi
   
   # Import L1 transactions if file exists
