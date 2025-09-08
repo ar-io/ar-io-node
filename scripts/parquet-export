@@ -711,8 +711,8 @@ import_csv_to_duckdb() {
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO blocks 
 SELECT 
-  unhex(indep_hash), height, unhex(previous_block), unhex(nonce), unhex(hash), 
-  block_timestamp, tx_count, block_size
+  unhex(indep_hash), height::UBIGINT, unhex(previous_block), unhex(nonce), unhex(hash), 
+  block_timestamp::INTEGER, tx_count::INTEGER, block_size::UBIGINT
 FROM read_csv_auto('$temp_csv_dir/blocks.csv');
 SQL
   fi
@@ -723,17 +723,18 @@ SQL
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO transactions 
 SELECT 
-  unhex(id), indexed_at, block_transaction_index, is_data_item,
+  unhex(id), indexed_at::UBIGINT, block_transaction_index::USMALLINT, is_data_item::BOOLEAN,
   CASE WHEN target = '' THEN NULL ELSE unhex(target) END,
-  quantity, reward,
-  CASE WHEN anchor = '' OR anchor IS NULL THEN unhex('') ELSE unhex(anchor) END, data_size, content_type, format, height,
+  quantity::DECIMAL(20,0), reward::DECIMAL(20,0),
+  CASE WHEN anchor = '' OR anchor IS NULL THEN unhex('') ELSE unhex(anchor) END, 
+  data_size::UBIGINT, content_type, format::UTINYINT, height::UBIGINT,
   unhex(owner_address),
   CASE WHEN data_root = '' THEN NULL ELSE unhex(data_root) END,
   CASE WHEN parent = '' THEN NULL ELSE unhex(parent) END,
-  "offset", size, data_offset, owner_offset, owner_size,
+  "offset"::UBIGINT, size::UBIGINT, data_offset::UBIGINT, owner_offset::UBIGINT, owner_size::UINTEGER,
   CASE WHEN owner = '' THEN NULL ELSE unhex(owner) END,
-  signature_offset, signature_size, signature_type,
-  unhex(root_transaction_id), root_parent_offset
+  signature_offset::UBIGINT, signature_size::UINTEGER, signature_type::UINTEGER,
+  unhex(root_transaction_id), root_parent_offset::UINTEGER
 FROM read_csv_auto('$temp_csv_dir/l1_transactions.csv');
 SQL
   fi
@@ -744,17 +745,17 @@ SQL
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO transactions 
 SELECT 
-  unhex(id), indexed_at, block_transaction_index, is_data_item,
+  unhex(id), indexed_at::UBIGINT, block_transaction_index::USMALLINT, is_data_item::BOOLEAN,
   CASE WHEN target = '' THEN NULL ELSE unhex(target) END,
-  quantity, reward,
+  quantity::DECIMAL(20,0), reward::DECIMAL(20,0),
   CASE WHEN anchor = '' OR anchor IS NULL THEN unhex('') ELSE unhex(anchor) END,
-  data_size, content_type, format, height,
+  data_size::UBIGINT, content_type, format::UTINYINT, height::UBIGINT,
   unhex(owner_address), data_root,
   CASE WHEN parent = '' THEN NULL ELSE unhex(parent) END,
-  "offset", size, data_offset, owner_offset, owner_size,
+  "offset"::UBIGINT, size::UBIGINT, data_offset::UBIGINT, owner_offset::UBIGINT, owner_size::UINTEGER,
   CASE WHEN owner = '' THEN NULL ELSE unhex(owner) END,
-  signature_offset, signature_size, signature_type,
-  unhex(root_transaction_id), root_parent_offset
+  signature_offset::UBIGINT, signature_size::UINTEGER, signature_type::UINTEGER,
+  unhex(root_transaction_id), root_parent_offset::UINTEGER
 FROM read_csv_auto('$temp_csv_dir/l2_transactions.csv');
 SQL
   fi
@@ -764,11 +765,11 @@ SQL
     echo "  Importing L1 tags..."
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO tags 
-SELECT height, unhex(id), tag_index, 
-  CASE WHEN indexed_at = '' THEN NULL ELSE indexed_at END,
+SELECT height::UBIGINT, unhex(id), tag_index::USMALLINT, 
+  CASE WHEN indexed_at = '' THEN NULL ELSE indexed_at::UBIGINT END,
   CASE WHEN tag_name IS NULL THEN unhex('') ELSE unhex(tag_name) END,
   CASE WHEN tag_value IS NULL THEN unhex('') ELSE unhex(tag_value) END,
-  is_data_item
+  is_data_item::BOOLEAN
 FROM read_csv_auto('$temp_csv_dir/l1_tags.csv');
 SQL
   fi
@@ -778,10 +779,10 @@ SQL
     echo "  Importing L2 tags..."
     duckdb "$TEMP_DB" <<SQL
 INSERT INTO tags 
-SELECT height, unhex(id), tag_index, indexed_at,
+SELECT height::UBIGINT, unhex(id), tag_index::USMALLINT, indexed_at::UBIGINT,
   CASE WHEN tag_name IS NULL THEN unhex('') ELSE unhex(tag_name) END,
   CASE WHEN tag_value IS NULL THEN unhex('') ELSE unhex(tag_value) END,
-  is_data_item
+  is_data_item::BOOLEAN
 FROM read_csv_auto('$temp_csv_dir/l2_tags.csv');
 SQL
   fi
