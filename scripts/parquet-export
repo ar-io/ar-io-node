@@ -713,7 +713,7 @@ INSERT INTO blocks
 SELECT 
   unhex(indep_hash), height::UBIGINT, unhex(previous_block), unhex(nonce), unhex(hash), 
   block_timestamp::INTEGER, tx_count::INTEGER, block_size::UBIGINT
-FROM read_csv_auto('$temp_csv_dir/blocks.csv');
+FROM read_csv('$temp_csv_dir/blocks.csv', header=true);
 SQL
   fi
   
@@ -735,7 +735,12 @@ SELECT
   CASE WHEN owner = '' THEN NULL ELSE unhex(owner) END,
   signature_offset::UBIGINT, signature_size::UINTEGER, signature_type::UINTEGER,
   unhex(root_transaction_id), root_parent_offset::UINTEGER
-FROM read_csv_auto('$temp_csv_dir/l1_transactions.csv');
+FROM read_csv('$temp_csv_dir/l1_transactions.csv', 
+  header=true,
+  types={
+    'quantity': 'VARCHAR',
+    'reward': 'VARCHAR'
+  });
 SQL
   fi
   
@@ -756,7 +761,12 @@ SELECT
   CASE WHEN owner = '' THEN NULL ELSE unhex(owner) END,
   signature_offset::UBIGINT, signature_size::UINTEGER, signature_type::UINTEGER,
   unhex(root_transaction_id), root_parent_offset::UINTEGER
-FROM read_csv_auto('$temp_csv_dir/l2_transactions.csv');
+FROM read_csv('$temp_csv_dir/l2_transactions.csv',
+  header=true,
+  types={
+    'quantity': 'VARCHAR',
+    'reward': 'VARCHAR'
+  });
 SQL
   fi
   
@@ -770,7 +780,7 @@ SELECT height::UBIGINT, unhex(id), tag_index::USMALLINT,
   CASE WHEN tag_name IS NULL THEN unhex('') ELSE unhex(tag_name) END,
   CASE WHEN tag_value IS NULL THEN unhex('') ELSE unhex(tag_value) END,
   is_data_item::BOOLEAN
-FROM read_csv_auto('$temp_csv_dir/l1_tags.csv');
+FROM read_csv('$temp_csv_dir/l1_tags.csv', header=true);
 SQL
   fi
   
@@ -783,7 +793,7 @@ SELECT height::UBIGINT, unhex(id), tag_index::USMALLINT, indexed_at::UBIGINT,
   CASE WHEN tag_name IS NULL THEN unhex('') ELSE unhex(tag_name) END,
   CASE WHEN tag_value IS NULL THEN unhex('') ELSE unhex(tag_value) END,
   is_data_item::BOOLEAN
-FROM read_csv_auto('$temp_csv_dir/l2_tags.csv');
+FROM read_csv('$temp_csv_dir/l2_tags.csv', header=true);
 SQL
   fi
   
