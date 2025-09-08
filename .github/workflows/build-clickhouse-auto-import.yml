@@ -9,7 +9,12 @@ on:
       - Dockerfile.clickhouse-auto-import
       - scripts/clickhouse-auto-import
       - scripts/clickhouse-import
-      - src/database/clickhouse/schema.sql
+      - scripts/parquet-export
+      - scripts/lib/common.sh
+      - src/database/clickhouse/**
+      - src/database/duckdb/**
+      - src/workers/parquet-exporter.ts
+      - src/database/composite-clickhouse.ts
 
 jobs:
   images:
