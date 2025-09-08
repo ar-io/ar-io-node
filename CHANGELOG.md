@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 49] - 2025-09-07
 
+This is an optional release that significantly improves the ClickHouse ETL pipeline with better performance, reliability, and Apache Iceberg metadata support. While optional for most users, this release is important for anyone experimenting with Parquet exports and ClickHouse integration.
+
 ### Added
 
 - **Apache Iceberg Metadata Generation**: Added `generate-iceberg-metadata`
