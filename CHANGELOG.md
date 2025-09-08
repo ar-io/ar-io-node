@@ -4,13 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 49] - 2025-09-07
 
 ### Added
 
+- **Apache Iceberg Metadata Generation**: Added `generate-iceberg-metadata`
+  script to create Apache Iceberg table metadata for exported Parquet datasets,
+  enabling compatibility with query engines like DuckDB and Spark. Controlled by
+  new `ENABLE_ICEBERG_GENERATION` environment variable (default: false).
+  **Note: Iceberg metadata generation is still under active development and
+  currently incomplete.**
+
+- **HyperBEAM Sidecar Support**: Added optional HyperBEAM container
+  configuration with `.env.hb.example` template for running AO processes
+  alongside the gateway.
+
+- **ETL Configuration Documentation**: Documented existing ClickHouse
+  auto-import environment variables in `.env.example`:
+  - `CLICKHOUSE_AUTO_IMPORT_SLEEP_INTERVAL` - interval between import cycles
+    (default: 3600 seconds)
+  - `CLICKHOUSE_AUTO_IMPORT_HEIGHT_INTERVAL` - batch size in blocks (default:
+    10000)
+  - `CLICKHOUSE_AUTO_IMPORT_MAX_ROWS_PER_FILE` - Parquet file size limit
+    (default: 1000000)
+
 ### Changed
 
-### Fixed
+- **ETL Pipeline Architecture**: Refactored the ClickHouse ETL pipeline for
+  improved reliability and modularity:
+  - Implemented staging-based workflow to prevent data corruption
+  - Changed from API-based triggering to direct script execution
+  - Made L1 transaction export the default behavior
+  - Changed default export location from `data/parquet` to
+    `data/datasets/default`
 
 ## [Release 48] - 2025-09-02
 
