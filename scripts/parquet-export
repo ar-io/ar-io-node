@@ -758,7 +758,18 @@ INSERT INTO blocks
 SELECT 
   unhex(indep_hash), height::UBIGINT, unhex(previous_block), unhex(nonce), unhex(hash), 
   block_timestamp::INTEGER, tx_count::INTEGER, block_size::UBIGINT
-FROM read_csv('$temp_csv_dir/blocks.csv', header=true);
+FROM read_csv('$temp_csv_dir/blocks.csv', 
+  header=true,
+  types={
+    'indep_hash': 'VARCHAR',
+    'height': 'UBIGINT',
+    'previous_block': 'VARCHAR', 
+    'nonce': 'VARCHAR',
+    'hash': 'VARCHAR',
+    'block_timestamp': 'INTEGER',
+    'tx_count': 'INTEGER',
+    'block_size': 'UBIGINT'
+  });
 SQL
       local blocks_import_end=$(date +%s)
       echo "    [DEBUG] Blocks import completed in $((blocks_import_end - blocks_import_start)) seconds at $(date -Iseconds)"
