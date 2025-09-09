@@ -1,0 +1,988 @@
+#!/usr/bin/env bash
+
+# AR.IO Gateway - Tag-Based Parquet Dataset Partitioning
+# Takes existing Parquet datasets and repartitions them by specified tag values
+# Supports both single-level and two-level partitioning with Iceberg compatibility
+
+# Load common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+set -euo pipefail
+
+# Check required commands
+require_commands duckdb || exit 1
+
+# Override log_timing with millisecond precision version for this script
+log_timing() {
+  log_timing_ms "$1" "$2" "${3:-$(date +%s%N)}" "${SHOW_TIMING:-false}"
+}
+
+usage() {
+  cat <<USAGE
+Usage: $0 --input-dir DIR --output-dir DIR --tag-name NAME [options]
+
+Required Arguments:
+  --input-dir DIR           Source dataset directory (with blocks/transactions/tags subdirs)
+  --output-dir DIR          Target directory for repartitioned data
+  --tag-name NAME           Tag name to partition by (e.g., "Drive-Id", "App-Name")
+
+Optional Arguments:
+  --preserve-height         Keep height-based sub-partitions (default: false)
+  --height-partition-size N Blocks per height partition when preserving (default: 1000)
+  --max-file-rows N         Maximum rows per Parquet file (default: 1000000)
+  --min-occurrences N       Only process tag values with at least N occurrences (default: 1)
+  --max-partitions N        Process only top N tag values by occurrence count (default: all)
+  --skip-partitions N       Skip first N partitions for pagination (default: 0)
+  --process-by-height       Enable height-based chunking for memory efficiency (default: false)
+  --height-chunk-size N     Process N blocks at a time when using height chunking (default: 10000)
+  --include-untagged        Create partition for items without the specified tag (default: false)
+  --untagged-name NAME      Name for untagged partition (default: "__untagged__")
+  --staging-dir PATH        Staging directory for temp files (default: data/etl/staging)
+  --dry-run                 Show what would be done without executing
+  --show-timing             Show detailed timing information
+  
+  Iceberg Support:
+  --generate-iceberg        Generate Apache Iceberg metadata after partitioning
+  --iceberg-root URI        Warehouse root URI for Iceberg metadata
+
+Examples:
+  # Partition by Drive-Id (single level) - process only drives with 100+ transactions
+  $0 --input-dir data/datasets/default --output-dir data/datasets/by-drive \\
+     --tag-name "Drive-Id" --min-occurrences 100 --generate-iceberg
+
+  # Partition by App-Name with height chunking for memory efficiency
+  $0 --input-dir data/datasets/default --output-dir data/datasets/by-app \\
+     --tag-name "App-Name" --process-by-height --height-chunk-size 50000
+     
+  # Process high-cardinality tags - top 1000 File-Ids with 10+ occurrences
+  $0 --input-dir data/datasets/default --output-dir data/datasets/by-file \\
+     --tag-name "File-Id" --min-occurrences 10 --max-partitions 1000 --process-by-height
+USAGE
+}
+
+# Configuration defaults
+INPUT_DIR=""
+OUTPUT_DIR=""
+TAG_NAME=""
+PRESERVE_HEIGHT=false
+HEIGHT_PARTITION_SIZE=1000
+MAX_FILE_ROWS=1000000
+MIN_OCCURRENCES=1
+MAX_PARTITIONS=""
+SKIP_PARTITIONS=0
+PROCESS_BY_HEIGHT=false
+HEIGHT_CHUNK_SIZE=10000
+INCLUDE_UNTAGGED=false
+UNTAGGED_NAME="__untagged__"
+STAGING_DIR="${ETL_STAGING_PATH:-data/etl/staging}"
+DRY_RUN=false
+RUN_ID="$(date +%Y%m%d_%H%M%S)_$$"
+
+# Iceberg support
+GENERATE_ICEBERG=false
+ICEBERG_ROOT=""
+
+# Load environment configuration
+load_env
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --input-dir)
+      INPUT_DIR="$2"
+      shift 2
+      ;;
+    --output-dir)
+      OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --tag-name)
+      TAG_NAME="$2"
+      shift 2
+      ;;
+    --preserve-height)
+      PRESERVE_HEIGHT=true
+      shift 1
+      ;;
+    --height-partition-size)
+      HEIGHT_PARTITION_SIZE="$2"
+      shift 2
+      ;;
+    --max-file-rows)
+      MAX_FILE_ROWS="$2"
+      shift 2
+      ;;
+    --min-occurrences)
+      MIN_OCCURRENCES="$2"
+      shift 2
+      ;;
+    --max-partitions)
+      MAX_PARTITIONS="$2"
+      shift 2
+      ;;
+    --skip-partitions)
+      SKIP_PARTITIONS="$2"
+      shift 2
+      ;;
+    --process-by-height)
+      PROCESS_BY_HEIGHT=true
+      shift 1
+      ;;
+    --height-chunk-size)
+      HEIGHT_CHUNK_SIZE="$2"
+      shift 2
+      ;;
+    --include-untagged)
+      INCLUDE_UNTAGGED=true
+      shift 1
+      ;;
+    --untagged-name)
+      UNTAGGED_NAME="$2"
+      shift 2
+      ;;
+    --staging-dir)
+      STAGING_DIR="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift 1
+      ;;
+    --show-timing)
+      SHOW_TIMING=true
+      shift 1
+      ;;
+    --generate-iceberg)
+      GENERATE_ICEBERG=true
+      shift 1
+      ;;
+    --iceberg-root)
+      ICEBERG_ROOT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# Validate required arguments
+if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" || -z "$TAG_NAME" ]]; then
+  echo "Error: Missing required arguments" >&2
+  usage
+  exit 1
+fi
+
+# Validate numeric arguments
+for v in "$HEIGHT_PARTITION_SIZE" "$MAX_FILE_ROWS" "$MIN_OCCURRENCES" "$SKIP_PARTITIONS" "$HEIGHT_CHUNK_SIZE"; do
+  [[ $v =~ ^[0-9]+$ ]] || { echo "Error: Non-numeric argument detected: $v" >&2; exit 1; }
+done
+
+# Validate MAX_PARTITIONS if provided
+if [[ -n "$MAX_PARTITIONS" ]]; then
+  [[ $MAX_PARTITIONS =~ ^[0-9]+$ ]] || { echo "Error: Non-numeric argument for --max-partitions: $MAX_PARTITIONS" >&2; exit 1; }
+fi
+
+# Validate input directory structure
+for subdir in transactions tags; do
+  if [[ ! -d "$INPUT_DIR/$subdir/data" ]]; then
+    echo "Error: Input directory missing required structure: $INPUT_DIR/$subdir/data" >&2
+    exit 1
+  fi
+done
+
+# Check for Parquet files in input
+parquet_count=$(find "$INPUT_DIR" -name "*.parquet" | wc -l)
+if [[ $parquet_count -eq 0 ]]; then
+  echo "Error: No Parquet files found in input directory: $INPUT_DIR" >&2
+  exit 1
+fi
+
+# Setup directories
+JOB_STAGING_DIR="$STAGING_DIR/partition-job-$RUN_ID"
+TEMP_DB="$JOB_STAGING_DIR/partition.duckdb"
+
+# Cleanup function
+cleanup() {
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    if [[ -d "$JOB_STAGING_DIR" ]]; then
+      echo "Partitioning failed. Temporary files preserved in: $JOB_STAGING_DIR"
+    fi
+  else
+    # Clean up on successful completion
+    rm -rf "$JOB_STAGING_DIR"
+  fi
+}
+trap cleanup EXIT
+
+# Create necessary directories
+if ! $DRY_RUN; then
+  mkdir -p "$JOB_STAGING_DIR"
+  mkdir -p "$OUTPUT_DIR"/{transactions,tags}/{data,metadata}
+fi
+
+echo "Tag-based partitioning configuration:"
+echo "  Input directory: $INPUT_DIR"
+echo "  Output directory: $OUTPUT_DIR"  
+echo "  Tag name: $TAG_NAME"
+echo "  Min occurrences: $MIN_OCCURRENCES"
+echo "  Max partitions: ${MAX_PARTITIONS:-unlimited}"
+echo "  Skip partitions: $SKIP_PARTITIONS"
+echo "  Process by height: $PROCESS_BY_HEIGHT"
+echo "  Height chunk size: $HEIGHT_CHUNK_SIZE"
+echo "  Preserve height partitions: $PRESERVE_HEIGHT"
+echo "  Height partition size: $HEIGHT_PARTITION_SIZE"
+echo "  Max file rows: $MAX_FILE_ROWS"
+echo "  Include untagged: $INCLUDE_UNTAGGED"
+echo "  Untagged partition name: $UNTAGGED_NAME"
+echo "  Dry run: $DRY_RUN"
+echo "  Generate Iceberg metadata: $GENERATE_ICEBERG"
+echo ""
+
+if $DRY_RUN; then
+  echo "DRY RUN MODE - No files will be modified"
+  echo ""
+fi
+
+# Function to sanitize tag values for directory names
+sanitize_tag_value() {
+  local tag_value="$1"
+  # Replace problematic characters with underscores, but preserve most characters
+  # Iceberg can handle most special characters, but file systems may have limits
+  echo "$tag_value" | sed 's/[\/\\:*?"<>|]/_/g'
+}
+
+# Function to discover existing height partitions
+discover_height_partitions() {
+  local height_partitions=()
+  
+  # Find all existing height partitions in tags directory
+  for partition_dir in "$INPUT_DIR/tags/data"/height=*/; do
+    if [[ -d "$partition_dir" ]]; then
+      local partition_name=$(basename "$partition_dir")
+      # Extract height range from "height=START-END" format
+      local height_range=${partition_name#height=}
+      height_partitions+=("$height_range")
+    fi
+  done
+  
+  # Sort partitions by start height
+  IFS=$'\n' sorted_partitions=($(sort -t'-' -k1,1n <<<"${height_partitions[*]}"))
+  unset IFS
+  
+  echo "  Found ${#sorted_partitions[@]} height partitions: ${sorted_partitions[*]}"
+  
+  # Export as global variable for use by other functions  
+  HEIGHT_PARTITIONS=("${sorted_partitions[@]}")
+}
+
+# Function to discover unique tag values
+discover_tag_values() {
+  echo "Discovering unique values for tag: $TAG_NAME"
+  
+  local discovery_start=$(date +%s%N)
+  
+  # Use DuckDB to find all unique tag values efficiently by processing height partitions
+  local tag_values_file="$JOB_STAGING_DIR/tag_values.csv"
+  
+  if ! $DRY_RUN; then
+    # First discover existing height partitions
+    discover_height_partitions
+    
+    echo "  Discovering unique tag values across all data..."
+    
+    # Build query with filters
+    local limit_clause=""
+    local offset_clause=""
+    local having_clause=""
+    
+    if [[ -n "$MAX_PARTITIONS" ]]; then
+      limit_clause="LIMIT $MAX_PARTITIONS"
+    fi
+    
+    if [[ $SKIP_PARTITIONS -gt 0 ]]; then
+      offset_clause="OFFSET $SKIP_PARTITIONS"
+    fi
+    
+    if [[ $MIN_OCCURRENCES -gt 1 ]]; then
+      having_clause="HAVING COUNT(*) >= $MIN_OCCURRENCES"
+    fi
+    
+    # Simple aggregation query across all tag data
+    duckdb "$TEMP_DB" <<SQL
+COPY (
+  SELECT 
+    CAST(tag_value AS VARCHAR) AS tag_value,
+    COUNT(*) AS occurrence_count,
+    MIN(height) AS min_height,
+    MAX(height) AS max_height
+  FROM read_parquet('$INPUT_DIR/tags/data/*/*.parquet', hive_partitioning=false)
+  WHERE CAST(tag_name AS VARCHAR) = '$TAG_NAME'
+  GROUP BY CAST(tag_value AS VARCHAR)
+  $having_clause
+  ORDER BY COUNT(*) DESC, tag_value
+  $limit_clause $offset_clause
+) TO '$tag_values_file' (FORMAT CSV, HEADER true);
+SQL
+  fi
+  
+  log_timing "Tag value discovery" "$discovery_start"
+  
+  if [[ -f "$tag_values_file" ]]; then
+    local total_values=$(tail -n +2 "$tag_values_file" | wc -l)
+    local total_items=$(tail -n +2 "$tag_values_file" | cut -d',' -f2 | paste -sd+ | bc)
+    echo "  Found $total_values unique tag values covering $total_items items"
+    
+    # Show top 10 values for preview
+    echo "  Top tag values:"
+    head -11 "$tag_values_file" | tail -10 | while IFS=, read -r tag_value count min_height max_height; do
+      echo "    $tag_value: $count items (height $min_height-$max_height)"
+    done
+    
+    if [[ $total_values -gt 10 ]]; then
+      echo "    ... and $((total_values - 10)) more"
+    fi
+  fi
+}
+
+# Function to count untagged items
+count_untagged_items() {
+  if ! $INCLUDE_UNTAGGED; then
+    return 0
+  fi
+  
+  echo "Counting items without tag: $TAG_NAME"
+  
+  local count_start=$(date +%s%N)
+  local untagged_count=0
+  
+  if ! $DRY_RUN; then
+    # Create temp table for tagged IDs across all height partitions
+    duckdb "$TEMP_DB" <<SQL
+CREATE TEMP TABLE temp_tagged_ids (
+  id VARCHAR,
+  height UBIGINT
+);
+SQL
+
+    # Collect tagged IDs from each height partition
+    for height_range in "${HEIGHT_PARTITIONS[@]}"; do
+      duckdb "$TEMP_DB" <<SQL
+INSERT INTO temp_tagged_ids
+SELECT DISTINCT id, height
+FROM read_parquet('$INPUT_DIR/tags/data/height=$height_range/*.parquet', hive_partitioning=false)
+WHERE CAST(tag_name AS VARCHAR) = '$TAG_NAME';
+SQL
+    done
+    
+    # Count untagged transactions across all height partitions
+    untagged_count=0
+    for height_range in "${HEIGHT_PARTITIONS[@]}"; do
+      local chunk_count
+      chunk_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+        SELECT COUNT(*)
+        FROM read_parquet('$INPUT_DIR/transactions/data/height=$height_range/*.parquet', hive_partitioning=false) t
+        LEFT JOIN temp_tagged_ids tg ON t.id = tg.id AND t.height = tg.height
+        WHERE tg.id IS NULL;
+      ")
+      untagged_count=$((untagged_count + chunk_count))
+    done
+    
+    # Clean up temporary table
+    duckdb "$TEMP_DB" -c "DROP TABLE IF EXISTS temp_tagged_ids;"
+  fi
+  
+  log_timing "Untagged item counting" "$count_start"
+  echo "  Found $untagged_count untagged items"
+  
+  return 0
+}
+
+# Function to export data for a specific tag value
+export_tag_partition() {
+  local tag_value="$1"
+  local is_untagged="${2:-false}"
+  
+  local sanitized_tag_value
+  if [[ "$is_untagged" == "true" ]]; then
+    sanitized_tag_value="$UNTAGGED_NAME"
+    echo "Exporting untagged partition: $sanitized_tag_value"
+  else
+    sanitized_tag_value=$(sanitize_tag_value "$tag_value")
+    echo "Exporting partition for tag value: $tag_value (as: $sanitized_tag_value)"
+  fi
+  
+  local export_start=$(date +%s%N)
+  local tag_name_safe=$(echo "$TAG_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g')
+  
+  if $DRY_RUN; then
+    echo "  [DRY RUN] Would create partitions in: $OUTPUT_DIR/**/data/${tag_name_safe}=${sanitized_tag_value}/"
+    return 0
+  fi
+  
+  # Create temporary tables for efficient filtering
+  echo "  Building temporary ID tables for efficient filtering..."
+  
+  # Create table for target IDs (not TEMP to persist across function calls)
+  duckdb "$TEMP_DB" <<SQL
+DROP TABLE IF EXISTS temp_target_ids;
+CREATE TABLE temp_target_ids (
+  id BLOB,
+  height UBIGINT
+);
+SQL
+
+  # Populate the temp table with target IDs from each height partition
+  for height_range in "${HEIGHT_PARTITIONS[@]}"; do
+    if [[ "$is_untagged" == "true" ]]; then
+      # For untagged: get all transaction IDs NOT in this tag
+      duckdb "$TEMP_DB" <<SQL
+INSERT INTO temp_target_ids
+SELECT DISTINCT t.id, t.height
+FROM read_parquet('$INPUT_DIR/transactions/data/height=$height_range/*.parquet', hive_partitioning=false) t
+WHERE t.id NOT IN (
+  SELECT DISTINCT id 
+  FROM read_parquet('$INPUT_DIR/tags/data/height=$height_range/*.parquet', hive_partitioning=false)
+  WHERE CAST(tag_name AS VARCHAR) = '$TAG_NAME'
+);
+SQL
+    else
+      # For tagged: get IDs with this specific tag value
+      # Use TRY/CATCH equivalent by checking if files exist first
+      local tag_count
+      tag_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+        SELECT COUNT(*)
+        FROM read_parquet('$INPUT_DIR/tags/data/height=$height_range/*.parquet', hive_partitioning=false)
+        WHERE CAST(tag_name AS VARCHAR) = '$TAG_NAME'
+          AND CAST(tag_value AS VARCHAR) = '$tag_value';
+      " 2>/dev/null || echo "0")
+      
+      if [[ "$tag_count" != "0" && -n "$tag_count" ]]; then
+        duckdb "$TEMP_DB" <<SQL
+INSERT INTO temp_target_ids
+SELECT DISTINCT id, height
+FROM read_parquet('$INPUT_DIR/tags/data/height=$height_range/*.parquet', hive_partitioning=false)
+WHERE CAST(tag_name AS VARCHAR) = '$TAG_NAME'
+  AND CAST(tag_value AS VARCHAR) = '$tag_value';
+SQL
+      fi
+    fi
+  done
+  
+  echo "    Built temporary ID table with $(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM temp_target_ids;") entries"
+  
+  # Use simple WHERE clause with temp table join
+  local where_clause="
+    EXISTS (
+      SELECT 1 FROM temp_target_ids tt
+      WHERE tt.id = t.id AND tt.height = t.height
+    )"
+  
+  # Check if we should process by height chunks
+  if $PROCESS_BY_HEIGHT; then
+    export_tag_partition_by_height "$tag_name_safe" "$sanitized_tag_value" "$where_clause" "$is_untagged" "$tag_value"
+  else
+    # Export each table type in standard mode (blocks, transactions, and tags)
+    for table_type in blocks transactions tags; do
+      export_table_for_tag "$table_type" "$tag_name_safe" "$sanitized_tag_value" "$where_clause" "$is_untagged"
+    done
+  fi
+  
+  # Clean up temporary table
+  duckdb "$TEMP_DB" -c "DROP TABLE IF EXISTS temp_target_ids;"
+  
+  log_timing "Export partition $sanitized_tag_value" "$export_start"
+}
+
+# Function to export a tag partition using height-based chunking
+export_tag_partition_by_height() {
+  local tag_name_safe="$1" 
+  local sanitized_tag_value="$2"
+  local base_where_clause="$3"
+  local is_untagged="$4"
+  local tag_value="$5"
+  
+  echo "  Using height-based chunking (chunk size: $HEIGHT_CHUNK_SIZE blocks)"
+  
+  # Get the height range from our temporary ID table (already populated)
+  local height_info
+  height_info=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT MIN(height), MAX(height)
+    FROM temp_target_ids;
+  ")
+  
+  local min_height=$(echo "$height_info" | cut -d',' -f1)
+  local max_height=$(echo "$height_info" | cut -d',' -f2)
+  
+  if [[ -z "$min_height" || "$min_height" == "null" ]] || [[ -z "$max_height" || "$max_height" == "null" ]]; then
+    echo "    No data found for this tag value, skipping"
+    return 0
+  fi
+  
+  echo "    Height range: $min_height - $max_height"
+  
+  # Calculate number of chunks
+  local total_height_span=$((max_height - min_height + 1))
+  local num_chunks=$(( (total_height_span + HEIGHT_CHUNK_SIZE - 1) / HEIGHT_CHUNK_SIZE ))
+  echo "    Processing in $num_chunks height chunks"
+  
+  # Process each height chunk
+  local current_height=$min_height
+  local chunk_num=0
+  
+  while [[ $current_height -le $max_height ]]; do
+    local chunk_end=$((current_height + HEIGHT_CHUNK_SIZE - 1))
+    if [[ $chunk_end -gt $max_height ]]; then
+      chunk_end=$max_height
+    fi
+    
+    echo "    Processing chunk $((chunk_num + 1))/$num_chunks: height $current_height-$chunk_end"
+    
+    # Add height filter to the WHERE clause
+    local height_where_clause="$base_where_clause AND t.height >= $current_height AND t.height <= $chunk_end"
+    
+    # Export each table type for this height chunk (blocks, transactions, and tags)
+    for table_type in blocks transactions tags; do
+      local chunk_output_dir="$OUTPUT_DIR/$table_type/data/${tag_name_safe}=${sanitized_tag_value}"
+      mkdir -p "$chunk_output_dir"
+      
+      # Export this chunk for this table type
+      export_table_chunk "$table_type" "$chunk_output_dir" "$height_where_clause" "$current_height" "$chunk_end" "$chunk_num"
+    done
+    
+    current_height=$((chunk_end + 1))
+    chunk_num=$((chunk_num + 1))
+  done
+}
+
+# Function to export a table chunk (used by height-based chunking)
+export_table_chunk() {
+  local table_type="$1"
+  local output_dir="$2"
+  local where_clause="$3"
+  local chunk_start="$4"
+  local chunk_end="$5"
+  local chunk_num="$6"
+  
+  # Find height partitions that overlap with this chunk range
+  local overlapping_partitions=()
+  for height_range in "${HEIGHT_PARTITIONS[@]}"; do
+    local start_height=${height_range%-*}
+    local end_height=${height_range#*-}
+    
+    # Check if partition overlaps with chunk range
+    if [[ $start_height -le $chunk_end && $end_height -ge $chunk_start ]]; then
+      overlapping_partitions+=("$height_range")
+    fi
+  done
+  
+  if [[ ${#overlapping_partitions[@]} -eq 0 ]]; then
+    return 0
+  fi
+  
+  # Build UNION ALL query to read from overlapping partitions
+  local union_query=""
+  for i in "${!overlapping_partitions[@]}"; do
+    local height_range="${overlapping_partitions[$i]}"
+    if [[ $i -gt 0 ]]; then
+      union_query+=" UNION ALL "
+    fi
+    union_query+="SELECT * FROM read_parquet('$INPUT_DIR/$table_type/data/height=$height_range/*.parquet', hive_partitioning=false)"
+  done
+  
+  # Adjust WHERE clause for different table types
+  local final_where_clause="$where_clause AND t.height >= $chunk_start AND t.height <= $chunk_end"
+  if [[ "$table_type" == "blocks" ]]; then
+    # For blocks, include all blocks in the height range (no tag filtering)
+    final_where_clause="t.height >= $chunk_start AND t.height <= $chunk_end"
+  elif [[ "$table_type" == "tags" ]]; then
+    # For tags, we want all tags for the matching transactions
+    final_where_clause="
+      t.id IN (
+        SELECT DISTINCT tt.id
+        FROM temp_target_ids tt
+        WHERE tt.height >= $chunk_start AND tt.height <= $chunk_end
+      ) AND t.height >= $chunk_start AND t.height <= $chunk_end"
+  fi
+  
+  # Get row count for this chunk
+  local row_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT COUNT(*)
+    FROM ($union_query) t
+    WHERE $final_where_clause;
+  ")
+  
+  if [[ $row_count -eq 0 ]]; then
+    return 0
+  fi
+  
+  echo "      $table_type: $row_count rows"
+  
+  # Export this chunk
+  local chunk_file="$output_dir/${table_type}_h${chunk_start}_${chunk_end}_c${chunk_num}_${RUN_ID}.parquet"
+  
+  if [[ $row_count -le $MAX_FILE_ROWS ]]; then
+    # Single file export
+    duckdb "$TEMP_DB" -c "
+      COPY (
+        SELECT t.*
+        FROM ($union_query) t
+        WHERE $final_where_clause
+        ORDER BY $(get_sort_columns "$table_type")
+      ) TO '$chunk_file' (FORMAT PARQUET, COMPRESSION 'zstd');
+    "
+  else
+    # Multiple file export (if a single chunk is still too large)
+    local file_num=0
+    local offset=0
+    
+    while [[ $offset -lt $row_count ]]; do
+      local remaining_rows=$((row_count - offset))
+      local limit_rows=$((remaining_rows < MAX_FILE_ROWS ? remaining_rows : MAX_FILE_ROWS))
+      
+      # Only create file if there are rows to export
+      if [[ $limit_rows -gt 0 ]]; then
+        local multi_file="$output_dir/${table_type}_h${chunk_start}_${chunk_end}_c${chunk_num}_f${file_num}_${RUN_ID}.parquet"
+        duckdb "$TEMP_DB" -c "
+          COPY (
+            SELECT t.*
+            FROM ($union_query) t
+            WHERE $final_where_clause
+            ORDER BY $(get_sort_columns "$table_type")
+            LIMIT $limit_rows OFFSET $offset
+          ) TO '$multi_file' (FORMAT PARQUET, COMPRESSION 'zstd');
+        "
+      fi
+      
+      offset=$((offset + MAX_FILE_ROWS))
+      file_num=$((file_num + 1))
+    done
+  fi
+}
+
+# Function to export a specific table type for a tag value
+export_table_for_tag() {
+  local table_type="$1"
+  local tag_name_safe="$2" 
+  local sanitized_tag_value="$3"
+  local where_clause="$4"
+  local is_untagged="$5"
+  
+  echo "  Exporting $table_type table..."
+  
+  local table_export_start=$(date +%s%N)
+  local output_base_dir="$OUTPUT_DIR/$table_type/data/${tag_name_safe}=${sanitized_tag_value}"
+  
+  # Create output directory
+  mkdir -p "$output_base_dir"
+  
+  # Get unique height ranges from temp_target_ids to match actual partition names
+  local relevant_partitions
+  relevant_partitions=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT DISTINCT 
+      CASE 
+        WHEN height < 1000 THEN '0-999'
+        ELSE CAST(FLOOR(height / 1000) * 1000 AS INTEGER) || '-' || CAST((FLOOR(height / 1000) * 1000) + 999 AS INTEGER)
+      END as height_range
+    FROM temp_target_ids
+    ORDER BY height_range;
+  ")
+  
+  if [[ -z "$relevant_partitions" ]]; then
+    echo "    No relevant partitions found"
+    return 0
+  fi
+  
+  # Build UNION ALL query for only relevant partitions
+  local union_query=""
+  local partition_count=0
+  while IFS= read -r height_range; do
+    if [[ $partition_count -gt 0 ]]; then
+      union_query+=" UNION ALL "
+    fi
+    union_query+="SELECT * FROM read_parquet('$INPUT_DIR/$table_type/data/height=$height_range/*.parquet', hive_partitioning=false)"
+    partition_count=$((partition_count + 1))
+  done <<< "$relevant_partitions"
+  
+  echo "    Using $partition_count relevant height partitions"
+  
+  # Adjust WHERE clause for different table types
+  local final_where_clause="$where_clause"
+  if [[ "$table_type" == "blocks" ]]; then
+    # For blocks, include all blocks from the relevant height ranges (no tag filtering)
+    final_where_clause="1=1"  # No filtering - include all blocks
+  elif [[ "$table_type" == "tags" ]]; then
+    # For tags, we want all tags for the matching transactions, not just the partitioning tag
+    final_where_clause="
+      t.id IN (
+        SELECT DISTINCT tt.id
+        FROM temp_target_ids tt
+      )"
+  fi
+  # For transactions, use the where_clause as-is
+  
+  # Get row count for this partition
+  local row_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT COUNT(*)
+    FROM ($union_query) t
+    WHERE $final_where_clause;
+  ")
+  
+  if [[ $row_count -eq 0 ]]; then
+    echo "    No $table_type rows for this partition, skipping"
+    return 0
+  fi
+  
+  echo "    Found $row_count rows to export"
+  
+  if [[ $PRESERVE_HEIGHT == "true" ]] && [[ $row_count -gt 0 ]]; then
+    # Export with height sub-partitions
+    export_with_height_partitions "$table_type" "$output_base_dir" "$final_where_clause" "$union_query"
+  else
+    # Export as single partition (may split into multiple files if too large)
+    export_single_partition "$table_type" "$output_base_dir" "$final_where_clause" "$row_count" "$union_query"
+  fi
+  
+  log_timing "Export $table_type for $sanitized_tag_value" "$table_export_start"
+}
+
+# Function to export data with height-based sub-partitions
+export_with_height_partitions() {
+  local table_type="$1"
+  local base_output_dir="$2"
+  local where_clause="$3"
+  local union_query="$4"
+  
+  echo "    Exporting with height sub-partitions..."
+  
+  # Get height range for this partition using temp_target_ids
+  local height_info
+  if [[ "$table_type" == "tags" ]] || [[ "$table_type" == "blocks" ]]; then
+    # For tags and blocks, get height range from temp_target_ids
+    height_info=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT MIN(height), MAX(height)
+      FROM temp_target_ids;
+    ")
+  else
+    # For transactions, get height range from the union query
+    height_info=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT MIN(height), MAX(height)
+      FROM ($union_query) t
+      WHERE $where_clause;
+    ")
+  fi
+  
+  local min_height=$(echo "$height_info" | cut -d',' -f1)
+  local max_height=$(echo "$height_info" | cut -d',' -f2)
+  
+  echo "      Height range: $min_height - $max_height"
+  
+  # Create height partitions
+  local current_height=$min_height
+  while [[ $current_height -le $max_height ]]; do
+    local partition_end=$((current_height + HEIGHT_PARTITION_SIZE - 1))
+    if [[ $partition_end -gt $max_height ]]; then
+      partition_end=$max_height
+    fi
+    
+    local height_partition_dir="$base_output_dir/height=${current_height}-${partition_end}"
+    mkdir -p "$height_partition_dir"
+    
+    # Export this height range
+    local height_where
+    if [[ "$table_type" == "blocks" ]]; then
+      # For blocks, only filter by height (no tag filtering)
+      height_where="t.height >= $current_height AND t.height <= $partition_end"
+    else
+      height_where="$where_clause AND t.height >= $current_height AND t.height <= $partition_end"
+    fi
+    
+    local height_row_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT COUNT(*)
+      FROM ($union_query) t
+      WHERE $height_where;
+    ")
+    
+    if [[ $height_row_count -gt 0 ]]; then
+      echo "      Height partition $current_height-$partition_end: $height_row_count rows"
+      export_single_partition "$table_type" "$height_partition_dir" "$height_where" "$height_row_count" "$union_query"
+    fi
+    
+    current_height=$((partition_end + 1))
+  done
+}
+
+# Function to export a single partition (potentially split into multiple files)
+export_single_partition() {
+  local table_type="$1"
+  local output_dir="$2" 
+  local where_clause="$3"
+  local row_count="$4"
+  local union_query="$5"
+  
+  local file_base_name="${table_type}_${RUN_ID}"
+  
+  if [[ $row_count -le $MAX_FILE_ROWS ]]; then
+    # Single file export
+    local output_file="$output_dir/${file_base_name}.parquet"
+    duckdb "$TEMP_DB" -c "
+      COPY (
+        SELECT t.*
+        FROM ($union_query) t
+        WHERE $where_clause
+        ORDER BY $(get_sort_columns "$table_type")
+      ) TO '$output_file' (FORMAT PARQUET, COMPRESSION 'zstd');
+    "
+    echo "        Exported to: $(basename "$output_file")"
+  else
+    # Multiple file export
+    local file_num=0
+    local offset=0
+    echo "        Splitting into multiple files (max $MAX_FILE_ROWS rows each)..."
+    
+    while [[ $offset -lt $row_count ]]; do
+      local remaining_rows=$((row_count - offset))
+      local limit_rows=$((remaining_rows < MAX_FILE_ROWS ? remaining_rows : MAX_FILE_ROWS))
+      
+      # Only create file if there are rows to export
+      if [[ $limit_rows -gt 0 ]]; then
+        local output_file="$output_dir/${file_base_name}_${file_num}.parquet"
+        duckdb "$TEMP_DB" -c "
+          COPY (
+            SELECT t.*
+            FROM ($union_query) t
+            WHERE $where_clause
+            ORDER BY $(get_sort_columns "$table_type")
+            LIMIT $limit_rows OFFSET $offset
+          ) TO '$output_file' (FORMAT PARQUET, COMPRESSION 'zstd');
+        "
+        echo "          File $file_num: $(basename "$output_file")"
+      fi
+      
+      offset=$((offset + MAX_FILE_ROWS))
+      file_num=$((file_num + 1))
+    done
+  fi
+}
+
+# Function to get appropriate sort columns for each table type
+get_sort_columns() {
+  local table_type="$1"
+  case "$table_type" in
+    "transactions") 
+      echo "t.height, t.id"
+      ;;
+    "tags")
+      echo "t.height, t.id, t.tag_index"
+      ;;
+    *)
+      echo "t.height"
+      ;;
+  esac
+}
+
+# Main execution
+main() {
+  local total_start=$(date +%s%N)
+  
+  echo "Starting tag-based partitioning process..."
+  echo "Found $parquet_count Parquet files in input directory"
+  echo ""
+  
+  # Initialize DuckDB database
+  if ! $DRY_RUN; then
+    echo "Initializing DuckDB..."
+    # DuckDB will be created automatically when we first use it
+  fi
+  
+  # Discover unique tag values
+  discover_tag_values
+  echo ""
+  
+  # Count untagged items if needed
+  if $INCLUDE_UNTAGGED; then
+    count_untagged_items
+    echo ""
+  fi
+  
+  # Process each tag value
+  if [[ -f "$JOB_STAGING_DIR/tag_values.csv" ]] || $DRY_RUN; then
+    local processed_count=0
+    
+    if ! $DRY_RUN; then
+      while IFS=, read -r tag_value occurrence_count min_height max_height; do
+        # Skip header line
+        if [[ "$tag_value" == "tag_value" ]]; then
+          continue
+        fi
+        
+        export_tag_partition "$tag_value"
+        processed_count=$((processed_count + 1))
+        echo ""
+      done < "$JOB_STAGING_DIR/tag_values.csv"
+    else
+      echo "[DRY RUN] Would process discovered tag values"
+      processed_count="N/A"
+    fi
+    
+    # Process untagged items if requested
+    if $INCLUDE_UNTAGGED; then
+      export_tag_partition "" true
+      echo ""
+    fi
+    
+    echo "Processed $processed_count tag value partitions"
+  else
+    echo "No tag values found to process"
+  fi
+  
+  log_timing "Total partitioning process" "$total_start"
+  
+  # Generate Iceberg metadata if requested
+  if $GENERATE_ICEBERG && ! $DRY_RUN; then
+    echo "Generating Apache Iceberg metadata..."
+    if command -v python3 >/dev/null 2>&1; then
+      if python3 -c "import pyiceberg" 2>/dev/null; then
+        local iceberg_cmd="python3 \"$SCRIPT_DIR/generate-iceberg-metadata\" --datasets-dir \"$OUTPUT_DIR\""
+        if [[ -n "$ICEBERG_ROOT" ]]; then
+          iceberg_cmd="$iceberg_cmd --datasets-root \"$ICEBERG_ROOT\""
+          echo "  Using datasets root: $ICEBERG_ROOT"
+        fi
+        
+        if eval "$iceberg_cmd"; then
+          echo "  ✓ Iceberg metadata generated successfully"
+        else
+          echo "  ⚠ Warning: Iceberg metadata generation failed, but partitioned data is intact"
+        fi
+      else
+        echo "  ⚠ Warning: PyIceberg not installed. Run: pip install 'pyiceberg[pyarrow,duckdb,sql]'"
+      fi
+    else
+      echo "  ⚠ Warning: Python3 not available, cannot generate Iceberg metadata"
+    fi
+  fi
+  
+  echo ""
+  echo "Tag-based partitioning completed!"
+  echo "Output directory: $OUTPUT_DIR"
+  
+  if ! $DRY_RUN; then
+    # Show summary statistics
+    local total_files=$(find "$OUTPUT_DIR" -name "*.parquet" | wc -l)
+    local total_size=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1)
+    echo "Generated $total_files Parquet files (total size: $total_size)"
+  fi
+}
+
+# Run main function
+main
+
+exit 0
