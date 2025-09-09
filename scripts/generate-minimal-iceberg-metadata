@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""
+AR.IO Gateway - Generate Minimal Apache Iceberg Metadata for DuckDB
+Creates only the essential metadata files that DuckDB needs to read Parquet exports
+"""
+
+import os
+import json
+import glob
+import argparse
+from pathlib import Path
+import fastavro
+
+
+def get_blocks_schema_fields():
+    """Get the schema fields for blocks table matching DuckDB export"""
+    return [
+        {"id": 1, "name": "indep_hash", "required": False, "type": "binary"},
+        {"id": 2, "name": "height", "required": False, "type": "long"},
+        {"id": 3, "name": "previous_block", "required": False, "type": "binary"},
+        {"id": 4, "name": "nonce", "required": False, "type": "binary"},
+        {"id": 5, "name": "hash", "required": False, "type": "binary"},
+        {"id": 6, "name": "block_timestamp", "required": False, "type": "int"},
+        {"id": 7, "name": "tx_count", "required": False, "type": "int"},
+        {"id": 8, "name": "block_size", "required": False, "type": "long"},
+    ]
+
+
+def get_transactions_schema_fields():
+    """Get the schema fields for transactions table matching DuckDB export"""
+    return [
+        {"id": 1, "name": "id", "required": False, "type": "binary"},
+        {"id": 2, "name": "indexed_at", "required": False, "type": "long"},
+        {"id": 3, "name": "block_transaction_index", "required": False, "type": "int"},
+        {"id": 4, "name": "is_data_item", "required": False, "type": "boolean"},
+        {"id": 5, "name": "target", "required": False, "type": "binary"},
+        {"id": 6, "name": "quantity", "required": False, "type": "decimal(20,0)"},
+        {"id": 7, "name": "reward", "required": False, "type": "decimal(20,0)"},
+        {"id": 8, "name": "anchor", "required": False, "type": "binary"},
+        {"id": 9, "name": "data_size", "required": False, "type": "long"},
+        {"id": 10, "name": "content_type", "required": False, "type": "string"},
+        {"id": 11, "name": "format", "required": False, "type": "int"},
+        {"id": 12, "name": "height", "required": False, "type": "long"},
+        {"id": 13, "name": "owner_address", "required": False, "type": "binary"},
+        {"id": 14, "name": "data_root", "required": False, "type": "binary"},
+        {"id": 15, "name": "parent", "required": False, "type": "binary"},
+        {"id": 16, "name": "offset", "required": False, "type": "long"},
+        {"id": 17, "name": "size", "required": False, "type": "long"},
+        {"id": 18, "name": "data_offset", "required": False, "type": "long"},
+        {"id": 19, "name": "owner_offset", "required": False, "type": "long"},
+        {"id": 20, "name": "owner_size", "required": False, "type": "int"},
+        {"id": 21, "name": "owner", "required": False, "type": "binary"},
+        {"id": 22, "name": "signature_offset", "required": False, "type": "long"},
+        {"id": 23, "name": "signature_size", "required": False, "type": "int"},
+        {"id": 24, "name": "signature_type", "required": False, "type": "int"},
+        {"id": 25, "name": "root_transaction_id", "required": False, "type": "binary"},
+        {"id": 26, "name": "root_parent_offset", "required": False, "type": "int"},
+    ]
+
+
+def get_tags_schema_fields():
+    """Get the schema fields for tags table matching DuckDB export"""
+    return [
+        {"id": 1, "name": "height", "required": False, "type": "long"},
+        {"id": 2, "name": "id", "required": False, "type": "binary"},
+        {"id": 3, "name": "tag_index", "required": False, "type": "int"},
+        {"id": 4, "name": "indexed_at", "required": False, "type": "long"},
+        {"id": 5, "name": "tag_name", "required": False, "type": "binary"},
+        {"id": 6, "name": "tag_value", "required": False, "type": "binary"},
+        {"id": 7, "name": "is_data_item", "required": False, "type": "boolean"},
+    ]
+
+
+def create_manifest_avro(parquet_files, datasets_root, warehouse_dir, manifest_file_path):
+    """Create an Avro manifest file listing all Parquet files"""
+    manifest_entries = []
+    total_size = 0
+    
+    # Iceberg manifest schema for data files
+    data_file_schema = {
+        "type": "record",
+        "name": "data_file",
+        "fields": [
+            {"name": "content", "type": "int"},  # 0 = DATA, 1 = POSITION_DELETES, 2 = EQUALITY_DELETES
+            {"name": "file_path", "type": "string"},
+            {"name": "file_format", "type": "string"},
+            {"name": "partition", "type": {"type": "record", "name": "r102", "fields": []}},
+            {"name": "record_count", "type": "long"},
+            {"name": "file_size_in_bytes", "type": "long"},
+            {"name": "column_sizes", "type": {"type": "map", "values": "long"}},
+            {"name": "value_counts", "type": {"type": "map", "values": "long"}},
+            {"name": "null_value_counts", "type": {"type": "map", "values": "long"}},
+            {"name": "nan_value_counts", "type": {"type": "map", "values": "long"}},
+            {"name": "lower_bounds", "type": {"type": "map", "values": "bytes"}},
+            {"name": "upper_bounds", "type": {"type": "map", "values": "bytes"}},
+            {"name": "key_metadata", "type": ["null", "bytes"], "default": None},
+            {"name": "split_offsets", "type": {"type": "array", "items": "long"}},
+            {"name": "equality_ids", "type": ["null", {"type": "array", "items": "int"}], "default": None},
+            {"name": "sort_order_id", "type": ["null", "int"], "default": None}
+        ]
+    }
+    
+    # Iceberg manifest entry schema that wraps data files
+    manifest_entry_schema = {
+        "type": "record",
+        "name": "manifest_entry",
+        "fields": [
+            {"name": "status", "type": "int"},  # 0 = EXISTING, 1 = ADDED, 2 = DELETED
+            {"name": "snapshot_id", "type": ["null", "long"], "default": None},
+            {"name": "sequence_number", "type": ["null", "long"], "default": None},
+            {"name": "file_sequence_number", "type": ["null", "long"], "default": None},
+            {"name": "data_file", "type": data_file_schema}
+        ]
+    }
+    
+    for parquet_file in parquet_files:
+        file_size = os.path.getsize(parquet_file)
+        total_size += file_size
+        
+        if datasets_root and datasets_root.startswith(('http://', 'https://')):
+            # For HTTP/HTTPS, use full URLs
+            rel_path = os.path.relpath(parquet_file, warehouse_dir)
+            file_path = f"{datasets_root.rstrip('/')}/{rel_path}"
+        else:
+            # For local, use relative paths from table root including 'data' prefix
+            # parquet_file is like: .../blocks/data/height=xxx/file.parquet
+            # We want path relative to table root: data/height=xxx/file.parquet
+            partition_dir = os.path.dirname(parquet_file)  # .../blocks/data/height=xxx
+            data_dir = os.path.dirname(partition_dir)      # .../blocks/data
+            table_dir = os.path.dirname(data_dir)          # .../blocks
+            rel_path = os.path.relpath(parquet_file, table_dir)
+            file_path = rel_path
+        
+        data_file = {
+            "content": 0,  # DATA
+            "file_path": file_path,
+            "file_format": "PARQUET",
+            "partition": {},
+            "record_count": 0,
+            "file_size_in_bytes": file_size,
+            "column_sizes": {},
+            "value_counts": {},
+            "null_value_counts": {},
+            "nan_value_counts": {},
+            "lower_bounds": {},
+            "upper_bounds": {},
+            "key_metadata": None,
+            "split_offsets": [4],  # Minimal split offset
+            "equality_ids": None,
+            "sort_order_id": None
+        }
+        
+        manifest_entry = {
+            "status": 1,  # ADDED
+            "snapshot_id": 1,
+            "sequence_number": None,
+            "file_sequence_number": None,
+            "data_file": data_file
+        }
+        
+        manifest_entries.append(manifest_entry)
+    
+    # Write Avro manifest file
+    with open(manifest_file_path, 'wb') as f:
+        fastavro.writer(f, manifest_entry_schema, manifest_entries)
+    
+    return len(manifest_entries), total_size
+
+
+def create_manifest_list_avro(manifest_path, file_count, total_size, manifest_list_path):
+    """Create a manifest-list Avro file that points to the manifest"""
+    
+    # Iceberg manifest-list schema
+    manifest_list_schema = {
+        "type": "record",
+        "name": "manifest_file",
+        "fields": [
+            {"name": "manifest_path", "type": "string"},
+            {"name": "manifest_length", "type": "long"},
+            {"name": "partition_spec_id", "type": "int"},
+            {"name": "content", "type": "int"},  # 0 = DATA, 1 = DELETES
+            {"name": "sequence_number", "type": "long"},
+            {"name": "min_sequence_number", "type": "long"},
+            {"name": "added_snapshot_id", "type": "long"},
+            {"name": "added_files_count", "type": "int"},
+            {"name": "existing_files_count", "type": "int"},
+            {"name": "deleted_files_count", "type": "int"},
+            {"name": "added_rows_count", "type": "long"},
+            {"name": "existing_rows_count", "type": "long"},
+            {"name": "deleted_rows_count", "type": "long"},
+            {"name": "partitions", "type": ["null", {"type": "array", "items": {"type": "record", "name": "r508", "fields": [{"name": "contains_null", "type": "boolean"}, {"name": "contains_nan", "type": ["null", "boolean"], "default": None}, {"name": "lower_bound", "type": ["null", "bytes"], "default": None}, {"name": "upper_bound", "type": ["null", "bytes"], "default": None}]}}], "default": None},
+            {"name": "key_metadata", "type": ["null", "bytes"], "default": None}
+        ]
+    }
+    
+    manifest_list_entry = {
+        "manifest_path": f"metadata/{os.path.basename(manifest_path)}",
+        "manifest_length": os.path.getsize(manifest_path),
+        "partition_spec_id": 0,
+        "content": 0,  # DATA
+        "sequence_number": 0,
+        "min_sequence_number": 0,
+        "added_snapshot_id": 1,
+        "added_files_count": file_count,
+        "existing_files_count": 0,
+        "deleted_files_count": 0,
+        "added_rows_count": 0,
+        "existing_rows_count": 0,
+        "deleted_rows_count": 0,
+        "partitions": None,
+        "key_metadata": None
+    }
+    
+    with open(manifest_list_path, 'wb') as f:
+        fastavro.writer(f, manifest_list_schema, [manifest_list_entry])
+
+
+def create_minimal_metadata(table_name, schema_fields, parquet_files, table_location, datasets_root, warehouse_dir, metadata_dir):
+    """Create Iceberg metadata JSON with unified approach for local and remote"""
+    
+    # Create Avro manifest file
+    manifest_file_path = os.path.join(metadata_dir, "snap-1-manifest.avro")
+    file_count, total_size = create_manifest_avro(parquet_files, datasets_root, warehouse_dir, manifest_file_path)
+    
+    # Create manifest-list file
+    manifest_list_path = os.path.join(metadata_dir, "snap-1-manifest-list.avro")
+    create_manifest_list_avro(manifest_file_path, file_count, total_size, manifest_list_path)
+    
+    # Create the metadata structure with snapshot
+    metadata = {
+        "format-version": 1,
+        "table-uuid": f"00000000-0000-0000-0000-{table_name.ljust(12, '0')[:12]}",
+        "location": table_location,
+        "last-updated-ms": 1640995200000,  # Fixed timestamp
+        "last-column-id": max(field["id"] for field in schema_fields),
+        "schema": {
+            "type": "struct",
+            "schema-id": 0,
+            "fields": schema_fields
+        },
+        "current-schema-id": 0,
+        "schemas": [
+            {
+                "type": "struct", 
+                "schema-id": 0,
+                "fields": schema_fields
+            }
+        ],
+        "partition-spec": [],
+        "default-spec-id": 0,
+        "partition-specs": [
+            {
+                "spec-id": 0,
+                "fields": []
+            }
+        ],
+        "last-partition-id": 0,
+        "properties": {},
+        "current-snapshot-id": 1,
+        "snapshots": [
+            {
+                "snapshot-id": 1,
+                "timestamp-ms": 1640995200000,
+                "summary": {
+                    "operation": "append",
+                    "added-data-files": str(file_count),
+                    "added-records": "0", 
+                    "added-files-size": str(total_size),
+                    "changed-partition-count": "1",
+                    "total-records": "0",
+                    "total-files-size": str(total_size),
+                    "total-data-files": str(file_count),
+                    "total-delete-files": "0",
+                    "total-position-deletes": "0",
+                    "total-equality-deletes": "0"
+                },
+                "manifest-list": "metadata/snap-1-manifest-list.avro"
+            }
+        ],
+        "snapshot-log": [
+            {
+                "timestamp-ms": 1640995200000,
+                "snapshot-id": 1
+            }
+        ],
+        "metadata-log": []
+    }
+    
+    return metadata
+
+
+def generate_minimal_metadata(datasets_dir, datasets_root=None):
+    """Generate minimal Iceberg metadata for all tables"""
+    
+    tables_config = [
+        ("blocks", get_blocks_schema_fields()),
+        ("transactions", get_transactions_schema_fields()),
+        ("tags", get_tags_schema_fields()),
+    ]
+    
+    successful_tables = []
+    
+    for table_name, schema_fields in tables_config:
+        table_dir = os.path.join(datasets_dir, table_name)
+        if not os.path.exists(table_dir):
+            print(f"Skipping {table_name}: directory does not exist")
+            continue
+        
+        print(f"Processing table: {table_name}")
+        
+        # Find all Parquet files
+        data_dir = os.path.join(table_dir, "data")
+        if not os.path.exists(data_dir):
+            print(f"  No data directory found for {table_name}")
+            continue
+        
+        parquet_files = glob.glob(os.path.join(data_dir, "*/*.parquet"))
+        if not parquet_files:
+            print(f"  No Parquet files found for {table_name}")
+            continue
+        
+        print(f"  Found {len(parquet_files)} Parquet files")
+        
+        # Create metadata directory
+        metadata_dir = os.path.join(table_dir, "metadata")
+        os.makedirs(metadata_dir, exist_ok=True)
+        
+        # Determine table location
+        if datasets_root:
+            table_location = f"{datasets_root.rstrip('/')}/{table_name}"
+        else:
+            table_location = f"file://{os.path.abspath(table_dir)}"
+        
+        # Generate metadata and Avro manifest
+        metadata = create_minimal_metadata(
+            table_name, schema_fields, parquet_files, table_location, datasets_root, datasets_dir, metadata_dir
+        )
+        
+        # Write metadata.json
+        metadata_file = os.path.join(metadata_dir, "v1.metadata.json")
+        with open(metadata_file, "w") as f:
+            json.dump(metadata, f, separators=(",", ":"))
+        
+        # Write version-hint.text
+        version_hint_file = os.path.join(metadata_dir, "version-hint.text")
+        with open(version_hint_file, "w") as f:
+            f.write("1")
+        
+        # Avro files were already created by create_minimal_metadata
+        manifest_file = os.path.join(metadata_dir, "snap-1-manifest.avro")
+        manifest_list_file = os.path.join(metadata_dir, "snap-1-manifest-list.avro")
+        
+        print(f"  Created metadata files:")
+        print(f"    {metadata_file}")
+        print(f"    {manifest_list_file}")
+        print(f"    {manifest_file}")
+        print(f"    {version_hint_file}")
+        
+        successful_tables.append(table_name)
+    
+    return successful_tables
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Generate minimal Apache Iceberg metadata for DuckDB',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+This creates only the essential metadata files that DuckDB needs to read Iceberg tables.
+
+Examples:
+  %(prog)s --datasets-dir data/parquet-test
+  %(prog)s --datasets-dir /path/to/datasets
+  %(prog)s --datasets-dir data/export --datasets-root https://example.com/datasets
+  
+Query with DuckDB:
+  duckdb
+  INSTALL iceberg;
+  LOAD iceberg;
+  SELECT COUNT(*) FROM iceberg_scan('path/to/datasets/blocks');
+"""
+    )
+    
+    parser.add_argument(
+        '--datasets-dir',
+        default='data/datasets/default',
+        help='Datasets directory containing Parquet data (default: data/datasets/default)'
+    )
+    
+    parser.add_argument(
+        '--datasets-root',
+        help='Optional datasets root URI for metadata references (e.g., https://example.com/datasets). '
+             'If not provided, uses local file:// paths'
+    )
+    
+    args = parser.parse_args()
+    
+    # Check if datasets directory exists
+    if not os.path.exists(args.datasets_dir):
+        print(f"Error: Datasets directory does not exist: {args.datasets_dir}")
+        return 1
+    
+    print(f"Generating minimal Iceberg metadata for DuckDB")
+    print(f"Datasets: {args.datasets_dir}")
+    print()
+    
+    try:
+        successful_tables = generate_minimal_metadata(args.datasets_dir, args.datasets_root)
+        
+        if successful_tables:
+            print()
+            print("=" * 50)
+            print("Minimal Iceberg metadata generation complete!")
+            print(f"Successfully created metadata for {len(successful_tables)} tables: {', '.join(successful_tables)}")
+            print()
+            print("To query these tables with DuckDB:")
+            print("  duckdb")
+            print("  INSTALL iceberg;")
+            print("  LOAD iceberg;")
+            for table_name in successful_tables:
+                table_path = os.path.abspath(os.path.join(args.datasets_dir, table_name))
+                print(f"  SELECT COUNT(*) FROM iceberg_scan('{table_path}');")
+            return 0
+        else:
+            print("No tables were successfully processed.")
+            return 1
+            
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+if __name__ == '__main__':
+    exit(main())
