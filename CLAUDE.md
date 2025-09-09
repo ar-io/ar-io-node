@@ -105,4 +105,8 @@ The project includes reference repositories managed by `mr` (myrepos) in the `re
   - Source: https://github.com/permaweb/ao
   - Reference for: AO protocol, message passing, process scheduling, compute units
 
+- **repos/ar-io-observer** - AR.IO network observer and monitoring tools
+  - Source: https://github.com/ar-io/ar-io-observer
+  - Reference for: Network monitoring, gateway health checks, observation protocols
+
 Use `mr update` to clone/update these repositories. They are excluded from git tracking via `.gitignore`.

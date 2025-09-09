@@ -11,3 +11,6 @@ checkout = git clone https://github.com/permaweb/HyperBEAM
 
 [repos/ao]
 checkout = git clone https://github.com/permaweb/ao
+
+[repos/ar-io-observer]
+checkout = git clone https://github.com/ar-io/ar-io-observer
