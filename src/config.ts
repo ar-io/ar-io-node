@@ -1038,3 +1038,15 @@ export const ANT_AO_CU_URL = sanitizeUrl(
 export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
 export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
 export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
+
+// x402 variables for USDC
+export const ENABLE_X_402_USDC =
+  env.varOrDefault('ENABLE_X_402_USDC', 'false') === 'true';
+export const X_402_USDC_ADDRESS = env.varOrUndefined('X_402_USDC_ADDRESS');
+export const X_402_USDC_QUEUE_BUNDLE_PRICE_USDC = env.varOrDefault(
+  'X_402_USDC_QUEUE_BUNDLE_PRICE_USDC',
+  '$1.00',
+);
+export const X_402_USDC_FACILITATOR = env.varOrUndefined(
+  'X_402_USDC_FACILITATOR',
+);
