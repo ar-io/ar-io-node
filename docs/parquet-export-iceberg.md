@@ -15,7 +15,7 @@ This document describes the enhanced Parquet export system for AR.IO Node that i
 ### Components
 
 1. **parquet-export-v2**: Enhanced bash script for exporting SQLite data to Parquet
-2. **generate-iceberg-metadata.py**: Python script for generating Apache Iceberg metadata
+2. **generate-iceberg-metadata**: Python script for generating minimal Apache Iceberg metadata for DuckDB
 3. **Warehouse Structure**: Standard Iceberg-compatible directory layout
 
 ### Directory Structure
@@ -84,9 +84,9 @@ If an export is interrupted:
 After export completes:
 
 ```bash
-python3 ./scripts/generate-iceberg-metadata.py \
-  --warehouse-dir data/local/warehouse \
-  --partition-size 1000
+./scripts/generate-iceberg-metadata \
+  --datasets-dir data/datasets/default \
+  --datasets-root http://localhost:4000/local/datasets/default
 ```
 
 ## Configuration Options
@@ -107,40 +107,45 @@ python3 ./scripts/generate-iceberg-metadata.py \
 | `--warehouseDir` | data/local/warehouse | Warehouse directory |
 | `--resume` | false | Resume from checkpoint |
 
-### generate-iceberg-metadata.py
+### generate-iceberg-metadata
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--warehouse-dir` | data/local/warehouse | Warehouse directory |
-| `--catalog-name` | ar-io-catalog | Iceberg catalog name |
-| `--namespace` | default | Table namespace |
-| `--partition-size` | 1000 | Expected partition size |
+| `--datasets-dir` | data/datasets/default | Datasets directory containing Parquet data |
+| `--datasets-root` | (optional) | Optional datasets root URI for HTTP access (e.g., http://localhost:4000/local/datasets/default) |
 
 ## Querying the Data
 
 ### DuckDB
 
 ```sql
--- Install Iceberg extension
+-- Install required extensions
+INSTALL httpfs;
+LOAD httpfs;
 INSTALL iceberg;
 LOAD iceberg;
 
--- Query blocks
-SELECT * FROM iceberg_scan('data/local/warehouse/blocks/metadata/metadata.json')
-WHERE height BETWEEN 1000000 AND 1001000;
+-- Query blocks (local)
+SELECT COUNT(*) FROM iceberg_scan('data/datasets/default/blocks');
+
+-- Query blocks (remote via HTTP)
+SELECT COUNT(*) FROM iceberg_scan('http://localhost:4000/local/datasets/default/blocks/metadata/v1.metadata.json');
 
 -- Aggregate transactions by height
 SELECT 
   height, 
   COUNT(*) as tx_count,
   SUM(data_size) as total_data_size
-FROM iceberg_scan('data/local/warehouse/transactions/metadata/metadata.json')
+FROM iceberg_scan('data/datasets/default/transactions')
 GROUP BY height
-ORDER BY height;
+ORDER BY height
+LIMIT 10;
 
 -- Find specific tags
-SELECT * FROM iceberg_scan('data/local/warehouse/tags/metadata/metadata.json')
-WHERE tag_name = 'App-Name' AND tag_value LIKE 'ArDrive%';
+SELECT * FROM iceberg_scan('data/datasets/default/tags')
+WHERE CAST(tag_name AS VARCHAR) = 'App-Name' 
+AND CAST(tag_value AS VARCHAR) LIKE 'ArDrive%'
+LIMIT 10;
 ```
 
 ### Apache Spark
@@ -160,15 +165,15 @@ df.filter(df.height.between(1000000, 1001000)).show()
 
 ### Iceberg Metadata Format
 
-The `generate-iceberg-metadata.py` script generates **JSON-formatted** Iceberg metadata files, not the standard Avro format used by production Iceberg. This approach:
+The `generate-iceberg-metadata` script generates **Avro-formatted** Iceberg metadata files with minimal overhead specifically for DuckDB compatibility. This approach:
 
-- ✅ **Works with**: DuckDB's Iceberg extension (which can read JSON manifests)
-- ✅ **Provides**: Human-readable metadata for debugging and inspection
-- ✅ **Demonstrates**: Iceberg table structure and partitioning concepts
-- ⚠️ **May not work with**: Some Iceberg tools that strictly require Avro format
-- ⚠️ **For production**: Consider using PyIceberg or Java Iceberg libraries for full compliance
+- ✅ **Works with**: DuckDB's Iceberg extension (production Avro format)
+- ✅ **Supports**: Both local file access and HTTP remote access
+- ✅ **Provides**: Lightweight metadata generation without full PyIceberg overhead
+- ✅ **Enables**: Remote analytics via HTTP with absolute URLs
+- ✅ **Production ready**: Standard Iceberg format compatible with most tools
 
-The JSON format includes all the necessary metadata structure (schemas, partitions, snapshots) but in a simplified, readable format rather than binary Avro.
+The metadata format includes all necessary Iceberg structures (schemas, partitions, snapshots, manifests) in standard Avro format with proper HTTP URL support for remote access.
 
 ## Key Features
 

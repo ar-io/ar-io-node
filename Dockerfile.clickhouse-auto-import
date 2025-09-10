@@ -45,7 +45,8 @@ RUN python3 -m venv /app/venv && \
         sqlalchemy \
         psycopg2-binary \
         pandas \
-        fsspec[http]
+        fsspec[http] \
+        fastavro
 
 # Create necessary directories
 WORKDIR /app
