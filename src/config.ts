@@ -927,6 +927,13 @@ export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
 export const ENABLE_MEMPOOL_WATCHER =
   env.varOrDefault('ENABLE_MEMPOOL_WATCHER', 'false') === 'true';
 
+//
+// Datasets endpoint
+//
+
+export const ENABLE_DATASETS_ENDPOINT =
+  env.varOrDefault('ENABLE_DATASETS_ENDPOINT', 'false') === 'true';
+
 export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
   'MEMPOOL_POLLING_INTERVAL_MS',
   '30000', // 30 seconds

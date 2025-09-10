@@ -167,7 +167,7 @@ def create_manifest_avro(parquet_files, datasets_root, warehouse_dir, manifest_f
     return len(manifest_entries), total_size
 
 
-def create_manifest_list_avro(manifest_path, file_count, total_size, manifest_list_path):
+def create_manifest_list_avro(manifest_path, file_count, total_size, manifest_list_path, table_location=None, datasets_root=None):
     """Create a manifest-list Avro file that points to the manifest"""
     
     # Iceberg manifest-list schema
@@ -194,7 +194,7 @@ def create_manifest_list_avro(manifest_path, file_count, total_size, manifest_li
     }
     
     manifest_list_entry = {
-        "manifest_path": f"metadata/{os.path.basename(manifest_path)}",
+        "manifest_path": f"{table_location}/metadata/{os.path.basename(manifest_path)}" if datasets_root else f"metadata/{os.path.basename(manifest_path)}",
         "manifest_length": os.path.getsize(manifest_path),
         "partition_spec_id": 0,
         "content": 0,  # DATA
@@ -224,7 +224,7 @@ def create_minimal_metadata(table_name, schema_fields, parquet_files, table_loca
     
     # Create manifest-list file
     manifest_list_path = os.path.join(metadata_dir, "snap-1-manifest-list.avro")
-    create_manifest_list_avro(manifest_file_path, file_count, total_size, manifest_list_path)
+    create_manifest_list_avro(manifest_file_path, file_count, total_size, manifest_list_path, table_location, datasets_root)
     
     # Create the metadata structure with snapshot
     metadata = {
@@ -274,7 +274,7 @@ def create_minimal_metadata(table_name, schema_fields, parquet_files, table_loca
                     "total-position-deletes": "0",
                     "total-equality-deletes": "0"
                 },
-                "manifest-list": "metadata/snap-1-manifest-list.avro"
+                "manifest-list": f"{table_location}/metadata/snap-1-manifest-list.avro" if datasets_root else "metadata/snap-1-manifest-list.avro"
             }
         ],
         "snapshot-log": [
