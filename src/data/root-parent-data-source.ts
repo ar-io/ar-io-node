@@ -78,7 +78,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
     let currentId = dataItemId;
     let totalOffset = 0;
-    let traversalPath: string[] = [];
+    const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
 
@@ -95,9 +95,8 @@ export class RootParentDataSource implements ContiguousDataSource {
       traversalPath.push(currentId);
 
       // Get attributes for current item
-      const attributes = await this.dataAttributesSource.getDataAttributes(
-        currentId,
-      );
+      const attributes =
+        await this.dataAttributesSource.getDataAttributes(currentId);
 
       if (!attributes) {
         log.debug('No attributes found for item, traversal incomplete', {
@@ -113,7 +112,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       }
 
       // If no parent, this is the root
-      if (!attributes.parentId || attributes.parentId === currentId) {
+      if (attributes.parentId == null || attributes.parentId === currentId) {
         log.debug('Found root transaction via attributes', {
           rootTxId: currentId,
           totalOffset,
@@ -192,7 +191,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       if (attributesTraversal) {
         const { rootTxId, totalOffset, size } = attributesTraversal;
-        
+
         this.log.debug('Successfully traversed using attributes', {
           id,
           rootTxId,
@@ -278,12 +277,15 @@ export class RootParentDataSource implements ContiguousDataSource {
             'data.size': data.size,
           });
 
-          this.log.debug('Successfully fetched data using attributes traversal', {
-            id,
-            rootTxId,
-            cached: data.cached,
-            size: data.size,
-          });
+          this.log.debug(
+            'Successfully fetched data using attributes traversal',
+            {
+              id,
+              rootTxId,
+              cached: data.cached,
+              size: data.size,
+            },
+          );
 
           return data;
         } finally {
@@ -305,9 +307,12 @@ export class RootParentDataSource implements ContiguousDataSource {
       }
 
       // Fall back to legacy traversal
-      this.log.debug('Attributes traversal failed, falling back to legacy method', {
-        id,
-      });
+      this.log.debug(
+        'Attributes traversal failed, falling back to legacy method',
+        {
+          id,
+        },
+      );
       span.addEvent('Falling back to legacy traversal');
       span.setAttributes({
         'traversal.method': 'legacy_fallback',
