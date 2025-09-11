@@ -76,19 +76,19 @@ describe('TurboDynamoDbDataSource', () => {
 
     it('should throw error when neither client nor region provided', () => {
       assert.throws(() => {
-        new TurboDynamoDbDataSource({ 
+        new TurboDynamoDbDataSource({
           dataAttributesSource: mockDataAttributesSource,
-          log 
+          log,
         });
       }, /TurboDynamoDbDataSource requires either a DynamoDBClient instance or region configuration/);
     });
 
     it('should throw error when region is empty string', () => {
       assert.throws(() => {
-        new TurboDynamoDbDataSource({ 
-          region: '', 
+        new TurboDynamoDbDataSource({
+          region: '',
           dataAttributesSource: mockDataAttributesSource,
-          log 
+          log,
         });
       }, /TurboDynamoDbDataSource requires either a DynamoDBClient instance or region configuration/);
     });
