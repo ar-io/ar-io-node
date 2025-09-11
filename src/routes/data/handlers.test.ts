@@ -16,6 +16,7 @@ import { release } from '../../version.js';
 import {
   ContiguousDataIndex,
   ContiguousDataSource,
+  DataAttributesSource,
   DataBlockListValidator,
   ManifestPathResolver,
 } from '../../types.js';
@@ -25,6 +26,7 @@ describe('Data routes', () => {
   describe('createDataHandler', () => {
     let app: express.Express;
     let dataIndex: ContiguousDataIndex;
+    let dataAttributesSource: DataAttributesSource;
     let dataSource: ContiguousDataSource;
     let dataBlockListValidator: DataBlockListValidator;
     let manifestPathResolver: ManifestPathResolver;
@@ -40,6 +42,9 @@ describe('Data routes', () => {
         getVerifiableDataIds: () => Promise.resolve([]),
         getRootTxId: () => Promise.resolve(undefined),
         saveVerificationStatus: () => Promise.resolve(undefined),
+      };
+      dataAttributesSource = {
+        getDataAttributes: () => Promise.resolve(undefined),
       };
       dataSource = {
         getData: (params?: any) => {
@@ -93,7 +98,7 @@ describe('Data routes', () => {
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -113,7 +118,7 @@ describe('Data routes', () => {
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -133,7 +138,7 @@ describe('Data routes', () => {
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -156,7 +161,7 @@ describe('Data routes', () => {
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -179,7 +184,7 @@ describe('Data routes', () => {
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -207,7 +212,7 @@ describe('Data routes', () => {
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -230,7 +235,7 @@ describe('Data routes', () => {
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -313,7 +318,7 @@ in
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -396,7 +401,7 @@ es
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -479,7 +484,7 @@ st
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -504,7 +509,7 @@ st
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -560,7 +565,7 @@ st
         '/:id',
         createDataHandler({
           log,
-          dataIndex,
+          dataAttributesSource,
           dataSource,
           dataBlockListValidator,
           manifestPathResolver,
@@ -579,7 +584,7 @@ st
     describe('Headers', () => {
       describe('X-AR-IO-Verified', () => {
         it("should return false when data isn't verified", async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -593,7 +598,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -610,7 +615,7 @@ st
         });
 
         it("should return false when data isn't verified AND cached", async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -646,7 +651,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -663,7 +668,7 @@ st
         });
 
         it('should return false when data is verified but not cached', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -677,7 +682,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -694,7 +699,7 @@ st
         });
 
         it('should return true when data is verified AND cached', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -730,7 +735,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -753,7 +758,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -771,7 +776,7 @@ st
         });
 
         it("shouldn't return digest/etag when hash is available AND data is not cached", async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'hash',
               size: 10,
@@ -786,7 +791,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -804,7 +809,7 @@ st
         });
 
         it('should return digest/etag when hash is available AND data is cached', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'hash',
               size: 10,
@@ -841,7 +846,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -863,7 +868,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -871,7 +876,7 @@ st
           );
 
           // Mock data with base64url hash
-          dataIndex.getDataAttributes = async () => ({
+          dataAttributesSource.getDataAttributes = async () => ({
             hash: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4',
             size: 100,
             contentType: 'text/plain',
@@ -915,7 +920,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -934,7 +939,7 @@ st
         });
 
         it('should return root transaction id for data items', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -949,7 +954,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -970,7 +975,7 @@ st
 
       describe('If-None-Match', () => {
         it('should return 304 for HEAD request when If-None-Match matches ETag', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1007,7 +1012,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1030,7 +1035,7 @@ st
         });
 
         it('should return 200 for HEAD request when If-None-Match does not match ETag', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1067,7 +1072,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1085,7 +1090,7 @@ st
         });
 
         it('should return 304 for GET request when If-None-Match matches ETag', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1122,7 +1127,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1146,7 +1151,7 @@ st
         });
 
         it('should return 200 for GET request when If-None-Match does not match ETag', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1183,7 +1188,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1202,7 +1207,7 @@ st
 
         it('should not return 304 when ETag is not set', async () => {
           // No hash means no ETag
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -1216,7 +1221,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1234,7 +1239,7 @@ st
         });
 
         it('should return 304 for range request when If-None-Match matches ETag', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1271,7 +1276,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1297,7 +1302,7 @@ st
 
       describe('X-AR-IO-Trusted header', () => {
         it('should set X-AR-IO-Trusted to true when data.trusted is true', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1335,7 +1340,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1352,7 +1357,7 @@ st
         });
 
         it('should set X-AR-IO-Trusted to false when data.trusted is false', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1390,7 +1395,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1407,7 +1412,7 @@ st
         });
 
         it('should set X-AR-IO-Trusted header correctly for HEAD requests', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1445,7 +1450,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1462,7 +1467,7 @@ st
         });
 
         it('should set X-AR-IO-Trusted header for non-cached data', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1500,7 +1505,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1518,7 +1523,7 @@ st
         });
 
         it('should set X-AR-IO-Trusted header for range requests', async () => {
-          dataIndex.getDataAttributes = () =>
+          dataAttributesSource.getDataAttributes = () =>
             Promise.resolve({
               hash: 'test-hash',
               size: 10,
@@ -1556,7 +1561,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1579,7 +1584,7 @@ st
           const resolvedId = 'resolved-manifest-path-id';
 
           // Mock the data attributes to indicate this is a manifest
-          mock.method(dataIndex, 'getDataAttributes', () =>
+          mock.method(dataAttributesSource, 'getDataAttributes', () =>
             Promise.resolve({
               size: 100,
               contentType: 'application/x.arweave-manifest+json',
@@ -1634,7 +1639,7 @@ st
             '/:id/*',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1650,7 +1655,7 @@ st
         });
 
         it('should set X-AR-IO-Data-Id header with data ID for direct data access', async () => {
-          mock.method(dataIndex, 'getDataAttributes', () =>
+          mock.method(dataAttributesSource, 'getDataAttributes', () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -1678,7 +1683,7 @@ st
             '/:id',
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,
@@ -1696,7 +1701,7 @@ st
         it('should set X-AR-IO-Data-Id header with ArNS resolved ID when ArNS resolution occurs', async () => {
           const arnsResolvedId = 'arns-resolved-data-id';
 
-          mock.method(dataIndex, 'getDataAttributes', () =>
+          mock.method(dataAttributesSource, 'getDataAttributes', () =>
             Promise.resolve({
               size: 10,
               contentType: 'application/octet-stream',
@@ -1730,7 +1735,7 @@ st
             },
             createDataHandler({
               log,
-              dataIndex,
+              dataAttributesSource,
               dataSource,
               dataBlockListValidator,
               manifestPathResolver,

@@ -19,6 +19,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
+  DataAttributesSource,
   RequestAttributes,
   ContiguousMetadata,
 } from '../types.js';
@@ -60,6 +61,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private metadataStore: KvJsonStore<ContiguousMetadata>;
   private dataStore: ContiguousDataStore;
   private contiguousDataIndex: ContiguousDataIndex;
+  private dataAttributesSource: DataAttributesSource;
   private dataContentAttributeImporter: DataContentAttributeImporter;
   private skipCache: boolean;
 
@@ -69,6 +71,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metadataStore,
     dataStore,
     contiguousDataIndex,
+    dataAttributesSource,
     dataContentAttributeImporter,
     skipCache = false,
   }: {
@@ -77,6 +80,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metadataStore: KvJsonStore<ContiguousMetadata>;
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
+    dataAttributesSource: DataAttributesSource;
     dataContentAttributeImporter: DataContentAttributeImporter;
     skipCache?: boolean;
   }) {
@@ -85,6 +89,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.metadataStore = metadataStore;
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
+    this.dataAttributesSource = dataAttributesSource;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
     this.skipCache = skipCache;
   }
@@ -288,7 +293,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // Get data attributes if not provided
       const attributes =
         dataAttributes ??
-        (await this.contiguousDataIndex.getDataAttributes(id));
+        (await this.dataAttributesSource.getDataAttributes(id));
 
       if (attributes) {
         span.setAttributes({
@@ -490,14 +495,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   }
                 } else {
                   span.addEvent('Skipping cache storage - hash mismatch', {
-                    'data.trusted_hash': dataAttributes?.hash,
+                    'data.trusted_hash': attributes?.hash,
                     'data.computed_hash': hash,
                   });
                   span.setAttribute('cache.operation.stored', false);
                   this.log.debug(
                     'Skipping caching of untrusted data with hash that does not match local hash',
                     {
-                      trustedHash: dataAttributes?.hash,
+                      trustedHash: attributes?.hash,
                       streamedHash: hash,
                     },
                   );

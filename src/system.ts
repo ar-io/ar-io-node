@@ -97,6 +97,7 @@ import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { FullChunkSource } from './data/full-chunk-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
+import { CompositeDataAttributesSource } from './data/composite-data-attributes-source.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -158,6 +159,11 @@ export const db = new StandaloneSqliteDatabase({
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
   tagSelectivity: config.TAG_SELECTIVITY,
+});
+
+export const dataAttributesSource = new CompositeDataAttributesSource({
+  log,
+  source: db,
 });
 
 // Create shared cache for root TX lookups
@@ -684,6 +690,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
+  dataAttributesSource,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
 });
@@ -697,6 +704,7 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
+  dataAttributesSource,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
 });
