@@ -22,7 +22,9 @@ import { SpanStatusCode, Span } from '@opentelemetry/api';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataSource,
+  ContiguousDataAttributesStore,
   Region,
   RequestAttributes,
 } from '../types.js';
@@ -150,6 +152,7 @@ function idToBinary(dataItemId: TransactionId): Uint8Array {
 export class TurboDynamoDbDataSource implements ContiguousDataSource {
   private dynamoClient: DynamoDBClient;
   private log: winston.Logger;
+  private dataAttributesSource: ContiguousDataAttributesStore;
   private circuitBreakerWrapper: {
     fire<T>(task: DynamoTask<T>): Promise<T>;
     breaker: CircuitBreaker<[DynamoTask<unknown>], unknown>;
@@ -162,6 +165,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     credentials,
     assumeRoleArn,
     log,
+    dataAttributesSource,
   }: {
     dynamoClient?: DynamoDBClient;
     endpoint?: string;
@@ -173,8 +177,10 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     };
     assumeRoleArn?: string;
     log: winston.Logger;
+    dataAttributesSource: ContiguousDataAttributesStore;
   }) {
     this.log = log.child({ class: this.constructor.name });
+    this.dataAttributesSource = dataAttributesSource;
 
     // If a client is provided, use it
     if (dynamoClient) {
@@ -330,6 +336,50 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           },
         );
 
+        // Cache attributes discovered from DynamoDB offsets
+        // Not awaiting to avoid blocking the response
+        const attributes: Partial<ContiguousDataAttributes> = {
+          size: payloadLength,
+          dataOffset: payloadDataStart,
+          contentType: payloadContentType,
+        };
+
+        // Handle parent relationships
+        if (offsetsInfo.parentInfo !== undefined) {
+          // Has direct parent
+          attributes.parentId = offsetsInfo.parentInfo.parentDataItemId;
+          attributes.offset = offsetsInfo.parentInfo.startOffsetInParentPayload;
+        } else if (offsetsInfo.rootParentInfo !== undefined) {
+          // No direct parent but has root - this means root IS the parent
+          attributes.rootTransactionId =
+            offsetsInfo.rootParentInfo.rootParentId;
+          attributes.parentId = offsetsInfo.rootParentInfo.rootParentId;
+          attributes.offset = offsetsInfo.rootParentInfo.startOffsetInRootTx;
+        } else {
+          // No parent info at all
+          attributes.offset = 0;
+        }
+
+        // Also set rootTransactionId if we have rootParentInfo and parentInfo
+        if (
+          offsetsInfo.rootParentInfo !== undefined &&
+          offsetsInfo.parentInfo !== undefined
+        ) {
+          attributes.rootTransactionId =
+            offsetsInfo.rootParentInfo.rootParentId;
+        }
+
+        // TODO: Clean up this type assertion - consider making setDataAttributes accept Partial<ContiguousDataAttributes>
+        // or ensure all required fields are set before calling
+        this.dataAttributesSource
+          .setDataAttributes(id, attributes as ContiguousDataAttributes)
+          .catch((error) => {
+            this.log.warn('Failed to cache attributes from DynamoDB offsets', {
+              id,
+              error: error.message,
+            });
+          });
+
         const requestAttributesHeaders =
           generateRequestAttributes(requestAttributes);
 
@@ -366,6 +416,22 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         this.log.debug(`Turbo DynamoDB: Found raw data for ${id}`, {
           payloadInfo: dataItem.info,
         });
+
+        // Cache attributes discovered from raw data item
+        // Not awaiting to avoid blocking the response
+        this.dataAttributesSource
+          .setDataAttributes(id, {
+            size: dataItem.buffer.length - dataItem.info.payloadDataStart,
+            dataOffset: dataItem.info.payloadDataStart,
+            contentType: dataItem.info.payloadContentType,
+            offset: 0, // Required field for raw data items
+          })
+          .catch((error) => {
+            this.log.warn('Failed to cache attributes from DynamoDB raw data', {
+              id,
+              error: error.message,
+            });
+          });
 
         const result = this.getDataStreamFromRawBuffer({
           buffer: dataItem.buffer,
