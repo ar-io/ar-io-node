@@ -9,7 +9,6 @@ import { Span } from '@opentelemetry/api';
 
 import {
   ContiguousData,
-  ContiguousDataAttributes,
   ContiguousDataSource,
   DataItemRootTxIndex,
   Region,
@@ -54,13 +53,11 @@ export class RootParentDataSource implements ContiguousDataSource {
 
   async getData({
     id,
-    dataAttributes,
     requestAttributes,
     region,
     parentSpan,
   }: {
     id: string;
-    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
@@ -70,7 +67,6 @@ export class RootParentDataSource implements ContiguousDataSource {
       {
         attributes: {
           'data.id': id,
-          'data.has_attributes': dataAttributes !== undefined,
           'data.has_region': region !== undefined,
           'data.region.offset': region?.offset,
           'data.region.size': region?.size,
@@ -128,7 +124,6 @@ export class RootParentDataSource implements ContiguousDataSource {
         try {
           return await this.dataSource.getData({
             id,
-            dataAttributes,
             requestAttributes,
             region,
             parentSpan: span,
@@ -252,7 +247,6 @@ export class RootParentDataSource implements ContiguousDataSource {
       try {
         const data = await this.dataSource.getData({
           id: rootTxId,
-          dataAttributes,
           requestAttributes,
           region: finalRegion,
           parentSpan: fetchSpan,

@@ -10,8 +10,8 @@ import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
 
 import {
   ContiguousData,
-  ContiguousDataAttributes,
   ContiguousDataSource,
+  DataAttributesSource,
   Region,
   RequestAttributes,
 } from '../types.js';
@@ -36,16 +36,19 @@ export class ArIODataSource implements ContiguousDataSource {
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
   private peerManager: ArIOPeerManager;
+  private dataAttributesSource: DataAttributesSource;
   peers: Record<string, string> = {};
 
   constructor({
     log,
     peerManager,
+    dataAttributesSource,
     maxHopsAllowed = MAX_DATA_HOPS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     peerManager: ArIOPeerManager;
+    dataAttributesSource: DataAttributesSource;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
   }) {
@@ -53,6 +56,7 @@ export class ArIODataSource implements ContiguousDataSource {
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
     this.peerManager = peerManager;
+    this.dataAttributesSource = dataAttributesSource;
     this.peers = peerManager.getPeers();
   }
 
@@ -124,14 +128,12 @@ export class ArIODataSource implements ContiguousDataSource {
 
   async getData({
     id,
-    dataAttributes,
     requestAttributes,
     region,
     retryCount,
     parentSpan,
   }: {
     id: string;
-    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
     retryCount?: number;
@@ -142,7 +144,6 @@ export class ArIODataSource implements ContiguousDataSource {
       {
         attributes: {
           'data.id': id,
-          'data.has_attributes': dataAttributes !== undefined,
           'data.region.has_region': region !== undefined,
           'data.region.offset': region?.offset,
           'data.region.size': region?.size,
@@ -185,6 +186,10 @@ export class ArIODataSource implements ContiguousDataSource {
 
       const requestAttributesHeaders =
         generateRequestAttributes(requestAttributes);
+
+      // Get data attributes if available
+      const dataAttributes =
+        await this.dataAttributesSource.getDataAttributes(id);
 
       for (let i = 0; i < randomPeers.length; i++) {
         const currentPeer = randomPeers[i];
