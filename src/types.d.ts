@@ -553,6 +553,7 @@ export interface ContiguousDataAttributes {
   dataRoot?: string;
   size: number;
   offset: number;
+  parentId?: string;
   contentEncoding?: string;
   contentType?: string;
   rootTransactionId?: string;
@@ -594,6 +595,13 @@ export interface ContiguousDataParent {
 
 export interface DataAttributesSource {
   getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
+}
+
+export interface ContiguousDataAttributesStore extends DataAttributesSource {
+  setDataAttributes(
+    id: string,
+    attributes: Partial<ContiguousDataAttributes>,
+  ): Promise<void>;
 }
 
 export interface ContiguousDataIndex {

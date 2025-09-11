@@ -11,7 +11,7 @@ import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
 import {
   ContiguousData,
   ContiguousDataSource,
-  DataAttributesSource,
+  ContiguousDataAttributesStore,
   Region,
   RequestAttributes,
 } from '../types.js';
@@ -36,7 +36,7 @@ export class ArIODataSource implements ContiguousDataSource {
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
   private peerManager: ArIOPeerManager;
-  private dataAttributesSource: DataAttributesSource;
+  private dataAttributesSource: ContiguousDataAttributesStore;
   peers: Record<string, string> = {};
 
   constructor({
@@ -48,7 +48,7 @@ export class ArIODataSource implements ContiguousDataSource {
   }: {
     log: winston.Logger;
     peerManager: ArIOPeerManager;
-    dataAttributesSource: DataAttributesSource;
+    dataAttributesSource: ContiguousDataAttributesStore;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
   }) {
@@ -242,6 +242,7 @@ export class ArIODataSource implements ContiguousDataSource {
           });
 
           return this.parseResponse({
+            id,
             response,
             requestAttributes: parsedRequestAttributes,
             requestStartTime,
@@ -279,6 +280,7 @@ export class ArIODataSource implements ContiguousDataSource {
   }
 
   private parseResponse({
+    id,
     response,
     requestAttributes,
     requestStartTime,
@@ -286,6 +288,7 @@ export class ArIODataSource implements ContiguousDataSource {
     ttfb,
     expectedHash,
   }: {
+    id: string;
     response: AxiosResponse;
     requestAttributes: RequestAttributes;
     requestStartTime: number;
@@ -332,6 +335,27 @@ export class ArIODataSource implements ContiguousDataSource {
       const kbps = contentLength / downloadTimeSeconds / 1024;
       this.handlePeerSuccess(peer, kbps, ttfb);
     });
+
+    // Cache attributes discovered from peer headers
+    const peerDigest = response.headers[headerNames.digest.toLowerCase()];
+    if (peerDigest) {
+      // Save/merge the attributes we discovered from the peer
+      // Not awaiting to avoid blocking the response
+      this.dataAttributesSource
+        .setDataAttributes(id, {
+          hash: peerDigest, // Already base64url encoded
+          size: contentLength,
+          contentType: response.headers['content-type'],
+          offset: 0, // Required field, using 0 as default
+        })
+        .catch((error) => {
+          this.log.warn('Failed to cache attributes from peer', {
+            id,
+            peer,
+            error: error.message,
+          });
+        });
+    }
 
     return {
       stream,

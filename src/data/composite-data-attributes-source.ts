@@ -7,11 +7,17 @@
 import { LRUCache } from 'lru-cache';
 import winston from 'winston';
 
-import { ContiguousDataAttributes, DataAttributesSource } from '../types.js';
+import {
+  ContiguousDataAttributes,
+  ContiguousDataAttributesStore,
+  DataAttributesSource,
+} from '../types.js';
 
 const DEFAULT_MAX_CACHE_SIZE = 10000;
 
-export class CompositeDataAttributesSource implements DataAttributesSource {
+export class CompositeDataAttributesSource
+  implements ContiguousDataAttributesStore
+{
   private log: winston.Logger;
   private source: DataAttributesSource;
   private cache: LRUCache<string, ContiguousDataAttributes>;
@@ -92,5 +98,18 @@ export class CompositeDataAttributesSource implements DataAttributesSource {
       });
       throw error;
     }
+  }
+
+  async setDataAttributes(
+    id: string,
+    attributes: Partial<ContiguousDataAttributes>,
+  ): Promise<void> {
+    this.log.debug('Setting data attributes in cache', { id });
+    const existingAttributes = this.cache.get(id);
+    const mergedAttributes = existingAttributes
+      ? { ...existingAttributes, ...attributes }
+      : attributes;
+    // TODO: Clean up type assertion - cache should handle partial attributes properly
+    this.cache.set(id, mergedAttributes as ContiguousDataAttributes);
   }
 }
