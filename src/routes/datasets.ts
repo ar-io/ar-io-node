@@ -28,7 +28,7 @@ if (config.ENABLE_DATASETS_ENDPOINT) {
   // FIXME: serve-index types have conflicts with express types, similar to swagger-ui-express issue
   datasetsRouter.use(
     '/local/datasets',
-    // @ts-ignore
+    // @ts-expect-error - serve-index types conflict with express types
     serveIndex(DATASETS_PATH, {
       icons: true,
       view: 'details',
