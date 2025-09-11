@@ -15,7 +15,6 @@ import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { KvJsonStore } from '../store/kv-attributes-store.js';
 import {
   ContiguousData,
-  ContiguousDataAttributes,
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
@@ -255,13 +254,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
   async getData({
     id,
-    dataAttributes,
     requestAttributes,
     region,
     parentSpan,
   }: {
     id: string;
-    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: {
       offset: number;
@@ -274,7 +271,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       {
         attributes: {
           'data.id': id,
-          'data.has_attributes': dataAttributes !== undefined,
           'data.has_region': region !== undefined,
           'data.region_offset': region?.offset,
           'data.region_size': region?.size,
@@ -290,10 +286,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     });
 
     try {
-      // Get data attributes if not provided
-      const attributes =
-        dataAttributes ??
-        (await this.dataAttributesSource.getDataAttributes(id));
+      // Get data attributes
+      const attributes = await this.dataAttributesSource.getDataAttributes(id);
 
       if (attributes) {
         span.setAttributes({
@@ -382,7 +376,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       const upstreamStart = Date.now();
       const data = await this.dataSource.getData({
         id,
-        dataAttributes,
         requestAttributes,
         region,
         parentSpan: span,
@@ -409,7 +402,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // relationships in the DB, and when data size is zero to avoid unnecessary
       // storage operations and indexing.
       if (
-        (data.trusted === true || dataAttributes?.hash !== undefined) &&
+        (data.trusted === true || attributes?.hash !== undefined) &&
         region === undefined &&
         data.size > 0
       ) {
@@ -454,10 +447,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     receivedSize: bytesReceived,
                   });
                   await this.dataStore.cleanup(cacheStream);
-                } else if (
-                  data.trusted === true ||
-                  dataAttributes?.hash === hash
-                ) {
+                } else if (data.trusted === true || attributes?.hash === hash) {
                   await this.dataStore.finalize(cacheStream, hash);
                   span.addEvent('Data cached successfully', {
                     'cache.duration_ms': cachingDuration,
@@ -529,7 +519,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       } else {
         // Log why caching was skipped
         const reasons = [];
-        if (data.trusted !== true && dataAttributes?.hash === undefined) {
+        if (data.trusted !== true && attributes?.hash === undefined) {
           reasons.push('untrusted data without local hash');
         }
         if (region !== undefined) {
@@ -545,7 +535,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
             reasons: reasons.join(', '),
             dataSize: data.size,
             trusted: data.trusted,
-            hasLocalHash: dataAttributes?.hash !== undefined,
+            hasLocalHash: attributes?.hash !== undefined,
             hasRegion: region !== undefined,
           });
         }

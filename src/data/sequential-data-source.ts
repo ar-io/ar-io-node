@@ -8,7 +8,6 @@ import winston from 'winston';
 
 import {
   ContiguousData,
-  ContiguousDataAttributes,
   ContiguousDataSource,
   Region,
   RequestAttributes,
@@ -33,13 +32,11 @@ export class SequentialDataSource implements ContiguousDataSource {
 
   async getData({
     id,
-    dataAttributes,
     requestAttributes,
     region,
     parentSpan,
   }: {
     id: string;
-    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
@@ -49,7 +46,6 @@ export class SequentialDataSource implements ContiguousDataSource {
       {
         attributes: {
           'data.id': id,
-          'data.has_attributes': dataAttributes !== undefined,
           'data.has_region': region !== undefined,
           'data.region.offset': region?.offset,
           'data.region.size': region?.size,
@@ -95,7 +91,6 @@ export class SequentialDataSource implements ContiguousDataSource {
         try {
           const data = await dataSource.getData({
             id,
-            dataAttributes,
             requestAttributes,
             region,
             parentSpan: sourceSpan,

@@ -11,7 +11,10 @@ import winston from 'winston';
 
 import { RootParentDataSource } from './root-parent-data-source.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
-import { ContiguousDataSource, DataItemRootTxIndex } from '../types.js';
+import {
+  ContiguousDataSource,
+  DataItemRootTxIndex,
+} from '../types.js';
 
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
@@ -377,17 +380,10 @@ describe('RootParentDataSource', () => {
       assert.strictEqual((dataSource.getData as any).mock.calls.length, 1);
     });
 
-    it('should pass through dataAttributes and requestAttributes', async () => {
+    it('should pass through requestAttributes to underlying data source', async () => {
       const dataItemId = 'test-data-item-id';
       const rootTxId = 'root-tx-id';
       const dataStream = Readable.from([Buffer.from('test data')]);
-
-      const dataAttributes = {
-        hash: 'test-hash',
-        dataRoot: 'test-root',
-        size: 500,
-        offset: 0,
-      };
 
       const requestAttributes = {
         arnsName: 'test-name',
@@ -412,18 +408,18 @@ describe('RootParentDataSource', () => {
 
       await rootParentDataSource.getData({
         id: dataItemId,
-        dataAttributes,
         requestAttributes,
       });
 
-      // Verify attributes were passed through
+      // Verify requestAttributes were passed through (but not dataAttributes, as they are now handled internally)
       const dataSourceCall = (dataSource.getData as any).mock.calls[0]
         .arguments[0];
-      assert.deepStrictEqual(dataSourceCall.dataAttributes, dataAttributes);
       assert.deepStrictEqual(
         dataSourceCall.requestAttributes,
         requestAttributes,
       );
+      // dataAttributes should not be passed since they are now handled by DataAttributesSource
+      assert.strictEqual(dataSourceCall.dataAttributes, undefined);
     });
   });
 });
