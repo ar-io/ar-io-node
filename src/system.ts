@@ -483,6 +483,7 @@ export const arIOPeerManager = new ArIOPeerManager({
 export const arIODataSource = new ArIODataSource({
   log,
   peerManager: arIOPeerManager,
+  dataAttributesSource,
 });
 
 export const arIOChunkSource = new ArIOChunkSource({

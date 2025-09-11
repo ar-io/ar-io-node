@@ -7,7 +7,6 @@
 import {
   ContiguousDataSource,
   ContiguousDataIndex,
-  ContiguousDataAttributes,
   ChainSource,
   TransactionAttributesStore,
   DataItemAttributesStore,
@@ -63,9 +62,6 @@ export abstract class AttributeFetchers {
 
     const { stream } = await this.dataSource.getData({
       id: parentId,
-      dataAttributes: {
-        size,
-      } as ContiguousDataAttributes,
       region: {
         offset,
         size,

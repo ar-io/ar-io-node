@@ -306,7 +306,6 @@ const handleRangeRequest = async ({
 
       const rangeData = await dataSource.getData({
         id,
-        dataAttributes,
         requestAttributes,
         region: {
           offset: start,
@@ -389,7 +388,6 @@ const handleRangeRequest = async ({
 
         const rangeData = await dataSource.getData({
           id,
-          dataAttributes,
           requestAttributes,
           region: {
             offset: start,
@@ -566,7 +564,6 @@ export const createRawDataHandler = ({
       try {
         data = await dataSource.getData({
           id,
-          dataAttributes,
           requestAttributes,
           parentSpan: span,
         });
@@ -712,7 +709,6 @@ const sendManifestResponse = async ({
     try {
       data = await dataSource.getData({
         id: resolvedId,
-        dataAttributes,
         requestAttributes,
         parentSpan,
       });
@@ -978,7 +974,6 @@ export const createDataHandler = ({
       try {
         data = await dataSource.getData({
           id,
-          dataAttributes,
           requestAttributes,
           parentSpan: span,
         });
