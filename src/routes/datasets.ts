@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
 import express from 'express';
 import serveIndex from 'serve-index';
 import path from 'node:path';
@@ -25,8 +25,10 @@ if (config.ENABLE_DATASETS_ENDPOINT) {
   log.info('Datasets endpoint enabled', { path: DATASETS_PATH });
 
   // Serve directory browser
+  // FIXME: serve-index types have conflicts with express types, similar to swagger-ui-express issue
   datasetsRouter.use(
     '/local/datasets',
+    // @ts-ignore
     serveIndex(DATASETS_PATH, {
       icons: true,
       view: 'details',
