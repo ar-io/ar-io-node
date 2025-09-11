@@ -232,4 +232,75 @@ describe('CompositeDataAttributesSource', () => {
       assert.strictEqual(source.callCount, 2);
     });
   });
+
+  describe('setDataAttributes', () => {
+    it('should cache new attributes', async () => {
+      const source = new MockDataAttributesSource('source1');
+      const composite = new CompositeDataAttributesSource({ log, source });
+
+      // Set attributes directly in cache
+      await composite.setDataAttributes('test-id', TEST_DATA_ATTRIBUTES);
+
+      // Get should return cached data without hitting source
+      const result = await composite.getDataAttributes('test-id');
+
+      assert.deepStrictEqual(result, TEST_DATA_ATTRIBUTES);
+      assert.strictEqual(source.callCount, 0); // Should not hit source
+    });
+
+    it('should merge with existing cached attributes', async () => {
+      const source = new MockDataAttributesSource('source1');
+      const composite = new CompositeDataAttributesSource({ log, source });
+
+      // First set some attributes
+      await composite.setDataAttributes('test-id', {
+        ...TEST_DATA_ATTRIBUTES,
+        hash: 'original-hash',
+        contentType: 'text/plain',
+      });
+
+      // Then merge with new attributes
+      await composite.setDataAttributes('test-id', {
+        hash: 'updated-hash',
+        size: 2048,
+        offset: 100,
+        parentId: 'parent-123',
+      });
+
+      // Get should return merged attributes
+      const result = await composite.getDataAttributes('test-id');
+
+      assert.strictEqual(result?.hash, 'updated-hash'); // Updated
+      assert.strictEqual(result?.size, 2048); // Updated
+      assert.strictEqual(result?.offset, 100); // Updated
+      assert.strictEqual(result?.parentId, 'parent-123'); // New
+      assert.strictEqual(result?.contentType, 'text/plain'); // Preserved
+      assert.strictEqual(result?.dataRoot, TEST_DATA_ATTRIBUTES.dataRoot); // Preserved
+      assert.strictEqual(source.callCount, 0); // Should not hit source
+    });
+
+    it('should replace cached data from source on set', async () => {
+      const source = new MockDataAttributesSource('source1');
+      source.setData('test-id', TEST_DATA_ATTRIBUTES);
+      const composite = new CompositeDataAttributesSource({ log, source });
+
+      // First get from source to populate cache
+      const result1 = await composite.getDataAttributes('test-id');
+      assert.strictEqual(result1?.hash, 'source1-test-hash');
+      assert.strictEqual(source.callCount, 1);
+
+      // Set new attributes - should merge with cached data
+      await composite.setDataAttributes('test-id', {
+        hash: 'manual-hash',
+        parentId: 'parent-456',
+      });
+
+      // Get should return merged data from cache
+      const result2 = await composite.getDataAttributes('test-id');
+      assert.strictEqual(result2?.hash, 'manual-hash'); // Overwritten
+      assert.strictEqual(result2?.parentId, 'parent-456'); // New
+      assert.strictEqual(result2?.size, TEST_DATA_ATTRIBUTES.size); // Preserved
+      assert.strictEqual(source.callCount, 1); // No additional source calls
+    });
+  });
 });

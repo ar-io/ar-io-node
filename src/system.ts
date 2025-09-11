@@ -98,6 +98,7 @@ import { FullChunkSource } from './data/full-chunk-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 import { CompositeDataAttributesSource } from './data/composite-data-attributes-source.js';
+import { ContiguousDataAttributesStore } from './types.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -161,10 +162,11 @@ export const db = new StandaloneSqliteDatabase({
   tagSelectivity: config.TAG_SELECTIVITY,
 });
 
-export const dataAttributesSource = new CompositeDataAttributesSource({
-  log,
-  source: db,
-});
+export const dataAttributesSource: ContiguousDataAttributesStore =
+  new CompositeDataAttributesSource({
+    log,
+    source: db,
+  });
 
 // Create shared cache for root TX lookups
 // LRUCache v11 requires values to be objects, not primitives with undefined
@@ -582,6 +584,7 @@ const turboDynamoDBDataSource =
         region: config.AWS_DYNAMODB_TURBO_REGION,
         endpoint: config.AWS_DYNAMODB_TURBO_ENDPOINT,
         assumeRoleArn: config.AWS_DYNAMODB_TURBO_ASSUME_ROLE_ARN,
+        dataAttributesSource,
       })
     : undefined;
 

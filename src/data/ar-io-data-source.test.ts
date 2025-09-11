@@ -10,7 +10,7 @@ import * as winston from 'winston';
 import axios from 'axios';
 import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
-import { RequestAttributes, DataAttributesSource } from '../types.js';
+import { RequestAttributes, ContiguousDataAttributesStore } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
 import { ArIOPeerManager } from './ar-io-peer-manager.js';
 import * as metrics from '../metrics.js';
@@ -25,7 +25,7 @@ const nodeUrl = 'localNode.com';
 let requestAttributes: RequestAttributes;
 let mockedArIOInstance: AoARIORead;
 let mockedAxiosGet: any;
-let mockDataAttributesSource: DataAttributesSource;
+let mockDataAttributesSource: ContiguousDataAttributesStore;
 
 before(async () => {
   log = winston.createLogger({ silent: true });
@@ -34,6 +34,7 @@ before(async () => {
 beforeEach(async () => {
   mockDataAttributesSource = {
     getDataAttributes: mock.fn(() => Promise.resolve(undefined)),
+    setDataAttributes: mock.fn(() => Promise.resolve()),
   };
 
   mockedArIOInstance = {
