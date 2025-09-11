@@ -44,7 +44,6 @@ if (config.ENABLE_DATASETS_ENDPOINT) {
       setHeaders: (res) => {
         // Security headers
         res.set('X-Content-Type-Options', 'nosniff');
-        res.set('X-Frame-Options', 'DENY');
         res.set('Cache-Control', 'public, max-age=3600');
       },
     }),
