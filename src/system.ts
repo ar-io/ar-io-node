@@ -537,8 +537,10 @@ const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
 const txChunksDataItemSource = new RootParentDataSource({
   log,
   dataSource: baseTxChunksDataSource,
+  dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource,
+  fallbackToLegacyTraversal: config.ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK,
 });
 
 const s3DataSource =

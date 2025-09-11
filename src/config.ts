@@ -398,6 +398,10 @@ export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
   env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'true') === 'true';
 
+// Whether to fallback to legacy root traversal when attributes are incomplete
+export const ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK =
+  env.varOrDefault('ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK', 'true') === 'true';
+
 export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
   '600', // 10 minutes
