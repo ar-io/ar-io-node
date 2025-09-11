@@ -530,6 +530,7 @@ export interface ChunkBroadcaster {
   }): Promise<BroadcastChunkResult>;
 }
 
+// TODO: optionally include contiguous data attributes
 export interface ContiguousData {
   hash?: string;
   stream: Readable;
@@ -589,6 +590,10 @@ export interface ContiguousDataParent {
   parentHash?: string;
   offset: number;
   size: number;
+}
+
+export interface DataAttributesSource {
+  getDataAttributes(id: string): Promise<ContiguousDataAttributes | undefined>;
 }
 
 export interface ContiguousDataIndex {

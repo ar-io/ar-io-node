@@ -19,6 +19,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
+  DataAttributesSource,
   RequestAttributes,
   ContiguousMetadata,
 } from '../types.js';
@@ -60,6 +61,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private metadataStore: KvJsonStore<ContiguousMetadata>;
   private dataStore: ContiguousDataStore;
   private contiguousDataIndex: ContiguousDataIndex;
+  private dataAttributesSource: DataAttributesSource;
   private dataContentAttributeImporter: DataContentAttributeImporter;
   private skipCache: boolean;
 
@@ -69,6 +71,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metadataStore,
     dataStore,
     contiguousDataIndex,
+    dataAttributesSource,
     dataContentAttributeImporter,
     skipCache = false,
   }: {
@@ -77,6 +80,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metadataStore: KvJsonStore<ContiguousMetadata>;
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
+    dataAttributesSource: DataAttributesSource;
     dataContentAttributeImporter: DataContentAttributeImporter;
     skipCache?: boolean;
   }) {
@@ -85,6 +89,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.metadataStore = metadataStore;
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
+    this.dataAttributesSource = dataAttributesSource;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
     this.skipCache = skipCache;
   }
@@ -288,7 +293,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // Get data attributes if not provided
       const attributes =
         dataAttributes ??
-        (await this.contiguousDataIndex.getDataAttributes(id));
+        (await this.dataAttributesSource.getDataAttributes(id));
 
       if (attributes) {
         span.setAttributes({
@@ -408,6 +413,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       ) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
+
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
@@ -434,6 +440,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 // Only finalize (cache locally) when we trust the source or
                 // the computed hash matches an existing hash computed from a
                 // trusted source.
+                // TODO: perhaps we should only care about the hash match when the data is either trusted or verified in the first place
                 if (data.trusted === true || dataAttributes?.hash === hash) {
                   await this.dataStore.finalize(cacheStream, hash);
                   span.addEvent('Data cached successfully', {
@@ -474,7 +481,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   this.calculateVerificationPriority(requestAttributes);
 
                 // Only update hashes when we trust the data source
+                // TODO: it's probably fine to queue hashes for things that aren't already verified
                 if (data.trusted === true) {
+                  // TODO: queue offsets for indexing too
                   this.dataContentAttributeImporter.queueDataContentAttributes({
                     id,
                     dataRoot: attributes?.dataRoot,
