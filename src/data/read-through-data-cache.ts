@@ -442,6 +442,34 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     'data.trusted': data.trusted,
                   });
                   span.setAttribute('cache.operation.stored', true);
+
+                  this.log.info('Successfully cached data', { id, hash });
+                  try {
+                    const verificationPriority =
+                      this.calculateVerificationPriority(requestAttributes);
+
+                    // Only update hashes when we trust the data source
+                    if (data.trusted === true) {
+                      this.dataContentAttributeImporter.queueDataContentAttributes(
+                        {
+                          id,
+                          dataRoot: attributes?.dataRoot,
+                          hash,
+                          dataSize: data.size,
+                          contentType: data.sourceContentType,
+                          cachedAt: currentUnixTimestamp(),
+                          verified: data.verified,
+                          verificationPriority,
+                        },
+                      );
+                    }
+                  } catch (error: any) {
+                    this.log.error('Error saving data content attributes:', {
+                      id,
+                      message: error.message,
+                      stack: error.stack,
+                    });
+                  }
                 } else {
                   span.addEvent('Skipping cache storage - hash mismatch', {
                     'data.trusted_hash': dataAttributes?.hash,
@@ -462,32 +490,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   'error.message': error.message,
                 });
                 this.log.error('Error finalizing data in cache:', {
-                  id,
-                  message: error.message,
-                  stack: error.stack,
-                });
-              }
-
-              this.log.info('Successfully cached data', { id, hash });
-              try {
-                const verificationPriority =
-                  this.calculateVerificationPriority(requestAttributes);
-
-                // Only update hashes when we trust the data source
-                if (data.trusted === true) {
-                  this.dataContentAttributeImporter.queueDataContentAttributes({
-                    id,
-                    dataRoot: attributes?.dataRoot,
-                    hash,
-                    dataSize: data.size,
-                    contentType: data.sourceContentType,
-                    cachedAt: currentUnixTimestamp(),
-                    verified: data.verified,
-                    verificationPriority,
-                  });
-                }
-              } catch (error: any) {
-                this.log.error('Error saving data content attributes:', {
                   id,
                   message: error.message,
                   stack: error.stack,
