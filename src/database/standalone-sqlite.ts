@@ -47,6 +47,7 @@ import {
   ChainOffsetIndex,
   ContiguousDataAttributes,
   ContiguousDataIndex,
+  DataAttributesSource,
   ContiguousDataParent,
   DataItemAttributes,
   DataItemRootTxIndex,
@@ -2738,6 +2739,7 @@ export class StandaloneSqliteDatabase
     ChainIndex,
     ChainOffsetIndex,
     ContiguousDataIndex,
+    DataAttributesSource,
     DataItemRootTxIndex,
     GqlQueryable,
     NestedDataIndexWriter

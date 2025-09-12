@@ -10,7 +10,7 @@ import * as winston from 'winston';
 import axios from 'axios';
 import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
-import { RequestAttributes } from '../types.js';
+import { RequestAttributes, ContiguousDataAttributesStore } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
 import { ArIOPeerManager } from './ar-io-peer-manager.js';
 import * as metrics from '../metrics.js';
@@ -25,12 +25,18 @@ const nodeUrl = 'localNode.com';
 let requestAttributes: RequestAttributes;
 let mockedArIOInstance: AoARIORead;
 let mockedAxiosGet: any;
+let mockDataAttributesSource: ContiguousDataAttributesStore;
 
 before(async () => {
   log = winston.createLogger({ silent: true });
 });
 
 beforeEach(async () => {
+  mockDataAttributesSource = {
+    getDataAttributes: mock.fn(() => Promise.resolve(undefined)),
+    setDataAttributes: mock.fn(() => Promise.resolve()),
+  };
+
   mockedArIOInstance = {
     getGateways: async () => ({
       items: [
@@ -88,6 +94,7 @@ beforeEach(async () => {
   dataSource = new ArIODataSource({
     log,
     peerManager,
+    dataAttributesSource: mockDataAttributesSource,
   });
 
   requestAttributes = { origin: 'node-url', hops: 0 };
@@ -467,6 +474,19 @@ describe('ArIODataSource', () => {
         const expectedHash = 'test-hash-123';
         const streamData = Readable.from(['valid data']);
 
+        // Mock data attributes source to return expected hash
+        mockDataAttributesSource.getDataAttributes = mock.fn(() =>
+          Promise.resolve({
+            hash: expectedHash,
+            size: 10,
+            isManifest: false,
+            stable: true,
+            verified: true,
+            offset: 0,
+            signature: null,
+          }),
+        );
+
         mock.method(axios, 'get', async (url, config) => {
           // Verify expected digest header is sent
           assert.equal(
@@ -488,15 +508,6 @@ describe('ArIODataSource', () => {
 
         const data = await dataSource.getData({
           id: 'dataId',
-          dataAttributes: {
-            hash: expectedHash,
-            size: 10,
-            isManifest: false,
-            stable: true,
-            verified: true,
-            offset: 0,
-            signature: null,
-          },
         });
 
         assert.deepEqual(data, {
@@ -519,6 +530,19 @@ describe('ArIODataSource', () => {
         const wrongHash = 'wrong-hash-456';
         const streamData = Readable.from(['invalid data']);
 
+        // Mock data attributes source to return expected hash
+        mockDataAttributesSource.getDataAttributes = mock.fn(() =>
+          Promise.resolve({
+            hash: expectedHash,
+            size: 10,
+            isManifest: false,
+            stable: true,
+            verified: true,
+            offset: 0,
+            signature: null,
+          }),
+        );
+
         mock.method(axios, 'get', async () => ({
           status: 200,
           data: streamData,
@@ -533,15 +557,6 @@ describe('ArIODataSource', () => {
         await assert.rejects(
           dataSource.getData({
             id: 'dataId',
-            dataAttributes: {
-              hash: expectedHash,
-              size: 10,
-              isManifest: false,
-              stable: true,
-              verified: true,
-              offset: 0,
-              signature: null,
-            },
           }),
           {
             message: 'Failed to fetch contiguous data from ArIO peers',
