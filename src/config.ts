@@ -1005,6 +1005,10 @@ export const LEGACY_AWS_S3_CHUNK_DATA_PREFIX = env.varOrUndefined(
 // Whether or not to bypass the header cache
 export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
 
+// Whether or not to bypass the data cache (read-through data cache)
+export const SKIP_DATA_CACHE =
+  env.varOrDefault('SKIP_DATA_CACHE', 'false') === 'true';
+
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
   'SIMULATED_REQUEST_FAILURE_RATE',

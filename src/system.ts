@@ -685,6 +685,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   dataStore: contiguousDataStore,
   contiguousDataIndex,
   dataContentAttributeImporter,
+  skipCache: config.SKIP_DATA_CACHE,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
@@ -697,6 +698,7 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   dataStore: contiguousDataStore,
   contiguousDataIndex,
   dataContentAttributeImporter,
+  skipCache: config.SKIP_DATA_CACHE,
 });
 
 export const dataItemIndexer = new DataItemIndexer({

@@ -597,4 +597,77 @@ describe('ReadThroughDataCache', function () {
       );
     });
   });
+
+  describe('skipCache', () => {
+    it('should skip cache retrieval when skipCache is enabled', async () => {
+      const skipCacheInstance = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        skipCache: true,
+      });
+
+      // Mock the getCacheData method to ensure it returns undefined when skipCache is true
+      const result = await skipCacheInstance.getCacheData(
+        'test-id',
+        'test-hash',
+        100,
+      );
+
+      assert.equal(result, undefined);
+    });
+
+    it('should fetch data from upstream when skipCache is enabled', async () => {
+      const skipCacheInstance = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        skipCache: true,
+      });
+
+      // Mock data attributes
+      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          size: 100,
+          contentType: 'plain/text',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      // Mock upstream data source
+      const upstreamStream = new Readable();
+      upstreamStream.push('upstream data');
+      upstreamStream.push(null);
+
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          stream: upstreamStream,
+          size: 100,
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      const result = await skipCacheInstance.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.equal(result.cached, false);
+      assert.equal(result.trusted, true);
+      assert.equal(result.size, 100);
+    });
+  });
 });

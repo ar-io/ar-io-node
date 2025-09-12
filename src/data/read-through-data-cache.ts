@@ -61,6 +61,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private dataStore: ContiguousDataStore;
   private contiguousDataIndex: ContiguousDataIndex;
   private dataContentAttributeImporter: DataContentAttributeImporter;
+  private skipCache: boolean;
 
   constructor({
     log,
@@ -69,6 +70,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataStore,
     contiguousDataIndex,
     dataContentAttributeImporter,
+    skipCache = false,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -76,6 +78,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
     dataContentAttributeImporter: DataContentAttributeImporter;
+    skipCache?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -83,6 +86,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
+    this.skipCache = skipCache;
   }
 
   private calculateVerificationPriority(
@@ -182,6 +186,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       }
     | undefined
   > {
+    // Skip cache retrieval if configured to do so
+    if (this.skipCache) {
+      this.log.debug(
+        'Skipping cache retrieval due to SKIP_DATA_CACHE setting',
+        { id },
+      );
+      return undefined;
+    }
+
     if (hash !== undefined) {
       try {
         this.log.debug('Found data hash in index', { id, hash });
