@@ -253,19 +253,51 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       span.addEvent('Starting offsets lookup');
       const offsetsInfo = await this.getOffsetsInfo(id);
       if (offsetsInfo && offsetsInfo.parentInfo === undefined) {
-        span.addEvent('Offsets found without parent info, skipping');
+        span.addEvent('Offsets found without parent info');
 
         span.setAttributes({
           'turbo.offsets_found': true,
           'turbo.offsets_has_parent': false,
         });
 
-        this.log.debug(
-          `Turbo DynamoDB: Found offsets without parent into for data item ${id}. Skipping...`,
-          {
-            offsetsInfo,
-          },
-        );
+        if (offsetsInfo.rootParentInfo) {
+          this.log.debug(
+            `Turbo DynamoDB: Found offsets with root parent info for ${id}`,
+            {
+              offsetsInfo,
+            },
+          );
+
+          // Cache attributes discovered from DynamoDB offsets with root parent info
+          // Not awaiting to avoid blocking the response
+          const attributes: Partial<ContiguousDataAttributes> = {
+            size: offsetsInfo.rawContentLength - offsetsInfo.payloadDataStart,
+            dataOffset: offsetsInfo.payloadDataStart,
+            contentType: offsetsInfo.payloadContentType,
+            rootTransactionId: offsetsInfo.rootParentInfo.rootParentId,
+            parentId: offsetsInfo.rootParentInfo.rootParentId, // root IS the parent
+            offset: offsetsInfo.rootParentInfo.startOffsetInRootTx,
+          };
+
+          this.dataAttributesSource
+            .setDataAttributes(id, attributes)
+            .catch((error) => {
+              this.log.warn(
+                'Failed to cache attributes from DynamoDB offsets',
+                {
+                  id,
+                  error: error.message,
+                },
+              );
+            });
+        } else {
+          this.log.debug(
+            `Turbo DynamoDB: Found offsets without parent info for data item ${id}. Skipping...`,
+            {
+              offsetsInfo,
+            },
+          );
+        }
       } else if (offsetsInfo?.parentInfo) {
         span.addEvent('Offsets found with parent info');
 
@@ -342,37 +374,18 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           size: payloadLength,
           dataOffset: payloadDataStart,
           contentType: payloadContentType,
+          parentId: offsetsInfo.parentInfo.parentDataItemId,
+          offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
         };
 
-        // Handle parent relationships
-        if (offsetsInfo.parentInfo !== undefined) {
-          // Has direct parent
-          attributes.parentId = offsetsInfo.parentInfo.parentDataItemId;
-          attributes.offset = offsetsInfo.parentInfo.startOffsetInParentPayload;
-        } else if (offsetsInfo.rootParentInfo !== undefined) {
-          // No direct parent but has root - this means root IS the parent
-          attributes.rootTransactionId =
-            offsetsInfo.rootParentInfo.rootParentId;
-          attributes.parentId = offsetsInfo.rootParentInfo.rootParentId;
-          attributes.offset = offsetsInfo.rootParentInfo.startOffsetInRootTx;
-        } else {
-          // No parent info at all
-          attributes.offset = 0;
-        }
-
-        // Also set rootTransactionId if we have rootParentInfo and parentInfo
-        if (
-          offsetsInfo.rootParentInfo !== undefined &&
-          offsetsInfo.parentInfo !== undefined
-        ) {
+        // Set rootTransactionId if we have rootParentInfo
+        if (offsetsInfo.rootParentInfo !== undefined) {
           attributes.rootTransactionId =
             offsetsInfo.rootParentInfo.rootParentId;
         }
 
-        // TODO: Clean up this type assertion - consider making setDataAttributes accept Partial<ContiguousDataAttributes>
-        // or ensure all required fields are set before calling
         this.dataAttributesSource
-          .setDataAttributes(id, attributes as ContiguousDataAttributes)
+          .setDataAttributes(id, attributes)
           .catch((error) => {
             this.log.warn('Failed to cache attributes from DynamoDB offsets', {
               id,
