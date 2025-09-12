@@ -646,6 +646,7 @@ describe('ReadThroughDataCache', function () {
         dataStore: mockContiguousDataStore,
         metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
         contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesSource: mockDataAttributesSource,
         dataContentAttributeImporter: mockDataContentAttributeImporter,
         skipCache: true,
       });
