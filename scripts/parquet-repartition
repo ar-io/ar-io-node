@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# AR.IO Gateway - Tag-Based Parquet Dataset Partitioning
-# Takes existing Parquet datasets and repartitions them by specified tag values
+# AR.IO Gateway - Parquet Dataset Repartitioning
+# Takes existing Parquet datasets and repartitions them by tag values or owner addresses
 # Supports both single-level and two-level partitioning with Iceberg compatibility
 
 # Load common library
@@ -20,14 +20,23 @@ log_timing() {
 
 usage() {
   cat <<USAGE
-Usage: $0 --input-dir DIR --output-dir DIR --tag-name NAME [options]
+Usage: $0 --input-dir DIR --output-dir DIR [--tag-name NAME | --partition-by-owner] [options]
 
 Required Arguments:
   --input-dir DIR           Source dataset directory (with blocks/transactions/tags subdirs)
   --output-dir DIR          Target directory for repartitioned data
-  --tag-name NAME           Tag name to partition by (e.g., "Drive-Id", "App-Name")
 
-Optional Arguments:
+Partitioning Mode (choose one):
+  --tag-name NAME           Tag name to partition by (e.g., "Drive-Id", "App-Name")
+  --partition-by-owner      Partition by owner address instead of tags
+
+Owner Partitioning Options:
+  --owner-address ADDR      Process only this specific owner address (base64url encoded)
+
+Tag Partitioning Options:
+  --tag-value VALUE         Process only this specific tag value (requires --tag-name)
+
+General Options:
   --preserve-height         Keep height-based sub-partitions (default: false)
   --height-partition-size N Blocks per height partition when preserving (default: 1000)
   --max-file-rows N         Maximum rows per Parquet file (default: 1000000)
@@ -47,17 +56,25 @@ Optional Arguments:
   --iceberg-root URI        Warehouse root URI for Iceberg metadata
 
 Examples:
+  # Partition by owner address - discover top owners with 100+ transactions
+  $0 --input-dir data/datasets/default --output-dir data/datasets/by-owner \\
+     --partition-by-owner --min-occurrences 100 --generate-iceberg
+
+  # Partition by specific owner address
+  $0 --input-dir data/datasets/default --output-dir data/datasets/by-owner \\
+     --partition-by-owner --owner-address "9_666Wkk2GzL0LGd3xhb0jY7HqNy71BaV4sULQlJsBQ="
+
   # Partition by Drive-Id (single level) - process only drives with 100+ transactions
   $0 --input-dir data/datasets/default --output-dir data/datasets/by-drive \\
      --tag-name "Drive-Id" --min-occurrences 100 --generate-iceberg
 
+  # Partition by specific tag value
+  $0 --input-dir data/datasets/default --output-dir data/datasets/by-drive \\
+     --tag-name "Drive-Id" --tag-value "specific-drive-id-here"
+
   # Partition by App-Name with height chunking for memory efficiency
   $0 --input-dir data/datasets/default --output-dir data/datasets/by-app \\
      --tag-name "App-Name" --process-by-height --height-chunk-size 50000
-     
-  # Process high-cardinality tags - top 1000 File-Ids with 10+ occurrences
-  $0 --input-dir data/datasets/default --output-dir data/datasets/by-file \\
-     --tag-name "File-Id" --min-occurrences 10 --max-partitions 1000 --process-by-height
 USAGE
 }
 
@@ -65,6 +82,9 @@ USAGE
 INPUT_DIR=""
 OUTPUT_DIR=""
 TAG_NAME=""
+TAG_VALUE=""
+PARTITION_BY_OWNER=false
+OWNER_ADDRESS=""
 PRESERVE_HEIGHT=false
 HEIGHT_PARTITION_SIZE=1000
 MAX_FILE_ROWS=1000000
@@ -99,6 +119,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tag-name)
       TAG_NAME="$2"
+      shift 2
+      ;;
+    --tag-value)
+      TAG_VALUE="$2"
+      shift 2
+      ;;
+    --partition-by-owner)
+      PARTITION_BY_OWNER=true
+      shift 1
+      ;;
+    --owner-address)
+      OWNER_ADDRESS="$2"
       shift 2
       ;;
     --preserve-height)
@@ -174,8 +206,35 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required arguments
-if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" || -z "$TAG_NAME" ]]; then
-  echo "Error: Missing required arguments" >&2
+if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" ]]; then
+  echo "Error: Missing required arguments: --input-dir and --output-dir are required" >&2
+  usage
+  exit 1
+fi
+
+# Validate partitioning mode selection
+if [[ -z "$TAG_NAME" && "$PARTITION_BY_OWNER" != "true" ]]; then
+  echo "Error: Must specify either --tag-name or --partition-by-owner" >&2
+  usage
+  exit 1
+fi
+
+if [[ -n "$TAG_NAME" && "$PARTITION_BY_OWNER" == "true" ]]; then
+  echo "Error: Cannot specify both --tag-name and --partition-by-owner" >&2
+  usage
+  exit 1
+fi
+
+# Validate tag-specific options
+if [[ -n "$TAG_VALUE" && -z "$TAG_NAME" ]]; then
+  echo "Error: --tag-value requires --tag-name" >&2
+  usage
+  exit 1
+fi
+
+# Validate owner-specific options
+if [[ -n "$OWNER_ADDRESS" && "$PARTITION_BY_OWNER" != "true" ]]; then
+  echo "Error: --owner-address requires --partition-by-owner" >&2
   usage
   exit 1
 fi
@@ -229,13 +288,30 @@ if ! $DRY_RUN; then
   mkdir -p "$OUTPUT_DIR"/{transactions,tags}/{data,metadata}
 fi
 
-echo "Tag-based partitioning configuration:"
-echo "  Input directory: $INPUT_DIR"
-echo "  Output directory: $OUTPUT_DIR"  
-echo "  Tag name: $TAG_NAME"
-echo "  Min occurrences: $MIN_OCCURRENCES"
-echo "  Max partitions: ${MAX_PARTITIONS:-unlimited}"
-echo "  Skip partitions: $SKIP_PARTITIONS"
+if [[ "$PARTITION_BY_OWNER" == "true" ]]; then
+  echo "Owner-based partitioning configuration:"
+  echo "  Input directory: $INPUT_DIR"
+  echo "  Output directory: $OUTPUT_DIR"
+  if [[ -n "$OWNER_ADDRESS" ]]; then
+    echo "  Specific owner: $OWNER_ADDRESS"
+  else
+    echo "  Min occurrences: $MIN_OCCURRENCES"
+    echo "  Max partitions: ${MAX_PARTITIONS:-unlimited}"
+    echo "  Skip partitions: $SKIP_PARTITIONS"
+  fi
+else
+  echo "Tag-based partitioning configuration:"
+  echo "  Input directory: $INPUT_DIR"
+  echo "  Output directory: $OUTPUT_DIR"  
+  echo "  Tag name: $TAG_NAME"
+  if [[ -n "$TAG_VALUE" ]]; then
+    echo "  Specific tag value: $TAG_VALUE"
+  else
+    echo "  Min occurrences: $MIN_OCCURRENCES"
+    echo "  Max partitions: ${MAX_PARTITIONS:-unlimited}"
+    echo "  Skip partitions: $SKIP_PARTITIONS"
+  fi
+fi
 echo "  Process by height: $PROCESS_BY_HEIGHT"
 echo "  Height chunk size: $HEIGHT_CHUNK_SIZE"
 echo "  Preserve height partitions: $PRESERVE_HEIGHT"
@@ -297,27 +373,61 @@ discover_tag_values() {
     # First discover existing height partitions
     discover_height_partitions
     
-    echo "  Discovering unique tag values across all data..."
+    if [[ -n "$TAG_VALUE" ]]; then
+      # Process specific tag value
+      echo "  Processing specific tag value: $TAG_VALUE"
+      
+      # Create single row CSV for consistent processing
+      cat > "$tag_values_file" <<EOF
+tag_value,occurrence_count,min_height,max_height
+$TAG_VALUE,0,0,0
+EOF
+      
+      # Get actual count and height info
+      local count_info=$(duckdb "$TEMP_DB" -csv -noheader -c "
+        SELECT 
+          COUNT(*) AS occurrence_count,
+          COALESCE(MIN(height), 0) AS min_height,
+          COALESCE(MAX(height), 0) AS max_height
+        FROM read_parquet('$INPUT_DIR/tags/data/*/*.parquet', hive_partitioning=false)
+        WHERE CAST(tag_name AS VARCHAR) = '$TAG_NAME'
+          AND CAST(tag_value AS VARCHAR) = '$TAG_VALUE';
+      ")
+      
+      # Update the CSV with real values
+      local count=$(echo "$count_info" | cut -d',' -f1)
+      local min_height=$(echo "$count_info" | cut -d',' -f2)
+      local max_height=$(echo "$count_info" | cut -d',' -f3)
+      
+      cat > "$tag_values_file" <<EOF
+tag_value,occurrence_count,min_height,max_height
+$TAG_VALUE,$count,$min_height,$max_height
+EOF
+      
+      echo "    Found $count items for this tag value (height $min_height-$max_height)"
+      
+    else
+      echo "  Discovering unique tag values across all data..."
     
-    # Build query with filters
-    local limit_clause=""
-    local offset_clause=""
-    local having_clause=""
-    
-    if [[ -n "$MAX_PARTITIONS" ]]; then
-      limit_clause="LIMIT $MAX_PARTITIONS"
-    fi
-    
-    if [[ $SKIP_PARTITIONS -gt 0 ]]; then
-      offset_clause="OFFSET $SKIP_PARTITIONS"
-    fi
-    
-    if [[ $MIN_OCCURRENCES -gt 1 ]]; then
-      having_clause="HAVING COUNT(*) >= $MIN_OCCURRENCES"
-    fi
-    
-    # Simple aggregation query across all tag data
-    duckdb "$TEMP_DB" <<SQL
+      # Build query with filters
+      local limit_clause=""
+      local offset_clause=""
+      local having_clause=""
+      
+      if [[ -n "$MAX_PARTITIONS" ]]; then
+        limit_clause="LIMIT $MAX_PARTITIONS"
+      fi
+      
+      if [[ $SKIP_PARTITIONS -gt 0 ]]; then
+        offset_clause="OFFSET $SKIP_PARTITIONS"
+      fi
+      
+      if [[ $MIN_OCCURRENCES -gt 1 ]]; then
+        having_clause="HAVING COUNT(*) >= $MIN_OCCURRENCES"
+      fi
+      
+      # Simple aggregation query across all tag data
+      duckdb "$TEMP_DB" <<SQL
 COPY (
   SELECT 
     CAST(tag_value AS VARCHAR) AS tag_value,
@@ -332,6 +442,7 @@ COPY (
   $limit_clause $offset_clause
 ) TO '$tag_values_file' (FORMAT CSV, HEADER true);
 SQL
+    fi
   fi
   
   log_timing "Tag value discovery" "$discovery_start"
@@ -349,6 +460,122 @@ SQL
     
     if [[ $total_values -gt 10 ]]; then
       echo "    ... and $((total_values - 10)) more"
+    fi
+  fi
+}
+
+# Function to discover unique owner addresses
+discover_owner_addresses() {
+  echo "Discovering owner addresses for partitioning"
+  
+  local discovery_start=$(date +%s%N)
+  
+  # Use DuckDB to find all unique owner addresses efficiently
+  local owner_values_file="$JOB_STAGING_DIR/owner_values.csv"
+  
+  if ! $DRY_RUN; then
+    # First discover existing height partitions (reuse from tag logic)
+    discover_height_partitions
+    
+    if [[ -n "$OWNER_ADDRESS" ]]; then
+      # Process specific owner address
+      echo "  Processing specific owner address: $OWNER_ADDRESS"
+      
+      # Convert base64url to standard base64 (replace - with +, _ with /)
+      local standard_b64=$(echo "$OWNER_ADDRESS" | tr '_-' '/+')
+      # Add padding if needed
+      while [[ ${#standard_b64} -ne $(((${#standard_b64} + 3) / 4 * 4)) ]]; do
+        standard_b64="${standard_b64}="
+      done
+      
+      # Create single row CSV for consistent processing
+      cat > "$owner_values_file" <<EOF
+owner_address_b64url,occurrence_count,min_height,max_height
+$OWNER_ADDRESS,0,0,0
+EOF
+      
+      # Get actual count and height info
+      local count_info=$(duckdb "$TEMP_DB" -csv -noheader -c "
+        SELECT 
+          COUNT(*) AS occurrence_count,
+          COALESCE(MIN(height), 0) AS min_height,
+          COALESCE(MAX(height), 0) AS max_height
+        FROM read_parquet('$INPUT_DIR/transactions/data/*/*.parquet', hive_partitioning=false)
+        WHERE base64(owner_address) = '$standard_b64';
+      ")
+      
+      # Update the CSV with real values
+      local count=$(echo "$count_info" | cut -d',' -f1)
+      local min_height=$(echo "$count_info" | cut -d',' -f2)
+      local max_height=$(echo "$count_info" | cut -d',' -f3)
+      
+      cat > "$owner_values_file" <<EOF
+owner_address_b64url,occurrence_count,min_height,max_height
+$OWNER_ADDRESS,$count,$min_height,$max_height
+EOF
+      
+      echo "    Found $count transactions for this owner (height $min_height-$max_height)"
+      
+    else
+      # Discover all owner addresses
+      echo "  Discovering unique owner addresses across all data..."
+      
+      # Build query with filters
+      local limit_clause=""
+      local offset_clause=""
+      local having_clause=""
+      
+      if [[ -n "$MAX_PARTITIONS" ]]; then
+        limit_clause="LIMIT $MAX_PARTITIONS"
+      fi
+      
+      if [[ $SKIP_PARTITIONS -gt 0 ]]; then
+        offset_clause="OFFSET $SKIP_PARTITIONS"
+      fi
+      
+      if [[ $MIN_OCCURRENCES -gt 1 ]]; then
+        having_clause="HAVING COUNT(*) >= $MIN_OCCURRENCES"
+      fi
+      
+      # Query for unique owner addresses with base64url encoding
+      duckdb "$TEMP_DB" <<SQL
+COPY (
+  SELECT 
+    -- Convert base64 to base64url (replace + with -, / with _)
+    translate(rtrim(base64(owner_address), '='), '+/', '-_') AS owner_address_b64url,
+    COUNT(*) AS occurrence_count,
+    MIN(height) AS min_height,
+    MAX(height) AS max_height
+  FROM read_parquet('$INPUT_DIR/transactions/data/*/*.parquet', hive_partitioning=false)
+  GROUP BY owner_address
+  $having_clause
+  ORDER BY COUNT(*) DESC, owner_address
+  $limit_clause $offset_clause
+) TO '$owner_values_file' (FORMAT CSV, HEADER true);
+SQL
+    fi
+  fi
+  
+  log_timing "Owner address discovery" "$discovery_start"
+  
+  if [[ -f "$owner_values_file" ]]; then
+    local total_addresses=$(tail -n +2 "$owner_values_file" | wc -l)
+    local total_items=$(tail -n +2 "$owner_values_file" | cut -d',' -f2 | paste -sd+ | bc)
+    echo "  Found $total_addresses unique owner addresses covering $total_items transactions"
+    
+    # Show top 10 addresses for preview
+    echo "  Top owner addresses:"
+    head -11 "$owner_values_file" | tail -10 | while IFS=, read -r owner_b64url count min_height max_height; do
+      # Truncate long addresses for display
+      local display_addr="$owner_b64url"
+      if [[ ${#display_addr} -gt 20 ]]; then
+        display_addr="${display_addr:0:17}..."
+      fi
+      echo "    $display_addr: $count transactions (height $min_height-$max_height)"
+    done
+    
+    if [[ $total_addresses -gt 10 ]]; then
+      echo "    ... and $((total_addresses - 10)) more"
     fi
   fi
 }
@@ -500,6 +727,227 @@ SQL
   duckdb "$TEMP_DB" -c "DROP TABLE IF EXISTS temp_target_ids;"
   
   log_timing "Export partition $sanitized_tag_value" "$export_start"
+}
+
+# Function to export data for a specific owner address
+export_owner_partition() {
+  local owner_b64url="$1"
+  
+  echo "Exporting partition for owner address: $owner_b64url"
+  
+  local export_start=$(date +%s%N)
+  
+  if $DRY_RUN; then
+    echo "  [DRY RUN] Would create partitions in: $OUTPUT_DIR/**/data/owner_address=${owner_b64url}/"
+    return 0
+  fi
+  
+  # Convert base64url to standard base64 for database queries
+  local standard_b64=$(echo "$owner_b64url" | tr '_-' '/+')
+  # Add padding if needed
+  while [[ ${#standard_b64} -ne $(((${#standard_b64} + 3) / 4 * 4)) ]]; do
+    standard_b64="${standard_b64}="
+  done
+  
+  # Create temporary tables for efficient filtering
+  echo "  Building temporary ID tables for efficient filtering..."
+  
+  # Create table for target IDs (not TEMP to persist across function calls)
+  duckdb "$TEMP_DB" <<SQL
+DROP TABLE IF EXISTS temp_target_ids;
+CREATE TABLE temp_target_ids (
+  id BLOB,
+  height UBIGINT
+);
+SQL
+
+  # Populate the temp table with target IDs from each height partition
+  for height_range in "${HEIGHT_PARTITIONS[@]}"; do
+    # Get IDs for transactions with this owner address
+    local tx_count
+    tx_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+      SELECT COUNT(*)
+      FROM read_parquet('$INPUT_DIR/transactions/data/height=$height_range/*.parquet', hive_partitioning=false)
+      WHERE base64(owner_address) = '$standard_b64';
+    " 2>/dev/null || echo "0")
+    
+    if [[ "$tx_count" != "0" && -n "$tx_count" ]]; then
+      duckdb "$TEMP_DB" <<SQL
+INSERT INTO temp_target_ids
+SELECT DISTINCT id, height
+FROM read_parquet('$INPUT_DIR/transactions/data/height=$height_range/*.parquet', hive_partitioning=false)
+WHERE base64(owner_address) = '$standard_b64';
+SQL
+    fi
+  done
+  
+  echo "    Built temporary ID table with $(duckdb "$TEMP_DB" -csv -noheader -c "SELECT COUNT(*) FROM temp_target_ids;") entries"
+  
+  # Use simple WHERE clause with temp table join
+  local where_clause="
+    EXISTS (
+      SELECT 1 FROM temp_target_ids tt
+      WHERE tt.id = t.id AND tt.height = t.height
+    )"
+  
+  # Check if we should process by height chunks
+  if $PROCESS_BY_HEIGHT; then
+    export_owner_partition_by_height "owner_address" "$owner_b64url" "$where_clause"
+  else
+    # Export each table type in standard mode (blocks, transactions, and tags)
+    for table_type in blocks transactions tags; do
+      export_table_for_owner "$table_type" "owner_address" "$owner_b64url" "$where_clause"
+    done
+  fi
+  
+  # Clean up temporary table
+  duckdb "$TEMP_DB" -c "DROP TABLE IF EXISTS temp_target_ids;"
+  
+  log_timing "Export owner partition $owner_b64url" "$export_start"
+}
+
+# Function to export data for an owner using height-based chunking
+export_owner_partition_by_height() {
+  local field_name_safe="$1"
+  local sanitized_value="$2"
+  local base_where_clause="$3"
+  
+  echo "  Using height-based chunking (chunk size: $HEIGHT_CHUNK_SIZE blocks)"
+  
+  # Get the height range from our temporary ID table (already populated)
+  local height_info
+  height_info=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT MIN(height), MAX(height)
+    FROM temp_target_ids;
+  ")
+  
+  local min_height=$(echo "$height_info" | cut -d',' -f1)
+  local max_height=$(echo "$height_info" | cut -d',' -f2)
+  
+  if [[ -z "$min_height" || "$min_height" == "null" ]] || [[ -z "$max_height" || "$max_height" == "null" ]]; then
+    echo "    No data found for this owner address, skipping"
+    return 0
+  fi
+  
+  echo "    Height range: $min_height - $max_height"
+  
+  # Calculate number of chunks
+  local total_height_span=$((max_height - min_height + 1))
+  local num_chunks=$(( (total_height_span + HEIGHT_CHUNK_SIZE - 1) / HEIGHT_CHUNK_SIZE ))
+  echo "    Processing in $num_chunks height chunks"
+  
+  # Process each height chunk
+  local current_height=$min_height
+  local chunk_num=0
+  
+  while [[ $current_height -le $max_height ]]; do
+    local chunk_end=$((current_height + HEIGHT_CHUNK_SIZE - 1))
+    if [[ $chunk_end -gt $max_height ]]; then
+      chunk_end=$max_height
+    fi
+    
+    echo "    Processing chunk $((chunk_num + 1))/$num_chunks: height $current_height-$chunk_end"
+    
+    # Add height filter to the WHERE clause
+    local height_where_clause="$base_where_clause AND t.height >= $current_height AND t.height <= $chunk_end"
+    
+    # Export each table type for this height chunk (blocks, transactions, and tags)
+    for table_type in blocks transactions tags; do
+      local chunk_output_dir="$OUTPUT_DIR/$table_type/data/${field_name_safe}=${sanitized_value}"
+      mkdir -p "$chunk_output_dir"
+      
+      # Export this chunk for this table type
+      export_table_chunk "$table_type" "$chunk_output_dir" "$height_where_clause" "$current_height" "$chunk_end" "$chunk_num"
+    done
+    
+    current_height=$((chunk_end + 1))
+    chunk_num=$((chunk_num + 1))
+  done
+}
+
+# Function to export a specific table type for an owner
+export_table_for_owner() {
+  local table_type="$1"
+  local field_name_safe="$2" 
+  local sanitized_value="$3"
+  local where_clause="$4"
+  
+  echo "  Exporting $table_type table..."
+  
+  local table_export_start=$(date +%s%N)
+  local output_base_dir="$OUTPUT_DIR/$table_type/data/${field_name_safe}=${sanitized_value}"
+  
+  # Create output directory
+  mkdir -p "$output_base_dir"
+  
+  # Get unique height ranges from temp_target_ids to match actual partition names
+  local relevant_partitions
+  relevant_partitions=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT DISTINCT 
+      CASE 
+        WHEN height < 1000 THEN '0-999'
+        ELSE CAST(FLOOR(height / 1000) * 1000 AS INTEGER) || '-' || CAST((FLOOR(height / 1000) * 1000) + 999 AS INTEGER)
+      END as height_range
+    FROM temp_target_ids
+    ORDER BY height_range;
+  ")
+  
+  if [[ -z "$relevant_partitions" ]]; then
+    echo "    No relevant partitions found"
+    return 0
+  fi
+  
+  # Build UNION ALL query for only relevant partitions
+  local union_query=""
+  local partition_count=0
+  while IFS= read -r height_range; do
+    if [[ $partition_count -gt 0 ]]; then
+      union_query+=" UNION ALL "
+    fi
+    union_query+="SELECT * FROM read_parquet('$INPUT_DIR/$table_type/data/height=$height_range/*.parquet', hive_partitioning=false)"
+    partition_count=$((partition_count + 1))
+  done <<< "$relevant_partitions"
+  
+  echo "    Using $partition_count relevant height partitions"
+  
+  # Adjust WHERE clause for different table types
+  local final_where_clause="$where_clause"
+  if [[ "$table_type" == "blocks" ]]; then
+    # For blocks, include all blocks from the relevant height ranges (no owner filtering)
+    final_where_clause="1=1"  # No filtering - include all blocks
+  elif [[ "$table_type" == "tags" ]]; then
+    # For tags, we want all tags for the matching transactions, not just the partitioning tag
+    final_where_clause="
+      t.id IN (
+        SELECT DISTINCT tt.id
+        FROM temp_target_ids tt
+      )"
+  fi
+  # For transactions, use the where_clause as-is
+  
+  # Get row count for this partition
+  local row_count=$(duckdb "$TEMP_DB" -csv -noheader -c "
+    SELECT COUNT(*)
+    FROM ($union_query) t
+    WHERE $final_where_clause;
+  ")
+  
+  if [[ $row_count -eq 0 ]]; then
+    echo "    No $table_type rows for this partition, skipping"
+    return 0
+  fi
+  
+  echo "    Found $row_count rows to export"
+  
+  if [[ $PRESERVE_HEIGHT == "true" ]] && [[ $row_count -gt 0 ]]; then
+    # Export with height sub-partitions
+    export_with_height_partitions "$table_type" "$output_base_dir" "$final_where_clause" "$union_query"
+  else
+    # Export as single partition (may split into multiple files if too large)
+    export_single_partition "$table_type" "$output_base_dir" "$final_where_clause" "$row_count" "$union_query"
+  fi
+  
+  log_timing "Export $table_type for $sanitized_value" "$table_export_start"
 }
 
 # Function to export a tag partition using height-based chunking
@@ -893,7 +1341,11 @@ get_sort_columns() {
 main() {
   local total_start=$(date +%s%N)
   
-  echo "Starting tag-based partitioning process..."
+  if [[ "$PARTITION_BY_OWNER" == "true" ]]; then
+    echo "Starting owner-based partitioning process..."
+  else
+    echo "Starting tag-based partitioning process..."
+  fi
   echo "Found $parquet_count Parquet files in input directory"
   echo ""
   
@@ -903,45 +1355,88 @@ main() {
     # DuckDB will be created automatically when we first use it
   fi
   
-  # Discover unique tag values
-  discover_tag_values
+  # Discover partitioning keys (tags or owners)
+  if [[ "$PARTITION_BY_OWNER" == "true" ]]; then
+    discover_owner_addresses
+  else
+    discover_tag_values
+  fi
   echo ""
   
-  # Count untagged items if needed
-  if $INCLUDE_UNTAGGED; then
+  # Count untagged items if needed (only for tag mode)
+  if $INCLUDE_UNTAGGED && [[ "$PARTITION_BY_OWNER" != "true" ]]; then
     count_untagged_items
     echo ""
   fi
   
-  # Process each tag value
-  if [[ -f "$JOB_STAGING_DIR/tag_values.csv" ]] || $DRY_RUN; then
-    local processed_count=0
-    
-    if ! $DRY_RUN; then
-      while IFS=, read -r tag_value occurrence_count min_height max_height; do
-        # Skip header line
-        if [[ "$tag_value" == "tag_value" ]]; then
-          continue
-        fi
-        
-        export_tag_partition "$tag_value"
-        processed_count=$((processed_count + 1))
-        echo ""
-      done < "$JOB_STAGING_DIR/tag_values.csv"
+  # Process partitions
+  if [[ "$PARTITION_BY_OWNER" == "true" ]]; then
+    # Process owner addresses
+    if [[ -f "$JOB_STAGING_DIR/owner_values.csv" ]] || $DRY_RUN; then
+      local processed_count=0
+      
+      if ! $DRY_RUN; then
+        while IFS=, read -r owner_b64url occurrence_count min_height max_height; do
+          # Skip header line
+          if [[ "$owner_b64url" == "owner_address_b64url" ]]; then
+            continue
+          fi
+          
+          export_owner_partition "$owner_b64url"
+          processed_count=$((processed_count + 1))
+          echo ""
+        done < "$JOB_STAGING_DIR/owner_values.csv"
+      else
+        echo "[DRY RUN] Would process discovered owner addresses"
+        processed_count="N/A"
+      fi
+      
+      echo "Processed $processed_count owner address partitions"
     else
-      echo "[DRY RUN] Would process discovered tag values"
-      processed_count="N/A"
+      echo "No owner addresses found to process"
     fi
-    
-    # Process untagged items if requested
-    if $INCLUDE_UNTAGGED; then
-      export_tag_partition "" true
-      echo ""
-    fi
-    
-    echo "Processed $processed_count tag value partitions"
   else
-    echo "No tag values found to process"
+    # Process tag values (existing logic)
+    if [[ -f "$JOB_STAGING_DIR/tag_values.csv" ]] || $DRY_RUN; then
+      local processed_count=0
+      
+      if ! $DRY_RUN; then
+        # Handle specific tag value if provided
+        if [[ -n "$TAG_VALUE" ]]; then
+          export_tag_partition "$TAG_VALUE"
+          processed_count=1
+        else
+          # Process all discovered tag values
+          while IFS=, read -r tag_value occurrence_count min_height max_height; do
+            # Skip header line
+            if [[ "$tag_value" == "tag_value" ]]; then
+              continue
+            fi
+            
+            export_tag_partition "$tag_value"
+            processed_count=$((processed_count + 1))
+            echo ""
+          done < "$JOB_STAGING_DIR/tag_values.csv"
+        fi
+      else
+        if [[ -n "$TAG_VALUE" ]]; then
+          echo "[DRY RUN] Would process specific tag value: $TAG_VALUE"
+        else
+          echo "[DRY RUN] Would process discovered tag values"
+        fi
+        processed_count="N/A"
+      fi
+      
+      # Process untagged items if requested
+      if $INCLUDE_UNTAGGED; then
+        export_tag_partition "" true
+        echo ""
+      fi
+      
+      echo "Processed $processed_count tag value partitions"
+    else
+      echo "No tag values found to process"
+    fi
   fi
   
   log_timing "Total partitioning process" "$total_start"
