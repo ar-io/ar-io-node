@@ -408,6 +408,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       ) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
+        let bytesReceived = 0;
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
@@ -434,7 +435,22 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 // Only finalize (cache locally) when we trust the source or
                 // the computed hash matches an existing hash computed from a
                 // trusted source.
-                if (data.trusted === true || dataAttributes?.hash === hash) {
+                if (bytesReceived !== data.size) {
+                  span.addEvent('Skipping cache storage - size mismatch', {
+                    'data.expected_size': data.size,
+                    'data.received_size': bytesReceived,
+                  });
+                  span.setAttribute('cache.operation.size_mismatch', true);
+                  this.log.warn('Stream size mismatch - not caching', {
+                    id,
+                    expectedSize: data.size,
+                    receivedSize: bytesReceived,
+                  });
+                  await this.dataStore.cleanup(cacheStream);
+                } else if (
+                  data.trusted === true ||
+                  dataAttributes?.hash === hash
+                ) {
                   await this.dataStore.finalize(cacheStream, hash);
                   span.addEvent('Data cached successfully', {
                     'cache.duration_ms': cachingDuration,
@@ -500,6 +516,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         });
 
         data.stream.on('data', (chunk) => {
+          bytesReceived += chunk.length;
           hasher.update(chunk);
         });
       }
