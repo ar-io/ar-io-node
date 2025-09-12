@@ -99,11 +99,30 @@ export class RootParentDataSource implements ContiguousDataSource {
         await this.dataAttributesSource.getDataAttributes(currentId);
 
       if (!attributes) {
-        log.debug('No attributes found for item, traversal incomplete', {
-          currentId,
+        // If this is the first item and has no attributes, traversal fails
+        if (traversalPath.length === 1) {
+          log.debug(
+            'No attributes found for initial item, traversal incomplete',
+            {
+              currentId,
+              traversalPath,
+            },
+          );
+          return null;
+        }
+
+        // If we've traversed to this item via parent links, it's the root
+        log.debug('Reached root transaction (no attributes after traversal)', {
+          rootTxId: currentId,
+          totalOffset,
           traversalPath,
+          originalItemSize,
         });
-        return null;
+        return {
+          rootTxId: currentId,
+          totalOffset,
+          size: originalItemSize!,
+        };
       }
 
       // Remember the original item size (the item we're looking for)
