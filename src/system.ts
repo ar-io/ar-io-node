@@ -530,6 +530,17 @@ const ans104OffsetSource = new Ans104OffsetSource({
   dataSource: baseTxChunksDataSource,
 });
 
+// Offset-aware version of gateways data source that uses cached upstream offsets
+// but does not perform expensive offset searching if they're not available
+const offsetAwareGatewaysDataSource = new RootParentDataSource({
+  log,
+  dataSource: gatewaysDataSource,
+  dataAttributesSource,
+  dataItemRootTxIndex: rootTxIndex,
+  ans104OffsetSource,
+  fallbackToLegacyTraversal: false, // No expensive offset searching
+});
+
 // Regular chunks data source (no data item resolution)
 const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
 
@@ -642,6 +653,8 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return arIODataSource;
     case 'trusted-gateways':
       return gatewaysDataSource;
+    case 'trusted-gateways-offset-aware':
+      return offsetAwareGatewaysDataSource;
     case 'chunks':
       return txChunksDataSource;
     case 'chunks-data-item':
