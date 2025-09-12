@@ -226,6 +226,13 @@ static_resources:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
+                        - match: { prefix: '/local/datasets' }
+                          route:
+                            cluster: datasets_service_cluster
+                            timeout: 0s
+                            retry_policy:
+                              retry_on: '5xx,reset'
+                              num_retries: 5
                         - match: { prefix: '/' }
                           response_headers_to_add:
                             - header:
@@ -412,3 +419,29 @@ static_resources:
                       address: ao-cu
                       port_value: 6363
                       ipv4_compat: true
+
+    - name: datasets_service_cluster
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: LEAST_REQUEST
+      load_assignment:
+        cluster_name: datasets_service_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: #@ data.values.DATASETS_HOST
+                      port_value: #@ data.values.DATASETS_PORT
+                      ipv4_compat: true
+      #@ if data.values.DATASETS_PORT == "443":
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: #@ data.values.DATASETS_HOST
+          common_tls_context:
+            validation_context:
+              trusted_ca:
+                filename: /etc/ssl/certs/ca-certificates.crt
+      #@ end
