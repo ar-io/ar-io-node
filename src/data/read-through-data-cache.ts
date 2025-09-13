@@ -399,12 +399,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
 
       // Skip caching when data is untrusted and we don't have a local hash to
-      // compare against, and when serving regions to avoid persisting data
+      // compare against, when serving regions to avoid persisting data
       // fragments and (more importantly) writing invalid ID to hash
-      // relationships in the DB.
+      // relationships in the DB, and when data size is zero to avoid unnecessary
+      // storage operations and indexing.
       if (
         (data.trusted === true || dataAttributes?.hash !== undefined) &&
-        region === undefined
+        region === undefined &&
+        data.size > 0
       ) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
@@ -519,6 +521,29 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           bytesReceived += chunk.length;
           hasher.update(chunk);
         });
+      } else {
+        // Log why caching was skipped
+        const reasons = [];
+        if (data.trusted !== true && dataAttributes?.hash === undefined) {
+          reasons.push('untrusted data without local hash');
+        }
+        if (region !== undefined) {
+          reasons.push('serving data region');
+        }
+        if (data.size === 0) {
+          reasons.push('zero-size data');
+        }
+
+        if (reasons.length > 0) {
+          this.log.debug('Skipping caching due to:', {
+            id,
+            reasons: reasons.join(', '),
+            dataSize: data.size,
+            trusted: data.trusted,
+            hasLocalHash: dataAttributes?.hash !== undefined,
+            hasRegion: region !== undefined,
+          });
+        }
       }
 
       data.stream.once('error', () => {
