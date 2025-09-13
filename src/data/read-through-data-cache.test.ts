@@ -670,4 +670,154 @@ describe('ReadThroughDataCache', function () {
       assert.equal(result.size, 100);
     });
   });
+
+  describe('zero-size data handling', () => {
+    it('should skip caching and indexing for zero-size data', async function () {
+      let createWriteStreamCalls = 0;
+      let queueDataContentAttributesCalls = 0;
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        createWriteStreamCalls++;
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      mock.method(
+        mockDataContentAttributeImporter,
+        'queueDataContentAttributes',
+        () => {
+          queueDataContentAttributesCalls++;
+          return;
+        },
+      );
+
+      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push(null); // Empty stream
+            },
+          }),
+          size: 0, // Zero-size data
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      // Verify that zero-size data is returned correctly
+      assert.ok(result.stream instanceof Readable);
+      assert.equal(result.size, 0);
+      assert.equal(result.sourceContentType, 'plain/text');
+      assert.equal(result.verified, true);
+      assert.equal(result.trusted, true);
+      assert.equal(result.cached, false);
+
+      // Verify that caching operations were skipped
+      assert.equal(
+        createWriteStreamCalls,
+        0,
+        'createWriteStream should not be called for zero-size data',
+      );
+      assert.equal(
+        queueDataContentAttributesCalls,
+        0,
+        'queueDataContentAttributes should not be called for zero-size data',
+      );
+
+      // Consume the stream to ensure it's empty
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, '');
+    });
+
+    it('should cache non-zero-size data normally', async function () {
+      let createWriteStreamCalls = 0;
+      let queueDataContentAttributesCalls = 0;
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        createWriteStreamCalls++;
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      mock.method(
+        mockDataContentAttributeImporter,
+        'queueDataContentAttributes',
+        () => {
+          queueDataContentAttributesCalls++;
+          return;
+        },
+      );
+
+      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+          size: 9, // Non-zero size
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      // Verify that non-zero-size data is returned correctly
+      assert.ok(result.stream instanceof Readable);
+      assert.equal(result.size, 9);
+      assert.equal(result.sourceContentType, 'plain/text');
+      assert.equal(result.verified, true);
+      assert.equal(result.trusted, true);
+      assert.equal(result.cached, false);
+
+      // Verify that caching operations were performed
+      assert.equal(
+        createWriteStreamCalls,
+        1,
+        'createWriteStream should be called for non-zero-size data',
+      );
+      // Note: queueDataContentAttributes is called asynchronously in the pipeline callback
+      // so we can't reliably assert it here in this synchronous test
+
+      // Consume the stream to verify data
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, 'test data');
+    });
+  });
 });

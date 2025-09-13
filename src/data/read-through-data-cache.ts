@@ -399,15 +399,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
 
       // Skip caching when data is untrusted and we don't have a local hash to
-      // compare against, and when serving regions to avoid persisting data
+      // compare against, when serving regions to avoid persisting data
       // fragments and (more importantly) writing invalid ID to hash
-      // relationships in the DB.
+      // relationships in the DB, and when data size is zero to avoid unnecessary
+      // storage operations and indexing.
       if (
         (data.trusted === true || dataAttributes?.hash !== undefined) &&
-        region === undefined
+        region === undefined &&
+        data.size > 0
       ) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
+        let bytesReceived = 0;
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
@@ -434,7 +437,22 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 // Only finalize (cache locally) when we trust the source or
                 // the computed hash matches an existing hash computed from a
                 // trusted source.
-                if (data.trusted === true || dataAttributes?.hash === hash) {
+                if (bytesReceived !== data.size) {
+                  span.addEvent('Skipping cache storage - size mismatch', {
+                    'data.expected_size': data.size,
+                    'data.received_size': bytesReceived,
+                  });
+                  span.setAttribute('cache.operation.size_mismatch', true);
+                  this.log.warn('Stream size mismatch - not caching', {
+                    id,
+                    expectedSize: data.size,
+                    receivedSize: bytesReceived,
+                  });
+                  await this.dataStore.cleanup(cacheStream);
+                } else if (
+                  data.trusted === true ||
+                  dataAttributes?.hash === hash
+                ) {
                   await this.dataStore.finalize(cacheStream, hash);
                   span.addEvent('Data cached successfully', {
                     'cache.duration_ms': cachingDuration,
@@ -442,6 +460,34 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     'data.trusted': data.trusted,
                   });
                   span.setAttribute('cache.operation.stored', true);
+
+                  this.log.info('Successfully cached data', { id, hash });
+                  try {
+                    const verificationPriority =
+                      this.calculateVerificationPriority(requestAttributes);
+
+                    // Only update hashes when we trust the data source
+                    if (data.trusted === true) {
+                      this.dataContentAttributeImporter.queueDataContentAttributes(
+                        {
+                          id,
+                          dataRoot: attributes?.dataRoot,
+                          hash,
+                          dataSize: data.size,
+                          contentType: data.sourceContentType,
+                          cachedAt: currentUnixTimestamp(),
+                          verified: data.verified,
+                          verificationPriority,
+                        },
+                      );
+                    }
+                  } catch (error: any) {
+                    this.log.error('Error saving data content attributes:', {
+                      id,
+                      message: error.message,
+                      stack: error.stack,
+                    });
+                  }
                 } else {
                   span.addEvent('Skipping cache storage - hash mismatch', {
                     'data.trusted_hash': dataAttributes?.hash,
@@ -467,39 +513,37 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   stack: error.stack,
                 });
               }
-
-              this.log.info('Successfully cached data', { id, hash });
-              try {
-                const verificationPriority =
-                  this.calculateVerificationPriority(requestAttributes);
-
-                // Only update hashes when we trust the data source
-                if (data.trusted === true) {
-                  this.dataContentAttributeImporter.queueDataContentAttributes({
-                    id,
-                    dataRoot: attributes?.dataRoot,
-                    hash,
-                    dataSize: data.size,
-                    contentType: data.sourceContentType,
-                    cachedAt: currentUnixTimestamp(),
-                    verified: data.verified,
-                    verificationPriority,
-                  });
-                }
-              } catch (error: any) {
-                this.log.error('Error saving data content attributes:', {
-                  id,
-                  message: error.message,
-                  stack: error.stack,
-                });
-              }
             }
           }
         });
 
         data.stream.on('data', (chunk) => {
+          bytesReceived += chunk.length;
           hasher.update(chunk);
         });
+      } else {
+        // Log why caching was skipped
+        const reasons = [];
+        if (data.trusted !== true && dataAttributes?.hash === undefined) {
+          reasons.push('untrusted data without local hash');
+        }
+        if (region !== undefined) {
+          reasons.push('serving data region');
+        }
+        if (data.size === 0) {
+          reasons.push('zero-size data');
+        }
+
+        if (reasons.length > 0) {
+          this.log.debug('Skipping caching due to:', {
+            id,
+            reasons: reasons.join(', '),
+            dataSize: data.size,
+            trusted: data.trusted,
+            hasLocalHash: dataAttributes?.hash !== undefined,
+            hasRegion: region !== undefined,
+          });
+        }
       }
 
       data.stream.once('error', () => {
