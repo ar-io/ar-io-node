@@ -242,7 +242,6 @@ export class ArIODataSource implements ContiguousDataSource {
           });
 
           return this.parseResponse({
-            id,
             response,
             requestAttributes: parsedRequestAttributes,
             requestStartTime,
@@ -280,7 +279,6 @@ export class ArIODataSource implements ContiguousDataSource {
   }
 
   private parseResponse({
-    id,
     response,
     requestAttributes,
     requestStartTime,
@@ -288,7 +286,6 @@ export class ArIODataSource implements ContiguousDataSource {
     ttfb,
     expectedHash,
   }: {
-    id: string;
     response: AxiosResponse;
     requestAttributes: RequestAttributes;
     requestStartTime: number;
