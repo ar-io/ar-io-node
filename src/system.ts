@@ -544,8 +544,8 @@ const offsetAwareGatewaysDataSource = new RootParentDataSource({
 // Regular chunks data source (no data item resolution)
 const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
 
-// Chunks data source with data item resolution
-const txChunksDataItemSource = new RootParentDataSource({
+// Chunks data source with offset-aware data item resolution
+const txChunksOffsetAwareSource = new RootParentDataSource({
   log,
   dataSource: baseTxChunksDataSource,
   dataAttributesSource,
@@ -657,8 +657,10 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return offsetAwareGatewaysDataSource;
     case 'chunks':
       return txChunksDataSource;
-    case 'chunks-data-item':
-      return txChunksDataItemSource;
+    case 'chunks-offset-aware':
+      return txChunksOffsetAwareSource;
+    case 'chunks-data-item': // Deprecated: use 'chunks-offset-aware' instead
+      return txChunksOffsetAwareSource;
     case 'tx-data':
       return arweaveClient;
     default:
