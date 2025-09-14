@@ -109,7 +109,6 @@ export class CompositeDataAttributesSource
     const mergedAttributes = existingAttributes
       ? { ...existingAttributes, ...attributes }
       : attributes;
-    // TODO: Clean up type assertion - cache should handle partial attributes properly
     this.cache.set(id, mergedAttributes as ContiguousDataAttributes);
   }
 }

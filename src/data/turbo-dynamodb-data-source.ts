@@ -378,12 +378,6 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
         };
 
-        // Set rootTransactionId if we have rootParentInfo
-        if (offsetsInfo.rootParentInfo !== undefined) {
-          attributes.rootTransactionId =
-            offsetsInfo.rootParentInfo.rootParentId;
-        }
-
         this.dataAttributesSource
           .setDataAttributes(id, attributes)
           .catch((error) => {

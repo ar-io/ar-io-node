@@ -336,27 +336,6 @@ export class ArIODataSource implements ContiguousDataSource {
       this.handlePeerSuccess(peer, kbps, ttfb);
     });
 
-    // Cache attributes discovered from peer headers
-    const peerDigest = response.headers[headerNames.digest.toLowerCase()];
-    if (peerDigest) {
-      // Save/merge the attributes we discovered from the peer
-      // Not awaiting to avoid blocking the response
-      this.dataAttributesSource
-        .setDataAttributes(id, {
-          hash: peerDigest, // Already base64url encoded
-          size: contentLength,
-          contentType: response.headers['content-type'],
-          offset: 0, // Required field, using 0 as default
-        })
-        .catch((error) => {
-          this.log.warn('Failed to cache attributes from peer', {
-            id,
-            peer,
-            error: error.message,
-          });
-        });
-    }
-
     return {
       stream,
       size: contentLength,
