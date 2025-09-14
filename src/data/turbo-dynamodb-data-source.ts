@@ -332,6 +332,28 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           'turbo.payload_length': payloadLength,
         });
 
+        // Cache attributes discovered from DynamoDB offsets
+        // Not awaiting to avoid blocking the response
+        const attributes: Partial<ContiguousDataAttributes> = {
+          size: payloadLength,
+          dataOffset: payloadDataStart,
+          contentType: payloadContentType,
+          parentId: offsetsInfo.parentInfo.parentDataItemId,
+          offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
+        };
+
+        this.dataAttributesSource
+          .setDataAttributes(id, attributes)
+          .catch((error) => {
+            this.log.warn('Failed to cache attributes from DynamoDB offsets', {
+              id,
+              error: error.message,
+            });
+          });
+
+        const requestAttributesHeaders =
+          generateRequestAttributes(requestAttributes);
+
         // Recursively get parent data with the appropriate offset
         span.addEvent('Recursively fetching parent data');
         const nestedDataItemDataStream = await this.getData({
@@ -367,28 +389,6 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
             offsetsInfo,
           },
         );
-
-        // Cache attributes discovered from DynamoDB offsets
-        // Not awaiting to avoid blocking the response
-        const attributes: Partial<ContiguousDataAttributes> = {
-          size: payloadLength,
-          dataOffset: payloadDataStart,
-          contentType: payloadContentType,
-          parentId: offsetsInfo.parentInfo.parentDataItemId,
-          offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
-        };
-
-        this.dataAttributesSource
-          .setDataAttributes(id, attributes)
-          .catch((error) => {
-            this.log.warn('Failed to cache attributes from DynamoDB offsets', {
-              id,
-              error: error.message,
-            });
-          });
-
-        const requestAttributesHeaders =
-          generateRequestAttributes(requestAttributes);
 
         return {
           stream: nestedDataItemDataStream.stream,
