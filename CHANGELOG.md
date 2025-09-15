@@ -4,42 +4,64 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 50] - 2025-09-15
+
+This is a **recommended release** due to cache safety improvements that prevent
+caching incomplete data and enhance data validation reliability.
+
+This release introduces significant robustness improvements with offset-aware
+data sources, experimental datasets HTTP endpoint for analytics workloads, and
+enhanced Parquet/Iceberg tooling. It also includes important fixes for data
+validation and root parent traversal.
 
 ### Added
 
+- **Offset-Aware Data Sources**: Added two new offset-aware data sources that
+  leverage cached upstream offset attributes for improved performance:
+  - `chunks-offset-aware` (renamed from `chunks-data-item` with backwards
+    compatibility) - enables automatic data item resolution within ANS-104
+    bundles using cached offsets
+  - `trusted-gateways-offset-aware` - uses cached upstream offsets without
+    expensive searching for faster data retrieval
+- **Cache Skip Configuration**: Added `SKIP_DATA_CACHE` environment variable to
+  bypass cache retrieval and always fetch from upstream sources for testing and
+  debugging
+- **Datasets HTTP Endpoint (Experimental)**: Added optional `/local/datasets`
+  endpoint (disabled by default) for HTTP access to Parquet files and Iceberg
+  metadata, enabling remote DuckDB queries. Note: This feature is experimental
+  and subject to change
+- **Datasets Proxy Configuration**: Added configurable datasets proxy via Envoy
+  with `DATASETS_PROXY_HOST` and `DATASETS_PROXY_PORT` environment variables
+- **Parquet Repartitioning Tool**: Added comprehensive `parquet-repartition`
+  script supporting both tag-based and owner address-based partitioning with
+  height chunking and Iceberg metadata generation
+- **Minimal Iceberg Metadata Generator**: Added lightweight
+  `generate-minimal-iceberg-metadata` script optimized for DuckDB compatibility
+  with HTTP URL support
+- **Multi-Architecture Support**: Added multi-arch support to ClickHouse
+  auto-import Docker image for broader platform compatibility
+
 ### Changed
+
+- **Default Retrieval Order**: Updated default `ON_DEMAND_RETRIEVAL_ORDER` to
+  use new `chunks-offset-aware` name (backwards compatible with
+  `chunks-data-item`)
+- **Iceberg Metadata Implementation**: Replaced complex PyIceberg-based
+  implementation with minimal fastavro-based version for better performance and
+  DuckDB compatibility
+- **Zero-Size Data Handling**: Skip caching and indexing for zero-size data to
+  prevent unnecessary storage operations
 
 ### Fixed
 
-## [Release 50] - 2025-09-14
-
-This release introduces significant performance improvements with offset-aware data sources, experimental datasets HTTP endpoint for analytics workloads, and enhanced Parquet/Iceberg tooling. It also includes important fixes for data validation and root parent traversal.
-
-### Added
-
-- **Offset-Aware Data Sources**: Added two new offset-aware data sources that leverage cached upstream offset attributes for improved performance:
-  - `chunks-offset-aware` (renamed from `chunks-data-item` with backwards compatibility) - enables automatic data item resolution within ANS-104 bundles using cached offsets
-  - `trusted-gateways-offset-aware` - uses cached upstream offsets without expensive searching for faster data retrieval
-- **Cache Skip Configuration**: Added `SKIP_DATA_CACHE` environment variable to bypass cache retrieval and always fetch from upstream sources for testing and debugging
-- **Datasets HTTP Endpoint (Experimental)**: Added optional `/local/datasets` endpoint (disabled by default) for HTTP access to Parquet files and Iceberg metadata, enabling remote DuckDB queries. Note: This feature is experimental and subject to change
-- **Datasets Proxy Configuration**: Added configurable datasets proxy via Envoy with `DATASETS_PROXY_HOST` and `DATASETS_PROXY_PORT` environment variables
-- **Parquet Repartitioning Tool**: Added comprehensive `parquet-repartition` script supporting both tag-based and owner address-based partitioning with height chunking and Iceberg metadata generation
-- **Minimal Iceberg Metadata Generator**: Added lightweight `generate-minimal-iceberg-metadata` script optimized for DuckDB compatibility with HTTP URL support
-- **Multi-Architecture Support**: Added multi-arch support to ClickHouse auto-import Docker image for broader platform compatibility
-
-### Changed
-
-- **Default Retrieval Order**: Updated default `ON_DEMAND_RETRIEVAL_ORDER` to use new `chunks-offset-aware` name (backwards compatible with `chunks-data-item`)
-- **Iceberg Metadata Implementation**: Replaced complex PyIceberg-based implementation with minimal fastavro-based version for better performance and DuckDB compatibility
-- **Zero-Size Data Handling**: Skip caching and indexing for zero-size data to prevent unnecessary storage operations
-
-### Fixed
-
-- **Root Parent Traversal**: Fixed RootParentDataSource to properly handle root transactions without cached attributes
-- **Data Size Validation**: Added validation to prevent caching incomplete data and prevent ID to hash mapping queue on partial stream errors
-- **Parquet Export Issues**: Fixed CSV column type specification to prevent DuckDB type inference errors
-- **ClickHouse Build Workflow**: Updated build workflow to include missing file paths
+- **Root Parent Traversal**: Fixed RootParentDataSource to properly handle root
+  transactions without cached attributes
+- **Data Size Validation**: Added validation to prevent caching incomplete data
+  and prevent ID to hash mapping queue on partial stream errors
+- **Parquet Export Issues**: Fixed CSV column type specification to prevent
+  DuckDB type inference errors
+- **ClickHouse Build Workflow**: Updated build workflow to include missing file
+  paths
 
 ## [Release 49] - 2025-09-07
 
