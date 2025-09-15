@@ -66,9 +66,12 @@ export class RootParentDataSource implements ContiguousDataSource {
    * Traverses the parent chain using data attributes to find the root transaction.
    * Returns null if traversal is incomplete due to missing attributes.
    */
-  private async traverseToRootUsingAttributes(
-    dataItemId: string,
-  ): Promise<{ rootTxId: string; totalOffset: number; size: number } | null> {
+  private async traverseToRootUsingAttributes(dataItemId: string): Promise<{
+    rootTxId: string;
+    totalOffset: number;
+    size: number;
+    contentType?: string;
+  } | null> {
     const log = this.log.child({
       method: 'traverseToRootUsingAttributes',
       dataItemId,
@@ -81,6 +84,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
+    let originalItemContentType: string | undefined;
 
     while (true) {
       // Cycle detection
@@ -117,17 +121,20 @@ export class RootParentDataSource implements ContiguousDataSource {
           totalOffset,
           traversalPath,
           originalItemSize,
+          originalItemContentType,
         });
         return {
           rootTxId: currentId,
           totalOffset,
           size: originalItemSize!,
+          contentType: originalItemContentType,
         };
       }
 
-      // Remember the original item size (the item we're looking for)
+      // Remember the original item size and content type (the item we're looking for)
       if (originalItemSize === undefined) {
         originalItemSize = attributes.size;
+        originalItemContentType = attributes.contentType;
       }
 
       // If no parent, this is the root
@@ -137,11 +144,13 @@ export class RootParentDataSource implements ContiguousDataSource {
           totalOffset,
           traversalPath,
           originalItemSize,
+          originalItemContentType,
         });
         return {
           rootTxId: currentId,
           totalOffset,
           size: originalItemSize,
+          contentType: originalItemContentType,
         };
       }
 
@@ -209,13 +218,15 @@ export class RootParentDataSource implements ContiguousDataSource {
       const attributesTraversal = await this.traverseToRootUsingAttributes(id);
 
       if (attributesTraversal) {
-        const { rootTxId, totalOffset, size } = attributesTraversal;
+        const { rootTxId, totalOffset, size, contentType } =
+          attributesTraversal;
 
         this.log.debug('Successfully traversed using attributes', {
           id,
           rootTxId,
           totalOffset,
           size,
+          contentType,
         });
 
         span.setAttributes({
@@ -303,10 +314,16 @@ export class RootParentDataSource implements ContiguousDataSource {
               rootTxId,
               cached: data.cached,
               size: data.size,
+              originalContentType: contentType,
+              rootContentType: data.sourceContentType,
             },
           );
 
-          return data;
+          // Preserve the original data item's content type if available
+          return {
+            ...data,
+            sourceContentType: contentType ?? data.sourceContentType,
+          };
         } finally {
           fetchSpan.end();
         }
@@ -337,6 +354,19 @@ export class RootParentDataSource implements ContiguousDataSource {
         'traversal.method': 'legacy_fallback',
         'fallback.used': true,
       });
+
+      // Try to get the original data item's content type for legacy path
+      let originalContentType: string | undefined;
+      try {
+        const originalAttributes =
+          await this.dataAttributesSource.getDataAttributes(id);
+        originalContentType = originalAttributes?.contentType;
+      } catch (error) {
+        this.log.debug('Failed to get content type for legacy fallback', {
+          id,
+          error: error instanceof Error ? error.message : error,
+        });
+      }
 
       // Step 2: Get root transaction ID using legacy method
       span.addEvent('Getting root transaction ID (legacy)');
@@ -522,9 +552,15 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootTxId,
           cached: data.cached,
           size: data.size,
+          originalContentType,
+          rootContentType: data.sourceContentType,
         });
 
-        return data;
+        // Preserve the original data item's content type if available
+        return {
+          ...data,
+          sourceContentType: originalContentType ?? data.sourceContentType,
+        };
       } finally {
         fetchSpan.end();
       }
