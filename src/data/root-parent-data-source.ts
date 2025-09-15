@@ -70,7 +70,6 @@ export class RootParentDataSource implements ContiguousDataSource {
     rootTxId: string;
     totalOffset: number;
     size: number;
-    contentType?: string;
   } | null> {
     const log = this.log.child({
       method: 'traverseToRootUsingAttributes',
@@ -84,7 +83,6 @@ export class RootParentDataSource implements ContiguousDataSource {
     const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
-    let originalItemContentType: string | undefined;
 
     while (true) {
       // Cycle detection
@@ -121,20 +119,17 @@ export class RootParentDataSource implements ContiguousDataSource {
           totalOffset,
           traversalPath,
           originalItemSize,
-          originalItemContentType,
         });
         return {
           rootTxId: currentId,
           totalOffset,
           size: originalItemSize!,
-          contentType: originalItemContentType,
         };
       }
 
-      // Remember the original item size and content type (the item we're looking for)
+      // Remember the original item size (the item we're looking for)
       if (originalItemSize === undefined) {
         originalItemSize = attributes.size;
-        originalItemContentType = attributes.contentType;
       }
 
       // If no parent, this is the root
@@ -144,13 +139,11 @@ export class RootParentDataSource implements ContiguousDataSource {
           totalOffset,
           traversalPath,
           originalItemSize,
-          originalItemContentType,
         });
         return {
           rootTxId: currentId,
           totalOffset,
           size: originalItemSize,
-          contentType: originalItemContentType,
         };
       }
 
@@ -213,20 +206,32 @@ export class RootParentDataSource implements ContiguousDataSource {
     try {
       this.log.debug('Getting data using root parent resolution', { id });
 
+      // Get the content type for the requested data item
+      let originalContentType: string | undefined;
+      try {
+        const originalAttributes =
+          await this.dataAttributesSource.getDataAttributes(id);
+        originalContentType = originalAttributes?.contentType;
+      } catch (error) {
+        this.log.debug('Failed to get content type for data item', {
+          id,
+          error: error instanceof Error ? error.message : error,
+        });
+      }
+
       // Step 1: Try attributes-based traversal first
       span.addEvent('Attempting attributes-based traversal');
       const attributesTraversal = await this.traverseToRootUsingAttributes(id);
 
       if (attributesTraversal) {
-        const { rootTxId, totalOffset, size, contentType } =
-          attributesTraversal;
+        const { rootTxId, totalOffset, size } = attributesTraversal;
 
         this.log.debug('Successfully traversed using attributes', {
           id,
           rootTxId,
           totalOffset,
           size,
-          contentType,
+          originalContentType,
         });
 
         span.setAttributes({
@@ -314,7 +319,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               rootTxId,
               cached: data.cached,
               size: data.size,
-              originalContentType: contentType,
+              originalContentType,
               rootContentType: data.sourceContentType,
             },
           );
@@ -322,7 +327,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           // Preserve the original data item's content type if available
           return {
             ...data,
-            sourceContentType: contentType ?? data.sourceContentType,
+            sourceContentType: originalContentType ?? data.sourceContentType,
           };
         } finally {
           fetchSpan.end();
@@ -354,19 +359,6 @@ export class RootParentDataSource implements ContiguousDataSource {
         'traversal.method': 'legacy_fallback',
         'fallback.used': true,
       });
-
-      // Try to get the original data item's content type for legacy path
-      let originalContentType: string | undefined;
-      try {
-        const originalAttributes =
-          await this.dataAttributesSource.getDataAttributes(id);
-        originalContentType = originalAttributes?.contentType;
-      } catch (error) {
-        this.log.debug('Failed to get content type for legacy fallback', {
-          id,
-          error: error instanceof Error ? error.message : error,
-        });
-      }
 
       // Step 2: Get root transaction ID using legacy method
       span.addEvent('Getting root transaction ID (legacy)');
