@@ -14,6 +14,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
+  DataAttributesSource,
   RequestAttributes,
 } from '../types.js';
 import { ReadThroughDataCache } from './read-through-data-cache.js';
@@ -30,6 +31,7 @@ describe('ReadThroughDataCache', function () {
   let mockContiguousDataSource: ContiguousDataSource;
   let mockContiguousDataStore: ContiguousDataStore;
   let mockContiguousDataIndex: ContiguousDataIndex;
+  let mockDataAttributesSource: DataAttributesSource;
   let mockDataContentAttributeImporter: DataContentAttributeImporter;
   let readThroughDataCache: ReadThroughDataCache;
   let requestAttributes: RequestAttributes;
@@ -119,6 +121,22 @@ describe('ReadThroughDataCache', function () {
       },
     } as unknown as ContiguousDataIndex;
 
+    mockDataAttributesSource = {
+      getDataAttributes: async (id: string) => {
+        if (id === 'knownId') {
+          return {
+            size: 100,
+            contentType: undefined,
+            isManifest: false,
+            stable: false,
+            verified: false,
+            signature: null,
+          };
+        }
+        return undefined;
+      },
+    };
+
     mockDataContentAttributeImporter = {
       queueDataContentAttributes: (_: DataContentAttributeProperties) => {
         return;
@@ -135,6 +153,7 @@ describe('ReadThroughDataCache', function () {
       dataStore: mockContiguousDataStore,
       metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
       contiguousDataIndex: mockContiguousDataIndex,
+      dataAttributesSource: mockDataAttributesSource,
       dataContentAttributeImporter: mockDataContentAttributeImporter,
     });
 
@@ -231,7 +250,7 @@ describe('ReadThroughDataCache', function () {
   describe('getData', function () {
     it('should fetch cached data successfully', async function () {
       let calledWithArgument: string;
-      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
         return Promise.resolve({
           hash: 'test-hash',
           size: 100,
@@ -295,7 +314,7 @@ describe('ReadThroughDataCache', function () {
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore
       let calledWithArgument: string;
-      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
         return Promise.resolve({
           hash: 'test-hash',
           size: 100,
@@ -466,7 +485,7 @@ describe('ReadThroughDataCache', function () {
 
     it('should fetch cached data successfully with region', async function () {
       const region = { offset: 10, size: 50 };
-      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
         return Promise.resolve({
           hash: 'test-hash',
           size: 100,
@@ -595,6 +614,230 @@ describe('ReadThroughDataCache', function () {
           .class,
         'ReadThroughDataCache',
       );
+    });
+  });
+
+  describe('skipCache', () => {
+    it('should skip cache retrieval when skipCache is enabled', async () => {
+      const skipCacheInstance = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        skipCache: true,
+      });
+
+      // Mock the getCacheData method to ensure it returns undefined when skipCache is true
+      const result = await skipCacheInstance.getCacheData(
+        'test-id',
+        'test-hash',
+        100,
+      );
+
+      assert.equal(result, undefined);
+    });
+
+    it('should fetch data from upstream when skipCache is enabled', async () => {
+      const skipCacheInstance = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesSource: mockDataAttributesSource,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        skipCache: true,
+      });
+
+      // Mock data attributes
+      mock.method(mockContiguousDataIndex, 'getDataAttributes', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          size: 100,
+          contentType: 'plain/text',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      // Mock upstream data source
+      const upstreamStream = new Readable();
+      upstreamStream.push('upstream data');
+      upstreamStream.push(null);
+
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          stream: upstreamStream,
+          size: 100,
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      const result = await skipCacheInstance.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.equal(result.cached, false);
+      assert.equal(result.trusted, true);
+      assert.equal(result.size, 100);
+    });
+  });
+
+  describe('zero-size data handling', () => {
+    it('should skip caching and indexing for zero-size data', async function () {
+      let createWriteStreamCalls = 0;
+      let queueDataContentAttributesCalls = 0;
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        createWriteStreamCalls++;
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      mock.method(
+        mockDataContentAttributeImporter,
+        'queueDataContentAttributes',
+        () => {
+          queueDataContentAttributesCalls++;
+          return;
+        },
+      );
+
+      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push(null); // Empty stream
+            },
+          }),
+          size: 0, // Zero-size data
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      // Verify that zero-size data is returned correctly
+      assert.ok(result.stream instanceof Readable);
+      assert.equal(result.size, 0);
+      assert.equal(result.sourceContentType, 'plain/text');
+      assert.equal(result.verified, true);
+      assert.equal(result.trusted, true);
+      assert.equal(result.cached, false);
+
+      // Verify that caching operations were skipped
+      assert.equal(
+        createWriteStreamCalls,
+        0,
+        'createWriteStream should not be called for zero-size data',
+      );
+      assert.equal(
+        queueDataContentAttributesCalls,
+        0,
+        'queueDataContentAttributes should not be called for zero-size data',
+      );
+
+      // Consume the stream to ensure it's empty
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, '');
+    });
+
+    it('should cache non-zero-size data normally', async function () {
+      let createWriteStreamCalls = 0;
+      let queueDataContentAttributesCalls = 0;
+
+      mock.method(mockContiguousDataStore, 'get', () =>
+        Promise.resolve(undefined),
+      );
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        createWriteStreamCalls++;
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      mock.method(
+        mockDataContentAttributeImporter,
+        'queueDataContentAttributes',
+        () => {
+          queueDataContentAttributesCalls++;
+          return;
+        },
+      );
+
+      mock.method(mockContiguousDataSource, 'getData', (args: any) => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data');
+              this.push(null);
+            },
+          }),
+          size: 9, // Non-zero size
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true,
+          cached: false,
+        });
+      });
+
+      const result = await readThroughDataCache.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      // Verify that non-zero-size data is returned correctly
+      assert.ok(result.stream instanceof Readable);
+      assert.equal(result.size, 9);
+      assert.equal(result.sourceContentType, 'plain/text');
+      assert.equal(result.verified, true);
+      assert.equal(result.trusted, true);
+      assert.equal(result.cached, false);
+
+      // Verify that caching operations were performed
+      assert.equal(
+        createWriteStreamCalls,
+        1,
+        'createWriteStream should be called for non-zero-size data',
+      );
+      // Note: queueDataContentAttributes is called asynchronously in the pipeline callback
+      // so we can't reliably assert it here in this synchronous test
+
+      // Consume the stream to verify data
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, 'test data');
     });
   });
 });

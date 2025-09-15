@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-da2abd14cdf3248db21673878c6f2c7b752a3850}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-159d6467108122a3413c5ab45150d334dc9fb78f}
     build:
       context: envoy/
     restart: unless-stopped
@@ -20,6 +20,8 @@ services:
       - TVAL_FALLBACK_NODE_PORT=${FALLBACK_NODE_PORT:-1984}
       - TVAL_GRAPHQL_HOST=${GRAPHQL_HOST:-core}
       - TVAL_GRAPHQL_PORT=${GRAPHQL_PORT:-4000}
+      - TVAL_DATASETS_HOST=${DATASETS_PROXY_HOST:-core}
+      - TVAL_DATASETS_PORT=${DATASETS_PROXY_PORT:-4000}
       - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
     networks:
       - ar-io-network
@@ -28,7 +30,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-8c1f559a5d8cf8a0a9a4c577b56f7b989b467e62}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-95c324834538c984eee08dedadcc93f6f1c8a5f3}
     build:
       context: .
     restart: unless-stopped
@@ -43,6 +45,7 @@ services:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
+      - ${DATASETS_PATH:-./data/datasets}:/app/data/datasets
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}
@@ -55,6 +58,7 @@ services:
       - START_HEIGHT=${START_HEIGHT:-}
       - STOP_HEIGHT=${STOP_HEIGHT:-}
       - SKIP_CACHE=${SKIP_CACHE:-}
+      - SKIP_DATA_CACHE=${SKIP_DATA_CACHE:-}
       - SIMULATED_REQUEST_FAILURE_RATE=${SIMULATED_REQUEST_FAILURE_RATE:-}
       - INSTANCE_ID=${INSTANCE_ID:-}
       - AR_IO_WALLET=${AR_IO_WALLET:-}
@@ -105,6 +109,7 @@ services:
       - ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS=${ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_ROLLING_COUNT_TIMEOUT_MS:-}
       - ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS=${ARIO_PROCESS_DEFAULT_CIRCUIT_BREAKER_RESET_TIMEOUT_MS:-}
       - ENABLE_MEMPOOL_WATCHER=${ENABLE_MEMPOOL_WATCHER:-}
+      - ENABLE_DATASETS_ENDPOINT=${ENABLE_DATASETS_ENDPOINT:-}
       - MEMPOOL_POOLING_INTERVAL_MS=${MEMPOOL_POOLING_INTERVAL_MS:-}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
@@ -120,7 +125,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-49}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-50}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS=${CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
@@ -217,7 +222,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-5d06e824ce7d18764bed130025a3f493657cd39d}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-71bbc13161b69bc28c501d09f586513073d550fe}
     profiles:
       - clickhouse
     build:
@@ -270,7 +275,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-49}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-50}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
       - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}

@@ -97,6 +97,8 @@ import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { FullChunkSource } from './data/full-chunk-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
+import { CompositeDataAttributesSource } from './data/composite-data-attributes-source.js';
+import { ContiguousDataAttributesStore } from './types.js';
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -159,6 +161,12 @@ export const db = new StandaloneSqliteDatabase({
   bundlesDbPath: 'data/sqlite/bundles.db',
   tagSelectivity: config.TAG_SELECTIVITY,
 });
+
+export const dataAttributesSource: ContiguousDataAttributesStore =
+  new CompositeDataAttributesSource({
+    log,
+    source: db,
+  });
 
 // Create shared cache for root TX lookups
 // LRUCache v11 requires values to be objects, not primitives with undefined
@@ -477,6 +485,7 @@ export const arIOPeerManager = new ArIOPeerManager({
 export const arIODataSource = new ArIODataSource({
   log,
   peerManager: arIOPeerManager,
+  dataAttributesSource,
 });
 
 export const arIOChunkSource = new ArIOChunkSource({
@@ -521,15 +530,28 @@ const ans104OffsetSource = new Ans104OffsetSource({
   dataSource: baseTxChunksDataSource,
 });
 
+// Offset-aware version of gateways data source that uses cached upstream offsets
+// but does not perform expensive offset searching if they're not available
+const offsetAwareGatewaysDataSource = new RootParentDataSource({
+  log,
+  dataSource: gatewaysDataSource,
+  dataAttributesSource,
+  dataItemRootTxIndex: rootTxIndex,
+  ans104OffsetSource,
+  fallbackToLegacyTraversal: false, // No expensive offset searching
+});
+
 // Regular chunks data source (no data item resolution)
 const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
 
-// Chunks data source with data item resolution
-const txChunksDataItemSource = new RootParentDataSource({
+// Chunks data source with offset-aware data item resolution
+const txChunksOffsetAwareSource = new RootParentDataSource({
   log,
   dataSource: baseTxChunksDataSource,
+  dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource,
+  fallbackToLegacyTraversal: config.ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK,
 });
 
 const s3DataSource =
@@ -575,6 +597,7 @@ const turboDynamoDBDataSource =
         region: config.AWS_DYNAMODB_TURBO_REGION,
         endpoint: config.AWS_DYNAMODB_TURBO_ENDPOINT,
         assumeRoleArn: config.AWS_DYNAMODB_TURBO_ASSUME_ROLE_ARN,
+        dataAttributesSource,
       })
     : undefined;
 
@@ -630,10 +653,14 @@ function getDataSource(sourceName: string): ContiguousDataSource | undefined {
       return arIODataSource;
     case 'trusted-gateways':
       return gatewaysDataSource;
+    case 'trusted-gateways-offset-aware':
+      return offsetAwareGatewaysDataSource;
     case 'chunks':
       return txChunksDataSource;
-    case 'chunks-data-item':
-      return txChunksDataItemSource;
+    case 'chunks-offset-aware':
+      return txChunksOffsetAwareSource;
+    case 'chunks-data-item': // Deprecated: use 'chunks-offset-aware' instead
+      return txChunksOffsetAwareSource;
     case 'tx-data':
       return arweaveClient;
     default:
@@ -684,7 +711,9 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
+  dataAttributesSource,
   dataContentAttributeImporter,
+  skipCache: config.SKIP_DATA_CACHE,
 });
 
 export const backgroundContiguousDataSource = new ReadThroughDataCache({
@@ -696,7 +725,9 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
+  dataAttributesSource,
   dataContentAttributeImporter,
+  skipCache: config.SKIP_DATA_CACHE,
 });
 
 export const dataItemIndexer = new DataItemIndexer({

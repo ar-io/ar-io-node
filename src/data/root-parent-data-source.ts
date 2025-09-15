@@ -9,7 +9,7 @@ import { Span } from '@opentelemetry/api';
 
 import {
   ContiguousData,
-  ContiguousDataAttributes,
+  ContiguousDataAttributesStore,
   ContiguousDataSource,
   DataItemRootTxIndex,
   Region,
@@ -25,42 +25,163 @@ import { Ans104OffsetSource } from './ans104-offset-source.js';
 export class RootParentDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
+  private dataAttributesSource: ContiguousDataAttributesStore;
   private dataItemRootTxIndex: DataItemRootTxIndex;
   private ans104OffsetSource: Ans104OffsetSource;
+  private fallbackToLegacyTraversal: boolean;
 
   /**
    * Creates a new RootParentDataSource instance.
    * @param log - Winston logger for debugging and error reporting
    * @param dataSource - Underlying data source for fetching actual data
-   * @param dataItemRootTxIndex - Index for resolving data items to root transactions
-   * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles
+   * @param dataAttributesSource - Source for data attributes to traverse parent chains
+   * @param dataItemRootTxIndex - Index for resolving data items to root transactions (fallback)
+   * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles (fallback)
+   * @param fallbackToLegacyTraversal - Whether to fall back to legacy traversal when attributes are incomplete
    */
   constructor({
     log,
     dataSource,
+    dataAttributesSource,
     dataItemRootTxIndex,
     ans104OffsetSource,
+    fallbackToLegacyTraversal = true,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
+    dataAttributesSource: ContiguousDataAttributesStore;
     dataItemRootTxIndex: DataItemRootTxIndex;
     ans104OffsetSource: Ans104OffsetSource;
+    fallbackToLegacyTraversal?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
+    this.dataAttributesSource = dataAttributesSource;
     this.dataItemRootTxIndex = dataItemRootTxIndex;
     this.ans104OffsetSource = ans104OffsetSource;
+    this.fallbackToLegacyTraversal = fallbackToLegacyTraversal;
+  }
+
+  /**
+   * Traverses the parent chain using data attributes to find the root transaction.
+   * Returns null if traversal is incomplete due to missing attributes.
+   */
+  private async traverseToRootUsingAttributes(
+    dataItemId: string,
+  ): Promise<{ rootTxId: string; totalOffset: number; size: number } | null> {
+    const log = this.log.child({
+      method: 'traverseToRootUsingAttributes',
+      dataItemId,
+    });
+
+    log.debug('Starting parent traversal using attributes');
+
+    let currentId = dataItemId;
+    let totalOffset = 0;
+    const traversalPath: string[] = [];
+    const visited = new Set<string>();
+    let originalItemSize: number | undefined;
+
+    while (true) {
+      // Cycle detection
+      if (visited.has(currentId)) {
+        log.warn('Cycle detected in parent chain', {
+          currentId,
+          traversalPath,
+        });
+        return null;
+      }
+      visited.add(currentId);
+      traversalPath.push(currentId);
+
+      // Get attributes for current item
+      const attributes =
+        await this.dataAttributesSource.getDataAttributes(currentId);
+
+      if (!attributes) {
+        // If this is the first item and has no attributes, traversal fails
+        if (traversalPath.length === 1) {
+          log.debug(
+            'No attributes found for initial item, traversal incomplete',
+            {
+              currentId,
+              traversalPath,
+            },
+          );
+          return null;
+        }
+
+        // If we've traversed to this item via parent links, it's the root
+        log.debug('Reached root transaction (no attributes after traversal)', {
+          rootTxId: currentId,
+          totalOffset,
+          traversalPath,
+          originalItemSize,
+        });
+        return {
+          rootTxId: currentId,
+          totalOffset,
+          size: originalItemSize!,
+        };
+      }
+
+      // Remember the original item size (the item we're looking for)
+      if (originalItemSize === undefined) {
+        originalItemSize = attributes.size;
+      }
+
+      // If no parent, this is the root
+      if (attributes.parentId == null || attributes.parentId === currentId) {
+        log.debug('Found root transaction via attributes', {
+          rootTxId: currentId,
+          totalOffset,
+          traversalPath,
+          originalItemSize,
+        });
+        return {
+          rootTxId: currentId,
+          totalOffset,
+          size: originalItemSize,
+        };
+      }
+
+      // Add this item's offset to the total
+      totalOffset += attributes.offset;
+
+      // Add dataOffset if present (for payload positioning)
+      if (attributes.dataOffset !== undefined) {
+        totalOffset += attributes.dataOffset;
+      }
+
+      log.debug('Traversing to parent', {
+        currentId,
+        parentId: attributes.parentId,
+        itemOffset: attributes.offset,
+        dataOffset: attributes.dataOffset,
+        totalOffset,
+      });
+
+      // Move to parent
+      currentId = attributes.parentId;
+
+      // Safety check for excessive traversal depth
+      if (traversalPath.length > 10) {
+        log.warn('Excessive traversal depth, aborting', {
+          depth: traversalPath.length,
+          traversalPath,
+        });
+        return null;
+      }
+    }
   }
 
   async getData({
     id,
-    dataAttributes,
     requestAttributes,
     region,
     parentSpan,
   }: {
     id: string;
-    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
@@ -70,7 +191,6 @@ export class RootParentDataSource implements ContiguousDataSource {
       {
         attributes: {
           'data.id': id,
-          'data.has_attributes': dataAttributes !== undefined,
           'data.has_region': region !== undefined,
           'data.region.offset': region?.offset,
           'data.region.size': region?.size,
@@ -84,8 +204,142 @@ export class RootParentDataSource implements ContiguousDataSource {
     try {
       this.log.debug('Getting data using root parent resolution', { id });
 
-      // Step 1: Get root transaction ID
-      span.addEvent('Getting root transaction ID');
+      // Step 1: Try attributes-based traversal first
+      span.addEvent('Attempting attributes-based traversal');
+      const attributesTraversal = await this.traverseToRootUsingAttributes(id);
+
+      if (attributesTraversal) {
+        const { rootTxId, totalOffset, size } = attributesTraversal;
+
+        this.log.debug('Successfully traversed using attributes', {
+          id,
+          rootTxId,
+          totalOffset,
+          size,
+        });
+
+        span.setAttributes({
+          'root.tx_id': rootTxId,
+          'traversal.method': 'attributes',
+          'traversal.total_offset': totalOffset,
+          'data.item.size': size,
+        });
+
+        // Calculate final region using discovered offset
+        let finalRegion: Region;
+        if (region) {
+          // If a region was requested, adjust it relative to the discovered offset
+          finalRegion = {
+            offset: totalOffset + (region.offset || 0),
+            size: region.size || size,
+          };
+
+          // Ensure we don't exceed the data item bounds
+          if (region.offset && region.offset >= size) {
+            const error = new Error(
+              `Requested region offset ${region.offset} exceeds data item size ${size}`,
+            );
+            span.recordException(error);
+            throw error;
+          }
+
+          if (region.size && region.offset) {
+            const requestedEnd = region.offset + region.size;
+            if (requestedEnd > size) {
+              // Truncate to available size
+              finalRegion.size = size - region.offset;
+              this.log.debug('Truncated region to fit data item bounds', {
+                requestedSize: region.size,
+                truncatedSize: finalRegion.size,
+              });
+            }
+          }
+        } else {
+          // No region requested, use the full data item
+          finalRegion = {
+            offset: totalOffset,
+            size,
+          };
+        }
+
+        span.setAttributes({
+          'final.region.offset': finalRegion.offset,
+          'final.region.size': finalRegion.size,
+        });
+
+        // Fetch data using root ID and calculated region
+        span.addEvent('Fetching data from root bundle using attributes');
+        const fetchSpan = startChildSpan(
+          'RootParentDataSource.fetchDataFromAttributes',
+          {
+            attributes: {
+              'root.tx_id': rootTxId,
+              'region.offset': finalRegion.offset,
+              'region.size': finalRegion.size,
+            },
+          },
+          span,
+        );
+
+        try {
+          const data = await this.dataSource.getData({
+            id: rootTxId,
+            requestAttributes,
+            region: finalRegion,
+            parentSpan: fetchSpan,
+          });
+
+          span.setAttributes({
+            'data.cached': data.cached,
+            'data.trusted': data.trusted,
+            'data.verified': data.verified,
+            'data.size': data.size,
+          });
+
+          this.log.debug(
+            'Successfully fetched data using attributes traversal',
+            {
+              id,
+              rootTxId,
+              cached: data.cached,
+              size: data.size,
+            },
+          );
+
+          return data;
+        } finally {
+          fetchSpan.end();
+        }
+      }
+
+      // Attributes traversal failed
+      if (!this.fallbackToLegacyTraversal) {
+        const error = new Error(
+          `Unable to traverse parent chain for data item ${id} - attributes incomplete and fallback disabled`,
+        );
+        span.recordException(error);
+        span.setAttributes({
+          'traversal.method': 'attributes_failed',
+          'fallback.enabled': false,
+        });
+        throw error;
+      }
+
+      // Fall back to legacy traversal
+      this.log.debug(
+        'Attributes traversal failed, falling back to legacy method',
+        {
+          id,
+        },
+      );
+      span.addEvent('Falling back to legacy traversal');
+      span.setAttributes({
+        'traversal.method': 'legacy_fallback',
+        'fallback.used': true,
+      });
+
+      // Step 2: Get root transaction ID using legacy method
+      span.addEvent('Getting root transaction ID (legacy)');
       const rootTxLookupSpan = startChildSpan(
         'RootParentDataSource.getRootTxId',
         {
@@ -128,7 +382,6 @@ export class RootParentDataSource implements ContiguousDataSource {
         try {
           return await this.dataSource.getData({
             id,
-            dataAttributes,
             requestAttributes,
             region,
             parentSpan: span,
@@ -252,7 +505,6 @@ export class RootParentDataSource implements ContiguousDataSource {
       try {
         const data = await this.dataSource.getData({
           id: rootTxId,
-          dataAttributes,
           requestAttributes,
           region: finalRegion,
           parentSpan: fetchSpan,

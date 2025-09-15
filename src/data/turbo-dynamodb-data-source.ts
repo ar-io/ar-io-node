@@ -22,7 +22,9 @@ import { SpanStatusCode, Span } from '@opentelemetry/api';
 import { setUpCircuitBreakerListenerMetrics } from '../metrics.js';
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataSource,
+  ContiguousDataAttributesStore,
   Region,
   RequestAttributes,
 } from '../types.js';
@@ -150,6 +152,7 @@ function idToBinary(dataItemId: TransactionId): Uint8Array {
 export class TurboDynamoDbDataSource implements ContiguousDataSource {
   private dynamoClient: DynamoDBClient;
   private log: winston.Logger;
+  private dataAttributesSource: ContiguousDataAttributesStore;
   private circuitBreakerWrapper: {
     fire<T>(task: DynamoTask<T>): Promise<T>;
     breaker: CircuitBreaker<[DynamoTask<unknown>], unknown>;
@@ -162,6 +165,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     credentials,
     assumeRoleArn,
     log,
+    dataAttributesSource,
   }: {
     dynamoClient?: DynamoDBClient;
     endpoint?: string;
@@ -173,8 +177,10 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     };
     assumeRoleArn?: string;
     log: winston.Logger;
+    dataAttributesSource: ContiguousDataAttributesStore;
   }) {
     this.log = log.child({ class: this.constructor.name });
+    this.dataAttributesSource = dataAttributesSource;
 
     // If a client is provided, use it
     if (dynamoClient) {
@@ -247,19 +253,51 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
       span.addEvent('Starting offsets lookup');
       const offsetsInfo = await this.getOffsetsInfo(id);
       if (offsetsInfo && offsetsInfo.parentInfo === undefined) {
-        span.addEvent('Offsets found without parent info, skipping');
+        span.addEvent('Offsets found without parent info');
 
         span.setAttributes({
           'turbo.offsets_found': true,
           'turbo.offsets_has_parent': false,
         });
 
-        this.log.debug(
-          `Turbo DynamoDB: Found offsets without parent into for data item ${id}. Skipping...`,
-          {
-            offsetsInfo,
-          },
-        );
+        if (offsetsInfo.rootParentInfo) {
+          this.log.debug(
+            `Turbo DynamoDB: Found offsets with root parent info for ${id}`,
+            {
+              offsetsInfo,
+            },
+          );
+
+          // Cache attributes discovered from DynamoDB offsets with root parent info
+          // Not awaiting to avoid blocking the response
+          const attributes: Partial<ContiguousDataAttributes> = {
+            size: offsetsInfo.rawContentLength - offsetsInfo.payloadDataStart,
+            dataOffset: offsetsInfo.payloadDataStart,
+            contentType: offsetsInfo.payloadContentType,
+            rootTransactionId: offsetsInfo.rootParentInfo.rootParentId,
+            parentId: offsetsInfo.rootParentInfo.rootParentId, // root IS the parent
+            offset: offsetsInfo.rootParentInfo.startOffsetInRootTx,
+          };
+
+          this.dataAttributesSource
+            .setDataAttributes(id, attributes)
+            .catch((error) => {
+              this.log.warn(
+                'Failed to cache attributes from DynamoDB offsets',
+                {
+                  id,
+                  error: error.message,
+                },
+              );
+            });
+        } else {
+          this.log.debug(
+            `Turbo DynamoDB: Found offsets without parent info for data item ${id}. Skipping...`,
+            {
+              offsetsInfo,
+            },
+          );
+        }
       } else if (offsetsInfo?.parentInfo) {
         span.addEvent('Offsets found with parent info');
 
@@ -293,6 +331,28 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           'turbo.start_offset_in_parent_payload': startOffsetInParentPayload,
           'turbo.payload_length': payloadLength,
         });
+
+        // Cache attributes discovered from DynamoDB offsets
+        // Not awaiting to avoid blocking the response
+        const attributes: Partial<ContiguousDataAttributes> = {
+          size: payloadLength,
+          dataOffset: payloadDataStart,
+          contentType: payloadContentType,
+          parentId: offsetsInfo.parentInfo.parentDataItemId,
+          offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
+        };
+
+        this.dataAttributesSource
+          .setDataAttributes(id, attributes)
+          .catch((error) => {
+            this.log.warn('Failed to cache attributes from DynamoDB offsets', {
+              id,
+              error: error.message,
+            });
+          });
+
+        const requestAttributesHeaders =
+          generateRequestAttributes(requestAttributes);
 
         // Recursively get parent data with the appropriate offset
         span.addEvent('Recursively fetching parent data');
@@ -330,9 +390,6 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           },
         );
 
-        const requestAttributesHeaders =
-          generateRequestAttributes(requestAttributes);
-
         return {
           stream: nestedDataItemDataStream.stream,
           size: nestedDataItemDataStream.size,
@@ -366,6 +423,22 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         this.log.debug(`Turbo DynamoDB: Found raw data for ${id}`, {
           payloadInfo: dataItem.info,
         });
+
+        // Cache attributes discovered from raw data item
+        // Not awaiting to avoid blocking the response
+        this.dataAttributesSource
+          .setDataAttributes(id, {
+            size: dataItem.buffer.length - dataItem.info.payloadDataStart,
+            dataOffset: dataItem.info.payloadDataStart,
+            contentType: dataItem.info.payloadContentType,
+            offset: 0, // Required field for raw data items
+          })
+          .catch((error) => {
+            this.log.warn('Failed to cache attributes from DynamoDB raw data', {
+              id,
+              error: error.message,
+            });
+          });
 
         const result = this.getDataStreamFromRawBuffer({
           buffer: dataItem.buffer,

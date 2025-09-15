@@ -22,6 +22,8 @@
           pyarrow
           duckdb
           sqlalchemy
+          # For minimal Iceberg manifest generation
+          fastavro
         ]);
       in
       {

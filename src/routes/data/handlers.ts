@@ -21,8 +21,8 @@ import {
   DataBlockListValidator,
   ContiguousData,
   ContiguousDataAttributes,
-  ContiguousDataIndex,
   ContiguousDataSource,
+  DataAttributesSource,
   ManifestPathResolver,
   RequestAttributes,
 } from '../../types.js';
@@ -306,7 +306,6 @@ const handleRangeRequest = async ({
 
       const rangeData = await dataSource.getData({
         id,
-        dataAttributes,
         requestAttributes,
         region: {
           offset: start,
@@ -389,7 +388,6 @@ const handleRangeRequest = async ({
 
         const rangeData = await dataSource.getData({
           id,
-          dataAttributes,
           requestAttributes,
           region: {
             offset: start,
@@ -446,13 +444,13 @@ export const sendPaymentRequired = (
 // Data routes
 export const createRawDataHandler = ({
   log,
-  dataIndex,
+  dataAttributesSource,
   dataSource,
   dataBlockListValidator,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
-  dataIndex: ContiguousDataIndex;
+  dataAttributesSource: DataAttributesSource;
   dataBlockListValidator: DataBlockListValidator;
 }) => {
   return asyncHandler(async (req: Request, res: Response) => {
@@ -507,7 +505,7 @@ export const createRawDataHandler = ({
       span.addEvent('Retrieving data attributes');
       const attributesStartTime = Date.now();
       try {
-        dataAttributes = await dataIndex.getDataAttributes(id);
+        dataAttributes = await dataAttributesSource.getDataAttributes(id);
         const attributesDuration = Date.now() - attributesStartTime;
         span.setAttribute(
           'data.attributes_retrieval_duration_ms',
@@ -566,7 +564,6 @@ export const createRawDataHandler = ({
       try {
         data = await dataSource.getData({
           id,
-          dataAttributes,
           requestAttributes,
           parentSpan: span,
         });
@@ -664,7 +661,7 @@ const sendManifestResponse = async ({
   req,
   res,
   dataSource,
-  dataIndex,
+  dataAttributesSource,
   id,
   resolvedId,
   complete,
@@ -675,7 +672,7 @@ const sendManifestResponse = async ({
   req: Request;
   res: Response;
   dataSource: ContiguousDataSource;
-  dataIndex: ContiguousDataIndex;
+  dataAttributesSource: DataAttributesSource;
   id: string;
   resolvedId: string | undefined;
   complete: boolean;
@@ -697,7 +694,7 @@ const sendManifestResponse = async ({
 
     let dataAttributes: ContiguousDataAttributes | undefined;
     try {
-      dataAttributes = await dataIndex.getDataAttributes(resolvedId);
+      dataAttributes = await dataAttributesSource.getDataAttributes(resolvedId);
     } catch (error: any) {
       log.error('Error retrieving data attributes:', {
         dataId: resolvedId,
@@ -712,7 +709,6 @@ const sendManifestResponse = async ({
     try {
       data = await dataSource.getData({
         id: resolvedId,
-        dataAttributes,
         requestAttributes,
         parentSpan,
       });
@@ -809,14 +805,14 @@ const sendManifestResponse = async ({
 
 export const createDataHandler = ({
   log,
-  dataIndex,
+  dataAttributesSource,
   dataSource,
   dataBlockListValidator,
   manifestPathResolver,
 }: {
   log: Logger;
   dataSource: ContiguousDataSource;
-  dataIndex: ContiguousDataIndex;
+  dataAttributesSource: DataAttributesSource;
   dataBlockListValidator: DataBlockListValidator;
   manifestPathResolver: ManifestPathResolver;
 }) => {
@@ -878,7 +874,7 @@ export const createDataHandler = ({
       span.addEvent('Retrieving data attributes');
       const attributesStartTime = Date.now();
       try {
-        dataAttributes = await dataIndex.getDataAttributes(id);
+        dataAttributes = await dataAttributesSource.getDataAttributes(id);
         const attributesDuration = Date.now() - attributesStartTime;
         span.setAttribute(
           'data.attributes_retrieval_duration_ms',
@@ -958,7 +954,7 @@ export const createDataHandler = ({
             log,
             req,
             res,
-            dataIndex,
+            dataAttributesSource,
             dataSource,
             requestAttributes,
             parentSpan: span,
@@ -978,7 +974,6 @@ export const createDataHandler = ({
       try {
         data = await dataSource.getData({
           id,
-          dataAttributes,
           requestAttributes,
           parentSpan: span,
         });
@@ -1035,7 +1030,7 @@ export const createDataHandler = ({
             log,
             req,
             res,
-            dataIndex,
+            dataAttributesSource,
             dataSource,
             requestAttributes,
             ...manifestResolution,

@@ -15,10 +15,10 @@ import { generateRequestAttributes } from '../lib/request-attributes.js';
 import { KvJsonStore } from '../store/kv-attributes-store.js';
 import {
   ContiguousData,
-  ContiguousDataAttributes,
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
+  DataAttributesSource,
   RequestAttributes,
   ContiguousMetadata,
 } from '../types.js';
@@ -60,7 +60,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private metadataStore: KvJsonStore<ContiguousMetadata>;
   private dataStore: ContiguousDataStore;
   private contiguousDataIndex: ContiguousDataIndex;
+  private dataAttributesSource: DataAttributesSource;
   private dataContentAttributeImporter: DataContentAttributeImporter;
+  private skipCache: boolean;
 
   constructor({
     log,
@@ -68,21 +70,27 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metadataStore,
     dataStore,
     contiguousDataIndex,
+    dataAttributesSource,
     dataContentAttributeImporter,
+    skipCache = false,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
     metadataStore: KvJsonStore<ContiguousMetadata>;
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
+    dataAttributesSource: DataAttributesSource;
     dataContentAttributeImporter: DataContentAttributeImporter;
+    skipCache?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
     this.metadataStore = metadataStore;
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
+    this.dataAttributesSource = dataAttributesSource;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
+    this.skipCache = skipCache;
   }
 
   private calculateVerificationPriority(
@@ -182,6 +190,15 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       }
     | undefined
   > {
+    // Skip cache retrieval if configured to do so
+    if (this.skipCache) {
+      this.log.debug(
+        'Skipping cache retrieval due to SKIP_DATA_CACHE setting',
+        { id },
+      );
+      return undefined;
+    }
+
     if (hash !== undefined) {
       try {
         this.log.debug('Found data hash in index', { id, hash });
@@ -237,13 +254,11 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
   async getData({
     id,
-    dataAttributes,
     requestAttributes,
     region,
     parentSpan,
   }: {
     id: string;
-    dataAttributes?: ContiguousDataAttributes;
     requestAttributes?: RequestAttributes;
     region?: {
       offset: number;
@@ -256,7 +271,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       {
         attributes: {
           'data.id': id,
-          'data.has_attributes': dataAttributes !== undefined,
           'data.has_region': region !== undefined,
           'data.region_offset': region?.offset,
           'data.region_size': region?.size,
@@ -272,10 +286,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     });
 
     try {
-      // Get data attributes if not provided
-      const attributes =
-        dataAttributes ??
-        (await this.contiguousDataIndex.getDataAttributes(id));
+      // Get data attributes
+      const attributes = await this.dataAttributesSource.getDataAttributes(id);
 
       if (attributes) {
         span.setAttributes({
@@ -364,7 +376,6 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       const upstreamStart = Date.now();
       const data = await this.dataSource.getData({
         id,
-        dataAttributes,
         requestAttributes,
         region,
         parentSpan: span,
@@ -386,15 +397,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       data.stream.setMaxListeners(Infinity); // Suppress listener leak warnings
 
       // Skip caching when data is untrusted and we don't have a local hash to
-      // compare against, and when serving regions to avoid persisting data
+      // compare against, when serving regions to avoid persisting data
       // fragments and (more importantly) writing invalid ID to hash
-      // relationships in the DB.
+      // relationships in the DB, and when data size is zero to avoid unnecessary
+      // storage operations and indexing.
       if (
-        (data.trusted === true || dataAttributes?.hash !== undefined) &&
-        region === undefined
+        (data.trusted === true || attributes?.hash !== undefined) &&
+        region === undefined &&
+        data.size > 0
       ) {
         span.addEvent('Starting caching process');
         const cachingStart = Date.now();
+        let bytesReceived = 0;
         const hasher = crypto.createHash('sha256');
         const cacheStream = await this.dataStore.createWriteStream();
 
@@ -421,7 +435,19 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                 // Only finalize (cache locally) when we trust the source or
                 // the computed hash matches an existing hash computed from a
                 // trusted source.
-                if (data.trusted === true || dataAttributes?.hash === hash) {
+                if (bytesReceived !== data.size) {
+                  span.addEvent('Skipping cache storage - size mismatch', {
+                    'data.expected_size': data.size,
+                    'data.received_size': bytesReceived,
+                  });
+                  span.setAttribute('cache.operation.size_mismatch', true);
+                  this.log.warn('Stream size mismatch - not caching', {
+                    id,
+                    expectedSize: data.size,
+                    receivedSize: bytesReceived,
+                  });
+                  await this.dataStore.cleanup(cacheStream);
+                } else if (data.trusted === true || attributes?.hash === hash) {
                   await this.dataStore.finalize(cacheStream, hash);
                   span.addEvent('Data cached successfully', {
                     'cache.duration_ms': cachingDuration,
@@ -429,16 +455,44 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                     'data.trusted': data.trusted,
                   });
                   span.setAttribute('cache.operation.stored', true);
+
+                  this.log.info('Successfully cached data', { id, hash });
+                  try {
+                    const verificationPriority =
+                      this.calculateVerificationPriority(requestAttributes);
+
+                    // Only update hashes when we trust the data source
+                    if (data.trusted === true) {
+                      this.dataContentAttributeImporter.queueDataContentAttributes(
+                        {
+                          id,
+                          dataRoot: attributes?.dataRoot,
+                          hash,
+                          dataSize: data.size,
+                          contentType: data.sourceContentType,
+                          cachedAt: currentUnixTimestamp(),
+                          verified: data.verified,
+                          verificationPriority,
+                        },
+                      );
+                    }
+                  } catch (error: any) {
+                    this.log.error('Error saving data content attributes:', {
+                      id,
+                      message: error.message,
+                      stack: error.stack,
+                    });
+                  }
                 } else {
                   span.addEvent('Skipping cache storage - hash mismatch', {
-                    'data.trusted_hash': dataAttributes?.hash,
+                    'data.trusted_hash': attributes?.hash,
                     'data.computed_hash': hash,
                   });
                   span.setAttribute('cache.operation.stored', false);
                   this.log.debug(
                     'Skipping caching of untrusted data with hash that does not match local hash',
                     {
-                      trustedHash: dataAttributes?.hash,
+                      trustedHash: attributes?.hash,
                       streamedHash: hash,
                     },
                   );
@@ -454,39 +508,37 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                   stack: error.stack,
                 });
               }
-
-              this.log.info('Successfully cached data', { id, hash });
-              try {
-                const verificationPriority =
-                  this.calculateVerificationPriority(requestAttributes);
-
-                // Only update hashes when we trust the data source
-                if (data.trusted === true) {
-                  this.dataContentAttributeImporter.queueDataContentAttributes({
-                    id,
-                    dataRoot: attributes?.dataRoot,
-                    hash,
-                    dataSize: data.size,
-                    contentType: data.sourceContentType,
-                    cachedAt: currentUnixTimestamp(),
-                    verified: data.verified,
-                    verificationPriority,
-                  });
-                }
-              } catch (error: any) {
-                this.log.error('Error saving data content attributes:', {
-                  id,
-                  message: error.message,
-                  stack: error.stack,
-                });
-              }
             }
           }
         });
 
         data.stream.on('data', (chunk) => {
+          bytesReceived += chunk.length;
           hasher.update(chunk);
         });
+      } else {
+        // Log why caching was skipped
+        const reasons = [];
+        if (data.trusted !== true && attributes?.hash === undefined) {
+          reasons.push('untrusted data without local hash');
+        }
+        if (region !== undefined) {
+          reasons.push('serving data region');
+        }
+        if (data.size === 0) {
+          reasons.push('zero-size data');
+        }
+
+        if (reasons.length > 0) {
+          this.log.debug('Skipping caching due to:', {
+            id,
+            reasons: reasons.join(', '),
+            dataSize: data.size,
+            trusted: data.trusted,
+            hasLocalHash: attributes?.hash !== undefined,
+            hasRegion: region !== undefined,
+          });
+        }
       }
 
       data.stream.once('error', () => {

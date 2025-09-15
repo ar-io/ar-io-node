@@ -328,14 +328,16 @@ export const ARWEAVE_PEER_CHUNK_POST_CONCURRENCY_LIMIT = +env.varOrDefault(
 //
 
 // On-demand data retrieval priority order
-// Available sources: 'ar-io-network', 'trusted-gateways', 'chunks', 'chunks-data-item', 'tx-data', 's3', 'turbo-s3', 'turbo-elasticache', 'turbo-dynamodb'
+// Available sources: 'ar-io-network', 'trusted-gateways', 'trusted-gateways-offset-aware', 'chunks', 'chunks-offset-aware', 'chunks-data-item', 'tx-data', 's3', 'turbo-s3', 'turbo-elasticache', 'turbo-dynamodb'
 // - 'chunks': Standard chunk retrieval for transactions
-// - 'chunks-data-item': Chunk retrieval with automatic data item resolution (finds data items within bundles)
+// - 'chunks-offset-aware': Chunk retrieval with automatic data item resolution and offset-aware parent traversal
+// - 'chunks-data-item': Deprecated alias for 'chunks-offset-aware' (kept for backwards compatibility)
+// - 'trusted-gateways-offset-aware': Trusted gateways with upstream offset support (uses cached offsets, no searching)
 // Legacy sources: 'ar-io-peers', 'ario-peer' (use 'ar-io-network' instead)
 export const ON_DEMAND_RETRIEVAL_ORDER = env
   .varOrDefault(
     'ON_DEMAND_RETRIEVAL_ORDER',
-    'trusted-gateways,ar-io-network,chunks-data-item,tx-data',
+    'trusted-gateways,ar-io-network,chunks-offset-aware,tx-data',
   )
   .split(',');
 
@@ -397,6 +399,10 @@ export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
 // Whether or not to enable the background data verification worker
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
   env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'true') === 'true';
+
+// Whether to fallback to legacy root traversal when attributes are incomplete
+export const ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK =
+  env.varOrDefault('ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK', 'true') === 'true';
 
 export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
@@ -927,6 +933,13 @@ export const TRUSTED_ARNS_GATEWAY_URL = env.varOrDefault(
 export const ENABLE_MEMPOOL_WATCHER =
   env.varOrDefault('ENABLE_MEMPOOL_WATCHER', 'false') === 'true';
 
+//
+// Datasets endpoint
+//
+
+export const ENABLE_DATASETS_ENDPOINT =
+  env.varOrDefault('ENABLE_DATASETS_ENDPOINT', 'false') === 'true';
+
 export const MEMPOOL_POLLING_INTERVAL_MS = +env.varOrDefault(
   'MEMPOOL_POLLING_INTERVAL_MS',
   '30000', // 30 seconds
@@ -997,6 +1010,10 @@ export const LEGACY_AWS_S3_CHUNK_DATA_PREFIX = env.varOrUndefined(
 
 // Whether or not to bypass the header cache
 export const SKIP_CACHE = env.varOrDefault('SKIP_CACHE', 'false') === 'true';
+
+// Whether or not to bypass the data cache (read-through data cache)
+export const SKIP_DATA_CACHE =
+  env.varOrDefault('SKIP_DATA_CACHE', 'false') === 'true';
 
 // The rate (0 - 1) at which to simulate request failures
 export const SIMULATED_REQUEST_FAILURE_RATE = +env.varOrDefault(
