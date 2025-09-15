@@ -133,7 +133,9 @@ export class RootParentDataSource implements ContiguousDataSource {
       }
 
       // If no parent, this is the root
-      if (attributes.parentId == null || attributes.parentId === currentId) {
+      // BUT: if this is the first item (traversalPath.length === 1) and it's self-referencing,
+      // it means we started with a root transaction, not a data item
+      if (attributes.parentId == null || (attributes.parentId === currentId && traversalPath.length > 1)) {
         log.debug('Found root transaction via attributes', {
           rootTxId: currentId,
           totalOffset,
