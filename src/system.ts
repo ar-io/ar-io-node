@@ -13,6 +13,7 @@ import postgres from 'postgres';
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
+import { FilteredContiguousDataSource } from './data/filtered-contiguous-data-source.js';
 import { ReadThroughDataCache } from './data/read-through-data-cache.js';
 import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
@@ -471,9 +472,17 @@ export const bundleRepairWorker = new BundleRepairWorker({
   filtersChanged: config.FILTER_CHANGE_REPROCESS,
 });
 
-const gatewaysDataSource = new GatewaysDataSource({
+const baseGatewaysDataSource = new GatewaysDataSource({
   log,
   trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+});
+
+// Wrap with filtering for general gateway forwarding
+const gatewaysDataSource = new FilteredContiguousDataSource({
+  log,
+  dataSource: baseGatewaysDataSource,
+  blockedOrigins: config.TRUSTED_GATEWAYS_BLOCKED_ORIGINS,
+  blockedIpAddresses: config.TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES,
 });
 
 export const arIOPeerManager = new ArIOPeerManager({
@@ -532,9 +541,10 @@ const ans104OffsetSource = new Ans104OffsetSource({
 
 // Offset-aware version of gateways data source that uses cached upstream offsets
 // but does not perform expensive offset searching if they're not available
+// Uses unfiltered base source to avoid blocking legitimate chunk retrieval
 const offsetAwareGatewaysDataSource = new RootParentDataSource({
   log,
-  dataSource: gatewaysDataSource,
+  dataSource: baseGatewaysDataSource,
   dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource,

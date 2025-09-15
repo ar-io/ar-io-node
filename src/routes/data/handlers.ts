@@ -203,6 +203,19 @@ export const getRequestAttributes = (
     originNodeRelease = nodeRelease;
   }
 
+  // Extract client IP from request headers (X-Forwarded-For) or connection
+  let clientIp: string | undefined;
+  const xForwardedFor = req.headers['x-forwarded-for'] as string;
+  if (xForwardedFor !== undefined && xForwardedFor !== '') {
+    // X-Forwarded-For can contain multiple IPs, take the first one
+    clientIp = xForwardedFor.split(',')[0].trim();
+  } else if (
+    req.socket?.remoteAddress !== undefined &&
+    req.socket.remoteAddress !== ''
+  ) {
+    clientIp = req.socket.remoteAddress;
+  }
+
   return {
     hops,
     origin,
@@ -210,6 +223,7 @@ export const getRequestAttributes = (
     arnsName: req.arns?.name,
     arnsBasename: req.arns?.basename,
     arnsRecord: req.arns?.record,
+    clientIp,
   };
 };
 

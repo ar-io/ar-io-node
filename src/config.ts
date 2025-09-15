@@ -135,6 +135,35 @@ Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
   }
 });
 
+// Trusted gateways blocked origins (origins to reject when forwarding)
+export const TRUSTED_GATEWAYS_BLOCKED_ORIGINS = JSON.parse(
+  env.varOrDefault('TRUSTED_GATEWAYS_BLOCKED_ORIGINS', '[]'),
+) as string[];
+
+// Validate blocked origins
+TRUSTED_GATEWAYS_BLOCKED_ORIGINS.forEach((origin) => {
+  if (typeof origin !== 'string' || origin.trim().length === 0) {
+    throw new Error(
+      `Invalid origin in TRUSTED_GATEWAYS_BLOCKED_ORIGINS: ${origin}`,
+    );
+  }
+});
+
+// Trusted gateways blocked IP addresses (IPs/CIDR ranges to reject when forwarding)
+export const TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES = JSON.parse(
+  env.varOrDefault('TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES', '[]'),
+) as string[];
+
+// Basic validation for IP addresses - just check they're strings for now
+// Could add more sophisticated IP/CIDR validation if needed
+TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES.forEach((ip) => {
+  if (typeof ip !== 'string' || ip.trim().length === 0) {
+    throw new Error(
+      `Invalid IP address in TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES: ${ip}`,
+    );
+  }
+});
+
 export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS',
   '10000',

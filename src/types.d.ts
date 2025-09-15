@@ -404,6 +404,7 @@ interface RequestAttributes {
   arnsRecord?: string;
   origin?: string;
   originNodeRelease?: string;
+  clientIp?: string;
 }
 
 export interface GqlQueryable {
