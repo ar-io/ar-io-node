@@ -402,6 +402,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // relationships in the DB, and when data size is zero to avoid unnecessary
       // storage operations and indexing.
       if (
+        !this.skipCache &&
         (data.trusted === true || attributes?.hash !== undefined) &&
         region === undefined &&
         data.size > 0
@@ -519,6 +520,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       } else {
         // Log why caching was skipped
         const reasons = [];
+        if (this.skipCache) {
+          reasons.push('SKIP_DATA_CACHE is set');
+        }
         if (data.trusted !== true && attributes?.hash === undefined) {
           reasons.push('untrusted data without local hash');
         }

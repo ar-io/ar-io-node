@@ -689,6 +689,101 @@ describe('ReadThroughDataCache', function () {
       assert.equal(result.trusted, true);
       assert.equal(result.size, 100);
     });
+
+    it('should skip cache writes when skipCache is enabled', async () => {
+      let createWriteStreamCalls = 0;
+      let queueDataContentAttributesCalls = 0;
+
+      const skipCacheInstance = new ReadThroughDataCache({
+        log,
+        dataSource: mockContiguousDataSource,
+        dataStore: mockContiguousDataStore,
+        metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
+        contiguousDataIndex: mockContiguousDataIndex,
+        dataAttributesSource: mockDataAttributesSource,
+        dataContentAttributeImporter: mockDataContentAttributeImporter,
+        skipCache: true,
+      });
+
+      // Mock data attributes to ensure we would normally cache this data
+      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
+        return Promise.resolve({
+          hash: 'test-hash',
+          size: 100,
+          contentType: 'plain/text',
+          isManifest: false,
+          stable: true,
+          verified: true,
+        });
+      });
+
+      // Track calls to cache write operations
+      mock.method(mockContiguousDataStore, 'createWriteStream', () => {
+        createWriteStreamCalls++;
+        return Promise.resolve(
+          new Writable({
+            write(_, __, callback) {
+              callback();
+            },
+          }),
+        );
+      });
+
+      mock.method(
+        mockDataContentAttributeImporter,
+        'queueDataContentAttributes',
+        () => {
+          queueDataContentAttributesCalls++;
+          return;
+        },
+      );
+
+      // Mock upstream data source that would normally be cached
+      mock.method(mockContiguousDataSource, 'getData', () => {
+        return Promise.resolve({
+          stream: new Readable({
+            read() {
+              this.push('test data from upstream');
+              this.push(null);
+            },
+          }),
+          size: 100,
+          sourceContentType: 'plain/text',
+          verified: true,
+          trusted: true, // This would normally trigger caching
+          cached: false,
+        });
+      });
+
+      const result = await skipCacheInstance.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      // Verify that cache write operations were skipped
+      assert.equal(
+        createWriteStreamCalls,
+        0,
+        'createWriteStream should not be called when skipCache is true',
+      );
+      assert.equal(
+        queueDataContentAttributesCalls,
+        0,
+        'queueDataContentAttributes should not be called when skipCache is true',
+      );
+
+      // Verify data is still returned correctly
+      assert.equal(result.cached, false);
+      assert.equal(result.trusted, true);
+      assert.equal(result.size, 100);
+
+      // Consume the stream to verify data integrity
+      let receivedData = '';
+      for await (const chunk of result.stream) {
+        receivedData += chunk;
+      }
+      assert.equal(receivedData, 'test data from upstream');
+    });
   });
 
   describe('zero-size data handling', () => {
