@@ -1,5 +1,10 @@
 ---
 openapi: 3.1.1
+servers:
+  - url: https://ardrive.net
+    description: Production server
+  - url: http://localhost:4000
+    description: Local development server
 info:
   title: AR.IO Gateway
   version: 0.0.1
@@ -598,7 +603,7 @@ paths:
                           type: string
                           format: uri
                           description: Full URL of the gateway peer
-                          example: "https://gateway.example.com"
+                          example: 'https://gateway.example.com'
                         dataWeight:
                           type: number
                           minimum: 1
@@ -625,7 +630,7 @@ paths:
                           type: string
                           format: uri
                           description: URL of the Arweave node peer
-                          example: "http://arweave.example.com:1984"
+                          example: 'http://arweave.example.com:1984'
                         blocks:
                           type: number
                           description: Number of blocks stored by this peer
@@ -643,13 +648,13 @@ paths:
                   - arweaveNodes
                 example:
                   gateways:
-                    "gateway.example.com:443":
-                      url: "https://gateway.example.com"
+                    'gateway.example.com:443':
+                      url: 'https://gateway.example.com'
                       dataWeight: 50
                       chunkWeight: 50
                   arweaveNodes:
-                    "arweave.example.com:1984":
-                      url: "http://arweave.example.com:1984"
+                    'arweave.example.com:1984':
+                      url: 'http://arweave.example.com:1984'
                       blocks: 165967
                       height: 1732652
                       lastSeen: 1755190447700
