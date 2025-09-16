@@ -6,7 +6,10 @@
  */
 import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
-import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
+import {
+  ArIOPeerManager,
+  PeerSuccessMetrics,
+} from '../peers/ar-io-peer-manager.js';
 
 import {
   ContiguousData,

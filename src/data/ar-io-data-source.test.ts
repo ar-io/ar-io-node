@@ -12,7 +12,7 @@ import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
 import { RequestAttributes, ContiguousDataAttributesStore } from '../types.js';
 import { ArIODataSource } from './ar-io-data-source.js';
-import { ArIOPeerManager } from './ar-io-peer-manager.js';
+import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { headerNames } from '../constants.js';
