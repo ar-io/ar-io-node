@@ -19,6 +19,7 @@ import { dataRouter } from './routes/data/index.js';
 import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import * as system from './system.js';
+import { rateLimiterMiddleware } from './middleware/rate-limiter.js';
 
 system.arweaveClient.refreshPeers();
 
@@ -50,6 +51,13 @@ app.use(
     ],
   }),
 );
+
+if (config.ENABLE_RATE_LIMITER) {
+  log.info('[app] enabling rate limiter middleware');
+  app.use(rateLimiterMiddleware()); // ← before all routes
+} else {
+  log.info('[app] rate limiter middleware disabled');
+}
 
 app.use(arnsRouter);
 app.use(openApiRouter);
