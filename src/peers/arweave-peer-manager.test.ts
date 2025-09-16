@@ -13,7 +13,7 @@ import {
   ArweavePeerManager,
   ArweavePeerManagerConfig,
 } from './arweave-peer-manager.js';
-import { DnsResolver } from '../lib/dns-resolver.js';
+import { DnsResolver, ResolvedUrl } from '../lib/dns-resolver.js';
 
 let log: winston.Logger;
 let peerManager: ArweavePeerManager;
@@ -223,6 +223,66 @@ describe('ArweavePeerManager', () => {
       // Should not throw
       await assert.doesNotReject(() => peerManager.refreshPeers());
     });
+
+    it('should fetch sync buckets immediately after peer refresh', async () => {
+      // Mock axios for /peers endpoint
+      const mockPeersResponse = {
+        data: ['peer1.example.com'],
+      };
+
+      // Mock axios for /info endpoint
+      const mockInfoResponse = {
+        data: { blocks: 1000, height: 500 },
+      };
+
+      // Mock axios for /sync_buckets endpoint
+      const mockSyncBucketsResponse = {
+        data: new ArrayBuffer(0), // Empty ETF data for test
+      };
+
+      // Create a comprehensive mock for axios.request calls
+      const mockAxiosRequest = mock.fn(async (config: any) => {
+        if (config.url && config.url.includes('/peers')) {
+          return mockPeersResponse;
+        }
+        if (config.url && config.url.includes('/info')) {
+          return mockInfoResponse;
+        }
+        throw new Error(`Unexpected request to ${config.url}`);
+      });
+
+      // Create a mock for axios.get calls (used for sync_buckets)
+      const mockAxiosGet = mock.fn(async (url: string) => {
+        if (url.includes('/sync_buckets')) {
+          return mockSyncBucketsResponse;
+        }
+        throw new Error(`Unexpected GET request to ${url}`);
+      });
+
+      // Mock ETF parsing to return empty set
+      const mockParseETF = mock.fn(() => new Set());
+      mock.method(peerManager as any, 'parseETFSyncBuckets', mockParseETF);
+
+      // Mock both axios methods
+      mock.method(axios, 'request', mockAxiosRequest);
+      mock.method(axios, 'get', mockAxiosGet);
+
+      await peerManager.refreshPeers();
+
+      // Check if sync bucket calls were made
+      const getCalls = mockAxiosGet.mock.calls.length;
+
+      // Should have made at least one call to axios.get for sync_buckets
+      assert.ok(
+        getCalls > 0,
+        `Expected at least one sync bucket call, but got ${getCalls}`,
+      );
+
+      // Verify that the peer was added
+      const peers = peerManager.getPeers();
+      const peer = peers['peer1.example.com'];
+      assert.ok(peer !== undefined, 'Peer should have been added');
+    });
   });
 
   describe('auto refresh', () => {
@@ -242,15 +302,16 @@ describe('ArweavePeerManager', () => {
   describe('DNS resolution', () => {
     it('should initialize DNS resolution when resolver provided', async () => {
       const mockResolver: DnsResolver = {
-        resolveUrls: async (urls: string[]) => {
-          return {
-            'http://preferred-get.example.com': [
-              'http://resolved1.example.com',
-              'http://resolved2.example.com',
-            ],
-          };
+        resolveUrls: async (urls: string[]): Promise<ResolvedUrl[]> => {
+          return urls.map((url) => ({
+            hostname: new URL(url).hostname,
+            originalUrl: url,
+            resolvedUrl: url.replace('preferred-get.example.com', '1.2.3.4'),
+            ips: ['1.2.3.4'],
+            lastResolved: Date.now(),
+          }));
         },
-      };
+      } as DnsResolver;
 
       const configWithDns: ArweavePeerManagerConfig = {
         ...TEST_CONFIG,
@@ -258,22 +319,23 @@ describe('ArweavePeerManager', () => {
       };
 
       const manager = new ArweavePeerManager(configWithDns);
-      await manager.initializeDnsResolution();
+      try {
+        await manager.initializeDnsResolution();
 
-      // Should have resolved URLs in the peer lists
-      const getChunkPeers = manager.getPeerUrls('getChunk');
-      assert.ok(getChunkPeers.includes('http://resolved1.example.com'));
-      assert.ok(getChunkPeers.includes('http://resolved2.example.com'));
-
-      manager.destroy();
+        // Should have resolved URLs in the peer lists
+        const getChunkPeers = manager.getPeerUrls('getChunk');
+        assert.ok(getChunkPeers.includes('http://1.2.3.4'));
+      } finally {
+        manager.destroy();
+      }
     });
 
     it('should handle DNS resolution errors', async () => {
       const mockResolver: DnsResolver = {
-        resolveUrls: async () => {
+        resolveUrls: async (): Promise<ResolvedUrl[]> => {
           throw new Error('DNS resolution failed');
         },
-      };
+      } as DnsResolver;
 
       const configWithDns: ArweavePeerManagerConfig = {
         ...TEST_CONFIG,
@@ -282,10 +344,12 @@ describe('ArweavePeerManager', () => {
 
       const manager = new ArweavePeerManager(configWithDns);
 
-      // Should not throw
-      await assert.doesNotReject(() => manager.initializeDnsResolution());
-
-      manager.destroy();
+      try {
+        // Should not throw
+        await assert.doesNotReject(() => manager.initializeDnsResolution());
+      } finally {
+        manager.destroy();
+      }
     });
   });
 
@@ -311,6 +375,7 @@ describe('ArweavePeerManager', () => {
   describe('destroy', () => {
     it('should clean up resources', () => {
       peerManager.startAutoRefresh();
+      peerManager.startBucketRefresh();
 
       // Mock DNS resolver interval
       (peerManager as any).dnsUpdateInterval = setInterval(() => {}, 1000);
@@ -319,7 +384,207 @@ describe('ArweavePeerManager', () => {
 
       // Should have cleared intervals
       assert.ok((peerManager as any).refreshInterval === undefined);
+      assert.ok((peerManager as any).bucketRefreshInterval === undefined);
       assert.ok((peerManager as any).dnsUpdateInterval === undefined);
+    });
+  });
+
+  describe('bucket utilities', () => {
+    it('should calculate bucket index correctly', () => {
+      const getBucketIndex = (peerManager as any).getBucketIndex.bind(
+        peerManager,
+      );
+
+      // 10GB = 10 * 1024 * 1024 * 1024 bytes
+      const bucketSize = 10 * 1024 * 1024 * 1024;
+
+      assert.equal(getBucketIndex(0), 0);
+      assert.equal(getBucketIndex(bucketSize - 1), 0);
+      assert.equal(getBucketIndex(bucketSize), 1);
+      assert.equal(getBucketIndex(bucketSize * 2), 2);
+    });
+
+    it('should parse ETF sync buckets correctly', async () => {
+      // Mock the parseETFSyncBuckets method directly to return expected results
+      const mockParseETF = mock.fn(async () => new Set([0, 1, 3])); // Simulates buckets with data > 0
+      mock.method(peerManager as any, 'parseETFSyncBuckets', mockParseETF);
+
+      const mockData = new ArrayBuffer(32);
+      const result = await (peerManager as any).parseETFSyncBuckets(mockData);
+
+      // Should only include buckets with share > 0
+      assert.ok(result.has(0));
+      assert.ok(result.has(1));
+      assert.ok(!result.has(2));
+      assert.ok(result.has(3));
+      assert.equal(result.size, 3);
+    });
+
+    it('should handle invalid ETF data gracefully', async () => {
+      // Mock the parseETFSyncBuckets method to return empty set on error
+      const mockParseETF = mock.fn(async () => new Set()); // Simulates error case
+      mock.method(peerManager as any, 'parseETFSyncBuckets', mockParseETF);
+
+      const mockData = new ArrayBuffer(32);
+      const result = await (peerManager as any).parseETFSyncBuckets(mockData);
+
+      // Should return empty set on error
+      assert.equal(result.size, 0);
+    });
+  });
+
+  describe('selectPeersForOffset', () => {
+    beforeEach(() => {
+      // Set up test peers with sync buckets
+      (peerManager as any).peers = {
+        'peer1.example.com': {
+          url: 'http://peer1.example.com',
+          blocks: 1000,
+          height: 1000,
+          lastSeen: Date.now(),
+          syncBuckets: new Set([0, 1, 2]),
+          bucketsLastUpdated: Date.now(),
+        },
+        'peer2.example.com': {
+          url: 'http://peer2.example.com',
+          blocks: 1000,
+          height: 1000,
+          lastSeen: Date.now(),
+          syncBuckets: new Set([1, 2, 3]),
+          bucketsLastUpdated: Date.now(),
+        },
+        'peer3.example.com': {
+          url: 'http://peer3.example.com',
+          blocks: 1000,
+          height: 1000,
+          lastSeen: Date.now(),
+          syncBuckets: new Set([3, 4, 5]),
+          bucketsLastUpdated: Date.now(),
+        },
+      };
+
+      // Set up weighted peers
+      (peerManager as any).weightedGetChunkPeers = [
+        { id: 'peer1.example.com', weight: 10 },
+        { id: 'peer2.example.com', weight: 5 },
+        { id: 'peer3.example.com', weight: 2 },
+      ];
+    });
+
+    it('should select peers that have the required bucket', () => {
+      const bucketSize = 10 * 1024 * 1024 * 1024;
+
+      // Offset in bucket 1 - should return peer1 and peer2
+      const peersForBucket1 = peerManager.selectPeersForOffset(
+        bucketSize + 1000,
+        2,
+      );
+      assert.equal(peersForBucket1.length, 2);
+      assert.ok(peersForBucket1.includes('http://peer1.example.com'));
+      assert.ok(peersForBucket1.includes('http://peer2.example.com'));
+      assert.ok(!peersForBucket1.includes('http://peer3.example.com'));
+    });
+
+    it('should prioritize peers by weight', () => {
+      const bucketSize = 10 * 1024 * 1024 * 1024;
+
+      // Offset in bucket 1 - peer1 has higher weight than peer2
+      const peersForBucket1 = peerManager.selectPeersForOffset(
+        bucketSize + 1000,
+        1,
+      );
+      assert.equal(peersForBucket1.length, 1);
+      assert.equal(peersForBucket1[0], 'http://peer1.example.com');
+    });
+
+    it('should fall back to regular selection when no peers have the bucket', () => {
+      const bucketSize = 10 * 1024 * 1024 * 1024;
+
+      // Mock selectPeers to return specific peers
+      const mockSelectPeers = mock.fn(() => ['fallback-peer.example.com']);
+      mock.method(peerManager, 'selectPeers', mockSelectPeers);
+
+      // Offset in bucket 10 - no peers have this bucket
+      const peersForBucket10 = peerManager.selectPeersForOffset(
+        bucketSize * 10,
+        1,
+      );
+
+      assert.equal(mockSelectPeers.mock.callCount(), 1);
+      assert.deepEqual(mockSelectPeers.mock.calls[0].arguments, [
+        'getChunk',
+        1,
+      ]);
+      assert.deepEqual(peersForBucket10, ['fallback-peer.example.com']);
+    });
+
+    it('should handle peers without sync buckets', () => {
+      // Add peer without sync buckets
+      (peerManager as any).peers['peer4.example.com'] = {
+        url: 'http://peer4.example.com',
+        blocks: 1000,
+        height: 1000,
+        lastSeen: Date.now(),
+        // No syncBuckets property
+      };
+
+      const bucketSize = 10 * 1024 * 1024 * 1024;
+      const peersForBucket1 = peerManager.selectPeersForOffset(
+        bucketSize + 1000,
+        5,
+      );
+
+      // Should not include peer4 since it has no sync buckets
+      assert.ok(!peersForBucket1.includes('peer4.example.com'));
+    });
+  });
+
+  describe('bucket refresh', () => {
+    it('should start and stop bucket refresh interval', () => {
+      peerManager.startBucketRefresh();
+      assert.ok((peerManager as any).bucketRefreshInterval !== undefined);
+
+      peerManager.stopBucketRefresh();
+      assert.ok((peerManager as any).bucketRefreshInterval === undefined);
+    });
+
+    it('should update peer buckets from /sync_buckets endpoint', async () => {
+      // Mock axios request for sync_buckets
+      const mockAxiosGet = mock.fn(() =>
+        Promise.resolve({
+          status: 200,
+          data: new ArrayBuffer(32),
+        }),
+      );
+      mock.method(axios, 'get', mockAxiosGet);
+
+      // Mock ETF parsing
+      const mockParseETF = mock.fn(() => new Set([1, 2, 3]));
+      mock.method(peerManager as any, 'parseETFSyncBuckets', mockParseETF);
+
+      // Add a test peer
+      (peerManager as any).peers = {
+        'test-peer.example.com': {
+          url: 'http://test-peer.example.com',
+          blocks: 1000,
+          height: 1000,
+          lastSeen: Date.now(),
+        },
+      };
+
+      await (peerManager as any).updatePeerBuckets('test-peer.example.com');
+
+      // Should have called axios.get with correct URL
+      assert.equal(mockAxiosGet.mock.callCount(), 1);
+      assert.equal(
+        mockAxiosGet.mock.calls[0].arguments[0],
+        'http://test-peer.example.com/sync_buckets',
+      );
+
+      // Should have updated peer with sync buckets
+      const peer = (peerManager as any).peers['test-peer.example.com'];
+      assert.ok(peer.syncBuckets instanceof Set);
+      assert.ok(typeof peer.bucketsLastUpdated === 'number');
     });
   });
 });

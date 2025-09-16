@@ -32,6 +32,7 @@ try {
 
 // Start peer management services
 system.arweavePeerManager.startAutoRefresh();
+system.arweavePeerManager.startBucketRefresh();
 system.arweavePeerManager.refreshPeers();
 
 system.headerFsCacheCleanupWorker?.start();

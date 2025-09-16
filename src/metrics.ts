@@ -106,6 +106,16 @@ export const arweavePeerRefreshErrorCounter = new promClient.Counter({
   help: 'Count of errors refreshing the Arweave peers list',
 });
 
+export const arweavePeerSyncBucketErrorCounter = new promClient.Counter({
+  name: 'arweave_peer_sync_bucket_errors_total',
+  help: 'Count of failed sync bucket fetch requests from Arweave peers',
+});
+
+export const arweavePeerSyncBucketUpdateCounter = new promClient.Counter({
+  name: 'arweave_peer_sync_bucket_updates_total',
+  help: 'Count of successful sync bucket updates from Arweave peers',
+});
+
 export const arweavePoaCounter = new promClient.Counter({
   name: 'arweave_poa_total',
   help: 'Count of fetched blocks with PoA attached',
