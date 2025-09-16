@@ -11,6 +11,7 @@ import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import postgres from 'postgres';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
+import { ArweavePeerManager } from './peers/arweave-peer-manager.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { FilteredContiguousDataSource } from './data/filtered-contiguous-data-source.js';
@@ -131,13 +132,25 @@ const dnsResolver =
     ? new DnsResolver({ log })
     : undefined;
 
+// Create Arweave peer manager
+export const arweavePeerManager = new ArweavePeerManager({
+  log,
+  trustedNodeUrl: config.TRUSTED_NODE_URL,
+  preferredChunkGetUrls: config.PREFERRED_CHUNK_GET_NODE_URLS,
+  preferredChunkPostUrls: config.PREFERRED_CHUNK_POST_NODE_URLS,
+  ignoreUrls: config.ARWEAVE_NODE_IGNORE_URLS,
+  peerInfoTimeoutMs: 5000,
+  refreshIntervalMs: 10 * 60 * 1000, // 10 minutes
+  temperatureDelta: config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+  dnsResolver,
+});
+
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
   skipCache: config.SKIP_CACHE,
-  preferredChunkGetUrls: config.PREFERRED_CHUNK_GET_NODE_URLS,
-  dnsResolver,
+  peerManager: arweavePeerManager,
   blockStore: makeBlockStore({
     log,
     type: config.CHAIN_CACHE_TYPE,

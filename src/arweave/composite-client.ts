@@ -23,10 +23,6 @@ import { FailureSimulator } from '../lib/chaos.js';
 import { DnsResolver } from '../lib/dns-resolver.js';
 import { fromB64Url } from '../lib/encoding.js';
 import {
-  WeightedElement,
-  randomWeightedChoices,
-} from '../lib/random-weighted-choices.js';
-import {
   sanityCheckBlock,
   sanityCheckChunk,
   sanityCheckTx,
@@ -36,6 +32,10 @@ import { secp256k1OwnerFromTx } from '../lib/ecdsa-public-key-recover.js';
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
+import {
+  ArweavePeerManager,
+  type ArweavePeerCategory,
+} from '../peers/arweave-peer-manager.js';
 import {
   BroadcastChunkResult,
   BroadcastChunkResponses,
@@ -104,11 +104,6 @@ interface Peer {
   lastSeen: number;
 }
 
-type WeightedPeerListName =
-  | 'weightedChainPeers'
-  | 'weightedGetChunkPeers'
-  | 'weightedPostChunkPeers';
-
 export class ArweaveCompositeClient
   implements
     ChainSource,
@@ -133,17 +128,10 @@ export class ArweaveCompositeClient
   private trustedNodeUrl: string;
   private trustedNodeAxios;
 
-  // Peers
-  private peers: Record<string, Peer> = {};
-  private preferredChunkGetUrls: string[];
-  private resolvedChunkGetUrls: string[];
-  private weightedChainPeers: WeightedElement<string>[] = [];
-  private weightedGetChunkPeers: WeightedElement<string>[] = [];
-  private weightedPostChunkPeers: WeightedElement<string>[] = [];
+  // Peer management
+  private peerManager: ArweavePeerManager;
 
   // New peer-based chunk POST system
-  private preferredChunkPostUrls: string[];
-  private resolvedChunkPostUrls: string[];
   private peerChunkQueues: Map<string, PeerChunkQueue> = new Map();
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
 
@@ -180,6 +168,7 @@ export class ArweaveCompositeClient
     blockStore,
     txStore,
     failureSimulator,
+    peerManager,
     requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
     requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
     maxRequestsPerSecond = DEFAULT_MAX_REQUESTS_PER_SECOND,
@@ -187,8 +176,6 @@ export class ArweaveCompositeClient
     blockPrefetchCount = DEFAULT_BLOCK_PREFETCH_COUNT,
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
-    preferredChunkGetUrls = [],
-    dnsResolver,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -196,6 +183,7 @@ export class ArweaveCompositeClient
     blockStore: PartialJsonBlockStore;
     txStore: PartialJsonTransactionStore;
     failureSimulator: FailureSimulator;
+    peerManager: ArweavePeerManager;
     requestTimeout?: number;
     requestRetryCount?: number;
     requestPerSecond?: number;
@@ -204,45 +192,17 @@ export class ArweaveCompositeClient
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
-    preferredChunkGetUrls?: string[];
-    dnsResolver?: DnsResolver;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
-    this.preferredChunkGetUrls = preferredChunkGetUrls.map((url) =>
-      url.replace(/\/$/, ''),
-    );
-    this.dnsResolver = dnsResolver;
-
-    // Initialize with unresolved URLs first
-    this.resolvedChunkGetUrls = this.preferredChunkGetUrls;
-
-    // TODO: use defaults in constructor instead of referencing config here
-
-    // Initialize new peer-based chunk POST system
-    this.preferredChunkPostUrls = config.PREFERRED_CHUNK_POST_NODE_URLS.map(
-      (url) => url.replace(/\/$/, ''),
-    );
-    // Initialize with unresolved URLs first
-    this.resolvedChunkPostUrls = this.preferredChunkPostUrls;
-    this.initializeChunkPostPeers();
+    this.peerManager = peerManager;
 
     // Initialize memoized sorting function for chunk POST peers
     this.getSortedChunkPostPeers = memoize(
       (eligiblePeers: string[]) => {
-        // Create a copy and sort: preferred peers first, then by weight within each group
-        return [...eligiblePeers].sort((a, b) => {
-          const aIsPreferred = this.isPreferredPeer(a);
-          const bIsPreferred = this.isPreferredPeer(b);
-
-          // If one is preferred and the other isn't, preferred comes first
-          if (aIsPreferred && !bIsPreferred) return -1;
-          if (!aIsPreferred && bIsPreferred) return 1;
-
-          // If both are preferred or both are not, sort by weight
-          return this.getPeerWeight(b) - this.getPeerWeight(a);
-        });
+        // Use peerManager to select peers already sorted by preference and weight
+        return this.peerManager.selectPeers('postChunk', eligiblePeers.length);
       },
       {
         maxAge: config.CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS,
@@ -333,267 +293,9 @@ export class ArweaveCompositeClient
       }
     }, 1000);
 
-    // Refresh Arweave peers every 10 minutes
-    setInterval(() => this.refreshPeers(), 10 * 60 * 1000);
-
-    // Initialize preferred chunk GET URLs with high weight
-    this.initializePreferredChunkGetUrls();
-
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
-  }
-
-  /**
-   * Initializes the weighted GET chunk peers with preferred URLs.
-   * Sets high initial weight (100) for all preferred GET URLs.
-   * Deduplicates URLs to prevent over-representation.
-   * @private
-   */
-  private initializePreferredChunkGetUrls(): void {
-    // Deduplicate and initialize weightedGetChunkPeers with resolved URLs at high weight
-    const uniqueUrls = [...new Set(this.resolvedChunkGetUrls)];
-    this.weightedGetChunkPeers = uniqueUrls.map((peerUrl) => ({
-      id: peerUrl,
-      weight: 100, // High weight for preferred chunk GET URLs
-    }));
-
-    // Log URL resolution for debugging
-    if (this.dnsResolver && this.preferredChunkGetUrls.length > 0) {
-      this.log.debug(
-        'Initialized preferred chunk GET URLs with DNS resolution',
-        {
-          originalUrls: this.preferredChunkGetUrls.length,
-          resolvedUrls: uniqueUrls.length,
-          usingDefaults: this.preferredChunkGetUrls.some(
-            (url) => url.includes('data-') && url.includes('.arweave.xyz'),
-          ),
-        },
-      );
-    }
-  }
-
-  /**
-   * Initializes DNS resolution for preferred GET/POST URLs. Idempotent - safe to call multiple times.
-   */
-  async initializeDnsResolution(): Promise<void> {
-    if (!this.dnsResolver) {
-      return;
-    }
-
-    // Clear any existing timers to prevent orphaned intervals
-    this.stopDnsResolution();
-
-    const hasGetUrls = this.preferredChunkGetUrls.length > 0;
-    const hasPostUrls = this.preferredChunkPostUrls.length > 0;
-
-    if (!hasGetUrls && !hasPostUrls) {
-      return;
-    }
-
-    const log = this.log.child({ method: 'initializeDnsResolution' });
-
-    // Combine both GET and POST URLs for resolution
-    const allUrls = [
-      ...this.preferredChunkGetUrls,
-      ...this.preferredChunkPostUrls,
-    ];
-
-    // Perform initial DNS resolution
-    const resolveStart = Date.now();
-    log.info('Resolving DNS for preferred chunk nodes...', {
-      getUrlCount: this.preferredChunkGetUrls.length,
-      postUrlCount: this.preferredChunkPostUrls.length,
-      totalUrlCount: allUrls.length,
-    });
-
-    await this.dnsResolver.resolveUrls(allUrls);
-
-    const resolvedUrls = this.dnsResolver.getAllResolvedUrls();
-    const successCount = resolvedUrls.filter(
-      (r) => r.resolutionError === undefined,
-    ).length;
-
-    log.info('DNS resolution complete', {
-      totalUrls: allUrls.length,
-      successfulResolutions: successCount,
-      failedResolutions: allUrls.length - successCount,
-      durationMs: Date.now() - resolveStart,
-      usingDefaultGets: this.preferredChunkGetUrls.some(
-        (url) => url.includes('data-') && url.includes('.arweave.xyz'),
-      ),
-      usingDefaultPosts: this.preferredChunkPostUrls.some(
-        (url) => url.includes('tip-') && url.includes('.arweave.xyz'),
-      ),
-    });
-
-    // Log resolved URLs for debugging
-    resolvedUrls.forEach((result) => {
-      if (result.resolutionError !== undefined) {
-        log.warn('Failed to resolve URL', {
-          hostname: result.hostname,
-          originalUrl: result.originalUrl,
-          error: result.resolutionError,
-        });
-      } else {
-        log.debug('Resolved URL', {
-          hostname: result.hostname,
-          originalUrl: result.originalUrl,
-          resolvedUrl: result.resolvedUrl,
-          ips: result.ips,
-        });
-      }
-    });
-
-    // Update resolved URLs
-    this.updateResolvedUrls();
-
-    // Start periodic DNS re-resolution
-    if (config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS > 0) {
-      // Single interval that handles both DNS resolution and updates
-      this.dnsUpdateInterval = setInterval(async () => {
-        try {
-          log.debug('Running periodic DNS re-resolution');
-
-          // Trigger fresh DNS resolution
-          await this.dnsResolver?.resolveUrls(allUrls);
-
-          // Update our peer lists with the new results
-          this.updateResolvedUrls();
-        } catch (error: any) {
-          log.error('Error during periodic DNS resolution', {
-            error: error.message,
-            stack: error.stack,
-          });
-        }
-      }, config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS * 1000);
-
-      // Don't block the event loop
-      this.dnsUpdateInterval.unref();
-
-      log.info('Started periodic DNS re-resolution', {
-        intervalSeconds:
-          config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS,
-      });
-    }
-  }
-
-  /**
-   * Updates the resolved URLs for both GET and POST peers based on current DNS resolution.
-   * Detects changes and updates weighted peer lists accordingly.
-   * @private
-   */
-  private updateResolvedUrls(): void {
-    if (!this.dnsResolver) {
-      return;
-    }
-
-    // Update GET URLs
-    const newResolvedGetUrls = this.dnsResolver.getResolvedUrlStrings(
-      this.preferredChunkGetUrls,
-    );
-
-    // Check if GET URLs have changed
-    const getUrlsChanged = !isDeepStrictEqual(
-      newResolvedGetUrls,
-      this.resolvedChunkGetUrls,
-    );
-
-    if (getUrlsChanged) {
-      this.log.debug(
-        'DNS resolution changed, updating preferred chunk GET URLs',
-        {
-          oldUrls: this.resolvedChunkGetUrls,
-          newUrls: newResolvedGetUrls,
-        },
-      );
-
-      // Deduplicate resolved URLs to prevent over-representation
-      this.resolvedChunkGetUrls = [...new Set(newResolvedGetUrls)];
-
-      // Update the weighted peers list with new resolved URLs
-      const preferredPeers = this.resolvedChunkGetUrls.map((peerUrl) => ({
-        id: peerUrl,
-        weight: 100,
-      }));
-
-      // Preserve non-preferred peers
-      const nonPreferredPeers = this.weightedGetChunkPeers.filter(
-        (peer) =>
-          !this.resolvedChunkGetUrls.includes(peer.id) &&
-          !this.preferredChunkGetUrls.includes(peer.id),
-      );
-
-      this.weightedGetChunkPeers = [...preferredPeers, ...nonPreferredPeers];
-    }
-
-    // Update POST URLs
-    const newResolvedPostUrls = this.dnsResolver.getResolvedUrlStrings(
-      this.preferredChunkPostUrls,
-    );
-
-    // Check if POST URLs have changed
-    const postUrlsChanged = !isDeepStrictEqual(
-      newResolvedPostUrls,
-      this.resolvedChunkPostUrls,
-    );
-
-    if (postUrlsChanged) {
-      this.log.debug(
-        'DNS resolution changed, updating preferred chunk POST URLs',
-        {
-          oldUrls: this.resolvedChunkPostUrls,
-          newUrls: newResolvedPostUrls,
-        },
-      );
-
-      // Deduplicate resolved URLs to prevent over-representation
-      this.resolvedChunkPostUrls = [...new Set(newResolvedPostUrls)];
-
-      // Update the weighted POST peers list with new resolved URLs
-      const preferredPostPeers = this.resolvedChunkPostUrls.map((peerUrl) => ({
-        id: peerUrl,
-        weight: config.PREFERRED_CHUNK_POST_WEIGHT,
-      }));
-
-      // Preserve non-preferred POST peers
-      const nonPreferredPostPeers = this.weightedPostChunkPeers.filter(
-        (peer) =>
-          !this.resolvedChunkPostUrls.includes(peer.id) &&
-          !this.preferredChunkPostUrls.includes(peer.id),
-      );
-
-      this.weightedPostChunkPeers = [
-        ...preferredPostPeers,
-        ...nonPreferredPostPeers,
-      ];
-    }
-  }
-
-  /**
-   * Stops the periodic DNS resolution timer if running.
-   * Safe to call multiple times.
-   */
-  stopDnsResolution(): void {
-    if (this.dnsUpdateInterval) {
-      clearInterval(this.dnsUpdateInterval);
-      this.dnsUpdateInterval = undefined;
-    }
-  }
-
-  /**
-   * Initializes the weighted POST chunk peers with preferred URLs.
-   * Sets weight from config for all preferred POST URLs.
-   * Deduplicates URLs to prevent over-representation.
-   * @private
-   */
-  private initializeChunkPostPeers(): void {
-    // Deduplicate and initialize weightedPostChunkPeers with resolved URLs at high weight
-    const uniqueUrls = [...new Set(this.resolvedChunkPostUrls)];
-    this.weightedPostChunkPeers = uniqueUrls.map((peerUrl) => ({
-      id: peerUrl,
-      weight: config.PREFERRED_CHUNK_POST_WEIGHT,
-    }));
   }
 
   private getOrCreatePeerQueue(peer: string): PeerChunkQueue {
@@ -615,57 +317,13 @@ export class ArweaveCompositeClient
   }
 
   private getEligiblePeersForPost(): string[] {
-    return this.weightedPostChunkPeers
-      .filter((peer) => {
-        const peerQueue = this.peerChunkQueues.get(peer.id);
-        return (
-          !peerQueue ||
-          peerQueue.queue.length() < config.CHUNK_POST_QUEUE_DEPTH_THRESHOLD
-        );
-      })
-      .map((peer) => peer.id);
-  }
-
-  private getPeerWeight(peer: string): number {
-    const weightedPeer = this.weightedPostChunkPeers.find((p) => p.id === peer);
-    return weightedPeer?.weight ?? 1;
-  }
-
-  private isPreferredPeer(peer: string): boolean {
-    return (
-      this.preferredChunkPostUrls.includes(peer) ||
-      this.resolvedChunkPostUrls.includes(peer)
-    );
-  }
-
-  private updateChunkPostPeerWeight(peer: string, success: boolean): void {
-    const peerIndex = this.weightedPostChunkPeers.findIndex(
-      (p) => p.id === peer,
-    );
-    if (peerIndex !== -1) {
-      const delta = config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
-      const isPreferred = this.isPreferredPeer(peer);
-
-      if (success) {
-        this.weightedPostChunkPeers[peerIndex].weight = Math.min(
-          this.weightedPostChunkPeers[peerIndex].weight + delta,
-          100,
-        );
-      } else {
-        // Never decrease weight for preferred peers
-        if (!isPreferred) {
-          this.weightedPostChunkPeers[peerIndex].weight = Math.max(
-            this.weightedPostChunkPeers[peerIndex].weight - delta,
-            1,
-          );
-        } else {
-          this.log.debug('Skipping weight decrease for preferred peer', {
-            peer,
-            currentWeight: this.weightedPostChunkPeers[peerIndex].weight,
-          });
-        }
-      }
-    }
+    return this.peerManager.getPeerUrls('postChunk').filter((peerUrl) => {
+      const peerQueue = this.peerChunkQueues.get(peerUrl);
+      return (
+        !peerQueue ||
+        peerQueue.queue.length() < config.CHUNK_POST_QUEUE_DEPTH_THRESHOLD
+      );
+    });
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
@@ -733,7 +391,6 @@ export class ArweaveCompositeClient
       {
         attributes: {
           'chunk.peer': peer,
-          'chunk.peer.is_preferred': this.isPreferredPeer(peer),
           'chunk.data_root': chunk.data_root,
           'chunk.data_size': chunk.data_size,
         },
@@ -777,13 +434,13 @@ export class ArweaveCompositeClient
 
       if (result.success) {
         peerQueue.totalSuccesses++;
-        this.updateChunkPostPeerWeight(peer, true);
+        this.peerManager.reportSuccess('postChunk', peer);
         span.addEvent('Chunk POST succeeded');
       } else {
         if (result.error !== undefined) {
           span.addEvent('Chunk POST failed', { error: result.error });
         }
-        this.updateChunkPostPeerWeight(peer, false);
+        this.peerManager.reportFailure('postChunk', peer);
       }
 
       return result;
@@ -795,149 +452,27 @@ export class ArweaveCompositeClient
     }
   }
 
-  async refreshPeers(): Promise<void> {
-    const log = this.log.child({ method: 'refreshPeers' });
-    log.debug('Refreshing peers...');
-
-    try {
-      const response = await this.trustedNodeRequest({
-        method: 'GET',
-        url: '/peers',
-      });
-      const peerHosts = response.data as string[];
-
-      // Create concurrency limiter for peer info requests
-      const peerInfoLimit = pLimit(config.PEER_REFRESH_CONCURRENCY);
-
-      await Promise.all(
-        peerHosts.map((peerHost) =>
-          peerInfoLimit(async () => {
-            if (!config.ARWEAVE_NODE_IGNORE_URLS.includes(peerHost)) {
-              try {
-                const peerUrl = `http://${peerHost}`;
-                const response = await axios({
-                  method: 'GET',
-                  url: '/info',
-                  baseURL: peerUrl,
-                  timeout: DEFAULT_PEER_INFO_TIMEOUT_MS,
-                });
-                this.peers[peerHost] = {
-                  url: peerUrl,
-                  blocks: response.data.blocks,
-                  height: response.data.height,
-                  lastSeen: new Date().getTime(),
-                };
-              } catch (error) {
-                metrics.arweavePeerInfoErrorCounter.inc();
-              }
-            } else {
-              this.log.debug('Ignoring peer:', { peerHost });
-            }
-          }),
-        ),
-      );
-      // Update chain and post chunk peers (no preferred URLs)
-      for (const peerListName of [
-        'weightedChainPeers',
-        'weightedPostChunkPeers',
-      ] as WeightedPeerListName[]) {
-        this[peerListName] = Object.values(this.peers).map((peerObject) => {
-          const previousWeight =
-            this[peerListName].find((peer) => peer.id === peerObject.url)
-              ?.weight ?? undefined;
-          return {
-            id: peerObject.url,
-            weight: previousWeight === undefined ? 50 : previousWeight,
-          };
-        });
-      }
-
-      // Update GET chunk peers (preserve resolved preferred URLs)
-      const preferredChunkGetEntries = this.weightedGetChunkPeers.filter(
-        (peer) => this.resolvedChunkGetUrls.includes(peer.id),
-      );
-
-      // Add discovered peers for chunk GET
-      const discoveredChunkGetEntries = Object.values(this.peers).map(
-        (peerObject) => {
-          const previousWeight =
-            this.weightedGetChunkPeers.find(
-              (peer) => peer.id === peerObject.url,
-            )?.weight ?? undefined;
-          return {
-            id: peerObject.url,
-            weight: previousWeight === undefined ? 1 : previousWeight,
-          };
-        },
-      );
-
-      // Combine preferred and discovered peers for chunk GET, avoiding duplicates
-      const allChunkGetEntries = [...preferredChunkGetEntries];
-      for (const discoveredPeer of discoveredChunkGetEntries) {
-        if (!allChunkGetEntries.some((peer) => peer.id === discoveredPeer.id)) {
-          allChunkGetEntries.push(discoveredPeer);
-        }
-      }
-
-      this.weightedGetChunkPeers = allChunkGetEntries;
-
-      // Update POST chunk peers (preserve preferred URLs)
-      const preferredChunkPostEntries = this.weightedPostChunkPeers.filter(
-        (peer) =>
-          this.preferredChunkPostUrls.includes(peer.id) ||
-          this.resolvedChunkPostUrls.includes(peer.id),
-      );
-
-      // Add discovered peers for chunk POST
-      const discoveredChunkPostEntries = Object.values(this.peers).map(
-        (peerObject) => {
-          const previousWeight =
-            this.weightedPostChunkPeers.find(
-              (peer) => peer.id === peerObject.url,
-            )?.weight ?? undefined;
-          return {
-            id: peerObject.url,
-            weight: previousWeight === undefined ? 50 : previousWeight,
-          };
-        },
-      );
-
-      // Combine preferred and discovered peers for chunk POST, avoiding duplicates
-      const allChunkPostEntries = [...preferredChunkPostEntries];
-      for (const discoveredPeer of discoveredChunkPostEntries) {
-        if (
-          !allChunkPostEntries.some((peer) => peer.id === discoveredPeer.id)
-        ) {
-          allChunkPostEntries.push(discoveredPeer);
-        }
-      }
-
-      this.weightedPostChunkPeers = allChunkPostEntries;
-    } catch (error: any) {
-      this.log.warn('Error refreshing peers:', {
-        message: error.message,
-        stack: error.stack,
-      });
-      metrics.arweavePeerRefreshErrorCounter.inc();
-    }
-  }
-
   getPeers(): Record<string, Peer> {
-    return this.peers;
+    return this.peerManager.getPeers();
   }
 
-  selectPeers(peerCount: number, peerListName: WeightedPeerListName): string[] {
-    const log = this.log.child({ method: 'selectPeers', peerListName });
-
-    if (this[peerListName].length === 0) {
-      log.debug('No weighted peers available');
-      return [];
+  selectPeers(peerCount: number, peerListName: string): string[] {
+    let category: ArweavePeerCategory;
+    switch (peerListName) {
+      case 'weightedChainPeers':
+        category = 'chain';
+        break;
+      case 'weightedGetChunkPeers':
+        category = 'getChunk';
+        break;
+      case 'weightedPostChunkPeers':
+        category = 'postChunk';
+        break;
+      default:
+        throw new Error(`Unknown peer list name: ${peerListName}`);
     }
 
-    return randomWeightedChoices<string>({
-      table: this[peerListName],
-      count: peerCount,
-    });
+    return this.peerManager.selectPeers(category, peerCount);
   }
 
   async trustedNodeRequest(request: AxiosRequestConfig) {
@@ -1315,7 +850,7 @@ export class ArweaveCompositeClient
     peer: string,
     method: string,
     sourceType: 'trusted' | 'peer',
-    peerListName: WeightedPeerListName,
+    peerListName: string,
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'success',
@@ -1325,15 +860,22 @@ export class ArweaveCompositeClient
       source_type: sourceType,
     });
     if (sourceType === 'peer') {
-      // warm the succeeding peer
-      this[peerListName].forEach((weightedPeer) => {
-        if (weightedPeer.id === peer) {
-          weightedPeer.weight = Math.min(
-            weightedPeer.weight + config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
-            100,
-          );
-        }
-      });
+      let category: ArweavePeerCategory;
+      switch (peerListName) {
+        case 'weightedChainPeers':
+          category = 'chain';
+          break;
+        case 'weightedGetChunkPeers':
+          category = 'getChunk';
+          break;
+        case 'weightedPostChunkPeers':
+          category = 'postChunk';
+          break;
+        default:
+          throw new Error(`Unknown peer list name: ${peerListName}`);
+      }
+
+      this.peerManager.reportSuccess(category, peer);
     }
   }
 
@@ -1341,7 +883,7 @@ export class ArweaveCompositeClient
     peer: string,
     method: string,
     sourceType: 'trusted' | 'peer',
-    peerListName: WeightedPeerListName,
+    peerListName: string,
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'error',
@@ -1351,15 +893,22 @@ export class ArweaveCompositeClient
       source_type: sourceType,
     });
     if (sourceType === 'peer') {
-      // cool the failing peer
-      this[peerListName].forEach((weightedPeer) => {
-        if (weightedPeer.id === peer) {
-          weightedPeer.weight = Math.max(
-            weightedPeer.weight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
-            1,
-          );
-        }
-      });
+      let category: ArweavePeerCategory;
+      switch (peerListName) {
+        case 'weightedChainPeers':
+          category = 'chain';
+          break;
+        case 'weightedGetChunkPeers':
+          category = 'getChunk';
+          break;
+        case 'weightedPostChunkPeers':
+          category = 'postChunk';
+          break;
+        default:
+          throw new Error(`Unknown peer list name: ${peerListName}`);
+      }
+
+      this.peerManager.reportFailure(category, peer);
     }
   }
 
@@ -1730,14 +1279,8 @@ export class ArweaveCompositeClient
 
       // 2. Get sorted peers from memoized function (cached for 10 seconds)
       const sortedPeers = this.getSortedChunkPostPeers(eligiblePeers);
-      const preferredPeerCount = sortedPeers.filter((peer) =>
-        this.isPreferredPeer(peer),
-      ).length;
-      const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
 
       span.setAttribute('chunk.sorted_peers', sortedPeers.length);
-      span.setAttribute('chunk.preferred_peers', preferredPeerCount);
-      span.setAttribute('chunk.non_preferred_peers', nonPreferredPeerCount);
 
       // 3. Broadcast in parallel with concurrency limit
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);
