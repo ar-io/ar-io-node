@@ -15,12 +15,10 @@ import wait from '../lib/wait.js';
 import * as winston from 'winston';
 import pLimit from 'p-limit';
 import memoize from 'memoizee';
-import { isDeepStrictEqual } from 'node:util';
 import { context, trace, Span } from '@opentelemetry/api';
 import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
 
 import { FailureSimulator } from '../lib/chaos.js';
-import { DnsResolver } from '../lib/dns-resolver.js';
 import { fromB64Url } from '../lib/encoding.js';
 import {
   sanityCheckBlock,
@@ -71,7 +69,6 @@ const CHUNK_CACHE_TTL_SECONDS = 5;
 const CHUNK_CACHE_CAPACITY = 1000;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
-const DEFAULT_PEER_INFO_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
 
 // Peer queue management types
@@ -121,8 +118,6 @@ export class ArweaveCompositeClient
   private blockStore: PartialJsonBlockStore;
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
   private skipCache: boolean;
-  private dnsResolver?: DnsResolver;
-  private dnsUpdateInterval?: NodeJS.Timeout;
 
   // Trusted node
   private trustedNodeUrl: string;
@@ -945,10 +940,10 @@ export class ArweaveCompositeClient
           max_attempts: retryCount,
         });
 
-        // Select a random set of peers for each retry attempt
-        const randomPeers = this.selectPeers(
+        // Select peers with offset awareness when possible
+        const randomPeers = this.peerManager.selectPeersForOffset(
+          absoluteOffset,
           peerSelectionCount,
-          'weightedGetChunkPeers',
         );
 
         if (randomPeers.length === 0) {
@@ -966,20 +961,61 @@ export class ArweaveCompositeClient
           attempt: attempt + 1,
         });
 
+        // Ensure clean URL construction without double slashes
+        const baseUrl = randomPeer.endsWith('/')
+          ? randomPeer.slice(0, -1)
+          : randomPeer;
+        const chunkPath = `chunk/${absoluteOffset}`;
+        const requestUrl = `${baseUrl}/${chunkPath}`;
+
+        this.log.debug('Making chunk request to peer', {
+          peer: randomPeer,
+          peerHost,
+          absoluteOffset,
+          requestUrl,
+          timeout: 500,
+          attempt: attempt + 1,
+        });
+
+        const startTime = Date.now();
+
         try {
-          const startTime = Date.now();
           const response = await axios({
             method: 'GET',
-            url: `/chunk/${absoluteOffset}`,
-            baseURL: randomPeer,
+            url: chunkPath, // No leading slash
+            baseURL: baseUrl, // No trailing slash
             timeout: 500,
           });
           const responseTime = Date.now() - startTime;
 
+          this.log.debug('Received chunk response from peer', {
+            peer: randomPeer,
+            peerHost,
+            absoluteOffset,
+            responseTime,
+            status: response.status,
+            statusText: response.statusText,
+            contentType: response.headers['content-type'],
+            dataSize: JSON.stringify(response.data).length,
+            attempt: attempt + 1,
+          });
+
           const jsonChunk = response.data;
 
           // Fast fail if chunk has the wrong structure
-          sanityCheckChunk(jsonChunk);
+          try {
+            sanityCheckChunk(jsonChunk);
+          } catch (sanityError: any) {
+            this.log.warn('Chunk failed sanity check', {
+              peer: randomPeer,
+              peerHost,
+              absoluteOffset,
+              sanityError: sanityError.message,
+              chunkData: jsonChunk,
+              attempt: attempt + 1,
+            });
+            throw sanityError;
+          }
 
           const txPath = fromB64Url(jsonChunk.tx_path);
           const dataRootBuffer = txPath.slice(-64, -32);
@@ -1001,12 +1037,27 @@ export class ArweaveCompositeClient
             sourceHost,
           };
 
-          await validateChunk(
-            txSize,
-            chunk,
-            fromB64Url(dataRoot),
-            relativeOffset,
-          );
+          try {
+            await validateChunk(
+              txSize,
+              chunk,
+              fromB64Url(dataRoot),
+              relativeOffset,
+            );
+          } catch (validationError: any) {
+            this.log.warn('Chunk failed validation', {
+              peer: randomPeer,
+              peerHost,
+              absoluteOffset,
+              txSize,
+              dataRoot,
+              relativeOffset,
+              validationError: validationError.message,
+              chunkSize: chunk.chunk.length,
+              attempt: attempt + 1,
+            });
+            throw validationError;
+          }
 
           span.setAttributes({
             'chunk.successful_peer': peerHost,
@@ -1030,10 +1081,45 @@ export class ArweaveCompositeClient
 
           return chunk;
         } catch (error: any) {
+          const responseTime = Date.now() - startTime;
+
+          // Enhanced error logging for debugging
+          let errorDetails: any = {
+            peer: randomPeer,
+            peerHost,
+            absoluteOffset,
+            requestUrl,
+            attempt: attempt + 1,
+            responseTime,
+            errorType: error.constructor.name,
+            errorMessage: error.message,
+          };
+
+          // Check if it's an Axios error for more details
+          if (axios.isAxiosError(error)) {
+            errorDetails = {
+              ...errorDetails,
+              isAxiosError: true,
+              code: error.code,
+              status: error.response?.status,
+              statusText: error.response?.statusText,
+              responseHeaders: error.response?.headers,
+              responseData: error.response?.data,
+              timeout: error.code === 'ECONNABORTED',
+              connectionRefused: error.code === 'ECONNREFUSED',
+              hostUnreachable: error.code === 'EHOSTUNREACH',
+              dnsLookupFailed: error.code === 'ENOTFOUND',
+            };
+          }
+
+          this.log.warn('Chunk request failed', errorDetails);
+
           span.addEvent('Peer request failed', {
             peer_host: peerHost,
             error: error.message,
             attempt: attempt + 1,
+            error_code: error.code,
+            http_status: error.response?.status,
           });
 
           this.handlePeerFailure(
@@ -1281,6 +1367,14 @@ export class ArweaveCompositeClient
       const sortedPeers = this.getSortedChunkPostPeers(eligiblePeers);
 
       span.setAttribute('chunk.sorted_peers', sortedPeers.length);
+
+      // Calculate preferred vs non-preferred peer counts for logging
+      const preferredChunkPostUrls =
+        this.peerManager.getPreferredChunkPostUrls();
+      const preferredPeerCount = sortedPeers.filter((peer) =>
+        preferredChunkPostUrls.includes(peer),
+      ).length;
+      const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
 
       // 3. Broadcast in parallel with concurrency limit
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);

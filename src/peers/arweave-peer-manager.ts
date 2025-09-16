@@ -8,17 +8,20 @@ import { default as axios } from 'axios';
 import winston from 'winston';
 import pLimit from 'p-limit';
 
-import { DnsResolver } from '../lib/dns-resolver.js';
+import { DnsResolver, ResolvedUrl } from '../lib/dns-resolver.js';
 import {
   WeightedElement,
   randomWeightedChoices,
 } from '../lib/random-weighted-choices.js';
+import { parseETFSyncBuckets } from '../lib/etf-sync-buckets-parser.js';
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
 
 const DEFAULT_PEER_INFO_TIMEOUT_MS = 5000;
 const DEFAULT_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_TEMPERATURE_DELTA = 5;
+const DEFAULT_BUCKET_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const BUCKET_SIZE = 10 * 1024 * 1024 * 1024; // 10GB bucket size
 
 /**
  * Represents an Arweave peer node with its metadata
@@ -28,6 +31,8 @@ interface ArweavePeer {
   blocks: number; // Number of blocks the peer has
   height: number; // Current height of the peer's chain
   lastSeen: number; // Timestamp of last successful contact
+  syncBuckets?: Set<number>; // Set of 10GB bucket indices this peer has
+  bucketsLastUpdated?: number; // Timestamp of last bucket update
 }
 
 /**
@@ -43,6 +48,7 @@ export interface ArweavePeerManagerConfig {
   refreshIntervalMs?: number; // How often to refresh peer list
   temperatureDelta?: number; // Weight adjustment on success/failure
   dnsResolver?: DnsResolver; // Optional DNS resolver for preferred URLs
+  bucketRefreshIntervalMs?: number; // How often to refresh sync buckets (default 5 minutes)
 }
 
 /**
@@ -62,10 +68,6 @@ export interface ArweavePeerSuccessMetrics {
 /**
  * Internal weighted element structure
  */
-interface WeightedPeer {
-  id: string; // Peer URL
-  weight: number; // Weight for random selection (1-100)
-}
 
 type WeightedPeerListName =
   | 'weightedChainPeers'
@@ -93,13 +95,15 @@ export class ArweavePeerManager {
   private peerInfoTimeoutMs: number;
   private refreshIntervalMs: number;
   private temperatureDelta: number;
+  private bucketRefreshIntervalMs: number;
 
   // Optional DNS resolver
   private dnsResolver?: DnsResolver;
   private dnsUpdateInterval?: NodeJS.Timeout;
 
-  // Auto-refresh timer
+  // Auto-refresh timers
   private refreshInterval?: NodeJS.Timeout;
+  private bucketRefreshInterval?: NodeJS.Timeout;
 
   constructor(config: ArweavePeerManagerConfig) {
     this.log = config.log.child({ class: this.constructor.name });
@@ -113,6 +117,8 @@ export class ArweavePeerManager {
       config.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
     this.temperatureDelta =
       config.temperatureDelta ?? DEFAULT_TEMPERATURE_DELTA;
+    this.bucketRefreshIntervalMs =
+      config.bucketRefreshIntervalMs ?? DEFAULT_BUCKET_REFRESH_INTERVAL_MS;
     this.dnsResolver = config.dnsResolver;
 
     // Initialize preferred URLs
@@ -214,11 +220,12 @@ export class ArweavePeerManager {
     // Perform initial DNS resolution
     try {
       const resolvedUrls = await this.dnsResolver.resolveUrls(allUrls);
-      this.updateResolvedUrls(resolvedUrls);
+      const resolvedUrlsMap = this.convertResolvedUrlsToMap(resolvedUrls);
+      this.updateResolvedUrls(resolvedUrlsMap);
 
       log.debug('Initial DNS resolution completed', {
         originalCount: allUrls.length,
-        resolvedCount: Object.keys(resolvedUrls).length,
+        resolvedCount: resolvedUrls.length,
       });
     } catch (error: any) {
       log.warn('Initial DNS resolution failed, using original URLs', {
@@ -231,11 +238,12 @@ export class ArweavePeerManager {
       async () => {
         try {
           const resolvedUrls = await this.dnsResolver!.resolveUrls(allUrls);
-          this.updateResolvedUrls(resolvedUrls);
+          const resolvedUrlsMap = this.convertResolvedUrlsToMap(resolvedUrls);
+          this.updateResolvedUrls(resolvedUrlsMap);
 
           log.debug('Periodic DNS resolution completed', {
             originalCount: allUrls.length,
-            resolvedCount: Object.keys(resolvedUrls).length,
+            resolvedCount: resolvedUrls.length,
           });
         } catch (error: any) {
           log.warn('Periodic DNS resolution failed', {
@@ -245,6 +253,16 @@ export class ArweavePeerManager {
       },
       5 * 60 * 1000,
     ); // Update every 5 minutes
+  }
+
+  private convertResolvedUrlsToMap(
+    resolvedUrls: ResolvedUrl[],
+  ): Record<string, string[]> {
+    const result: Record<string, string[]> = {};
+    for (const resolvedUrl of resolvedUrls) {
+      result[resolvedUrl.originalUrl] = [resolvedUrl.resolvedUrl];
+    }
+    return result;
   }
 
   private updateResolvedUrls(resolvedUrls: Record<string, string[]>): void {
@@ -290,6 +308,13 @@ export class ArweavePeerManager {
    */
   getPeers(): Record<string, ArweavePeer> {
     return this.peers;
+  }
+
+  /**
+   * Get preferred chunk POST URLs
+   */
+  getPreferredChunkPostUrls(): string[] {
+    return this.preferredChunkPostUrls;
   }
 
   /**
@@ -425,6 +450,9 @@ export class ArweavePeerManager {
 
       this.updateWeightedPeerLists();
 
+      // Immediately fetch sync buckets for new/updated peers
+      await this.refreshPeerSyncBuckets();
+
       log.debug('Peer refresh completed', {
         totalPeers: Object.keys(this.peers).length,
       });
@@ -546,6 +574,103 @@ export class ArweavePeerManager {
   }
 
   /**
+   * Start automatic bucket refresh interval
+   */
+  startBucketRefresh(): void {
+    if (this.bucketRefreshInterval) {
+      this.stopBucketRefresh(); // Clear existing interval
+    }
+
+    this.bucketRefreshInterval = setInterval(() => {
+      this.refreshBuckets().catch((error) => {
+        this.log.warn('Auto bucket refresh failed', {
+          error: error.message,
+        });
+      });
+    }, this.bucketRefreshIntervalMs);
+
+    this.log.debug('Started automatic bucket refresh', {
+      intervalMs: this.bucketRefreshIntervalMs,
+    });
+  }
+
+  /**
+   * Stop automatic bucket refresh
+   */
+  stopBucketRefresh(): void {
+    if (this.bucketRefreshInterval) {
+      clearInterval(this.bucketRefreshInterval);
+      this.bucketRefreshInterval = undefined;
+      this.log.debug('Stopped automatic bucket refresh');
+    }
+  }
+
+  /**
+   * Refresh sync buckets for peers without buckets (immediate refresh)
+   */
+  private async refreshPeerSyncBuckets(): Promise<void> {
+    const log = this.log.child({ method: 'refreshPeerSyncBuckets' });
+
+    // Find peers that don't have sync buckets yet
+    const peersToUpdate = Object.entries(this.peers)
+      .filter(([, peer]) => peer.syncBuckets === undefined)
+      .map(([url]) => url);
+
+    if (peersToUpdate.length === 0) {
+      log.debug('All peers already have sync buckets');
+      return;
+    }
+
+    log.debug('Immediately fetching sync buckets for new peers', {
+      peerCount: peersToUpdate.length,
+    });
+
+    // Update sync buckets for each peer
+    await Promise.all(
+      peersToUpdate.map((peerUrl) => this.updatePeerBuckets(peerUrl)),
+    );
+  }
+
+  /**
+   * Refresh sync buckets for all peers that need updating
+   */
+  private async refreshBuckets(): Promise<void> {
+    const log = this.log.child({ method: 'refreshBuckets' });
+    const now = Date.now();
+
+    // Find peers that need bucket updates
+    const peersToUpdate = Object.entries(this.peers)
+      .filter(([, peer]) => {
+        // Update if buckets haven't been fetched yet, or if they're stale
+        return (
+          peer.bucketsLastUpdated === undefined ||
+          now - peer.bucketsLastUpdated > this.bucketRefreshIntervalMs
+        );
+      })
+      .map(([url]) => url);
+
+    if (peersToUpdate.length === 0) {
+      log.debug('No peers need bucket updates');
+      return;
+    }
+
+    log.debug('Refreshing buckets for peers', {
+      peerCount: peersToUpdate.length,
+    });
+
+    // Create concurrency limiter for bucket requests
+    const bucketUpdateLimit = pLimit(config.PEER_REFRESH_CONCURRENCY);
+
+    await Promise.all(
+      peersToUpdate.map((peerUrl) =>
+        bucketUpdateLimit(() => this.updatePeerBuckets(peerUrl)),
+      ),
+    );
+
+    log.debug('Bucket refresh completed');
+  }
+
+  /**
    * Get peer URLs for a specific category (for debugging/monitoring)
    */
   getPeerUrls(category?: ArweavePeerCategory): string[] {
@@ -558,10 +683,140 @@ export class ArweavePeerManager {
   }
 
   /**
+   * Select peers that have data for a specific offset
+   */
+  selectPeersForOffset(offset: number, count: number = 3): string[] {
+    const log = this.log.child({
+      method: 'selectPeersForOffset',
+      offset,
+      count,
+    });
+
+    const bucketIndex = this.getBucketIndex(offset);
+    const candidatePeers: string[] = [];
+
+    // Find peers that have the required bucket
+    for (const [peerUrl, peer] of Object.entries(this.peers)) {
+      if (peer.syncBuckets?.has(bucketIndex)) {
+        candidatePeers.push(peer.url);
+      }
+    }
+
+    if (candidatePeers.length === 0) {
+      log.debug(
+        'No peers found with required bucket, falling back to weighted selection',
+        {
+          bucketIndex,
+        },
+      );
+      // Fall back to regular weighted selection for chunk operations
+      return this.selectPeers('getChunk', count);
+    }
+
+    // Score peers by their weight from the weighted lists
+    const weightedGetChunkPeers = new Map(
+      this.weightedGetChunkPeers.map((p) => [p.id, p.weight]),
+    );
+
+    // Create weighted elements for randomized selection
+    const weightedElements = candidatePeers.map((url) => {
+      // Extract hostname from full URL to match with weighted peers
+      const hostname = new URL(url).hostname;
+      return {
+        id: url,
+        weight: weightedGetChunkPeers.get(hostname) ?? 1, // Default weight if not in weighted list
+      };
+    });
+
+    // Use randomized weighted selection like the regular selectPeers method
+    const selected = randomWeightedChoices({
+      table: weightedElements,
+      count,
+    });
+
+    log.debug('Selected offset-aware peers', {
+      bucketIndex,
+      candidateCount: candidatePeers.length,
+      selectedCount: selected.length,
+    });
+
+    return selected;
+  }
+
+  /**
+   * Update sync buckets for a specific peer
+   */
+  private async updatePeerBuckets(peerKey: string): Promise<void> {
+    const log = this.log.child({ method: 'updatePeerBuckets', peerKey });
+
+    // Get the peer info to get the full URL
+    const peer = this.peers[peerKey];
+    if (peer === undefined) {
+      log.warn('Peer not found for bucket update');
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${peer.url}/sync_buckets`, {
+        timeout: this.peerInfoTimeoutMs,
+        responseType: 'arraybuffer',
+      });
+
+      if (response.status !== 200) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const buckets = await this.parseETFSyncBuckets(response.data);
+
+      // Update peer info (we already have the peer reference)
+      peer.syncBuckets = buckets;
+      peer.bucketsLastUpdated = Date.now();
+      log.debug('Updated sync buckets', { bucketCount: buckets.size });
+
+      // Record successful update
+      metrics.arweavePeerSyncBucketUpdateCounter.inc();
+    } catch (error: any) {
+      log.warn('Failed to fetch sync buckets', { error: error.message });
+
+      // Record error
+      metrics.arweavePeerSyncBucketErrorCounter.inc();
+
+      // Clear buckets on failure but don't remove the peer entirely
+      peer.syncBuckets = undefined;
+      peer.bucketsLastUpdated = undefined;
+    }
+  }
+
+  /**
+   * Calculate bucket index from offset
+   */
+  private getBucketIndex(offset: number): number {
+    return Math.floor(offset / BUCKET_SIZE);
+  }
+
+  /**
+   * Parse ETF sync bucket data from Arweave peer
+   */
+  private async parseETFSyncBuckets(data: ArrayBuffer): Promise<Set<number>> {
+    try {
+      const result = parseETFSyncBuckets(data);
+      this.log.debug('Parsed ETF sync buckets', {
+        bucketSize: result.bucketSize,
+        bucketCount: result.buckets.size,
+      });
+      return result.buckets;
+    } catch (error) {
+      this.log.error('Failed to parse ETF sync buckets', { error });
+      return new Set();
+    }
+  }
+
+  /**
    * Cleanup resources
    */
   destroy(): void {
     this.stopAutoRefresh();
+    this.stopBucketRefresh();
     this.stopDnsResolution();
   }
 }
