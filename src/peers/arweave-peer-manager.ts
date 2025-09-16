@@ -696,7 +696,7 @@ export class ArweavePeerManager {
     const candidatePeers: string[] = [];
 
     // Find peers that have the required bucket
-    for (const [peerUrl, peer] of Object.entries(this.peers)) {
+    for (const [, peer] of Object.entries(this.peers)) {
       if (peer.syncBuckets?.has(bucketIndex)) {
         candidatePeers.push(peer.url);
       }
