@@ -44,6 +44,7 @@
     "fs-extra": "^11.3.2",
     "graphql": "^16.11.0",
     "ioredis": "^5.8.0",
+    "is-ip": "^5.0.1",
     "json-canonicalize": "^1.0.6",
     "lmdb": "^2.9.4",
     "lru-cache": "^11.2.2",
