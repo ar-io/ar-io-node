@@ -132,24 +132,13 @@ export class RootParentDataSource implements ContiguousDataSource {
         originalItemSize = attributes.size;
       }
 
-      // If this is the first item and it's self-referencing, it's a root transaction
-      // being directly accessed - exit traversal immediately
-      if (traversalPath.length === 1 && attributes.parentId === currentId) {
-        log.debug('Initial item is self-referencing root, traversal not applicable', {
-          currentId,
-          traversalPath,
-        });
-        return null;
-      }
-
       // If no parent, this is the root
       if (attributes.parentId == null || attributes.parentId === currentId) {
-        log.debug('Found root transaction via attributes', {
-          rootTxId: currentId,
-          totalOffset,
-          traversalPath,
-          originalItemSize,
-        });
+        // Skip L1 transaction
+        if (dataItemId === currentId) {
+          return null;
+        }
+
         return {
           rootTxId: currentId,
           totalOffset,
