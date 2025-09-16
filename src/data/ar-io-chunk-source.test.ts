@@ -10,7 +10,7 @@ import * as winston from 'winston';
 import { AoARIORead } from '@ar.io/sdk';
 import { ChunkDataByAnySourceParams } from '../types.js';
 import { ArIOChunkSource } from './ar-io-chunk-source.js';
-import { ArIOPeerManager } from './ar-io-peer-manager.js';
+import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
 
 let log: winston.Logger;
 let chunkSource: ArIOChunkSource;

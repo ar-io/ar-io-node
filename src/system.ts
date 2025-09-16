@@ -83,7 +83,7 @@ import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
-import { ArIOPeerManager } from './data/ar-io-peer-manager.js';
+import { ArIOPeerManager } from './peers/ar-io-peer-manager.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
