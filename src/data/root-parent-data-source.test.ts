@@ -644,10 +644,10 @@ describe('RootParentDataSource', () => {
 
       assert.strictEqual(result.size, 1000);
 
-      // Should fetch data with offset 0
+      // Should pass through to underlying data source without region
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, rootId);
-      assert.strictEqual(dataCall.region.offset, 0);
+      assert.strictEqual(dataCall.region, undefined);
     });
 
     it('should detect cycles in parent chain', async () => {
