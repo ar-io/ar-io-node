@@ -15,33 +15,33 @@ import { Span } from '@opentelemetry/api';
 
 /**
  * A wrapper around ContiguousDataSource that filters requests based on
- * blocked origins and IP addresses before forwarding to the inner data source.
+ * blocked origins and CIDR ranges before forwarding to the inner data source.
  */
 export class FilteredContiguousDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private innerDataSource: ContiguousDataSource;
   private blockedOrigins: Set<string>;
-  private blockedIpAddresses: string[];
+  private blockedCidrs: string[];
 
   constructor({
     log,
     dataSource,
     blockedOrigins = [],
-    blockedIpAddresses = [],
+    blockedCidrs = [],
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
     blockedOrigins?: string[];
-    blockedIpAddresses?: string[];
+    blockedCidrs?: string[];
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.innerDataSource = dataSource;
     this.blockedOrigins = new Set(blockedOrigins);
-    this.blockedIpAddresses = blockedIpAddresses;
+    this.blockedCidrs = blockedCidrs;
 
     this.log.info('FilteredContiguousDataSource initialized', {
       blockedOrigins: blockedOrigins.length,
-      blockedIpAddresses: blockedIpAddresses.length,
+      blockedCidrs: blockedCidrs.length,
     });
   }
 
@@ -52,21 +52,15 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
     return this.blockedOrigins.has(origin);
   }
 
-  private isIpBlocked(clientIp?: string): boolean {
+  private isCidrBlocked(clientIp?: string): boolean {
     if (clientIp === undefined || clientIp === '') {
       return false;
     }
 
-    // Simple string matching for now - could be enhanced with CIDR matching
-    for (const blockedIp of this.blockedIpAddresses) {
-      if (clientIp === blockedIp) {
+    // Check if IP matches any of the blocked CIDR ranges
+    for (const blockedCidr of this.blockedCidrs) {
+      if (this.isIpInCidr(clientIp, blockedCidr)) {
         return true;
-      }
-      // Basic CIDR check - if blocked IP contains '/' treat as CIDR
-      if (blockedIp.includes('/')) {
-        if (this.isIpInCidr(clientIp, blockedIp)) {
-          return true;
-        }
       }
     }
 
@@ -126,7 +120,7 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
         );
       }
 
-      if (this.isIpBlocked(requestAttributes.clientIp)) {
+      if (this.isCidrBlocked(requestAttributes.clientIp)) {
         this.log.info('Blocking request due to blocked IP', {
           id,
           clientIp: requestAttributes.clientIp,

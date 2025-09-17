@@ -205,7 +205,7 @@ export const getRequestAttributes = (
 
   // Extract client IP from request headers (X-Forwarded-For) or connection
   let clientIp: string | undefined;
-  const xForwardedFor = req.headers['x-forwarded-for'] as string;
+  const xForwardedFor = req.headers['x-forwarded-for'] as string | undefined;
   if (xForwardedFor !== undefined && xForwardedFor !== '') {
     // X-Forwarded-For can contain multiple IPs, take the first one
     clientIp = xForwardedFor.split(',')[0].trim();
