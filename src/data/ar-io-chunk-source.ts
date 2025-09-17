@@ -184,6 +184,8 @@ export class ArIOChunkSource
         arnsName: params.requestAttributes?.arnsName,
         arnsBasename: params.requestAttributes?.arnsBasename,
         arnsRecord: params.requestAttributes?.arnsRecord,
+        clientIp: params.requestAttributes?.clientIp,
+        clientIps: params.requestAttributes?.clientIps || [],
       });
 
       const headers = requestAttributesHeaders?.headers || {};

@@ -52,15 +52,34 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
     return this.blockedOrigins.has(origin);
   }
 
-  private isCidrBlocked(clientIp?: string): boolean {
-    if (clientIp === undefined || clientIp === '') {
+  private isCidrBlocked(clientIp?: string, clientIps?: string[]): boolean {
+    const ipsToCheck: string[] = [];
+
+    // Add legacy clientIp for backwards compatibility
+    if (clientIp !== undefined && clientIp !== '') {
+      ipsToCheck.push(clientIp);
+    }
+
+    // Add all client IPs if available
+    if (clientIps && clientIps.length > 0) {
+      ipsToCheck.push(...clientIps);
+    }
+
+    if (ipsToCheck.length === 0) {
       return false;
     }
 
-    // Check if IP matches any of the blocked CIDR ranges
-    for (const blockedCidr of this.blockedCidrs) {
-      if (this.isIpInCidr(clientIp, blockedCidr)) {
-        return true;
+    // Check if ANY IP matches any of the blocked CIDR ranges
+    for (const ip of ipsToCheck) {
+      for (const blockedCidr of this.blockedCidrs) {
+        if (this.isIpInCidr(ip, blockedCidr)) {
+          this.log.debug('IP blocked by CIDR', {
+            ip,
+            cidr: blockedCidr,
+            allIps: ipsToCheck,
+          });
+          return true;
+        }
       }
     }
 
@@ -120,13 +139,19 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
         );
       }
 
-      if (this.isCidrBlocked(requestAttributes.clientIp)) {
+      if (
+        this.isCidrBlocked(
+          requestAttributes.clientIp,
+          requestAttributes.clientIps,
+        )
+      ) {
         this.log.info('Blocking request due to blocked IP', {
           id,
           clientIp: requestAttributes.clientIp,
+          clientIps: requestAttributes.clientIps,
         });
         throw new Error(
-          `Request blocked: IP '${requestAttributes.clientIp}' is blocked`,
+          `Request blocked: One or more IPs in [${requestAttributes.clientIps?.join(', ') || requestAttributes.clientIp}] are blocked`,
         );
       }
     }

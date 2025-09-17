@@ -131,6 +131,7 @@ describe('ArIODataSource', () => {
           hops: 1,
           origin: undefined,
           originNodeRelease: undefined,
+          clientIps: [],
         },
       });
 
@@ -187,6 +188,7 @@ describe('ArIODataSource', () => {
           hops: 1,
           origin: undefined,
           originNodeRelease: undefined,
+          clientIps: [],
         },
       });
 
@@ -267,6 +269,7 @@ describe('ArIODataSource', () => {
           hops: 3,
           origin: undefined,
           originNodeRelease: undefined,
+          clientIps: [],
         },
       });
     });
@@ -521,6 +524,7 @@ describe('ArIODataSource', () => {
             hops: 1,
             origin: undefined,
             originNodeRelease: undefined,
+            clientIps: [],
           },
         });
       });

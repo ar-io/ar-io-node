@@ -189,6 +189,7 @@ describe('GatewayDataSource', () => {
         hops: requestAttributes.hops + 1,
         origin: requestAttributes.origin,
         originNodeRelease: undefined,
+        clientIps: [],
       });
 
       let receivedData = '';
