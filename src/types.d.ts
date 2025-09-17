@@ -397,14 +397,22 @@ interface GqlBlocksResult {
   edges: GqlBlockEdge[];
 }
 
-interface RequestAttributes {
+export interface RequestAttributes {
+  /** Number of hops this request has made through AR.IO gateways */
   hops: number;
+  /** ArNS name being accessed (e.g., 'subdomain' in subdomain.example.arweave.dev) */
   arnsName?: string;
+  /** ArNS base name being accessed (e.g., 'example' in subdomain.example.arweave.dev) */
   arnsBasename?: string;
+  /** ArNS record being accessed */
   arnsRecord?: string;
+  /** Origin gateway that initiated this request (from X-AR-IO-Origin header) */
   origin?: string;
+  /** Release version of the origin node */
   originNodeRelease?: string;
+  /** Legacy single client IP for backwards compatibility */
   clientIp?: string;
+  /** Complete list of client IPs from X-Forwarded-For and socket.remoteAddress */
   clientIps: string[];
 }
 

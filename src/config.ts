@@ -151,23 +151,21 @@ TRUSTED_GATEWAYS_BLOCKED_ORIGINS.forEach((origin) => {
   }
 });
 
-// Trusted gateways blocked CIDR ranges to reject when forwarding
-export const TRUSTED_GATEWAYS_BLOCKED_CIDRS = env
-  .varOrDefault('TRUSTED_GATEWAYS_BLOCKED_CIDRS', '')
+// Trusted gateways blocked IPs and CIDR ranges to reject when forwarding
+export const TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS = env
+  .varOrDefault('TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS', '')
   .split(',')
   .map((cidr) => cidr.trim())
   .filter((cidr) => cidr.length > 0);
 
-// Validate blocked CIDR ranges
-TRUSTED_GATEWAYS_BLOCKED_CIDRS.forEach((cidr) => {
+// Validate blocked IPs and CIDR ranges
+TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS.forEach((cidr) => {
   if (typeof cidr !== 'string' || cidr.trim().length === 0) {
-    throw new Error(`Invalid CIDR in TRUSTED_GATEWAYS_BLOCKED_CIDRS: ${cidr}`);
+    throw new Error(`Invalid IP/CIDR in TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS: ${cidr}`);
   }
-  if (!cidr.includes('/')) {
-    throw new Error(
-      `Invalid CIDR format in TRUSTED_GATEWAYS_BLOCKED_CIDRS: ${cidr} (must include /prefix)`,
-    );
-  }
+  // Allow both exact IPs and CIDR notation
+  // Individual IPs (no slash) are allowed for exact matching
+  // CIDRs must include /prefix
 });
 
 export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(

@@ -42,7 +42,7 @@ beforeEach(async () => {
     log,
     dataSource: mockDataSource,
     blockedOrigins: ['blocked-origin.com', 'evil.gateway.net'],
-    blockedCidrs: ['192.168.1.100/32', '10.0.0.0/8'],
+    blockedIpsAndCidrs: ['192.168.1.100/32', '10.0.0.0/8'],
   });
 });
 
@@ -227,7 +227,7 @@ describe('FilteredContiguousDataSource', () => {
           log,
           dataSource: mockDataSource,
           blockedOrigins: [],
-          blockedIpAddresses: ['invalid-cidr/abc'],
+          blockedIpsAndCidrs: ['invalid-cidr/abc'],
         });
 
       const requestAttributes: RequestAttributes = {
@@ -254,7 +254,7 @@ describe('FilteredContiguousDataSource', () => {
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
-        blockedIpAddresses: [],
+        blockedIpsAndCidrs: [],
       });
 
       const requestAttributes: RequestAttributes = {
@@ -307,7 +307,7 @@ describe('FilteredContiguousDataSource', () => {
         log,
         dataSource: mockDataSource,
         blockedOrigins: [],
-        blockedCidrs: ['192.168.1.0/24', '10.0.0.0/8'],
+        blockedIpsAndCidrs: ['192.168.1.0/24', '10.0.0.0/8'],
       });
     });
 
@@ -416,6 +416,297 @@ describe('FilteredContiguousDataSource', () => {
       };
 
       const data = await filteredDataSource.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
+    });
+  });
+
+  describe('Edge cases and security tests', () => {
+    it('should handle IPv6 exact matching', async () => {
+      const ipv6FilteredSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['2001:db8::1', 'fe80::1'],
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['2001:db8::1'],
+      };
+
+      await assert.rejects(
+        ipv6FilteredSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+    });
+
+    it('should handle IPv4-mapped IPv6 normalization', async () => {
+      const mappedFilteredSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.1.1'], // Block the normalized IPv4
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['::ffff:192.168.1.1'], // IPv4-mapped IPv6
+      };
+
+      await assert.rejects(
+        mappedFilteredSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+    });
+
+    it('should reject invalid CIDR prefix (/33)', async () => {
+      const invalidPrefixSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.1.0/33'], // Invalid prefix > 32
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['192.168.1.1'],
+      };
+
+      // Should not block because CIDR is invalid
+      const data = await invalidPrefixSource.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
+    });
+
+    it('should reject invalid CIDR prefix (/-1)', async () => {
+      const negativeSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.1.0/-1'], // Negative prefix
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['192.168.1.1'],
+      };
+
+      // Should not block because CIDR is invalid
+      const data = await negativeSource.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
+    });
+
+    it('should reject invalid IPv4 format (999.999.999.999)', async () => {
+      const invalidIpSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['999.999.999.999'], // Invalid IP
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['192.168.1.1'],
+      };
+
+      // Should not block because blocked IP is invalid
+      const data = await invalidIpSource.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
+    });
+
+    it('should support bare IP as /32 CIDR', async () => {
+      const bareIpSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.1.1'], // Bare IP (should be treated as /32)
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['192.168.1.1'], // Exact match
+      };
+
+      await assert.rejects(
+        bareIpSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+    });
+
+    it('should handle /0 mask edge case (blocks everything)', async () => {
+      const wildcardSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['0.0.0.0/0'], // Blocks all IPv4
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['8.8.8.8'], // Any IPv4 should be blocked
+      };
+
+      await assert.rejects(
+        wildcardSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+    });
+
+    it('should handle /32 mask edge case (exact match only)', async () => {
+      const exactSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.1.1/32'], // Only exact IP
+      });
+
+      // Exact match should be blocked
+      const blockedAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['192.168.1.1'],
+      };
+
+      await assert.rejects(
+        exactSource.getData({
+          id: 'test-id',
+          requestAttributes: blockedAttributes,
+        }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+
+      // Different IP should be allowed
+      const allowedAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['192.168.1.2'],
+      };
+
+      const data = await exactSource.getData({
+        id: 'test-id',
+        requestAttributes: allowedAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
+    });
+
+    it('should handle multiple IPs with mixed formats', async () => {
+      const mixedSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.1.1', '2001:db8::1', '10.0.0.0/8'],
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['8.8.8.8', '2001:db8::1', '192.168.1.100'], // IPv6 should be blocked
+      };
+
+      await assert.rejects(
+        mixedSource.getData({
+          id: 'test-id',
+          requestAttributes,
+        }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+    });
+
+    it('should handle case insensitive IPv6 matching', async () => {
+      const ipv6Source = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['2001:DB8::1'], // Uppercase hex
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['2001:db8::1'], // Lowercase hex
+      };
+
+      // Should be blocked due to exact string matching (case sensitive)
+      const data = await ipv6Source.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData); // Should pass since exact string match is case sensitive
+    });
+
+    it('should handle empty and whitespace values', async () => {
+      const cleanSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.1.1'],
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['  ', '', '192.168.1.2'], // Empty/whitespace values
+      };
+
+      const data = await cleanSource.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
+    });
+
+    it('should reject IPs with leading zeros (prevents octal interpretation)', async () => {
+      const octalSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedIpsAndCidrs: ['192.168.001.1'], // Leading zero in third octet
+      });
+
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        clientIps: ['192.168.1.1'],
+      };
+
+      // Should not match because leading zeros make the blocked entry invalid
+      const data = await octalSource.getData({
         id: 'test-id',
         requestAttributes,
       });

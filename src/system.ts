@@ -482,7 +482,7 @@ const gatewaysDataSource = new FilteredContiguousDataSource({
   log,
   dataSource: baseGatewaysDataSource,
   blockedOrigins: config.TRUSTED_GATEWAYS_BLOCKED_ORIGINS,
-  blockedCidrs: config.TRUSTED_GATEWAYS_BLOCKED_CIDRS,
+  blockedIpsAndCidrs: config.TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS,
 });
 
 export const arIOPeerManager = new ArIOPeerManager({

@@ -35,6 +35,30 @@ const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
 
+/**
+ * Validates if a string is a valid IP address format (IPv4 or IPv6)
+ * @param ip - The IP address string to validate
+ * @returns true if the IP format is valid, false otherwise
+ */
+function isValidIpFormat(ip: string): boolean {
+  // IPv4 validation
+  if (ip.includes('.') && !ip.includes(':')) {
+    const parts = ip.split('.');
+    if (parts.length !== 4) return false;
+    return parts.every(part => {
+      const num = parseInt(part, 10);
+      return !isNaN(num) && num >= 0 && num <= 255 && part === num.toString();
+    });
+  }
+
+  // IPv6 validation (basic - check for colons and valid hex characters)
+  if (ip.includes(':')) {
+    return /^[0-9a-fA-F:]+$/.test(ip);
+  }
+
+  return false;
+}
+
 const handleIfNoneMatch = (req: Request, res: Response): boolean => {
   const ifNoneMatch = req.get('if-none-match');
   const etag = res.getHeader('etag');
@@ -203,20 +227,37 @@ export const getRequestAttributes = (
     originNodeRelease = nodeRelease;
   }
 
-  // Extract client IPs from request headers (X-Forwarded-For) and connection
+  // Extract and validate client IPs from request headers (X-Forwarded-For) and connection
   const clientIps: string[] = [];
   let clientIp: string | undefined;
 
-  const xForwardedFor = req.headers['x-forwarded-for'] as string | undefined;
+  const xForwardedFor = req.headers['x-forwarded-for'];
   if (xForwardedFor !== undefined && xForwardedFor !== '') {
-    // X-Forwarded-For can contain multiple IPs, collect all of them
-    const forwardedIps = xForwardedFor
-      .split(',')
-      .map((ip) => ip.trim())
-      .filter((ip) => ip.length > 0);
-    clientIps.push(...forwardedIps);
-    // Keep first IP for backwards compatibility
-    clientIp = forwardedIps[0];
+    // Handle both string and string[] headers (Express can return either)
+    const forwardedValues = Array.isArray(xForwardedFor)
+      ? xForwardedFor.flatMap(h => h.split(','))
+      : xForwardedFor.split(',');
+
+    // Process each IP with validation and normalization
+    for (const rawIp of forwardedValues) {
+      const ip = rawIp.trim();
+
+      // Skip empty, unknown, or invalid entries
+      if (!ip || ip.toLowerCase() === 'unknown') {
+        continue;
+      }
+
+      // Normalize IPv4-mapped IPv6 (::ffff:192.168.1.1 -> 192.168.1.1)
+      const normalizedIp = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1] || ip;
+
+      // Basic validation - check for valid IP format
+      if (isValidIpFormat(normalizedIp)) {
+        clientIps.push(normalizedIp);
+      }
+    }
+
+    // Keep first valid IP for backwards compatibility
+    clientIp = clientIps[0];
   }
 
   // Always include remote address if available (even when X-Forwarded-For is present)
@@ -224,14 +265,16 @@ export const getRequestAttributes = (
     req.socket?.remoteAddress !== undefined &&
     req.socket.remoteAddress !== ''
   ) {
-    const remoteAddr = req.socket.remoteAddress;
-    // Only add if not already in the list
-    if (!clientIps.includes(remoteAddr)) {
-      clientIps.push(remoteAddr);
+    const remoteIp = req.socket.remoteAddress;
+    // Normalize IPv4-mapped IPv6
+    const normalizedRemote = remoteIp.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1] || remoteIp;
+
+    if (!clientIps.includes(normalizedRemote)) {
+      clientIps.push(normalizedRemote);
     }
     // Set as fallback if no X-Forwarded-For
     if (clientIp === undefined) {
-      clientIp = remoteAddr;
+      clientIp = normalizedRemote;
     }
   }
 
