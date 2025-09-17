@@ -123,6 +123,7 @@ describe('Request attributes functions', () => {
         hops: 3,
         origin: headers[headerNames.origin],
         originNodeRelease: headers[headerNames.originNodeRelease],
+        clientIps: [],
       };
 
       const result = parseRequestAttributesHeaders({ headers });
@@ -138,6 +139,7 @@ describe('Request attributes functions', () => {
         hops: 1,
         origin: headers[headerNames.origin],
         originNodeRelease: headers[headerNames.originNodeRelease],
+        clientIps: [],
       };
 
       const result = parseRequestAttributesHeaders({ headers });
@@ -154,6 +156,7 @@ describe('Request attributes functions', () => {
         hops: currentHops,
         origin: headers[headerNames.origin],
         originNodeRelease: headers[headerNames.originNodeRelease],
+        clientIps: [],
       };
 
       const result = parseRequestAttributesHeaders({ headers, currentHops });
@@ -175,6 +178,7 @@ describe('Request attributes functions', () => {
         arnsName: 'test-basename_test-record',
         arnsBasename: 'test-basename',
         arnsRecord: 'test-record',
+        clientIps: [],
       };
 
       const result = parseRequestAttributesHeaders({ headers });

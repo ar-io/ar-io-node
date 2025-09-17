@@ -203,17 +203,36 @@ export const getRequestAttributes = (
     originNodeRelease = nodeRelease;
   }
 
-  // Extract client IP from request headers (X-Forwarded-For) or connection
+  // Extract client IPs from request headers (X-Forwarded-For) and connection
+  const clientIps: string[] = [];
   let clientIp: string | undefined;
+
   const xForwardedFor = req.headers['x-forwarded-for'] as string | undefined;
   if (xForwardedFor !== undefined && xForwardedFor !== '') {
-    // X-Forwarded-For can contain multiple IPs, take the first one
-    clientIp = xForwardedFor.split(',')[0].trim();
-  } else if (
+    // X-Forwarded-For can contain multiple IPs, collect all of them
+    const forwardedIps = xForwardedFor
+      .split(',')
+      .map((ip) => ip.trim())
+      .filter((ip) => ip.length > 0);
+    clientIps.push(...forwardedIps);
+    // Keep first IP for backwards compatibility
+    clientIp = forwardedIps[0];
+  }
+
+  // Always include remote address if available (even when X-Forwarded-For is present)
+  if (
     req.socket?.remoteAddress !== undefined &&
     req.socket.remoteAddress !== ''
   ) {
-    clientIp = req.socket.remoteAddress;
+    const remoteAddr = req.socket.remoteAddress;
+    // Only add if not already in the list
+    if (!clientIps.includes(remoteAddr)) {
+      clientIps.push(remoteAddr);
+    }
+    // Set as fallback if no X-Forwarded-For
+    if (clientIp === undefined) {
+      clientIp = remoteAddr;
+    }
   }
 
   return {
@@ -224,6 +243,7 @@ export const getRequestAttributes = (
     arnsBasename: req.arns?.basename,
     arnsRecord: req.arns?.record,
     clientIp,
+    clientIps,
   };
 };
 

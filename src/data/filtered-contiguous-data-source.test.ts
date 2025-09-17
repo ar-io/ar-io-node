@@ -42,7 +42,7 @@ beforeEach(async () => {
     log,
     dataSource: mockDataSource,
     blockedOrigins: ['blocked-origin.com', 'evil.gateway.net'],
-    blockedIpAddresses: ['192.168.1.100', '10.0.0.0/8'],
+    blockedCidrs: ['192.168.1.100/32', '10.0.0.0/8'],
   });
 });
 
@@ -64,6 +64,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'allowed-origin.com',
         clientIp: '192.168.1.10',
+        clientIps: ['192.168.1.10'],
       };
 
       const data = await filteredDataSource.getData({
@@ -79,6 +80,7 @@ describe('FilteredContiguousDataSource', () => {
       const requestAttributes: RequestAttributes = {
         hops: 1,
         clientIp: '192.168.1.10',
+        clientIps: ['192.168.1.10'],
       };
 
       const data = await filteredDataSource.getData({
@@ -95,6 +97,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'allowed-origin.com',
         clientIp: '192.168.2.100',
+        clientIps: ['192.168.2.100'],
       };
 
       const data = await filteredDataSource.getData({
@@ -128,6 +131,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'blocked-origin.com',
         clientIp: '192.168.1.10',
+        clientIps: ['192.168.1.10'],
       };
 
       await assert.rejects(
@@ -146,6 +150,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'allowed-origin.com',
         clientIp: '192.168.1.100',
+        clientIps: ['192.168.1.100'],
       };
 
       await assert.rejects(
@@ -153,7 +158,7 @@ describe('FilteredContiguousDataSource', () => {
           id: 'test-id',
           requestAttributes,
         }),
-        /Request blocked: IP '192\.168\.1\.100' is blocked/,
+        /Request blocked.*192\.168\.1\.100.*blocked/,
       );
 
       assert.equal((mockDataSource.getData as any).mock.callCount(), 0);
@@ -164,6 +169,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'allowed-origin.com',
         clientIp: '10.0.5.100',
+        clientIps: ['10.0.5.100'],
       };
 
       await assert.rejects(
@@ -171,7 +177,7 @@ describe('FilteredContiguousDataSource', () => {
           id: 'test-id',
           requestAttributes,
         }),
-        /Request blocked: IP '10\.0\.5\.100' is blocked/,
+        /Request blocked.*10\.0\.5\.100.*blocked/,
       );
 
       assert.equal((mockDataSource.getData as any).mock.callCount(), 0);
@@ -182,6 +188,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'evil.gateway.net',
         clientIp: '1.2.3.4',
+        clientIps: ['1.2.3.4'],
       };
 
       await assert.rejects(
@@ -202,6 +209,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'allowed-origin.com',
         clientIp: '11.0.0.1', // Outside 10.0.0.0/8
+        clientIps: ['11.0.0.1'],
       };
 
       const data = await filteredDataSource.getData({
@@ -226,6 +234,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'allowed-origin.com',
         clientIp: '192.168.1.1',
+        clientIps: ['192.168.1.1'],
       };
 
       // Should not block due to invalid CIDR
@@ -252,6 +261,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 1,
         origin: 'any-origin.com',
         clientIp: '192.168.1.100',
+        clientIps: ['192.168.1.100'],
       };
 
       const data = await unrestrictedDataSource.getData({
@@ -268,6 +278,7 @@ describe('FilteredContiguousDataSource', () => {
         hops: 2,
         origin: 'allowed-origin.com',
         clientIp: '192.168.1.10',
+        clientIps: ['192.168.1.10'],
         arnsName: 'test-name',
         arnsBasename: 'test-basename',
       };
@@ -287,6 +298,129 @@ describe('FilteredContiguousDataSource', () => {
         requestAttributes,
       );
       assert.deepEqual(mockCall.arguments[0].region, region);
+    });
+  });
+
+  describe('Multiple Client IPs', () => {
+    beforeEach(() => {
+      filteredDataSource = new FilteredContiguousDataSource({
+        log,
+        dataSource: mockDataSource,
+        blockedOrigins: [],
+        blockedCidrs: ['192.168.1.0/24', '10.0.0.0/8'],
+      });
+    });
+
+    it('should block when first IP in clientIps matches blocked CIDR', async () => {
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        origin: 'allowed-origin.com',
+        clientIp: '192.168.1.100', // First IP, should be blocked
+        clientIps: ['192.168.1.100', '203.0.113.1'], // First blocked, second allowed
+      };
+
+      await assert.rejects(
+        () =>
+          filteredDataSource.getData({
+            id: 'test-id',
+            requestAttributes,
+          }),
+        {
+          message: /Request blocked.*192.168.1.100.*203.0.113.1.*blocked/,
+        },
+      );
+    });
+
+    it('should block when second IP in clientIps matches blocked CIDR', async () => {
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        origin: 'allowed-origin.com',
+        clientIp: '203.0.113.1', // First IP, allowed
+        clientIps: ['203.0.113.1', '10.0.5.100'], // First allowed, second blocked
+      };
+
+      await assert.rejects(
+        () =>
+          filteredDataSource.getData({
+            id: 'test-id',
+            requestAttributes,
+          }),
+        {
+          message: /Request blocked.*203.0.113.1.*10.0.5.100.*blocked/,
+        },
+      );
+    });
+
+    it('should allow when none of the IPs in clientIps match blocked CIDRs', async () => {
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        origin: 'allowed-origin.com',
+        clientIp: '203.0.113.1', // First IP, allowed
+        clientIps: ['203.0.113.1', '198.51.100.1', '172.16.0.1'], // All allowed
+      };
+
+      const data = await filteredDataSource.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
+    });
+
+    it('should block when clientIp is blocked even if not in clientIps array', async () => {
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        origin: 'allowed-origin.com',
+        clientIp: '192.168.1.100', // Legacy field, blocked
+        clientIps: ['203.0.113.1'], // Array has allowed IP
+      };
+
+      await assert.rejects(
+        () =>
+          filteredDataSource.getData({
+            id: 'test-id',
+            requestAttributes,
+          }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+    });
+
+    it('should work with empty clientIps array and fall back to clientIp', async () => {
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        origin: 'allowed-origin.com',
+        clientIp: '192.168.1.100', // Blocked
+        clientIps: [], // Empty array
+      };
+
+      await assert.rejects(
+        () =>
+          filteredDataSource.getData({
+            id: 'test-id',
+            requestAttributes,
+          }),
+        {
+          message: /Request blocked.*blocked/,
+        },
+      );
+    });
+
+    it('should allow when neither clientIp nor clientIps are present', async () => {
+      const requestAttributes: RequestAttributes = {
+        hops: 1,
+        origin: 'allowed-origin.com',
+        clientIps: [], // Empty array
+        // No clientIp field
+      };
+
+      const data = await filteredDataSource.getData({
+        id: 'test-id',
+        requestAttributes,
+      });
+
+      assert.deepEqual(data, mockContiguousData);
     });
   });
 });
