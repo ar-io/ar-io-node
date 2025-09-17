@@ -136,9 +136,11 @@ Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
 });
 
 // Trusted gateways blocked origins (origins to reject when forwarding)
-export const TRUSTED_GATEWAYS_BLOCKED_ORIGINS = JSON.parse(
-  env.varOrDefault('TRUSTED_GATEWAYS_BLOCKED_ORIGINS', '[]'),
-) as string[];
+export const TRUSTED_GATEWAYS_BLOCKED_ORIGINS = env
+  .varOrDefault('TRUSTED_GATEWAYS_BLOCKED_ORIGINS', '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
 
 // Validate blocked origins
 TRUSTED_GATEWAYS_BLOCKED_ORIGINS.forEach((origin) => {
@@ -149,17 +151,21 @@ TRUSTED_GATEWAYS_BLOCKED_ORIGINS.forEach((origin) => {
   }
 });
 
-// Trusted gateways blocked IP addresses (IPs/CIDR ranges to reject when forwarding)
-export const TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES = JSON.parse(
-  env.varOrDefault('TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES', '[]'),
-) as string[];
+// Trusted gateways blocked CIDR ranges to reject when forwarding
+export const TRUSTED_GATEWAYS_BLOCKED_CIDRS = env
+  .varOrDefault('TRUSTED_GATEWAYS_BLOCKED_CIDRS', '')
+  .split(',')
+  .map((cidr) => cidr.trim())
+  .filter((cidr) => cidr.length > 0);
 
-// Basic validation for IP addresses - just check they're strings for now
-// Could add more sophisticated IP/CIDR validation if needed
-TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES.forEach((ip) => {
-  if (typeof ip !== 'string' || ip.trim().length === 0) {
+// Validate blocked CIDR ranges
+TRUSTED_GATEWAYS_BLOCKED_CIDRS.forEach((cidr) => {
+  if (typeof cidr !== 'string' || cidr.trim().length === 0) {
+    throw new Error(`Invalid CIDR in TRUSTED_GATEWAYS_BLOCKED_CIDRS: ${cidr}`);
+  }
+  if (!cidr.includes('/')) {
     throw new Error(
-      `Invalid IP address in TRUSTED_GATEWAYS_BLOCKED_IP_ADDRESSES: ${ip}`,
+      `Invalid CIDR format in TRUSTED_GATEWAYS_BLOCKED_CIDRS: ${cidr} (must include /prefix)`,
     );
   }
 });
