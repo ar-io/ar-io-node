@@ -145,9 +145,12 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
       let prefixLength: number;
 
       if (cidr.includes('/')) {
-        [network, prefixLength] = cidr.split('/').map((part, index) =>
-          index === 0 ? part : parseInt(part, 10)
-        ) as [string, number];
+        [network, prefixLength] = cidr
+          .split('/')
+          .map((part, index) => (index === 0 ? part : parseInt(part, 10))) as [
+          string,
+          number,
+        ];
       } else {
         // Bare IP - treat as /32 (exact match)
         network = cidr;
@@ -193,7 +196,7 @@ export class FilteredContiguousDataSource implements ContiguousDataSource {
       const networkNum = ipToNumber(network);
 
       // Handle /0 mask correctly - when prefixLength is 0, mask should be 0
-      const mask = prefixLength === 0 ? 0 : ((-1 << (32 - prefixLength)) >>> 0);
+      const mask = prefixLength === 0 ? 0 : (-1 << (32 - prefixLength)) >>> 0;
 
       return (ipNum & mask) === (networkNum & mask);
     } catch (error) {

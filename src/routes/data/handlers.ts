@@ -45,7 +45,7 @@ function isValidIpFormat(ip: string): boolean {
   if (ip.includes('.') && !ip.includes(':')) {
     const parts = ip.split('.');
     if (parts.length !== 4) return false;
-    return parts.every(part => {
+    return parts.every((part) => {
       const num = parseInt(part, 10);
       return !isNaN(num) && num >= 0 && num <= 255 && part === num.toString();
     });
@@ -235,7 +235,7 @@ export const getRequestAttributes = (
   if (xForwardedFor !== undefined && xForwardedFor !== '') {
     // Handle both string and string[] headers (Express can return either)
     const forwardedValues = Array.isArray(xForwardedFor)
-      ? xForwardedFor.flatMap(h => h.split(','))
+      ? xForwardedFor.flatMap((h) => h.split(','))
       : xForwardedFor.split(',');
 
     // Process each IP with validation and normalization
@@ -248,7 +248,8 @@ export const getRequestAttributes = (
       }
 
       // Normalize IPv4-mapped IPv6 (::ffff:192.168.1.1 -> 192.168.1.1)
-      const normalizedIp = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1] || ip;
+      const normalizedIp =
+        ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1] ?? ip;
 
       // Basic validation - check for valid IP format
       if (isValidIpFormat(normalizedIp)) {
@@ -267,7 +268,8 @@ export const getRequestAttributes = (
   ) {
     const remoteIp = req.socket.remoteAddress;
     // Normalize IPv4-mapped IPv6
-    const normalizedRemote = remoteIp.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1] || remoteIp;
+    const normalizedRemote =
+      remoteIp.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1] ?? remoteIp;
 
     if (!clientIps.includes(normalizedRemote)) {
       clientIps.push(normalizedRemote);

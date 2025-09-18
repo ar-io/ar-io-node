@@ -161,7 +161,9 @@ export const TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS = env
 // Validate blocked IPs and CIDR ranges
 TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS.forEach((cidr) => {
   if (typeof cidr !== 'string' || cidr.trim().length === 0) {
-    throw new Error(`Invalid IP/CIDR in TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS: ${cidr}`);
+    throw new Error(
+      `Invalid IP/CIDR in TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS: ${cidr}`,
+    );
   }
   // Allow both exact IPs and CIDR notation
   // Individual IPs (no slash) are allowed for exact matching
