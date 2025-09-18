@@ -8,7 +8,7 @@ import { strict as assert } from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
 import axios from 'axios';
-import { default as wait } from 'wait';
+import wait from '../../src/lib/wait.js';
 import Sqlite, { Database } from 'better-sqlite3';
 import crypto from 'node:crypto';
 import { b64UrlToUtf8, toB64Url, fromB64Url } from '../../src/lib/encoding.js';

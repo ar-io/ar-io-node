@@ -35,7 +35,7 @@ import { normalizeAns104DataItem } from '../lib/ans-104.js';
 import log from '../log.js';
 import { BundleRecord } from '../types.js';
 import { processBundleStream } from '../lib/bundles.js';
-import wait from 'wait';
+import wait from '../lib/wait.js';
 
 const HEIGHT = 1138;
 const BLOCK_TX_INDEX = 42;

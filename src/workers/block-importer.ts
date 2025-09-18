@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import * as EventEmitter from 'node:events';
-import { default as wait } from 'wait';
+import wait from '../lib/wait.js';
 import * as winston from 'winston';
 
 import { MAX_FORK_DEPTH } from '../arweave/constants.js';
