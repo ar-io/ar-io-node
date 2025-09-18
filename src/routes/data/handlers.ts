@@ -261,7 +261,35 @@ export const getRequestAttributes = (
     clientIp = clientIps[0];
   }
 
-  // Always include remote address if available (even when X-Forwarded-For is present)
+  // Extract X-Real-IP header (commonly used by nginx)
+  const xRealIp = req.headers['x-real-ip'];
+  if (xRealIp !== undefined && xRealIp !== '') {
+    // Handle both string and string[] headers (Express can return either)
+    const realIpValue = Array.isArray(xRealIp) ? xRealIp[0] : xRealIp;
+    const trimmedRealIp = realIpValue.trim();
+
+    // Skip empty, unknown, or invalid entries
+    if (trimmedRealIp && trimmedRealIp.toLowerCase() !== 'unknown') {
+      // Normalize IPv4-mapped IPv6 (::ffff:192.168.1.1 -> 192.168.1.1)
+      const normalizedRealIp =
+        trimmedRealIp.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1] ??
+        trimmedRealIp;
+
+      // Basic validation - check for valid IP format
+      if (
+        isValidIpFormat(normalizedRealIp) &&
+        !clientIps.includes(normalizedRealIp)
+      ) {
+        clientIps.push(normalizedRealIp);
+        // Set as fallback if no X-Forwarded-For
+        if (clientIp === undefined) {
+          clientIp = normalizedRealIp;
+        }
+      }
+    }
+  }
+
+  // Always include remote address if available (even when X-Forwarded-For or X-Real-IP is present)
   if (
     req.socket?.remoteAddress !== undefined &&
     req.socket.remoteAddress !== ''
@@ -274,7 +302,7 @@ export const getRequestAttributes = (
     if (!clientIps.includes(normalizedRemote)) {
       clientIps.push(normalizedRemote);
     }
-    // Set as fallback if no X-Forwarded-For
+    // Set as fallback if no X-Forwarded-For or X-Real-IP
     if (clientIp === undefined) {
       clientIp = normalizedRemote;
     }
