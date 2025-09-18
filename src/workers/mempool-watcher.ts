@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { default as wait } from 'wait';
+import wait from '../lib/wait.js';
 import * as winston from 'winston';
 import { ChainSource } from '../types.js';
 import { TransactionFetcher } from './transaction-fetcher.js';

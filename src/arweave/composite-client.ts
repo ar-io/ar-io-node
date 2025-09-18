@@ -11,7 +11,7 @@ import { default as fastq } from 'fastq';
 import { default as NodeCache } from 'node-cache';
 import { Readable } from 'node:stream';
 import * as rax from 'retry-axios';
-import { default as wait } from 'wait';
+import wait from '../lib/wait.js';
 import * as winston from 'winston';
 import pLimit from 'p-limit';
 import memoize from 'memoizee';

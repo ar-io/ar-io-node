@@ -14,7 +14,7 @@ import {
   Wait,
 } from 'testcontainers';
 import { createServer } from 'node:http';
-import wait from 'wait';
+import wait from '../../src/lib/wait.js';
 import axios from 'axios';
 import { cleanDb } from './utils.js';
 import { isTestFiltered } from '../utils.js';

@@ -15,7 +15,7 @@ import {
   mock,
 } from 'node:test';
 import { EventEmitter } from 'node:events';
-import { default as wait } from 'wait';
+import wait from '../lib/wait.js';
 
 import { StandaloneSqliteDatabase } from '../../src/database/standalone-sqlite.js';
 import { BlockImporter } from '../../src/workers/block-importer.js';

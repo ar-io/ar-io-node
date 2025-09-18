@@ -9,7 +9,7 @@ import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import winston from 'winston';
 import { MempoolWatcher } from './mempool-watcher.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
-import { default as wait } from 'wait';
+import wait from '../lib/wait.js';
 
 describe('MempoolWatcher', () => {
   let log: winston.Logger;

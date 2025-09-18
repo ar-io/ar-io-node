@@ -12,7 +12,7 @@ import axios from 'axios';
 
 import { WebhookEmitter } from '../../src/workers/webhook-emitter.js';
 import { AlwaysMatch, NeverMatch } from '../filters.js';
-import wait from 'wait';
+import wait from '../lib/wait.js';
 
 describe('WebhookEmitter', () => {
   let log: winston.Logger;
