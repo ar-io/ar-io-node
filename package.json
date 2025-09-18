@@ -67,7 +67,6 @@
     "stream-json": "^1.9.1",
     "swagger-ui-express": "^4.6.3",
     "umzug": "^3.8.2",
-    "wait": "^0.4.2",
     "winston": "^3.17.0",
     "x402": "^0.6.1",
     "x402-express": "^0.6.1",

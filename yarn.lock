@@ -11881,11 +11881,6 @@ wagmi@^2.15.6:
     "@wagmi/core" "2.21.0"
     use-sync-external-store "1.4.0"
 
-wait@^0.4.2:
-  version "0.4.2"
-  resolved "https://registry.yarnpkg.com/wait/-/wait-0.4.2.tgz#d7d932ea72a57a78b526d168322457d2d7e4ae33"
-  integrity sha512-g4Uu25y9MJ3jtBcrRDDXeI/f7lBNtVmNUM3Xd78S19tm1gZutDkL/f6UEcMi/NqWvKZ74Mhrb+4LwpYbjG6XYA==
-
 warp-arbundles@^1.0.4:
   version "1.0.4"
   resolved "https://registry.yarnpkg.com/warp-arbundles/-/warp-arbundles-1.0.4.tgz#10c0cd662ab41b0dabad9159c7110f43425cc5cc"

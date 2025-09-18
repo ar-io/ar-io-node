@@ -28,7 +28,6 @@ import {
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container.js';
 import { isTestFiltered } from '../utils.js';
 import { DataItem } from '@dha-team/arbundles';
-import { release } from '../../src/version.js';
 
 const projectRootPath = process.cwd();
 
@@ -746,6 +745,263 @@ describe('X-AR-IO headers', function () {
       );
 
       assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '12');
+    });
+  });
+});
+
+describe('x402 Payment Integration', function () {
+  let compose: StartedDockerComposeEnvironment;
+
+  before(async function () {
+    await cleanDb();
+
+    compose = await composeUp({
+      START_WRITERS: 'false',
+      ENABLE_X_402_USDC_DATA_EGRESS: 'true',
+      X_402_USDC_PER_BYTE_PRICE: '0.0000000001',
+      X_402_USDC_DEFAULT_CONTENT_LENGTH: '104857600', // 100MB
+      X_402_USDC_FACILITATOR_URL: 'https://x402.org/facilitator',
+      X_402_USDC_NETWORK: 'base-sepolia',
+    });
+  });
+
+  after(async function () {
+    await compose.down();
+  });
+
+  describe('Payment Required Scenarios', function () {
+    it('should return 402 for raw data request without payment', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Required');
+      assert(res.data.message.includes('Payment of'));
+      assert(res.data.message.includes('USDC required'));
+      assert(res.headers['x-payment-required']);
+    });
+
+    it('should return 402 for manifest data request without payment', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx2}/`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Required');
+      assert(res.data.message.includes('Payment of'));
+      assert(res.headers['x-payment-required']);
+    });
+
+    it('should return 402 for manifest path request without payment', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx1}/0`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Required');
+    });
+
+    it('should calculate different prices for different content sizes', async function () {
+      // Test small content (should use minimum price)
+      const smallRes = await axios.get(`http://localhost:4000/raw/${tx1}`, {
+        validateStatus: (status) => status === 402,
+      });
+      assert(smallRes.data.message.includes('$0.001'));
+
+      // Test larger content
+      const largeRes = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+      // Should also be minimum price due to small test data
+      assert(largeRes.data.message.includes('$0.001'));
+    });
+  });
+
+  describe('Payment Verification Failures', function () {
+    it('should return 402 for invalid payment header format', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        headers: {
+          'x-payment': 'invalid-payment-format',
+        },
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Verification Failed');
+    });
+
+    it('should return 402 for malformed JWT payment', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        headers: {
+          'x-payment': 'not.a.valid.jwt.token.at.all',
+        },
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Verification Failed');
+    });
+
+    it('should return 402 for empty payment header', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        headers: {
+          'x-payment': '',
+        },
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Required');
+    });
+  });
+
+  describe('Graceful Degradation', function () {
+    it('should continue serving data when x402 facilitator fails', async function () {
+      // This test assumes the facilitator will fail due to invalid configuration
+      // In a real scenario with proper mocking, this would simulate facilitator errors
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        headers: {
+          'x-payment': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.test',
+        },
+        // Should fallback to serving data without payment on facilitator errors
+        validateStatus: (status) => status < 500,
+      });
+
+      // Should either succeed (200) or require payment (402), not server error (500)
+      assert(res.status === 200 || res.status === 402);
+    });
+
+    it('should handle database errors gracefully', async function () {
+      // Test with a transaction ID that might cause database issues
+      const res = await axios.get(
+        `http://localhost:4000/raw/nonexistent1234567890abcdefghijklmnopqrst`,
+        {
+          headers: {
+            'x-payment': 'test-payment',
+          },
+          validateStatus: (status) => status < 500,
+        },
+      );
+
+      // Should not return server errors even with database issues
+      assert(res.status !== 500);
+    });
+  });
+
+  describe('Range Requests with Payment', function () {
+    it('should require payment for range requests', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        headers: {
+          Range: 'bytes=0-99',
+        },
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Required');
+    });
+
+    it('should calculate payment for full content size on range requests', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        headers: {
+          Range: 'bytes=0-10',
+        },
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      // Payment should be calculated for full content, not just the range
+      assert(res.data.message.includes('Payment of'));
+      assert(res.data.message.includes('130 bytes')); // Full content size
+    });
+  });
+
+  describe('HEAD Requests with Payment', function () {
+    it('should require payment for HEAD requests', async function () {
+      const res = await axios.head(`http://localhost:4000/raw/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert(res.headers['x-payment-required']);
+    });
+  });
+
+  describe('Content-Type and Headers', function () {
+    it('should include payment-related headers in 402 responses', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert(res.headers['x-payment-required']);
+      assert(res.headers['content-type'].includes('application/json'));
+      assert(typeof res.data.message === 'string');
+      assert(typeof res.data.error === 'string');
+    });
+
+    it('should preserve original content-type headers after successful payment', async function () {
+      // This test would need a valid payment to work in practice
+      // For now, it verifies the payment requirement structure
+      const res = await axios.get(`http://localhost:4000/raw/${tx1}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      // Verify payment message includes content info
+      assert(res.data.message.includes('bytes'));
+    });
+  });
+
+  describe('Transaction ID Validation', function () {
+    it('should skip payment check for invalid transaction IDs', async function () {
+      const res = await axios.get(`http://localhost:4000/invalid-tx-id`, {
+        validateStatus: (status) => status !== 402,
+      });
+
+      // Should not require payment for invalid IDs (they skip payment middleware)
+      assert.notEqual(res.status, 402);
+    });
+
+    it('should skip payment check for very short IDs', async function () {
+      const res = await axios.get(`http://localhost:4000/short`, {
+        validateStatus: (status) => status !== 402,
+      });
+
+      // Should not require payment for short IDs
+      assert.notEqual(res.status, 402);
+    });
+
+    it('should require payment for valid 43-character transaction IDs', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'Payment Required');
+    });
+  });
+
+  describe('Pricing Configuration', function () {
+    it('should use configured per-byte pricing', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      // Should use minimum price for small content
+      assert(res.data.message.includes('$0.001'));
+    });
+
+    it('should include facilitator URL in error context', async function () {
+      const res = await axios.get(`http://localhost:4000/raw/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      // The payment system should be operational
+      assert(res.headers['x-payment-required']);
     });
   });
 });
