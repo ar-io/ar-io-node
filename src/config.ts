@@ -1106,7 +1106,7 @@ export const X_402_USDC_DATA_EGRESS_PRICE_DATA_ID = env.varOrDefault(
 export const X_402_USDC_FACILITATOR_URL = env.varOrDefault(
   'X_402_USDC_FACILITATOR_URL',
   'https://x402.org/facilitator',
-);
+) as `${string}://${string}`;
 export const X_402_USDC_PER_BYTE_PRICE = +env.varOrDefault(
   'X_402_USDC_PER_BYTE_PRICE',
   '0.0000000001', // $0.0000000001 per byte = $0.10 per GB

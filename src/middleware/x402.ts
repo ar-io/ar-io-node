@@ -4,14 +4,20 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-// @ts-expect-error-next-line
 import { useFacilitator } from 'x402/verify';
+import { PaymentRequirements, settleResponseHeader } from 'x402/types';
+import { decodePayment } from 'x402/schemes';
 import { Request, Response, NextFunction } from 'express';
 import * as config from '../config.js';
 import * as system from '../system.js';
 import log from '../log.js';
 import { tracer } from '../tracing.js';
 import { ContiguousDataAttributes } from '../types.js';
+
+// TODO: we could move this to system.ts and use the same facilitator for all x402 requests
+const facilitator = useFacilitator({
+  url: config.X_402_USDC_FACILITATOR_URL,
+});
 
 /**
  *
@@ -40,8 +46,11 @@ export const x402DataEgressMiddleware = async (
   res: Response,
   next: NextFunction,
 ) => {
-  // Skip if x402 is not enabled
-  if (!config.ENABLE_X_402_USDC_DATA_EGRESS) {
+  // Skip if x402 is not enabled or no address is provided
+  if (
+    !config.ENABLE_X_402_USDC_DATA_EGRESS ||
+    config.X_402_USDC_ADDRESS === undefined
+  ) {
     return next();
   }
 
@@ -91,21 +100,21 @@ export const x402DataEgressMiddleware = async (
     span.setAttribute('x402.price', price);
     span.setAttribute('x402.content_size', contentLength);
 
-    // Create facilitator instance
-    const facilitator = useFacilitator({
-      url: config.X_402_USDC_FACILITATOR_URL,
-    });
-
     // Create payment requirements
-    const paymentRequirements = {
-      recipient: config.X_402_USDC_ADDRESS,
-      payments: [
-        {
-          network: config.X_402_USDC_NETWORK,
-          token: 'USDC',
-          price,
-        },
-      ],
+    const paymentRequirements: PaymentRequirements = {
+      scheme: 'exact' as const,
+      description: `AR.IO Gateway data egress for ${contentLength} bytes`,
+      network: config.X_402_USDC_NETWORK as 'base-sepolia' | 'base',
+      maxAmountRequired: price.replace('$', ''), // Remove $ prefix for amount
+      payTo: config.X_402_USDC_ADDRESS,
+      asset: 'USDC',
+      resource: `${req.protocol}://${req.get('host') ?? 'localhost'}${req.originalUrl}`,
+      mimeType: dataAttributes?.contentType ?? 'application/octet-stream',
+      maxTimeoutSeconds: 300, // 5 minutes
+      extra: {
+        contentLength,
+        dataId: id,
+      },
     };
 
     // Check for existing payment header
@@ -116,6 +125,8 @@ export const x402DataEgressMiddleware = async (
       span.setAttribute('x402.payment_required', true);
       res.status(402);
       res.set('X-Payment-Required', JSON.stringify(paymentRequirements));
+
+      // TODO: we could detect if the request is from a browser and serve them html with a form to pay
       return res.json({
         error: 'Payment Required',
         message: locallyCached
@@ -125,32 +136,72 @@ export const x402DataEgressMiddleware = async (
       });
     }
 
-    // Verify the payment using facilitator
-    const verifyResponse = await facilitator.verify({
-      paymentHeader,
-      requirements: paymentRequirements,
-    });
+    let paymentPayload;
+    try {
+      // Decode the payment payload from the header using x402 utility
+      paymentPayload = decodePayment(paymentHeader);
+    } catch (error: any) {
+      span.setAttribute('x402.payment_verification_failed', true);
+      res.status(402);
+      res.set('X-Payment-Required', JSON.stringify(paymentRequirements));
+      return res.json({
+        error: 'Payment Verification Failed',
+        message: 'Invalid payment header format',
+        requirements: paymentRequirements,
+      });
+    }
 
-    if (!verifyResponse.valid) {
+    // Validate that the payment payload matches our requirements
+    if (paymentPayload.scheme !== paymentRequirements.scheme) {
+      span.setAttribute('x402.payment_verification_failed', true);
+      res.status(402);
+      res.set('X-Payment-Required', JSON.stringify(paymentRequirements));
+      return res.json({
+        error: 'Payment Verification Failed',
+        message: 'Payment scheme mismatch',
+        requirements: paymentRequirements,
+      });
+    }
+
+    if (paymentPayload.network !== paymentRequirements.network) {
+      span.setAttribute('x402.payment_verification_failed', true);
+      res.status(402);
+      res.set('X-Payment-Required', JSON.stringify(paymentRequirements));
+      return res.json({
+        error: 'Payment Verification Failed',
+        message: 'Payment network mismatch',
+        requirements: paymentRequirements,
+      });
+    }
+
+    // Verify the payment using facilitator
+    const verifyResponse = await facilitator.verify(
+      paymentPayload,
+      paymentRequirements,
+    );
+
+    if (!verifyResponse.isValid) {
       // Payment verification failed
       span.setAttribute('x402.payment_verification_failed', true);
       res.status(402);
       res.set('X-Payment-Required', JSON.stringify(paymentRequirements));
       return res.json({
         error: 'Payment Verification Failed',
-        message: verifyResponse.error || 'Invalid payment',
+        message: verifyResponse.invalidReason || 'Invalid payment',
         requirements: paymentRequirements,
       });
     }
 
     // Settle the payment using facilitator
-    const settleResponse = await facilitator.settle({
-      paymentHeader,
-      requirements: paymentRequirements,
-    });
+    const settleResponse = await facilitator.settle(
+      paymentPayload,
+      paymentRequirements,
+    );
+
+    const responseHeader = settleResponseHeader(settleResponse);
 
     // Set the payment response header
-    res.set('X-Payment-Response', JSON.stringify(settleResponse));
+    res.set('X-Payment-Response', responseHeader);
     span.setAttribute('x402.payment_verified', true);
     span.setAttribute('x402.payment_settled', true);
 
