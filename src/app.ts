@@ -20,7 +20,6 @@ import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
-import { x402MiddlewareUsdc } from './middleware/x402.js';
 
 // Initialize DNS resolution for preferred chunk GET nodes (non-fatal on failure)
 try {
@@ -62,18 +61,13 @@ app.use(
   }),
 );
 
-// X402
-if (config.ENABLE_X_402_USDC) {
-  app.use(x402MiddlewareUsdc);
-}
-
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);
 app.use(datasetsRouter);
 app.use(chunkRouter);
-app.use(dataRouter);
 app.use(rootRouter);
+app.use(dataRouter);
 
 // GraphQL
 const apolloServerInstanceGql = apolloServer(system.gqlQueryable, {

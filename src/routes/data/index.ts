@@ -14,6 +14,7 @@ import {
   FARCASTER_FRAME_DATA_PATH_REGEX,
 } from '../../constants.js';
 import { createDataHandler, createRawDataHandler } from './handlers.js';
+import { x402DataEgressMiddleware } from '../../middleware/x402.js';
 
 // Used by ArNS Router
 export const dataHandler = createDataHandler({
@@ -25,6 +26,10 @@ export const dataHandler = createDataHandler({
 });
 
 export const dataRouter = Router();
+
+// Apply x402 payment middleware to data routes
+dataRouter.use(x402DataEgressMiddleware);
+
 dataRouter.get(DATA_PATH_REGEX, dataHandler);
 dataRouter.get(
   RAW_DATA_PATH_REGEX,
