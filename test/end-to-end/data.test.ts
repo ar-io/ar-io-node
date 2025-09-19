@@ -759,8 +759,7 @@ describe('x402 Payment Integration', function () {
       START_WRITERS: 'false',
       ENABLE_X_402_USDC_DATA_EGRESS: 'true',
       X_402_USDC_PER_BYTE_PRICE: '0.0000000001',
-      X_402_USDC_DEFAULT_CONTENT_LENGTH: '104857600', // 100MB
-      X_402_USDC_FACILITATOR_URL: 'https://x402.org/facilitator',
+      X_402_USDC_FACILITATOR_URL: 'https://some-test-facilitator.xyz',
       X_402_USDC_NETWORK: 'base-sepolia',
     });
   });

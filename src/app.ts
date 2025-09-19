@@ -7,7 +7,6 @@
 import { default as cors } from 'cors';
 import express from 'express';
 import { Server } from 'node:http';
-
 import * as config from './config.js';
 import { headerNames } from './constants.js';
 import log from './log.js';
@@ -20,6 +19,7 @@ import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
+import { x402Router } from './routes/x402.js';
 
 // Initialize DNS resolution for preferred chunk GET nodes (non-fatal on failure)
 try {
@@ -56,11 +56,16 @@ app.use(
       // these are not exposed by default and must be added manually to be used on browsers
       'content-length',
       'content-encoding',
+      // x402 headers
+      'X-Payment',
+      'X-Payment-Response',
+      // ar-io custom headers
       ...Object.values(headerNames),
     ],
   }),
 );
 
+app.use(x402Router);
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);

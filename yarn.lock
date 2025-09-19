@@ -11858,7 +11858,7 @@ viem@2.23.2:
     ox "0.6.7"
     ws "8.18.0"
 
-viem@>=2.29.0, viem@^2.1.1, viem@^2.21.26, viem@^2.27.2, viem@^2.31.7:
+viem@>=2.29.0, viem@^2.1.1, viem@^2.21.26, viem@^2.27.2, viem@^2.31.7, viem@^2.37.6:
   version "2.37.6"
   resolved "https://registry.yarnpkg.com/viem/-/viem-2.37.6.tgz#3b05586555bd4b2c1b7351ed148f9fa98df72027"
   integrity sha512-b+1IozQ8TciVQNdQUkOH5xtFR0z7ZxR8pyloENi/a+RA408lv4LoX12ofwoiT3ip0VRhO5ni1em//X0jn/eW0g==
@@ -12073,7 +12073,16 @@ x402-express@^0.6.1:
     x402 "^0.6.1"
     zod "^3.24.2"
 
-x402@^0.6.1:
+x402-fetch@^0.6.0:
+  version "0.6.0"
+  resolved "https://registry.yarnpkg.com/x402-fetch/-/x402-fetch-0.6.0.tgz#69fd857f9f01aa64baf4bd841b1e77623ce3f35a"
+  integrity sha512-c7ZQQOjgBWyX9xbmRCliUguVeG0RCofTlcnPKBrAgNYxEo8p/yuQr2PRvyN9tdQdXVTlGgIsII7GO1wLHJpLhA==
+  dependencies:
+    viem "^2.21.26"
+    x402 "^0.6.0"
+    zod "^3.24.2"
+
+x402@^0.6.0, x402@^0.6.1:
   version "0.6.1"
   resolved "https://registry.yarnpkg.com/x402/-/x402-0.6.1.tgz#b9d0f7dd9cdda752bfcf0a65d814ed00ecd714c0"
   integrity sha512-9UmeCSsYzFGav5FdVP70VplKlR3V90P0DZ9fPSrlLVp0ifUVi1S9TztvegkmIHE9xTGZ1GWNi+bkne6N0Ea58w==

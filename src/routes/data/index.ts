@@ -29,7 +29,6 @@ export const dataRouter = Router();
 
 // Apply x402 payment middleware to data routes
 dataRouter.use(x402DataEgressMiddleware);
-
 dataRouter.get(DATA_PATH_REGEX, dataHandler);
 dataRouter.get(
   RAW_DATA_PATH_REGEX,
