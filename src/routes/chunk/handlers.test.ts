@@ -34,7 +34,7 @@ describe('Chunk routes', () => {
       }),
     };
 
-    const db: any = {
+    const txOffsetSource: any = {
       getTxByOffset: () => ({
         data_root: 'abc1234',
         data_size: 100,
@@ -47,7 +47,7 @@ describe('Chunk routes', () => {
       CHUNK_OFFSET_PATH,
       createChunkOffsetHandler({
         chunkSource,
-        db,
+        txOffsetSource,
         log,
       }),
     );
@@ -74,7 +74,7 @@ describe('Chunk routes', () => {
       CHUNK_OFFSET_PATH,
       createChunkOffsetHandler({
         chunkSource: {} as any,
-        db: {} as any,
+        txOffsetSource: {} as any,
         log,
       }),
     );
@@ -88,7 +88,7 @@ describe('Chunk routes', () => {
   });
 
   it('should return 404 if DB returns undefined (transaction not found)', async () => {
-    const db: any = {
+    const txOffsetSource: any = {
       getTxByOffset: () => ({
         data_root: undefined,
         data_size: 100,
@@ -101,7 +101,7 @@ describe('Chunk routes', () => {
       CHUNK_OFFSET_PATH,
       createChunkOffsetHandler({
         chunkSource: {} as any,
-        db,
+        txOffsetSource,
         log,
       }),
     );
@@ -122,7 +122,7 @@ describe('Chunk routes', () => {
       },
     };
 
-    const db: any = {
+    const txOffsetSource: any = {
       getTxByOffset: () => ({
         data_root: 'abc1234',
         data_size: 100,
@@ -135,7 +135,7 @@ describe('Chunk routes', () => {
       CHUNK_OFFSET_PATH,
       createChunkOffsetHandler({
         chunkSource,
-        db,
+        txOffsetSource,
         log,
       }),
     );
@@ -153,7 +153,7 @@ describe('Chunk routes', () => {
       getChunkByAny: async () => undefined,
     };
 
-    const db: any = {
+    const txOffsetSource: any = {
       getTxByOffset: () => ({
         data_root: 'abc1234',
         data_size: 100,
@@ -166,7 +166,7 @@ describe('Chunk routes', () => {
       CHUNK_OFFSET_PATH,
       createChunkOffsetHandler({
         chunkSource,
-        db,
+        txOffsetSource,
         log,
       }),
     );
@@ -190,7 +190,7 @@ describe('Chunk routes', () => {
       }),
     };
 
-    const db: any = {
+    const txOffsetSource: any = {
       getTxByOffset: () => ({
         data_root: 'abc1234',
         data_size: 100,
@@ -203,7 +203,7 @@ describe('Chunk routes', () => {
       CHUNK_OFFSET_PATH,
       createChunkOffsetHandler({
         chunkSource,
-        db,
+        txOffsetSource,
         log,
       }),
     );
@@ -228,7 +228,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -241,7 +241,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -268,7 +268,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource: {} as any,
-          db: {} as any,
+          txOffsetSource: {} as any,
           log,
         }),
       );
@@ -293,7 +293,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -304,7 +304,7 @@ describe('Chunk routes', () => {
 
       const handler = createChunkOffsetHandler({
         chunkSource,
-        db,
+        txOffsetSource,
         log,
       });
 
@@ -348,7 +348,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -361,7 +361,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -384,7 +384,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -397,7 +397,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -421,7 +421,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -434,7 +434,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -458,7 +458,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -471,7 +471,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -498,7 +498,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -511,7 +511,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -538,7 +538,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -551,7 +551,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -577,7 +577,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -590,7 +590,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -616,7 +616,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -629,7 +629,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -657,7 +657,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -670,7 +670,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );
@@ -692,7 +692,7 @@ describe('Chunk routes', () => {
         }),
       };
 
-      const db: any = {
+      const txOffsetSource: any = {
         getTxByOffset: () => ({
           data_root: 'abc1234',
           data_size: 100,
@@ -705,7 +705,7 @@ describe('Chunk routes', () => {
         CHUNK_OFFSET_PATH,
         createChunkOffsetHandler({
           chunkSource,
-          db,
+          txOffsetSource,
           log,
         }),
       );

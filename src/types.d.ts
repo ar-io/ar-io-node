@@ -216,6 +216,17 @@ export interface ChainOffsetIndex {
   saveTxOffset(txId: string, offset: number): Promise<void>;
 }
 
+export interface TxOffsetResult {
+  data_root: string | undefined;
+  id: string | undefined;
+  offset: number | undefined;
+  data_size: number | undefined;
+}
+
+export interface TxOffsetSource {
+  getTxByOffset(offset: number): Promise<TxOffsetResult>;
+}
+
 export interface BundleRecord {
   id: string;
   rootTransactionId?: string;
