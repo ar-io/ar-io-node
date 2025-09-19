@@ -691,8 +691,8 @@ export class ArweavePeerManager {
     log.debug('Peer selection for offset', {
       bucketIndex,
       totalPeers: Object.keys(this.peers).length,
-      peersWithSyncBuckets: Object.values(this.peers).filter(
-        (p) => p.syncBuckets && p.syncBuckets.size > 0,
+      peersWithSyncBuckets: Object.values(this.peers).filter((p) =>
+        Boolean(p.syncBuckets && p.syncBuckets.size > 0),
       ).length,
       candidatePeersWithBucket: candidatePeers.length,
     });
