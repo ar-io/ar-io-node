@@ -1,5 +1,5 @@
 {
-  "watch": ["src"],
+  "watch": ["src", ".env"],
   "ext": "ts,graphql",
-  "exec": "ts-node-esm ./src/app.ts"
+  "exec": "node --import ./register.js --env-file=.env src/app.ts"
 }
