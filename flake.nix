@@ -43,8 +43,10 @@
               nodePackages.typescript-language-server
               nodejs_20
               openjdk
+              pandoc
               python3WithPackages
               sqlite-interactive
+              typst
               yaml-language-server
               yarn
             ];
