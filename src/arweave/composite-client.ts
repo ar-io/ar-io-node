@@ -935,9 +935,22 @@ export class ArweaveCompositeClient
           peerSelectionCount,
         );
 
+        this.log.debug('Peer selection for chunk request', {
+          absoluteOffset,
+          peerSelectionCount,
+          selectedPeers: randomPeers.length,
+          attempt: attempt + 1,
+          peers: randomPeers.slice(0, 3), // Log first 3 peers for debugging
+        });
+
         if (randomPeers.length === 0) {
           const error = new Error('No peers available for chunk retrieval');
           span.recordException(error);
+          this.log.error('No peers available for chunk retrieval', {
+            absoluteOffset,
+            peerSelectionCount,
+            attempt: attempt + 1,
+          });
           throw error;
         }
 
@@ -966,8 +979,7 @@ export class ArweaveCompositeClient
         try {
           const response = await axios({
             method: 'GET',
-            url: chunkPath, // No leading slash
-            baseURL: baseUrl, // No trailing slash
+            url: requestUrl,
             timeout: 500,
           });
           const responseTime = Date.now() - startTime;
@@ -1481,9 +1493,13 @@ export class ArweaveCompositeClient
   /**
    * Find transaction that contains the given offset using binary search on the chain
    */
-  async findTxByOffset(
-    offset: number,
-  ): Promise<{ txId: string; txOffset: number } | null> {
+  async findTxByOffset(offset: number): Promise<{
+    txId: string;
+    txOffset: number;
+    txSize: number;
+    txStartOffset: number;
+    txEndOffset: number;
+  } | null> {
     const searchId = Math.random().toString(36).substring(7);
     this.log.debug('Starting binary search for transaction by offset', {
       offset,
@@ -1695,12 +1711,19 @@ export class ArweaveCompositeClient
   }
 
   /**
-   * Binary search through transactions in a block to find the one containing the given offset
+   * Linear scan through transactions in a block to find the one containing the given offset
+   * Note: Transactions in blocks are NOT sorted by offset, so binary search doesn't work
    */
   private async binarySearchTransactions(
     block: any,
     targetOffset: number,
-  ): Promise<{ txId: string; txOffset: number } | null> {
+  ): Promise<{
+    txId: string;
+    txOffset: number;
+    txSize: number;
+    txStartOffset: number;
+    txEndOffset: number;
+  } | null> {
     const txIds = block.txs || [];
     if (txIds.length === 0) {
       this.log.debug('Block has no transactions', {
@@ -1718,8 +1741,35 @@ export class ArweaveCompositeClient
       txIds: txIds.slice(0, 5), // Log first 5 tx IDs for debugging
     });
 
+    // Sort transaction IDs by their binary representation (same as Arweave does)
+    // Arweave assigns offsets to transactions after sorting them by ID as binary data
+    const sortedTxIds = [...txIds].sort((a, b) => {
+      try {
+        // Decode base64url to binary for proper comparison
+        const decodeB64Url = (str: string): Buffer => {
+          // Add padding if needed and convert to base64
+          const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+          const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+          return Buffer.from(padded, 'base64');
+        };
+
+        const bufA = decodeB64Url(a);
+        const bufB = decodeB64Url(b);
+        return Buffer.compare(bufA, bufB);
+      } catch (error) {
+        // Fallback to string comparison if decoding fails
+        return a.localeCompare(b);
+      }
+    });
+
+    this.log.debug('Sorted transactions for binary search', {
+      originalOrder: txIds.slice(0, 3),
+      sortedOrder: sortedTxIds.slice(0, 3),
+      isSortingNeeded: JSON.stringify(txIds) !== JSON.stringify(sortedTxIds),
+    });
+
     let left = 0;
-    let right = txIds.length - 1;
+    let right = sortedTxIds.length - 1;
     let result: { txId: string; txOffset: number } | null = null;
     let iteration = 0;
     const offsetRequests: {
@@ -1731,7 +1781,7 @@ export class ArweaveCompositeClient
     while (left <= right) {
       iteration++;
       const mid = Math.floor((left + right) / 2);
-      const txId = txIds[mid];
+      const txId = sortedTxIds[mid];
 
       this.log.debug('Transaction search iteration', {
         iteration,
@@ -1746,10 +1796,12 @@ export class ArweaveCompositeClient
 
       // Check cache first
       const cacheKey = `tx_offset_${txId}`;
-      let txOffset = this.txOffsetCache.get(cacheKey);
+      const cachedData = this.txOffsetCache.get(cacheKey);
+      let txOffset: number;
+      let txSize: number;
       let fromCache = true;
 
-      if (txOffset === undefined) {
+      if (cachedData === undefined) {
         fromCache = false;
         try {
           this.log.debug('Fetching transaction offset from chain', {
@@ -1761,7 +1813,8 @@ export class ArweaveCompositeClient
 
           const offsetResponse = await this.getTxOffset(txId);
           txOffset = parseInt(offsetResponse.offset);
-          this.txOffsetCache.set(cacheKey, txOffset);
+          txSize = parseInt(offsetResponse.size);
+          this.txOffsetCache.set(cacheKey, { offset: txOffset, size: txSize });
 
           this.log.debug('Successfully fetched transaction offset', {
             txId,
@@ -1786,18 +1839,57 @@ export class ArweaveCompositeClient
             `Failed to get transaction offset for ${txId}: ${error.message}`,
           );
         }
+      } else {
+        // Cache hit - extract data from cached object
+        if (typeof cachedData === 'number') {
+          // Handle legacy cache entries that only stored offset
+          txOffset = cachedData;
+          txSize = 0; // We don't have size for legacy entries, will need to refetch
+          fromCache = false; // Force refetch to get complete data
+
+          const offsetResponse = await this.getTxOffset(txId);
+          txOffset = parseInt(offsetResponse.offset);
+          txSize = parseInt(offsetResponse.size);
+          this.txOffsetCache.set(cacheKey, { offset: txOffset, size: txSize });
+        } else {
+          // New cache format with both offset and size
+          txOffset = cachedData.offset;
+          txSize = cachedData.size;
+        }
       }
 
-      offsetRequests.push({ txId, offset: txOffset, fromCache });
+      offsetRequests.push({ txId, offset: txOffset, size: txSize, fromCache });
 
-      const decision =
-        txOffset >= targetOffset ? 'search_left' : 'search_right';
-      const isCandidate = txOffset >= targetOffset;
+      // Check if target offset falls within this transaction's data range
+      // Calculate transaction boundaries: txStart = txOffset - txSize + 1
+      const txStartOffset = txOffset - txSize + 1;
+      const txEndOffset = txOffset;
+
+      // Check if target is within transaction boundaries
+      const isWithinTransaction =
+        targetOffset >= txStartOffset && targetOffset <= txEndOffset;
+
+      let decision: 'search_left' | 'search_right' | 'found';
+      if (isWithinTransaction) {
+        decision = 'found';
+      } else if (targetOffset < txStartOffset) {
+        // Target is before this transaction - search left (earlier transactions)
+        decision = 'search_left';
+      } else {
+        // Target is after this transaction - search right (later transactions)
+        decision = 'search_right';
+      }
+
+      const isCandidate = isWithinTransaction;
 
       this.log.debug('Transaction offset comparison', {
         txId,
         txOffset,
+        txSize,
+        txStartOffset,
+        txEndOffset,
         targetOffset,
+        isWithinTransaction,
         decision,
         isCandidate,
         fromCache,
@@ -1805,26 +1897,39 @@ export class ArweaveCompositeClient
         blockHeight: block.height,
       });
 
-      if (txOffset >= targetOffset) {
-        result = { txId, txOffset };
-        right = mid - 1;
-        this.log.debug(
-          'Transaction is candidate, searching left for better match',
-          {
-            candidateTxId: txId,
-            candidateOffset: txOffset,
-            newRight: right,
-            targetOffset,
-            iteration,
-          },
-        );
-      } else {
-        left = mid + 1;
-        this.log.debug('Transaction offset too small, searching right', {
+      if (decision === 'found') {
+        // Found the transaction containing the target offset
+        result = { txId, txOffset, txSize, txStartOffset, txEndOffset };
+        this.log.debug('Found transaction containing target offset', {
           txId,
           txOffset,
-          newLeft: left,
+          txSize,
+          txStartOffset,
+          txEndOffset,
           targetOffset,
+          offsetWithinTx: targetOffset - txStartOffset,
+          iteration,
+        });
+        break; // Exit the binary search loop
+      } else if (decision === 'search_left') {
+        right = mid - 1;
+        this.log.debug('Target before transaction, searching left', {
+          txId,
+          txStartOffset,
+          txEndOffset,
+          targetOffset,
+          newRight: right,
+          iteration,
+        });
+      } else {
+        // decision === 'search_right'
+        left = mid + 1;
+        this.log.debug('Target after transaction, searching right', {
+          txId,
+          txStartOffset,
+          txEndOffset,
+          targetOffset,
+          newLeft: left,
           iteration,
         });
       }
@@ -1841,6 +1946,9 @@ export class ArweaveCompositeClient
         ? {
             txId: result.txId,
             txOffset: result.txOffset,
+            txSize: result.txSize,
+            txStartOffset: result.txStartOffset,
+            txEndOffset: result.txEndOffset,
           }
         : null,
       offsetRequests: offsetRequests.slice(0, 10), // Log first 10 requests for debugging
