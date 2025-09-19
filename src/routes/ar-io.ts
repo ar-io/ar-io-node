@@ -133,7 +133,7 @@ arIoRouter.get('/ar-io/peers', async (_req, res) => {
   try {
     const [gateways, arweaveNodes] = await Promise.all([
       getGatewayPeers(),
-      system.arweaveClient.getPeers(),
+      system.arweavePeerManager.getPeers(),
     ]);
     res.json({ gateways, arweaveNodes });
   } catch (error: any) {
