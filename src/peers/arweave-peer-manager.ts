@@ -688,6 +688,15 @@ export class ArweavePeerManager {
       }
     }
 
+    log.debug('Peer selection for offset', {
+      bucketIndex,
+      totalPeers: Object.keys(this.peers).length,
+      peersWithSyncBuckets: Object.values(this.peers).filter(
+        (p) => p.syncBuckets && p.syncBuckets.size > 0,
+      ).length,
+      candidatePeersWithBucket: candidatePeers.length,
+    });
+
     if (candidatePeers.length === 0) {
       log.debug(
         'No peers found with required bucket, falling back to weighted selection',
@@ -696,7 +705,12 @@ export class ArweavePeerManager {
         },
       );
       // Fall back to regular weighted selection for chunk operations
-      return this.selectPeers('getChunk', count);
+      const fallbackPeers = this.selectPeers('getChunk', count);
+      log.debug('Fallback peer selection result', {
+        selectedPeers: fallbackPeers.length,
+        peers: fallbackPeers.slice(0, 3), // Log first 3 peers
+      });
+      return fallbackPeers;
     }
 
     // Score peers by their weight from the weighted lists
