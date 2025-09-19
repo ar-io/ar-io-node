@@ -23,15 +23,24 @@ export function encodeTransactionGqlCursor({
   isDataItem,
   id,
   indexedAt,
+  seenIds,
 }: {
   height: number | null;
   blockTransactionIndex: number | null;
   isDataItem: boolean | null;
   id: string | null;
   indexedAt: number | null;
+  seenIds?: string[];
 }) {
   return utf8ToB64Url(
-    JSON.stringify([height, blockTransactionIndex, isDataItem, id, indexedAt]),
+    JSON.stringify([
+      height,
+      blockTransactionIndex,
+      isDataItem,
+      id,
+      indexedAt,
+      seenIds || [],
+    ]),
   );
 }
 
@@ -44,19 +53,31 @@ export function decodeTransactionGqlCursor(cursor: string | undefined) {
         isDataItem: null,
         id: null,
         indexedAt: null,
+        seenIds: [],
       };
     }
 
-    const [height, blockTransactionIndex, isDataItem, id, indexedAt] =
-      JSON.parse(b64UrlToUtf8(cursor)) as [
-        number | null,
-        number | null,
-        boolean | null,
-        string | null,
-        number | null,
-      ];
+    const parsed = JSON.parse(b64UrlToUtf8(cursor)) as [
+      number | null,
+      number | null,
+      boolean | null,
+      string | null,
+      number | null,
+      string[]?,
+    ];
 
-    return { height, blockTransactionIndex, isDataItem, id, indexedAt };
+    // Handle backward compatibility - older cursors may not have seenIds
+    const [height, blockTransactionIndex, isDataItem, id, indexedAt, seenIds] =
+      parsed;
+
+    return {
+      height,
+      blockTransactionIndex,
+      isDataItem,
+      id,
+      indexedAt,
+      seenIds: seenIds || [],
+    };
   } catch (error) {
     throw new ValidationError('Invalid transaction cursor');
   }
@@ -430,14 +451,22 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       tags,
     });
 
-    // Filter out edges that already exist in the ClickHouse results
+    // Decode cursor to get previously seen IDs
+    const { seenIds } = decodeTransactionGqlCursor(cursor);
+
+    // Filter out edges that already exist in the ClickHouse results OR were seen before
     const gqlQueryableEdges = gqlQueryableResults.edges.filter(
-      (edge) => !txs.some((tx) => tx.id === edge.node.id),
+      (edge) =>
+        !txs.some((tx) => tx.id === edge.node.id) &&
+        !seenIds.includes(edge.node.id),
     );
 
     // Combine the ClickHouse results with the gqlQueryable results
+    // Filter out any results that were seen in previous pages
+    const filteredTxs = txs.filter((tx) => !seenIds.includes(tx.id));
+
     const edges = [
-      ...txs.map((tx) => ({
+      ...filteredTxs.map((tx) => ({
         cursor: encodeTransactionGqlCursor(tx),
         node: tx,
       })),
@@ -471,11 +500,28 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
       return txA.id.localeCompare(txB.id) * sortOrderModifier;
     });
 
+    // Create final edges with updated cursors that include all seen IDs
+    const finalEdges = edges.slice(0, pageSize);
+
+    const edgesWithUpdatedCursors = finalEdges.map((edge, index) => {
+      // seenIds should include all IDs from previous pages PLUS all IDs from current page up to (but not including) this cursor
+      const currentPageIds = finalEdges.slice(0, index).map(e => e.node.id);
+      const allSeenIds = [...seenIds, ...currentPageIds];
+
+      return {
+        ...edge,
+        cursor: encodeTransactionGqlCursor({
+          ...edge.node,
+          seenIds: allSeenIds,
+        }),
+      };
+    });
+
     return {
       pageInfo: {
         hasNextPage: edges.length > pageSize,
       },
-      edges: edges.slice(0, pageSize),
+      edges: edgesWithUpdatedCursors,
     };
   }
 
