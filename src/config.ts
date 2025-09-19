@@ -414,6 +414,41 @@ export const CHUNK_METADATA_SOURCE_PARALLELISM = +env.varOrDefault(
   '1',
 );
 
+// Chain fallback for chunk offset requests
+export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
+  env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';
+
+// Cache settings for chain fallback binary search
+export const CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE',
+  '1000',
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS',
+  `${60 * 10 * 1000}`, // 10 minutes
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE =
+  +env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE', '5000');
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS',
+    `${60 * 5 * 1000}`, // 5 minutes
+  );
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE',
+  '1000',
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS',
+    `${60 * 5 * 1000}`, // 5 minutes
+  );
+
 //
 // Indexing
 //

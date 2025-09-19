@@ -13,6 +13,7 @@ import {
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
   CHUNK_POST_MIN_SUCCESS_COUNT,
 } from '../../config.js';
+import * as config from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { toB64Url } from '../../lib/encoding.js';
 import { Chunk, ChunkByAnySource } from '../../types.js';
@@ -39,10 +40,12 @@ export const createChunkOffsetHandler = ({
   chunkSource,
   db,
   log,
+  arweaveClient,
 }: {
   chunkSource: ChunkByAnySource;
   db: StandaloneSqliteDatabase;
   log: Logger;
+  arweaveClient?: ArweaveCompositeClient;
 }) => {
   return asyncHandler(async (request: Request, response: Response) => {
     const span = tracer.startSpan('ChunkOffsetHandler.handle', {
@@ -65,39 +68,117 @@ export const createChunkOffsetHandler = ({
 
       span.setAttribute('chunk.absolute_offset', offset);
 
-      // TODO: use a binary search to get this from the chain if it's not
-      // available in the DB
-      const {
-        data_root,
-        id,
-        data_size,
-        offset: weaveOffset,
-      } = await db.getTxByOffset(offset);
+      // Try to get transaction info from database first
+      let dbResult;
+      let usedFallback = false;
 
-      // This is unnecessary amount of validation, but it is here to be make typescript happy
+      try {
+        dbResult = await db.getTxByOffset(offset);
+      } catch (error) {
+        log.debug('Database lookup failed, no fallback will be attempted', {
+          offset,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        span.setAttribute('http.status_code', 404);
+        span.setAttribute('chunk.retrieval.error', 'db_lookup_failed');
+        response.sendStatus(404);
+        return;
+      }
+
+      const { data_root, id, data_size, offset: weaveOffset } = dbResult;
+
+      // Check if database returned empty/invalid result and fallback is available
       if (
+        (data_root === undefined ||
+          weaveOffset === undefined ||
+          id === undefined ||
+          data_size === undefined) &&
+        arweaveClient &&
+        config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
+      ) {
+        span.addEvent(
+          'Database returned empty result, attempting chain fallback',
+        );
+        log.debug('Database returned empty result, attempting chain fallback', {
+          offset,
+        });
+
+        try {
+          const chainResult = await arweaveClient.findTxByOffset(offset);
+          if (chainResult) {
+            // Get transaction details from chain
+            const tx = await arweaveClient.getTx({ txId: chainResult.txId });
+            if (
+              tx !== undefined &&
+              tx !== null &&
+              tx.data_root !== undefined &&
+              tx.data_size !== undefined
+            ) {
+              // Reconstruct the dbResult-like object from chain data
+              Object.assign(dbResult, {
+                data_root: tx.data_root,
+                id: chainResult.txId,
+                data_size: parseInt(tx.data_size),
+                offset: chainResult.txOffset,
+              });
+              usedFallback = true;
+              span.addEvent('Chain fallback successful');
+              span.setAttribute('chunk.used_chain_fallback', true);
+              log.debug('Chain fallback successful', {
+                offset,
+                txId: chainResult.txId,
+                txOffset: chainResult.txOffset,
+              });
+            } else {
+              throw new Error('Invalid transaction data from chain');
+            }
+          } else {
+            throw new Error('Transaction not found on chain');
+          }
+        } catch (error: any) {
+          span.setAttribute('http.status_code', 404);
+          span.setAttribute('chunk.retrieval.error', 'chain_fallback_failed');
+          span.addEvent('Chain fallback failed');
+          log.debug('Chain fallback failed', {
+            offset,
+            error: error.message,
+          });
+          response.sendStatus(404);
+          return;
+        }
+      } else if (
         data_root === undefined ||
         weaveOffset === undefined ||
         id === undefined ||
         data_size === undefined
       ) {
+        // No fallback available and database result is invalid
         span.setAttribute('http.status_code', 404);
         span.setAttribute('chunk.retrieval.error', 'tx_not_found');
-        span.addEvent('Transaction not found in database');
+        span.addEvent(
+          'Transaction not found in database and no fallback available',
+        );
         response.sendStatus(404);
         return;
       }
 
+      // Re-extract the values in case they were updated by fallback
+      const finalDataRoot = dbResult.data_root;
+      const finalId = dbResult.id;
+      const finalDataSize = dbResult.data_size;
+      const finalWeaveOffset = dbResult.offset;
+
       // Calculate the relative offset, needed for chunk data source
-      const contiguousDataStartDelimiter = weaveOffset - data_size + 1;
+      const contiguousDataStartDelimiter = finalWeaveOffset - finalDataSize + 1;
       const relativeOffset = offset - contiguousDataStartDelimiter;
 
       span.setAttributes({
-        'chunk.tx_id': id,
-        'chunk.data_root': data_root,
-        'chunk.data_size': data_size,
-        'chunk.weave_offset': weaveOffset,
+        'chunk.tx_id': finalId,
+        'chunk.data_root': finalDataRoot,
+        'chunk.data_size': finalDataSize,
+        'chunk.weave_offset': finalWeaveOffset,
         'chunk.relative_offset': relativeOffset,
+        'chunk.used_fallback': usedFallback,
       });
 
       // Extract request attributes for hop tracking
@@ -112,9 +193,9 @@ export const createChunkOffsetHandler = ({
 
       try {
         chunk = await chunkSource.getChunkByAny({
-          txSize: data_size,
+          txSize: finalDataSize,
           absoluteOffset: offset,
-          dataRoot: data_root,
+          dataRoot: finalDataRoot,
           relativeOffset,
           requestAttributes,
         });

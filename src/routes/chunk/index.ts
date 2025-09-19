@@ -29,6 +29,7 @@ chunkRouter.get(
     chunkSource,
     db,
     log: log.child({ class: 'ChunkGetOffsetHandler' }),
+    arweaveClient,
   }),
 );
 
@@ -38,6 +39,7 @@ chunkRouter.head(
     chunkSource,
     db,
     log: log.child({ class: 'ChunkHeadOffsetHandler' }),
+    arweaveClient,
   }),
 );
 
