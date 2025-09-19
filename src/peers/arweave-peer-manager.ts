@@ -143,44 +143,53 @@ export class ArweavePeerManager {
     this.initializePreferredChunkPostUrls();
   }
 
-  private initializePreferredChunkGetUrls(): void {
-    // Deduplicate and initialize weightedGetChunkPeers with resolved URLs at high weight
-    const uniqueUrls = [...new Set(this.resolvedChunkGetUrls)];
-    this.weightedGetChunkPeers = uniqueUrls.map((peerUrl) => ({
+  private initializeWeightedPeerList(
+    resolvedUrls: string[],
+    preferredUrls: string[],
+    operation: 'GET' | 'POST',
+  ): WeightedElement<string>[] {
+    // Deduplicate and initialize with resolved URLs at high weight
+    const uniqueUrls = [...new Set(resolvedUrls)];
+    const weightedPeers = uniqueUrls.map((peerUrl) => ({
       id: peerUrl,
-      weight: 100, // High weight for preferred chunk GET URLs
+      weight: 100, // High weight for preferred URLs
     }));
 
     // Log URL initialization for debugging
-    if (this.preferredChunkGetUrls.length > 0) {
-      this.log.debug('Initialized preferred chunk GET URLs', {
-        originalUrls: this.preferredChunkGetUrls.length,
+    if (preferredUrls.length > 0) {
+      this.log.debug(`Initialized preferred chunk ${operation} URLs`, {
+        originalUrls: preferredUrls.length,
         resolvedUrls: uniqueUrls.length,
       });
+      this.log.silly(`Individual chunk ${operation} URLs`, {
+        urls: uniqueUrls,
+      });
     }
+
+    return weightedPeers;
+  }
+
+  private initializePreferredChunkGetUrls(): void {
+    this.weightedGetChunkPeers = this.initializeWeightedPeerList(
+      this.resolvedChunkGetUrls,
+      this.preferredChunkGetUrls,
+      'GET',
+    );
   }
 
   private initializePreferredChunkPostUrls(): void {
-    // Deduplicate and initialize weightedPostChunkPeers with resolved URLs at high weight
-    const uniqueUrls = [...new Set(this.resolvedChunkPostUrls)];
-    this.weightedPostChunkPeers = uniqueUrls.map((peerUrl) => ({
-      id: peerUrl,
-      weight: 100, // High weight for preferred chunk POST URLs
-    }));
-
-    // Log URL initialization for debugging
-    if (this.preferredChunkPostUrls.length > 0) {
-      this.log.debug('Initialized preferred chunk POST URLs', {
-        originalUrls: this.preferredChunkPostUrls.length,
-        resolvedUrls: uniqueUrls.length,
-      });
-    }
+    this.weightedPostChunkPeers = this.initializeWeightedPeerList(
+      this.resolvedChunkPostUrls,
+      this.preferredChunkPostUrls,
+      'POST',
+    );
   }
 
   /**
    * Initializes DNS resolution for preferred GET/POST URLs. Idempotent - safe to call multiple times.
    */
   async initializeDnsResolution(): Promise<void> {
+    // Skip DNS resolution if no DNS resolver is configured
     if (!this.dnsResolver) {
       return;
     }
@@ -191,6 +200,7 @@ export class ArweavePeerManager {
     const hasGetUrls = this.preferredChunkGetUrls.length > 0;
     const hasPostUrls = this.preferredChunkPostUrls.length > 0;
 
+    // Skip DNS resolution if no preferred URLs are configured
     if (!hasGetUrls && !hasPostUrls) {
       return;
     }
@@ -345,7 +355,7 @@ export class ArweavePeerManager {
     metrics?: ArweavePeerSuccessMetrics,
   ): void {
     if (metrics?.responseTimeMs !== undefined) {
-      this.log.debug('Peer success reported', {
+      this.log.silly('Peer success reported', {
         category,
         peerUrl,
         responseTimeMs: metrics.responseTimeMs,
@@ -370,7 +380,7 @@ export class ArweavePeerManager {
    * Report failed interaction with a peer
    */
   reportFailure(category: ArweavePeerCategory, peerUrl: string): void {
-    this.log.debug('Peer failure reported', {
+    this.log.silly('Peer failure reported', {
       category,
       peerUrl,
     });

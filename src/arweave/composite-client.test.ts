@@ -160,7 +160,7 @@ describe('ArweaveCompositeClient', () => {
 
       const client = createTestClient({ preferredChunkGetUrls });
 
-      const selectedPeers = client.selectPeers(1, 'weightedGetChunkPeers');
+      const selectedPeers = client.peerManager.selectPeers('getChunk', 1);
 
       assert.equal(selectedPeers.length, 1);
       assert.ok(preferredChunkGetUrls.includes(selectedPeers[0]));
@@ -181,7 +181,7 @@ describe('ArweaveCompositeClient', () => {
 
       const client = createTestClient();
 
-      const selectedPeers = client.selectPeers(5, 'weightedGetChunkPeers');
+      const selectedPeers = client.peerManager.selectPeers('getChunk', 5);
 
       assert.equal(selectedPeers.length, 0);
     });
