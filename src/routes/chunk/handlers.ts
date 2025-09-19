@@ -7,16 +7,14 @@
 
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
-import { StandaloneSqliteDatabase } from '../../database/standalone-sqlite.js';
 import {
   CHUNK_POST_ABORT_TIMEOUT_MS,
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
   CHUNK_POST_MIN_SUCCESS_COUNT,
 } from '../../config.js';
-import * as config from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { toB64Url } from '../../lib/encoding.js';
-import { Chunk, ChunkByAnySource } from '../../types.js';
+import { Chunk, ChunkByAnySource, TxOffsetSource } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
@@ -38,14 +36,12 @@ const handleIfNoneMatch = (req: Request, res: Response): boolean => {
 
 export const createChunkOffsetHandler = ({
   chunkSource,
-  db,
+  txOffsetSource,
   log,
-  arweaveClient,
 }: {
   chunkSource: ChunkByAnySource;
-  db: StandaloneSqliteDatabase;
+  txOffsetSource: TxOffsetSource;
   log: Logger;
-  arweaveClient?: ArweaveCompositeClient;
 }) => {
   return asyncHandler(async (request: Request, response: Response) => {
     const span = tracer.startSpan('ChunkOffsetHandler.handle', {
@@ -68,105 +64,41 @@ export const createChunkOffsetHandler = ({
 
       span.setAttribute('chunk.absolute_offset', offset);
 
-      // Try to get transaction info from database first
-      let dbResult;
-      let usedFallback = false;
-
+      // Get transaction info using composite source (database with chain fallback)
+      let txResult;
       try {
-        dbResult = await db.getTxByOffset(offset);
-      } catch (error) {
-        log.debug('Database lookup failed, no fallback will be attempted', {
+        txResult = await txOffsetSource.getTxByOffset(offset);
+      } catch (error: any) {
+        log.debug('Transaction offset lookup failed', {
           offset,
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: error.message,
         });
         span.setAttribute('http.status_code', 404);
-        span.setAttribute('chunk.retrieval.error', 'db_lookup_failed');
+        span.setAttribute('chunk.retrieval.error', 'offset_lookup_failed');
         response.sendStatus(404);
         return;
       }
 
-      const { data_root, id, data_size, offset: weaveOffset } = dbResult;
+      const { data_root, id, data_size, offset: weaveOffset } = txResult;
 
-      // Check if database returned empty/invalid result and fallback is available
+      // Check if result is valid
       if (
-        (data_root === undefined ||
-          weaveOffset === undefined ||
-          id === undefined ||
-          data_size === undefined) &&
-        arweaveClient &&
-        config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
-      ) {
-        span.addEvent(
-          'Database returned empty result, attempting chain fallback',
-        );
-        log.debug('Database returned empty result, attempting chain fallback', {
-          offset,
-        });
-
-        try {
-          const chainResult = await arweaveClient.findTxByOffset(offset);
-          if (chainResult) {
-            // Get transaction details from chain
-            const tx = await arweaveClient.getTx({ txId: chainResult.txId });
-            if (
-              tx !== undefined &&
-              tx !== null &&
-              tx.data_root !== undefined &&
-              tx.data_size !== undefined
-            ) {
-              // Reconstruct the dbResult-like object from chain data
-              Object.assign(dbResult, {
-                data_root: tx.data_root,
-                id: chainResult.txId,
-                data_size: parseInt(tx.data_size),
-                offset: chainResult.txOffset,
-              });
-              usedFallback = true;
-              span.addEvent('Chain fallback successful');
-              span.setAttribute('chunk.used_chain_fallback', true);
-              log.debug('Chain fallback successful', {
-                offset,
-                txId: chainResult.txId,
-                txOffset: chainResult.txOffset,
-              });
-            } else {
-              throw new Error('Invalid transaction data from chain');
-            }
-          } else {
-            throw new Error('Transaction not found on chain');
-          }
-        } catch (error: any) {
-          span.setAttribute('http.status_code', 404);
-          span.setAttribute('chunk.retrieval.error', 'chain_fallback_failed');
-          span.addEvent('Chain fallback failed');
-          log.debug('Chain fallback failed', {
-            offset,
-            error: error.message,
-          });
-          response.sendStatus(404);
-          return;
-        }
-      } else if (
         data_root === undefined ||
         weaveOffset === undefined ||
         id === undefined ||
         data_size === undefined
       ) {
-        // No fallback available and database result is invalid
         span.setAttribute('http.status_code', 404);
         span.setAttribute('chunk.retrieval.error', 'tx_not_found');
-        span.addEvent(
-          'Transaction not found in database and no fallback available',
-        );
+        span.addEvent('Transaction not found');
         response.sendStatus(404);
         return;
       }
 
-      // Re-extract the values in case they were updated by fallback
-      const finalDataRoot = dbResult.data_root;
-      const finalId = dbResult.id;
-      const finalDataSize = dbResult.data_size;
-      const finalWeaveOffset = dbResult.offset;
+      const finalDataRoot = data_root;
+      const finalId = id;
+      const finalDataSize = data_size;
+      const finalWeaveOffset = weaveOffset;
 
       // Calculate the relative offset, needed for chunk data source
       const contiguousDataStartDelimiter = finalWeaveOffset - finalDataSize + 1;
@@ -178,7 +110,6 @@ export const createChunkOffsetHandler = ({
         'chunk.data_size': finalDataSize,
         'chunk.weave_offset': finalWeaveOffset,
         'chunk.relative_offset': relativeOffset,
-        'chunk.used_fallback': usedFallback,
       });
 
       // Extract request attributes for hop tracking
