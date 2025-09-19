@@ -151,6 +151,21 @@ Additional fields in chunk proofs:
 - `block_start_offset`: Start position of block in weave
 - `block_end_offset`: End position of block in weave
 
+### Transaction Order vs Offset Order
+
+Transactions in a block appear in **inclusion order** (the order they were added to the block), but their offsets are assigned based on **ID sort order**.
+
+Before assigning offsets, Arweave sorts all transactions in a block by their transaction ID (compared as binary data). This means:
+
+- A transaction's position in a block does not indicate its offset range
+- The first transaction in a block may have a larger offset than the last transaction
+- To determine offset order, transactions must be sorted by their ID as binary data
+
+For example, in a block with transactions at indices 0 and 1:
+- The transaction at index 0 might have offset range 345449326488888-345449326492026
+- The transaction at index 1 might have offset range 345449328058615-345449412246841
+- This happens because the transaction at index 1 has an ID that sorts before the transaction at index 0
+
 ## Offset Calculations
 
 ### Converting Between Offset Types
