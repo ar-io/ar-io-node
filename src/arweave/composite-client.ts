@@ -17,6 +17,7 @@ import pLimit from 'p-limit';
 import memoize from 'memoizee';
 import { context, trace, Span } from '@opentelemetry/api';
 import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
+import { LRUCache } from 'lru-cache';
 
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
@@ -126,21 +127,28 @@ export class ArweaveCompositeClient
   // Peer management
   private peerManager: ArweavePeerManager;
 
+  // Binary search caches (configured via environment variables)
+  private blockCache = new LRUCache<number, any>({
+    max: config.CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE,
+    ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS,
+  });
+  private txOffsetCache = new LRUCache<string, number>({
+    max: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE,
+    ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS,
+  });
+  private txDataCache = new LRUCache<string, any>({
+    max: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE,
+    ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS,
+  });
   // New peer-based chunk POST system
   private peerChunkQueues: Map<string, PeerChunkQueue> = new Map();
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
+  // Timer references for cleanup
+  private bucketFillerInterval?: NodeJS.Timeout;
 
   // Block and TX promise caches used for prefetching
-  private blockByHeightPromiseCache = new NodeCache({
-    checkperiod: 10,
-    stdTTL: 30,
-    useClones: false, // cloning promises is unsafe
-  });
-  private txPromiseCache = new NodeCache({
-    checkperiod: 10,
-    stdTTL: 60,
-    useClones: false, // cloning promises is unsafe
-  });
+  private blockByHeightPromiseCache: NodeCache;
+  private txPromiseCache: NodeCache;
 
   // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<
@@ -171,6 +179,7 @@ export class ArweaveCompositeClient
     blockPrefetchCount = DEFAULT_BLOCK_PREFETCH_COUNT,
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
+    cacheCheckPeriodSeconds = 10,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -187,6 +196,7 @@ export class ArweaveCompositeClient
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
+    cacheCheckPeriodSeconds?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
@@ -213,6 +223,18 @@ export class ArweaveCompositeClient
     this.txStore = txStore;
     this.blockStore = blockStore;
     this.skipCache = skipCache;
+
+    // Initialize NodeCache instances with configurable check period
+    this.blockByHeightPromiseCache = new NodeCache({
+      checkperiod: cacheCheckPeriodSeconds,
+      stdTTL: 30,
+      useClones: false, // cloning promises is unsafe
+    });
+    this.txPromiseCache = new NodeCache({
+      checkperiod: cacheCheckPeriodSeconds,
+      stdTTL: 60,
+      useClones: false, // cloning promises is unsafe
+    });
 
     // Initialize chunk promise cache with read-through function
     this.chunkPromiseCache = new ReadThroughPromiseCache<string, Chunk>({
@@ -282,7 +304,7 @@ export class ArweaveCompositeClient
     );
 
     // Start trusted node request bucket filler (for rate limiting)
-    setInterval(() => {
+    this.bucketFillerInterval = setInterval(() => {
       if (this.trustedNodeRequestBucket <= maxRequestsPerSecond * 300) {
         this.trustedNodeRequestBucket += maxRequestsPerSecond;
       }
@@ -1454,5 +1476,400 @@ export class ArweaveCompositeClient
 
   queueDepth(): number {
     return this.trustedNodeRequestQueue.length();
+  }
+
+  /**
+   * Find transaction that contains the given offset using binary search on the chain
+   */
+  async findTxByOffset(
+    offset: number,
+  ): Promise<{ txId: string; txOffset: number } | null> {
+    const searchId = Math.random().toString(36).substring(7);
+    this.log.debug('Starting binary search for transaction by offset', {
+      offset,
+      searchId,
+    });
+
+    try {
+      // First, find the block that contains this offset
+      this.log.debug('Phase 1: Searching for containing block', {
+        offset,
+        searchId,
+      });
+
+      const containingBlock = await this.binarySearchBlocks(offset);
+      if (!containingBlock) {
+        this.log.debug(
+          'Binary search completed: No block found containing offset',
+          {
+            offset,
+            searchId,
+            result: 'not_found',
+          },
+        );
+        return null;
+      }
+
+      this.log.debug('Phase 1 completed: Found containing block', {
+        blockHeight: containingBlock.height,
+        blockOffset: containingBlock.weave_size,
+        txCount: containingBlock.txs?.length || 0,
+        offset,
+        searchId,
+      });
+
+      // Then search within that block's transactions
+      this.log.debug(
+        'Phase 2: Searching for containing transaction within block',
+        {
+          offset,
+          blockHeight: containingBlock.height,
+          txCount: containingBlock.txs?.length || 0,
+          searchId,
+        },
+      );
+
+      const result = await this.binarySearchTransactions(
+        containingBlock,
+        offset,
+      );
+      if (!result) {
+        this.log.debug(
+          'Phase 2 completed: No transaction found containing offset within block',
+          {
+            offset,
+            blockHeight: containingBlock.height,
+            txCount: containingBlock.txs?.length || 0,
+            searchId,
+            result: 'not_found',
+          },
+        );
+        return null;
+      }
+
+      this.log.debug('Binary search completed successfully', {
+        txId: result.txId,
+        txOffset: result.txOffset,
+        blockHeight: containingBlock.height,
+        offset,
+        searchId,
+        result: 'found',
+      });
+
+      return result;
+    } catch (error: any) {
+      this.log.error('Binary search failed with error', {
+        offset,
+        searchId,
+        error: error.message,
+        stack: error.stack,
+        result: 'error',
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Binary search through blocks to find the one containing the given offset
+   */
+  private async binarySearchBlocks(targetOffset: number): Promise<any | null> {
+    const cacheKey = `block_for_offset_${targetOffset}`;
+    const cached = this.blockCache.get(cacheKey);
+    if (cached) {
+      this.log.debug('Block search cache hit', {
+        targetOffset,
+        cachedBlockHeight: cached.height,
+        cachedBlockOffset: cached.weave_size,
+      });
+      return cached;
+    }
+
+    try {
+      const currentHeight = await this.getHeight();
+      let left = 0;
+      let right = currentHeight;
+      let result: any | null = null;
+      let iteration = 0;
+
+      this.log.debug('Starting binary search for blocks', {
+        targetOffset,
+        heightRange: `${left}-${right}`,
+        totalBlocks: currentHeight + 1,
+      });
+
+      while (left <= right) {
+        iteration++;
+        const mid = Math.floor((left + right) / 2);
+
+        this.log.debug('Block search iteration', {
+          iteration,
+          left,
+          right,
+          mid,
+          targetOffset,
+          searchSpace: right - left + 1,
+        });
+
+        const block = await this.getBlockByHeight(mid);
+
+        if (block === undefined || block === null) {
+          this.log.debug('Block not found at height, adjusting search range', {
+            height: mid,
+            iteration,
+            newRight: mid - 1,
+            targetOffset,
+          });
+          right = mid - 1;
+          continue;
+        }
+
+        const blockOffset = parseInt(block.weave_size);
+        const decision =
+          blockOffset >= targetOffset ? 'search_left' : 'search_right';
+
+        this.log.debug('Block found, analyzing offset', {
+          height: mid,
+          blockOffset,
+          targetOffset,
+          decision,
+          iteration,
+          isCandidate: blockOffset >= targetOffset,
+        });
+
+        if (blockOffset >= targetOffset) {
+          result = block;
+          right = mid - 1;
+          this.log.debug(
+            'Block is candidate, searching left for better match',
+            {
+              candidateHeight: mid,
+              candidateOffset: blockOffset,
+              newRight: right,
+              targetOffset,
+              iteration,
+            },
+          );
+        } else {
+          left = mid + 1;
+          this.log.debug('Block offset too small, searching right', {
+            height: mid,
+            blockOffset,
+            newLeft: left,
+            targetOffset,
+            iteration,
+          });
+        }
+      }
+
+      this.log.debug('Block binary search completed', {
+        targetOffset,
+        iterations: iteration,
+        foundBlock: result
+          ? {
+              height: result.height,
+              offset: result.weave_size,
+              txCount: result.txs?.length || 0,
+            }
+          : null,
+        cacheKey,
+      });
+
+      if (result) {
+        this.blockCache.set(cacheKey, result);
+        this.log.debug('Caching block search result', {
+          targetOffset,
+          blockHeight: result.height,
+          blockOffset: result.weave_size,
+        });
+      }
+
+      return result;
+    } catch (error: any) {
+      this.log.error('Error in binary search for blocks', {
+        targetOffset,
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Binary search through transactions in a block to find the one containing the given offset
+   */
+  private async binarySearchTransactions(
+    block: any,
+    targetOffset: number,
+  ): Promise<{ txId: string; txOffset: number } | null> {
+    const txIds = block.txs || [];
+    if (txIds.length === 0) {
+      this.log.debug('Block has no transactions', {
+        blockHeight: block.height,
+        targetOffset,
+      });
+      return null;
+    }
+
+    this.log.debug('Starting binary search for transactions', {
+      blockHeight: block.height,
+      blockOffset: block.weave_size,
+      txCount: txIds.length,
+      targetOffset,
+      txIds: txIds.slice(0, 5), // Log first 5 tx IDs for debugging
+    });
+
+    let left = 0;
+    let right = txIds.length - 1;
+    let result: { txId: string; txOffset: number } | null = null;
+    let iteration = 0;
+    const offsetRequests: {
+      txId: string;
+      offset: number;
+      fromCache: boolean;
+    }[] = [];
+
+    while (left <= right) {
+      iteration++;
+      const mid = Math.floor((left + right) / 2);
+      const txId = txIds[mid];
+
+      this.log.debug('Transaction search iteration', {
+        iteration,
+        left,
+        right,
+        mid,
+        txId,
+        targetOffset,
+        blockHeight: block.height,
+        searchSpace: right - left + 1,
+      });
+
+      // Check cache first
+      const cacheKey = `tx_offset_${txId}`;
+      let txOffset = this.txOffsetCache.get(cacheKey);
+      let fromCache = true;
+
+      if (txOffset === undefined) {
+        fromCache = false;
+        try {
+          this.log.debug('Fetching transaction offset from chain', {
+            txId,
+            iteration,
+            blockHeight: block.height,
+            targetOffset,
+          });
+
+          const offsetResponse = await this.getTxOffset(txId);
+          txOffset = parseInt(offsetResponse.offset);
+          this.txOffsetCache.set(cacheKey, txOffset);
+
+          this.log.debug('Successfully fetched transaction offset', {
+            txId,
+            txOffset,
+            iteration,
+            targetOffset,
+          });
+        } catch (error: any) {
+          this.log.error(
+            'Failed to get transaction offset during binary search',
+            {
+              txId,
+              blockHeight: block.height,
+              iteration,
+              targetOffset,
+              error: error.message,
+            },
+          );
+          // If we can't get the offset for this transaction, we can't reliably
+          // perform binary search, so we should fail the search
+          throw new Error(
+            `Failed to get transaction offset for ${txId}: ${error.message}`,
+          );
+        }
+      }
+
+      offsetRequests.push({ txId, offset: txOffset, fromCache });
+
+      const decision =
+        txOffset >= targetOffset ? 'search_left' : 'search_right';
+      const isCandidate = txOffset >= targetOffset;
+
+      this.log.debug('Transaction offset comparison', {
+        txId,
+        txOffset,
+        targetOffset,
+        decision,
+        isCandidate,
+        fromCache,
+        iteration,
+        blockHeight: block.height,
+      });
+
+      if (txOffset >= targetOffset) {
+        result = { txId, txOffset };
+        right = mid - 1;
+        this.log.debug(
+          'Transaction is candidate, searching left for better match',
+          {
+            candidateTxId: txId,
+            candidateOffset: txOffset,
+            newRight: right,
+            targetOffset,
+            iteration,
+          },
+        );
+      } else {
+        left = mid + 1;
+        this.log.debug('Transaction offset too small, searching right', {
+          txId,
+          txOffset,
+          newLeft: left,
+          targetOffset,
+          iteration,
+        });
+      }
+    }
+
+    this.log.debug('Transaction binary search completed', {
+      blockHeight: block.height,
+      targetOffset,
+      iterations: iteration,
+      totalOffsetRequests: offsetRequests.length,
+      cacheHits: offsetRequests.filter((r) => r.fromCache).length,
+      cacheMisses: offsetRequests.filter((r) => !r.fromCache).length,
+      foundTransaction: result
+        ? {
+            txId: result.txId,
+            txOffset: result.txOffset,
+          }
+        : null,
+      offsetRequests: offsetRequests.slice(0, 10), // Log first 10 requests for debugging
+    });
+
+    return result;
+  }
+
+  /**
+   * Cleanup method to stop timers and clear caches
+   * Should be called when the client is no longer needed (e.g., in tests)
+   */
+  cleanup(): void {
+    // Clear the bucket filler interval
+    if (this.bucketFillerInterval) {
+      clearInterval(this.bucketFillerInterval);
+      this.bucketFillerInterval = undefined;
+    }
+
+    // Clear NodeCache instances (this stops their internal timers)
+    this.blockByHeightPromiseCache.flushAll();
+    this.txPromiseCache.flushAll();
+
+    // Clear LRU caches
+    this.blockCache.clear();
+    this.txOffsetCache.clear();
+    this.txDataCache.clear();
+
+    // Clear promise cache
+    this.chunkPromiseCache.clear();
   }
 }
