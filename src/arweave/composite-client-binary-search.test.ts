@@ -86,7 +86,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
     });
 
     it('should find transaction when block and transaction contain the offset', async () => {
-      const targetOffset = 1500;
+      const targetOffset = 1800; // Changed to be within transaction range
       const containingBlockHeight = 50;
       const txId = 'test-tx-id';
       const txOffset = 2000;
@@ -113,7 +113,10 @@ describe('ArweaveCompositeClient Binary Search', () => {
       // Mock getTxOffset
       client.getTxOffset = mock.fn(async (id: string) => {
         if (id === txId) {
-          return { offset: txOffset.toString() };
+          return {
+            offset: txOffset.toString(),
+            size: '500', // Transaction size for range calculation
+          };
         }
         throw new Error('Transaction not found');
       });
@@ -122,6 +125,9 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       assert.strictEqual(result?.txId, txId);
       assert.strictEqual(result?.txOffset, txOffset);
+      assert.strictEqual(result?.txSize, 500);
+      assert.strictEqual(result?.txStartOffset, 1501); // txOffset - txSize + 1 = 2000 - 500 + 1
+      assert.strictEqual(result?.txEndOffset, 2000); // txOffset
     });
 
     it('should handle empty transaction list in blocks', async () => {
@@ -243,12 +249,16 @@ describe('ArweaveCompositeClient Binary Search', () => {
       // Mock getTxOffset
       client.getTxOffset = mock.fn(async () => ({
         offset: exactOffset.toString(),
+        size: '1000', // Transaction size for boundary test
       }));
 
       const result = await client.findTxByOffset(exactOffset);
 
       assert.strictEqual(result?.txId, txId);
       assert.strictEqual(result?.txOffset, exactOffset);
+      assert.strictEqual(result?.txSize, 1000);
+      assert.strictEqual(result?.txStartOffset, 1001); // 2000 - 1000 + 1
+      assert.strictEqual(result?.txEndOffset, 2000);
     });
 
     it('should handle very small offsets', async () => {
@@ -286,9 +296,153 @@ describe('ArweaveCompositeClient Binary Search', () => {
     });
   });
 
+  describe('transaction sorting', () => {
+    it('should sort transactions by binary representation before searching', async () => {
+      const targetOffset = 345449370152728; // Offset from real problematic case
+
+      // These are real transaction IDs from block 1700011 that demonstrate the sorting issue
+      const txIds = [
+        'zK0EETL7U5ohgv5mzka8KhluBwPfILRYM62CRIC2SEE', // Sorts last as string
+        '8crKVhXbmF92QKevmdxohVHlc6OqRo_6JbgArRmEwZc', // F1CACA... - sorts first as string, last as binary
+      ];
+
+      // Mock getHeight
+      client.getHeight = mock.fn(async () => 1700011);
+
+      // Mock getBlockByHeight to return block with our test transactions
+      client.getBlockByHeight = mock.fn(async (height: number) => ({
+        height,
+        weave_size: '345449412300000', // Large enough to contain target offset
+        txs: txIds,
+      }));
+
+      // Mock getTxOffset to return offsets that match the binary sort order
+      client.getTxOffset = mock.fn(async (id: string) => {
+        if (id === '8crKVhXbmF92QKevmdxohVHlc6OqRo_6JbgArRmEwZc') {
+          // This is the large transaction that contains our target offset
+          return {
+            offset: '345449412246841',
+            size: '84188227', // Large transaction
+          };
+        } else if (id === 'zK0EETL7U5ohgv5mzka8KhluBwPfILRYM62CRIC2SEE') {
+          // Smaller transaction with smaller offset
+          return {
+            offset: '345449326488888',
+            size: '3138',
+          };
+        }
+        throw new Error(`Unexpected transaction ID: ${id}`);
+      });
+
+      const result = await client.findTxByOffset(targetOffset);
+
+      // Should find the F1CACA transaction (8crK...) that contains the target offset
+      assert.strictEqual(
+        result?.txId,
+        '8crKVhXbmF92QKevmdxohVHlc6OqRo_6JbgArRmEwZc',
+      );
+      assert.strictEqual(result?.txOffset, 345449412246841);
+      assert.strictEqual(result?.txSize, 84188227);
+
+      // Verify the target offset falls within the transaction boundaries
+      const expectedStartOffset = 345449412246841 - 84188227 + 1; // 345449328058615
+      assert.ok(targetOffset >= expectedStartOffset);
+      assert.ok(targetOffset <= 345449412246841);
+    });
+
+    it('should correctly calculate transaction boundaries and find offset within range', async () => {
+      const txId = 'range-test-tx';
+      const txOffset = 10000;
+      const txSize = 5000;
+      const txStartOffset = txOffset - txSize + 1; // 5001
+      const txEndOffset = txOffset; // 10000
+
+      // Test offsets at different positions within the transaction
+      const testCases = [
+        { offset: txStartOffset, description: 'at start boundary' },
+        { offset: txStartOffset + 1000, description: 'in middle' },
+        { offset: txEndOffset, description: 'at end boundary' },
+      ];
+
+      for (const testCase of testCases) {
+        // Mock getHeight
+        client.getHeight = mock.fn(async () => 100);
+
+        // Mock getBlockByHeight
+        client.getBlockByHeight = mock.fn(async (height: number) => ({
+          height,
+          weave_size: '15000', // Large enough to contain our transaction
+          txs: [txId],
+        }));
+
+        // Mock getTxOffset
+        client.getTxOffset = mock.fn(async () => ({
+          offset: txOffset.toString(),
+          size: txSize.toString(),
+        }));
+
+        const result = await client.findTxByOffset(testCase.offset);
+
+        assert.strictEqual(
+          result?.txId,
+          txId,
+          `Should find transaction ${testCase.description}`,
+        );
+        assert.strictEqual(result?.txOffset, txOffset);
+        assert.strictEqual(result?.txSize, txSize);
+        assert.strictEqual(result?.txStartOffset, txStartOffset);
+        assert.strictEqual(result?.txEndOffset, txEndOffset);
+
+        // Clean up mocks for next iteration
+        mock.restoreAll();
+      }
+    });
+
+    it('should not find transaction when offset is outside range', async () => {
+      const txId = 'out-of-range-tx';
+      const txOffset = 10000;
+      const txSize = 1000;
+
+      // Test offsets outside the transaction range
+      const testCases = [
+        { offset: 8999, description: 'before transaction start (9001)' },
+        { offset: 10001, description: 'after transaction end (10000)' },
+      ];
+
+      for (const testCase of testCases) {
+        // Mock getHeight
+        client.getHeight = mock.fn(async () => 100);
+
+        // Mock getBlockByHeight
+        client.getBlockByHeight = mock.fn(async (height: number) => ({
+          height,
+          weave_size: '15000',
+          txs: [txId],
+        }));
+
+        // Mock getTxOffset
+        client.getTxOffset = mock.fn(async () => ({
+          offset: txOffset.toString(),
+          size: txSize.toString(),
+        }));
+
+        const result = await client.findTxByOffset(testCase.offset);
+
+        assert.strictEqual(
+          result,
+          null,
+          `Should not find transaction ${testCase.description}`,
+        );
+
+        // Clean up mocks for next iteration
+        mock.restoreAll();
+      }
+    });
+  });
+
   describe('caching behavior', () => {
     it('should cache transaction offsets', async () => {
-      const targetOffset = 1500;
+      const targetOffset = 1800; // Changed to be within transaction range
       const txId = 'cached-tx';
 
       // Mock getHeight
@@ -304,6 +458,7 @@ describe('ArweaveCompositeClient Binary Search', () => {
       // Mock getTxOffset - should only be called once due to caching
       const getTxOffsetMock = mock.fn(async () => ({
         offset: '2000',
+        size: '500',
       }));
       client.getTxOffset = getTxOffsetMock;
 
