@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Generate e-reader optimized PDF from AR.IO Node architecture analysis
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# File paths
+MARKDOWN_FILE="$ROOT_DIR/architecture-review.md"
+PDF_FILE="$ROOT_DIR/architecture-review.pdf"
+
+usage() {
+    echo "Usage: $0"
+    echo "  Generates an e-reader optimized PDF of the AR.IO Node architecture"
+    echo "  Uses pandoc with typst as the PDF engine"
+    echo ""
+    echo "Environment variables:"
+    echo "  SKIP_COVERAGE=true    Skip test coverage generation and use cached results"
+    echo "                        (speeds up generation for testing/iteration)"
+    exit 1
+}
+
+check_dependencies() {
+    local missing=0
+
+    if ! command -v pandoc &> /dev/null; then
+        echo -e "${RED}❌ pandoc not found. Install with: nix-shell -p pandoc${NC}"
+        missing=1
+    fi
+
+    if ! command -v typst &> /dev/null; then
+        echo -e "${RED}❌ typst not found. Install with: nix-shell -p typst${NC}"
+        missing=1
+    fi
+
+    if [[ $missing -eq 1 ]]; then
+        exit 1
+    fi
+}
+
+generate_markdown() {
+    echo -e "${YELLOW}📝 Generating architecture review markdown...${NC}"
+
+    cd "$ROOT_DIR"
+
+    if ! node --import ./register.js tools/generate-architecture-review.ts; then
+        echo -e "${RED}❌ Failed to generate markdown${NC}"
+        exit 1
+    fi
+
+    if [[ ! -f "$MARKDOWN_FILE" ]]; then
+        echo -e "${RED}❌ Markdown file not generated: $MARKDOWN_FILE${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✅ Markdown generated: $(basename "$MARKDOWN_FILE")${NC}"
+}
+
+generate_pdf() {
+    echo -e "${YELLOW}📚 Generating e-reader PDF with pandoc + typst...${NC}"
+
+    # Create a temporary file with escaped @ symbols to prevent citation parsing
+    local temp_markdown="/tmp/architecture-review-escaped.md"
+    sed 's/@/\\@/g' "$MARKDOWN_FILE" > "$temp_markdown"
+
+    # Pandoc with typst engine, optimized for e-readers
+    pandoc "$temp_markdown" \
+        -o "$PDF_FILE" \
+        --pdf-engine=typst \
+        --variable=papersize:a5 \
+        --variable=margin-left:8mm \
+        --variable=margin-right:8mm \
+        --variable=margin-top:12mm \
+        --variable=margin-bottom:12mm \
+        --variable=fontsize:11pt \
+        --variable=lineheight:1.3 \
+        --toc \
+        --toc-depth=2 \
+        --highlight-style=monochrome \
+        --metadata title="AR.IO Node Architecture Analysis" \
+        --metadata author="Generated Analysis" \
+        --metadata date="$(date +%Y-%m-%d)"
+
+    # Clean up temporary file
+    rm -f "$temp_markdown"
+
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}✅ PDF generated: $(basename "$PDF_FILE")${NC}"
+        echo -e "   Size: $(ls -lh "$PDF_FILE" | awk '{print $5}')"
+        echo -e "   Format: E-reader optimized (A5, compact margins)"
+    else
+        echo -e "${RED}❌ Failed to generate PDF${NC}"
+        exit 1
+    fi
+}
+
+# Main execution
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+    usage
+fi
+
+echo -e "${GREEN}🚀 AR.IO Node Architecture PDF Generator${NC}"
+echo
+
+check_dependencies
+generate_markdown
+generate_pdf
+
+echo
+echo -e "${GREEN}🎉 E-book generation complete!${NC}"
+echo -e "📄 File: $(basename "$PDF_FILE")"
+echo
+echo -e "${YELLOW}💡 For best e-reader experience:${NC}"
+echo "  • Transfer via email or USB"
+echo "  • Compact margins for better screen usage"
+echo "  • Use table of contents for navigation"
