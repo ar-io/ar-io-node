@@ -893,44 +893,46 @@ export class ArweaveCompositeClient
     });
 
     try {
-      for (let attempt = 0; attempt < retryCount; attempt++) {
+      // Select peers once with offset awareness - get more peers upfront
+      const orderedPeers = this.peerManager.selectPeersForOffset(
+        absoluteOffset,
+        Math.max(peerSelectionCount, retryCount), // Get at least retryCount peers
+      );
+
+      this.log.debug('Peer selection for chunk request', {
+        absoluteOffset,
+        selectedPeers: orderedPeers.length,
+        maxAttempts: Math.min(orderedPeers.length, retryCount),
+        peers: orderedPeers.slice(0, 3), // Log first 3 peers for debugging
+      });
+
+      if (orderedPeers.length === 0) {
+        const error = new Error('No peers available for chunk retrieval');
+        span.recordException(error);
+        this.log.error('No peers available for chunk retrieval', {
+          absoluteOffset,
+        });
+        throw error;
+      }
+
+      span.setAttribute('chunk.available_peers', orderedPeers.length);
+
+      // Iterate through peers sequentially
+      const maxAttempts = Math.min(orderedPeers.length, retryCount);
+      for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
         span.addEvent('Starting peer attempt', {
-          attempt: attempt + 1,
-          max_attempts: retryCount,
+          peer_index: peerIndex + 1,
+          total_peers: orderedPeers.length,
+          max_attempts: maxAttempts,
         });
 
-        // Select peers with offset awareness when possible
-        const randomPeers = this.peerManager.selectPeersForOffset(
-          absoluteOffset,
-          peerSelectionCount,
-        );
-
-        this.log.debug('Peer selection for chunk request', {
-          absoluteOffset,
-          peerSelectionCount,
-          selectedPeers: randomPeers.length,
-          attempt: attempt + 1,
-          peers: randomPeers.slice(0, 3), // Log first 3 peers for debugging
-        });
-
-        if (randomPeers.length === 0) {
-          const error = new Error('No peers available for chunk retrieval');
-          span.recordException(error);
-          this.log.error('No peers available for chunk retrieval', {
-            absoluteOffset,
-            peerSelectionCount,
-            attempt: attempt + 1,
-          });
-          throw error;
-        }
-
-        span.setAttribute('chunk.available_peers', randomPeers.length);
-        const randomPeer = randomPeers[0];
+        const randomPeer = orderedPeers[peerIndex];
         const peerHost = new URL(randomPeer).hostname;
 
         span.addEvent('Trying peer', {
           peer_host: peerHost,
-          attempt: attempt + 1,
+          peer_index: peerIndex + 1,
+          total_peers: orderedPeers.length,
         });
 
         const requestUrl = `${randomPeer}/chunk/${absoluteOffset}`;
@@ -941,7 +943,8 @@ export class ArweaveCompositeClient
           absoluteOffset,
           requestUrl,
           timeout: 500,
-          attempt: attempt + 1,
+          peerIndex: peerIndex + 1,
+          totalPeers: orderedPeers.length,
         });
 
         const startTime = Date.now();
@@ -963,7 +966,8 @@ export class ArweaveCompositeClient
             statusText: response.statusText,
             contentType: response.headers['content-type'],
             dataSize: JSON.stringify(response.data).length,
-            attempt: attempt + 1,
+            peerIndex: peerIndex + 1,
+            totalPeers: orderedPeers.length,
           });
 
           const jsonChunk = response.data;
@@ -978,7 +982,8 @@ export class ArweaveCompositeClient
               absoluteOffset,
               sanityError: sanityError.message,
               chunkData: jsonChunk,
-              attempt: attempt + 1,
+              peerIndex: peerIndex + 1,
+              totalPeers: orderedPeers.length,
             });
             throw sanityError;
           }
@@ -1020,14 +1025,16 @@ export class ArweaveCompositeClient
               relativeOffset,
               validationError: validationError.message,
               chunkSize: chunk.chunk.length,
-              attempt: attempt + 1,
+              peerIndex: peerIndex + 1,
+              totalPeers: orderedPeers.length,
             });
             throw validationError;
           }
 
           span.setAttributes({
             'chunk.successful_peer': peerHost,
-            'chunk.final_attempt': attempt + 1,
+            'chunk.final_peer_index': peerIndex + 1,
+            'chunk.total_peers_tried': peerIndex + 1,
             'chunk.response_time_ms': responseTime,
             'chunk.size': chunk.chunk.length,
           });
@@ -1054,7 +1061,8 @@ export class ArweaveCompositeClient
             peer: randomPeer,
             peerHost,
             absoluteOffset,
-            attempt: attempt + 1,
+            peerIndex: peerIndex + 1,
+            totalPeers: orderedPeers.length,
             responseTime,
             error: error.message,
             ...(axios.isAxiosError(error) && {
@@ -1068,7 +1076,8 @@ export class ArweaveCompositeClient
           span.addEvent('Peer request failed', {
             peer_host: peerHost,
             error: error.message,
-            attempt: attempt + 1,
+            peer_index: peerIndex + 1,
+            total_peers: orderedPeers.length,
             error_code: error.code,
             http_status: error.response?.status,
           });
@@ -1080,19 +1089,18 @@ export class ArweaveCompositeClient
             'getChunk',
           );
 
-          // If this is the last attempt, throw the error
-          if (attempt === retryCount - 1) {
-            const finalError = new Error(
-              `Failed to fetch chunk from any peer after ${retryCount} attempts`,
-            );
-            span.recordException(finalError);
-            throw finalError;
-          }
+          // Continue to next peer (no early exit needed in for loop)
         }
       }
 
-      span.addEvent('All attempts failed');
-      const error = new Error('Failed to fetch chunk from any peer');
+      // If we exit the loop without returning, all peers failed
+      span.addEvent('All peers failed', {
+        total_peers_tried: maxAttempts,
+        available_peers: orderedPeers.length,
+      });
+      const error = new Error(
+        `Failed to fetch chunk from ${maxAttempts} peers (${orderedPeers.length} available)`,
+      );
       span.recordException(error);
       throw error;
     } catch (error: any) {
