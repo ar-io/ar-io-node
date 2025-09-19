@@ -125,7 +125,7 @@ export class ArweaveCompositeClient
   private trustedNodeAxios;
 
   // Peer management
-  private peerManager: ArweavePeerManager;
+  public peerManager: ArweavePeerManager;
 
   // Binary search caches (configured via environment variables)
   private blockCache = new LRUCache<number, any>({
@@ -469,24 +469,6 @@ export class ArweaveCompositeClient
     }
   }
 
-  private peerListNameToCategory(peerListName: string): ArweavePeerCategory {
-    switch (peerListName) {
-      case 'weightedChainPeers':
-        return 'chain';
-      case 'weightedGetChunkPeers':
-        return 'getChunk';
-      case 'weightedPostChunkPeers':
-        return 'postChunk';
-      default:
-        throw new Error(`Unknown peer list name: ${peerListName}`);
-    }
-  }
-
-  selectPeers(peerCount: number, peerListName: string): string[] {
-    const category = this.peerListNameToCategory(peerListName);
-    return this.peerManager.selectPeers(category, peerCount);
-  }
-
   async trustedNodeRequest(request: AxiosRequestConfig) {
     while (this.trustedNodeRequestBucket <= 0) {
       await wait(100);
@@ -626,7 +608,7 @@ export class ArweaveCompositeClient
   }
 
   async peerGetTx(url: string, retryCount = 3) {
-    const peersToTry = this.selectPeers(retryCount, 'weightedChainPeers');
+    const peersToTry = this.peerManager.selectPeers('chain', retryCount);
 
     return Promise.any(
       peersToTry.map((peerUrl) => {
@@ -644,12 +626,7 @@ export class ArweaveCompositeClient
             // as a success and increment the weights. If the TX is invalid we
             // also decement the weight so it's a wash and a flood of invalid
             // TXs will still be counted against the peer.
-            this.handlePeerSuccess(
-              peerUrl,
-              'peerGetTx',
-              'peer',
-              'weightedChainPeers',
-            );
+            this.handlePeerSuccess(peerUrl, 'peerGetTx', 'peer', 'chain');
 
             const tx = this.arweave.transactions.fromRaw(response.data);
             const isValid = await this.arweave.transactions.verify(tx);
@@ -661,12 +638,7 @@ export class ArweaveCompositeClient
             return response;
           } catch (err) {
             // On error, mark this peer as failed and reject the promise for this peer.
-            this.handlePeerFailure(
-              peerUrl,
-              'peerGetTx',
-              'peer',
-              'weightedChainPeers',
-            );
+            this.handlePeerFailure(peerUrl, 'peerGetTx', 'peer', 'chain');
             throw err;
           }
         })();
@@ -862,7 +834,7 @@ export class ArweaveCompositeClient
     peer: string,
     method: string,
     sourceType: 'trusted' | 'peer',
-    peerListName: string,
+    category: ArweavePeerCategory,
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'success',
@@ -872,7 +844,6 @@ export class ArweaveCompositeClient
       source_type: sourceType,
     });
     if (sourceType === 'peer') {
-      const category = this.peerListNameToCategory(peerListName);
       this.peerManager.reportSuccess(category, peer);
     }
   }
@@ -881,7 +852,7 @@ export class ArweaveCompositeClient
     peer: string,
     method: string,
     sourceType: 'trusted' | 'peer',
-    peerListName: string,
+    category: ArweavePeerCategory,
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'error',
@@ -891,7 +862,6 @@ export class ArweaveCompositeClient
       source_type: sourceType,
     });
     if (sourceType === 'peer') {
-      const category = this.peerListNameToCategory(peerListName);
       this.peerManager.reportFailure(category, peer);
     }
   }
@@ -1072,7 +1042,7 @@ export class ArweaveCompositeClient
             randomPeer,
             'peerGetChunk',
             'peer',
-            'weightedGetChunkPeers',
+            'getChunk',
           );
 
           return chunk;
@@ -1107,7 +1077,7 @@ export class ArweaveCompositeClient
             randomPeer,
             'peerGetChunk',
             'peer',
-            'weightedGetChunkPeers',
+            'getChunk',
           );
 
           // If this is the last attempt, throw the error

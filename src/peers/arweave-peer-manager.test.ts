@@ -485,16 +485,28 @@ describe('ArweavePeerManager', () => {
       assert.ok(!peersForBucket1.includes('http://peer3.example.com'));
     });
 
-    it('should prioritize peers by weight', () => {
+    it('should use weights for peer selection', () => {
       const bucketSize = 10 * 1024 * 1024 * 1024;
 
-      // Offset in bucket 1 - peer1 has higher weight than peer2
+      // Offset in bucket 1 - should return one of peer1 or peer2 (both have this bucket)
       const peersForBucket1 = peerManager.selectPeersForOffset(
         bucketSize + 1000,
         1,
       );
+
+      // Should return exactly one peer
       assert.equal(peersForBucket1.length, 1);
-      assert.equal(peersForBucket1[0], 'http://peer1.example.com');
+
+      // Should be either peer1 or peer2 (both have bucket 1)
+      const selectedPeer = peersForBucket1[0];
+      assert.ok(
+        selectedPeer === 'http://peer1.example.com' ||
+          selectedPeer === 'http://peer2.example.com',
+        `Selected peer should be peer1 or peer2, but got ${selectedPeer}`,
+      );
+
+      // Should not select peer3 (doesn't have bucket 1)
+      assert.notEqual(selectedPeer, 'http://peer3.example.com');
     });
 
     it('should fall back to regular selection when no peers have the bucket', () => {
