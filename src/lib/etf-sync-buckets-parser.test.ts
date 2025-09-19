@@ -25,9 +25,9 @@ describe('ETF Sync Buckets Parser', () => {
         5,
         0, // small big integer: 5 bytes, positive
         0,
-        228,
-        11,
-        84,
+        0,
+        0,
+        128,
         2, // 10737418240 (10GB) in little-endian
         116, // map tag
         0,
@@ -78,9 +78,9 @@ describe('ETF Sync Buckets Parser', () => {
         5,
         0, // small big integer: 5 bytes, positive
         0,
-        228,
-        11,
-        84,
+        0,
+        0,
+        128,
         2, // 10737418240 (10GB) in little-endian
         116, // map tag
         0,
@@ -121,9 +121,9 @@ describe('ETF Sync Buckets Parser', () => {
         5,
         0, // small big integer: 5 bytes, positive
         0,
-        228,
-        11,
-        84,
+        0,
+        0,
+        128,
         2, // 10737418240 (10GB) in little-endian
         116, // map tag
         0,
@@ -185,9 +185,9 @@ describe('ETF Sync Buckets Parser', () => {
         5,
         0, // small big integer: 5 bytes, positive
         0,
-        228,
-        11,
-        84,
+        0,
+        0,
+        128,
         2, // 10737418240 (10GB) in little-endian
         97,
         42, // small integer instead of map
@@ -228,9 +228,9 @@ describe('ETF Sync Buckets Parser', () => {
         5,
         0, // small big integer: 5 bytes, positive
         0,
-        228,
-        11,
-        84,
+        0,
+        0,
+        128,
         2, // 10737418240 (10GB) in little-endian
         116, // map tag
         0,

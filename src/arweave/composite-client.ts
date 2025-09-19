@@ -447,26 +447,21 @@ export class ArweaveCompositeClient
     }
   }
 
-  getPeers(): Record<string, Peer> {
-    return this.peerManager.getPeers();
-  }
-
-  selectPeers(peerCount: number, peerListName: string): string[] {
-    let category: ArweavePeerCategory;
+  private peerListNameToCategory(peerListName: string): ArweavePeerCategory {
     switch (peerListName) {
       case 'weightedChainPeers':
-        category = 'chain';
-        break;
+        return 'chain';
       case 'weightedGetChunkPeers':
-        category = 'getChunk';
-        break;
+        return 'getChunk';
       case 'weightedPostChunkPeers':
-        category = 'postChunk';
-        break;
+        return 'postChunk';
       default:
         throw new Error(`Unknown peer list name: ${peerListName}`);
     }
+  }
 
+  selectPeers(peerCount: number, peerListName: string): string[] {
+    const category = this.peerListNameToCategory(peerListName);
     return this.peerManager.selectPeers(category, peerCount);
   }
 
@@ -855,21 +850,7 @@ export class ArweaveCompositeClient
       source_type: sourceType,
     });
     if (sourceType === 'peer') {
-      let category: ArweavePeerCategory;
-      switch (peerListName) {
-        case 'weightedChainPeers':
-          category = 'chain';
-          break;
-        case 'weightedGetChunkPeers':
-          category = 'getChunk';
-          break;
-        case 'weightedPostChunkPeers':
-          category = 'postChunk';
-          break;
-        default:
-          throw new Error(`Unknown peer list name: ${peerListName}`);
-      }
-
+      const category = this.peerListNameToCategory(peerListName);
       this.peerManager.reportSuccess(category, peer);
     }
   }
@@ -888,21 +869,7 @@ export class ArweaveCompositeClient
       source_type: sourceType,
     });
     if (sourceType === 'peer') {
-      let category: ArweavePeerCategory;
-      switch (peerListName) {
-        case 'weightedChainPeers':
-          category = 'chain';
-          break;
-        case 'weightedGetChunkPeers':
-          category = 'getChunk';
-          break;
-        case 'weightedPostChunkPeers':
-          category = 'postChunk';
-          break;
-        default:
-          throw new Error(`Unknown peer list name: ${peerListName}`);
-      }
-
+      const category = this.peerListNameToCategory(peerListName);
       this.peerManager.reportFailure(category, peer);
     }
   }
@@ -961,12 +928,7 @@ export class ArweaveCompositeClient
           attempt: attempt + 1,
         });
 
-        // Ensure clean URL construction without double slashes
-        const baseUrl = randomPeer.endsWith('/')
-          ? randomPeer.slice(0, -1)
-          : randomPeer;
-        const chunkPath = `chunk/${absoluteOffset}`;
-        const requestUrl = `${baseUrl}/${chunkPath}`;
+        const requestUrl = `${randomPeer}/chunk/${absoluteOffset}`;
 
         this.log.debug('Making chunk request to peer', {
           peer: randomPeer,
@@ -1083,36 +1045,21 @@ export class ArweaveCompositeClient
         } catch (error: any) {
           const responseTime = Date.now() - startTime;
 
-          // Enhanced error logging for debugging
-          let errorDetails: any = {
+          // Log essential error information only
+          const errorDetails = {
             peer: randomPeer,
             peerHost,
             absoluteOffset,
-            requestUrl,
             attempt: attempt + 1,
             responseTime,
-            errorType: error.constructor.name,
-            errorMessage: error.message,
-          };
-
-          // Check if it's an Axios error for more details
-          if (axios.isAxiosError(error)) {
-            errorDetails = {
-              ...errorDetails,
-              isAxiosError: true,
+            error: error.message,
+            ...(axios.isAxiosError(error) && {
               code: error.code,
               status: error.response?.status,
-              statusText: error.response?.statusText,
-              responseHeaders: error.response?.headers,
-              responseData: error.response?.data,
-              timeout: error.code === 'ECONNABORTED',
-              connectionRefused: error.code === 'ECONNREFUSED',
-              hostUnreachable: error.code === 'EHOSTUNREACH',
-              dnsLookupFailed: error.code === 'ENOTFOUND',
-            };
-          }
+            }),
+          };
 
-          this.log.warn('Chunk request failed', errorDetails);
+          this.log.debug('Chunk request failed', errorDetails);
 
           span.addEvent('Peer request failed', {
             peer_host: peerHost,

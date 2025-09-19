@@ -108,8 +108,12 @@ export class ArweavePeerManager {
   constructor(config: ArweavePeerManagerConfig) {
     this.log = config.log.child({ class: this.constructor.name });
     this.trustedNodeUrl = config.trustedNodeUrl;
-    this.preferredChunkGetUrls = config.preferredChunkGetUrls || [];
-    this.preferredChunkPostUrls = config.preferredChunkPostUrls || [];
+    this.preferredChunkGetUrls = this.normalizeUrls(
+      config.preferredChunkGetUrls || [],
+    );
+    this.preferredChunkPostUrls = this.normalizeUrls(
+      config.preferredChunkPostUrls || [],
+    );
     this.ignoreUrls = config.ignoreUrls || [];
     this.peerInfoTimeoutMs =
       config.peerInfoTimeoutMs ?? DEFAULT_PEER_INFO_TIMEOUT_MS;
@@ -125,20 +129,14 @@ export class ArweavePeerManager {
     this.initializePreferredUrls();
   }
 
-  private initializePreferredUrls(): void {
-    // Initialize GET chunk peers with resolved URLs
-    if (this.dnsResolver && this.preferredChunkGetUrls.length > 0) {
-      this.resolvedChunkGetUrls = [...this.preferredChunkGetUrls]; // Will be updated by DNS resolver
-    } else {
-      this.resolvedChunkGetUrls = [...this.preferredChunkGetUrls];
-    }
+  private normalizeUrls(urls: string[]): string[] {
+    return urls.map((url) => (url.endsWith('/') ? url.slice(0, -1) : url));
+  }
 
-    // Initialize POST chunk peers with resolved URLs
-    if (this.dnsResolver && this.preferredChunkPostUrls.length > 0) {
-      this.resolvedChunkPostUrls = [...this.preferredChunkPostUrls]; // Will be updated by DNS resolver
-    } else {
-      this.resolvedChunkPostUrls = [...this.preferredChunkPostUrls];
-    }
+  private initializePreferredUrls(): void {
+    // Initialize resolved URLs with preferred URLs (DNS resolver will update these later if configured)
+    this.resolvedChunkGetUrls = [...this.preferredChunkGetUrls];
+    this.resolvedChunkPostUrls = [...this.preferredChunkPostUrls];
 
     // Initialize weighted peer lists
     this.initializePreferredChunkGetUrls();
@@ -153,18 +151,12 @@ export class ArweavePeerManager {
       weight: 100, // High weight for preferred chunk GET URLs
     }));
 
-    // Log URL resolution for debugging
-    if (this.dnsResolver && this.preferredChunkGetUrls.length > 0) {
-      this.log.debug(
-        'Initialized preferred chunk GET URLs with DNS resolution',
-        {
-          originalUrls: this.preferredChunkGetUrls.length,
-          resolvedUrls: uniqueUrls.length,
-          usingDefaults: this.preferredChunkGetUrls.some(
-            (url) => url.includes('data-') && url.includes('.arweave.xyz'),
-          ),
-        },
-      );
+    // Log URL initialization for debugging
+    if (this.preferredChunkGetUrls.length > 0) {
+      this.log.debug('Initialized preferred chunk GET URLs', {
+        originalUrls: this.preferredChunkGetUrls.length,
+        resolvedUrls: uniqueUrls.length,
+      });
     }
   }
 
@@ -176,18 +168,12 @@ export class ArweavePeerManager {
       weight: 100, // High weight for preferred chunk POST URLs
     }));
 
-    // Log URL resolution for debugging
-    if (this.dnsResolver && this.preferredChunkPostUrls.length > 0) {
-      this.log.debug(
-        'Initialized preferred chunk POST URLs with DNS resolution',
-        {
-          originalUrls: this.preferredChunkPostUrls.length,
-          resolvedUrls: uniqueUrls.length,
-          usingDefaults: this.preferredChunkPostUrls.some(
-            (url) => url.includes('data-') && url.includes('.arweave.xyz'),
-          ),
-        },
-      );
+    // Log URL initialization for debugging
+    if (this.preferredChunkPostUrls.length > 0) {
+      this.log.debug('Initialized preferred chunk POST URLs', {
+        originalUrls: this.preferredChunkPostUrls.length,
+        resolvedUrls: uniqueUrls.length,
+      });
     }
   }
 
@@ -271,7 +257,7 @@ export class ArweavePeerManager {
     for (const originalUrl of this.preferredChunkGetUrls) {
       const resolved = resolvedUrls[originalUrl];
       if (resolved !== undefined && resolved.length > 0) {
-        this.resolvedChunkGetUrls.push(...resolved);
+        this.resolvedChunkGetUrls.push(...this.normalizeUrls(resolved));
       } else {
         this.resolvedChunkGetUrls.push(originalUrl);
       }
@@ -282,7 +268,7 @@ export class ArweavePeerManager {
     for (const originalUrl of this.preferredChunkPostUrls) {
       const resolved = resolvedUrls[originalUrl];
       if (resolved !== undefined && resolved.length > 0) {
-        this.resolvedChunkPostUrls.push(...resolved);
+        this.resolvedChunkPostUrls.push(...this.normalizeUrls(resolved));
       } else {
         this.resolvedChunkPostUrls.push(originalUrl);
       }
