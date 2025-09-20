@@ -833,8 +833,9 @@ export class ArweaveCompositeClient
   handlePeerSuccess(
     peer: string,
     method: string,
-    sourceType: 'trusted' | 'peer',
+    sourceType: 'trusted' | 'preferred' | 'peer',
     category: ArweavePeerCategory,
+    peerType?: 'bucket' | 'general',
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'success',
@@ -842,6 +843,7 @@ export class ArweaveCompositeClient
       class: this.constructor.name,
       source: peer,
       source_type: sourceType,
+      peer_type: peerType || 'unknown',
     });
     if (sourceType === 'peer') {
       this.peerManager.reportSuccess(category, peer);
@@ -851,8 +853,9 @@ export class ArweaveCompositeClient
   handlePeerFailure(
     peer: string,
     method: string,
-    sourceType: 'trusted' | 'peer',
+    sourceType: 'trusted' | 'preferred' | 'peer',
     category: ArweavePeerCategory,
+    peerType?: 'bucket' | 'general',
   ): void {
     metrics.requestChunkTotal.inc({
       status: 'error',
@@ -860,6 +863,7 @@ export class ArweaveCompositeClient
       class: this.constructor.name,
       source: peer,
       source_type: sourceType,
+      peer_type: peerType || 'unknown',
     });
     if (sourceType === 'peer') {
       this.peerManager.reportFailure(category, peer);
@@ -893,15 +897,32 @@ export class ArweaveCompositeClient
     });
 
     try {
-      // Select peers once with offset awareness - get more peers upfront
-      const orderedPeers = this.peerManager.selectPeersForOffset(
+      // Try bucket-specific peers first, then general peers as fallback
+      const bucketPeers = this.peerManager.selectBucketPeersForOffset(
         absoluteOffset,
-        Math.max(peerSelectionCount, retryCount), // Get at least retryCount peers
+        Math.max(peerSelectionCount, retryCount), // Get more bucket peers upfront
       );
+
+      // Get general peers as secondary fallback (excluding bucket peers to avoid duplicates)
+      const allGeneralPeers = this.peerManager.selectPeers(
+        'getChunk',
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      // Filter out bucket peers from general peers to avoid duplicates
+      const bucketPeerSet = new Set(bucketPeers);
+      const generalPeers = allGeneralPeers.filter(
+        (peer) => !bucketPeerSet.has(peer),
+      );
+
+      // Combine: bucket peers first, then general peers
+      const orderedPeers = [...bucketPeers, ...generalPeers];
 
       this.log.debug('Peer selection for chunk request', {
         absoluteOffset,
-        selectedPeers: orderedPeers.length,
+        bucketPeers: bucketPeers.length,
+        generalPeers: generalPeers.length,
+        totalSelectedPeers: orderedPeers.length,
         maxAttempts: Math.min(orderedPeers.length, retryCount),
         peers: orderedPeers.slice(0, 3), // Log first 3 peers for debugging
       });
@@ -915,15 +936,42 @@ export class ArweaveCompositeClient
         throw error;
       }
 
-      span.setAttribute('chunk.available_peers', orderedPeers.length);
+      span.setAttributes({
+        'chunk.available_peers': orderedPeers.length,
+        'chunk.bucket_peers': bucketPeers.length,
+        'chunk.general_peers': generalPeers.length,
+      });
 
-      // Iterate through peers sequentially
+      // Iterate through peers sequentially (bucket peers first, then general)
       const maxAttempts = Math.min(orderedPeers.length, retryCount);
       for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
+        // Check if we're transitioning from bucket peers to general peers
+        const isBucketPeer = peerIndex < bucketPeers.length;
+        const isTransition =
+          peerIndex === bucketPeers.length && bucketPeers.length > 0;
+
+        if (isTransition) {
+          span.addEvent('Transitioning to general peers', {
+            bucket_peers_tried: bucketPeers.length,
+            remaining_general_peers: generalPeers.length,
+          });
+          this.log.debug('All bucket peers failed, trying general peers', {
+            absoluteOffset,
+            bucketPeersTried: bucketPeers.length,
+            remainingGeneralPeers: generalPeers.length,
+          });
+
+          // Track transition metric
+          metrics.chunkPeerTransitionTotal.inc({
+            method: 'peerGetChunk',
+          });
+        }
+
         span.addEvent('Starting peer attempt', {
           peer_index: peerIndex + 1,
           total_peers: orderedPeers.length,
           max_attempts: maxAttempts,
+          peer_type: isBucketPeer ? 'bucket' : 'general',
         });
 
         const randomPeer = orderedPeers[peerIndex];
@@ -933,6 +981,7 @@ export class ArweaveCompositeClient
           peer_host: peerHost,
           peer_index: peerIndex + 1,
           total_peers: orderedPeers.length,
+          peer_type: isBucketPeer ? 'bucket' : 'general',
         });
 
         const requestUrl = `${randomPeer}/chunk/${absoluteOffset}`;
@@ -945,6 +994,7 @@ export class ArweaveCompositeClient
           timeout: 500,
           peerIndex: peerIndex + 1,
           totalPeers: orderedPeers.length,
+          peerType: isBucketPeer ? 'bucket' : 'general',
         });
 
         const startTime = Date.now();
@@ -1048,8 +1098,11 @@ export class ArweaveCompositeClient
           this.handlePeerSuccess(
             randomPeer,
             'peerGetChunk',
-            'peer',
+            this.peerManager.isPreferredChunkGetPeer(randomPeer)
+              ? 'preferred'
+              : 'peer',
             'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
           );
 
           return chunk;
@@ -1085,8 +1138,11 @@ export class ArweaveCompositeClient
           this.handlePeerFailure(
             randomPeer,
             'peerGetChunk',
-            'peer',
+            this.peerManager.isPreferredChunkGetPeer(randomPeer)
+              ? 'preferred'
+              : 'peer',
             'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
           );
 
           // Continue to next peer (no early exit needed in for loop)
