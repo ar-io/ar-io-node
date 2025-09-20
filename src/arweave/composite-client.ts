@@ -56,7 +56,6 @@ import {
   PartialJsonTransactionStore,
   Region,
   ChunkDataByAnySourceParams,
-  WithPeers,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -95,13 +94,6 @@ interface PeerChunkQueue {
   totalSuccesses: number;
 }
 
-interface Peer {
-  url: string;
-  blocks: number;
-  height: number;
-  lastSeen: number;
-}
-
 export class ArweaveCompositeClient
   implements
     ChainSource,
@@ -109,8 +101,7 @@ export class ArweaveCompositeClient
     ChunkByAnySource,
     ChunkDataByAnySource,
     ChunkMetadataByAnySource,
-    ContiguousDataSource,
-    WithPeers<Peer>
+    ContiguousDataSource
 {
   private arweave: Arweave;
   private log: winston.Logger;
@@ -128,11 +119,14 @@ export class ArweaveCompositeClient
   public peerManager: ArweavePeerManager;
 
   // Binary search caches (configured via environment variables)
-  private blockCache = new LRUCache<number, any>({
+  private blockCache = new LRUCache<string, any>({
     max: config.CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE,
     ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS,
   });
-  private txOffsetCache = new LRUCache<string, number>({
+  private txOffsetCache = new LRUCache<
+    string,
+    { offset: number; size: number }
+  >({
     max: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE,
     ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS,
   });
@@ -765,12 +759,24 @@ export class ArweaveCompositeClient
   async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
     this.failureSimulator.maybeFail();
 
-    return (
+    const response = (
       await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/offset`,
       })
     ).data;
+
+    // Ensure offset and size are numbers (API might return strings)
+    return {
+      offset:
+        typeof response.offset === 'string'
+          ? parseInt(response.offset)
+          : response.offset,
+      size:
+        typeof response.size === 'string'
+          ? parseInt(response.size)
+          : response.size,
+    };
   }
 
   async getTxField<K extends keyof PartialJsonTransaction>(
@@ -1804,11 +1810,18 @@ export class ArweaveCompositeClient
 
     let left = 0;
     let right = sortedTxIds.length - 1;
-    let result: { txId: string; txOffset: number } | null = null;
+    let result: {
+      txId: string;
+      txOffset: number;
+      txSize: number;
+      txStartOffset: number;
+      txEndOffset: number;
+    } | null = null;
     let iteration = 0;
     const offsetRequests: {
       txId: string;
       offset: number;
+      size: number;
       fromCache: boolean;
     }[] = [];
 
@@ -1846,8 +1859,8 @@ export class ArweaveCompositeClient
           });
 
           const offsetResponse = await this.getTxOffset(txId);
-          txOffset = parseInt(offsetResponse.offset);
-          txSize = parseInt(offsetResponse.size);
+          txOffset = offsetResponse.offset;
+          txSize = offsetResponse.size;
           this.txOffsetCache.set(cacheKey, { offset: txOffset, size: txSize });
 
           this.log.debug('Successfully fetched transaction offset', {
@@ -1882,8 +1895,8 @@ export class ArweaveCompositeClient
           fromCache = false; // Force refetch to get complete data
 
           const offsetResponse = await this.getTxOffset(txId);
-          txOffset = parseInt(offsetResponse.offset);
-          txSize = parseInt(offsetResponse.size);
+          txOffset = offsetResponse.offset;
+          txSize = offsetResponse.size;
           this.txOffsetCache.set(cacheKey, { offset: txOffset, size: txSize });
         } else {
           // New cache format with both offset and size
