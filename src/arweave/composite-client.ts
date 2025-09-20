@@ -1307,10 +1307,13 @@ export class ArweaveCompositeClient
 
       const stream = Readable.from(txData);
 
+      const requestType = region ? 'range' : 'full';
+
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: dataResponse.config.baseURL,
+          request_type: requestType,
         });
       });
 
@@ -1318,7 +1321,28 @@ export class ArweaveCompositeClient
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: dataResponse.config.baseURL,
+          request_type: requestType,
         });
+
+        // Track bytes streamed
+        const bytesStreamed = region ? region.size : size;
+        metrics.getDataStreamBytesTotal.inc(
+          {
+            class: this.constructor.name,
+            source: dataResponse.config.baseURL,
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
+
+        metrics.getDataStreamSizeHistogram.observe(
+          {
+            class: this.constructor.name,
+            source: dataResponse.config.baseURL,
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
       });
 
       return {

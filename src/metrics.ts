@@ -314,6 +314,19 @@ export const getDataStreamSuccessesTotal = new promClient.Counter({
   labelNames: ['class', 'source', 'request_type'] as const,
 });
 
+export const getDataStreamBytesTotal = new promClient.Counter({
+  name: 'get_data_stream_bytes_total',
+  help: 'Total bytes streamed successfully',
+  labelNames: ['class', 'source', 'request_type'] as const,
+});
+
+export const getDataStreamSizeHistogram = new promClient.Histogram({
+  name: 'get_data_stream_size_bytes',
+  help: 'Distribution of data stream sizes in bytes',
+  labelNames: ['class', 'source', 'request_type'] as const,
+  buckets: [102400, 1048576, 10485760, 104857600], // 100KB, 1MB, 10MB, 100MB
+});
+
 export const dataRequestChunksHistogram = new promClient.Histogram({
   name: 'data_request_chunks',
   help: 'Number of chunks fetched per data request',

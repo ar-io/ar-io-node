@@ -141,6 +141,25 @@ export class TxChunksDataSource implements ContiguousDataSource {
             request_type: 'range',
           });
 
+          // Track bytes streamed
+          metrics.getDataStreamBytesTotal.inc(
+            {
+              class: this.constructor.name,
+              source: 'chunks',
+              request_type: 'range',
+            },
+            region.size,
+          );
+
+          metrics.getDataStreamSizeHistogram.observe(
+            {
+              class: this.constructor.name,
+              source: 'chunks',
+              request_type: 'range',
+            },
+            region.size,
+          );
+
           // Track chunks fetched per request
           metrics.dataRequestChunksHistogram.observe(
             {
