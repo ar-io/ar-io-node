@@ -91,6 +91,9 @@ describe('ArweaveCompositeClient Binary Search', () => {
       const txId = 'test-tx-id';
       const txOffset = 2000;
 
+      // Clear any cached data first
+      client.cleanup();
+
       // Mock getHeight
       client.getHeight = mock.fn(async () => 100);
 
@@ -114,8 +117,8 @@ describe('ArweaveCompositeClient Binary Search', () => {
       client.getTxOffset = mock.fn(async (id: string) => {
         if (id === txId) {
           return {
-            offset: txOffset.toString(),
-            size: '500', // Transaction size for range calculation
+            offset: txOffset,
+            size: 500, // Transaction size for range calculation
           };
         }
         throw new Error('Transaction not found');
@@ -236,6 +239,9 @@ describe('ArweaveCompositeClient Binary Search', () => {
       const exactOffset = 2000;
       const txId = 'boundary-tx';
 
+      // Clear any cached data first
+      client.cleanup();
+
       // Mock getHeight
       client.getHeight = mock.fn(async () => 100);
 
@@ -248,8 +254,8 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
       // Mock getTxOffset
       client.getTxOffset = mock.fn(async () => ({
-        offset: exactOffset.toString(),
-        size: '1000', // Transaction size for boundary test
+        offset: exactOffset,
+        size: 1000, // Transaction size for boundary test
       }));
 
       const result = await client.findTxByOffset(exactOffset);
@@ -300,6 +306,9 @@ describe('ArweaveCompositeClient Binary Search', () => {
     it('should sort transactions by binary representation before searching', async () => {
       const targetOffset = 345449370152728; // Offset from real problematic case
 
+      // Clear any cached data first
+      client.cleanup();
+
       // These are real transaction IDs from block 1700011 that demonstrate the sorting issue
       const txIds = [
         'zK0EETL7U5ohgv5mzka8KhluBwPfILRYM62CRIC2SEE', // Sorts last as string
@@ -321,14 +330,14 @@ describe('ArweaveCompositeClient Binary Search', () => {
         if (id === '8crKVhXbmF92QKevmdxohVHlc6OqRo_6JbgArRmEwZc') {
           // This is the large transaction that contains our target offset
           return {
-            offset: '345449412246841',
-            size: '84188227', // Large transaction
+            offset: 345449412246841,
+            size: 84188227, // Large transaction
           };
         } else if (id === 'zK0EETL7U5ohgv5mzka8KhluBwPfILRYM62CRIC2SEE') {
           // Smaller transaction with smaller offset
           return {
-            offset: '345449326488888',
-            size: '3138',
+            offset: 345449326488888,
+            size: 3138,
           };
         }
         throw new Error(`Unexpected transaction ID: ${id}`);
@@ -377,8 +386,8 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
         // Mock getTxOffset
         client.getTxOffset = mock.fn(async () => ({
-          offset: txOffset.toString(),
-          size: txSize.toString(),
+          offset: txOffset,
+          size: txSize,
         }));
 
         const result = await client.findTxByOffset(testCase.offset);
@@ -422,8 +431,8 @@ describe('ArweaveCompositeClient Binary Search', () => {
 
         // Mock getTxOffset
         client.getTxOffset = mock.fn(async () => ({
-          offset: txOffset.toString(),
-          size: txSize.toString(),
+          offset: txOffset,
+          size: txSize,
         }));
 
         const result = await client.findTxByOffset(testCase.offset);
