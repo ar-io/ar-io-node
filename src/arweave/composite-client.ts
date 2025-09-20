@@ -200,8 +200,13 @@ export class ArweaveCompositeClient
     // Initialize memoized sorting function for chunk POST peers
     this.getSortedChunkPostPeers = memoize(
       (eligiblePeers: string[]) => {
-        // Use peerManager to select peers already sorted by preference and weight
-        return this.peerManager.selectPeers('postChunk', eligiblePeers.length);
+        // Prioritize eligible peers chosen by weighted selection; never introduce ineligible ones
+        const selected = new Set(
+          this.peerManager.selectPeers('postChunk', eligiblePeers.length),
+        );
+        const prioritized = eligiblePeers.filter((p) => selected.has(p));
+        const remainder = eligiblePeers.filter((p) => !selected.has(p));
+        return [...prioritized, ...remainder];
       },
       {
         maxAge: config.CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS,
@@ -2015,9 +2020,9 @@ export class ArweaveCompositeClient
       this.bucketFillerInterval = undefined;
     }
 
-    // Clear NodeCache instances (this stops their internal timers)
-    this.blockByHeightPromiseCache.flushAll();
-    this.txPromiseCache.flushAll();
+    // Clear NodeCache instances and stop their internal timers
+    this.blockByHeightPromiseCache.close();
+    this.txPromiseCache.close();
 
     // Clear LRU caches
     this.blockCache.clear();

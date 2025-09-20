@@ -1115,6 +1115,8 @@ export const shutdown = async (exitCode = 0) => {
       await dataVerificationWorker?.stop();
       // Stop DNS periodic re-resolution if running
       arweavePeerManager.stopDnsResolution();
+      arweavePeerManager.stopAutoRefresh();
+      arweavePeerManager.stopBucketRefresh();
       await db.stop();
       process.exit(exitCode);
     });

@@ -208,14 +208,22 @@ function skipValue(buffer: Uint8Array, offset: number): number {
 
     case SMALL_BIG_EXT: {
       // Small big integer: length(1), sign(1), data(length bytes)
-      if (offset + 1 > buffer.length) {
+      if (offset + 2 > buffer.length) {
         throw new ETFParseError(
           'Unexpected end of data while skipping small big integer',
           offset,
         );
       }
       const length = buffer[offset];
-      return offset + 1 + 1 + length; // length byte + sign byte + data bytes
+      const signOffset = offset + 1;
+      const dataOffset = offset + 2;
+      if (dataOffset + length > buffer.length) {
+        throw new ETFParseError(
+          'Unexpected end of data while skipping small big integer data',
+          dataOffset,
+        );
+      }
+      return dataOffset + length; // length + sign + data
     }
 
     case NEW_FLOAT_EXT:
