@@ -230,25 +230,22 @@ export class ArweavePeerManager {
     }
 
     // Set up periodic DNS updates
-    this.dnsUpdateInterval = setInterval(
-      async () => {
-        try {
-          const resolvedUrls = await this.dnsResolver!.resolveUrls(allUrls);
-          const resolvedUrlsMap = this.convertResolvedUrlsToMap(resolvedUrls);
-          this.updateResolvedUrls(resolvedUrlsMap);
+    this.dnsUpdateInterval = setInterval(async () => {
+      try {
+        const resolvedUrls = await this.dnsResolver!.resolveUrls(allUrls);
+        const resolvedUrlsMap = this.convertResolvedUrlsToMap(resolvedUrls);
+        this.updateResolvedUrls(resolvedUrlsMap);
 
-          log.debug('Periodic DNS resolution completed', {
-            originalCount: allUrls.length,
-            resolvedCount: resolvedUrls.length,
-          });
-        } catch (error: any) {
-          log.warn('Periodic DNS resolution failed', {
-            error: error.message,
-          });
-        }
-      },
-      5 * 60 * 1000,
-    ); // Update every 5 minutes
+        log.debug('Periodic DNS resolution completed', {
+          originalCount: allUrls.length,
+          resolvedCount: resolvedUrls.length,
+        });
+      } catch (error: any) {
+        log.warn('Periodic DNS resolution failed', {
+          error: error.message,
+        });
+      }
+    }, config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS * 1000);
   }
 
   private convertResolvedUrlsToMap(
@@ -737,11 +734,9 @@ export class ArweavePeerManager {
 
     // Create weighted elements for randomized selection
     const weightedElements = candidatePeers.map((url) => {
-      // Extract hostname from full URL to match with weighted peers
-      const hostname = new URL(url).hostname;
       return {
         id: url,
-        weight: weightedGetChunkPeers.get(hostname) ?? 1, // Default weight if not in weighted list
+        weight: weightedGetChunkPeers.get(url) ?? 1, // Default weight if not in weighted list
       };
     });
 
@@ -797,11 +792,9 @@ export class ArweavePeerManager {
 
     // Create weighted elements for randomized selection
     const weightedElements = candidatePeers.map((url) => {
-      // Extract hostname from full URL to match with weighted peers
-      const hostname = new URL(url).hostname;
       return {
         id: url,
-        weight: weightedGetChunkPeers.get(hostname) ?? 1, // Default weight if not in weighted list
+        weight: weightedGetChunkPeers.get(url) ?? 1, // Default weight if not in weighted list
       };
     });
 

@@ -89,7 +89,7 @@ describe('ArIOChunkSource', () => {
     it('should reject requests exceeding maximum hops', () => {
       const params = {
         ...TEST_PARAMS,
-        requestAttributes: { hops: 1 },
+        requestAttributes: { hops: 2 },
       };
 
       // Test the validation method directly (fast unit test)
@@ -128,7 +128,7 @@ describe('ArIOChunkSource', () => {
       assert.doesNotThrow(() => validateHops(params));
     });
 
-    it('should allow requests at exactly the maximum hop count', () => {
+    it('should reject requests at exactly the maximum hop count', () => {
       const params = {
         ...TEST_PARAMS,
         requestAttributes: { hops: 1 }, // MAX_CHUNK_HOPS = 1

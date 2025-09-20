@@ -193,8 +193,8 @@ To find which chunk contains a specific byte:
 1. **Using Relative Offset** (within transaction):
 
    ```javascript
-   const chunkIndex = Math.floor(relativeOffset / 256_144);
-   const offsetInChunk = relativeOffset % 256_144;
+   const chunkIndex = Math.floor(relativeOffset / 262_144);
+   const offsetInChunk = relativeOffset % 262_144;
    ```
 
 2. **Using Absolute Offset**:
@@ -211,9 +211,9 @@ The Merkle path parser extracts exact chunk boundaries from the data_path:
 ```javascript
 // Parsed from data_path
 {
-  startOffset: 256144,    // Start of chunk within transaction (inclusive)
-  endOffset: 512288,      // End of chunk within transaction (exclusive)
-  chunkSize: 256144,      // Actual size of this chunk
+  startOffset: 262144,    // Start of chunk within transaction (inclusive)
+  endOffset: 524288,      // End of chunk within transaction (exclusive)
+  chunkSize: 262144,      // Actual size of this chunk
 }
 
 // Combined with transaction offset to get absolute positions:
