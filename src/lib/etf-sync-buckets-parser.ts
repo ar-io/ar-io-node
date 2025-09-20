@@ -215,7 +215,6 @@ function skipValue(buffer: Uint8Array, offset: number): number {
         );
       }
       const length = buffer[offset];
-      const signOffset = offset + 1;
       const dataOffset = offset + 2;
       if (dataOffset + length > buffer.length) {
         throw new ETFParseError(
