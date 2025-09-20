@@ -334,14 +334,20 @@ export const dataRequestFirstChunkLatency = new promClient.Histogram({
 
 export const requestChunkTotal = new promClient.Counter({
   name: 'request_chunk_total',
-  help: 'Count of each individual chunk http request, status can be "error" or "success", source_type can be "trusted" or "peer".',
-  labelNames: ['status', 'class', 'method', 'source', 'source_type'] as const,
+  help: 'Count of each individual chunk http request, status can be "error" or "success", source_type can be "trusted", "preferred", or "peer", peer_type can be "bucket" or "general".',
+  labelNames: ['status', 'class', 'method', 'source', 'source_type', 'peer_type'] as const,
 });
 
 export const getChunkTotal = new promClient.Counter({
   name: 'get_chunk_total',
   help: 'Higher level count of chunk discovery, counts when the caller request for chunk ends, stores the status of the request',
   labelNames: ['status', 'class', 'method'] as const,
+});
+
+export const chunkPeerTransitionTotal = new promClient.Counter({
+  name: 'chunk_peer_transition_total',
+  help: 'Count of chunk retrieval attempts that required fallback from bucket to general peers',
+  labelNames: ['method'] as const,
 });
 
 //

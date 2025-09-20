@@ -679,6 +679,13 @@ export class ArweavePeerManager {
   }
 
   /**
+   * Check if a peer URL is a preferred peer for chunk GET operations
+   */
+  isPreferredChunkGetPeer(peerUrl: string): boolean {
+    return this.resolvedChunkGetUrls.includes(peerUrl);
+  }
+
+  /**
    * Select peers that have data for a specific offset
    */
   selectPeersForOffset(offset: number, count: number = 3): string[] {
@@ -754,6 +761,66 @@ export class ArweavePeerManager {
   }
 
   /**
+   * Select bucket-specific peers for an offset, without fallback to general peers
+   */
+  selectBucketPeersForOffset(offset: number, count: number = 3): string[] {
+    const log = this.log.child({
+      method: 'selectBucketPeersForOffset',
+      offset,
+      count,
+    });
+
+    const bucketIndex = this.getBucketIndex(offset);
+    const candidatePeers: string[] = [];
+
+    // Find peers that have the required bucket
+    for (const [, peer] of Object.entries(this.peers)) {
+      if (peer.syncBuckets?.has(bucketIndex)) {
+        candidatePeers.push(peer.url);
+      }
+    }
+
+    log.debug('Bucket-specific peer selection for offset', {
+      bucketIndex,
+      candidatePeersWithBucket: candidatePeers.length,
+    });
+
+    if (candidatePeers.length === 0) {
+      log.debug('No peers found with required bucket');
+      return [];
+    }
+
+    // Score peers by their weight from the weighted lists
+    const weightedGetChunkPeers = new Map(
+      this.weightedGetChunkPeers.map((p) => [p.id, p.weight]),
+    );
+
+    // Create weighted elements for randomized selection
+    const weightedElements = candidatePeers.map((url) => {
+      // Extract hostname from full URL to match with weighted peers
+      const hostname = new URL(url).hostname;
+      return {
+        id: url,
+        weight: weightedGetChunkPeers.get(hostname) ?? 1, // Default weight if not in weighted list
+      };
+    });
+
+    // Use randomized weighted selection like the regular selectPeers method
+    const selected = randomWeightedChoices({
+      table: weightedElements,
+      count,
+    });
+
+    log.debug('Selected bucket-specific peers', {
+      bucketIndex,
+      candidateCount: candidatePeers.length,
+      selectedCount: selected.length,
+    });
+
+    return selected;
+  }
+
+  /**
    * Update sync buckets for a specific peer
    */
   private async updatePeerBuckets(peerKey: string): Promise<void> {
@@ -786,7 +853,7 @@ export class ArweavePeerManager {
       // Record successful update
       metrics.arweavePeerSyncBucketUpdateCounter.inc();
     } catch (error: any) {
-      log.warn('Failed to fetch sync buckets', { error: error.message });
+      log.debug('Failed to fetch sync buckets', { error: error.message });
 
       // Record error
       metrics.arweavePeerSyncBucketErrorCounter.inc();
