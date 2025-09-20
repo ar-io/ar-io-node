@@ -13,6 +13,13 @@ import PrometheusMetrics from 'opossum-prometheus';
 import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
+import { AR_IO_NODE_RELEASE } from './config.js';
+
+// Set default labels for all metrics
+promClient.register.setDefaultLabels({
+  release: AR_IO_NODE_RELEASE,
+});
+
 /**
  * @deprecated Use setUpCircuitBreakerListenerMetrics instead.
  */
