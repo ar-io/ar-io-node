@@ -135,6 +135,41 @@ Object.entries(TRUSTED_GATEWAYS_URLS).forEach(([url, weight]) => {
   }
 });
 
+// Trusted gateways blocked origins (origins to reject when forwarding)
+export const TRUSTED_GATEWAYS_BLOCKED_ORIGINS = env
+  .varOrDefault('TRUSTED_GATEWAYS_BLOCKED_ORIGINS', '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
+
+// Validate blocked origins
+TRUSTED_GATEWAYS_BLOCKED_ORIGINS.forEach((origin) => {
+  if (typeof origin !== 'string' || origin.trim().length === 0) {
+    throw new Error(
+      `Invalid origin in TRUSTED_GATEWAYS_BLOCKED_ORIGINS: ${origin}`,
+    );
+  }
+});
+
+// Trusted gateways blocked IPs and CIDR ranges to reject when forwarding
+export const TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS = env
+  .varOrDefault('TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS', '')
+  .split(',')
+  .map((cidr) => cidr.trim())
+  .filter((cidr) => cidr.length > 0);
+
+// Validate blocked IPs and CIDR ranges
+TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS.forEach((cidr) => {
+  if (typeof cidr !== 'string' || cidr.trim().length === 0) {
+    throw new Error(
+      `Invalid IP/CIDR in TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS: ${cidr}`,
+    );
+  }
+  // Allow both exact IPs and CIDR notation
+  // Individual IPs (no slash) are allowed for exact matching
+  // CIDRs must include /prefix
+});
+
 export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS',
   '10000',
@@ -378,6 +413,44 @@ export const CHUNK_METADATA_SOURCE_PARALLELISM = +env.varOrDefault(
   'CHUNK_METADATA_SOURCE_PARALLELISM',
   '1',
 );
+
+// Chain fallback for chunk offset requests
+export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
+  env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';
+
+// Cache settings for chain fallback binary search
+export const CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE',
+  '2000',
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS',
+  `${60 * 10 * 1000}`, // 10 minutes
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE',
+    '10000',
+  );
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS',
+    `${60 * 5 * 1000}`, // 5 minutes
+  );
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE',
+  '10000',
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS',
+    `${60 * 5 * 1000}`, // 5 minutes
+  );
 
 //
 // Indexing

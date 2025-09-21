@@ -14,7 +14,7 @@ import {
   Chunk,
   ChunkData,
   ChunkMetadata,
-} from '../types';
+} from '../types.js';
 
 export class FullChunkSource
   implements ChunkByAnySource, ChunkMetadataByAnySource, ChunkDataByAnySource

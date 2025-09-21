@@ -8,7 +8,7 @@ import assert from 'node:assert';
 import axios from 'axios';
 import { describe, before, after, it } from 'node:test';
 import { StartedDockerComposeEnvironment } from 'testcontainers';
-import { default as wait } from 'wait';
+import wait from '../../src/lib/wait.js';
 import { cleanDb, composeUp } from './utils.js';
 import { isTestFiltered } from '../utils.js';
 

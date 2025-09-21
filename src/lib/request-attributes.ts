@@ -98,6 +98,7 @@ export const parseRequestAttributesHeaders = ({
     origin: headersLowercaseKeys[headerNames.origin.toLowerCase()],
     originNodeRelease:
       headersLowercaseKeys[headerNames.originNodeRelease.toLowerCase()],
+    clientIps: [], // No client IPs available from headers
     ...(arnsName != null && { arnsName }),
     ...(arnsBasename != null && { arnsBasename }),
     ...(arnsRecord != null && { arnsRecord }),

@@ -10,7 +10,10 @@ import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 import { release } from '../version.js';
 import { tracer } from '../tracing.js';
-import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
+import {
+  ArIOPeerManager,
+  PeerSuccessMetrics,
+} from '../peers/ar-io-peer-manager.js';
 import {
   generateRequestAttributes,
   validateHopCount,
@@ -184,6 +187,8 @@ export class ArIOChunkSource
         arnsName: params.requestAttributes?.arnsName,
         arnsBasename: params.requestAttributes?.arnsBasename,
         arnsRecord: params.requestAttributes?.arnsRecord,
+        clientIp: params.requestAttributes?.clientIp,
+        clientIps: params.requestAttributes?.clientIps || [],
       });
 
       const headers = requestAttributesHeaders?.headers || {};

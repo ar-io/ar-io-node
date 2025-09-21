@@ -335,10 +335,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           'cache.check_duration_ms': cacheCheckDuration,
         });
 
+        const requestType = region ? 'range' : 'full';
+
         cacheData.stream.once('error', () => {
           metrics.getDataStreamErrorsTotal.inc({
             class: this.constructor.name,
             source: 'cache',
+            request_type: requestType,
           });
         });
 
@@ -346,7 +349,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           metrics.getDataStreamSuccessesTotal.inc({
             class: this.constructor.name,
             source: 'cache',
+            request_type: requestType,
           });
+
+          // Track bytes streamed from cache
+          const bytesStreamed = region?.size ?? cacheData.size;
+          metrics.getDataStreamBytesTotal.inc(
+            {
+              class: this.constructor.name,
+              source: 'cache',
+              request_type: requestType,
+            },
+            bytesStreamed,
+          );
+
+          metrics.getDataStreamSizeHistogram.observe(
+            {
+              class: this.constructor.name,
+              source: 'cache',
+              request_type: requestType,
+            },
+            bytesStreamed,
+          );
         });
 
         const processedRequestAttributes =
@@ -402,6 +426,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       // relationships in the DB, and when data size is zero to avoid unnecessary
       // storage operations and indexing.
       if (
+        !this.skipCache &&
         (data.trusted === true || attributes?.hash !== undefined) &&
         region === undefined &&
         data.size > 0
@@ -519,6 +544,9 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       } else {
         // Log why caching was skipped
         const reasons = [];
+        if (this.skipCache) {
+          reasons.push('SKIP_DATA_CACHE is set');
+        }
         if (data.trusted !== true && attributes?.hash === undefined) {
           reasons.push('untrusted data without local hash');
         }
@@ -541,10 +569,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         }
       }
 
+      const requestType = region ? 'range' : 'full';
+
       data.stream.once('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: 'cache',
+          request_type: requestType,
         });
       });
 
@@ -552,7 +583,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: 'cache',
+          request_type: requestType,
         });
+
+        // Track bytes streamed from upstream
+        const bytesStreamed = region?.size ?? data.size;
+        metrics.getDataStreamBytesTotal.inc(
+          {
+            class: this.constructor.name,
+            source: 'cache',
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
+
+        metrics.getDataStreamSizeHistogram.observe(
+          {
+            class: this.constructor.name,
+            source: 'cache',
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
       });
 
       data.stream.pause();

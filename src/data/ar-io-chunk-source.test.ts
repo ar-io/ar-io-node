@@ -10,7 +10,7 @@ import * as winston from 'winston';
 import { AoARIORead } from '@ar.io/sdk';
 import { ChunkDataByAnySourceParams } from '../types.js';
 import { ArIOChunkSource } from './ar-io-chunk-source.js';
-import { ArIOPeerManager } from './ar-io-peer-manager.js';
+import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
 
 let log: winston.Logger;
 let chunkSource: ArIOChunkSource;
@@ -89,7 +89,7 @@ describe('ArIOChunkSource', () => {
     it('should reject requests exceeding maximum hops', () => {
       const params = {
         ...TEST_PARAMS,
-        requestAttributes: { hops: 1 },
+        requestAttributes: { hops: 2 },
       };
 
       // Test the validation method directly (fast unit test)
@@ -128,7 +128,7 @@ describe('ArIOChunkSource', () => {
       assert.doesNotThrow(() => validateHops(params));
     });
 
-    it('should allow requests at exactly the maximum hop count', () => {
+    it('should reject requests at exactly the maximum hop count', () => {
       const params = {
         ...TEST_PARAMS,
         requestAttributes: { hops: 1 }, // MAX_CHUNK_HOPS = 1

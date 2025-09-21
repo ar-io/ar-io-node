@@ -6,7 +6,10 @@
  */
 import { default as axios, AxiosResponse } from 'axios';
 import winston from 'winston';
-import { ArIOPeerManager, PeerSuccessMetrics } from './ar-io-peer-manager.js';
+import {
+  ArIOPeerManager,
+  PeerSuccessMetrics,
+} from '../peers/ar-io-peer-manager.js';
 
 import {
   ContiguousData,
@@ -64,10 +67,16 @@ export class ArIODataSource implements ContiguousDataSource {
     return this.peerManager.selectPeers(DATA_CATEGORY, peerCount);
   }
 
-  handlePeerSuccess(peer: string, kbps: number, ttfb: number): void {
+  handlePeerSuccess(
+    peer: string,
+    kbps: number,
+    ttfb: number,
+    requestType: string,
+  ): void {
     metrics.getDataStreamSuccessesTotal.inc({
       class: this.constructor.name,
       source: peer,
+      request_type: requestType,
     });
 
     const successMetrics: PeerSuccessMetrics = {
@@ -78,10 +87,11 @@ export class ArIODataSource implements ContiguousDataSource {
     this.peerManager.reportSuccess(DATA_CATEGORY, peer, successMetrics);
   }
 
-  handlePeerFailure(peer: string): void {
+  handlePeerFailure(peer: string, requestType: string): void {
     metrics.getDataStreamErrorsTotal.inc({
       class: this.constructor.name,
       source: peer,
+      request_type: requestType,
     });
 
     this.peerManager.reportFailure(DATA_CATEGORY, peer);
@@ -248,6 +258,7 @@ export class ArIODataSource implements ContiguousDataSource {
             peer: currentPeer,
             ttfb,
             expectedHash: dataAttributes?.hash,
+            region,
           });
         } catch (error: any) {
           span.addEvent('Peer request failed', {
@@ -285,6 +296,7 @@ export class ArIODataSource implements ContiguousDataSource {
     peer,
     ttfb,
     expectedHash,
+    region,
   }: {
     response: AxiosResponse;
     requestAttributes: RequestAttributes;
@@ -292,6 +304,7 @@ export class ArIODataSource implements ContiguousDataSource {
     peer: string;
     ttfb: number;
     expectedHash?: string;
+    region?: Region;
   }): ContiguousData {
     const stream = response.data;
 
@@ -323,14 +336,35 @@ export class ArIODataSource implements ContiguousDataSource {
 
     const contentLength =
       parseInt(response.headers['content-length'] ?? '0') || 0;
+    const requestType = region ? 'range' : 'full';
+
     stream.on('error', () => {
-      this.handlePeerFailure(peer);
+      this.handlePeerFailure(peer, requestType);
     });
 
     stream.on('end', () => {
       const downloadTimeSeconds = (Date.now() - requestStartTime) / 1000;
       const kbps = contentLength / downloadTimeSeconds / 1024;
-      this.handlePeerSuccess(peer, kbps, ttfb);
+      this.handlePeerSuccess(peer, kbps, ttfb, requestType);
+
+      // Track bytes streamed
+      metrics.getDataStreamBytesTotal.inc(
+        {
+          class: this.constructor.name,
+          source: peer,
+          request_type: requestType,
+        },
+        contentLength,
+      );
+
+      metrics.getDataStreamSizeHistogram.observe(
+        {
+          class: this.constructor.name,
+          source: peer,
+          request_type: requestType,
+        },
+        contentLength,
+      );
     });
 
     return {

@@ -30,19 +30,6 @@
 - Avoid DEFAULT values in ALTER TABLE ADD COLUMN as they require rewriting the entire table
 - Use NULLS FIRST/LAST in ORDER BY instead of COALESCE to preserve index usage
 
-## Data Verification System
-
-- Data verification tracks retry attempts with:
-  - `verification_retry_count` - incremented on each failed verification
-  - `verification_priority` - higher values are verified first (default 0)
-  - `first_verification_attempted_at` - timestamp of first retry
-  - `last_verification_attempted_at` - timestamp of most recent retry
-- Verification order: priority DESC, retry_count ASC, id ASC
-- On successful verification:
-  - `verified` is set to true
-  - Retry count and timestamp fields are preserved for historical tracking
-- The retry pattern follows the same approach used for bundle retries
-
 ## SQL Statement Organization
 
 - SQL statements are organized in `src/database/sql/<schema>/` directories
@@ -78,7 +65,7 @@ When adding a new database method:
 
 ## Git Workflow
 
-- Never use `git commit -A`. Add the individual files you want instead.
+- Never use `git commit -A` or `git add .`. Add the individual files you want instead.
 
 ## Linting
 
@@ -92,15 +79,15 @@ The project includes reference repositories managed by `mr` (myrepos) in the `re
 - **repos/arweave** - Core Arweave node implementation (Erlang)
   - Source: https://github.com/ArweaveTeam/arweave
   - Reference for: Block structure, transaction formats, mining protocols, network protocols
-  
+
 - **repos/arweave-js** - JavaScript/TypeScript client library for Arweave
   - Source: https://github.com/ArweaveTeam/arweave-js
   - Reference for: Transaction creation, signing, API interactions, data formatting
-  
+
 - **repos/HyperBEAM** - Erlang BEAM VM running in WebAssembly
   - Source: https://github.com/permaweb/HyperBEAM
   - Reference for: AO process execution, WASM integration
-  
+
 - **repos/ao** - The AO computer - Actor Oriented smart contracts on Arweave
   - Source: https://github.com/permaweb/ao
   - Reference for: AO protocol, message passing, process scheduling, compute units

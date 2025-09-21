@@ -65,6 +65,7 @@ describe('Data routes', () => {
             requestAttributes: {
               origin: 'node-url',
               hops: 0,
+              clientIps: [],
             },
           });
         },
@@ -643,6 +644,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -727,6 +729,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -838,6 +841,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1004,6 +1008,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1064,6 +1069,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1119,6 +1125,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1180,6 +1187,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1268,6 +1276,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1332,6 +1341,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1387,6 +1397,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1442,6 +1453,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1497,6 +1509,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1517,7 +1530,7 @@ st
             .expect(200)
             .then((res: any) => {
               assert.equal(res.headers['x-ar-io-trusted'], 'false');
-              assert.equal(res.headers['x-ar-io-cache'], 'MISS');
+              assert.equal(res.headers['x-cache'], 'MISS');
               assert.equal(res.body.toString(), 'testing...');
             });
         });
@@ -1553,6 +1566,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           };
@@ -1622,6 +1636,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             });
           });
@@ -1675,6 +1690,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             }),
           );
@@ -1721,6 +1737,7 @@ st
               requestAttributes: {
                 origin: 'node-url',
                 hops: 0,
+                clientIps: [],
               },
             }),
           );

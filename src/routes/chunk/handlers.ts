@@ -7,7 +7,6 @@
 
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
-import { StandaloneSqliteDatabase } from '../../database/standalone-sqlite.js';
 import {
   CHUNK_POST_ABORT_TIMEOUT_MS,
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
@@ -15,7 +14,7 @@ import {
 } from '../../config.js';
 import { headerNames } from '../../constants.js';
 import { toB64Url } from '../../lib/encoding.js';
-import { Chunk, ChunkByAnySource } from '../../types.js';
+import { Chunk, ChunkByAnySource, TxOffsetSource } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
@@ -37,11 +36,11 @@ const handleIfNoneMatch = (req: Request, res: Response): boolean => {
 
 export const createChunkOffsetHandler = ({
   chunkSource,
-  db,
+  txOffsetSource,
   log,
 }: {
   chunkSource: ChunkByAnySource;
-  db: StandaloneSqliteDatabase;
+  txOffsetSource: TxOffsetSource;
   log: Logger;
 }) => {
   return asyncHandler(async (request: Request, response: Response) => {
@@ -65,16 +64,24 @@ export const createChunkOffsetHandler = ({
 
       span.setAttribute('chunk.absolute_offset', offset);
 
-      // TODO: use a binary search to get this from the chain if it's not
-      // available in the DB
-      const {
-        data_root,
-        id,
-        data_size,
-        offset: weaveOffset,
-      } = await db.getTxByOffset(offset);
+      // Get transaction info using composite source (database with chain fallback)
+      let txResult;
+      try {
+        txResult = await txOffsetSource.getTxByOffset(offset);
+      } catch (error: any) {
+        log.debug('Transaction offset lookup failed', {
+          offset,
+          error: error.message,
+        });
+        span.setAttribute('http.status_code', 404);
+        span.setAttribute('chunk.retrieval.error', 'offset_lookup_failed');
+        response.sendStatus(404);
+        return;
+      }
 
-      // This is unnecessary amount of validation, but it is here to be make typescript happy
+      const { data_root, id, data_size, offset: weaveOffset } = txResult;
+
+      // Check if result is valid
       if (
         data_root === undefined ||
         weaveOffset === undefined ||
@@ -83,20 +90,25 @@ export const createChunkOffsetHandler = ({
       ) {
         span.setAttribute('http.status_code', 404);
         span.setAttribute('chunk.retrieval.error', 'tx_not_found');
-        span.addEvent('Transaction not found in database');
+        span.addEvent('Transaction not found');
         response.sendStatus(404);
         return;
       }
 
+      const finalDataRoot = data_root;
+      const finalId = id;
+      const finalDataSize = data_size;
+      const finalWeaveOffset = weaveOffset;
+
       // Calculate the relative offset, needed for chunk data source
-      const contiguousDataStartDelimiter = weaveOffset - data_size + 1;
+      const contiguousDataStartDelimiter = finalWeaveOffset - finalDataSize + 1;
       const relativeOffset = offset - contiguousDataStartDelimiter;
 
       span.setAttributes({
-        'chunk.tx_id': id,
-        'chunk.data_root': data_root,
-        'chunk.data_size': data_size,
-        'chunk.weave_offset': weaveOffset,
+        'chunk.tx_id': finalId,
+        'chunk.data_root': finalDataRoot,
+        'chunk.data_size': finalDataSize,
+        'chunk.weave_offset': finalWeaveOffset,
         'chunk.relative_offset': relativeOffset,
       });
 
@@ -112,9 +124,9 @@ export const createChunkOffsetHandler = ({
 
       try {
         chunk = await chunkSource.getChunkByAny({
-          txSize: data_size,
+          txSize: finalDataSize,
           absoluteOffset: offset,
-          dataRoot: data_root,
+          dataRoot: finalDataRoot,
           relativeOffset,
           requestAttributes,
         });

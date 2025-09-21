@@ -516,10 +516,10 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.size, 500);
       assert.strictEqual(result.stream, dataStream);
 
-      // Verify we called getDataAttributes for both items
+      // Verify we called getDataAttributes for the original item + both items during traversal
       assert.strictEqual(
         (dataAttributesSource.getDataAttributes as any).mock.calls.length,
-        2,
+        3,
       );
       assert.strictEqual(
         (dataAttributesSource.getDataAttributes as any).mock.calls[0]
@@ -528,6 +528,11 @@ describe('RootParentDataSource', () => {
       );
       assert.strictEqual(
         (dataAttributesSource.getDataAttributes as any).mock.calls[1]
+          .arguments[0],
+        dataItemId,
+      );
+      assert.strictEqual(
+        (dataAttributesSource.getDataAttributes as any).mock.calls[2]
           .arguments[0],
         parentId,
       );
@@ -639,10 +644,10 @@ describe('RootParentDataSource', () => {
 
       assert.strictEqual(result.size, 1000);
 
-      // Should fetch data with offset 0
+      // Should pass through to underlying data source without region
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, rootId);
-      assert.strictEqual(dataCall.region.offset, 0);
+      assert.strictEqual(dataCall.region, undefined);
     });
 
     it('should detect cycles in parent chain', async () => {
@@ -690,10 +695,10 @@ describe('RootParentDataSource', () => {
       // Should succeed using fallback
       assert.strictEqual(result.size, 500);
 
-      // Should have attempted attributes lookup
+      // Should have attempted attributes lookup (once at start + once for each item in cycle)
       assert.strictEqual(
         (dataAttributesSource.getDataAttributes as any).mock.calls.length,
-        2,
+        3,
       );
 
       // Should have fallen back to legacy methods
@@ -737,10 +742,10 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.size, 800);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have tried attributes first
+      // Should have tried attributes (once at start + once during traversal attempt)
       assert.strictEqual(
         (dataAttributesSource.getDataAttributes as any).mock.calls.length,
-        1,
+        2,
       );
 
       // Should have fallen back to legacy
@@ -778,10 +783,10 @@ describe('RootParentDataSource', () => {
         /Unable to traverse parent chain.*attributes incomplete and fallback disabled/,
       );
 
-      // Should have tried attributes
+      // Should have tried attributes (once at start + once during traversal attempt)
       assert.strictEqual(
         (dataAttributesSource.getDataAttributes as any).mock.calls.length,
-        1,
+        2,
       );
 
       // Should NOT have tried legacy methods

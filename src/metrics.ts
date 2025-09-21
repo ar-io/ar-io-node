@@ -13,6 +13,13 @@ import PrometheusMetrics from 'opossum-prometheus';
 import CircuitBreaker from 'opossum';
 import winston from 'winston';
 
+import { AR_IO_NODE_RELEASE } from './config.js';
+
+// Set default labels for all metrics
+promClient.register.setDefaultLabels({
+  release: AR_IO_NODE_RELEASE,
+});
+
 /**
  * @deprecated Use setUpCircuitBreakerListenerMetrics instead.
  */
@@ -104,6 +111,16 @@ export const arweavePeerInfoErrorCounter = new promClient.Counter({
 export const arweavePeerRefreshErrorCounter = new promClient.Counter({
   name: 'arweave_peer_referesh_errors_total',
   help: 'Count of errors refreshing the Arweave peers list',
+});
+
+export const arweavePeerSyncBucketErrorCounter = new promClient.Counter({
+  name: 'arweave_peer_sync_bucket_errors_total',
+  help: 'Count of failed sync bucket fetch requests from Arweave peers',
+});
+
+export const arweavePeerSyncBucketUpdateCounter = new promClient.Counter({
+  name: 'arweave_peer_sync_bucket_updates_total',
+  help: 'Count of successful sync bucket updates from Arweave peers',
 });
 
 export const arweavePoaCounter = new promClient.Counter({
@@ -304,6 +321,19 @@ export const getDataStreamSuccessesTotal = new promClient.Counter({
   labelNames: ['class', 'source', 'request_type'] as const,
 });
 
+export const getDataStreamBytesTotal = new promClient.Counter({
+  name: 'get_data_stream_bytes_total',
+  help: 'Total bytes streamed successfully',
+  labelNames: ['class', 'source', 'request_type'] as const,
+});
+
+export const getDataStreamSizeHistogram = new promClient.Histogram({
+  name: 'get_data_stream_size_bytes',
+  help: 'Distribution of data stream sizes in bytes',
+  labelNames: ['class', 'source', 'request_type'] as const,
+  buckets: [102400, 1048576, 10485760, 104857600], // 100KB, 1MB, 10MB, 100MB
+});
+
 export const dataRequestChunksHistogram = new promClient.Histogram({
   name: 'data_request_chunks',
   help: 'Number of chunks fetched per data request',
@@ -324,14 +354,20 @@ export const dataRequestFirstChunkLatency = new promClient.Histogram({
 
 export const requestChunkTotal = new promClient.Counter({
   name: 'request_chunk_total',
-  help: 'Count of each individual chunk http request, status can be "error" or "success", source_type can be "trusted" or "peer".',
-  labelNames: ['status', 'class', 'method', 'source', 'source_type'] as const,
+  help: 'Count of each individual chunk http request, status can be "error" or "success", source_type can be "trusted", "preferred", or "peer", peer_type can be "bucket" or "general".',
+  labelNames: ['status', 'class', 'method', 'source', 'source_type', 'peer_type'] as const,
 });
 
 export const getChunkTotal = new promClient.Counter({
   name: 'get_chunk_total',
   help: 'Higher level count of chunk discovery, counts when the caller request for chunk ends, stores the status of the request',
   labelNames: ['status', 'class', 'method'] as const,
+});
+
+export const chunkPeerTransitionTotal = new promClient.Counter({
+  name: 'chunk_peer_transition_total',
+  help: 'Count of chunk retrieval attempts that required fallback from bucket to general peers',
+  labelNames: ['method'] as const,
 });
 
 //

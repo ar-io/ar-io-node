@@ -13,7 +13,7 @@ import {
   StartedDockerComposeEnvironment,
   Wait,
 } from 'testcontainers';
-import wait from 'wait';
+import wait from '../../src/lib/wait.js';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
 import { fromB64Url, sha256B64Url, toB64Url } from '../../src/lib/encoding.js';

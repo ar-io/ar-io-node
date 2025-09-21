@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 51] - 2025-09-22
+
+This is a **recommended release** that introduces significant enhancements to
+metrics, observer capabilities, gateway filtering, and performance. The release
+includes metrics improvements with release tracking, major observer enhancements
+with offset observation capabilities, enhanced trusted gateway filtering to
+prevent caching issues, and optimized chunk retrieval performance.
+
+### Added
+
+- **Metrics Enhancement**: Added release number as default label to all
+  Prometheus metrics, enabling filtering and comparison across releases
+- **Enhanced Data Stream Metrics**: Added comprehensive byte tracking with
+  `getDataStreamBytesTotal` counter and `getDataStreamSizeHistogram` with 4
+  buckets (100KB, 1MB, 10MB, 100MB)
+- **Peer Metrics**: Added metrics for preferred peers and peer types, tracking
+  "preferred" vs regular "peer" sources and "bucket" vs "general" peer selection
+- **Observer Offset Observation**: Added complete V1 implementation of offset
+  observation with cryptographic chunk validation using arweave.js validatePath()
+  for enhanced data integrity verification. This feature is currently in testing
+  phase and will be gradually enabled across the network
+- **Observer Gateway Sampling**: Added configurable gateway sampling for offset
+  observations with `OFFSET_OBSERVATION_SAMPLE_RATE` (default 5%)
+- **Observer Reference Gateway Comparison**: Added chunk availability comparison
+  against reference gateway to identify gateway-specific vs network-wide issues
+- **Observer Configuration Controls**: Added `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED`
+  to control whether offset failures cause gateway assessment failures (default: false)
+- **Trusted Gateway Filtering**: Added comprehensive IP and origin filtering for
+  trusted gateways with support for CIDR blocks and X-Real-IP header to prevent
+  gateway loops and unexpected caching behavior
+- **Chunk Offset Sampling Tool**: Added gateway health monitoring tool for chunk
+  offset sampling (see `tools/sample-chunk-offsets`)
+- **Storage Partition Converter**: Added Arweave storage partition to height
+  range converter script (see `tools/arweave-partitions-to-heights`)
+
+### Changed
+
+- **Request Type Labels**: Simplified metric request_type labels to 'full'
+  (complete data) and 'range' (partial data) for consistency
+- **Peer Management**: Refactored peer management architecture with extracted
+  ArweavePeerManager from ArweaveCompositeClient
+- **Cache Management**: Improved cache handling with proper timer cleanup in
+  NodeCache
+- **Chunk Retrieval Optimization**: Optimized chunk retrieval to use single
+  peer selection per request, reducing overhead
+- **Offset-Aware Architecture**: Implemented TxOffsetSource architecture for
+  more efficient chunk retrieval with sync bucket support
+
+### Fixed
+
+- **Root Transaction Detection**:
+  - Enhanced logic to prevent incorrect root detection for self-referencing
+    transactions
+  - Added early exit for self-referencing root transactions
+- **Data Cache**: Fixed data cache to respect SKIP_DATA_CACHE setting and skip
+  writes when disabled
+
 ## [Release 50] - 2025-09-15
 
 This is a **recommended release** due to cache safety improvements that prevent

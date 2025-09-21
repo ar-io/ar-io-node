@@ -2,6 +2,7 @@
 *.db-shm
 *.db-wal
 *.log
+.coverage-cache.txt
 .aider*
 /.direnv
 /.env

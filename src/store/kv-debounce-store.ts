@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { KVBufferStore } from '../types';
+import { KVBufferStore } from '../types.js';
 import { tracer } from '../tracing.js';
 import * as metrics from '../metrics.js';
 import { Span } from '@opentelemetry/api';

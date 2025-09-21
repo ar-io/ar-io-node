@@ -66,9 +66,11 @@ export class RootParentDataSource implements ContiguousDataSource {
    * Traverses the parent chain using data attributes to find the root transaction.
    * Returns null if traversal is incomplete due to missing attributes.
    */
-  private async traverseToRootUsingAttributes(
-    dataItemId: string,
-  ): Promise<{ rootTxId: string; totalOffset: number; size: number } | null> {
+  private async traverseToRootUsingAttributes(dataItemId: string): Promise<{
+    rootTxId: string;
+    totalOffset: number;
+    size: number;
+  } | null> {
     const log = this.log.child({
       method: 'traverseToRootUsingAttributes',
       dataItemId,
@@ -132,12 +134,11 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       // If no parent, this is the root
       if (attributes.parentId == null || attributes.parentId === currentId) {
-        log.debug('Found root transaction via attributes', {
-          rootTxId: currentId,
-          totalOffset,
-          traversalPath,
-          originalItemSize,
-        });
+        // Skip L1 transaction
+        if (dataItemId === currentId) {
+          return null;
+        }
+
         return {
           rootTxId: currentId,
           totalOffset,
@@ -204,6 +205,19 @@ export class RootParentDataSource implements ContiguousDataSource {
     try {
       this.log.debug('Getting data using root parent resolution', { id });
 
+      // Get the content type for the requested data item
+      let originalContentType: string | undefined;
+      try {
+        const originalAttributes =
+          await this.dataAttributesSource.getDataAttributes(id);
+        originalContentType = originalAttributes?.contentType;
+      } catch (error) {
+        this.log.debug('Failed to get content type for data item', {
+          id,
+          error: error instanceof Error ? error.message : error,
+        });
+      }
+
       // Step 1: Try attributes-based traversal first
       span.addEvent('Attempting attributes-based traversal');
       const attributesTraversal = await this.traverseToRootUsingAttributes(id);
@@ -216,6 +230,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootTxId,
           totalOffset,
           size,
+          originalContentType,
         });
 
         span.setAttributes({
@@ -303,10 +318,16 @@ export class RootParentDataSource implements ContiguousDataSource {
               rootTxId,
               cached: data.cached,
               size: data.size,
+              originalContentType,
+              rootContentType: data.sourceContentType,
             },
           );
 
-          return data;
+          // Preserve the original data item's content type if available
+          return {
+            ...data,
+            sourceContentType: originalContentType ?? data.sourceContentType,
+          };
         } finally {
           fetchSpan.end();
         }
@@ -522,9 +543,15 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootTxId,
           cached: data.cached,
           size: data.size,
+          originalContentType,
+          rootContentType: data.sourceContentType,
         });
 
-        return data;
+        // Preserve the original data item's content type if available
+        return {
+          ...data,
+          sourceContentType: originalContentType ?? data.sourceContentType,
+        };
       } finally {
         fetchSpan.end();
       }
