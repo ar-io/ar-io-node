@@ -94,6 +94,20 @@ Response Times:
 - Gather empirical data on chunk availability
 - Validate gateway configuration and performance
 
+### `arweave-partitions-to-heights`
+Converts Arweave storage partition files to height ranges for data analysis and partitioning operations. This tool helps translate between Arweave's partition-based storage system and height-based queries.
+
+**Usage:**
+```bash
+./tools/arweave-partitions-to-heights [options]
+```
+
+**Use Cases:**
+- Convert storage partitions to height ranges for data queries
+- Analyze data distribution across storage partitions
+- Support migration and data management operations
+- Enable height-based analytics on partitioned data
+
 ## Workflow
 
 To generate a complete architecture review document:
