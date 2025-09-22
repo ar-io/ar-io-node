@@ -9,7 +9,7 @@ import Redis from 'ioredis';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as env from './env.js';
+import { RATE_LIMITER_REDIS_ENDPOINT } from '../config.js';
 import logger from '../log.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,19 +24,13 @@ export interface TokenBucket {
   contentLength?: number;
 }
 
-// TODO: Make configurable as opt-in
-const valkeyServerlessEndpoint = env.varOrDefault(
-  'RATE_LIMITER_SERVERLESS_ENDPOINT',
-  'localhost:6379',
-);
-
-const [valkeyHost, valkeyPort] = valkeyServerlessEndpoint.split(':');
+const [redisHost, redisPort] = RATE_LIMITER_REDIS_ENDPOINT.split(':');
 
 export const rlIoRedisClient = new Redis.Cluster(
   [
     {
-      host: valkeyHost,
-      port: +valkeyPort,
+      host: redisHost,
+      port: +redisPort,
     },
   ],
   {

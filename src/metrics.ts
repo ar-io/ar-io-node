@@ -539,3 +539,25 @@ export function setUpCircuitBreakerListenerMetrics(
     logger?.info(`${breakerName} circuit breaker half-open`);
   });
 }
+
+//
+// Rate Limiter metrics
+//
+
+export const rateLimitExceededTotal = new promClient.Counter({
+  name: 'rate_limit_exceeded_total',
+  help: 'Total number of requests that exceeded rate limits',
+  labelNames: ['limit_type', 'domain'],
+});
+
+export const rateLimitRequestsTotal = new promClient.Counter({
+  name: 'rate_limit_requests_total',
+  help: 'Total number of requests processed by rate limiter',
+  labelNames: ['domain'],
+});
+
+export const rateLimitBytesBlockedTotal = new promClient.Counter({
+  name: 'rate_limit_bytes_blocked_total',
+  help: 'Total number of bytes that would have been served if not rate limited',
+  labelNames: ['domain'],
+});
