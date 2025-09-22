@@ -1136,3 +1136,40 @@ export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
+
+//
+// Rate Limiter
+//
+
+export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
+
+export const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
+  'RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
+  '10000',
+);
+
+export const RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
+  'RATE_LIMITER_RESOURCE_REFILL_PER_SEC',
+  '100',
+);
+
+export const RATE_LIMITER_IP_TOKENS_PER_BUCKET = +env.varOrDefault(
+  'RATE_LIMITER_IP_TOKENS_PER_BUCKET',
+  '2000',
+);
+
+export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
+  'RATE_LIMITER_IP_REFILL_PER_SEC',
+  '20',
+);
+
+export const RATE_LIMITER_IP_ALLOWLIST =
+  env
+    .varOrUndefined('RATE_LIMITER_CIDR_ALLOWLIST')
+    ?.split(',')
+    .map((ip) => ip.trim().replace('/32', '')) ?? [];
+
+export const RATE_LIMITER_REDIS_ENDPOINT = env.varOrDefault(
+  'RATE_LIMITER_REDIS_ENDPOINT',
+  'localhost:6379',
+);

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { TokenBucket } from '../lib/rate-limiter-valkey.js';
+import type { TokenBucket } from '../lib/rate-limiter-redis.js';
 
 declare global {
   namespace Express {

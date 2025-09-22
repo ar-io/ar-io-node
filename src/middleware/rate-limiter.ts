@@ -7,57 +7,16 @@
 
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { SpanStatusCode } from '@opentelemetry/api';
-import { Counter } from 'prom-client';
 import { isIP } from 'is-ip';
 import { tracer } from '../tracing.js';
-import { TokenBucket, rlIoRedisClient } from '../lib/rate-limiter-valkey.js';
+import { TokenBucket, rlIoRedisClient } from '../lib/rate-limiter-redis.js';
 import log from '../log.js';
-import * as env from '../lib/env.js';
-
-const VALKEY_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
-
-const rateLimitExceededTotal = new Counter({
-  name: 'rate_limit_exceeded_total',
-  help: 'Total number of requests that exceeded rate limits',
-  labelNames: ['limit_type', 'domain'],
-});
-
-const rateLimitRequestsTotal = new Counter({
-  name: 'rate_limit_requests_total',
-  help: 'Total number of requests processed by rate limiter',
-  labelNames: ['domain'],
-});
-
-const rateLimitBytesBlockedTotal = new Counter({
-  name: 'rate_limit_bytes_blocked_total',
-  help: 'Total number of bytes that would have been served if not rate limited',
-  labelNames: ['domain'],
-});
-
-const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
-  'RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
-  '10000',
-);
-const RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
-  'RATE_LIMITER_RESOURCE_REFILL_PER_SEC',
-  '100',
-);
-const RATE_LIMITER_IP_TOKENS_PER_BUCKET = +env.varOrDefault(
-  'RATE_LIMITER_IP_TOKENS_PER_BUCKET',
-  '2000',
-);
-const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
-  'RATE_LIMITER_IP_REFILL_PER_SEC',
-  '20',
-);
-const RATE_LIMITER_LIMITS_ENABLED =
-  env.varOrDefault('RATE_LIMITER_LIMITS_ENABLED', 'false') === 'true';
-
-const RATE_LIMITER_IP_ALLOWLIST =
-  env
-    .varOrUndefined('RATE_LIMITER_CIDR_ALLOWLIST')
-    ?.split(',')
-    .map((ip) => ip.trim().replace('/32', '')) ?? [];
+import * as config from '../config.js';
+import {
+  rateLimitExceededTotal,
+  rateLimitRequestsTotal,
+  rateLimitBytesBlockedTotal,
+} from '../metrics.js';
 
 function getCanonicalPath(req: Request) {
   // baseUrl is '' at the app root, so this concatenation works there too.
@@ -96,8 +55,8 @@ function extractDomain(host: string): string {
 /**
  * Check if an IP is in the allowlist
  */
-function isIpAllowlisted(ip: string): boolean {
-  return RATE_LIMITER_IP_ALLOWLIST.includes(ip);
+function isIpAllowlisted(ip: string, allowlist: string[]): boolean {
+  return allowlist.includes(ip);
 }
 
 function getClientIP(req: Request): string | undefined {
@@ -107,8 +66,7 @@ function getClientIP(req: Request): string | undefined {
     const ips = header.split(',').map((ip) => ip.trim());
     return ips[0];
   }
-  // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
-  return req.ip || undefined;
+  return req.ip ?? undefined;
 }
 
 function buildBucketKeys(
@@ -137,11 +95,14 @@ async function getOrCreateBuckets(
   ipCapacity: number,
   ipRefillRate: number,
   domain: string,
+  cacheTtlSeconds: number,
 ): Promise<[TokenBucket, TokenBucket]> {
   const span = tracer.startSpan('rateLimiter.getOrCreateBuckets');
-  span.setAttribute('resource_key', resourceKey);
-  span.setAttribute('ip_key', ipKey);
-  span.setAttribute('domain', domain);
+  span.setAttributes({
+    resource_key: resourceKey,
+    ip_key: ipKey,
+    domain: domain,
+  });
 
   try {
     const now = Date.now();
@@ -152,22 +113,24 @@ async function getOrCreateBuckets(
         resourceCapacity,
         resourceRefillRate,
         now,
-        VALKEY_CACHE_TTL_SECONDS,
+        cacheTtlSeconds,
       ),
       rlIoRedisClient.getOrCreateBucket(
         ipKey,
         ipCapacity,
         ipRefillRate,
         now,
-        VALKEY_CACHE_TTL_SECONDS,
+        cacheTtlSeconds,
       ),
     ]);
 
     const resourceBucket: TokenBucket = JSON.parse(resourceBucketJson);
     const ipBucket: TokenBucket = JSON.parse(ipBucketJson);
 
-    span.setAttribute('resource_bucket.tokens', resourceBucket.tokens);
-    span.setAttribute('ip_bucket.tokens', ipBucket.tokens);
+    span.setAttributes({
+      'resource_bucket.tokens': resourceBucket.tokens,
+      'ip_bucket.tokens': ipBucket.tokens,
+    });
 
     return [resourceBucket, ipBucket];
   } catch (error) {
@@ -205,16 +168,31 @@ async function getOrCreateBuckets(
 /**
  * Rate limiter middleware factory
  */
-export function rateLimiterMiddleware(): RequestHandler {
-  const resourceCapacity = RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET;
-  const resourceRefillRate = RATE_LIMITER_RESOURCE_REFILL_PER_SEC;
-  const ipCapacity = RATE_LIMITER_IP_TOKENS_PER_BUCKET;
-  const ipRefillRate = RATE_LIMITER_IP_REFILL_PER_SEC;
+export function rateLimiterMiddleware(options?: {
+  resourceCapacity?: number;
+  resourceRefillRate?: number;
+  ipCapacity?: number;
+  ipRefillRate?: number;
+  cacheTtlSeconds?: number;
+  limitsEnabled?: boolean;
+  ipAllowlist?: string[];
+}): RequestHandler {
+  const resourceCapacity =
+    options?.resourceCapacity ?? config.RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET;
+  const resourceRefillRate =
+    options?.resourceRefillRate ?? config.RATE_LIMITER_RESOURCE_REFILL_PER_SEC;
+  const ipCapacity =
+    options?.ipCapacity ?? config.RATE_LIMITER_IP_TOKENS_PER_BUCKET;
+  const ipRefillRate =
+    options?.ipRefillRate ?? config.RATE_LIMITER_IP_REFILL_PER_SEC;
+  const cacheTtlSeconds =
+    options?.cacheTtlSeconds ?? config.RATE_LIMITER_CACHE_TTL_SECONDS;
+  const limitsEnabled = options?.limitsEnabled ?? config.ENABLE_RATE_LIMITER;
+  const ipAllowlist = options?.ipAllowlist ?? config.RATE_LIMITER_IP_ALLOWLIST;
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
-    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
-    const clientIp = getClientIP(req) || '0.0.0.0';
+    const clientIp = getClientIP(req) ?? '0.0.0.0';
     const method = req.method;
     const canonicalPath = getCanonicalPath(req);
     const host = (req.headers.host ?? '').slice(0, 256);
@@ -224,7 +202,7 @@ export function rateLimiterMiddleware(): RequestHandler {
     rateLimitRequestsTotal.inc({ domain });
 
     // Check if IP is in allowlist - if so, skip rate limiting
-    if (isIpAllowlisted(clientIp)) {
+    if (isIpAllowlisted(clientIp, ipAllowlist)) {
       return next();
     }
 
@@ -281,6 +259,7 @@ export function rateLimiterMiddleware(): RequestHandler {
         ipCapacity,
         ipRefillRate,
         domain,
+        cacheTtlSeconds,
       );
 
       // Check if resource bucket has at least 1 token to allow the request
@@ -314,7 +293,7 @@ export function rateLimiterMiddleware(): RequestHandler {
           );
         }
 
-        if (RATE_LIMITER_LIMITS_ENABLED) {
+        if (limitsEnabled) {
           return res.status(429).json({
             error: 'Too Many Requests',
             message: 'Resource rate limit exceeded',
@@ -343,7 +322,7 @@ export function rateLimiterMiddleware(): RequestHandler {
           );
         }
 
-        if (RATE_LIMITER_LIMITS_ENABLED) {
+        if (limitsEnabled) {
           return res.status(429).json({
             error: 'Too Many Requests',
             message: 'IP rate limit exceeded',
@@ -392,14 +371,14 @@ export function rateLimiterMiddleware(): RequestHandler {
                   req.resourceBucket.key,
                   tokensToConsume,
                   now,
-                  VALKEY_CACHE_TTL_SECONDS,
+                  cacheTtlSeconds,
                   responseSize, // contentLength - only for resource bucket
                 ),
                 rlIoRedisClient.consumeTokens(
                   req.ipBucket.key,
                   tokensToConsume,
                   now,
-                  VALKEY_CACHE_TTL_SECONDS,
+                  cacheTtlSeconds,
                   // No contentLength for IP bucket
                 ),
               ]);
