@@ -227,25 +227,23 @@ export function rateLimiterMiddleware(options?: {
     const originalEnd = res.end;
 
     // Override write to track response size
-    (res.write as any) = function (chunk: any, encodingOrCallback?: any, callback?: any) {
-      if (chunk) {
-        if (typeof chunk === 'string') {
-          responseSize += Buffer.byteLength(chunk, encodingOrCallback || 'utf8');
-        } else if (Buffer.isBuffer(chunk)) {
-          responseSize += chunk.length;
-        }
-      }
+    (res.write as (
+      chunk: Buffer,
+      encoding: BufferEncoding,
+      cb?: ((err: Error | null | undefined) => void) | undefined,
+    ) => boolean) = function (chunk, encodingOrCallback, callback) {
+      responseSize += Buffer.byteLength(chunk);
       return originalWrite.call(res, chunk, encodingOrCallback, callback);
     };
 
     // Override end to track response size
-    (res.end as any) = function (chunk?: any, encodingOrCallback?: any, callback?: any) {
+    (res.end as unknown as (
+      chunk?: Buffer,
+      encoding?: BufferEncoding,
+      cb?: (() => void) | undefined,
+    ) => void) = function (chunk, encodingOrCallback, callback) {
       if (chunk) {
-        if (typeof chunk === 'string') {
-          responseSize += Buffer.byteLength(chunk, encodingOrCallback || 'utf8');
-        } else if (Buffer.isBuffer(chunk)) {
-          responseSize += chunk.length;
-        }
+        responseSize += Buffer.byteLength(chunk);
       }
       return originalEnd.call(res, chunk, encodingOrCallback, callback);
     };
