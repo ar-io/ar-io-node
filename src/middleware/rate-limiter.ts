@@ -9,7 +9,11 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { isIP } from 'is-ip';
 import { tracer } from '../tracing.js';
-import { TokenBucket, rlIoRedisClient } from '../lib/rate-limiter-redis.js';
+import {
+  TokenBucket,
+  RateLimiterRedisClient,
+  getRateLimiterRedisClient
+} from '../lib/rate-limiter-redis.js';
 import log from '../log.js';
 import * as config from '../config.js';
 import {
@@ -88,6 +92,7 @@ function buildBucketKeys(
  * Get or create both buckets using separate operations to avoid CROSSSLOT errors
  */
 async function getOrCreateBuckets(
+  redisClient: RateLimiterRedisClient,
   resourceKey: string,
   ipKey: string,
   resourceCapacity: number,
@@ -108,14 +113,14 @@ async function getOrCreateBuckets(
     const now = Date.now();
 
     const [resourceBucketJson, ipBucketJson] = await Promise.all([
-      rlIoRedisClient.getOrCreateBucket(
+      redisClient.getOrCreateBucket(
         resourceKey,
         resourceCapacity,
         resourceRefillRate,
         now,
         cacheTtlSeconds,
       ),
-      rlIoRedisClient.getOrCreateBucket(
+      redisClient.getOrCreateBucket(
         ipKey,
         ipCapacity,
         ipRefillRate,
@@ -176,6 +181,7 @@ export function rateLimiterMiddleware(options?: {
   cacheTtlSeconds?: number;
   limitsEnabled?: boolean;
   ipAllowlist?: string[];
+  redisClient?: RateLimiterRedisClient; // Optional Redis client for dependency injection
 }): RequestHandler {
   const resourceCapacity =
     options?.resourceCapacity ?? config.RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET;
@@ -189,6 +195,7 @@ export function rateLimiterMiddleware(options?: {
     options?.cacheTtlSeconds ?? config.RATE_LIMITER_CACHE_TTL_SECONDS;
   const limitsEnabled = options?.limitsEnabled ?? config.ENABLE_RATE_LIMITER;
   const ipAllowlist = options?.ipAllowlist ?? config.RATE_LIMITER_IP_ALLOWLIST;
+  const redisClient = options?.redisClient ?? getRateLimiterRedisClient();
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -220,22 +227,26 @@ export function rateLimiterMiddleware(options?: {
     const originalEnd = res.end;
 
     // Override write to track response size
-    (res.write as (
-      chunk: Buffer,
-      encoding: BufferEncoding,
-      cb?: ((err: Error | null | undefined) => void) | undefined,
-    ) => boolean) = function (chunk, encodingOrCallback, callback) {
-      responseSize += Buffer.byteLength(chunk);
+    (res.write as any) = function (chunk: any, encodingOrCallback?: any, callback?: any) {
+      if (chunk) {
+        if (typeof chunk === 'string') {
+          responseSize += Buffer.byteLength(chunk, encodingOrCallback || 'utf8');
+        } else if (Buffer.isBuffer(chunk)) {
+          responseSize += chunk.length;
+        }
+      }
       return originalWrite.call(res, chunk, encodingOrCallback, callback);
     };
 
     // Override end to track response size
-    (res.end as unknown as (
-      chunk: Buffer,
-      encoding: BufferEncoding,
-      cb?: (() => void) | undefined,
-    ) => void) = function (chunk, encodingOrCallback, callback) {
-      responseSize += Buffer.byteLength(chunk);
+    (res.end as any) = function (chunk?: any, encodingOrCallback?: any, callback?: any) {
+      if (chunk) {
+        if (typeof chunk === 'string') {
+          responseSize += Buffer.byteLength(chunk, encodingOrCallback || 'utf8');
+        } else if (Buffer.isBuffer(chunk)) {
+          responseSize += chunk.length;
+        }
+      }
       return originalEnd.call(res, chunk, encodingOrCallback, callback);
     };
 
@@ -252,6 +263,7 @@ export function rateLimiterMiddleware(options?: {
       // Get or create both buckets atomically
       rateLimitSpan.addEvent('Getting both buckets');
       const [resourceBucket, ipBucket] = await getOrCreateBuckets(
+        redisClient,
         resourceKey,
         ipKey,
         resourceCapacity,
@@ -367,14 +379,14 @@ export function rateLimiterMiddleware(options?: {
 
             const [resourceTokensRemaining, ipTokensRemaining] =
               await Promise.all([
-                rlIoRedisClient.consumeTokens(
+                redisClient.consumeTokens(
                   req.resourceBucket.key,
                   tokensToConsume,
                   now,
                   cacheTtlSeconds,
                   responseSize, // contentLength - only for resource bucket
                 ),
-                rlIoRedisClient.consumeTokens(
+                redisClient.consumeTokens(
                   req.ipBucket.key,
                   tokensToConsume,
                   now,
