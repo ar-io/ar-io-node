@@ -12,9 +12,6 @@ import { fileURLToPath } from 'node:url';
 import { RATE_LIMITER_REDIS_ENDPOINT } from '../config.js';
 import logger from '../log.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 export interface TokenBucket {
   key: string;
   tokens: number;
@@ -24,40 +21,72 @@ export interface TokenBucket {
   contentLength?: number;
 }
 
-const [redisHost, redisPort] = RATE_LIMITER_REDIS_ENDPOINT.split(':');
+export interface RateLimiterRedisClient {
+  getOrCreateBucket(
+    key: string,
+    capacity: number,
+    refillRate: number,
+    now: number,
+    ttlSeconds: number,
+  ): Promise<string>;
+  consumeTokens(
+    key: string,
+    tokensToConsume: number,
+    now: number,
+    ttlSeconds: number,
+    contentLength?: number,
+  ): Promise<number>;
+}
 
-export const rlIoRedisClient = new Redis.Cluster(
-  [
-    {
-      host: redisHost,
-      port: +redisPort,
-    },
-  ],
-  {
-    dnsLookup: (address, callback) => callback(null, address),
-    redisOptions: {
-      tls: {},
-    },
-  },
-);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Handle connection events
-rlIoRedisClient.on('error', (error) => {
-  logger.error('[rateLimiterCache] Redis connection error:', { error });
-});
+// Lazy initialization - only create the client when it's first accessed
+let _rlIoRedisClient: RateLimiterRedisClient | undefined;
 
-rlIoRedisClient.defineCommand('getOrCreateBucket', {
-  numberOfKeys: 1,
-  lua: fs.readFileSync(
-    path.join(__dirname, 'redis-lua/get-or-create-bucket.lua'),
-    'utf8',
-  ),
-});
+export function getRateLimiterRedisClient(): RateLimiterRedisClient {
+  if (!_rlIoRedisClient) {
+    const [redisHost, redisPort] = RATE_LIMITER_REDIS_ENDPOINT.split(':');
 
-rlIoRedisClient.defineCommand('consumeTokens', {
-  numberOfKeys: 1,
-  lua: fs.readFileSync(
-    path.join(__dirname, 'redis-lua/consume-tokens.lua'),
-    'utf8',
-  ),
-});
+    const client = new Redis.Cluster(
+      [
+        {
+          host: redisHost,
+          port: +redisPort,
+        },
+      ],
+      {
+        dnsLookup: (address, callback) => callback(null, address),
+        redisOptions: {
+          tls: {},
+        },
+      },
+    );
+
+    // Handle connection events
+    client.on('error', (error) => {
+      logger.error('[rateLimiterCache] Redis connection error:', { error });
+    });
+
+    client.defineCommand('getOrCreateBucket', {
+      numberOfKeys: 1,
+      lua: fs.readFileSync(
+        path.join(__dirname, 'redis-lua/get-or-create-bucket.lua'),
+        'utf8',
+      ),
+    });
+
+    client.defineCommand('consumeTokens', {
+      numberOfKeys: 1,
+      lua: fs.readFileSync(
+        path.join(__dirname, 'redis-lua/consume-tokens.lua'),
+        'utf8',
+      ),
+    });
+
+    _rlIoRedisClient = client as unknown as RateLimiterRedisClient;
+  }
+
+  return _rlIoRedisClient;
+}
+
