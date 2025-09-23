@@ -6,7 +6,6 @@
  */
 
 import { Request } from 'express';
-import { isIP } from 'is-ip';
 
 /**
  * Validate if a string is a valid IP address format
