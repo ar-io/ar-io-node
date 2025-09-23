@@ -12,8 +12,9 @@ import { tracer } from '../tracing.js';
 import {
   TokenBucket,
   RateLimiterRedisClient,
-  getRateLimiterRedisClient
+  getRateLimiterRedisClient,
 } from '../lib/rate-limiter-redis.js';
+import { extractAllClientIPs, isAnyIpAllowlisted } from '../lib/ip-utils.js';
 import log from '../log.js';
 import * as config from '../config.js';
 import {
@@ -54,23 +55,6 @@ function extractDomain(host: string): string {
   }
 
   return hostWithoutPort;
-}
-
-/**
- * Check if an IP is in the allowlist
- */
-function isIpAllowlisted(ip: string, allowlist: string[]): boolean {
-  return allowlist.includes(ip);
-}
-
-function getClientIP(req: Request): string | undefined {
-  const header = req.headers['x-forwarded-for'];
-  if (typeof header === 'string') {
-    // Split by comma and trim spaces
-    const ips = header.split(',').map((ip) => ip.trim());
-    return ips[0];
-  }
-  return req.ip ?? undefined;
 }
 
 function buildBucketKeys(
@@ -199,7 +183,10 @@ export function rateLimiterMiddleware(options?: {
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
-    const clientIp = getClientIP(req) ?? '0.0.0.0';
+    // Extract all client IPs from headers and connection
+    const { clientIp, clientIps } = extractAllClientIPs(req);
+    const primaryClientIp = clientIp ?? '0.0.0.0';
+
     const method = req.method;
     const canonicalPath = getCanonicalPath(req);
     const host = (req.headers.host ?? '').slice(0, 256);
@@ -208,16 +195,16 @@ export function rateLimiterMiddleware(options?: {
     // Increment total requests counter for all requests processed by rate limiter
     rateLimitRequestsTotal.inc({ domain });
 
-    // Check if IP is in allowlist - if so, skip rate limiting
-    if (isIpAllowlisted(clientIp, ipAllowlist)) {
+    // Check if ANY IP in the chain is in allowlist - if so, skip rate limiting
+    if (isAnyIpAllowlisted(clientIps, ipAllowlist)) {
       return next();
     }
 
-    // Create bucket keys
+    // Create bucket keys using primary client IP for consistency
     const { resourceKey, ipKey } = buildBucketKeys(
       method,
       canonicalPath,
-      clientIp,
+      primaryClientIp,
       host,
     );
 

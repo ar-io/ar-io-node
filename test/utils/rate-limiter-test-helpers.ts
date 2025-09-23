@@ -41,7 +41,7 @@ export function createMockResponse(): Partial<Response> & EventEmitter {
   const events = new EventEmitter();
   let statusCode = 200;
   let responseData: any = undefined;
-  let writtenChunks: Buffer[] = [];
+  const writtenChunks: Buffer[] = [];
 
   const res: any = {
     status: mock.fn((code: number) => {
@@ -95,7 +95,8 @@ export function createMockResponse(): Partial<Response> & EventEmitter {
     getStatus: () => statusCode,
     getResponseData: () => responseData,
     getWrittenChunks: () => writtenChunks,
-    getTotalBytesWritten: () => writtenChunks.reduce((sum, chunk) => sum + chunk.length, 0),
+    getTotalBytesWritten: () =>
+      writtenChunks.reduce((sum, chunk) => sum + chunk.length, 0),
   };
 
   return res;
@@ -160,19 +161,19 @@ export function createMockMetrics() {
     rateLimitRequestsTotal: {
       inc: mock.fn((labels: any) => {
         const key = JSON.stringify(labels);
-        incCalls[key] = (incCalls[key] || 0) + 1;
+        incCalls[key] = (incCalls[key] ?? 0) + 1;
       }),
     },
     rateLimitExceededTotal: {
       inc: mock.fn((labels: any) => {
         const key = JSON.stringify(labels);
-        incCalls[key] = (incCalls[key] || 0) + 1;
+        incCalls[key] = (incCalls[key] ?? 0) + 1;
       }),
     },
     rateLimitBytesBlockedTotal: {
       inc: mock.fn((labels: any, value: number) => {
         const key = JSON.stringify(labels);
-        incCalls[key] = (incCalls[key] || 0) + value;
+        incCalls[key] = (incCalls[key] ?? 0) + value;
       }),
     },
     getIncCalls: () => incCalls,
