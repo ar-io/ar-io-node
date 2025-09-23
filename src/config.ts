@@ -1163,11 +1163,11 @@ export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
   '20',
 );
 
-export const RATE_LIMITER_IP_ALLOWLIST =
+export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
   env
-    .varOrUndefined('RATE_LIMITER_CIDR_ALLOWLIST')
+    .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')
     ?.split(',')
-    .map((ip) => ip.trim().replace('/32', '')) ?? [];
+    .map((ip) => ip.trim()) ?? [];
 
 export const RATE_LIMITER_REDIS_ENDPOINT = env.varOrDefault(
   'RATE_LIMITER_REDIS_ENDPOINT',

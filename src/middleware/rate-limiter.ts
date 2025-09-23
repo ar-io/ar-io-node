@@ -178,7 +178,8 @@ export function rateLimiterMiddleware(options?: {
   const cacheTtlSeconds =
     options?.cacheTtlSeconds ?? config.RATE_LIMITER_CACHE_TTL_SECONDS;
   const limitsEnabled = options?.limitsEnabled ?? config.ENABLE_RATE_LIMITER;
-  const ipAllowlist = options?.ipAllowlist ?? config.RATE_LIMITER_IP_ALLOWLIST;
+  const ipAllowlist =
+    options?.ipAllowlist ?? config.RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST;
   const redisClient = options?.redisClient ?? getRateLimiterRedisClient();
 
   // Return the middleware function
@@ -223,17 +224,17 @@ export function rateLimiterMiddleware(options?: {
       return originalWrite.call(res, chunk, encodingOrCallback, callback);
     };
 
-    // Override end to track response size
-    (res.end as unknown as (
-      chunk?: Buffer,
-      encoding?: BufferEncoding,
-      cb?: (() => void) | undefined,
-    ) => void) = function (chunk, encodingOrCallback, callback) {
+    // Override end to track response size with proper overloads
+    res.end = function end(
+      chunk?: any,
+      encodingOrCallback?: any,
+      callback?: any,
+    ) {
       if (chunk) {
         responseSize += Buffer.byteLength(chunk);
       }
       return originalEnd.call(res, chunk, encodingOrCallback, callback);
-    };
+    } as typeof res.end;
 
     // Declare rateLimitSpan in outer scope
     let rateLimitSpan: ReturnType<typeof tracer.startSpan> | undefined;
