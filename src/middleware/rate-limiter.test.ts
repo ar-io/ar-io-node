@@ -33,7 +33,6 @@ function createTestMiddleware(options: any = {}) {
 }
 
 describe('Rate Limiter Tests', () => {
-
   beforeEach(() => {
     // Clear mock state for each test
     mockRedis.clear();
@@ -49,7 +48,13 @@ describe('Rate Limiter Tests', () => {
   describe('Token Bucket Behavior', () => {
     it('should create new bucket with full capacity', async () => {
       const now = Date.now();
-      const bucket = await mockRedis.getOrCreateBucket('test-key', 100, 10, now, 60);
+      const bucket = await mockRedis.getOrCreateBucket(
+        'test-key',
+        100,
+        10,
+        now,
+        60,
+      );
       const parsedBucket = JSON.parse(bucket);
 
       assert.strictEqual(parsedBucket.tokens, 100);
@@ -64,7 +69,13 @@ describe('Rate Limiter Tests', () => {
 
       // Simulate 5 seconds passing
       const later = now + 5000;
-      const bucket = await mockRedis.getOrCreateBucket('test-key', 100, 10, later, 60);
+      const bucket = await mockRedis.getOrCreateBucket(
+        'test-key',
+        100,
+        10,
+        later,
+        60,
+      );
       const parsedBucket = JSON.parse(bucket);
 
       // Should have refilled 50 tokens (10 per second * 5 seconds)
@@ -77,7 +88,13 @@ describe('Rate Limiter Tests', () => {
       await mockRedis.consumeTokens('test-key', 30, now, 60);
 
       // Simulate 10 seconds passing (would refill 100 tokens, but capped at capacity)
-      const bucket = await mockRedis.getOrCreateBucket('test-key', 100, 10, now + 10000, 60);
+      const bucket = await mockRedis.getOrCreateBucket(
+        'test-key',
+        100,
+        10,
+        now + 10000,
+        60,
+      );
       const parsedBucket = JSON.parse(bucket);
       assert.strictEqual(parsedBucket.tokens, 100);
     });
@@ -167,8 +184,16 @@ describe('Rate Limiter Tests', () => {
       const next1 = createMockNext();
       const next2 = createMockNext();
 
-      await middleware(req1 as Request, res1 as Response, next1 as NextFunction);
-      await middleware(req2 as Request, res2 as Response, next2 as NextFunction);
+      await middleware(
+        req1 as Request,
+        res1 as Response,
+        next1 as NextFunction,
+      );
+      await middleware(
+        req2 as Request,
+        res2 as Response,
+        next2 as NextFunction,
+      );
 
       // Different domains should have different resource keys
       assert.notStrictEqual(req1.resourceBucket?.key, req2.resourceBucket?.key);
@@ -192,6 +217,218 @@ describe('Rate Limiter Tests', () => {
       assert.strictEqual((next as any).mock.calls.length, 1);
       assert.strictEqual(req.resourceBucket, undefined);
       assert.strictEqual(req.ipBucket, undefined);
+    });
+  });
+
+  describe('Enhanced IP Allowlist with Forwarded Headers', () => {
+    it('should allow request when X-Forwarded-For first IP is allowlisted', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['203.0.113.1'],
+        limitsEnabled: true,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1, 192.168.1.1, 172.16.0.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since first IP in chain is allowlisted
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should allow request when X-Forwarded-For second IP is allowlisted', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['192.168.1.1'],
+        limitsEnabled: true,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1, 192.168.1.1, 172.16.0.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since second IP in chain is allowlisted
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should allow request when X-Forwarded-For last IP is allowlisted', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['172.16.0.1'],
+        limitsEnabled: true,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1, 192.168.1.1, 172.16.0.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since last IP in chain is allowlisted
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should apply rate limiting when no IP in chain is allowlisted', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['10.0.0.5'],
+        limitsEnabled: true,
+        resourceCapacity: 100,
+        ipCapacity: 100,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1, 192.168.1.1, 172.16.0.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should proceed with rate limiting since no IP is allowlisted
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.ok(req.resourceBucket);
+      assert.ok(req.ipBucket);
+    });
+
+    it('should handle X-Real-IP header in allowlist check', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['198.51.100.1'],
+        limitsEnabled: true,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-real-ip': '198.51.100.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since X-Real-IP is allowlisted
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should handle socket.remoteAddress in allowlist check', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['127.0.0.1'],
+        limitsEnabled: true,
+      });
+
+      const req = createMockRequest('GET', '/test', '127.0.0.1');
+      // Simulate socket.remoteAddress
+      (req as any).socket = { remoteAddress: '127.0.0.1' };
+
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since socket IP is allowlisted
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should support CIDR ranges in allowlist', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['192.168.1.0/24'],
+        limitsEnabled: true,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1, 192.168.1.100, 172.16.0.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since 192.168.1.100 is in 192.168.1.0/24
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should handle IPv4-mapped IPv6 addresses in allowlist', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['192.168.1.1'],
+        limitsEnabled: true,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': '::ffff:192.168.1.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since ::ffff:192.168.1.1 normalizes to 192.168.1.1
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should handle malformed headers gracefully', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['192.168.1.1'],
+        limitsEnabled: true,
+        resourceCapacity: 100,
+        ipCapacity: 100,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': 'unknown, , 192.168.1.1, invalid-ip',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should skip rate limiting since 192.168.1.1 is valid and allowlisted
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.strictEqual(req.resourceBucket, undefined);
+      assert.strictEqual(req.ipBucket, undefined);
+    });
+
+    it('should use primary client IP for bucket keys even when allowlist check fails', async () => {
+      const middleware = createTestMiddleware({
+        ipAllowlist: ['10.0.0.5'], // Not in the request
+        limitsEnabled: true,
+        resourceCapacity: 100,
+        ipCapacity: 100,
+      });
+
+      const req = createMockRequest('GET', '/test', '10.0.0.1', {
+        'x-forwarded-for': '203.0.113.1, 192.168.1.1',
+      });
+      const res = createMockResponse();
+      const next = createMockNext();
+
+      await middleware(req as Request, res as Response, next as NextFunction);
+
+      // Should proceed with rate limiting and use first valid IP (203.0.113.1) for bucket keys
+      assert.strictEqual((next as any).mock.calls.length, 1);
+      assert.ok(req.resourceBucket);
+      assert.ok(req.ipBucket);
+
+      // Bucket keys should be based on first IP from X-Forwarded-For
+      assert.ok(req.ipBucket.key.includes('203.0.113.1'));
     });
   });
 
@@ -314,8 +551,10 @@ describe('Rate Limiter Tests', () => {
       await waitForAsync();
 
       // Check tokens were consumed (5KB = 5 tokens)
-      const resourceBucket = mockRedis.getBucket(req.resourceBucket?.key!);
-      const ipBucket = mockRedis.getBucket(req.ipBucket?.key!);
+      assert.ok(req.resourceBucket?.key);
+      assert.ok(req.ipBucket?.key);
+      const resourceBucket = mockRedis.getBucket(req.resourceBucket.key);
+      const ipBucket = mockRedis.getBucket(req.ipBucket.key);
 
       assert.strictEqual(resourceBucket?.tokens, 95); // 100 - 5
       assert.strictEqual(ipBucket?.tokens, 95); // 100 - 5
@@ -340,8 +579,10 @@ describe('Rate Limiter Tests', () => {
 
       await waitForAsync();
 
-      const resourceBucket = mockRedis.getBucket(req.resourceBucket?.key!);
-      const ipBucket = mockRedis.getBucket(req.ipBucket?.key!);
+      assert.ok(req.resourceBucket?.key);
+      assert.ok(req.ipBucket?.key);
+      const resourceBucket = mockRedis.getBucket(req.resourceBucket.key);
+      const ipBucket = mockRedis.getBucket(req.ipBucket.key);
 
       // Should consume minimum 1 token
       assert.strictEqual(resourceBucket?.tokens, 99); // 100 - 1
@@ -376,7 +617,11 @@ describe('Rate Limiter Tests', () => {
       const res2 = createMockResponse();
       const next2 = createMockNext();
 
-      await middleware(req2 as Request, res2 as Response, next2 as NextFunction);
+      await middleware(
+        req2 as Request,
+        res2 as Response,
+        next2 as NextFunction,
+      );
 
       // Check refilled tokens (should have refilled 30 tokens)
       assert.ok(req2.resourceBucket);

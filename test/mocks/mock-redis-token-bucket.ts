@@ -5,7 +5,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { TokenBucket, RateLimiterRedisClient } from '../../src/lib/rate-limiter-redis.js';
+import type {
+  TokenBucket,
+  RateLimiterRedisClient,
+} from '../../src/lib/rate-limiter-redis.js';
 
 /**
  * Mock Redis client that simulates token bucket behavior
