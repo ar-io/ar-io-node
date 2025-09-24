@@ -72,7 +72,8 @@
     "yaml": "^2.8.1"
   },
   "resolutions": {
-    "secp256k1": "5.0.1"
+    "secp256k1": "5.0.1",
+    "elliptic": "6.6.1"
   },
   "devDependencies": {
     "@aws-lite/s3-types": "^0.2.6",
