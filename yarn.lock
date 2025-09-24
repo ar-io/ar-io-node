@@ -124,15 +124,15 @@
   dependencies:
     xss "^1.0.8"
 
-"@ar.io/sdk@3.19.0":
-  version "3.19.0"
-  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-3.19.0.tgz#ed31a1a55d435356fda48ec7e2e0ebc81ddd4c53"
-  integrity sha512-nTmPzxlS533QQMqXKe/MxE9jBWaDutFTfSiQ1nCBbjFqDlkNaotZrGkFYtpcX+T7ZEWP+nvXA8HOYrfCGlIFHw==
+"@ar.io/sdk@3.20.0":
+  version "3.20.0"
+  resolved "https://registry.yarnpkg.com/@ar.io/sdk/-/sdk-3.20.0.tgz#362531878602ac415f2e8c043cddda7312ba078e"
+  integrity sha512-qk5ENo1DSRF1nyUbqGNg+wG6d55qU0ylN19D7zW98Al5fCetyDWEM8OT9PhQXVuehWv3TyxeCh/WVwbvvhSpgw==
   dependencies:
     "@dha-team/arbundles" "^1.0.1"
     "@permaweb/aoconnect" "0.0.68"
     arweave "1.15.5"
-    axios "1.8.4"
+    axios "1.12.0"
     axios-retry "^4.3.0"
     commander "^12.1.0"
     eventemitter3 "^5.0.1"
@@ -4623,13 +4623,13 @@ axios-retry@^4.3.0:
   dependencies:
     is-retry-allowed "^2.2.0"
 
-axios@1.8.4:
-  version "1.8.4"
-  resolved "https://registry.yarnpkg.com/axios/-/axios-1.8.4.tgz#78990bb4bc63d2cae072952d374835950a82f447"
-  integrity sha512-eBSYY4Y68NNlHbHBMdeDmKNtDgXWhQsJcGqzO3iLUM0GraQFSS9cVgPX5I9b3lbdFKyYoAEGAZF1DwhTaljNAw==
+axios@1.12.0:
+  version "1.12.0"
+  resolved "https://registry.yarnpkg.com/axios/-/axios-1.12.0.tgz#11248459be05a5ee493485628fa0e4323d0abfc3"
+  integrity sha512-oXTDccv8PcfjZmPGlWsPSwtOJCZ/b6W5jAMCNcfwJbCzDckwG0jrYJFaWH1yvivfCXjVzV/SPDEhMB3Q+DSurg==
   dependencies:
     follow-redirects "^1.15.6"
-    form-data "^4.0.0"
+    form-data "^4.0.4"
     proxy-from-env "^1.1.0"
 
 axios@^1.12.2:

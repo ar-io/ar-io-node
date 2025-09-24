@@ -9,7 +9,7 @@
     "url": "https://github.com/ar-io/ar-io-node"
   },
   "dependencies": {
-    "@ar.io/sdk": "3.19.0",
+    "@ar.io/sdk": "3.20.0",
     "@ardrive/ardrive-promise-cache": "^1.4.0",
     "@aws-lite/client": "^0.23.2",
     "@aws-lite/s3": "^0.2.6",
