@@ -71,6 +71,9 @@
     "winston": "^3.17.0",
     "yaml": "^2.8.1"
   },
+  "resolutions": {
+    "secp256k1": "5.0.1"
+  },
   "devDependencies": {
     "@aws-lite/s3-types": "^0.2.6",
     "@cucumber/cucumber": "^11.2.0",
