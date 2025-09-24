@@ -9,7 +9,11 @@ import Redis from 'ioredis';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RATE_LIMITER_REDIS_ENDPOINT } from '../config.js';
+import {
+  RATE_LIMITER_REDIS_ENDPOINT,
+  RATE_LIMITER_REDIS_USE_TLS,
+  RATE_LIMITER_REDIS_USE_CLUSTER,
+} from '../config.js';
 import logger from '../log.js';
 
 export interface TokenBucket {
@@ -46,26 +50,44 @@ let _rlIoRedisClient: RateLimiterRedisClient | undefined;
 
 export function getRateLimiterRedisClient(): RateLimiterRedisClient {
   if (!_rlIoRedisClient) {
-    const [redisHost, redisPort] = RATE_LIMITER_REDIS_ENDPOINT.split(':');
+    const useCluster = RATE_LIMITER_REDIS_USE_CLUSTER === 'true';
 
-    const client = new Redis.Cluster(
-      [
-        {
-          host: redisHost,
-          port: +redisPort,
-        },
-      ],
-      {
-        dnsLookup: (address, callback) => callback(null, address),
-        redisOptions: {
-          tls: {},
-        },
-      },
+    function parseEndpoint(ep: string) {
+      const bracket = ep.match(/^\[(.+)\]:(\d+)$/);
+      if (bracket) return { host: bracket[1], port: Number(bracket[2]) };
+      const idx = ep.lastIndexOf(':');
+      if (idx === -1) throw new Error('Invalid redis endpoint: ' + ep);
+      return { host: ep.slice(0, idx), port: Number(ep.slice(idx + 1)) };
+    }
+
+    const endpoints = RATE_LIMITER_REDIS_ENDPOINT.split(',').map((e) =>
+      e.trim(),
     );
 
+    const tlsOpt = RATE_LIMITER_REDIS_USE_TLS === 'true' ? {} : undefined;
+
+    const client = useCluster
+      ? new Redis.Cluster(
+          endpoints.map((ep) => parseEndpoint(ep)),
+          {
+            dnsLookup: (address, callback) => callback(null, address),
+            redisOptions: {
+              tls: tlsOpt,
+            },
+          },
+        )
+      : (() => {
+          const { host, port } = parseEndpoint(endpoints[0]);
+          return new Redis.Redis(port, host, {
+            tls: tlsOpt,
+          });
+        })();
+
     // Handle connection events
-    client.on('error', (error) => {
-      logger.error('[rateLimiterCache] Redis connection error:', { error });
+    client.on('error', (error: unknown) => {
+      logger.error('[rateLimiterCache] Redis connection error:', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     client.defineCommand('getOrCreateBucket', {

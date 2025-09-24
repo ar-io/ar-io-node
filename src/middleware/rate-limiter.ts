@@ -357,7 +357,9 @@ export function rateLimiterMiddleware(options?: {
             responseSize,
             tokensToConsume,
             resourceKey: req.resourceBucket?.key,
+            resourceLastRefill: req.resourceBucket?.lastRefill,
             ipKey: req.ipBucket?.key,
+            ipLastRefill: req.ipBucket?.lastRefill,
           });
 
           if (req.resourceBucket && req.ipBucket) {
@@ -380,6 +382,15 @@ export function rateLimiterMiddleware(options?: {
                   // No contentLength for IP bucket
                 ),
               ]);
+
+            log.debug('[rateLimiter] Tokens remaining after consumption', {
+              resourceTokensRemaining,
+              ipTokensRemaining,
+              resourceKey: req.resourceBucket.key,
+              resourceLastRefill: req.resourceBucket?.lastRefill,
+              ipKey: req.ipBucket.key,
+              ipLastRefill: req.ipBucket?.lastRefill,
+            });
 
             consumeSpan.setAttribute(
               'resource_tokens_remaining',

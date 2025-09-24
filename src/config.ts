@@ -1173,3 +1173,13 @@ export const RATE_LIMITER_REDIS_ENDPOINT = env.varOrDefault(
   'RATE_LIMITER_REDIS_ENDPOINT',
   'localhost:6379',
 );
+
+export const RATE_LIMITER_REDIS_USE_TLS = env.varOrDefault(
+  'RATE_LIMITER_REDIS_USE_TLS',
+  'false',
+);
+
+export const RATE_LIMITER_REDIS_USE_CLUSTER = env.varOrDefault(
+  'RATE_LIMITER_REDIS_USE_CLUSTER',
+  'false',
+);
