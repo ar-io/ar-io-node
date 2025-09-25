@@ -187,6 +187,7 @@ export const txOffsetSource = new CompositeTxOffsetSource({
     ? new ChainTxOffsetSource({ log, arweaveClient })
     : undefined,
   fallbackEnabled: config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED,
+  fallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
 });
 
 export const dataAttributesSource: ContiguousDataAttributesStore =

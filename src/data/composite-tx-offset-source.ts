@@ -18,22 +18,27 @@ export class CompositeTxOffsetSource implements TxOffsetSource {
   private primarySource: TxOffsetSource;
   private fallbackSource?: TxOffsetSource;
   private fallbackEnabled: boolean;
+  private fallbackConcurrencyLimit: number;
+  private activeFallbackCount = 0;
 
   constructor({
     log,
     primarySource,
     fallbackSource,
     fallbackEnabled = true,
+    fallbackConcurrencyLimit = 5,
   }: {
     log: winston.Logger;
     primarySource: TxOffsetSource;
     fallbackSource?: TxOffsetSource;
     fallbackEnabled?: boolean;
+    fallbackConcurrencyLimit?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.primarySource = primarySource;
     this.fallbackSource = fallbackSource;
     this.fallbackEnabled = fallbackEnabled;
+    this.fallbackConcurrencyLimit = fallbackConcurrencyLimit;
   }
 
   async getTxByOffset(offset: number): Promise<TxOffsetResult> {
@@ -56,17 +61,37 @@ export class CompositeTxOffsetSource implements TxOffsetSource {
         this.fallbackEnabled &&
         !this.isValidResult(primaryResult)
       ) {
+        // Check if we're under the concurrency limit
+        if (this.activeFallbackCount >= this.fallbackConcurrencyLimit) {
+          log.debug('Skipping fallback - concurrency limit reached', {
+            activeFallbackCount: this.activeFallbackCount,
+            fallbackConcurrencyLimit: this.fallbackConcurrencyLimit,
+          });
+          return primaryResult;
+        }
+
         log.debug(
           'Primary source returned invalid result, attempting fallback',
+          {
+            activeFallbackCount: this.activeFallbackCount,
+            fallbackConcurrencyLimit: this.fallbackConcurrencyLimit,
+          },
         );
-        const fallbackResult = await this.fallbackSource.getTxByOffset(offset);
 
-        if (this.isValidResult(fallbackResult)) {
-          log.debug('Fallback source returned valid result');
-          return fallbackResult;
-        } else {
-          log.debug('Fallback source also returned invalid result');
-          return fallbackResult;
+        this.activeFallbackCount++;
+        try {
+          const fallbackResult =
+            await this.fallbackSource.getTxByOffset(offset);
+
+          if (this.isValidResult(fallbackResult)) {
+            log.debug('Fallback source returned valid result');
+            return fallbackResult;
+          } else {
+            log.debug('Fallback source also returned invalid result');
+            return fallbackResult;
+          }
+        } finally {
+          this.activeFallbackCount--;
         }
       }
 
