@@ -6,20 +6,38 @@
  */
 
 declare module 'ioredis' {
-  // Extend the Cluster interface to include our custom command helpers
+  // Extend both Cluster and Redis interfaces to include our custom command helpers
   interface Cluster {
-    getOrCreateBucket(
+    getOrCreateBucketAndConsume(
       key: string,
       capacity: number,
       refillRate: number,
       now: number,
       ttlSeconds: number,
+      tokensToConsume: number,
     ): Promise<string>;
 
     consumeTokens(
       key: string,
       tokensToConsume: number,
+      ttlSeconds: number,
+      contentLength?: number,
+    ): Promise<number>;
+  }
+
+  interface Redis {
+    getOrCreateBucketAndConsume(
+      key: string,
+      capacity: number,
+      refillRate: number,
       now: number,
+      ttlSeconds: number,
+      tokensToConsume: number,
+    ): Promise<string>;
+
+    consumeTokens(
+      key: string,
+      tokensToConsume: number,
       ttlSeconds: number,
       contentLength?: number,
     ): Promise<number>;

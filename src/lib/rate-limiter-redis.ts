@@ -25,18 +25,24 @@ export interface TokenBucket {
   contentLength?: number;
 }
 
+export interface BucketConsumptionResult {
+  bucket: TokenBucket;
+  consumed: number;
+  success: boolean;
+}
+
 export interface RateLimiterRedisClient {
-  getOrCreateBucket(
+  getOrCreateBucketAndConsume(
     key: string,
     capacity: number,
     refillRate: number,
     now: number,
     ttlSeconds: number,
-  ): Promise<string>;
+    tokensToConsume: number,
+  ): Promise<BucketConsumptionResult>;
   consumeTokens(
     key: string,
     tokensToConsume: number,
-    now: number,
     ttlSeconds: number,
     contentLength?: number,
   ): Promise<number>;
@@ -90,14 +96,6 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
       });
     });
 
-    client.defineCommand('getOrCreateBucket', {
-      numberOfKeys: 1,
-      lua: fs.readFileSync(
-        path.join(__dirname, 'redis-lua/get-or-create-bucket.lua'),
-        'utf8',
-      ),
-    });
-
     client.defineCommand('consumeTokens', {
       numberOfKeys: 1,
       lua: fs.readFileSync(
@@ -106,7 +104,36 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
       ),
     });
 
-    _rlIoRedisClient = client as unknown as RateLimiterRedisClient;
+    client.defineCommand('getOrCreateBucketAndConsume', {
+      numberOfKeys: 1,
+      lua: fs.readFileSync(
+        path.join(__dirname, 'redis-lua/get-or-create-and-consume-bucket.lua'),
+        'utf8',
+      ),
+    });
+
+    // Create wrapper object that implements our interface
+    _rlIoRedisClient = {
+      consumeTokens: client.consumeTokens.bind(client),
+      getOrCreateBucketAndConsume: async (
+        key: string,
+        capacity: number,
+        refillRate: number,
+        now: number,
+        ttlSeconds: number,
+        tokensToConsume: number,
+      ): Promise<BucketConsumptionResult> => {
+        const result = await client.getOrCreateBucketAndConsume(
+          key,
+          capacity,
+          refillRate,
+          now,
+          ttlSeconds,
+          tokensToConsume,
+        );
+        return JSON.parse(result);
+      },
+    };
   }
 
   return _rlIoRedisClient;

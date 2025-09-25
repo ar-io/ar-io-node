@@ -8,6 +8,7 @@
 import type {
   TokenBucket,
   RateLimiterRedisClient,
+  BucketConsumptionResult,
 } from '../../src/lib/rate-limiter-redis.js';
 
 /**
@@ -18,13 +19,14 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
   private buckets: Map<string, TokenBucket> = new Map();
   private timers: Map<string, NodeJS.Timeout> = new Map();
   public callCounts = {
-    getOrCreateBucket: 0,
+    getOrCreateBucketAndConsume: 0,
     consumeTokens: 0,
   };
 
   constructor() {
     // Bind methods to preserve 'this' context
-    this.getOrCreateBucket = this.getOrCreateBucket.bind(this);
+    this.getOrCreateBucketAndConsume =
+      this.getOrCreateBucketAndConsume.bind(this);
     this.consumeTokens = this.consumeTokens.bind(this);
     this.defineCommand = this.defineCommand.bind(this);
   }
@@ -44,17 +46,18 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
   }
 
   /**
-   * Simulates the Redis Lua script for getOrCreateBucket
-   * Creates a new bucket or refills an existing one
+   * Simulates the Redis Lua script for getOrCreateBucketAndConsume
+   * Creates/refills bucket and attempts to consume tokens atomically
    */
-  async getOrCreateBucket(
+  async getOrCreateBucketAndConsume(
     key: string,
     capacity: number,
     refillRate: number,
     now: number,
     ttlSeconds: number,
-  ): Promise<string> {
-    this.callCounts.getOrCreateBucket++;
+    tokensToConsume: number,
+  ): Promise<BucketConsumptionResult> {
+    this.callCounts.getOrCreateBucketAndConsume++;
 
     let bucket = this.buckets.get(key);
 
@@ -77,21 +80,51 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       bucket.lastRefill = now;
     }
 
-    // Set TTL
+    // Determine actual tokens needed (may override prediction with cached contentLength)
+    let actualTokensNeeded = tokensToConsume;
+    if (
+      tokensToConsume > 0 &&
+      bucket.contentLength != null &&
+      bucket.contentLength > 0
+    ) {
+      actualTokensNeeded = Math.max(1, Math.ceil(bucket.contentLength / 1024));
+    }
+
+    // Attempt to consume actual tokens needed
+    let consumed = 0;
+    let success = false;
+    if (actualTokensNeeded === 0) {
+      // No tokens needed, always succeed
+      success = true;
+    } else if (bucket.tokens >= actualTokensNeeded) {
+      // Sufficient tokens - consume them
+      bucket.tokens = bucket.tokens - actualTokensNeeded;
+      consumed = actualTokensNeeded;
+      success = true;
+    } else {
+      // Insufficient tokens - fail the consumption (don't go negative in atomic operation)
+      success = false;
+      consumed = 0;
+    }
+
+    // Set TTL and save bucket
     this.setTTL(key, ttlSeconds * 1000);
     this.buckets.set(key, bucket);
 
-    return JSON.stringify(bucket);
+    return {
+      bucket,
+      consumed,
+      success,
+    };
   }
 
   /**
    * Simulates the Redis Lua script for consumeTokens
-   * Consumes tokens from the bucket after refilling
+   * Consumes tokens from the bucket
    */
   async consumeTokens(
     key: string,
     tokensToConsume: number,
-    now: number,
     ttlSeconds: number,
     contentLength?: number,
   ): Promise<number> {
@@ -102,15 +135,8 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       return -1; // Bucket doesn't exist
     }
 
-    // Calculate tokens to refill based on elapsed time
-    const elapsedSeconds = Math.max(0, (now - bucket.lastRefill) / 1000);
-    const tokensToAdd = Math.floor(elapsedSeconds * bucket.refillRate);
-
-    // Refill tokens, capped at capacity
-    bucket.tokens = Math.min(bucket.capacity, bucket.tokens + tokensToAdd);
-    bucket.lastRefill = now;
-
     // Consume tokens (can go negative in real implementation)
+    // Note: We no longer refill tokens here or update lastRefill - that's only done in getOrCreateBucket
     bucket.tokens = bucket.tokens - tokensToConsume;
 
     // Store content length if provided (for resource buckets)
@@ -118,7 +144,7 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       bucket.contentLength = contentLength;
     }
 
-    // Reset TTL
+    // Reset TTL only
     this.setTTL(key, ttlSeconds * 1000);
     this.buckets.set(key, bucket);
 
@@ -167,7 +193,7 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     }
     this.timers.clear();
     this.buckets.clear();
-    this.callCounts.getOrCreateBucket = 0;
+    this.callCounts.getOrCreateBucketAndConsume = 0;
     this.callCounts.consumeTokens = 0;
   }
 
