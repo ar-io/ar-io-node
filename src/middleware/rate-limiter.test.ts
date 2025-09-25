@@ -16,9 +16,6 @@ import {
   createMockNext,
   waitForAsync,
   simulateResponse,
-  createMockLogger,
-  createMockMetrics,
-  createMockTracer,
 } from '../../test/utils/rate-limiter-test-helpers.js';
 
 // Create mock Redis client at module level
