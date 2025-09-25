@@ -452,6 +452,11 @@ export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS =
     `${60 * 5 * 1000}`, // 5 minutes
   );
 
+export const CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY',
+  '5',
+);
+
 //
 // Indexing
 //
