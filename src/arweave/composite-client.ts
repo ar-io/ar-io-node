@@ -848,14 +848,16 @@ export class ArweaveCompositeClient
     category: ArweavePeerCategory,
     peerType?: 'bucket' | 'general',
   ): void {
-    metrics.requestChunkTotal.inc({
-      status: 'success',
-      method,
-      class: this.constructor.name,
-      source: peer,
-      source_type: sourceType,
-      peer_type: peerType || 'unknown',
-    });
+    if (method === 'peerGetChunk') {
+      metrics.requestChunkTotal.inc({
+        status: 'success',
+        method,
+        class: this.constructor.name,
+        source: peer,
+        source_type: sourceType,
+        peer_type: peerType || 'unknown',
+      });
+    }
     if (sourceType === 'peer') {
       this.peerManager.reportSuccess(category, peer);
     }
@@ -868,14 +870,16 @@ export class ArweaveCompositeClient
     category: ArweavePeerCategory,
     peerType?: 'bucket' | 'general',
   ): void {
-    metrics.requestChunkTotal.inc({
-      status: 'error',
-      method,
-      class: this.constructor.name,
-      source: peer,
-      source_type: sourceType,
-      peer_type: peerType || 'unknown',
-    });
+    if (method === 'peerGetChunk') {
+      metrics.requestChunkTotal.inc({
+        status: 'error',
+        method,
+        class: this.constructor.name,
+        source: peer,
+        source_type: sourceType,
+        peer_type: peerType || 'unknown',
+      });
+    }
     if (sourceType === 'peer') {
       this.peerManager.reportFailure(category, peer);
     }
