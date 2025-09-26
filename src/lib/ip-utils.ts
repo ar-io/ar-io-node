@@ -184,34 +184,46 @@ export function extractAllClientIPs(req: Request): {
  */
 export function isIpInCidr(ip: string, cidr: string): boolean {
   try {
-    // Basic IPv4 validation
-    if (!ip.includes('.') || ip.includes(':')) {
-      return false; // Not IPv4
-    }
+    if (!cidr || !cidr.includes('/')) return false;
 
-    const [network, prefixStr] = cidr.split('/');
+    // Reject IPv6
+    if (ip.includes(':')) return false;
+
+    const [rawNetwork, rawPrefix] = cidr.split('/');
+    if (!rawNetwork || rawPrefix === undefined) return false;
+
+    const network = rawNetwork.trim();
+    const prefixStr = rawPrefix.trim();
+
+    // Validate prefix strictly: 0-32 (no leading + sign etc.)
+    if (!/^(\d|[12]\d|3[0-2])$/.test(prefixStr)) return false;
     const prefix = parseInt(prefixStr, 10);
 
-    if (isNaN(prefix) || prefix < 0 || prefix > 32) {
-      return false;
-    }
+    // Strict IPv4 dotted-quad validation (disallow leading zeros other than single 0)
+    const ipv4Segment = '(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)';
+    const ipv4Regex = new RegExp(
+      `^${ipv4Segment}\\.${ipv4Segment}\\.${ipv4Segment}\\.${ipv4Segment}$`,
+    );
+    if (!ipv4Regex.test(ip) || !ipv4Regex.test(network)) return false;
 
-    // Convert IP and network to 32-bit integers
-    const ipToInt = (ipAddr: string): number => {
-      return (
-        ipAddr
-          .split('.')
-          .reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0
-      );
-    };
+    // Helper: convert IPv4 to 32-bit int
+    const ipToInt = (addr: string): number =>
+      addr
+        .split('.')
+        .reduce((acc, oct) => (acc << 8) + parseInt(oct, 10), 0) >>> 0;
 
     const ipInt = ipToInt(ip);
     const networkInt = ipToInt(network);
 
-    // Handle /0 mask correctly - when prefix is 0, mask should be 0
-    const mask = prefix === 0 ? 0 : (-1 << (32 - prefix)) >>> 0;
+    // Compute mask (prefix 0 -> mask 0x00000000)
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
 
-    return (ipInt & mask) === (networkInt & mask);
+    // Enforce canonical network: network must have host bits zero
+    const maskedNetwork = (networkInt & mask) >>> 0;
+    if (maskedNetwork !== networkInt) return false;
+
+    const maskedIp = (ipInt & mask) >>> 0;
+    return maskedIp === networkInt;
   } catch {
     return false;
   }
