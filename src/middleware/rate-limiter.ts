@@ -485,7 +485,6 @@ export function rateLimiterMiddleware(options?: {
 
             // Set span attributes for each adjustment made
             adjustmentLabels.forEach((label, index) => {
-              // TODO: Why is this optional chained?
               consumeSpan?.setAttribute(
                 `${label}_tokens_remaining`,
                 remainingTokens[index],
