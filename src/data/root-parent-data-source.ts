@@ -373,7 +373,8 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       let rootTxId: string | undefined;
       try {
-        rootTxId = await this.dataItemRootTxIndex.getRootTxId(id);
+        const result = await this.dataItemRootTxIndex.getRootTxId(id);
+        rootTxId = result?.rootTxId;
         rootTxLookupSpan.setAttributes({
           'root.tx_id': rootTxId ?? 'not_found',
           'root.found': rootTxId !== undefined,

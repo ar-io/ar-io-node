@@ -119,7 +119,8 @@ export class DataVerificationWorker {
     const rootTxToDataIds = new Map<string, Set<string>>();
 
     for (const dataId of dataIds) {
-      const rootTxId = await this.dataItemRootTxIndex.getRootTxId(dataId);
+      const result = await this.dataItemRootTxIndex.getRootTxId(dataId);
+      const rootTxId = result?.rootTxId;
 
       if (rootTxId !== undefined) {
         if (!rootTxToDataIds.has(rootTxId)) {

@@ -57,4 +57,12 @@ SELECT COALESCE(
   (SELECT root_transaction_id FROM bundles.new_data_items WHERE id = @id),
   (SELECT id FROM stable_transactions WHERE id = @id),
   (SELECT id FROM new_transactions WHERE id = @id)
-) AS root_transaction_id;
+) AS root_transaction_id,
+COALESCE(
+  (SELECT content_type FROM bundles.stable_data_items WHERE id = @id),
+  (SELECT content_type FROM bundles.new_data_items WHERE id = @id)
+) AS content_type,
+COALESCE(
+  (SELECT data_size FROM bundles.stable_data_items WHERE id = @id),
+  (SELECT data_size FROM bundles.new_data_items WHERE id = @id)
+) AS data_size;

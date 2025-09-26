@@ -68,7 +68,7 @@ describe('RootParentDataSource', () => {
 
       // Mock root TX lookup
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
 
       // Mock offset parsing
@@ -135,7 +135,7 @@ describe('RootParentDataSource', () => {
       );
 
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -179,7 +179,7 @@ describe('RootParentDataSource', () => {
       );
 
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -273,7 +273,7 @@ describe('RootParentDataSource', () => {
 
       // When getRootTxId returns the same ID, it means it's already a root transaction
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => txId,
+        async () => ({ rootTxId: txId }),
       );
 
       (dataSource.getData as any).mock.mockImplementation(async () => ({
@@ -320,7 +320,7 @@ describe('RootParentDataSource', () => {
       );
 
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -357,7 +357,7 @@ describe('RootParentDataSource', () => {
       );
 
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -401,7 +401,7 @@ describe('RootParentDataSource', () => {
       );
 
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -443,7 +443,7 @@ describe('RootParentDataSource', () => {
       );
 
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -677,7 +677,7 @@ describe('RootParentDataSource', () => {
 
       // Should fallback to legacy when cycle detected
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => 'fallback-root',
+        async () => ({ rootTxId: 'fallback-root' }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
         async () => ({ offset: 1000, size: 500 }),
@@ -724,7 +724,7 @@ describe('RootParentDataSource', () => {
 
       // Mock legacy methods
       (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+        async () => ({ rootTxId }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
         async () => ({ offset: 2000, size: 800 }),

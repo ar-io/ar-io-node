@@ -15,7 +15,18 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
   private indexes: DataItemRootTxIndex[];
   private circuitBreakers: Map<
     string,
-    CircuitBreaker<[string], string | undefined>
+    CircuitBreaker<
+      [string],
+      | {
+          rootTxId: string;
+          rootOffset?: number;
+          rootDataOffset?: number;
+          contentType?: string;
+          size?: number;
+          dataSize?: number;
+        }
+      | undefined
+    >
   >;
 
   constructor({
@@ -76,7 +87,17 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     }
   }
 
-  async getRootTxId(id: string): Promise<string | undefined> {
+  async getRootTxId(id: string): Promise<
+    | {
+        rootTxId: string;
+        rootOffset?: number;
+        rootDataOffset?: number;
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | undefined
+  > {
     const log = this.log.child({ method: 'getRootTxId', id });
 
     for (let i = 0; i < this.indexes.length; i++) {
@@ -103,15 +124,15 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
         });
 
         // Execute with circuit breaker protection
-        const rootTxId = await circuitBreaker.fire(id);
+        const result = await circuitBreaker.fire(id);
 
-        if (rootTxId !== undefined) {
+        if (result !== undefined) {
           log.debug('Found root TX ID', {
-            rootTxId,
+            rootTxId: result.rootTxId,
             indexNumber: i + 1,
             indexClass: indexName,
           });
-          return rootTxId;
+          return result;
         }
 
         log.debug('Index returned undefined', {

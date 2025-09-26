@@ -675,7 +675,17 @@ export interface ContiguousDataIndex {
 }
 
 export interface DataItemRootTxIndex {
-  getRootTxId(id: string): Promise<string | undefined>;
+  getRootTxId(id: string): Promise<
+    | {
+        rootTxId: string;
+        rootOffset?: number;
+        rootDataOffset?: number;
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | undefined
+  >;
 }
 
 export interface ContiguousDataSource {
