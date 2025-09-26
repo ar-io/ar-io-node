@@ -325,8 +325,8 @@ describe('Rate Limiter Tests', () => {
 
       // Different domains should have different resource keys
       assert.notStrictEqual(req1.resourceBucket?.key, req2.resourceBucket?.key);
-      // But same IP should have different IP keys for different domains
-      assert.notStrictEqual(req1.ipBucket?.key, req2.ipBucket?.key);
+      // But same IP should have the same IP keys for different domains
+      assert.strictEqual(req1.ipBucket?.key, req2.ipBucket?.key);
     });
 
     it('should handle IP allowlist correctly', async () => {
@@ -597,8 +597,8 @@ describe('Rate Limiter Tests', () => {
     it('should block request when IP tokens exhausted', async () => {
       // Create IP bucket with 0 tokens
       const now = Date.now();
-      mockRedis.setBucket('{rl:example.com}:ip:192.168.1.1', {
-        key: '{rl:example.com}:ip:192.168.1.1',
+      mockRedis.setBucket('rl:ip:192.168.1.1', {
+        key: 'rl:ip:192.168.1.1',
         tokens: 0,
         lastRefill: now,
         capacity: 100,
