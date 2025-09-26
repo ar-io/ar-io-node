@@ -257,6 +257,14 @@ describe('IP Utilities', () => {
       assert.strictEqual(isIpInCidr('192.168.1.1', '192.168.1.0/33'), false); // Invalid prefix
       assert.strictEqual(isIpInCidr('192.168.1.1', '192.168.1.0/-1'), false); // Invalid prefix
     });
+
+    it('should NOT treat malformed CIDR network like foo/0 as match-all', () => {
+      assert.strictEqual(
+        isIpInCidr('203.0.113.5', 'foo/0'),
+        false,
+        'Malformed CIDR foo/0 should not match any IP',
+      );
+    });
   });
 
   describe('isAnyIpAllowlisted', () => {
@@ -306,6 +314,14 @@ describe('IP Utilities', () => {
       const allowlist = ['192.168.1.1'];
 
       assert.strictEqual(isAnyIpAllowlisted(clientIps, allowlist), true);
+    });
+
+    it('should NOT allowlist via malformed CIDR like foo/0', () => {
+      assert.strictEqual(
+        isAnyIpAllowlisted(['203.0.113.5'], ['foo/0']),
+        false,
+        'Malformed CIDR foo/0 should not cause allowlisting',
+      );
     });
   });
 
@@ -363,6 +379,14 @@ describe('IP Utilities', () => {
       const blocklist = ['0.0.0.0/0']; // Block all IPv4
 
       assert.strictEqual(isAnyIpBlocked(clientIps, blocklist), true);
+    });
+
+    it('should NOT blocklist via malformed CIDR like foo/0', () => {
+      assert.strictEqual(
+        isAnyIpBlocked(['203.0.113.5'], ['foo/0']),
+        false,
+        'Malformed CIDR foo/0 should not block IPs',
+      );
     });
   });
 });
