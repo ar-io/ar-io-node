@@ -100,7 +100,7 @@ if bucket.contentLength then
 end
 
 -- Save bucket state and set expiration to prevent memory leaks
-redis.call('HSET', table.unpack(hset_args))
+redis.call('HSET', unpack(hset_args))
 redis.call('EXPIRE', key, ttl)
 
 -- Step 6: Return structured result for the application
