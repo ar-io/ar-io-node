@@ -64,11 +64,11 @@ function buildBucketKeys(
   host: string,
 ): { resourceKey: string; ipKey: string } {
   const resourceTag = `rl:${method}:${host}:${path}`; // e.g. "rl:GET:arweave.net:/api/v1/foo"
-  const ipTag = `rl:${host}`; // e.g. "rl:arweave.net"
 
+  // NOTE: resourceKey and ipKey not intended to be used in multi-key operations together in clustered setups
   return {
     resourceKey: `{${resourceTag}}:resource`, // → "{rl:GET:arweave.net:/api/v1/foo}:resource"
-    ipKey: `{${ipTag}}:ip:${ip}`, // → "{rl:arweave.net}:ip:203.0.113.42"
+    ipKey: `rl:ip:${ip}`, // → "rl:ip:203.0.113.42"
   };
 }
 
