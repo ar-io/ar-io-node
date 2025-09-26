@@ -12,7 +12,12 @@ import { DataItemRootTxIndex } from '../types.js';
 import * as config from '../config.js';
 import { isValidTxId } from '../lib/validation.js';
 
-type CachedParentBundle = { bundleId?: string };
+type CachedParentBundle = {
+  bundleId?: string;
+  contentType?: string;
+  size?: number;
+  dataSize?: number;
+};
 
 // Special symbol to indicate item was not found (vs being a root tx)
 const NOT_FOUND = Symbol('NOT_FOUND');
@@ -86,8 +91,25 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     rax.attach(this.axiosInstance);
   }
 
-  async getRootTxId(id: string): Promise<string | undefined> {
+  async getRootTxId(id: string): Promise<
+    | {
+        rootTxId: string;
+        rootOffset?: number;
+        rootDataOffset?: number;
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | undefined
+  > {
     const log = this.log.child({ method: 'getRootTxId', id });
+
+    // First get the metadata for the original item
+    const originalMetadata = await this.queryItemMetadata(id, log);
+    if (originalMetadata === NOT_FOUND) {
+      log.debug('Item not found in Turbo', { id });
+      return undefined;
+    }
 
     // Keep track of visited IDs to prevent infinite loops
     const visited = new Set<string>();
@@ -119,7 +141,12 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
           rootTxId: currentId,
           depth: depth - 1,
         });
-        return currentId;
+        return {
+          rootTxId: currentId,
+          contentType: originalMetadata?.contentType,
+          size: originalMetadata?.size,
+          dataSize: originalMetadata?.dataSize,
+        };
       }
 
       // Continue following the chain
@@ -142,7 +169,14 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       });
     }
 
-    return currentId;
+    return currentId
+      ? {
+          rootTxId: currentId,
+          contentType: originalMetadata?.contentType,
+          size: originalMetadata?.size,
+          dataSize: originalMetadata?.dataSize,
+        }
+      : undefined;
   }
 
   private async queryBundleId(
@@ -220,6 +254,61 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
 
       // Other errors (network, timeout, etc.)
       log.debug('Failed to query Turbo', {
+        id,
+        error: error.message,
+        status: error.response?.status,
+      });
+
+      throw error; // Re-throw to trigger circuit breaker
+    }
+  }
+
+  private async queryItemMetadata(
+    id: string,
+    log: winston.Logger,
+  ): Promise<
+    | {
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | typeof NOT_FOUND
+  > {
+    try {
+      const url = `${this.turboEndpoint}/tx/${id}/status`;
+      log.debug('Querying Turbo status endpoint for metadata', { url });
+
+      const response = await this.axiosInstance.get<TurboStatusResponse>(url);
+
+      if (
+        response.status === 200 &&
+        response.data !== null &&
+        response.data !== undefined
+      ) {
+        const { payloadContentType, rawContentLength, payloadContentLength } =
+          response.data;
+
+        return {
+          contentType: payloadContentType,
+          size: rawContentLength,
+          dataSize: payloadContentLength,
+        };
+      }
+
+      // Unexpected response status
+      log.debug('Unexpected response from Turbo for metadata', {
+        id,
+        status: response.status,
+      });
+      return {};
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        log.debug('Item not found in Turbo for metadata (404)', { id });
+        return NOT_FOUND;
+      }
+
+      // Other errors (network, timeout, etc.)
+      log.debug('Failed to query Turbo for metadata', {
         id,
         error: error.message,
         status: error.response?.status,

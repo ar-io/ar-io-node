@@ -12,7 +12,11 @@ import { DataItemRootTxIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import * as config from '../config.js';
 
-type CachedParentBundle = { bundleId?: string };
+type CachedParentBundle = {
+  bundleId?: string;
+  contentType?: string;
+  size?: string;
+};
 
 // Special symbol to indicate item was not found (vs being a root tx)
 const NOT_FOUND = Symbol('NOT_FOUND');
@@ -23,6 +27,10 @@ const GRAPHQL_QUERY = `
       id
       bundledIn {
         id
+      }
+      data {
+        type
+        size
       }
     }
   }
@@ -100,8 +108,25 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
     rax.attach(this.axiosInstance);
   }
 
-  async getRootTxId(id: string): Promise<string | undefined> {
+  async getRootTxId(id: string): Promise<
+    | {
+        rootTxId: string;
+        rootOffset?: number;
+        rootDataOffset?: number;
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | undefined
+  > {
     const log = this.log.child({ method: 'getRootTxId', id });
+
+    // First get the metadata for the original item
+    const originalMetadata = await this.queryItemMetadata(id, log);
+    if (originalMetadata === NOT_FOUND) {
+      log.debug('Item not found in GraphQL', { id });
+      return undefined;
+    }
 
     // Keep track of visited IDs to prevent infinite loops
     const visited = new Set<string>();
@@ -133,7 +158,14 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
           rootTxId: currentId,
           depth: depth - 1,
         });
-        return currentId;
+        return {
+          rootTxId: currentId,
+          contentType: originalMetadata?.contentType,
+          size:
+            originalMetadata?.size != null
+              ? parseInt(originalMetadata.size, 10)
+              : undefined,
+        };
       }
 
       // Continue following the chain
@@ -156,7 +188,16 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       });
     }
 
-    return currentId;
+    return currentId
+      ? {
+          rootTxId: currentId,
+          contentType: originalMetadata?.contentType,
+          size:
+            originalMetadata?.size != null
+              ? parseInt(originalMetadata.size, 10)
+              : undefined,
+        }
+      : undefined;
   }
 
   private async queryBundleId(
@@ -237,6 +278,75 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
 
     // All gateways failed - return NOT_FOUND to indicate item wasn't found
     log.warn('Failed to query transaction from all gateways', {
+      id,
+      error: lastError?.message,
+    });
+
+    return NOT_FOUND;
+  }
+
+  private async queryItemMetadata(
+    id: string,
+    log: winston.Logger,
+  ): Promise<
+    | {
+        contentType?: string;
+        size?: string;
+      }
+    | typeof NOT_FOUND
+  > {
+    // lower number = higher priority
+    const priorities = Array.from(this.trustedGateways.keys()).sort(
+      (a, b) => a - b,
+    );
+
+    let lastError: Error | null = null;
+
+    for (const priority of priorities) {
+      const gatewaysInTier = this.trustedGateways.get(priority);
+
+      if (gatewaysInTier) {
+        const shuffledGateways = shuffleArray([...gatewaysInTier]);
+
+        for (const gatewayUrl of shuffledGateways) {
+          try {
+            const response = await this.axiosInstance.post(
+              `${gatewayUrl}/graphql`,
+              {
+                query: GRAPHQL_QUERY,
+                variables: { id },
+              },
+            );
+
+            if (response.data?.data?.transaction) {
+              const transaction = response.data.data.transaction;
+
+              return {
+                contentType: transaction.data?.type,
+                size: transaction.data?.size,
+              };
+            }
+
+            // Transaction not found in this gateway - try next
+            log.debug('Transaction not found for metadata', {
+              id,
+              gateway: gatewayUrl,
+            });
+            // Continue to next gateway instead of returning
+          } catch (error: any) {
+            lastError = error;
+            log.debug('Failed to query gateway for metadata', {
+              gateway: gatewayUrl,
+              error: error.message,
+            });
+            // Continue to next gateway
+          }
+        }
+      }
+    }
+
+    // All gateways failed
+    log.warn('Failed to query transaction metadata from all gateways', {
       id,
       error: lastError?.message,
     });

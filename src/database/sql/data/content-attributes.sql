@@ -150,7 +150,7 @@ WHERE cdip.id = :id
 LIMIT 1
 
 -- selectRootTransactionId
-SELECT root_transaction_id
+SELECT root_transaction_id, root_parent_offset, data_offset, data_size, data_item_size
 FROM contiguous_data_ids
 WHERE id = :id
 LIMIT 1
