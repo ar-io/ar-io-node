@@ -329,7 +329,6 @@ export function rateLimiterMiddleware(options?: {
         log.info(
           `[rateLimiter] ${bucketsResult.failureType === 'resource' ? 'Resource' : 'IP'} limit exceeded during atomic consumption`,
         );
-        rateLimitSpan.end();
 
         rateLimitExceededTotal.inc({
           limit_type: bucketsResult.failureType || 'unknown',
@@ -372,7 +371,6 @@ export function rateLimiterMiddleware(options?: {
       );
       rateLimitSpan.setAttribute('predicted_tokens_consumed', predictedTokens);
       rateLimitSpan.setAttribute('rate_limited', false);
-      rateLimitSpan.end();
 
       // Store buckets in request for response phase
       req.resourceBucket = bucketsResult.resourceBucket!;
@@ -551,7 +549,6 @@ export function rateLimiterMiddleware(options?: {
         );
         rateLimitSpan.setAttribute('rate_limiter.resource_key', resourceKey);
         rateLimitSpan.setAttribute('rate_limiter.ip_key', ipKey);
-        rateLimitSpan.end();
       }
 
       log.error('[rateLimiter] Error in rate limiter', {
