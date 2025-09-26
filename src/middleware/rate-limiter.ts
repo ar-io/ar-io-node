@@ -93,7 +93,9 @@ async function getOrCreateBucketsAndConsume(
   resourceBucket?: TokenBucket;
   ipBucket?: TokenBucket;
   failureType?: 'resource' | 'ip';
-  actualTokensConsumed?: number;
+  // Tokens initially consumed from each bucket during the predictive phase
+  resourceTokensConsumed?: number; // what was actually debited from resource bucket (predicted)
+  ipTokensConsumed?: number; // what was actually debited from IP bucket (actual tokens needed)
 }> {
   const span = tracer.startSpan('rateLimiter.getOrCreateBucketsAndConsume');
   span.setAttributes({
@@ -161,7 +163,7 @@ async function getOrCreateBucketsAndConsume(
         // Rollback: return tokens to resource bucket (use actual consumed amount)
         await redisClient.consumeTokens(
           resourceKey,
-          -actualTokensNeeded,
+          -resourceResult.consumed,
           cacheTtlSeconds,
         );
         span.setAttributes({ rollback_success: true });
@@ -186,7 +188,8 @@ async function getOrCreateBucketsAndConsume(
       success: true,
       resourceBucket: resourceResult.bucket,
       ipBucket: ipResult.bucket,
-      actualTokensConsumed: actualTokensNeeded,
+      resourceTokensConsumed: resourceResult.consumed,
+      ipTokensConsumed: ipResult.consumed,
     };
   } catch (error) {
     span.recordException(error as Error);
@@ -376,9 +379,11 @@ export function rateLimiterMiddleware(options?: {
       req.resourceBucket = bucketsResult.resourceBucket!;
       req.ipBucket = bucketsResult.ipBucket!;
 
-      // Store the actual tokens consumed for the response handler
-      const actualTokensConsumed =
-        bucketsResult.actualTokensConsumed ?? predictedTokens;
+      // Store the initially consumed tokens for each bucket separately
+      const initialResourceTokensConsumed =
+        bucketsResult.resourceTokensConsumed ?? predictedTokens;
+      const initialIpTokensConsumed =
+        bucketsResult.ipTokensConsumed ?? predictedTokens;
 
       // Add response finish handler to consume tokens based on response size
       res.on('finish', async () => {
@@ -392,43 +397,57 @@ export function rateLimiterMiddleware(options?: {
           // Calculate total tokens needed based on response size
           // Use 1 KB as the base unit (1 token = 1 KB), minimum 1 token per request
           const totalTokensNeeded = Math.max(1, Math.ceil(responseSize / 1024));
-          // Calculate adjustment needed (difference between actual response and what was consumed upfront)
-          const tokenAdjustment = totalTokensNeeded - actualTokensConsumed;
+          const resourceTokenAdjustment =
+            totalTokensNeeded - initialResourceTokensConsumed;
+          const ipTokenAdjustment = totalTokensNeeded - initialIpTokensConsumed;
 
           consumeSpan.setAttribute('total_tokens_needed', totalTokensNeeded);
           consumeSpan.setAttribute(
-            'actual_tokens_consumed',
-            actualTokensConsumed,
+            'initial_resource_tokens_consumed',
+            initialResourceTokensConsumed,
           );
-          consumeSpan.setAttribute('token_adjustment', tokenAdjustment);
+          consumeSpan.setAttribute(
+            'initial_ip_tokens_consumed',
+            initialIpTokensConsumed,
+          );
+          consumeSpan.setAttribute(
+            'resource_token_adjustment',
+            resourceTokenAdjustment,
+          );
+          consumeSpan.setAttribute('ip_token_adjustment', ipTokenAdjustment);
           consumeSpan.setAttribute('response_size_bytes', responseSize);
 
-          log.debug('[rateLimiter] Response size and token adjustment', {
-            responseSize,
-            totalTokensNeeded,
-            actualTokensConsumed,
-            tokenAdjustment,
-            resourceBucket: {
-              key: req.resourceBucket?.key,
-              tokens: req.resourceBucket?.tokens,
-              lastRefill: req.resourceBucket?.lastRefill,
+          log.debug(
+            '[rateLimiter] Response size and per-bucket token adjustment',
+            {
+              responseSize,
+              totalTokensNeeded,
+              initialResourceTokensConsumed,
+              initialIpTokensConsumed,
+              resourceTokenAdjustment,
+              ipTokenAdjustment,
+              resourceBucket: {
+                key: req.resourceBucket?.key,
+                tokens: req.resourceBucket?.tokens,
+                lastRefill: req.resourceBucket?.lastRefill,
+              },
+              ipBucket: {
+                key: req.ipBucket?.key,
+                tokens: req.ipBucket?.tokens,
+                lastRefill: req.ipBucket?.lastRefill,
+              },
             },
-            ipBucket: {
-              key: req.ipBucket?.key,
-              tokens: req.ipBucket?.tokens,
-              lastRefill: req.ipBucket?.lastRefill,
-            },
-          });
+          );
 
-          // Only adjust tokens if there's a difference and buckets exist
+          // Only adjust tokens if there's a difference per bucket and buckets exist
           const adjustmentPromises: Promise<number>[] = [];
           const adjustmentLabels: string[] = [];
 
-          if (tokenAdjustment !== 0 && req.resourceBucket) {
+          if (resourceTokenAdjustment !== 0 && req.resourceBucket) {
             adjustmentPromises.push(
               redisClient.consumeTokens(
                 req.resourceBucket.key,
-                tokenAdjustment,
+                resourceTokenAdjustment,
                 cacheTtlSeconds,
                 responseSize, // contentLength - only for resource bucket
               ),
@@ -436,11 +455,11 @@ export function rateLimiterMiddleware(options?: {
             adjustmentLabels.push('resource');
           }
 
-          if (tokenAdjustment !== 0 && req.ipBucket) {
+          if (ipTokenAdjustment !== 0 && req.ipBucket) {
             adjustmentPromises.push(
               redisClient.consumeTokens(
                 req.ipBucket.key,
-                tokenAdjustment,
+                ipTokenAdjustment,
                 cacheTtlSeconds,
                 // No contentLength for IP bucket
               ),
@@ -449,52 +468,99 @@ export function rateLimiterMiddleware(options?: {
           }
 
           if (adjustmentPromises.length > 0) {
-            // TODO: Use allSettled and handle more granularly?
-            const remainingTokens = await Promise.all(adjustmentPromises);
+            // Execute adjustments allowing partial failures
+            const settlements = await Promise.allSettled(adjustmentPromises);
 
-            // Create detailed per-bucket tracking
             const adjustmentDetails: Record<string, any> = {};
+            let failures = 0;
+            let successes = 0;
+
             adjustmentLabels.forEach((label, index) => {
+              const settlement = settlements[index];
               const bucket =
                 label === 'resource' ? req.resourceBucket : req.ipBucket;
-              const tokensAfter = remainingTokens[index];
               const tokensBefore = bucket?.tokens ?? 0;
 
-              adjustmentDetails[`${label}Bucket`] = {
-                key: bucket?.key,
-                tokensBeforeAdjustment: tokensBefore,
-                tokensDeducted: tokenAdjustment,
-                tokensAfterAdjustment: tokensAfter,
-                tokensConsumedTotal: tokensBefore - tokensAfter,
-                capacity: bucket?.capacity,
-                utilizationPercent:
-                  bucket?.capacity != null && bucket.capacity > 0
-                    ? Math.round(
-                        ((bucket.capacity - tokensAfter) / bucket.capacity) *
-                          100,
-                      )
-                    : 0,
-              };
+              if (settlement.status === 'fulfilled') {
+                successes++;
+                const tokensAfter = settlement.value;
+                const perBucketAdjustment =
+                  label === 'resource'
+                    ? resourceTokenAdjustment
+                    : ipTokenAdjustment;
+                adjustmentDetails[`${label}Bucket`] = {
+                  key: bucket?.key,
+                  tokensBeforeAdjustment: tokensBefore,
+                  tokensDeducted: perBucketAdjustment,
+                  tokensAfterAdjustment: tokensAfter,
+                  tokensConsumedTotal: tokensBefore - tokensAfter,
+                  capacity: bucket?.capacity,
+                  utilizationPercent:
+                    bucket?.capacity != null && bucket.capacity > 0
+                      ? Math.round(
+                          ((bucket.capacity - tokensAfter) / bucket.capacity) *
+                            100,
+                        )
+                      : 0,
+                  status: 'fulfilled',
+                };
+                consumeSpan?.setAttribute(
+                  `${label}_tokens_remaining`,
+                  tokensAfter,
+                );
+              } else {
+                failures++;
+                const error = settlement.reason;
+                const perBucketAdjustment =
+                  label === 'resource'
+                    ? resourceTokenAdjustment
+                    : ipTokenAdjustment;
+                adjustmentDetails[`${label}Bucket`] = {
+                  key: bucket?.key,
+                  tokensBeforeAdjustment: tokensBefore,
+                  tokensDeducted: perBucketAdjustment,
+                  tokensAfterAdjustment: null,
+                  capacity: bucket?.capacity,
+                  status: 'rejected',
+                  errorName: error?.name,
+                  errorMessage: error?.message ?? String(error),
+                };
+                log.error('[rateLimiter] Token adjustment failed for bucket', {
+                  label,
+                  error,
+                  key: bucket?.key,
+                  resourceTokenAdjustment,
+                  ipTokenAdjustment,
+                });
+                consumeSpan?.setAttribute(`${label}_adjustment_failed`, true);
+                consumeSpan?.setAttribute(
+                  `${label}_adjustment_error_type`,
+                  error?.constructor?.name || 'UnknownError',
+                );
+              }
             });
 
-            log.debug('[rateLimiter] Tokens remaining after adjustment', {
+            log.debug('[rateLimiter] Token adjustments completed', {
               totalAdjustments: adjustmentPromises.length,
+              successes,
+              failures,
               adjustedBuckets: adjustmentLabels,
               ...adjustmentDetails,
             });
 
-            // Set span attributes for each adjustment made
-            adjustmentLabels.forEach((label, index) => {
-              consumeSpan?.setAttribute(
-                `${label}_tokens_remaining`,
-                remainingTokens[index],
-              );
-            });
+            consumeSpan?.setAttribute(
+              'adjustments_total',
+              adjustmentPromises.length,
+            );
+            consumeSpan?.setAttribute('adjustments_failed', failures);
+            consumeSpan?.setAttribute('adjustments_succeeded', successes);
           } else {
             consumeSpan.setAttribute('token_adjustment_skipped', true);
+            const bothZero =
+              resourceTokenAdjustment === 0 && ipTokenAdjustment === 0;
             consumeSpan.setAttribute(
               'adjustment_reason',
-              tokenAdjustment === 0 ? 'perfect_consumption' : 'missing_buckets',
+              bothZero ? 'perfect_consumption' : 'missing_buckets',
             );
           }
         } catch (error) {
