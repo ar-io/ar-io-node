@@ -173,7 +173,7 @@ async function getOrCreateBucketsAndConsume(
           {
             error: rollbackError,
             resourceKey,
-            tokensToRollback: predictedTokens,
+            tokensToRollback: actualTokensNeeded,
           },
         );
       }
