@@ -1116,6 +1116,8 @@ export class StandaloneSqliteDatabaseWorker {
       signatureSize: dataItemAttributes?.signature_size,
       ownerOffset: dataItemAttributes?.owner_offset,
       ownerSize: dataItemAttributes?.owner_size,
+      rootDataItemOffset: dataRow?.root_data_item_offset,
+      rootDataOffset: dataRow?.root_data_offset,
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
       verified: dataRow?.verified === 1,
@@ -1284,6 +1286,8 @@ export class StandaloneSqliteDatabaseWorker {
     dataItemSize,
     dataItemOffset,
     formatId,
+    rootDataItemOffset,
+    rootDataOffset,
   }: {
     id: string;
     parentId?: string;
@@ -1300,6 +1304,8 @@ export class StandaloneSqliteDatabaseWorker {
     dataItemSize?: number;
     dataItemOffset?: number;
     formatId?: number;
+    rootDataItemOffset?: number;
+    rootDataOffset?: number;
   }) {
     const hashBuffer = fromB64Url(hash);
     const currentTimestamp = currentUnixTimestamp();
@@ -1320,6 +1326,8 @@ export class StandaloneSqliteDatabaseWorker {
       data_item_offset: dataItemOffset ?? null,
       data_item_size: dataItemSize ?? null,
       format_id: formatId ?? null,
+      root_data_item_offset: rootDataItemOffset ?? null,
+      root_data_offset: rootDataOffset ?? null,
     });
 
     if (dataRoot !== undefined) {
@@ -3313,6 +3321,8 @@ export class StandaloneSqliteDatabase
     dataItemSize,
     dataItemOffset,
     formatId,
+    rootDataItemOffset,
+    rootDataOffset,
   }: {
     id: string;
     parentId?: string;
@@ -3328,6 +3338,8 @@ export class StandaloneSqliteDatabase
     dataItemSize?: number;
     dataItemOffset?: number;
     formatId?: number;
+    rootDataItemOffset?: number;
+    rootDataOffset?: number;
   }) {
     if (this.saveDataContentAttributesCache.get(id)) {
       metrics.sqliteMethodDuplicateCallsCounter.inc({
@@ -3354,6 +3366,8 @@ export class StandaloneSqliteDatabase
         dataItemSize,
         dataItemOffset,
         formatId,
+        rootDataItemOffset,
+        rootDataOffset,
       },
     ]);
   }

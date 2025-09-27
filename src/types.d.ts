@@ -587,6 +587,8 @@ export interface ContiguousDataAttributes {
   signatureOffset?: number;
   ownerOffset?: number;
   ownerSize?: number;
+  rootDataItemOffset?: number;
+  rootDataOffset?: number;
   isManifest: boolean;
   stable: boolean;
   verified: boolean;

@@ -12,7 +12,7 @@ import { DataItemRootTxIndex } from '../types.js';
 import * as config from '../config.js';
 import { isValidTxId } from '../lib/validation.js';
 
-type CachedTurboOffsets = {
+export type CachedTurboOffsets = {
   parentDataItemId?: string;
   rootBundleId?: string;
   startOffsetInParentDataItemPayload?: number;
