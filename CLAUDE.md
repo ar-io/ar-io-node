@@ -50,8 +50,11 @@ When adding a new database method:
 
 ## Testing
 
-- Run specific tests with: `node --no-deprecation --import ./register.js --test src/path/to/test.ts`
-- Run all tests matching a pattern with: `node --no-deprecation --import ./register.js --test src/**/*.test.ts`
+- Run all tests with: `yarn test`
+- Run individual test files with: `yarn test:file src/path/to/test.ts`
+- Run individual test files with coverage: `yarn test:file:coverage src/path/to/test.ts`
+- Run tests with coverage: `yarn test:coverage`
+- Run e2e tests: `yarn test:e2e`
 - Mock functions in tests use: `mock.fn()` and reset with `mock.restoreAll()` in afterEach
 - Database schemas in tests come from `test/*.sql` files
 
