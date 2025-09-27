@@ -12,32 +12,36 @@ import { DataItemRootTxIndex } from '../types.js';
 import * as config from '../config.js';
 import { isValidTxId } from '../lib/validation.js';
 
-type CachedParentBundle = {
-  bundleId?: string;
-  contentType?: string;
-  size?: number;
-  dataSize?: number;
+type CachedTurboOffsets = {
+  parentDataItemId?: string;
+  rootBundleId?: string;
+  startOffsetInParentDataItemPayload?: number;
+  startOffsetInRootBundle?: number;
+  rawContentLength: number;
+  payloadContentType: string;
+  payloadDataStart: number;
+  payloadContentLength: number;
 };
 
 // Special symbol to indicate item was not found (vs being a root tx)
 const NOT_FOUND = Symbol('NOT_FOUND');
 
-interface TurboStatusResponse {
-  status: string;
-  bundleId?: string;
-  info?: string;
-  rawContentLength?: number;
-  payloadContentType?: string;
-  payloadDataStart?: number;
-  payloadContentLength?: number;
-  winc?: string;
+interface TurboOffsetsResponse {
+  parentDataItemId?: string;
+  rootBundleId?: string;
+  startOffsetInParentDataItemPayload?: number;
+  startOffsetInRootBundle?: number;
+  rawContentLength: number;
+  payloadContentType: string;
+  payloadDataStart: number;
+  payloadContentLength: number;
 }
 
 export class TurboRootTxIndex implements DataItemRootTxIndex {
   private log: winston.Logger;
   private readonly axiosInstance: AxiosInstance;
   private readonly turboEndpoint: string;
-  private readonly cache?: LRUCache<string, CachedParentBundle>;
+  private readonly cache?: LRUCache<string, CachedTurboOffsets>;
 
   constructor({
     log,
@@ -50,7 +54,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     turboEndpoint?: string;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
-    cache?: LRUCache<string, CachedParentBundle>;
+    cache?: LRUCache<string, CachedTurboOffsets>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.turboEndpoint = turboEndpoint;
@@ -104,15 +108,9 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
   > {
     const log = this.log.child({ method: 'getRootTxId', id });
 
-    // First get the metadata for the original item
-    const originalMetadata = await this.queryItemMetadata(id, log);
-    if (originalMetadata === NOT_FOUND) {
-      log.debug('Item not found in Turbo', { id });
-      return undefined;
-    }
-
     // Keep track of visited IDs to prevent infinite loops
     const visited = new Set<string>();
+    const chain: TurboOffsetsResponse[] = [];
     let currentId = id;
     let depth = 0;
     const MAX_DEPTH = 10; // Reasonable limit for nested bundles
@@ -121,36 +119,42 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       visited.add(currentId);
       depth++;
 
-      const queryResult = await this.queryBundleId(currentId, depth, log);
+      const offsets = await this.queryOffsets(currentId, depth, log);
 
-      // queryResult can be:
-      // - undefined: item is a root transaction (not bundled)
-      // - string: the bundle ID that contains this item
-      // - NOT_FOUND: item not found
-
-      if (queryResult === NOT_FOUND) {
+      if (offsets === NOT_FOUND) {
         // Item not found
         log.debug('Item not found in Turbo', { id: currentId });
         return undefined;
       }
 
-      if (queryResult === undefined) {
-        // This is a root transaction (not bundled)
-        log.debug('Found root transaction', {
+      chain.push(offsets);
+
+      if (offsets.rootBundleId != null) {
+        // Found root - calculate final position
+        log.debug('Found root bundle in chain', {
+          originalId: id,
+          rootBundleId: offsets.rootBundleId,
+          chainLength: chain.length,
+        });
+        return this.calculateRootPosition(chain);
+      }
+
+      if (offsets.parentDataItemId == null) {
+        // No parent and no root = this IS the root (L1 transaction)
+        log.debug('Found L1 root transaction', {
           originalId: id,
           rootTxId: currentId,
-          depth: depth - 1,
         });
         return {
           rootTxId: currentId,
-          contentType: originalMetadata?.contentType,
-          size: originalMetadata?.size,
-          dataSize: originalMetadata?.dataSize,
+          contentType: offsets.payloadContentType,
+          size: offsets.rawContentLength,
+          dataSize: offsets.payloadContentLength,
         };
       }
 
       // Continue following the chain
-      currentId = queryResult;
+      currentId = offsets.parentDataItemId;
     }
 
     if (depth >= MAX_DEPTH) {
@@ -169,69 +173,56 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       });
     }
 
-    return currentId
-      ? {
-          rootTxId: currentId,
-          contentType: originalMetadata?.contentType,
-          size: originalMetadata?.size,
-          dataSize: originalMetadata?.dataSize,
-        }
-      : undefined;
+    return undefined;
   }
 
-  private async queryBundleId(
+  private async queryOffsets(
     id: string,
     depth: number,
     log: winston.Logger,
-  ): Promise<string | undefined | typeof NOT_FOUND> {
+  ): Promise<TurboOffsetsResponse | typeof NOT_FOUND> {
     // Check cache first
     if (this.cache?.has(id)) {
-      const cached = this.cache.get(id);
-      log.debug('Cache hit for Turbo lookup', {
-        id,
-        bundleId: cached?.bundleId,
-      });
-      return cached?.bundleId;
+      const cached = this.cache.get(id)!;
+      log.debug('Cache hit for Turbo offsets lookup', { id });
+      return cached;
     }
 
     try {
-      const url = `${this.turboEndpoint}/tx/${id}/status`;
-      log.debug('Querying Turbo status endpoint', { url });
+      const url = `${this.turboEndpoint}/tx/${id}/offsets`;
+      log.debug('Querying Turbo offsets endpoint', { url });
 
-      const response = await this.axiosInstance.get<TurboStatusResponse>(url);
+      const response = await this.axiosInstance.get<TurboOffsetsResponse>(url);
 
       if (
         response.status === 200 &&
         response.data !== null &&
         response.data !== undefined
       ) {
-        const { bundleId } = response.data;
-
-        // bundleId will be undefined if this is a root transaction
-        // or a string if this item is bundled
-        const result = bundleId;
+        const offsets = response.data;
 
         // Cache the result
         if (this.cache) {
-          this.cache.set(id, { bundleId: result });
-          log.debug('Cached Turbo lookup result', { id, bundleId: result });
+          this.cache.set(id, offsets);
+          log.debug('Cached Turbo offsets result', { id });
         }
 
-        log.debug('Turbo status query result', {
+        log.debug('Turbo offsets query result', {
           id,
-          bundledIn: result,
-          status: response.data.status,
+          hasParent: offsets.parentDataItemId != null,
+          hasRoot: offsets.rootBundleId != null,
+          contentType: offsets.payloadContentType,
         });
 
-        return result;
+        return offsets;
       }
 
       // Unexpected response status
-      log.debug('Unexpected response from Turbo', {
+      log.debug('Unexpected response from Turbo offsets', {
         id,
         status: response.status,
       });
-      return undefined;
+      return NOT_FOUND;
     } catch (error: any) {
       if (error.response?.status === 404) {
         // Check if this could be an L1 transaction (Turbo doesn't index L1 txs)
@@ -242,7 +233,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
             depth,
           });
           // Return undefined to indicate this is a root transaction
-          return undefined;
+          return NOT_FOUND;
         }
 
         // Item not found in Turbo
@@ -253,7 +244,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       }
 
       // Other errors (network, timeout, etc.)
-      log.debug('Failed to query Turbo', {
+      log.debug('Failed to query Turbo offsets', {
         id,
         error: error.message,
         status: error.response?.status,
@@ -263,58 +254,43 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     }
   }
 
-  private async queryItemMetadata(
-    id: string,
-    log: winston.Logger,
-  ): Promise<
-    | {
-        contentType?: string;
-        size?: number;
-        dataSize?: number;
-      }
-    | typeof NOT_FOUND
-  > {
-    try {
-      const url = `${this.turboEndpoint}/tx/${id}/status`;
-      log.debug('Querying Turbo status endpoint for metadata', { url });
-
-      const response = await this.axiosInstance.get<TurboStatusResponse>(url);
-
-      if (
-        response.status === 200 &&
-        response.data !== null &&
-        response.data !== undefined
-      ) {
-        const { payloadContentType, rawContentLength, payloadContentLength } =
-          response.data;
-
-        return {
-          contentType: payloadContentType,
-          size: rawContentLength,
-          dataSize: payloadContentLength,
-        };
-      }
-
-      // Unexpected response status
-      log.debug('Unexpected response from Turbo for metadata', {
-        id,
-        status: response.status,
-      });
-      return {};
-    } catch (error: any) {
-      if (error.response?.status === 404) {
-        log.debug('Item not found in Turbo for metadata (404)', { id });
-        return NOT_FOUND;
-      }
-
-      // Other errors (network, timeout, etc.)
-      log.debug('Failed to query Turbo for metadata', {
-        id,
-        error: error.message,
-        status: error.response?.status,
-      });
-
-      throw error; // Re-throw to trigger circuit breaker
+  private calculateRootPosition(chain: TurboOffsetsResponse[]): {
+    rootTxId: string;
+    rootOffset?: number;
+    rootDataOffset?: number;
+    contentType?: string;
+    size?: number;
+    dataSize?: number;
+  } {
+    // The last item in chain has rootBundleId
+    const rootItem = chain[chain.length - 1];
+    if (rootItem.rootBundleId == null) {
+      throw new Error('Root item must have rootBundleId');
     }
+
+    let rootOffset = rootItem.startOffsetInRootBundle!;
+
+    // Walk back down the chain from parent to child
+    for (let i = chain.length - 2; i >= 0; i--) {
+      const parent = chain[i + 1];
+      const child = chain[i];
+
+      // Add parent's payload start to get into its payload
+      rootOffset += parent.payloadDataStart;
+      // Add child's position within parent's payload
+      rootOffset += child.startOffsetInParentDataItemPayload!;
+    }
+
+    // Get metadata from the original item (first in chain)
+    const originalItem = chain[0];
+
+    return {
+      rootTxId: rootItem.rootBundleId,
+      rootOffset: rootOffset,
+      rootDataOffset: rootOffset + originalItem.payloadDataStart,
+      contentType: originalItem.payloadContentType,
+      size: originalItem.rawContentLength,
+      dataSize: originalItem.payloadContentLength,
+    };
   }
 }
