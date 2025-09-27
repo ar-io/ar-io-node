@@ -2639,7 +2639,7 @@ export class StandaloneSqliteDatabaseWorker {
 
   getRootTxIdFromCoreAndBundles(id: string) {
     const row = this.stmts.core.selectRootTxId.get({ id: fromB64Url(id) });
-    if (row.root_transaction_id) {
+    if (row?.root_transaction_id) {
       return {
         rootTxId: toB64Url(row.root_transaction_id),
         contentType: row.content_type || undefined,

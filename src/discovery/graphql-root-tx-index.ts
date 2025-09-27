@@ -21,13 +21,23 @@ type CachedParentBundle = {
 // Special symbol to indicate item was not found (vs being a root tx)
 const NOT_FOUND = Symbol('NOT_FOUND');
 
-const GRAPHQL_QUERY = `
-  query getRootTxId($id: ID!) {
+// Query for bundle parent traversal - minimal fields for performance
+const GRAPHQL_BUNDLE_QUERY = `
+  query getBundleParent($id: ID!) {
     transaction(id: $id) {
       id
       bundledIn {
         id
       }
+    }
+  }
+`;
+
+// Query for metadata retrieval - only used for the original item
+const GRAPHQL_METADATA_QUERY = `
+  query getMetadata($id: ID!) {
+    transaction(id: $id) {
+      id
       data {
         type
         size
@@ -232,7 +242,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
             const response = await this.axiosInstance.post(
               `${gatewayUrl}/graphql`,
               {
-                query: GRAPHQL_QUERY,
+                query: GRAPHQL_BUNDLE_QUERY,
                 variables: { id },
               },
             );
@@ -313,7 +323,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
             const response = await this.axiosInstance.post(
               `${gatewayUrl}/graphql`,
               {
-                query: GRAPHQL_QUERY,
+                query: GRAPHQL_METADATA_QUERY,
                 variables: { id },
               },
             );
