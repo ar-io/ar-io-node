@@ -9,6 +9,7 @@
 /.env.ao
 /.env.bundler
 /coverage
+/reports
 /data
 /dist
 /node_modules

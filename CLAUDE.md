@@ -70,10 +70,16 @@ When adding a new database method:
 
 - Never use `git commit -A` or `git add .`. Add the individual files you want instead.
 
-## Linting
+## Code Quality
 
+### Linting
 - After making changes be sure to run 'yarn lint:check'.
 - If lint issues are found, run 'yarn lint:fix' to fix them.
+
+### Duplicate Detection
+- Check for code duplication: `yarn duplicate:check`
+- Generate HTML report: `yarn duplicate:report`
+- CI duplicate check: `yarn duplicate:ci`
 
 ## Reference Repositories
 
