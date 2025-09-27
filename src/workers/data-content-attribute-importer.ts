@@ -28,6 +28,8 @@ export type DataContentAttributeProperties = {
   dataItemSize?: number;
   dataItemOffset?: number;
   formatId?: number;
+  rootDataItemOffset?: number;
+  rootDataOffset?: number;
 };
 
 export class DataContentAttributeImporter {

@@ -69,6 +69,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   private async traverseToRootUsingAttributes(dataItemId: string): Promise<{
     rootTxId: string;
     totalOffset: number;
+    rootDataOffset: number;
     size: number;
   } | null> {
     const log = this.log.child({
@@ -83,6 +84,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
+    let originalItemDataOffset: number | undefined;
 
     while (true) {
       // Cycle detection
@@ -123,13 +125,15 @@ export class RootParentDataSource implements ContiguousDataSource {
         return {
           rootTxId: currentId,
           totalOffset,
+          rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
         };
       }
 
-      // Remember the original item size (the item we're looking for)
+      // Remember the original item size and data offset (the item we're looking for)
       if (originalItemSize === undefined) {
         originalItemSize = attributes.size;
+        originalItemDataOffset = attributes.dataOffset;
       }
 
       // If no parent, this is the root
@@ -142,6 +146,7 @@ export class RootParentDataSource implements ContiguousDataSource {
         return {
           rootTxId: currentId,
           totalOffset,
+          rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize,
         };
       }
@@ -223,7 +228,8 @@ export class RootParentDataSource implements ContiguousDataSource {
       const attributesTraversal = await this.traverseToRootUsingAttributes(id);
 
       if (attributesTraversal) {
-        const { rootTxId, totalOffset, size } = attributesTraversal;
+        const { rootTxId, totalOffset, rootDataOffset, size } =
+          attributesTraversal;
 
         this.log.debug('Successfully traversed using attributes', {
           id,
@@ -239,6 +245,27 @@ export class RootParentDataSource implements ContiguousDataSource {
           'traversal.total_offset': totalOffset,
           'data.item.size': size,
         });
+
+        // Store the discovered offsets for future use
+        try {
+          await this.dataAttributesSource.setDataAttributes(id, {
+            rootDataItemOffset: totalOffset,
+            rootDataOffset: rootDataOffset,
+          });
+          this.log.debug('Stored root offsets from attributes traversal', {
+            id,
+            rootDataItemOffset: totalOffset,
+            rootDataOffset: rootDataOffset,
+          });
+        } catch (error: any) {
+          this.log.warn(
+            'Failed to store root offsets from attributes traversal',
+            {
+              id,
+              error: error.message,
+            },
+          );
+        }
 
         // Calculate final region using discovered offset
         let finalRegion: Region;
@@ -372,13 +399,37 @@ export class RootParentDataSource implements ContiguousDataSource {
       );
 
       let rootTxId: string | undefined;
+      let rootResult: any;
       try {
-        const result = await this.dataItemRootTxIndex.getRootTxId(id);
-        rootTxId = result?.rootTxId;
+        rootResult = await this.dataItemRootTxIndex.getRootTxId(id);
+        rootTxId = rootResult?.rootTxId;
         rootTxLookupSpan.setAttributes({
           'root.tx_id': rootTxId ?? 'not_found',
           'root.found': rootTxId !== undefined,
         });
+
+        // Store the discovered offsets if available (from Turbo)
+        if (
+          rootResult?.rootOffset !== undefined &&
+          rootResult?.rootDataOffset !== undefined
+        ) {
+          try {
+            await this.dataAttributesSource.setDataAttributes(id, {
+              rootDataItemOffset: rootResult.rootOffset,
+              rootDataOffset: rootResult.rootDataOffset,
+            });
+            this.log.debug('Stored root offsets from Turbo lookup', {
+              id,
+              rootDataItemOffset: rootResult.rootOffset,
+              rootDataOffset: rootResult.rootDataOffset,
+            });
+          } catch (error: any) {
+            this.log.warn('Failed to store root offsets from Turbo lookup', {
+              id,
+              error: error.message,
+            });
+          }
+        }
       } finally {
         rootTxLookupSpan.end();
       }

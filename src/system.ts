@@ -42,6 +42,7 @@ import {
   CompositeRootTxIndex,
   GraphQLRootTxIndex,
   TurboRootTxIndex,
+  CachedTurboOffsets,
 } from './discovery/index.js';
 import { LRUCache } from 'lru-cache';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
@@ -204,6 +205,12 @@ const rootTxCache = new LRUCache<string, CachedParentBundle>({
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
 
+// Create separate cache for Turbo offsets
+const turboOffsetsCache = new LRUCache<string, CachedTurboOffsets>({
+  max: config.ROOT_TX_CACHE_MAX_SIZE,
+  ttl: config.ROOT_TX_CACHE_TTL_MS,
+});
+
 // Build indexes based on configuration
 const rootTxIndexes: DataItemRootTxIndex[] = [];
 
@@ -221,7 +228,7 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
           turboEndpoint: config.TURBO_ENDPOINT,
           requestTimeoutMs: config.TURBO_REQUEST_TIMEOUT_MS,
           requestRetryCount: config.TURBO_REQUEST_RETRY_COUNT,
-          cache: rootTxCache,
+          cache: turboOffsetsCache,
         }),
       );
       break;

@@ -38,7 +38,9 @@ INSERT INTO contiguous_data_ids (
   data_size,
   data_item_offset,
   data_item_size,
-  format_id
+  format_id,
+  root_data_item_offset,
+  root_data_offset
 )
 SELECT
   :id,
@@ -56,7 +58,9 @@ SELECT
   :data_size,
   :data_item_offset,
   :data_item_size,
-  :format_id
+  :format_id,
+  :root_data_item_offset,
+  :root_data_offset
 FROM ParentStatus
 WHERE
   NOT EXISTS (
@@ -76,7 +80,9 @@ ON CONFLICT(id) DO UPDATE SET
   data_size = excluded.data_size,
   data_item_offset = excluded.data_item_offset,
   data_item_size = excluded.data_item_size,
-  format_id = excluded.format_id
+  format_id = excluded.format_id,
+  root_data_item_offset = excluded.root_data_item_offset,
+  root_data_offset = excluded.root_data_offset
 WHERE contiguous_data_ids.verified != 1;
 
 -- insertDataRoot
@@ -108,7 +114,9 @@ FROM (
     cdi.data_size,
     cdi.data_item_offset,
     cdi.data_item_size,
-    cdi.format_id
+    cdi.format_id,
+    cdi.root_data_item_offset,
+    cdi.root_data_offset
   FROM contiguous_data cd
   JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
   WHERE cdi.id = :id
@@ -128,7 +136,9 @@ FROM (
     cdi.data_size,
     cdi.data_item_offset,
     cdi.data_item_size,
-    cdi.format_id
+    cdi.format_id,
+    cdi.root_data_item_offset,
+    cdi.root_data_offset
   FROM data_roots dr
   JOIN contiguous_data cd ON dr.contiguous_data_hash = cd.hash
   JOIN contiguous_data_ids cdi ON cdi.contiguous_data_hash = cd.hash
