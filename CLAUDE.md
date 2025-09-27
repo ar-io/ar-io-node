@@ -81,6 +81,14 @@ When adding a new database method:
 - Generate HTML report: `yarn duplicate:report`
 - CI duplicate check: `yarn duplicate:ci`
 
+### Dependency Analysis
+- Check for circular dependencies: `yarn deps:check`
+- Generate dependency graph: `yarn deps:graph`
+- Find orphan modules: `yarn deps:orphans`
+- Find leaf modules: `yarn deps:leaves`
+- Show dependency summary: `yarn deps:summary`
+- CI dependency check: `yarn deps:ci`
+
 ## Reference Repositories
 
 The project includes reference repositories managed by `mr` (myrepos) in the `repos/` directory. These can be used for understanding Arweave internals and related protocols:

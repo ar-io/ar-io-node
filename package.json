@@ -144,6 +144,12 @@
     "lint:fix": "eslint --fix src test",
     "duplicate:check": "jscpd src",
     "duplicate:report": "jscpd src --reporters html,console",
-    "duplicate:ci": "jscpd src --reporters console --exitCode 1"
+    "duplicate:ci": "jscpd src --reporters console --exitCode 1",
+    "deps:check": "madge --circular --warning src",
+    "deps:graph": "madge --image reports/dependency-graph.svg src",
+    "deps:orphans": "madge --orphans --exclude '\\.test\\.ts$' src",
+    "deps:leaves": "madge --leaves --exclude '\\.test\\.ts$' src",
+    "deps:summary": "madge --summary src",
+    "deps:ci": "madge --circular --no-spinner --no-color src"
   }
 }
