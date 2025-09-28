@@ -4,8 +4,8 @@ This directory contains development and documentation tools for the AR.IO Node p
 
 ## Tools
 
-### `generate-architecture-review.ts`
-Analyzes the repository structure and generates a comprehensive markdown document covering:
+### `generate-architecture-pdf`
+Analyzes the repository structure and generates a comprehensive architecture review document in both markdown and PDF formats. The analysis covers:
 - Directory structure and file organization
 - Type system analysis
 - Database schemas and SQL statements
@@ -15,15 +15,7 @@ Analyzes the repository structure and generates a comprehensive markdown documen
 - Internal tools and AI configuration
 - Repository statistics
 
-**Usage:**
-```bash
-node --import ./register.js tools/generate-architecture-review.ts
-```
-
-**Output:** `architecture-review.md` in the project root
-
-### `generate-architecture-pdf`
-Converts the architecture review markdown into an e-reader optimized PDF using pandoc with typst as the PDF engine.
+The tool then converts the markdown into an e-reader optimized PDF using pandoc with typst as the PDF engine.
 
 **Dependencies:** `pandoc` and `typst` (available in the project's Nix flake)
 
@@ -35,7 +27,9 @@ Converts the architecture review markdown into an e-reader optimized PDF using p
 SKIP_COVERAGE=true ./tools/generate-architecture-pdf
 ```
 
-**Output:** `architecture-review.pdf` in the project root, optimized for Kindle and other e-readers
+**Output:**
+- `architecture-review.md` - Comprehensive markdown analysis
+- `architecture-review.pdf` - E-reader optimized PDF (Kindle format)
 
 ### `sample-chunk-offsets`
 Continuously samples random chunk offsets within the Arweave weave and tests chunk retrieval against a specified gateway URL, reporting success rates and performance statistics. Useful for monitoring gateway health and debugging chunk retrieval issues.
@@ -122,8 +116,7 @@ To generate a complete architecture review document:
 # Quick generation for testing (skips coverage analysis)
 SKIP_COVERAGE=true ./tools/generate-architecture-pdf
 
-# Or run steps separately
-node --import ./register.js tools/generate-architecture-review.ts
+# Or convert existing markdown to PDF manually
 pandoc architecture-review.md -o architecture-review.pdf --pdf-engine=typst --variable=papersize:a5
 ```
 

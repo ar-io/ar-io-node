@@ -372,7 +372,7 @@ function printUsage(): void {
   console.log(`
 Chunk Offset Sampling Tool
 
-Usage: node --import ./register.js tools/sample-chunk-offsets.ts [options]
+Usage: ./tools/sample-chunk-offsets [options]
 
 Options:
   --gateway <url>        Gateway URL to test (required)
@@ -384,10 +384,10 @@ Options:
   --help, -h             Show this help message
 
 Examples:
-  node --import ./register.js tools/sample-chunk-offsets.ts --gateway https://ar-io.dev
-  node --import ./register.js tools/sample-chunk-offsets.ts --gateway http://localhost:4000 --chain-url https://arweave.net
-  node --import ./register.js tools/sample-chunk-offsets.ts --gateway http://localhost:4000 --delay 500 --verbose
-  node --import ./register.js tools/sample-chunk-offsets.ts --gateway https://gateway.example.com --timeout 5000
+  ./tools/sample-chunk-offsets --gateway https://ar-io.dev
+  ./tools/sample-chunk-offsets --gateway http://localhost:4000 --chain-url https://arweave.net
+  ./tools/sample-chunk-offsets --gateway http://localhost:4000 --delay 500 --verbose
+  ./tools/sample-chunk-offsets --gateway https://gateway.example.com --timeout 5000
 `);
 }
 

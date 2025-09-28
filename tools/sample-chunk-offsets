@@ -25,4 +25,4 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
 # Pass all arguments to the TypeScript tool
-exec node --import ./register.js tools/sample-chunk-offsets.ts "$@"
+exec node --import ./register.js tools/lib/sample-chunk-offsets.ts "$@"
