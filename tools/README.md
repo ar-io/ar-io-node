@@ -194,6 +194,48 @@ Finalizes a release by updating docker-compose.yaml with specific image SHAs fro
 - Ensure consistent, reproducible docker image versions
 - Validate all release artifacts are properly available
 
+### `test-release`
+Tests a release by verifying all docker compose profiles work correctly with the finalized image SHAs. This tool automates the comprehensive testing steps required before final release tagging and deployment.
+
+**Usage:**
+```bash
+./tools/test-release <release-number> [options]
+
+# Test all profiles for release 52
+./tools/test-release 52
+
+# Keep containers running for debugging
+./tools/test-release 52 --no-cleanup
+
+# Test specific profile only
+./tools/test-release 52 --profile clickhouse
+```
+
+**Test Profiles:**
+1. **Default Profile**: Core services (envoy, core, redis, observer) - must remain stable
+2. **Clickhouse Profile**: Adds clickhouse and clickhouse-auto-import containers
+3. **Litestream Profile**: Adds litestream container (may exit if S3 not configured - expected)
+4. **AO Integration**: Adds AO CU container (may restart if not configured - expected)
+
+**Validation Features:**
+- Verifies docker-compose.yaml uses specific image SHAs (not "latest")
+- Checks container startup and stability over time
+- Validates core containers remain running across all profiles
+- Handles expected behaviors (litestream/AO exits due to configuration)
+- Comprehensive test summary with pass/fail status
+
+**Safety Features:**
+- Prerequisites validation (branch, version, Docker availability)
+- Automatic cleanup after tests (unless --no-cleanup specified)
+- Clear error messages for debugging
+- Exit code indicates overall test success/failure
+
+**Use Cases:**
+- Verify release configuration before final tagging
+- Validate all docker compose profiles work with specific image SHAs
+- Catch container startup or stability issues early
+- Ensure consistent behavior across different deployment scenarios
+
 ## Workflow
 
 To generate a complete architecture review document:
