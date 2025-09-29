@@ -138,26 +138,65 @@ class ReleaseFinalizer {
   }
 
   private async fetchCurrentImageTags(): Promise<void> {
-    console.log('🐳 Fetching current image tags from ghcr.io...');
+    console.log('🐳 Fetching current git commit SHAs for images...');
 
-    for (const image of this.imageInfo) {
-      try {
-        console.log(`  Fetching ${image.name}...`);
+    // Get recent successful workflow runs to find commit SHAs with built images
+    try {
+      const workflowRuns = await this.executeCommand(`gh api repos/ar-io/ar-io-node/actions/runs --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | {head_sha: .head_sha, created_at: .created_at}' | head -10`);
 
-        // Get the latest tag (SHA) for the image
-        const result = await this.executeCommand(`gh api "/orgs/ar-io/packages/container/${image.name}/versions" --jq '.[0].name'`);
-        const tag = result.trim();
+      const runs = workflowRuns.trim().split('\n')
+        .filter(line => line.trim())
+        .map(line => JSON.parse(line))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 5); // Check the 5 most recent successful runs
 
-        if (!tag || tag === 'null') {
-          throw new Error(`Could not fetch tag for ${image.name}`);
+      console.log(`  Checking ${runs.length} recent successful workflow runs...`);
+
+      let foundCount = 0;
+
+      for (const run of runs) {
+        const sha = run.head_sha;
+        console.log(`  Checking commit ${sha.substring(0, 8)}...`);
+
+        // Check if all 4 images exist for this commit SHA
+        let allImagesExist = true;
+
+        for (const image of this.imageInfo) {
+          try {
+            const checkResult = await this.executeCommand(`gh api "/orgs/ar-io/packages/container/${image.name}/versions" --jq '.[] | select(.metadata.container.tags[] | contains("` + sha + `")) | .name' | head -1`);
+
+            if (!checkResult.trim()) {
+              allImagesExist = false;
+              break;
+            }
+          } catch (error) {
+            allImagesExist = false;
+            break;
+          }
         }
 
-        image.currentTag = tag;
-        console.log(`  ✅ ${image.name}: ${tag.substring(0, 12)}...`);
-
-      } catch (error) {
-        throw new Error(`Failed to fetch tag for ${image.name}: ${error}`);
+        if (allImagesExist) {
+          // Use this SHA for all images
+          for (const image of this.imageInfo) {
+            image.currentTag = sha;
+          }
+          foundCount = this.imageInfo.length;
+          console.log(`  ✅ Found all images for commit ${sha.substring(0, 8)}`);
+          break;
+        }
       }
+
+      if (foundCount === 0) {
+        throw new Error('Could not find a recent commit with all required images built');
+      }
+
+      // Display the tags we found
+      for (const image of this.imageInfo) {
+        console.log(`  ✅ ${image.name}: ${image.currentTag.substring(0, 12)}...`);
+      }
+
+    } catch (error) {
+      throw new Error(`Failed to fetch image commit SHAs: ${error}`);
     }
   }
 
