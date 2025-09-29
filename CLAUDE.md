@@ -6,6 +6,11 @@
 - Organize new terms into the appropriate existing sections
 - When modifying code, add or improve JSDoc comments where possible to enhance documentation
 
+## Processes
+
+- Process documentation is located in `docs/processes/`
+- The release process is documented at `docs/processes/release.md`
+
 ## Releases
 
 - Releases are tagged with rN in git where N is a monotonically increasing
