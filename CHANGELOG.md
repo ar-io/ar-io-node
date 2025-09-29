@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 52] - 2025-09-29
 
+This is a **recommended release** that introduces critical observer reliability
+improvements and a new Redis-based rate limiting system. The release significantly
+improves observer stability under load through reduced sample rates, optimized
+timeouts, and better concurrency management. Additionally, it introduces a complete
+rate limiting solution with token bucket algorithm and IP allowlist support for
+enhanced DDoS protection.
+
 ### Added
 
 - **Rate Limiter**: Complete Redis/Valkey-based rate limiting system with:
