@@ -5,14 +5,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Chunk Offset Sampling Tool Wrapper
+# Release Status Checker Wrapper
 #
-# This script provides a convenient way to run the chunk offset sampling tool
+# This script provides a convenient way to check the current release status
 # without having to remember the Node.js import flags.
 #
 # Usage:
-#   ./tools/sample-chunk-offsets --gateway https://ar-io.dev
-#   ./tools/sample-chunk-offsets --gateway http://localhost:4000 --delay 500 --verbose
+#   ./tools/release-status
 #
 
 set -euo pipefail
@@ -25,4 +24,4 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
 # Pass all arguments to the TypeScript tool
-exec node --import ./register.js tools/lib/sample-chunk-offsets.ts "$@"
+exec node --import ./register.js tools/lib/release-status.ts "$@"

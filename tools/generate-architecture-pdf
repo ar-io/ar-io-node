@@ -51,7 +51,7 @@ generate_markdown() {
 
     cd "$ROOT_DIR"
 
-    if ! node --import ./register.js tools/generate-architecture-review.ts; then
+    if ! node --import ./register.js tools/lib/generate-architecture-review.ts; then
         echo -e "${RED}❌ Failed to generate markdown${NC}"
         exit 1
     fi

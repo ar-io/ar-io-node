@@ -6,6 +6,11 @@
 - Organize new terms into the appropriate existing sections
 - When modifying code, add or improve JSDoc comments where possible to enhance documentation
 
+## Processes
+
+- Process documentation is located in `docs/processes/`
+- The release process is documented at `docs/processes/release.md`
+
 ## Releases
 
 - Releases are tagged with rN in git where N is a monotonically increasing
@@ -50,8 +55,11 @@ When adding a new database method:
 
 ## Testing
 
-- Run specific tests with: `node --no-deprecation --import ./register.js --test src/path/to/test.ts`
-- Run all tests matching a pattern with: `node --no-deprecation --import ./register.js --test src/**/*.test.ts`
+- Run all tests with: `yarn test`
+- Run individual test files with: `yarn test:file src/path/to/test.ts`
+- Run individual test files with coverage: `yarn test:file:coverage src/path/to/test.ts`
+- Run tests with coverage: `yarn test:coverage`
+- Run e2e tests: `yarn test:e2e`
 - Mock functions in tests use: `mock.fn()` and reset with `mock.restoreAll()` in afterEach
 - Database schemas in tests come from `test/*.sql` files
 
@@ -67,10 +75,24 @@ When adding a new database method:
 
 - Never use `git commit -A` or `git add .`. Add the individual files you want instead.
 
-## Linting
+## Code Quality
 
+### Linting
 - After making changes be sure to run 'yarn lint:check'.
 - If lint issues are found, run 'yarn lint:fix' to fix them.
+
+### Duplicate Detection
+- Check for code duplication: `yarn duplicate:check`
+- Generate HTML report: `yarn duplicate:report`
+- CI duplicate check: `yarn duplicate:ci`
+
+### Dependency Analysis
+- Check for circular dependencies: `yarn deps:check`
+- Generate dependency graph: `yarn deps:graph`
+- Find orphan modules: `yarn deps:orphans`
+- Find leaf modules: `yarn deps:leaves`
+- Show dependency summary: `yarn deps:summary`
+- CI dependency check: `yarn deps:ci`
 
 ## Reference Repositories
 

@@ -131,10 +131,24 @@ arIoRouter.get('/ar-io/info', arIoInfoHandler);
 // peer list
 arIoRouter.get('/ar-io/peers', async (_req, res) => {
   try {
-    const [gateways, arweaveNodes] = await Promise.all([
+    const [gateways, rawArweaveNodes] = await Promise.all([
       getGatewayPeers(),
       system.arweavePeerManager.getPeers(),
     ]);
+
+    // Transform arweave nodes to omit syncBuckets and add bucketCount
+    const arweaveNodes: Record<string, any> = {};
+    for (const [key, peer] of Object.entries(rawArweaveNodes)) {
+      arweaveNodes[key] = {
+        url: peer.url,
+        blocks: peer.blocks,
+        height: peer.height,
+        lastSeen: peer.lastSeen,
+        bucketCount: peer.syncBuckets?.size ?? 0,
+        bucketsLastUpdated: peer.bucketsLastUpdated,
+      };
+    }
+
     res.json({ gateways, arweaveNodes });
   } catch (error: any) {
     res.status(500).send(error?.message);

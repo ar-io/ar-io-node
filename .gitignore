@@ -1,20 +1,33 @@
+# Database files
 *.db
 *.db-shm
 *.db-wal
+
+# Log files
 *.log
-.coverage-cache.txt
-.aider*
-/.direnv
+
+# Environment files
 /.env
 /.env.ao
 /.env.bundler
+.env.bak*
+
+# Build/Runtime directories
 /coverage
-/data
 /dist
 /node_modules
 /vendor
+
+# Data directories
+/data
+/reports
 /wallets
+
+# Test files
 test-results.xml
+.coverage-cache.txt
+
+# Import data directories
 /scripts/import-data/ans102
 /scripts/import-data/ans104
 /scripts/import-data/transactions
@@ -22,23 +35,30 @@ test-results.xml
 /scripts/import-data/missing-root-tx-ids
 /scripts/import-data/data-items-per-block*
 
-# Generated docs
+# Generated documentation
 /docs/sqlite/bundles
 /docs/diagrams/*.png
 
-# VS Code
+# Development tools
+/.direnv
+.aider*
+
+# Editor directories and settings
 /.vscode
+/.idea
 .DS_Store
 
-# JetBrains
-/.idea
-
-# Local Claude instructions
-CLAUDE.local.md
+# Language servers and linters
+/.clj-kondo
+/.lsp
 
 # Repository manager
 /repos/*
 
-# Exceptions
+# Local Claude Code configuration
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Exceptions (keep these tracked)
 !/data/.gitkeep
 !/repos/.gitkeep

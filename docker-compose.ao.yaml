@@ -1,5 +1,7 @@
 services:
   ao-cu:
+    # Keep AO CU image pinned to a stable release for consistency
+    # Only update when explicitly needed for compatibility or bug fixes
     image: ghcr.io/permaweb/ao-cu:08436a88233f0247f3eb35979dd55163fd51a153
     restart: unless-stopped
     environment:
