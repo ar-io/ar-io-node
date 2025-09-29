@@ -129,9 +129,10 @@ class ReleaseStatusChecker {
       const dockerComposeFile = path.join(this.rootDir, 'docker-compose.yaml');
       const content = await readFile(dockerComposeFile, 'utf-8');
 
-      // Check that image tags default to 'latest'
+      // Check that image tags default to 'latest' (excluding observer which should stay pinned)
       const imageLines = content.match(/image: ghcr\.io\/ar-io\/.*:\$\{[^}]+:-([^}]+)\}/g) || [];
-      return imageLines.every(line => line.includes(':-latest}'));
+      const coreImages = imageLines.filter(line => !line.includes('ar-io-observer'));
+      return coreImages.every(line => line.includes(':-latest}'));
     } catch (error) {
       return false;
     }
@@ -156,7 +157,7 @@ class ReleaseStatusChecker {
     console.log(`Branch: ${status.currentBranch} ${this.getStatusIcon(status.isOnDevelop)}`);
     console.log(`Working Tree: ${status.hasUncommittedChanges ? 'dirty ❌' : 'clean ✅'}`);
     console.log(`Changelog: ${status.changelogHasUnreleased ? 'Has unreleased entries ✅' : 'No unreleased content ❌'}`);
-    console.log(`Docker Images: ${status.dockerImagesOnLatest ? "Using 'latest' tags ✅" : "Not using 'latest' tags ❌"}`);
+    console.log(`Docker Images: ${status.dockerImagesOnLatest ? "Core images using 'latest' tags ✅" : "Core images not using 'latest' tags ❌"}`);
     console.log(`AR_IO_NODE_RELEASE: ${status.arIoNodeReleaseVar} ${status.arIoNodeReleaseVar.includes('-pre') ? '✅' : '⚠️'}`);
     console.log();
     console.log(`Ready for Release: ${status.readyForRelease ? '✅ YES' : '❌ NO'}`);
@@ -174,7 +175,7 @@ class ReleaseStatusChecker {
         console.log('   • Add entries to [Unreleased] section in CHANGELOG.md');
       }
       if (!status.dockerImagesOnLatest) {
-        console.log('   • Ensure docker image tags default to "latest" in docker-compose.yaml');
+        console.log('   • Ensure core docker image tags default to "latest" in docker-compose.yaml (AO/observer should stay pinned)');
       }
       if (!status.isPreRelease) {
         console.log('   • Current version should be in pre-release format (e.g., "53-pre")');

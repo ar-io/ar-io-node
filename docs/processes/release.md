@@ -12,8 +12,8 @@
 7. Once image builds are complete, update the image tags in `docker-compose.yaml`
    to use the git commit SHA from the release commit (not the release number).
    Update clickhouse-auto-import, core, envoy, and litestream image tags.
-8. Set the AO CU image tag to the current stable commit SHA in
-   `docker-compose.ao.yaml`.
+8. AO CU and observer images should remain pinned and are not updated during
+   normal releases unless explicitly needed for compatibility or bug fixes.
 9. Test the release by starting docker compose with each profile to verify
    containers start and produce logs:
    - `docker compose up -d` (default profile)
@@ -46,6 +46,6 @@
 3. Set AR_IO_NODE_RELEASE environment variable in `docker-compose.yaml` to the
    same value used in `src/version.ts`.
 4. Set clickhouse-auto-import, core, envoy, and litestream image tags back to
-   `latest` in `docker-compose.yaml`.
-5. Set the AO cu image back to `latest` in `docker-compose.ao.yaml`.
-6. Create a new `[Unreleased]` entry in `CHANGELOG.md`.
+   `latest` in `docker-compose.yaml`. AO CU and observer images should remain
+   pinned.
+5. Create a new `[Unreleased]` entry in `CHANGELOG.md`.

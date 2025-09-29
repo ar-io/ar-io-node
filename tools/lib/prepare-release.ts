@@ -166,6 +166,8 @@ class ReleasePreparator {
 
   private async updateDockerCompose(): Promise<void> {
     console.log('📝 Updating docker-compose.yaml...');
+    // Note: This only updates AR_IO_NODE_RELEASE. AO CU and observer images
+    // should remain pinned and are not updated during normal releases.
 
     const dockerComposeFile = path.join(this.rootDir, 'docker-compose.yaml');
     const content = await readFile(dockerComposeFile, 'utf-8');
