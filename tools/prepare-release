@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Prepare Release Wrapper
+#
+# This script provides a convenient way to prepare a release
+# without having to remember the Node.js import flags.
+#
+# Usage:
+#   ./tools/prepare-release <release-number> [--dry-run]
+#   ./tools/prepare-release 52 --dry-run
+#   ./tools/prepare-release 52
+#
+
+set -euo pipefail
+
+# Get the directory containing this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Change to project root
+cd "${PROJECT_ROOT}"
+
+# Pass all arguments to the TypeScript tool
+exec node --import ./register.js tools/lib/prepare-release.ts "$@"

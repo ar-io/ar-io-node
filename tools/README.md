@@ -102,6 +102,68 @@ Converts Arweave storage partition files to height ranges for data analysis and 
 - Support migration and data management operations
 - Enable height-based analytics on partitioned data
 
+### `release-status`
+Checks the current state of the repository and determines if it's ready for a release. This tool provides a comprehensive overview of version status, git branch, working tree cleanliness, changelog content, and docker image configurations.
+
+**Usage:**
+```bash
+./tools/release-status
+```
+
+**Output Example:**
+```
+📊 AR.IO Node Release Status
+============================
+Current Version: 52-pre (development)
+Branch: develop ✅
+Working Tree: clean ✅
+Changelog: Has unreleased entries ✅
+Docker Images: Using 'latest' tags ✅
+AR_IO_NODE_RELEASE: 52-pre ✅
+
+Ready for Release: ✅ YES
+Suggested Release Number: 52
+```
+
+**Use Cases:**
+- Verify repository is ready for release preparation
+- Check current development state and version
+- Identify issues that need to be resolved before release
+- Get suggested next release number
+
+### `prepare-release`
+Automates the initial steps of preparing a new release by updating version files, changelog dates, and docker configurations. This tool ensures consistent release preparation while validating preconditions.
+
+**Usage:**
+```bash
+./tools/prepare-release <release-number> [--dry-run]
+
+# Preview changes without applying them
+./tools/prepare-release 52 --dry-run
+
+# Actually prepare release 52
+./tools/prepare-release 52
+```
+
+**Actions Performed:**
+1. Validates preconditions (on develop branch, clean working tree)
+2. Updates CHANGELOG.md to set release date for [Unreleased] section
+3. Removes "-pre" suffix from version in `src/version.ts`
+4. Updates `AR_IO_NODE_RELEASE` in `docker-compose.yaml`
+5. Commits all changes with standard message format
+
+**Safety Features:**
+- Dry-run mode for testing changes
+- Automatic rollback on errors
+- Comprehensive validation before modifications
+- Clear error messages with recovery instructions
+
+**Use Cases:**
+- Automate repetitive release preparation steps
+- Ensure consistent release process across all releases
+- Reduce manual errors in version and configuration updates
+- Preview release changes before committing
+
 ## Workflow
 
 To generate a complete architecture review document:
