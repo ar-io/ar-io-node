@@ -236,6 +236,46 @@ Tests a release by verifying all docker compose profiles work correctly with the
 - Catch container startup or stability issues early
 - Ensure consistent behavior across different deployment scenarios
 
+### `post-release`
+Performs post-release cleanup to prepare the development branch for the next release cycle. This tool automates the tedious manual steps required after a release is published, ensuring the repository is properly configured for continued development.
+
+**Usage:**
+```bash
+./tools/post-release [options]
+
+# Preview changes without applying them
+./tools/post-release --dry-run
+
+# Perform post-release cleanup
+./tools/post-release
+```
+
+**Actions Performed:**
+1. Auto-detects current release and calculates next release number
+2. Updates `src/version.ts` to next pre-release version (e.g., `52` → `53-pre`)
+3. Updates `AR_IO_NODE_RELEASE` environment variable to match new version
+4. Resets core docker image tags from specific SHAs back to `latest`
+5. Adds new `[Unreleased]` section to `CHANGELOG.md` with standard headers
+6. Commits all changes with comprehensive message and JIRA ticket reference
+
+**Smart Behavior:**
+- Observer and AO CU images remain pinned (not reset to latest)
+- Auto-detection prevents running post-release multiple times
+- Only resets image tags that were actually changed from SHAs
+- Preserves pinned images as intended by release process
+
+**Safety Features:**
+- Prerequisites validation (branch, working tree, version format)
+- Dry-run mode for previewing changes
+- Automatic rollback on errors
+- Clear progress indicators and status messages
+
+**Use Cases:**
+- Complete the release cycle after publishing
+- Prepare development branch for next release
+- Ensure consistent post-release state across all releases
+- Automate repetitive cleanup tasks
+
 ## Workflow
 
 To generate a complete architecture review document:
