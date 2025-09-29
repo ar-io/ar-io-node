@@ -164,6 +164,36 @@ Automates the initial steps of preparing a new release by updating version files
 - Reduce manual errors in version and configuration updates
 - Preview release changes before committing
 
+### `finalize-release`
+Finalizes a release by updating docker-compose.yaml with specific image SHAs from the container registry. This tool waits for any pending GitHub Actions to complete, fetches the latest image tags, validates they exist in git history, and commits the finalized configuration.
+
+**Usage:**
+```bash
+./tools/finalize-release <release-number>
+
+# Finalize release 52
+./tools/finalize-release 52
+```
+
+**Actions Performed:**
+1. Validates preconditions (on develop branch, clean working tree, correct version)
+2. Waits for any running GitHub Actions to complete
+3. Fetches current image tags from ghcr.io for core services
+4. Validates that all image SHAs exist in git history
+5. Updates docker-compose.yaml to use specific SHAs instead of "latest"
+6. Commits all changes with auto-detected JIRA ticket reference
+
+**Safety Features:**
+- Comprehensive validation before modifications
+- Automatic detection of JIRA ticket from recent commits
+- Clear error messages with recovery instructions
+- Skips observer and AO CU images (they remain pinned)
+
+**Use Cases:**
+- Complete the release preparation after image builds finish
+- Ensure consistent, reproducible docker image versions
+- Validate all release artifacts are properly available
+
 ## Workflow
 
 To generate a complete architecture review document:
