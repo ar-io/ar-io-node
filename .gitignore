@@ -55,8 +55,9 @@ test-results.xml
 # Repository manager
 /repos/*
 
-# Local configuration
+# Local Claude Code configuration
 CLAUDE.local.md
+.claude/settings.local.json
 
 # Exceptions (keep these tracked)
 !/data/.gitkeep
