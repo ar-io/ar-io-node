@@ -1100,6 +1100,11 @@ export class StandaloneSqliteDatabaseWorker {
       });
     }
 
+    // Calculate resolved offset values for reuse
+    const rootParentOffset = dataRow?.root_parent_offset ?? coreRow?.root_parent_offset;
+    const dataOffset = dataRow?.data_offset ?? coreRow?.data_offset;
+    const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
+
     return {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
@@ -1107,17 +1112,25 @@ export class StandaloneSqliteDatabaseWorker {
       contentEncoding: coreRow?.content_encoding,
       contentType,
       rootTransactionId,
-      rootParentOffset: dataRow?.root_parent_offset ?? coreRow?.root_parent_offset,
-      dataOffset: dataRow?.data_offset ?? coreRow?.data_offset,
-      offset: dataRow?.data_item_offset ?? dataItemAttributes?.offset,
+      rootParentOffset,
+      dataOffset,
+      offset,
       itemSize: dataRow?.data_item_size ?? dataItemAttributes?.size,
       formatId: dataRow?.format_id,
       signatureOffset: dataItemAttributes?.signature_offset,
       signatureSize: dataItemAttributes?.signature_size,
       ownerOffset: dataItemAttributes?.owner_offset,
       ownerSize: dataItemAttributes?.owner_size,
-      rootDataItemOffset: dataRow?.root_data_item_offset,
-      rootDataOffset: dataRow?.root_data_offset,
+      rootDataItemOffset:
+        dataRow?.root_data_item_offset ??
+        (rootParentOffset != null && offset != null
+          ? rootParentOffset + offset
+          : undefined),
+      rootDataOffset:
+        dataRow?.root_data_offset ??
+        (rootParentOffset != null && dataOffset != null
+          ? rootParentOffset + dataOffset
+          : undefined),
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
       stable: coreRow?.stable === true,
       verified: dataRow?.verified === 1,
@@ -2671,8 +2684,16 @@ export class StandaloneSqliteDatabaseWorker {
     if (row?.root_transaction_id) {
       return {
         rootTxId: toB64Url(row.root_transaction_id),
-        rootOffset: row.root_data_item_offset || row.root_parent_offset || undefined,
-        rootDataOffset: row.root_data_offset || row.data_offset || undefined,
+        rootOffset:
+          row.root_data_item_offset ??
+          (row.root_parent_offset != null && row.data_item_offset != null
+            ? row.root_parent_offset + row.data_item_offset
+            : undefined),
+        rootDataOffset:
+          row.root_data_offset ??
+          (row.root_parent_offset != null && row.data_offset != null
+            ? row.root_parent_offset + row.data_offset
+            : undefined),
         size: row.data_item_size || undefined,
         dataSize: row.data_size || undefined,
       };
