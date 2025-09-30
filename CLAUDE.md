@@ -71,6 +71,29 @@ When adding a new database method:
 - Use `currentUnixTimestamp()` helper for timestamp fields
 - When implementing similar features, check existing patterns (e.g., bundles retry system for verification retries)
 
+## Service and Data Management
+
+### Service Control
+- Start service: `yarn service:start`
+- Stop service: `yarn service:stop`
+- View logs: `yarn service:logs`
+- Service logs are in `logs/service.log` (JSONL format - one JSON object per line)
+- OTEL spans are in `logs/otel-spans.jsonl`
+- When testing changes: stop service, clear logs (`rm logs/service.log && touch logs/service.log`), then restart
+
+### Database Management
+- Database files are in `data/sqlite/` directory
+- To reset databases: `rm data/sqlite/*.db && yarn db:migrate up`
+- Always stop the service before manually deleting database files
+- Query databases with: `sqlite3 data/sqlite/<schema>.db "<SQL>"`
+
+### Cache Management
+- Contiguous data cache is in `data/contiguous/data/` and `data/contiguous/tmp/`
+- Cached files are organized by hash in subdirectories (e.g., `IX/zl/IXzlt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg`)
+- Cache files may require sudo to delete due to service ownership
+- To clear cache without full reset: stop service, delete cache files, restart service
+- Data caching is controlled by `SKIP_DATA_CACHE` environment variable (default: false)
+
 ## Git Workflow
 
 - Never use `git commit -A` or `git add .`. Add the individual files you want instead.

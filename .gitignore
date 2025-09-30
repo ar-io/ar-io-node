@@ -5,6 +5,8 @@
 
 # Log files
 *.log
+/logs/*
+!/logs/.gitkeep
 
 # Environment files
 /.env
