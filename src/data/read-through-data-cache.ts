@@ -488,16 +488,27 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
                     // Only update hashes when we trust the data source
                     if (data.trusted === true) {
+                      // Fetch attributes again to get any updates (like root offsets)
+                      // that were set by the upstream data source during getData
+                      const updatedAttributes =
+                        await this.dataAttributesSource.getDataAttributes(id);
+
                       this.dataContentAttributeImporter.queueDataContentAttributes(
                         {
                           id,
-                          dataRoot: attributes?.dataRoot,
+                          dataRoot: updatedAttributes?.dataRoot,
                           hash,
                           dataSize: data.size,
                           contentType: data.sourceContentType,
                           cachedAt: currentUnixTimestamp(),
                           verified: data.verified,
                           verificationPriority,
+                          rootTransactionId:
+                            updatedAttributes?.rootTransactionId,
+                          rootDataItemOffset:
+                            updatedAttributes?.rootDataItemOffset,
+                          rootDataOffset: updatedAttributes?.rootDataOffset,
+                          dataItemSize: updatedAttributes?.itemSize,
                         },
                       );
                     }

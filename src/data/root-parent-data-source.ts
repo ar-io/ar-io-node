@@ -250,11 +250,13 @@ export class RootParentDataSource implements ContiguousDataSource {
         // Store the discovered offsets for future use
         try {
           await this.dataAttributesSource.setDataAttributes(id, {
+            rootTransactionId: rootTxId,
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
           });
           this.log.debug('Stored root offsets from attributes traversal', {
             id,
+            rootTransactionId: rootTxId,
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
           });
@@ -416,16 +418,20 @@ export class RootParentDataSource implements ContiguousDataSource {
         ) {
           try {
             await this.dataAttributesSource.setDataAttributes(id, {
+              rootTransactionId: rootTxId,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
+              dataItemSize: rootResult.size,
             });
-            this.log.debug('Stored root offsets from Turbo lookup', {
+            this.log.debug('Stored root offsets from root TX index', {
               id,
+              rootTransactionId: rootTxId,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
+              dataItemSize: rootResult.size,
             });
           } catch (error: any) {
-            this.log.warn('Failed to store root offsets from Turbo lookup', {
+            this.log.warn('Failed to store root offsets from root TX index', {
               id,
               error: error.message,
             });
@@ -499,7 +505,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           'offset.size': offset.size,
         });
 
-        this.log.debug('Using offsets from Turbo', {
+        this.log.debug('Using offsets from root TX index', {
           id,
           rootTxId,
           offset: offset.offset,
@@ -551,12 +557,16 @@ export class RootParentDataSource implements ContiguousDataSource {
             // Store discovered offsets for future use (avoid re-parsing)
             try {
               const attributesToStore: {
+                rootTransactionId: string;
                 rootDataItemOffset: number;
                 rootDataOffset: number;
+                dataItemSize: number;
                 contentType?: string;
               } = {
+                rootTransactionId: rootTxId,
                 rootDataItemOffset: bundleParseResult.itemOffset,
                 rootDataOffset: bundleParseResult.dataOffset,
+                dataItemSize: bundleParseResult.itemSize,
               };
 
               if (bundleParseResult.contentType !== undefined) {
@@ -570,8 +580,10 @@ export class RootParentDataSource implements ContiguousDataSource {
 
               this.log.debug('Stored offsets from bundle parsing', {
                 id,
+                rootTransactionId: rootTxId,
                 rootDataItemOffset: bundleParseResult.itemOffset,
                 rootDataOffset: bundleParseResult.dataOffset,
+                dataItemSize: bundleParseResult.itemSize,
                 contentType: bundleParseResult.contentType,
               });
             } catch (error: any) {
