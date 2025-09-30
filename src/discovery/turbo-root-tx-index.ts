@@ -254,6 +254,43 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     }
   }
 
+  /**
+   * Calculates the final position of a nested data item within its root bundle.
+   *
+   * This method takes a chain of Turbo offset responses representing the path from
+   * a nested data item up to its root bundle, and calculates the cumulative offset
+   * required to locate the data item within the root bundle.
+   *
+   * @param chain - Array of TurboOffsetsResponse objects from child to root.
+   *                The first element is the target data item, and the last element
+   *                contains the rootBundleId.
+   *
+   * @returns Object containing:
+   *   - rootTxId: The ID of the root bundle transaction
+   *   - rootOffset: Offset to the start of the data item within the root bundle
+   *   - rootDataOffset: Offset to the start of the data item's payload within the root bundle
+   *   - contentType: Content type of the original data item
+   *   - size: Total size of the original data item (including headers)
+   *   - dataSize: Size of the original data item's payload only
+   *
+   * @example
+   * For a 3-level chain: dataItem → parent → root
+   *
+   * Offset calculation:
+   * 1. Start with root's startOffsetInRootBundle (where parent begins in root)
+   * 2. Add root's payloadDataStart (to get into root's payload)
+   * 3. Add parent's startOffsetInParentDataItemPayload (where dataItem begins in parent)
+   * 4. rootDataOffset = rootOffset + dataItem's payloadDataStart
+   *
+   * Visual representation:
+   * ```
+   * Root Bundle:
+   * [headers] [payload-start] [parent headers] [parent payload-start] [dataItem headers] [dataItem payload]
+   *           ^                                                        ^                   ^
+   *           |                                                        |                   |
+   *           startOffsetInRootBundle                                 rootOffset          rootDataOffset
+   * ```
+   */
   private calculateRootPosition(chain: TurboOffsetsResponse[]): {
     rootTxId: string;
     rootOffset?: number;
