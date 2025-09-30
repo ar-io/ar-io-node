@@ -421,14 +421,14 @@ export class RootParentDataSource implements ContiguousDataSource {
               rootTransactionId: rootTxId,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
-              dataItemSize: rootResult.size,
+              itemSize: rootResult.size,
             });
             this.log.debug('Stored root offsets from root TX index', {
               id,
               rootTransactionId: rootTxId,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
-              dataItemSize: rootResult.size,
+              itemSize: rootResult.size,
             });
           } catch (error: any) {
             this.log.warn('Failed to store root offsets from root TX index', {
@@ -479,8 +479,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       this.log.debug('Found root transaction', { id, rootTxId });
 
       // Step 2: Get offset and size (use Turbo offsets if available, otherwise parse bundle)
-      let offset: { offset: number; size: number };
-      let usedTurboOffsets = false;
+      let offset: { offset: number; size: number } | undefined;
 
       if (
         rootResult?.rootDataOffset !== undefined &&
@@ -491,7 +490,6 @@ export class RootParentDataSource implements ContiguousDataSource {
           offset: rootResult.rootDataOffset,
           size: rootResult.dataSize,
         };
-        usedTurboOffsets = true;
 
         // Extract content type from Turbo if available
         if (rootResult.contentType !== undefined) {
@@ -535,8 +533,10 @@ export class RootParentDataSource implements ContiguousDataSource {
         } | null = null;
 
         try {
-          bundleParseResult =
-            await this.ans104OffsetSource.getDataItemOffset(id, rootTxId);
+          bundleParseResult = await this.ans104OffsetSource.getDataItemOffset(
+            id,
+            rootTxId,
+          );
           offsetParseSpan.setAttributes({
             'offset.found': bundleParseResult !== null,
             'offset.data_offset': bundleParseResult?.dataOffset,
@@ -560,13 +560,13 @@ export class RootParentDataSource implements ContiguousDataSource {
                 rootTransactionId: string;
                 rootDataItemOffset: number;
                 rootDataOffset: number;
-                dataItemSize: number;
+                itemSize: number;
                 contentType?: string;
               } = {
                 rootTransactionId: rootTxId,
                 rootDataItemOffset: bundleParseResult.itemOffset,
                 rootDataOffset: bundleParseResult.dataOffset,
-                dataItemSize: bundleParseResult.itemSize,
+                itemSize: bundleParseResult.itemSize,
               };
 
               if (bundleParseResult.contentType !== undefined) {
@@ -583,7 +583,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 rootTransactionId: rootTxId,
                 rootDataItemOffset: bundleParseResult.itemOffset,
                 rootDataOffset: bundleParseResult.dataOffset,
-                dataItemSize: bundleParseResult.itemSize,
+                itemSize: bundleParseResult.itemSize,
                 contentType: bundleParseResult.contentType,
               });
             } catch (error: any) {
@@ -598,7 +598,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           offsetParseSpan.end();
         }
 
-        if (bundleParseResult === null) {
+        if (bundleParseResult === null || !offset) {
           const error = new Error(
             `Data item ${id} not found in root bundle ${rootTxId}`,
           );
