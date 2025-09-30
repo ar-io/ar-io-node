@@ -249,29 +249,14 @@ export class RootParentDataSource implements ContiguousDataSource {
 
         // Store the discovered offsets for future use
         try {
-          const attributesToStore: {
-            rootDataItemOffset: number;
-            rootDataOffset: number;
-            contentType?: string;
-          } = {
+          await this.dataAttributesSource.setDataAttributes(id, {
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
-          };
-
-          // Also store content type if we have it
-          if (originalContentType !== undefined) {
-            attributesToStore.contentType = originalContentType;
-          }
-
-          await this.dataAttributesSource.setDataAttributes(
-            id,
-            attributesToStore,
-          );
+          });
           this.log.debug('Stored root offsets from attributes traversal', {
             id,
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
-            contentType: originalContentType,
           });
         } catch (error: any) {
           this.log.warn(
@@ -424,35 +409,20 @@ export class RootParentDataSource implements ContiguousDataSource {
           'root.found': rootTxId !== undefined,
         });
 
-        // Store the discovered offsets and metadata if available (from Turbo)
+        // Store the discovered offsets if available (from Turbo)
         if (
           rootResult?.rootOffset !== undefined &&
           rootResult?.rootDataOffset !== undefined
         ) {
           try {
-            const attributesToStore: {
-              rootDataItemOffset: number;
-              rootDataOffset: number;
-              contentType?: string;
-            } = {
+            await this.dataAttributesSource.setDataAttributes(id, {
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
-            };
-
-            // Also store content type from Turbo if available
-            if (rootResult.contentType !== undefined) {
-              attributesToStore.contentType = rootResult.contentType;
-            }
-
-            await this.dataAttributesSource.setDataAttributes(
-              id,
-              attributesToStore,
-            );
+            });
             this.log.debug('Stored root offsets from Turbo lookup', {
               id,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
-              contentType: rootResult.contentType,
             });
           } catch (error: any) {
             this.log.warn('Failed to store root offsets from Turbo lookup', {
@@ -502,40 +472,42 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       this.log.debug('Found root transaction', { id, rootTxId });
 
-      // Step 2: Get offset (from Turbo if available, or parse bundle)
-      let offset: { offset: number; size: number } | null = null;
+      // Step 2: Get offset and size (use Turbo offsets if available, otherwise parse bundle)
+      let offset: { offset: number; size: number };
+      let usedTurboOffsets = false;
 
-      // Try to use Turbo offsets if available (skip expensive bundle parsing)
       if (
         rootResult?.rootDataOffset !== undefined &&
         rootResult?.dataSize !== undefined
       ) {
-        span.addEvent('Using pre-calculated Turbo offsets');
+        // Use Turbo offsets directly
         offset = {
           offset: rootResult.rootDataOffset,
           size: rootResult.dataSize,
         };
+        usedTurboOffsets = true;
 
-        // Use Turbo's content type if available (more accurate than local cache)
+        // Extract content type from Turbo if available
         if (rootResult.contentType !== undefined) {
           originalContentType = rootResult.contentType;
         }
 
+        span.addEvent('Using Turbo offsets');
         span.setAttributes({
           'offset.source': 'turbo',
           'offset.value': offset.offset,
           'offset.size': offset.size,
         });
 
-        this.log.debug('Using pre-calculated Turbo offsets (skip parsing)', {
+        this.log.debug('Using offsets from Turbo', {
           id,
           rootTxId,
           offset: offset.offset,
           size: offset.size,
-          contentType: originalContentType,
+          contentType: rootResult.contentType,
         });
       } else {
-        // Fall back to parsing bundle for offset
+        // Parse bundle to find offset
         span.addEvent('Parsing bundle for offset');
         const offsetParseSpan = startChildSpan(
           'RootParentDataSource.parseOffset',
@@ -548,47 +520,96 @@ export class RootParentDataSource implements ContiguousDataSource {
           span,
         );
 
+        let bundleParseResult: {
+          itemOffset: number;
+          dataOffset: number;
+          itemSize: number;
+          dataSize: number;
+          contentType?: string;
+        } | null = null;
+
         try {
-          offset = await this.ans104OffsetSource.getDataItemOffset(
-            id,
-            rootTxId,
-          );
+          bundleParseResult =
+            await this.ans104OffsetSource.getDataItemOffset(id, rootTxId);
           offsetParseSpan.setAttributes({
-            'offset.found': offset !== null,
-            'offset.value': offset?.offset,
-            'offset.size': offset?.size,
+            'offset.found': bundleParseResult !== null,
+            'offset.data_offset': bundleParseResult?.dataOffset,
+            'offset.data_size': bundleParseResult?.dataSize,
           });
+
+          if (bundleParseResult !== null) {
+            offset = {
+              offset: bundleParseResult.dataOffset,
+              size: bundleParseResult.dataSize,
+            };
+
+            // Set content type from bundle parsing
+            if (bundleParseResult.contentType !== undefined) {
+              originalContentType = bundleParseResult.contentType;
+            }
+
+            // Store discovered offsets for future use (avoid re-parsing)
+            try {
+              const attributesToStore: {
+                rootDataItemOffset: number;
+                rootDataOffset: number;
+                contentType?: string;
+              } = {
+                rootDataItemOffset: bundleParseResult.itemOffset,
+                rootDataOffset: bundleParseResult.dataOffset,
+              };
+
+              if (bundleParseResult.contentType !== undefined) {
+                attributesToStore.contentType = bundleParseResult.contentType;
+              }
+
+              await this.dataAttributesSource.setDataAttributes(
+                id,
+                attributesToStore,
+              );
+
+              this.log.debug('Stored offsets from bundle parsing', {
+                id,
+                rootDataItemOffset: bundleParseResult.itemOffset,
+                rootDataOffset: bundleParseResult.dataOffset,
+                contentType: bundleParseResult.contentType,
+              });
+            } catch (error: any) {
+              this.log.warn('Failed to store offsets from bundle parsing', {
+                id,
+                error: error.message,
+              });
+              // Don't fail the request if storage fails
+            }
+          }
         } finally {
           offsetParseSpan.end();
         }
 
+        if (bundleParseResult === null) {
+          const error = new Error(
+            `Data item ${id} not found in root bundle ${rootTxId}`,
+          );
+          span.recordException(error);
+          span.setAttributes({
+            'offset.not_found': true,
+          });
+          throw error;
+        }
+
         span.setAttributes({
-          'offset.source': 'bundle_parsing',
+          'offset.source': 'bundle_parse',
+          'offset.value': offset.offset,
+          'offset.size': offset.size,
+        });
+
+        this.log.debug('Found data item offset from bundle parsing', {
+          id,
+          rootTxId,
+          offset: offset.offset,
+          size: offset.size,
         });
       }
-
-      if (offset === null) {
-        const error = new Error(
-          `Data item ${id} not found in root bundle ${rootTxId}`,
-        );
-        span.recordException(error);
-        span.setAttributes({
-          'offset.not_found': true,
-        });
-        throw error;
-      }
-
-      span.setAttributes({
-        'offset.value': offset.offset,
-        'offset.size': offset.size,
-      });
-
-      this.log.debug('Found data item offset', {
-        id,
-        rootTxId,
-        offset: offset.offset,
-        size: offset.size,
-      });
 
       // Step 3: Calculate final region (combine discovered offset with requested region)
       let finalRegion: Region;

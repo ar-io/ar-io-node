@@ -567,10 +567,16 @@ const baseTxChunksDataSource = new TxChunksDataSource({
   chunkSource,
 });
 
-// ANS-104 offset source for parsing bundle headers
-const ans104OffsetSource = new Ans104OffsetSource({
+// ANS-104 offset source for parsing bundle headers from chunks
+const ans104ChunksOffsetSource = new Ans104OffsetSource({
   log,
   dataSource: baseTxChunksDataSource,
+});
+
+// ANS-104 offset source for parsing bundle headers from trusted gateways
+const ans104GatewaysOffsetSource = new Ans104OffsetSource({
+  log,
+  dataSource: baseGatewaysDataSource,
 });
 
 // Offset-aware version of gateways data source that uses cached upstream offsets
@@ -581,7 +587,7 @@ const offsetAwareGatewaysDataSource = new RootParentDataSource({
   dataSource: baseGatewaysDataSource,
   dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
-  ans104OffsetSource,
+  ans104OffsetSource: ans104GatewaysOffsetSource,
   fallbackToLegacyTraversal: true, // No expensive offset searching
 });
 
@@ -594,7 +600,7 @@ const txChunksOffsetAwareSource = new RootParentDataSource({
   dataSource: baseTxChunksDataSource,
   dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
-  ans104OffsetSource,
+  ans104OffsetSource: ans104ChunksOffsetSource,
   fallbackToLegacyTraversal: config.ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK,
 });
 

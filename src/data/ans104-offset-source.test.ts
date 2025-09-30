@@ -8,6 +8,7 @@ import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { Readable } from 'node:stream';
 import winston from 'winston';
+import { serializeTags } from '@dha-team/arbundles';
 
 import { Ans104OffsetSource } from './ans104-offset-source.js';
 import { ContiguousDataSource } from '../types.js';
@@ -117,10 +118,16 @@ describe('Ans104OffsetSource', () => {
       );
 
       assert.notStrictEqual(result, null);
-      // The offset should be: bundle header (96) + data item envelope header (1044)
-      assert.strictEqual(result?.offset, 96 + 1044);
-      // The size should be the total data item size (2000) minus the envelope header (1044)
-      assert.strictEqual(result?.size, 2000 - 1044);
+      // The itemOffset should be: bundle header (96)
+      assert.strictEqual(result?.itemOffset, 96);
+      // The dataOffset should be: bundle header (96) + data item envelope header (1044)
+      assert.strictEqual(result?.dataOffset, 96 + 1044);
+      // The itemSize should be the total data item size (2000)
+      assert.strictEqual(result?.itemSize, 2000);
+      // The dataSize should be: total size (2000) minus the envelope header (1044)
+      assert.strictEqual(result?.dataSize, 2000 - 1044);
+      // No Content-Type in this test
+      assert.strictEqual(result?.contentType, undefined);
     });
 
     it('should find data item in nested bundle', async () => {
@@ -304,8 +311,15 @@ describe('Ans104OffsetSource', () => {
       );
 
       assert.notStrictEqual(result, null);
-      assert.strictEqual(result?.offset, 96 + 96 + 1044); // Root header + nested header + data item header
-      assert.strictEqual(result?.size, 1500 - 1044); // Total size minus header
+      // itemOffset: Root header (96) + nested header (96)
+      assert.strictEqual(result?.itemOffset, 96 + 96);
+      // dataOffset: Root header + nested header + data item header
+      assert.strictEqual(result?.dataOffset, 96 + 96 + 1044);
+      // itemSize: Total data item size
+      assert.strictEqual(result?.itemSize, 1500);
+      // dataSize: Total size minus header
+      assert.strictEqual(result?.dataSize, 1500 - 1044);
+      assert.strictEqual(result?.contentType, undefined);
     });
 
     it('should return null when item not found', async () => {
@@ -610,6 +624,266 @@ describe('Ans104OffsetSource', () => {
 
       // Should return null without infinite loop
       assert.strictEqual(result, null);
+    });
+
+    it('should extract Content-Type tag from data item', async () => {
+      const itemIdBuffer = Buffer.alloc(32);
+      itemIdBuffer.write('test-item-with-content-type');
+      const dataItemId = itemIdBuffer.toString('base64url');
+      const rootBundleId = 'root-bundle-id';
+
+      const itemCount = Buffer.alloc(32);
+      itemCount.writeBigInt64LE(1n, 0);
+
+      const itemSize = Buffer.alloc(32);
+      itemSize.writeBigInt64LE(3000n, 0);
+
+      const bundleHeader = Buffer.concat([itemCount, itemSize, itemIdBuffer]);
+
+      getDataMock.mock.mockImplementation(async (args: any) => {
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 32
+        ) {
+          return {
+            stream: Readable.from([itemCount]),
+            size: 32,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 96
+        ) {
+          return {
+            stream: Readable.from([bundleHeader]),
+            size: 96,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 96 &&
+          args.region?.size <= 3000
+        ) {
+          // Create tags with Content-Type using proper serialization
+          const tags = [{ name: 'Content-Type', value: 'text/html' }];
+          const tagsBytes = serializeTags(tags);
+          const tagsCount = Buffer.alloc(8);
+          tagsCount.writeBigInt64LE(BigInt(tags.length), 0);
+          const tagsBytesLen = Buffer.alloc(8);
+          tagsBytesLen.writeBigInt64LE(BigInt(tagsBytes.length), 0);
+
+          const dataItemHeader = Buffer.concat([
+            Buffer.from([0x01, 0x00]), // Signature type 1
+            Buffer.alloc(512), // Signature
+            Buffer.alloc(512), // Owner
+            Buffer.from([0]), // No target
+            Buffer.from([0]), // No anchor
+            tagsCount,
+            tagsBytesLen,
+            tagsBytes,
+            Buffer.from('test data'),
+          ]);
+          return {
+            stream: Readable.from([dataItemHeader]),
+            size: dataItemHeader.length,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        throw new Error('Unexpected call');
+      });
+
+      const result = await ans104OffsetSource.getDataItemOffset(
+        dataItemId,
+        rootBundleId,
+      );
+
+      assert.notStrictEqual(result, null);
+      assert.strictEqual(result?.contentType, 'text/html');
+    });
+
+    it('should handle case-insensitive Content-Type tag matching', async () => {
+      const itemIdBuffer = Buffer.alloc(32);
+      itemIdBuffer.write('test-item-lowercase');
+      const dataItemId = itemIdBuffer.toString('base64url');
+      const rootBundleId = 'root-bundle-id';
+
+      const itemCount = Buffer.alloc(32);
+      itemCount.writeBigInt64LE(1n, 0);
+
+      const itemSize = Buffer.alloc(32);
+      itemSize.writeBigInt64LE(3000n, 0);
+
+      const bundleHeader = Buffer.concat([itemCount, itemSize, itemIdBuffer]);
+
+      getDataMock.mock.mockImplementation(async (args: any) => {
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 32
+        ) {
+          return {
+            stream: Readable.from([itemCount]),
+            size: 32,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 96
+        ) {
+          return {
+            stream: Readable.from([bundleHeader]),
+            size: 96,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 96 &&
+          args.region?.size <= 3000
+        ) {
+          // Use lowercase 'content-type' tag
+          const tags = [{ name: 'content-type', value: 'application/json' }];
+          const tagsBytes = serializeTags(tags);
+          const tagsCount = Buffer.alloc(8);
+          tagsCount.writeBigInt64LE(BigInt(tags.length), 0);
+          const tagsBytesLen = Buffer.alloc(8);
+          tagsBytesLen.writeBigInt64LE(BigInt(tagsBytes.length), 0);
+
+          const dataItemHeader = Buffer.concat([
+            Buffer.from([0x01, 0x00]),
+            Buffer.alloc(512),
+            Buffer.alloc(512),
+            Buffer.from([0]),
+            Buffer.from([0]),
+            tagsCount,
+            tagsBytesLen,
+            tagsBytes,
+            Buffer.from('test data'),
+          ]);
+          return {
+            stream: Readable.from([dataItemHeader]),
+            size: dataItemHeader.length,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        throw new Error('Unexpected call');
+      });
+
+      const result = await ans104OffsetSource.getDataItemOffset(
+        dataItemId,
+        rootBundleId,
+      );
+
+      assert.notStrictEqual(result, null);
+      assert.strictEqual(result?.contentType, 'application/json');
+    });
+
+    it('should use first Content-Type tag when multiple exist', async () => {
+      const itemIdBuffer = Buffer.alloc(32);
+      itemIdBuffer.write('test-item-multiple');
+      const dataItemId = itemIdBuffer.toString('base64url');
+      const rootBundleId = 'root-bundle-id';
+
+      const itemCount = Buffer.alloc(32);
+      itemCount.writeBigInt64LE(1n, 0);
+
+      const itemSize = Buffer.alloc(32);
+      itemSize.writeBigInt64LE(3000n, 0);
+
+      const bundleHeader = Buffer.concat([itemCount, itemSize, itemIdBuffer]);
+
+      getDataMock.mock.mockImplementation(async (args: any) => {
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 32
+        ) {
+          return {
+            stream: Readable.from([itemCount]),
+            size: 32,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 0 &&
+          args.region?.size === 96
+        ) {
+          return {
+            stream: Readable.from([bundleHeader]),
+            size: 96,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        if (
+          args.id === rootBundleId &&
+          args.region?.offset === 96 &&
+          args.region?.size <= 3000
+        ) {
+          // Multiple Content-Type tags - should use first one
+          const tags = [
+            { name: 'Content-Type', value: 'text/plain' },
+            { name: 'Other-Tag', value: 'other-value' },
+            { name: 'content-type', value: 'text/html' }, // Second Content-Type
+          ];
+          const tagsBytes = serializeTags(tags);
+          const tagsCount = Buffer.alloc(8);
+          tagsCount.writeBigInt64LE(BigInt(tags.length), 0);
+          const tagsBytesLen = Buffer.alloc(8);
+          tagsBytesLen.writeBigInt64LE(BigInt(tagsBytes.length), 0);
+
+          const dataItemHeader = Buffer.concat([
+            Buffer.from([0x01, 0x00]),
+            Buffer.alloc(512),
+            Buffer.alloc(512),
+            Buffer.from([0]),
+            Buffer.from([0]),
+            tagsCount,
+            tagsBytesLen,
+            tagsBytes,
+            Buffer.from('test data'),
+          ]);
+          return {
+            stream: Readable.from([dataItemHeader]),
+            size: dataItemHeader.length,
+            verified: false,
+            trusted: false,
+            cached: false,
+          };
+        }
+        throw new Error('Unexpected call');
+      });
+
+      const result = await ans104OffsetSource.getDataItemOffset(
+        dataItemId,
+        rootBundleId,
+      );
+
+      assert.notStrictEqual(result, null);
+      // Should use first Content-Type tag
+      assert.strictEqual(result?.contentType, 'text/plain');
     });
   });
 });
