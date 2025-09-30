@@ -6,7 +6,11 @@
  */
 import { Readable } from 'node:stream';
 import winston from 'winston';
-import { byteArrayToLong, deserializeTags } from '@dha-team/arbundles';
+import {
+  byteArrayToLong,
+  deserializeTags,
+  MIN_BINARY_SIZE,
+} from '@dha-team/arbundles';
 
 import { ContiguousDataSource } from '../types.js';
 import { readBytes, getReader } from '../lib/bundles.js';
@@ -94,6 +98,7 @@ export class Ans104OffsetSource {
     bundleId: string,
     currentOffset: number,
     visited: Set<string>,
+    rootBundleId?: string,
   ): Promise<{
     itemOffset: number;
     dataOffset: number;
@@ -101,10 +106,14 @@ export class Ans104OffsetSource {
     dataSize: number;
     contentType?: string;
   } | null> {
+    // Root bundle ID defaults to the current bundle ID on first call
+    const actualRootBundleId = rootBundleId || bundleId;
+
     const log = this.log.child({
       method: 'findInBundle',
       dataItemId,
       bundleId,
+      rootBundleId: actualRootBundleId,
       currentOffset,
     });
 
@@ -117,9 +126,10 @@ export class Ans104OffsetSource {
 
     try {
       // First, get the item count
+      // Always fetch from root bundle at the current offset
       const countData = await this.dataSource.getData({
-        id: bundleId,
-        region: { offset: 0, size: 32 },
+        id: actualRootBundleId,
+        region: { offset: currentOffset, size: 32 },
       });
 
       const itemCount = await this.parseItemCount(countData.stream);
@@ -134,8 +144,8 @@ export class Ans104OffsetSource {
       // Calculate header size and fetch headers
       const headerSize = 32 + 64 * itemCount;
       const headerData = await this.dataSource.getData({
-        id: bundleId,
-        region: { offset: 0, size: headerSize },
+        id: actualRootBundleId,
+        region: { offset: currentOffset, size: headerSize },
       });
 
       const items = await this.parseHeaders(headerData.stream, itemCount);
@@ -150,8 +160,8 @@ export class Ans104OffsetSource {
 
         // Parse the data item header to get the actual data offset and size
         const dataItemInfo = await this.parseDataItemHeader(
-          bundleId,
-          targetItem.offset,
+          actualRootBundleId,
+          currentOffset + targetItem.offset,
           targetItem.size,
         );
 
@@ -168,14 +178,29 @@ export class Ans104OffsetSource {
       // Check nested bundles
       log.debug('Checking for nested bundles');
       for (const item of items) {
-        const isBundleResult = await this.isBundle(bundleId, item);
+        const isBundleResult = await this.isBundle(
+          actualRootBundleId,
+          currentOffset + item.offset,
+          item,
+        );
         if (isBundleResult) {
           log.debug('Found nested bundle', { nestedId: item.id });
+
+          // Parse the nested bundle's ANS-104 header to get its data offset
+          const nestedBundleInfo = await this.parseDataItemHeader(
+            actualRootBundleId,
+            currentOffset + item.offset,
+            item.size,
+          );
+
+          // Recursively search within the nested bundle's data
+          // The data offset is relative to the bundle's start, so add it to currentOffset
           const result = await this.findInBundle(
             dataItemId,
             item.id,
-            currentOffset + item.offset,
+            currentOffset + item.offset + nestedBundleInfo.dataOffset,
             visited,
+            actualRootBundleId,
           );
           if (result) {
             return result;
@@ -274,24 +299,36 @@ export class Ans104OffsetSource {
   }
 
   private async isBundle(
-    parentBundleId: string,
+    rootBundleId: string,
+    cumulativeOffset: number,
     item: DataItemHeader,
   ): Promise<boolean> {
     const log = this.log.child({
       method: 'isBundle',
       itemId: item.id,
-      parentBundleId,
+      rootBundleId,
+      cumulativeOffset,
     });
 
     try {
+      // Items smaller than MIN_BINARY_SIZE can't be valid ANS-104 data items
+      if (item.size < MIN_BINARY_SIZE) {
+        log.debug('Item too small to be a valid data item', {
+          itemSize: item.size,
+          minSize: MIN_BINARY_SIZE,
+        });
+        return false;
+      }
+
       // We need to check the tags of this data item to see if it's a bundle
-      // Fetch enough data to parse the signature type and tags
-      const MIN_CHECK_SIZE = 2048; // Should be enough for sig + owner + tags
-      const checkSize = Math.min(item.size, MIN_CHECK_SIZE);
+      // Fetch the entire item if it's reasonably small, otherwise fetch enough for header + tags
+      // For Arweave signatures: 2 (sigType) + 512 (sig) + 512 (owner) + 33 (target) + 33 (anchor) + 16 (tags meta) = 1108 bytes minimum
+      const MAX_FETCH_SIZE = 10240; // 10KB max - fetch entire item if smaller
+      const checkSize = Math.min(item.size, MAX_FETCH_SIZE);
 
       const itemData = await this.dataSource.getData({
-        id: parentBundleId,
-        region: { offset: item.offset, size: checkSize },
+        id: rootBundleId,
+        region: { offset: cumulativeOffset, size: checkSize },
       });
 
       const reader = getReader(itemData.stream);
@@ -350,7 +387,8 @@ export class Ans104OffsetSource {
       const tagsBytes = bytes.subarray(0, tagsBytesLength);
 
       // Parse tags to check for Bundle-Format
-      const tags = this.parseTags(tagsBytes, tagsCount);
+      // Use the arbundles library function for proper deserialization
+      const tags = deserializeTags(Buffer.from(tagsBytes));
 
       const isBundleFormat = tags.some(
         (tag) => tag.name === 'Bundle-Format' && tag.value === 'binary',
@@ -373,10 +411,26 @@ export class Ans104OffsetSource {
 
       return isBundle;
     } catch (error: any) {
-      log.debug('Error checking if item is bundle, assuming not', {
-        error: error.message,
-        itemId: item.id,
-      });
+      // Handle specific error types differently
+      if (error.message === 'Invalid buffer') {
+        // This typically means the item is smaller than expected for a full header parse
+        // Could be a small data item or truncated data
+        log.debug(
+          'Insufficient data to parse complete header, assuming not a bundle',
+          {
+            error: error.message,
+            itemId: item.id,
+            itemSize: item.size,
+          },
+        );
+      } else {
+        // Other errors (signature type, parsing, etc.) - log at warn level
+        log.warn('Error checking if item is bundle, assuming not', {
+          error: error.message,
+          itemId: item.id,
+          itemSize: item.size,
+        });
+      }
       return false;
     }
   }
@@ -411,44 +465,6 @@ export class Ans104OffsetSource {
       default:
         throw new Error(`Unknown signature type: ${signatureType}`);
     }
-  }
-
-  private parseTags(
-    buffer: Buffer,
-    expectedCount: number,
-  ): Array<{ name: string; value: string }> {
-    const tags: Array<{ name: string; value: string }> = [];
-    let offset = 0;
-
-    for (let i = 0; i < expectedCount && offset < buffer.length; i++) {
-      // Read name length (4 bytes)
-      if (offset + 4 > buffer.length) break;
-      const nameLength = buffer.readUInt32LE(offset);
-      offset += 4;
-
-      // Read name
-      if (offset + nameLength > buffer.length) break;
-      const name = buffer
-        .subarray(offset, offset + nameLength)
-        .toString('utf-8');
-      offset += nameLength;
-
-      // Read value length (4 bytes)
-      if (offset + 4 > buffer.length) break;
-      const valueLength = buffer.readUInt32LE(offset);
-      offset += 4;
-
-      // Read value
-      if (offset + valueLength > buffer.length) break;
-      const value = buffer
-        .subarray(offset, offset + valueLength)
-        .toString('utf-8');
-      offset += valueLength;
-
-      tags.push({ name, value });
-    }
-
-    return tags;
   }
 
   private async parseDataItemHeader(
