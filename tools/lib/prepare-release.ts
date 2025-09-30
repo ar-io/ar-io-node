@@ -8,6 +8,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { simpleGit } from 'simple-git';
 import * as path from 'node:path';
+import { execSync } from 'node:child_process';
 
 interface PrepareReleaseOptions {
   releaseNumber: string;
@@ -29,6 +30,9 @@ class ReleasePreparator {
     console.log(`🚀 Preparing release ${this.options.releaseNumber}${this.options.dryRun ? ' (DRY RUN)' : ''}...\n`);
 
     try {
+      // Security audit phase
+      await this.runSecurityAudit();
+
       // Validation phase
       await this.validatePreConditions();
 
@@ -61,6 +65,27 @@ class ReleasePreparator {
         await this.rollbackChanges();
       }
       throw error;
+    }
+  }
+
+  private async runSecurityAudit(): Promise<void> {
+    console.log('🔒 Running security audit...');
+
+    try {
+      execSync('yarn audit', {
+        cwd: this.rootDir,
+        stdio: 'inherit',
+        encoding: 'utf-8'
+      });
+      console.log('✅ Security audit passed - no vulnerabilities found\n');
+    } catch (error: any) {
+      // yarn audit exits with non-zero if vulnerabilities are found
+      // Exit code 2+ means vulnerabilities exist
+      if (error.status && error.status >= 2) {
+        throw new Error('Security audit failed - vulnerabilities detected. Please review and fix before releasing.');
+      }
+      // Other errors (network issues, etc.) should also fail
+      throw new Error(`Security audit failed: ${error.message}`);
     }
   }
 
@@ -226,11 +251,12 @@ Examples:
   ./tools/prepare-release 52
 
 This tool will:
-1. Validate preconditions (on develop branch, clean working tree)
-2. Update CHANGELOG.md to set release date
-3. Remove "-pre" suffix from version in src/version.ts
-4. Update AR_IO_NODE_RELEASE in docker-compose.yaml
-5. Commit all changes with standard message
+1. Run security audit (yarn audit)
+2. Validate preconditions (on develop branch, clean working tree)
+3. Update CHANGELOG.md to set release date
+4. Remove "-pre" suffix from version in src/version.ts
+5. Update AR_IO_NODE_RELEASE in docker-compose.yaml
+6. Commit all changes with standard message
   `);
 }
 
