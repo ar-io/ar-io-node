@@ -1,6 +1,7 @@
 {
   "name": "ar-io-node",
   "description": "The AR.IO gateway core service",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "main": "./dist/app.js",
   "private": true,
