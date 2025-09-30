@@ -1311,6 +1311,14 @@ export class StandaloneSqliteDatabaseWorker {
     const currentTimestamp = currentUnixTimestamp();
     const isVerified = verified ? 1 : 0;
 
+    this.log.debug('Saving data content attributes', {
+      id,
+      rootTransactionId,
+      rootDataItemOffset,
+      rootDataOffset,
+      dataSize,
+    });
+
     this.stmts.data.insertDataId.run({
       id: fromB64Url(id),
       parent_id: parentId ? fromB64Url(parentId) : null,
@@ -2663,8 +2671,8 @@ export class StandaloneSqliteDatabaseWorker {
     if (row?.root_transaction_id) {
       return {
         rootTxId: toB64Url(row.root_transaction_id),
-        rootOffset: row.root_parent_offset || undefined,
-        rootDataOffset: row.data_offset || undefined,
+        rootOffset: row.root_data_item_offset || row.root_parent_offset || undefined,
+        rootDataOffset: row.root_data_offset || row.data_offset || undefined,
         size: row.data_item_size || undefined,
         dataSize: row.data_size || undefined,
       };

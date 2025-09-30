@@ -650,6 +650,8 @@ export interface ContiguousDataIndex {
     dataItemSize,
     dataItemOffset,
     formatId,
+    rootDataItemOffset,
+    rootDataOffset,
   }: {
     id: string;
     parentId?: string;
@@ -666,6 +668,8 @@ export interface ContiguousDataIndex {
     dataItemSize?: number;
     dataItemOffset?: number;
     formatId?: number;
+    rootDataItemOffset?: number;
+    rootDataOffset?: number;
   }): Promise<void>;
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
