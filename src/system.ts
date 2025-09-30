@@ -582,7 +582,7 @@ const offsetAwareGatewaysDataSource = new RootParentDataSource({
   dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource,
-  fallbackToLegacyTraversal: false, // No expensive offset searching
+  fallbackToLegacyTraversal: true, // No expensive offset searching
 });
 
 // Regular chunks data source (no data item resolution)

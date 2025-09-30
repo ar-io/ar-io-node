@@ -171,6 +171,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       currentId = attributes.parentId;
 
       // Safety check for excessive traversal depth
+      // TODO: lift this magic number into a constant
       if (traversalPath.length > 10) {
         log.warn('Excessive traversal depth, aborting', {
           depth: traversalPath.length,
@@ -248,14 +249,29 @@ export class RootParentDataSource implements ContiguousDataSource {
 
         // Store the discovered offsets for future use
         try {
-          await this.dataAttributesSource.setDataAttributes(id, {
+          const attributesToStore: {
+            rootDataItemOffset: number;
+            rootDataOffset: number;
+            contentType?: string;
+          } = {
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
-          });
+          };
+
+          // Also store content type if we have it
+          if (originalContentType !== undefined) {
+            attributesToStore.contentType = originalContentType;
+          }
+
+          await this.dataAttributesSource.setDataAttributes(
+            id,
+            attributesToStore,
+          );
           this.log.debug('Stored root offsets from attributes traversal', {
             id,
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
+            contentType: originalContentType,
           });
         } catch (error: any) {
           this.log.warn(
@@ -408,20 +424,35 @@ export class RootParentDataSource implements ContiguousDataSource {
           'root.found': rootTxId !== undefined,
         });
 
-        // Store the discovered offsets if available (from Turbo)
+        // Store the discovered offsets and metadata if available (from Turbo)
         if (
           rootResult?.rootOffset !== undefined &&
           rootResult?.rootDataOffset !== undefined
         ) {
           try {
-            await this.dataAttributesSource.setDataAttributes(id, {
+            const attributesToStore: {
+              rootDataItemOffset: number;
+              rootDataOffset: number;
+              contentType?: string;
+            } = {
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
-            });
+            };
+
+            // Also store content type from Turbo if available
+            if (rootResult.contentType !== undefined) {
+              attributesToStore.contentType = rootResult.contentType;
+            }
+
+            await this.dataAttributesSource.setDataAttributes(
+              id,
+              attributesToStore,
+            );
             this.log.debug('Stored root offsets from Turbo lookup', {
               id,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
+              contentType: rootResult.contentType,
             });
           } catch (error: any) {
             this.log.warn('Failed to store root offsets from Turbo lookup', {
@@ -471,29 +502,69 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       this.log.debug('Found root transaction', { id, rootTxId });
 
-      // Step 2: Parse bundle to find offset
-      span.addEvent('Parsing bundle for offset');
-      const offsetParseSpan = startChildSpan(
-        'RootParentDataSource.parseOffset',
-        {
-          attributes: {
-            'data.id': id,
-            'root.tx_id': rootTxId,
-          },
-        },
-        span,
-      );
-
+      // Step 2: Get offset (from Turbo if available, or parse bundle)
       let offset: { offset: number; size: number } | null = null;
-      try {
-        offset = await this.ans104OffsetSource.getDataItemOffset(id, rootTxId);
-        offsetParseSpan.setAttributes({
-          'offset.found': offset !== null,
-          'offset.value': offset?.offset,
-          'offset.size': offset?.size,
+
+      // Try to use Turbo offsets if available (skip expensive bundle parsing)
+      if (
+        rootResult?.rootDataOffset !== undefined &&
+        rootResult?.dataSize !== undefined
+      ) {
+        span.addEvent('Using pre-calculated Turbo offsets');
+        offset = {
+          offset: rootResult.rootDataOffset,
+          size: rootResult.dataSize,
+        };
+
+        // Use Turbo's content type if available (more accurate than local cache)
+        if (rootResult.contentType !== undefined) {
+          originalContentType = rootResult.contentType;
+        }
+
+        span.setAttributes({
+          'offset.source': 'turbo',
+          'offset.value': offset.offset,
+          'offset.size': offset.size,
         });
-      } finally {
-        offsetParseSpan.end();
+
+        this.log.debug('Using pre-calculated Turbo offsets (skip parsing)', {
+          id,
+          rootTxId,
+          offset: offset.offset,
+          size: offset.size,
+          contentType: originalContentType,
+        });
+      } else {
+        // Fall back to parsing bundle for offset
+        span.addEvent('Parsing bundle for offset');
+        const offsetParseSpan = startChildSpan(
+          'RootParentDataSource.parseOffset',
+          {
+            attributes: {
+              'data.id': id,
+              'root.tx_id': rootTxId,
+            },
+          },
+          span,
+        );
+
+        try {
+          offset = await this.ans104OffsetSource.getDataItemOffset(
+            id,
+            rootTxId,
+          );
+          offsetParseSpan.setAttributes({
+            'offset.found': offset !== null,
+            'offset.value': offset?.offset,
+            'offset.size': offset?.size,
+          });
+        } finally {
+          offsetParseSpan.end();
+        }
+
+        span.setAttributes({
+          'offset.source': 'bundle_parsing',
+        });
       }
 
       if (offset === null) {
