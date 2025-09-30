@@ -58,6 +58,12 @@ start_service() {
 
     cd "$PROJECT_ROOT"
 
+    # Set dev-friendly defaults (unless already set in .env)
+    # Use JSON logging for structured logs (easier for agentic tools to parse)
+    export LOG_FORMAT=${LOG_FORMAT:-json}
+    # Enable OTEL span file export for debugging
+    export OTEL_FILE_EXPORT_ENABLED=${OTEL_FILE_EXPORT_ENABLED:-true}
+
     # Start service in background, redirect output to log file
     nohup $NODE_CMD >> "$LOG_FILE" 2>&1 &
     local pid=$!
@@ -70,7 +76,8 @@ start_service() {
 
     if is_running; then
         echo "Service started successfully (PID: $pid)"
-        echo "Log file: $LOG_FILE"
+        echo "Application logs: $LOG_FILE"
+        echo "OTEL spans: $PROJECT_ROOT/logs/otel-spans.jsonl"
         echo "View logs with: yarn service:logs"
     else
         echo "Service failed to start. Check logs: $LOG_FILE"
