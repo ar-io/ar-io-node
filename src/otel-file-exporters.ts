@@ -82,7 +82,7 @@ export class FileSpanExporter implements SpanExporter {
       ).toISOString(),
       traceId: span.spanContext().traceId,
       spanId: span.spanContext().spanId,
-      parentSpanId: span.parentSpanId,
+      parentSpanId: span.parentSpanContext?.spanId,
       name: span.name,
       kind: span.kind,
       startTime: span.startTime,
