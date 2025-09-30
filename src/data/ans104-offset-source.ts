@@ -6,7 +6,7 @@
  */
 import { Readable } from 'node:stream';
 import winston from 'winston';
-import { byteArrayToLong } from '@dha-team/arbundles';
+import { byteArrayToLong, deserializeTags, Tag } from '@dha-team/arbundles';
 
 import { ContiguousDataSource } from '../types.js';
 import { readBytes, getReader } from '../lib/bundles.js';
@@ -38,13 +38,19 @@ export class Ans104OffsetSource {
    *
    * @param dataItemId - The ID of the data item to find
    * @param rootBundleId - The ID of the root bundle to search within
-   * @returns Object with offset and size if found, null otherwise
+   * @returns Object with offsets, sizes, and content type if found, null otherwise
    * @throws Error if bundle parsing fails
    */
   async getDataItemOffset(
     dataItemId: string,
     rootBundleId: string,
-  ): Promise<{ offset: number; size: number } | null> {
+  ): Promise<{
+    itemOffset: number;
+    dataOffset: number;
+    itemSize: number;
+    dataSize: number;
+    contentType?: string;
+  } | null> {
     const log = this.log.child({
       method: 'getDataItemOffset',
       dataItemId,
@@ -63,8 +69,11 @@ export class Ans104OffsetSource {
 
       if (result) {
         log.debug('Found data item', {
-          offset: result.offset,
-          size: result.size,
+          itemOffset: result.itemOffset,
+          dataOffset: result.dataOffset,
+          itemSize: result.itemSize,
+          dataSize: result.dataSize,
+          contentType: result.contentType,
         });
       } else {
         log.debug('Data item not found in bundle');
@@ -85,7 +94,13 @@ export class Ans104OffsetSource {
     bundleId: string,
     currentOffset: number,
     visited: Set<string>,
-  ): Promise<{ offset: number; size: number } | null> {
+  ): Promise<{
+    itemOffset: number;
+    dataOffset: number;
+    itemSize: number;
+    dataSize: number;
+    contentType?: string;
+  } | null> {
     const log = this.log.child({
       method: 'findInBundle',
       dataItemId,
@@ -140,9 +155,13 @@ export class Ans104OffsetSource {
           targetItem.size,
         );
 
+        const itemOffset = currentOffset + targetItem.offset;
         return {
-          offset: currentOffset + targetItem.offset + dataItemInfo.dataOffset,
-          size: dataItemInfo.dataSize,
+          itemOffset,
+          dataOffset: itemOffset + dataItemInfo.dataOffset,
+          itemSize: targetItem.size,
+          dataSize: dataItemInfo.dataSize,
+          contentType: dataItemInfo.contentType,
         };
       }
 
@@ -436,7 +455,7 @@ export class Ans104OffsetSource {
     bundleId: string,
     itemOffset: number,
     totalSize: number,
-  ): Promise<{ dataOffset: number; dataSize: number }> {
+  ): Promise<{ dataOffset: number; dataSize: number; contentType?: string }> {
     const log = this.log.child({
       method: 'parseDataItemHeader',
       bundleId,
@@ -500,14 +519,26 @@ export class Ans104OffsetSource {
 
       // Read tags metadata
       bytes = await readBytes(reader, bytes, 16);
-      // Skip tags count - we only need the byte length
+      const tagsLength = byteArrayToLong(bytes.subarray(0, 8));
       const tagsBytesLength = byteArrayToLong(bytes.subarray(8, 16));
       bytes = bytes.subarray(16);
       headerOffset += 16;
 
-      // Skip tags bytes
+      // Parse tags to extract Content-Type
+      let contentType: string | undefined;
       if (tagsBytesLength > 0) {
         bytes = await readBytes(reader, bytes, tagsBytesLength);
+        const tagsBytes = bytes.subarray(0, tagsBytesLength);
+
+        // Parse tags and find Content-Type (case-insensitive, use first match)
+        if (tagsLength > 0) {
+          const tags = deserializeTags(Buffer.from(tagsBytes));
+          const contentTypeTag = tags.find(
+            (tag) => tag.name.toLowerCase() === 'content-type',
+          );
+          contentType = contentTypeTag?.value;
+        }
+
         bytes = bytes.subarray(tagsBytesLength);
         headerOffset += tagsBytesLength;
       }
@@ -521,9 +552,10 @@ export class Ans104OffsetSource {
         headerOffset: dataOffset,
         dataSize,
         totalSize,
+        contentType,
       });
 
-      return { dataOffset, dataSize };
+      return { dataOffset, dataSize, contentType };
     } catch (error: any) {
       log.error('Error parsing data item header', {
         error: error.message,

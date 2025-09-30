@@ -73,7 +73,13 @@ describe('RootParentDataSource', () => {
 
       // Mock offset parsing
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Mock data fetch
@@ -139,7 +145,13 @@ describe('RootParentDataSource', () => {
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Request a region within the data item
@@ -183,7 +195,13 @@ describe('RootParentDataSource', () => {
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Request a region that extends beyond the data item
@@ -361,7 +379,13 @@ describe('RootParentDataSource', () => {
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Request a region that starts beyond the data item
@@ -405,7 +429,13 @@ describe('RootParentDataSource', () => {
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       (dataSource.getData as any).mock.mockImplementation(async () => {
@@ -447,7 +477,13 @@ describe('RootParentDataSource', () => {
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       (dataSource.getData as any).mock.mockImplementation(async () => ({
@@ -680,7 +716,13 @@ describe('RootParentDataSource', () => {
         async () => ({ rootTxId: 'fallback-root' }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
       (dataSource.getData as any).mock.mockImplementation(async () => ({
         stream: Readable.from([Buffer.from('fallback data')]),
@@ -727,7 +769,12 @@ describe('RootParentDataSource', () => {
         async () => ({ rootTxId }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 2000, size: 800 }),
+        async () => ({
+          itemOffset: 1900,
+          dataOffset: 2000,
+          itemSize: 900,
+          dataSize: 800,
+        }),
       );
       (dataSource.getData as any).mock.mockImplementation(async () => ({
         stream: dataStream,
