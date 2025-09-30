@@ -174,25 +174,15 @@ describe('Ans104OffsetSource', () => {
         paddedTargetId,
       ]);
 
-      // Bundle check data - create proper ANS-104 bundle tags
-      const bundleFormatTag = Buffer.concat([
-        Buffer.from([13, 0, 0, 0]), // "Bundle-Format" length (13)
-        Buffer.from('Bundle-Format'),
-        Buffer.from([6, 0, 0, 0]), // "binary" length (6)
-        Buffer.from('binary'),
-      ]);
-
-      const bundleVersionTag = Buffer.concat([
-        Buffer.from([14, 0, 0, 0]), // "Bundle-Version" length (14)
-        Buffer.from('Bundle-Version'),
-        Buffer.from([5, 0, 0, 0]), // "2.0.0" length (5)
-        Buffer.from('2.0.0'),
-      ]);
-
-      const tagsData = Buffer.concat([bundleFormatTag, bundleVersionTag]);
+      // Bundle check data - create proper ANS-104 bundle tags using arbundles
+      const tags = [
+        { name: 'Bundle-Format', value: 'binary' },
+        { name: 'Bundle-Version', value: '2.0.0' },
+      ];
+      const tagsData = Buffer.from(serializeTags(tags));
 
       const tagsCount = Buffer.alloc(8);
-      tagsCount.writeBigInt64LE(2n, 0); // 2 tags
+      tagsCount.writeBigInt64LE(BigInt(tags.length), 0);
       const tagsBytesLength = Buffer.alloc(8);
       tagsBytesLength.writeBigInt64LE(BigInt(tagsData.length), 0);
 
@@ -205,6 +195,7 @@ describe('Ans104OffsetSource', () => {
         tagsCount,
         tagsBytesLength,
         tagsData,
+        Buffer.alloc(5000 - (2 + 512 + 512 + 1 + 1 + 8 + 8 + tagsData.length)), // Pad to match nested bundle size
       ]);
 
       // Create data item header for parsing
@@ -247,11 +238,12 @@ describe('Ans104OffsetSource', () => {
             cached: false,
           };
         }
-        // Nested bundle check - checking if the nested item is a bundle (MIN_BINARY_SIZE check)
+        // Nested bundle check - checking if the nested item is a bundle
+        // Size is min(itemSize, 10240) = min(5000, 10240) = 5000
         if (
           args.id === rootBundleId &&
           args.region?.offset === 96 &&
-          args.region?.size === 2048
+          args.region?.size === 5000
         ) {
           return {
             stream: Readable.from([bundleCheckData]),
@@ -261,10 +253,13 @@ describe('Ans104OffsetSource', () => {
             cached: false,
           };
         }
-        // Nested bundle header
+        // Nested bundle item count (fetched from root bundle at nested bundle's data offset)
+        // The data offset is calculated from the ANS-104 header length
+        const bundleHeaderSize =
+          2 + 512 + 512 + 1 + 1 + 8 + 8 + tagsData.length; // sig type + sig + owner + target flag + anchor flag + tags meta + tags
         if (
-          args.id === nestedBundleId &&
-          args.region?.offset === 0 &&
+          args.id === rootBundleId &&
+          args.region?.offset === 96 + bundleHeaderSize &&
           args.region?.size === 32
         ) {
           return {
@@ -275,9 +270,10 @@ describe('Ans104OffsetSource', () => {
             cached: false,
           };
         }
+        // Nested bundle headers (fetched from root bundle at nested bundle's data offset)
         if (
-          args.id === nestedBundleId &&
-          args.region?.offset === 0 &&
+          args.id === rootBundleId &&
+          args.region?.offset === 96 + bundleHeaderSize &&
           args.region?.size === 96
         ) {
           return {
@@ -288,11 +284,12 @@ describe('Ans104OffsetSource', () => {
             cached: false,
           };
         }
-        // Parse data item header in nested bundle
+        // Parse data item header in nested bundle (fetched from root bundle)
+        // Size is min(itemSize, 10240) = min(1500, 10240) = 1500
         if (
-          args.id === nestedBundleId &&
-          args.region?.offset === 96 &&
-          args.region?.size <= 1500
+          args.id === rootBundleId &&
+          args.region?.offset === 96 + bundleHeaderSize + 96 &&
+          args.region?.size === 1500
         ) {
           return {
             stream: Readable.from([dataItemHeader]),
@@ -302,7 +299,9 @@ describe('Ans104OffsetSource', () => {
             cached: false,
           };
         }
-        throw new Error('Unexpected call');
+        throw new Error(
+          `Unexpected call: ${JSON.stringify({ id: args.id, offset: args.region?.offset, size: args.region?.size })}`,
+        );
       });
 
       const result = await ans104OffsetSource.getDataItemOffset(
@@ -311,10 +310,10 @@ describe('Ans104OffsetSource', () => {
       );
 
       assert.notStrictEqual(result, null);
-      // itemOffset: Root header (96) + nested header (96)
-      assert.strictEqual(result?.itemOffset, 96 + 96);
-      // dataOffset: Root header + nested header + data item header
-      assert.strictEqual(result?.dataOffset, 96 + 96 + 1044);
+      // itemOffset: Root header (96) + nested bundle header (1088) + item headers in nested bundle (96)
+      assert.strictEqual(result?.itemOffset, 96 + 1088 + 96);
+      // dataOffset: itemOffset + target item header (1044)
+      assert.strictEqual(result?.dataOffset, 96 + 1088 + 96 + 1044);
       // itemSize: Total data item size
       assert.strictEqual(result?.itemSize, 1500);
       // dataSize: Total size minus header

@@ -107,7 +107,10 @@ export class Ans104OffsetSource {
     contentType?: string;
   } | null> {
     // Root bundle ID defaults to the current bundle ID on first call
-    const actualRootBundleId = rootBundleId || bundleId;
+    const actualRootBundleId =
+      rootBundleId !== undefined && rootBundleId !== ''
+        ? rootBundleId
+        : bundleId;
 
     const log = this.log.child({
       method: 'findInBundle',
