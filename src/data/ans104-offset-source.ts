@@ -6,7 +6,7 @@
  */
 import { Readable } from 'node:stream';
 import winston from 'winston';
-import { byteArrayToLong, deserializeTags, Tag } from '@dha-team/arbundles';
+import { byteArrayToLong, deserializeTags } from '@dha-team/arbundles';
 
 import { ContiguousDataSource } from '../types.js';
 import { readBytes, getReader } from '../lib/bundles.js';
