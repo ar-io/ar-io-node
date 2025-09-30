@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+#
+# AR.IO Node Service Management Script
+#
+# Manages the ar-io-node service as a background daemon with file logging.
+#
+# Usage:
+#   ./scripts/service start    - Start the service in background
+#   ./scripts/service stop     - Stop the service
+#   ./scripts/service restart  - Restart the service
+#   ./scripts/service status   - Check service status
+#   ./scripts/service logs     - Tail the service log file
+#
+
+set -e
+
+# Determine script directory and project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Files for process management
+PID_FILE="$PROJECT_ROOT/logs/service.pid"
+LOG_FILE="$PROJECT_ROOT/logs/service.log"
+LOG_DIR="$PROJECT_ROOT/logs"
+
+# Node command from yarn start
+NODE_CMD="node --no-deprecation --import ./register.js --env-file=.env src/app.ts"
+
+# Ensure logs directory exists
+mkdir -p "$LOG_DIR"
+
+# Function to check if process is running
+is_running() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Function to get PID
+get_pid() {
+    if [ -f "$PID_FILE" ]; then
+        cat "$PID_FILE"
+    fi
+}
+
+# Start the service
+start_service() {
+    if is_running; then
+        echo "Service is already running (PID: $(get_pid))"
+        exit 1
+    fi
+
+    echo "Starting ar-io-node service..."
+
+    cd "$PROJECT_ROOT"
+
+    # Start service in background, redirect output to log file
+    nohup $NODE_CMD >> "$LOG_FILE" 2>&1 &
+    local pid=$!
+
+    # Save PID
+    echo "$pid" > "$PID_FILE"
+
+    # Brief wait to check if process started successfully
+    sleep 2
+
+    if is_running; then
+        echo "Service started successfully (PID: $pid)"
+        echo "Log file: $LOG_FILE"
+        echo "View logs with: yarn service:logs"
+    else
+        echo "Service failed to start. Check logs: $LOG_FILE"
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+}
+
+# Stop the service
+stop_service() {
+    if ! is_running; then
+        echo "Service is not running"
+        # Clean up stale PID file if it exists
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+
+    local pid=$(get_pid)
+    echo "Stopping ar-io-node service (PID: $pid)..."
+
+    # Send TERM signal
+    kill "$pid"
+
+    # Wait for process to exit (up to 10 seconds)
+    local count=0
+    while is_running && [ $count -lt 10 ]; do
+        sleep 1
+        count=$((count + 1))
+    done
+
+    # Force kill if still running
+    if is_running; then
+        echo "Service did not stop gracefully, forcing shutdown..."
+        kill -9 "$pid"
+        sleep 1
+    fi
+
+    # Remove PID file
+    rm -f "$PID_FILE"
+    echo "Service stopped"
+}
+
+# Restart the service
+restart_service() {
+    echo "Restarting ar-io-node service..."
+    if is_running; then
+        stop_service
+    fi
+    sleep 1
+    start_service
+}
+
+# Check service status
+status_service() {
+    if is_running; then
+        local pid=$(get_pid)
+        echo "Service is running (PID: $pid)"
+        echo "Log file: $LOG_FILE"
+        exit 0
+    else
+        echo "Service is not running"
+        # Clean up stale PID file if it exists
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+}
+
+# Tail log file
+logs_service() {
+    if [ ! -f "$LOG_FILE" ]; then
+        echo "Log file not found: $LOG_FILE"
+        exit 1
+    fi
+
+    echo "Tailing $LOG_FILE (Ctrl-C to exit)..."
+    tail -f "$LOG_FILE"
+}
+
+# Main command dispatcher
+case "${1:-}" in
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        restart_service
+        ;;
+    status)
+        status_service
+        ;;
+    logs)
+        logs_service
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|logs}"
+        echo ""
+        echo "Commands:"
+        echo "  start    - Start the service in background"
+        echo "  stop     - Stop the service"
+        echo "  restart  - Restart the service"
+        echo "  status   - Check if service is running"
+        echo "  logs     - Tail the service log file"
+        exit 1
+        ;;
+esac

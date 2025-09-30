@@ -151,6 +151,11 @@
     "deps:orphans": "madge --orphans --exclude '\\.test\\.ts$' src",
     "deps:leaves": "madge --leaves --exclude '\\.test\\.ts$' src",
     "deps:summary": "madge --summary src",
-    "deps:ci": "madge --circular --no-spinner --no-color src"
+    "deps:ci": "madge --circular --no-spinner --no-color src",
+    "service:start": "scripts/service start",
+    "service:stop": "scripts/service stop",
+    "service:restart": "scripts/service restart",
+    "service:status": "scripts/service status",
+    "service:logs": "scripts/service logs"
   }
 }
