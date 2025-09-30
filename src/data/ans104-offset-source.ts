@@ -480,9 +480,11 @@ export class Ans104OffsetSource {
     });
 
     try {
-      // Fetch enough data to parse the full header
-      const MIN_HEADER_SIZE = 2048; // Should be enough for most headers
-      const headerSize = Math.min(totalSize, MIN_HEADER_SIZE);
+      // Fetch enough data to parse the full header including tags
+      // ANS-104 allows up to 128 tags with max 1024 byte keys and 3072 byte values
+      // Practical limit is ~10KB for most items, matching isBundle() buffer size
+      const MAX_HEADER_SIZE = 10240; // 10KB max - covers most realistic tag combinations
+      const headerSize = Math.min(totalSize, MAX_HEADER_SIZE);
 
       const headerData = await this.dataSource.getData({
         id: bundleId,
