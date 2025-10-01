@@ -2668,11 +2668,7 @@ export class StandaloneSqliteDatabaseWorker {
   getRootTxIdFromCoreAndBundles(id: string) {
     const row = this.stmts.core.selectRootTxId.get({ id: fromB64Url(id) });
     if (row?.root_transaction_id) {
-      return {
-        rootTxId: toB64Url(row.root_transaction_id),
-        contentType: row.content_type || undefined,
-        dataSize: row.data_size || undefined,
-      };
+      return toB64Url(row.root_transaction_id);
     }
 
     return;
@@ -2681,21 +2677,7 @@ export class StandaloneSqliteDatabaseWorker {
   getRootTxIdFromData(id: string) {
     const row = this.stmts.data.selectRootTransactionId.get({ id: fromB64Url(id) });
     if (row?.root_transaction_id) {
-      return {
-        rootTxId: toB64Url(row.root_transaction_id),
-        rootOffset:
-          row.root_data_item_offset ??
-          (row.root_parent_offset != null && row.data_item_offset != null
-            ? row.root_parent_offset + row.data_item_offset
-            : undefined),
-        rootDataOffset:
-          row.root_data_offset ??
-          (row.root_parent_offset != null && row.data_offset != null
-            ? row.root_parent_offset + row.data_offset
-            : undefined),
-        size: row.data_item_size || undefined,
-        dataSize: row.data_size || undefined,
-      };
+      return toB64Url(row.root_transaction_id);
     }
     return;
   }

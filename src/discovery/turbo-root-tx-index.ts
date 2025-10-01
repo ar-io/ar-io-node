@@ -186,8 +186,8 @@ export class TurboRootTxIndex implements DataItemRootIndex {
     log: winston.Logger,
   ): Promise<TurboOffsetsResponse | typeof NOT_FOUND> {
     // Check cache first
-    if (this.cache?.has(id)) {
-      const cached = this.cache.get(id)!;
+    const cached = this.cache?.get(id);
+    if (cached !== undefined) {
       log.debug('Cache hit for Turbo offsets lookup', { id });
       return cached;
     }

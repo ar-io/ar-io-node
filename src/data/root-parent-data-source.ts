@@ -9,6 +9,7 @@ import { Span } from '@opentelemetry/api';
 
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataAttributesStore,
   ContiguousDataSource,
   DataItemRootIndex,
@@ -119,7 +120,8 @@ export class RootParentDataSource implements ContiguousDataSource {
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
     let originalItemDataOffset: number | undefined;
-    let currentAttributes = initialAttributes; // Reuse the initial attributes we already fetched
+    let currentAttributes: ContiguousDataAttributes | undefined =
+      initialAttributes; // Reuse the initial attributes we already fetched
 
     while (true) {
       // Cycle detection
@@ -169,7 +171,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootTxId: currentId,
           totalOffset,
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
-          size: originalItemSize,
+          size: originalItemSize!,
         };
       }
 
@@ -442,6 +444,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
         // Store the discovered offsets if available (from Turbo)
         if (
+          rootTxId !== undefined &&
           rootResult?.rootOffset !== undefined &&
           rootResult?.rootDataOffset !== undefined
         ) {
