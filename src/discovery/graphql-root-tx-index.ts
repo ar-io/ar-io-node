@@ -8,7 +8,7 @@ import { default as axios, AxiosInstance } from 'axios';
 import * as rax from 'retry-axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
-import { DataItemRootTxIndex } from '../types.js';
+import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import * as config from '../config.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
@@ -49,7 +49,7 @@ const GRAPHQL_METADATA_QUERY = `
 
 const DEFAULT_REQUEST_RETRY_COUNT = 3;
 
-export class GraphQLRootTxIndex implements DataItemRootTxIndex {
+export class GraphQLRootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
   private trustedGateways: Map<number, string[]>;
   private readonly axiosInstance: AxiosInstance;
@@ -119,7 +119,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
     rax.attach(this.axiosInstance);
   }
 
-  async getRootTxId(id: string): Promise<
+  async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
         rootOffset?: number;
@@ -130,7 +130,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       }
     | undefined
   > {
-    const log = this.log.child({ method: 'getRootTxId', id });
+    const log = this.log.child({ method: 'getRootTx', id });
 
     // First get the metadata for the original item
     const originalMetadata = await this.queryItemMetadata(id, log);

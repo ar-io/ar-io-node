@@ -8,7 +8,7 @@ import { default as axios, AxiosInstance } from 'axios';
 import * as rax from 'retry-axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
-import { DataItemRootTxIndex } from '../types.js';
+import { DataItemRootIndex } from '../types.js';
 import * as config from '../config.js';
 import { isValidTxId } from '../lib/validation.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
@@ -38,7 +38,7 @@ interface TurboOffsetsResponse {
   payloadContentLength: number;
 }
 
-export class TurboRootTxIndex implements DataItemRootTxIndex {
+export class TurboRootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
   private readonly axiosInstance: AxiosInstance;
   private readonly turboEndpoint: string;
@@ -96,7 +96,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     rax.attach(this.axiosInstance);
   }
 
-  async getRootTxId(id: string): Promise<
+  async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
         rootOffset?: number;
@@ -107,7 +107,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       }
     | undefined
   > {
-    const log = this.log.child({ method: 'getRootTxId', id });
+    const log = this.log.child({ method: 'getRootTx', id });
 
     // Keep track of visited IDs to prevent infinite loops
     const visited = new Set<string>();

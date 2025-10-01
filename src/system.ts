@@ -55,7 +55,7 @@ import {
   DataBlockListValidator,
   NameBlockListValidator,
   BundleIndex,
-  DataItemRootTxIndex,
+  DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
   ContiguousDataIndex,
@@ -212,15 +212,10 @@ const turboOffsetsCache = new LRUCache<string, CachedTurboOffsets>({
 });
 
 // Build indexes based on configuration
-const rootTxIndexes: DataItemRootTxIndex[] = [];
+const rootTxIndexes: DataItemRootIndex[] = [];
 
 for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
   switch (sourceName.toLowerCase()) {
-    case 'db':
-      // Database is always available and doesn't need cache
-      rootTxIndexes.push(db);
-      break;
-
     case 'turbo':
       rootTxIndexes.push(
         new TurboRootTxIndex({
@@ -254,10 +249,11 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
   }
 }
 
-// Fallback if no valid sources configured
+// Validate that at least one source is configured
 if (rootTxIndexes.length === 0) {
-  log.warn('No valid root TX sources configured, using default (db only)');
-  rootTxIndexes.push(db);
+  log.warn(
+    'No valid root TX sources configured - root resolution will be unavailable',
+  );
 }
 
 // Create composite root TX index with circuit breakers

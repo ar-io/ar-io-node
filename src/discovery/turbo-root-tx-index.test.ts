@@ -19,13 +19,13 @@ describe('TurboRootTxIndex', () => {
   });
 
   describe('constructor', () => {
-    it('should implement DataItemRootTxIndex interface', () => {
+    it('should implement DataItemRootIndex interface', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      assert(typeof turboIndex.getRootTxId === 'function');
+      assert(typeof turboIndex.getRootTx === 'function');
     });
 
     it('should accept cache in constructor', () => {
@@ -52,7 +52,7 @@ describe('TurboRootTxIndex', () => {
         cache,
       });
 
-      assert(typeof turboIndex.getRootTxId === 'function');
+      assert(typeof turboIndex.getRootTx === 'function');
     });
 
     it('should use default endpoint when not provided', () => {
@@ -60,7 +60,7 @@ describe('TurboRootTxIndex', () => {
         log,
       });
 
-      assert(typeof turboIndex.getRootTxId === 'function');
+      assert(typeof turboIndex.getRootTx === 'function');
     });
 
     it('should accept request configuration options', () => {
@@ -71,11 +71,11 @@ describe('TurboRootTxIndex', () => {
         requestRetryCount: 5,
       });
 
-      assert(typeof turboIndex.getRootTxId === 'function');
+      assert(typeof turboIndex.getRootTx === 'function');
     });
   });
 
-  describe('getRootTxId', () => {
+  describe('getRootTx', () => {
     it('should resolve single-level data item with root bundle', async () => {
       const dataItemId = 'test-data-item-123';
       const rootBundleId = 'root-bundle-456';
@@ -108,7 +108,7 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      const result = await turboIndex.getRootTxId(dataItemId);
+      const result = await turboIndex.getRootTx(dataItemId);
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, rootBundleId);
@@ -169,7 +169,7 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      const result = await turboIndex.getRootTxId(childId);
+      const result = await turboIndex.getRootTx(childId);
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, rootBundleId);
@@ -213,7 +213,7 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      const result = await turboIndex.getRootTxId(l1TxId);
+      const result = await turboIndex.getRootTx(l1TxId);
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, l1TxId);
@@ -249,7 +249,7 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      const result = await turboIndex.getRootTxId(nonExistentId);
+      const result = await turboIndex.getRootTx(nonExistentId);
 
       assert.equal(result, undefined);
       assert.equal(mockAxiosInstance.get.mock.calls.length, 1);
@@ -303,7 +303,7 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      const result = await turboIndex.getRootTxId(id1);
+      const result = await turboIndex.getRootTx(id1);
 
       // Should detect cycle and return undefined
       assert.equal(result, undefined);
@@ -364,7 +364,7 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      const result = await turboIndex.getRootTxId('level-0');
+      const result = await turboIndex.getRootTx('level-0');
 
       // Should abort at max depth and return undefined
       assert.equal(result, undefined);
@@ -408,12 +408,12 @@ describe('TurboRootTxIndex', () => {
       });
 
       // First call - should hit API
-      const result1 = await turboIndex.getRootTxId(dataItemId);
+      const result1 = await turboIndex.getRootTx(dataItemId);
       assert(result1 !== undefined);
       assert.equal(mockAxiosInstance.get.mock.calls.length, 1);
 
       // Second call - should use cache
-      const result2 = await turboIndex.getRootTxId(dataItemId);
+      const result2 = await turboIndex.getRootTx(dataItemId);
       assert(result2 !== undefined);
       assert.equal(mockAxiosInstance.get.mock.calls.length, 1); // Still 1 - no new API call
 
@@ -482,7 +482,7 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
       });
 
-      const result = await turboIndex.getRootTxId(level1Id);
+      const result = await turboIndex.getRootTx(level1Id);
 
       assert(result !== undefined);
       assert.equal(result.rootTxId, rootId);

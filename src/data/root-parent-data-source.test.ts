@@ -14,14 +14,14 @@ import { Ans104OffsetSource } from './ans104-offset-source.js';
 import {
   ContiguousDataSource,
   ContiguousDataAttributesStore,
-  DataItemRootTxIndex,
+  DataItemRootIndex,
 } from '../types.js';
 
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
   let dataSource: ContiguousDataSource;
   let dataAttributesSource: ContiguousDataAttributesStore;
-  let dataItemRootTxIndex: DataItemRootTxIndex;
+  let dataItemRootTxIndex: DataItemRootIndex;
   let ans104OffsetSource: Ans104OffsetSource;
   let rootParentDataSource: RootParentDataSource;
 
@@ -37,7 +37,7 @@ describe('RootParentDataSource', () => {
       setDataAttributes: mock.fn(),
     };
     dataItemRootTxIndex = {
-      getRootTxId: mock.fn(),
+      getRootTx: mock.fn(),
     };
     ans104OffsetSource = {
       getDataItemOffset: mock.fn(),
@@ -67,7 +67,7 @@ describe('RootParentDataSource', () => {
       );
 
       // Mock root TX lookup
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
 
@@ -101,11 +101,11 @@ describe('RootParentDataSource', () => {
 
       // Verify call order
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls[0].arguments[0],
+        (dataItemRootTxIndex.getRootTx as any).mock.calls[0].arguments[0],
         dataItemId,
       );
 
@@ -140,7 +140,7 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
 
@@ -190,7 +190,7 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
 
@@ -238,7 +238,7 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => undefined,
       );
 
@@ -256,13 +256,13 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.verified, true);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have called getRootTxId
+      // Should have called getRootTx
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls[0].arguments[0],
+        (dataItemRootTxIndex.getRootTx as any).mock.calls[0].arguments[0],
         txId,
       );
 
@@ -289,8 +289,8 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      // When getRootTxId returns the same ID, it means it's already a root transaction
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      // When getRootTx returns the same ID, it means it's already a root transaction
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId: txId }),
       );
 
@@ -308,9 +308,9 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.verified, true);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have called getRootTxId
+      // Should have called getRootTx
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
 
@@ -337,7 +337,7 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
 
@@ -355,7 +355,7 @@ describe('RootParentDataSource', () => {
       );
 
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -374,7 +374,7 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
 
@@ -404,7 +404,7 @@ describe('RootParentDataSource', () => {
       );
 
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -424,7 +424,7 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
 
@@ -447,7 +447,7 @@ describe('RootParentDataSource', () => {
       }, fetchError);
 
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -472,7 +472,7 @@ describe('RootParentDataSource', () => {
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
 
@@ -581,7 +581,7 @@ describe('RootParentDataSource', () => {
 
       // Should not use legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         0,
       );
       assert.strictEqual(
@@ -645,7 +645,7 @@ describe('RootParentDataSource', () => {
 
       // Should not use legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         0,
       );
     });
@@ -712,7 +712,7 @@ describe('RootParentDataSource', () => {
       );
 
       // Should fallback to legacy when cycle detected
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId: 'fallback-root' }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -745,7 +745,7 @@ describe('RootParentDataSource', () => {
 
       // Should have fallen back to legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -765,7 +765,7 @@ describe('RootParentDataSource', () => {
       );
 
       // Mock legacy methods
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => ({ rootTxId }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -797,7 +797,7 @@ describe('RootParentDataSource', () => {
 
       // Should have fallen back to legacy
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -838,7 +838,7 @@ describe('RootParentDataSource', () => {
 
       // Should NOT have tried legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         0,
       );
       assert.strictEqual(

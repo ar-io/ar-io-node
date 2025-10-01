@@ -12,7 +12,7 @@ import { DataImporter } from './data-importer.js';
 import {
   ContiguousDataIndex,
   ContiguousDataSource,
-  DataItemRootTxIndex,
+  DataItemRootIndex,
   NormalizedDataItem,
   PartialJsonTransaction,
 } from '../types.js';
@@ -28,7 +28,7 @@ export class DataVerificationWorker {
   // Dependencies
   private log: winston.Logger;
   private contiguousDataIndex: ContiguousDataIndex;
-  private dataItemRootTxIndex: DataItemRootTxIndex;
+  private dataItemRootTxIndex: DataItemRootIndex;
   private dataRootComputer: DataRootComputer;
   private chunkDataImporter: DataImporter | undefined;
   private bundleDataImporter: DataImporter | undefined;
@@ -62,7 +62,7 @@ export class DataVerificationWorker {
   }: {
     log: winston.Logger;
     contiguousDataIndex: ContiguousDataIndex;
-    dataItemRootTxIndex: DataItemRootTxIndex;
+    dataItemRootTxIndex: DataItemRootIndex;
     contiguousDataSource: ContiguousDataSource;
     chunkDataImporter?: DataImporter;
     bundleDataImporter?: DataImporter;
@@ -119,7 +119,7 @@ export class DataVerificationWorker {
     const rootTxToDataIds = new Map<string, Set<string>>();
 
     for (const dataId of dataIds) {
-      const result = await this.dataItemRootTxIndex.getRootTxId(dataId);
+      const result = await this.dataItemRootTxIndex.getRootTx(dataId);
       const rootTxId = result?.rootTxId;
 
       if (rootTxId !== undefined) {

@@ -50,7 +50,6 @@ import {
   DataAttributesSource,
   ContiguousDataParent,
   DataItemAttributes,
-  DataItemRootTxIndex,
   GqlQueryable,
   GqlTransaction,
   NestedDataIndexWriter,
@@ -2787,7 +2786,6 @@ export class StandaloneSqliteDatabase
     ChainOffsetIndex,
     ContiguousDataIndex,
     DataAttributesSource,
-    DataItemRootTxIndex,
     GqlQueryable,
     NestedDataIndexWriter
 {

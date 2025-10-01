@@ -11,7 +11,7 @@ import {
   ContiguousData,
   ContiguousDataAttributesStore,
   ContiguousDataSource,
-  DataItemRootTxIndex,
+  DataItemRootIndex,
   Region,
   RequestAttributes,
 } from '../types.js';
@@ -27,7 +27,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
   private dataAttributesSource: ContiguousDataAttributesStore;
-  private dataItemRootTxIndex: DataItemRootTxIndex;
+  private dataItemRootTxIndex: DataItemRootIndex;
   private ans104OffsetSource: Ans104OffsetSource;
   private fallbackToLegacyTraversal: boolean;
 
@@ -51,7 +51,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
     dataAttributesSource: ContiguousDataAttributesStore;
-    dataItemRootTxIndex: DataItemRootTxIndex;
+    dataItemRootTxIndex: DataItemRootIndex;
     ans104OffsetSource: Ans104OffsetSource;
     fallbackToLegacyTraversal?: boolean;
   }) {
@@ -404,7 +404,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       let rootTxId: string | undefined;
       let rootResult: any;
       try {
-        rootResult = await this.dataItemRootTxIndex.getRootTxId(id);
+        rootResult = await this.dataItemRootTxIndex.getRootTx(id);
         rootTxId = rootResult?.rootTxId;
         rootTxLookupSpan.setAttributes({
           'root.tx_id': rootTxId ?? 'not_found',
