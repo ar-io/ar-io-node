@@ -185,9 +185,9 @@ export class Ans104OffsetSource {
         const itemOffset = currentOffset + targetItem.offset;
         return {
           itemOffset,
-          dataOffset: itemOffset + dataItemInfo.dataOffset,
+          dataOffset: itemOffset + dataItemInfo.headerSize,
           itemSize: targetItem.size,
-          dataSize: dataItemInfo.dataSize,
+          dataSize: dataItemInfo.payloadSize,
           contentType: dataItemInfo.contentType,
         };
       }
@@ -203,19 +203,19 @@ export class Ans104OffsetSource {
         if (isBundleResult) {
           log.debug('Found nested bundle', { nestedId: item.id });
 
-          // Parse the nested bundle's ANS-104 header to get its data offset
+          // Parse the nested bundle's ANS-104 header to get its header size
           const nestedBundleInfo = await this.parseDataItemHeader(
             actualRootBundleId,
             currentOffset + item.offset,
             item.size,
           );
 
-          // Recursively search within the nested bundle's data
-          // The data offset is relative to the bundle's start, so add it to currentOffset
+          // Recursively search within the nested bundle's payload
+          // Skip the nested bundle's headers by adding headerSize to the offset
           const result = await this.findInBundle(
             dataItemId,
             item.id,
-            currentOffset + item.offset + nestedBundleInfo.dataOffset,
+            currentOffset + item.offset + nestedBundleInfo.headerSize,
             visited,
             actualRootBundleId,
           );
@@ -490,7 +490,11 @@ export class Ans104OffsetSource {
     bundleId: string,
     itemOffset: number,
     totalSize: number,
-  ): Promise<{ dataOffset: number; dataSize: number; contentType?: string }> {
+  ): Promise<{
+    headerSize: number;
+    payloadSize: number;
+    contentType?: string;
+  }> {
     const log = this.log.child({
       method: 'parseDataItemHeader',
       bundleId,
@@ -502,11 +506,11 @@ export class Ans104OffsetSource {
       // Fetch enough data to parse the full header including tags
       // The arbundles library enforces MAX_TAG_BYTES (4096 bytes) as the maximum tag section size
       // MAX_DATA_ITEM_HEADER_SIZE accounts for all header components plus this tag limit
-      const headerSize = Math.min(totalSize, MAX_DATA_ITEM_HEADER_SIZE);
+      const fetchSize = Math.min(totalSize, MAX_DATA_ITEM_HEADER_SIZE);
 
       const headerData = await this.dataSource.getData({
         id: bundleId,
-        region: { offset: itemOffset, size: headerSize },
+        region: { offset: itemOffset, size: fetchSize },
       });
 
       const reader = getReader(headerData.stream);
@@ -580,18 +584,18 @@ export class Ans104OffsetSource {
       }
 
       // The data starts right after the header
-      const dataOffset = headerOffset;
-      const dataSize = totalSize - headerOffset;
+      const headerSize = headerOffset;
+      const payloadSize = totalSize - headerOffset;
 
       log.debug('Parsed data item header', {
         signatureType,
-        headerOffset: dataOffset,
-        dataSize,
+        headerSize,
+        payloadSize,
         totalSize,
         contentType,
       });
 
-      return { dataOffset, dataSize, contentType };
+      return { headerSize, payloadSize, contentType };
     } catch (error: any) {
       log.error('Error parsing data item header', {
         error: error.message,
