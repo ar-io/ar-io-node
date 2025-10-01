@@ -21,7 +21,7 @@ The `DataVerificationWorker` is the central orchestrator of the verification pro
 -   **Triggers**: It can be triggered on a timed interval and potentially by events indicating new data arrival.
 -   **Dependencies**:
     -   `ContiguousDataIndex`: To query for verifiable data IDs and update their verification status.
-    -   `DataItemRootTxIndex`: To fetch the root transaction ID for a given data item, which is crucial for context.
+    -   `DataItemRootIndex`: To fetch the root transaction ID for a given data item, which is crucial for context.
     -   `DataRootComputer`: To compute the Merkle data root of a given data item.
     -   `DataImporter` (optional): To queue data for re-downloading/re-importing if verification fails due to mismatched data roots, suggesting local data corruption.
     -   `ContiguousDataSource`: To get the actual data stream for root computation.
@@ -33,7 +33,7 @@ The `DataVerificationWorker` is the central orchestrator of the verification pro
 ### `ContiguousDataIndex` (Interface, implemented by SQL stores)
 -   **Role**: This interface represents the storage system that holds metadata about contiguous data items (transactions or data items from bundles). It's queried by the `DataVerificationWorker` to find items needing verification (`getVerifiableDataIds`), retrieve their current attributes (like an indexed `dataRoot` via `getDataAttributes`), and to update their status (`saveVerificationStatus`, `incrementVerificationRetryCount`).
 
-### `DataItemRootTxIndex` (Interface, implemented by SQL stores)
+### `DataItemRootIndex` (Interface, implemented by SQL stores)
 -   **Role**: Provides a mapping from a data item ID to its root transaction ID. This is important for understanding the context of a piece of data, especially for bundled data items, as verification is often performed on the entire root transaction.
 
 ### `ContiguousDataSource` (Interface)
@@ -77,7 +77,7 @@ This section details the key internal APIs and function signatures involved in t
 -   `constructor(options)`: Initializes the worker with dependencies like loggers, data indexes, data sources, and configuration for worker count, timeouts, and intervals.
 -   `async start(): Promise<void>`: Starts the worker's periodic polling mechanism to queue and process data items for verification.
 -   `async stop(): Promise<void>`: Stops the worker, clears any intervals, and kills the internal queue.
--   `async queueRootTx(): Promise<void>`: Queries `ContiguousDataIndex` for verifiable data IDs, resolves their root transaction IDs using `DataItemRootTxIndex`, and adds them to an internal processing queue if not already present.
+-   `async queueRootTx(): Promise<void>`: Queries `ContiguousDataIndex` for verifiable data IDs, resolves their root transaction IDs using `DataItemRootIndex`, and adds them to an internal processing queue if not already present.
 -   `async verifyDataRoot(id: string): Promise<boolean>`: The core verification logic for a single data item (identified by its root transaction ID).
     -   Fetches data attributes (including the indexed `data_root`) from `ContiguousDataIndex`.
     -   If `data_root` is present, calls `DataRootComputer.computeDataRoot(id)` to get the computed root.
@@ -97,8 +97,8 @@ This interface is typically implemented by database interaction classes.
 -   `async incrementVerificationRetryCount(id: string): Promise<void>`: Increments the `verification_retry_count` and updates `last_verification_attempted_at` for the given data item.
 -   (Other methods exist for managing data, but these are key for verification).
 
-### `DataItemRootTxIndex` (Interface)
--   `async getRootTxId(dataId: string): Promise<string | undefined>`: For a given data item ID (which could be from a bundle), returns the ID of the root transaction that contains it.
+### `DataItemRootIndex` (Interface)
+-   `async getRootTx(dataId: string): Promise<string | undefined>`: For a given data item ID (which could be from a bundle), returns the ID of the root transaction that contains it.
 
 ### `DataRootComputer` (`src/lib/data-root.ts`)
 -   `async computeDataRoot(id: string): Promise<string | undefined>`: Fetches the data for the given ID using `ContiguousDataSource`, computes its Merkle data root, and returns it as a string. Returns `undefined` if computation fails.
@@ -124,7 +124,7 @@ sequenceDiagram
     participant Worker as DataVerificationWorker
     participant Scheduler
     participant ContigIndex as ContiguousDataIndex
-    participant RootTxIndex as DataItemRootTxIndex
+    participant RootTxIndex as DataItemRootIndex
     participant DataRootComp as DataRootComputer
     participant DataSource as ContiguousDataSource
     participant Importer as DataImporter
@@ -134,7 +134,7 @@ sequenceDiagram
     Worker->>ContigIndex: getVerifiableDataIds()
     ContigIndex-->>Worker: Returns list of data IDs
     loop For each dataId
-        Worker->>RootTxIndex: getRootTxId(dataId)
+        Worker->>RootTxIndex: getRootTx(dataId)
         RootTxIndex-->>Worker: Returns rootTxId
         Worker->>Worker: Enqueue rootTxId if not already processed
     end

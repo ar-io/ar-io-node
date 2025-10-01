@@ -6,13 +6,13 @@
  */
 import winston from 'winston';
 import CircuitBreaker from 'opossum';
-import { DataItemRootTxIndex } from '../types.js';
+import { DataItemRootIndex } from '../types.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
-export class CompositeRootTxIndex implements DataItemRootTxIndex {
+export class CompositeRootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
-  private indexes: DataItemRootTxIndex[];
+  private indexes: DataItemRootIndex[];
   private circuitBreakers: Map<
     string,
     CircuitBreaker<
@@ -41,7 +41,7 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     },
   }: {
     log: winston.Logger;
-    indexes: DataItemRootTxIndex[];
+    indexes: DataItemRootIndex[];
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -56,13 +56,10 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     this.circuitBreakers = new Map();
     for (const index of indexes) {
       const name = index.constructor.name;
-      const breaker = new CircuitBreaker(
-        (id: string) => index.getRootTxId(id),
-        {
-          ...circuitBreakerOptions,
-          name,
-        },
-      );
+      const breaker = new CircuitBreaker((id: string) => index.getRootTx(id), {
+        ...circuitBreakerOptions,
+        name,
+      });
 
       // Register metrics for this circuit breaker
       // Map class names to BreakerSource values
@@ -87,7 +84,7 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     }
   }
 
-  async getRootTxId(id: string): Promise<
+  async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
         rootOffset?: number;
@@ -98,7 +95,7 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
       }
     | undefined
   > {
-    const log = this.log.child({ method: 'getRootTxId', id });
+    const log = this.log.child({ method: 'getRootTx', id });
 
     // Keep track of incomplete result as fallback
     let fallbackResult:

@@ -167,7 +167,7 @@ async function traverseToRootUsingAttributes(dataItemId: string): Promise<Offset
 
 ### Turbo Integration Workflow
 
-1. **Query Turbo**: `TurboRootTxIndex.getRootTxId()` calls `/tx/{id}/offsets`
+1. **Query Turbo**: `TurboRootTxIndex.getRootTx()` calls `/tx/{id}/offsets`
 2. **Chain Following**: For nested items, follow `parentDataItemId` to build complete chain
 3. **Offset Calculation**: Use `calculateRootPosition()` to compute absolute offsets
 4. **Result Return**: Provide `rootTxId`, `rootOffset`, and `rootDataOffset`

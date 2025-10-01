@@ -818,8 +818,8 @@ export interface ContiguousDataIndex {
   saveVerificationPriority(id: string, priority: number): Promise<void>;
 }
 
-export interface DataItemRootTxIndex {
-  getRootTxId(id: string): Promise<
+export interface DataItemRootIndex {
+  getRootTx(id: string): Promise<
     | {
         rootTxId: string;
         rootOffset?: number;
