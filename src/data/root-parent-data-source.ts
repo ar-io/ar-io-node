@@ -17,6 +17,7 @@ import {
 } from '../types.js';
 import { startChildSpan } from '../tracing.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
+import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 
 /**
  * Data source that resolves data items to their root bundles before fetching data.
@@ -171,8 +172,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       currentId = attributes.parentId;
 
       // Safety check for excessive traversal depth
-      // TODO: lift this magic number into a constant
-      if (traversalPath.length > 10) {
+      if (traversalPath.length > MAX_BUNDLE_NESTING_DEPTH) {
         log.warn('Excessive traversal depth, aborting', {
           depth: traversalPath.length,
           traversalPath,
