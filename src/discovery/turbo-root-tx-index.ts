@@ -229,18 +229,18 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       return NOT_FOUND;
     } catch (error: any) {
       if (error.response?.status === 404) {
-        // Check if this could be an L1 transaction (Turbo doesn't index L1 txs)
-        // Only do this check after the first lookup (depth > 1) to avoid false positives
+        // Distinguish between initial lookup vs parent chain traversal
+        // depth > 1 means we're following a parent reference that isn't in Turbo
         if (depth > 1 && isValidTxId(id)) {
-          log.debug('Treating as potential L1 transaction after Turbo 404', {
+          log.debug('Parent item not found in Turbo during chain traversal', {
             id,
             depth,
           });
-          // Return undefined to indicate this is a root transaction
+          // Parent not indexed by Turbo - cannot resolve chain
           return NOT_FOUND;
         }
 
-        // Item not found in Turbo
+        // Item not found in Turbo (initial lookup)
         log.debug('Item not found in Turbo (404)', { id });
 
         // Don't cache 404s as the item might appear later
