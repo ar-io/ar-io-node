@@ -1065,32 +1065,32 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getDataAttributes(id: string) {
-    const coreRow = this.stmts.core.selectDataAttributes.get({
+    const txOrItemRow = this.stmts.core.selectDataAttributes.get({
       id: fromB64Url(id),
     });
 
     const dataRow = this.stmts.data.selectDataAttributes.get({
       id: fromB64Url(id),
-      data_root: coreRow?.data_root,
+      data_root: txOrItemRow?.data_root,
     });
 
-    if (coreRow === undefined && dataRow === undefined) {
+    if (txOrItemRow === undefined && dataRow === undefined) {
       return undefined;
     }
 
     const contentType =
-      coreRow?.content_type ?? dataRow?.original_source_content_type;
+      txOrItemRow?.content_type ?? dataRow?.original_source_content_type;
     const hash = dataRow?.hash;
-    const dataRoot = coreRow?.data_root;
+    const dataRoot = txOrItemRow?.data_root;
 
     // Prefer root_transaction_id from data.db if available
     const rootTransactionId =
       dataRow?.root_transaction_id !== null &&
       dataRow?.root_transaction_id !== undefined
         ? toB64Url(dataRow.root_transaction_id)
-        : coreRow?.root_transaction_id !== null &&
-          coreRow?.root_transaction_id !== undefined
-        ? toB64Url(coreRow.root_transaction_id)
+        : txOrItemRow?.root_transaction_id !== null &&
+          txOrItemRow?.root_transaction_id !== undefined
+        ? toB64Url(txOrItemRow.root_transaction_id)
         : undefined;
 
     let dataItemAttributes;
@@ -1101,15 +1101,15 @@ export class StandaloneSqliteDatabaseWorker {
     }
 
     // Calculate resolved offset values for reuse
-    const rootParentOffset = dataRow?.root_parent_offset ?? coreRow?.root_parent_offset;
-    const dataOffset = dataRow?.data_offset ?? coreRow?.data_offset;
+    const rootParentOffset = dataRow?.root_parent_offset ?? txOrItemRow?.root_parent_offset;
+    const dataOffset = dataRow?.data_offset ?? txOrItemRow?.data_offset;
     const offset = dataRow?.data_item_offset ?? dataItemAttributes?.offset;
 
     return {
       hash: hash ? toB64Url(hash) : undefined,
       dataRoot: dataRoot ? toB64Url(dataRoot) : undefined,
-      size: coreRow?.data_size ?? dataRow?.data_size,
-      contentEncoding: coreRow?.content_encoding,
+      size: txOrItemRow?.data_size ?? dataRow?.data_size,
+      contentEncoding: txOrItemRow?.content_encoding,
       contentType,
       rootTransactionId,
       rootParentOffset,
@@ -1132,7 +1132,7 @@ export class StandaloneSqliteDatabaseWorker {
           ? rootParentOffset + dataOffset
           : undefined),
       isManifest: contentType === MANIFEST_CONTENT_TYPE,
-      stable: coreRow?.stable === true,
+      stable: txOrItemRow?.stable === true,
       verified: dataRow?.verified === 1,
     };
   }
