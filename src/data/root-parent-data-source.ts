@@ -80,12 +80,46 @@ export class RootParentDataSource implements ContiguousDataSource {
 
     log.debug('Starting parent traversal using attributes');
 
+    // First, check if we can get the initial attributes
+    const initialAttributes =
+      await this.dataAttributesSource.getDataAttributes(dataItemId);
+
+    if (!initialAttributes) {
+      log.debug('No attributes found for data item');
+      return null;
+    }
+
+    // If we already have absolute root offsets, use them directly without traversing
+    if (
+      initialAttributes.rootTransactionId !== undefined &&
+      initialAttributes.rootDataItemOffset !== undefined &&
+      initialAttributes.rootDataOffset !== undefined &&
+      initialAttributes.size !== undefined
+    ) {
+      log.debug('Using pre-computed root offsets from attributes', {
+        rootTransactionId: initialAttributes.rootTransactionId,
+        rootDataItemOffset: initialAttributes.rootDataItemOffset,
+        rootDataOffset: initialAttributes.rootDataOffset,
+        size: initialAttributes.size,
+      });
+
+      return {
+        rootTxId: initialAttributes.rootTransactionId,
+        totalOffset: initialAttributes.rootDataItemOffset,
+        rootDataOffset: initialAttributes.rootDataOffset,
+        size: initialAttributes.size,
+      };
+    }
+
+    log.debug('Root offsets not available, traversing parent chain');
+
     let currentId = dataItemId;
     let totalOffset = 0;
     const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
     let originalItemDataOffset: number | undefined;
+    let currentAttributes = initialAttributes; // Reuse the initial attributes we already fetched
 
     while (true) {
       // Cycle detection
@@ -99,23 +133,10 @@ export class RootParentDataSource implements ContiguousDataSource {
       visited.add(currentId);
       traversalPath.push(currentId);
 
-      // Get attributes for current item
-      const attributes =
-        await this.dataAttributesSource.getDataAttributes(currentId);
+      // Use current attributes (already fetched for first iteration)
+      const attributes = currentAttributes;
 
-      if (!attributes) {
-        // If this is the first item and has no attributes, traversal fails
-        if (traversalPath.length === 1) {
-          log.debug(
-            'No attributes found for initial item, traversal incomplete',
-            {
-              currentId,
-              traversalPath,
-            },
-          );
-          return null;
-        }
-
+      if (attributes === null || attributes === undefined) {
         // If we've traversed to this item via parent links, it's the root
         log.debug('Reached root transaction (no attributes after traversal)', {
           rootTxId: currentId,
@@ -179,6 +200,10 @@ export class RootParentDataSource implements ContiguousDataSource {
         });
         return null;
       }
+
+      // Fetch attributes for the next iteration
+      currentAttributes =
+        await this.dataAttributesSource.getDataAttributes(currentId);
     }
   }
 
@@ -253,12 +278,14 @@ export class RootParentDataSource implements ContiguousDataSource {
             rootTransactionId: rootTxId,
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
+            size: size,
           });
           this.log.debug('Stored root offsets from attributes traversal', {
             id,
             rootTransactionId: rootTxId,
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
+            size: size,
           });
         } catch (error: any) {
           this.log.warn(
@@ -274,8 +301,9 @@ export class RootParentDataSource implements ContiguousDataSource {
         let finalRegion: Region;
         if (region) {
           // If a region was requested, adjust it relative to the discovered offset
+          // Use rootDataOffset (payload start) not totalOffset (item start)
           finalRegion = {
-            offset: totalOffset + (region.offset || 0),
+            offset: rootDataOffset + (region.offset || 0),
             size: region.size || size,
           };
 
@@ -300,9 +328,10 @@ export class RootParentDataSource implements ContiguousDataSource {
             }
           }
         } else {
-          // No region requested, use the full data item
+          // No region requested, use the full data item payload
+          // Use rootDataOffset (payload start) not totalOffset (item start)
           finalRegion = {
-            offset: totalOffset,
+            offset: rootDataOffset,
             size,
           };
         }
@@ -417,18 +446,38 @@ export class RootParentDataSource implements ContiguousDataSource {
           rootResult?.rootDataOffset !== undefined
         ) {
           try {
-            await this.dataAttributesSource.setDataAttributes(id, {
+            const attributesToStore: {
+              rootTransactionId: string;
+              rootDataItemOffset: number;
+              rootDataOffset: number;
+              itemSize?: number;
+              size?: number;
+            } = {
               rootTransactionId: rootTxId,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
-              itemSize: rootResult.size,
-            });
+            };
+
+            // Store both itemSize and size if available
+            if (rootResult.size !== undefined) {
+              attributesToStore.itemSize = rootResult.size;
+            }
+            if (rootResult.dataSize !== undefined) {
+              attributesToStore.size = rootResult.dataSize;
+            }
+
+            await this.dataAttributesSource.setDataAttributes(
+              id,
+              attributesToStore,
+            );
+
             this.log.debug('Stored root offsets from root TX index', {
               id,
               rootTransactionId: rootTxId,
               rootDataItemOffset: rootResult.rootOffset,
               rootDataOffset: rootResult.rootDataOffset,
               itemSize: rootResult.size,
+              size: rootResult.dataSize,
             });
           } catch (error: any) {
             this.log.warn('Failed to store root offsets from root TX index', {
@@ -561,12 +610,14 @@ export class RootParentDataSource implements ContiguousDataSource {
                 rootDataItemOffset: number;
                 rootDataOffset: number;
                 itemSize: number;
+                size: number;
                 contentType?: string;
               } = {
                 rootTransactionId: rootTxId,
                 rootDataItemOffset: bundleParseResult.itemOffset,
                 rootDataOffset: bundleParseResult.dataOffset,
                 itemSize: bundleParseResult.itemSize,
+                size: bundleParseResult.dataSize,
               };
 
               if (bundleParseResult.contentType !== undefined) {
@@ -584,6 +635,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 rootDataItemOffset: bundleParseResult.itemOffset,
                 rootDataOffset: bundleParseResult.dataOffset,
                 itemSize: bundleParseResult.itemSize,
+                size: bundleParseResult.dataSize,
                 contentType: bundleParseResult.contentType,
               });
             } catch (error: any) {

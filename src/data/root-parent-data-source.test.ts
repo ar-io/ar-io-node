@@ -686,6 +686,63 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(dataCall.region, undefined);
     });
 
+    it('should use pre-computed root offsets when available', async () => {
+      const dataItemId = 'test-item';
+      const rootTxId = 'root-bundle-id';
+      const dataStream = Readable.from([Buffer.from('test data')]);
+
+      // Mock attributes with pre-computed root offsets
+      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 500,
+              offset: 100,
+              parentId: 'parent-id',
+              contentType: 'text/plain',
+              // Pre-computed absolute offsets
+              rootTransactionId: rootTxId,
+              rootDataItemOffset: 1234,
+              rootDataOffset: 1334,
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: false,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({ id: dataItemId });
+
+      assert.strictEqual(result.size, 500);
+      assert.strictEqual(result.stream, dataStream);
+
+      // Should have called getDataAttributes twice:
+      // 1. getData for content type
+      // 2. traverseToRootUsingAttributes early check (finds pre-computed offsets)
+      assert.strictEqual(
+        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        2,
+      );
+
+      // Should NOT have traversed parents (optimization worked!)
+      // Only the initial attributes fetch, no parent chain traversal
+
+      // Should have fetched from root using pre-computed offsets
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, rootTxId);
+      assert.deepStrictEqual(dataCall.region, {
+        offset: 1334, // rootDataOffset (where payload starts, skipping headers)
+        size: 500, // payload size
+      });
+    });
+
     it('should detect cycles in parent chain', async () => {
       const itemA = 'item-a';
       const itemB = 'item-b';
@@ -737,10 +794,14 @@ describe('RootParentDataSource', () => {
       // Should succeed using fallback
       assert.strictEqual(result.size, 500);
 
-      // Should have attempted attributes lookup (once at start + once for each item in cycle)
+      // Should have attempted attributes lookup:
+      // 1. getData for content type
+      // 2. traverseToRootUsingAttributes initial check
+      // 3. Traverse to itemB
+      // 4. Traverse back to itemA (cycle detected on next iteration)
       assert.strictEqual(
         (dataAttributesSource.getDataAttributes as any).mock.calls.length,
-        3,
+        4,
       );
 
       // Should have fallen back to legacy methods
