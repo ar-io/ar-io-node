@@ -569,29 +569,167 @@ interface ContiguousMetadata {
   accessTimestampMs: number;
 }
 
+/**
+ * Attributes describing contiguous data for a transaction or data item.
+ *
+ * This interface provides comprehensive metadata about stored data, including
+ * content properties, bundle hierarchy relationships, and offset information
+ * for efficient retrieval. Some fields are only present for data items (bundled
+ * data) while others apply to both transactions and data items.
+ *
+ * See docs/glossary.md for detailed definitions of offsets and ANS-104 concepts.
+ */
 export interface ContiguousDataAttributes {
+  // Content identification and verification
+
+  /** SHA-256 hash of the complete contiguous data (base64url encoded). */
   hash?: string;
+
+  /** Merkle root hash from the transaction's data path (base64url encoded). For transactions only. */
   dataRoot?: string;
+
+  /** Total size of the data payload in bytes. For data items, this is the payload size only. */
   size: number;
+
+  /**
+   * Position of this item within its immediate parent.
+   * - For transactions: the transaction offset (end position) in the weave
+   * - For data items: position within the parent bundle's payload
+   */
   offset: number;
+
+  // Bundle hierarchy (data items only)
+
+  /**
+   * ID of the immediate parent bundle containing this data item.
+   * Undefined for L1 transactions. For nested bundles, points to the direct parent,
+   * not the root transaction.
+   */
   parentId?: string;
+
+  // Content metadata
+
+  /** Content encoding (e.g., "gzip"). */
   contentEncoding?: string;
+
+  /** MIME type of the content (e.g., "application/json", "image/png"). */
   contentType?: string;
+
+  // Root transaction reference
+
+  /**
+   * The top-level Arweave transaction ID containing this data.
+   * - For transactions: undefined (they are themselves the root)
+   * - For data items: the L1 transaction ID containing the bundle hierarchy
+   */
   rootTransactionId?: string;
+
+  // Offset fields for nested bundle navigation
+  // These enable direct access without traversing the entire bundle hierarchy
+
+  /**
+   * Offset of the parent bundle's data payload relative to the root transaction.
+   * - For top-level bundles: 0
+   * - For nested bundles: calculated by adding parent's rootParentOffset + dataOffset
+   * Used with dataOffset and offset to calculate absolute positions.
+   */
   rootParentOffset?: number;
+
+  /**
+   * Starting position of the data payload within this data item, relative to the parent bundle.
+   * Calculated as: data item's offset + header size.
+   * Used with rootParentOffset to calculate rootDataOffset: rootParentOffset + dataOffset.
+   */
   dataOffset?: number;
+
+  /**
+   * Total size of the data item including headers and payload.
+   * Equivalent to Turbo's rawContentLength field.
+   * Data items only.
+   */
   itemSize?: number;
+
+  /**
+   * Position of the data item header within its parent bundle.
+   * This is where the data item structure begins, before any headers.
+   * Data items only.
+   */
   dataItemOffset?: number;
+
+  /**
+   * Bundle format identifier (0 = ANS-102, 1 = ANS-104).
+   * Data items only.
+   */
   formatId?: number;
+
+  // Data item component offsets (all relative to parent bundle start)
+  // These enable extracting specific parts of the data item structure
+
+  /**
+   * Size of the signature in bytes.
+   * Data items only.
+   */
   signatureSize?: number;
+
+  /**
+   * Position where signature bytes begin, relative to parent bundle start.
+   * Located 2 bytes after the data item start (after signature type field).
+   * Data items only.
+   */
   signatureOffset?: number;
+
+  /**
+   * Position where owner public key begins, relative to parent bundle start.
+   * Located immediately after the signature bytes.
+   * Data items only.
+   */
   ownerOffset?: number;
+
+  /**
+   * Size of the owner public key in bytes.
+   * Data items only.
+   */
   ownerSize?: number;
+
+  // Absolute offsets within root transaction
+  // These enable direct chunk retrieval from the root transaction and retrieval from root (L1) bundle contiguous data
+
+  /**
+   * Absolute position of the data item header within the root transaction.
+   * Calculated as: rootParentOffset + offset
+   * Enables direct access to the data item without traversing bundle hierarchy.
+   * Data items only.
+   */
   rootDataItemOffset?: number;
+
+  /**
+   * Absolute position of the data payload within the root transaction.
+   * Calculated as: rootParentOffset + dataOffset
+   * Enables direct chunk retrieval of just the payload data.
+   * Data items only.
+   */
   rootDataOffset?: number;
+
+  // Status flags
+
+  /** True if this data has an ArFS manifest content type. */
   isManifest: boolean;
+
+  /**
+   * True if the data is beyond the fork depth threshold and will not be reorganized.
+   * Data becomes stable after it is at least 18 blocks deep in the chain, meaning
+   * it cannot be removed by a blockchain fork.
+   */
   stable: boolean;
+
+  /**
+   * True if the data has been verified to exist on Arweave and is cryptographically valid.
+   * Verification confirms: (1) merkle paths prove the data exists on-chain, and
+   * (2) for data items, the signature is valid.
+   */
   verified: boolean;
+
+  /** The cryptographic signature (base64url encoded), or null if not available. */
   signature: string | null;
 }
 
