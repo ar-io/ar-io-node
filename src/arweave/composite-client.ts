@@ -15,17 +15,12 @@ import wait from '../lib/wait.js';
 import * as winston from 'winston';
 import pLimit from 'p-limit';
 import memoize from 'memoizee';
-import { isDeepStrictEqual } from 'node:util';
 import { context, trace, Span } from '@opentelemetry/api';
 import { ReadThroughPromiseCache } from '@ardrive/ardrive-promise-cache';
+import { LRUCache } from 'lru-cache';
 
 import { FailureSimulator } from '../lib/chaos.js';
-import { DnsResolver } from '../lib/dns-resolver.js';
 import { fromB64Url } from '../lib/encoding.js';
-import {
-  WeightedElement,
-  randomWeightedChoices,
-} from '../lib/random-weighted-choices.js';
 import {
   sanityCheckBlock,
   sanityCheckChunk,
@@ -36,6 +31,10 @@ import { secp256k1OwnerFromTx } from '../lib/ecdsa-public-key-recover.js';
 import * as metrics from '../metrics.js';
 import * as config from '../config.js';
 import { tracer } from '../tracing.js';
+import {
+  ArweavePeerManager,
+  type ArweavePeerCategory,
+} from '../peers/arweave-peer-manager.js';
 import {
   BroadcastChunkResult,
   BroadcastChunkResponses,
@@ -57,7 +56,6 @@ import {
   PartialJsonTransactionStore,
   Region,
   ChunkDataByAnySourceParams,
-  WithPeers,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 
@@ -71,7 +69,6 @@ const CHUNK_CACHE_TTL_SECONDS = 5;
 const CHUNK_CACHE_CAPACITY = 1000;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
-const DEFAULT_PEER_INFO_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
 
 // Peer queue management types
@@ -97,18 +94,6 @@ interface PeerChunkQueue {
   totalSuccesses: number;
 }
 
-interface Peer {
-  url: string;
-  blocks: number;
-  height: number;
-  lastSeen: number;
-}
-
-type WeightedPeerListName =
-  | 'weightedChainPeers'
-  | 'weightedGetChunkPeers'
-  | 'weightedPostChunkPeers';
-
 export class ArweaveCompositeClient
   implements
     ChainSource,
@@ -116,8 +101,7 @@ export class ArweaveCompositeClient
     ChunkByAnySource,
     ChunkDataByAnySource,
     ChunkMetadataByAnySource,
-    ContiguousDataSource,
-    WithPeers<Peer>
+    ContiguousDataSource
 {
   private arweave: Arweave;
   private log: winston.Logger;
@@ -126,38 +110,39 @@ export class ArweaveCompositeClient
   private blockStore: PartialJsonBlockStore;
   private chunkPromiseCache: ReadThroughPromiseCache<string, Chunk>;
   private skipCache: boolean;
-  private dnsResolver?: DnsResolver;
-  private dnsUpdateInterval?: NodeJS.Timeout;
 
   // Trusted node
   private trustedNodeUrl: string;
   private trustedNodeAxios;
 
-  // Peers
-  private peers: Record<string, Peer> = {};
-  private preferredChunkGetUrls: string[];
-  private resolvedChunkGetUrls: string[];
-  private weightedChainPeers: WeightedElement<string>[] = [];
-  private weightedGetChunkPeers: WeightedElement<string>[] = [];
-  private weightedPostChunkPeers: WeightedElement<string>[] = [];
+  // Peer management
+  public peerManager: ArweavePeerManager;
 
+  // Binary search caches (configured via environment variables)
+  private blockCache = new LRUCache<string, any>({
+    max: config.CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE,
+    ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS,
+  });
+  private txOffsetCache = new LRUCache<
+    string,
+    { offset: number; size: number }
+  >({
+    max: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE,
+    ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS,
+  });
+  private txDataCache = new LRUCache<string, any>({
+    max: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE,
+    ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS,
+  });
   // New peer-based chunk POST system
-  private preferredChunkPostUrls: string[];
-  private resolvedChunkPostUrls: string[];
   private peerChunkQueues: Map<string, PeerChunkQueue> = new Map();
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
+  // Timer references for cleanup
+  private bucketFillerInterval?: NodeJS.Timeout;
 
   // Block and TX promise caches used for prefetching
-  private blockByHeightPromiseCache = new NodeCache({
-    checkperiod: 10,
-    stdTTL: 30,
-    useClones: false, // cloning promises is unsafe
-  });
-  private txPromiseCache = new NodeCache({
-    checkperiod: 10,
-    stdTTL: 60,
-    useClones: false, // cloning promises is unsafe
-  });
+  private blockByHeightPromiseCache: NodeCache;
+  private txPromiseCache: NodeCache;
 
   // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<
@@ -180,6 +165,7 @@ export class ArweaveCompositeClient
     blockStore,
     txStore,
     failureSimulator,
+    peerManager,
     requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS,
     requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
     maxRequestsPerSecond = DEFAULT_MAX_REQUESTS_PER_SECOND,
@@ -187,8 +173,7 @@ export class ArweaveCompositeClient
     blockPrefetchCount = DEFAULT_BLOCK_PREFETCH_COUNT,
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
-    preferredChunkGetUrls = [],
-    dnsResolver,
+    cacheCheckPeriodSeconds = 10,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -196,6 +181,7 @@ export class ArweaveCompositeClient
     blockStore: PartialJsonBlockStore;
     txStore: PartialJsonTransactionStore;
     failureSimulator: FailureSimulator;
+    peerManager: ArweavePeerManager;
     requestTimeout?: number;
     requestRetryCount?: number;
     requestPerSecond?: number;
@@ -204,45 +190,23 @@ export class ArweaveCompositeClient
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
-    preferredChunkGetUrls?: string[];
-    dnsResolver?: DnsResolver;
+    cacheCheckPeriodSeconds?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
-    this.preferredChunkGetUrls = preferredChunkGetUrls.map((url) =>
-      url.replace(/\/$/, ''),
-    );
-    this.dnsResolver = dnsResolver;
-
-    // Initialize with unresolved URLs first
-    this.resolvedChunkGetUrls = this.preferredChunkGetUrls;
-
-    // TODO: use defaults in constructor instead of referencing config here
-
-    // Initialize new peer-based chunk POST system
-    this.preferredChunkPostUrls = config.PREFERRED_CHUNK_POST_NODE_URLS.map(
-      (url) => url.replace(/\/$/, ''),
-    );
-    // Initialize with unresolved URLs first
-    this.resolvedChunkPostUrls = this.preferredChunkPostUrls;
-    this.initializeChunkPostPeers();
+    this.peerManager = peerManager;
 
     // Initialize memoized sorting function for chunk POST peers
     this.getSortedChunkPostPeers = memoize(
       (eligiblePeers: string[]) => {
-        // Create a copy and sort: preferred peers first, then by weight within each group
-        return [...eligiblePeers].sort((a, b) => {
-          const aIsPreferred = this.isPreferredPeer(a);
-          const bIsPreferred = this.isPreferredPeer(b);
-
-          // If one is preferred and the other isn't, preferred comes first
-          if (aIsPreferred && !bIsPreferred) return -1;
-          if (!aIsPreferred && bIsPreferred) return 1;
-
-          // If both are preferred or both are not, sort by weight
-          return this.getPeerWeight(b) - this.getPeerWeight(a);
-        });
+        // Prioritize eligible peers chosen by weighted selection; never introduce ineligible ones
+        const selected = new Set(
+          this.peerManager.selectPeers('postChunk', eligiblePeers.length),
+        );
+        const prioritized = eligiblePeers.filter((p) => selected.has(p));
+        const remainder = eligiblePeers.filter((p) => !selected.has(p));
+        return [...prioritized, ...remainder];
       },
       {
         maxAge: config.CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS,
@@ -258,6 +222,18 @@ export class ArweaveCompositeClient
     this.txStore = txStore;
     this.blockStore = blockStore;
     this.skipCache = skipCache;
+
+    // Initialize NodeCache instances with configurable check period
+    this.blockByHeightPromiseCache = new NodeCache({
+      checkperiod: cacheCheckPeriodSeconds,
+      stdTTL: 30,
+      useClones: false, // cloning promises is unsafe
+    });
+    this.txPromiseCache = new NodeCache({
+      checkperiod: cacheCheckPeriodSeconds,
+      stdTTL: 60,
+      useClones: false, // cloning promises is unsafe
+    });
 
     // Initialize chunk promise cache with read-through function
     this.chunkPromiseCache = new ReadThroughPromiseCache<string, Chunk>({
@@ -327,273 +303,15 @@ export class ArweaveCompositeClient
     );
 
     // Start trusted node request bucket filler (for rate limiting)
-    setInterval(() => {
+    this.bucketFillerInterval = setInterval(() => {
       if (this.trustedNodeRequestBucket <= maxRequestsPerSecond * 300) {
         this.trustedNodeRequestBucket += maxRequestsPerSecond;
       }
     }, 1000);
 
-    // Refresh Arweave peers every 10 minutes
-    setInterval(() => this.refreshPeers(), 10 * 60 * 1000);
-
-    // Initialize preferred chunk GET URLs with high weight
-    this.initializePreferredChunkGetUrls();
-
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
-  }
-
-  /**
-   * Initializes the weighted GET chunk peers with preferred URLs.
-   * Sets high initial weight (100) for all preferred GET URLs.
-   * Deduplicates URLs to prevent over-representation.
-   * @private
-   */
-  private initializePreferredChunkGetUrls(): void {
-    // Deduplicate and initialize weightedGetChunkPeers with resolved URLs at high weight
-    const uniqueUrls = [...new Set(this.resolvedChunkGetUrls)];
-    this.weightedGetChunkPeers = uniqueUrls.map((peerUrl) => ({
-      id: peerUrl,
-      weight: 100, // High weight for preferred chunk GET URLs
-    }));
-
-    // Log URL resolution for debugging
-    if (this.dnsResolver && this.preferredChunkGetUrls.length > 0) {
-      this.log.debug(
-        'Initialized preferred chunk GET URLs with DNS resolution',
-        {
-          originalUrls: this.preferredChunkGetUrls.length,
-          resolvedUrls: uniqueUrls.length,
-          usingDefaults: this.preferredChunkGetUrls.some(
-            (url) => url.includes('data-') && url.includes('.arweave.xyz'),
-          ),
-        },
-      );
-    }
-  }
-
-  /**
-   * Initializes DNS resolution for preferred GET/POST URLs. Idempotent - safe to call multiple times.
-   */
-  async initializeDnsResolution(): Promise<void> {
-    if (!this.dnsResolver) {
-      return;
-    }
-
-    // Clear any existing timers to prevent orphaned intervals
-    this.stopDnsResolution();
-
-    const hasGetUrls = this.preferredChunkGetUrls.length > 0;
-    const hasPostUrls = this.preferredChunkPostUrls.length > 0;
-
-    if (!hasGetUrls && !hasPostUrls) {
-      return;
-    }
-
-    const log = this.log.child({ method: 'initializeDnsResolution' });
-
-    // Combine both GET and POST URLs for resolution
-    const allUrls = [
-      ...this.preferredChunkGetUrls,
-      ...this.preferredChunkPostUrls,
-    ];
-
-    // Perform initial DNS resolution
-    const resolveStart = Date.now();
-    log.info('Resolving DNS for preferred chunk nodes...', {
-      getUrlCount: this.preferredChunkGetUrls.length,
-      postUrlCount: this.preferredChunkPostUrls.length,
-      totalUrlCount: allUrls.length,
-    });
-
-    await this.dnsResolver.resolveUrls(allUrls);
-
-    const resolvedUrls = this.dnsResolver.getAllResolvedUrls();
-    const successCount = resolvedUrls.filter(
-      (r) => r.resolutionError === undefined,
-    ).length;
-
-    log.info('DNS resolution complete', {
-      totalUrls: allUrls.length,
-      successfulResolutions: successCount,
-      failedResolutions: allUrls.length - successCount,
-      durationMs: Date.now() - resolveStart,
-      usingDefaultGets: this.preferredChunkGetUrls.some(
-        (url) => url.includes('data-') && url.includes('.arweave.xyz'),
-      ),
-      usingDefaultPosts: this.preferredChunkPostUrls.some(
-        (url) => url.includes('tip-') && url.includes('.arweave.xyz'),
-      ),
-    });
-
-    // Log resolved URLs for debugging
-    resolvedUrls.forEach((result) => {
-      if (result.resolutionError !== undefined) {
-        log.warn('Failed to resolve URL', {
-          hostname: result.hostname,
-          originalUrl: result.originalUrl,
-          error: result.resolutionError,
-        });
-      } else {
-        log.debug('Resolved URL', {
-          hostname: result.hostname,
-          originalUrl: result.originalUrl,
-          resolvedUrl: result.resolvedUrl,
-          ips: result.ips,
-        });
-      }
-    });
-
-    // Update resolved URLs
-    this.updateResolvedUrls();
-
-    // Start periodic DNS re-resolution
-    if (config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS > 0) {
-      // Single interval that handles both DNS resolution and updates
-      this.dnsUpdateInterval = setInterval(async () => {
-        try {
-          log.debug('Running periodic DNS re-resolution');
-
-          // Trigger fresh DNS resolution
-          await this.dnsResolver?.resolveUrls(allUrls);
-
-          // Update our peer lists with the new results
-          this.updateResolvedUrls();
-        } catch (error: any) {
-          log.error('Error during periodic DNS resolution', {
-            error: error.message,
-            stack: error.stack,
-          });
-        }
-      }, config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS * 1000);
-
-      // Don't block the event loop
-      this.dnsUpdateInterval.unref();
-
-      log.info('Started periodic DNS re-resolution', {
-        intervalSeconds:
-          config.PREFERRED_CHUNK_NODE_DNS_RESOLUTION_INTERVAL_SECONDS,
-      });
-    }
-  }
-
-  /**
-   * Updates the resolved URLs for both GET and POST peers based on current DNS resolution.
-   * Detects changes and updates weighted peer lists accordingly.
-   * @private
-   */
-  private updateResolvedUrls(): void {
-    if (!this.dnsResolver) {
-      return;
-    }
-
-    // Update GET URLs
-    const newResolvedGetUrls = this.dnsResolver.getResolvedUrlStrings(
-      this.preferredChunkGetUrls,
-    );
-
-    // Check if GET URLs have changed
-    const getUrlsChanged = !isDeepStrictEqual(
-      newResolvedGetUrls,
-      this.resolvedChunkGetUrls,
-    );
-
-    if (getUrlsChanged) {
-      this.log.debug(
-        'DNS resolution changed, updating preferred chunk GET URLs',
-        {
-          oldUrls: this.resolvedChunkGetUrls,
-          newUrls: newResolvedGetUrls,
-        },
-      );
-
-      // Deduplicate resolved URLs to prevent over-representation
-      this.resolvedChunkGetUrls = [...new Set(newResolvedGetUrls)];
-
-      // Update the weighted peers list with new resolved URLs
-      const preferredPeers = this.resolvedChunkGetUrls.map((peerUrl) => ({
-        id: peerUrl,
-        weight: 100,
-      }));
-
-      // Preserve non-preferred peers
-      const nonPreferredPeers = this.weightedGetChunkPeers.filter(
-        (peer) =>
-          !this.resolvedChunkGetUrls.includes(peer.id) &&
-          !this.preferredChunkGetUrls.includes(peer.id),
-      );
-
-      this.weightedGetChunkPeers = [...preferredPeers, ...nonPreferredPeers];
-    }
-
-    // Update POST URLs
-    const newResolvedPostUrls = this.dnsResolver.getResolvedUrlStrings(
-      this.preferredChunkPostUrls,
-    );
-
-    // Check if POST URLs have changed
-    const postUrlsChanged = !isDeepStrictEqual(
-      newResolvedPostUrls,
-      this.resolvedChunkPostUrls,
-    );
-
-    if (postUrlsChanged) {
-      this.log.debug(
-        'DNS resolution changed, updating preferred chunk POST URLs',
-        {
-          oldUrls: this.resolvedChunkPostUrls,
-          newUrls: newResolvedPostUrls,
-        },
-      );
-
-      // Deduplicate resolved URLs to prevent over-representation
-      this.resolvedChunkPostUrls = [...new Set(newResolvedPostUrls)];
-
-      // Update the weighted POST peers list with new resolved URLs
-      const preferredPostPeers = this.resolvedChunkPostUrls.map((peerUrl) => ({
-        id: peerUrl,
-        weight: config.PREFERRED_CHUNK_POST_WEIGHT,
-      }));
-
-      // Preserve non-preferred POST peers
-      const nonPreferredPostPeers = this.weightedPostChunkPeers.filter(
-        (peer) =>
-          !this.resolvedChunkPostUrls.includes(peer.id) &&
-          !this.preferredChunkPostUrls.includes(peer.id),
-      );
-
-      this.weightedPostChunkPeers = [
-        ...preferredPostPeers,
-        ...nonPreferredPostPeers,
-      ];
-    }
-  }
-
-  /**
-   * Stops the periodic DNS resolution timer if running.
-   * Safe to call multiple times.
-   */
-  stopDnsResolution(): void {
-    if (this.dnsUpdateInterval) {
-      clearInterval(this.dnsUpdateInterval);
-      this.dnsUpdateInterval = undefined;
-    }
-  }
-
-  /**
-   * Initializes the weighted POST chunk peers with preferred URLs.
-   * Sets weight from config for all preferred POST URLs.
-   * Deduplicates URLs to prevent over-representation.
-   * @private
-   */
-  private initializeChunkPostPeers(): void {
-    // Deduplicate and initialize weightedPostChunkPeers with resolved URLs at high weight
-    const uniqueUrls = [...new Set(this.resolvedChunkPostUrls)];
-    this.weightedPostChunkPeers = uniqueUrls.map((peerUrl) => ({
-      id: peerUrl,
-      weight: config.PREFERRED_CHUNK_POST_WEIGHT,
-    }));
   }
 
   private getOrCreatePeerQueue(peer: string): PeerChunkQueue {
@@ -615,57 +333,13 @@ export class ArweaveCompositeClient
   }
 
   private getEligiblePeersForPost(): string[] {
-    return this.weightedPostChunkPeers
-      .filter((peer) => {
-        const peerQueue = this.peerChunkQueues.get(peer.id);
-        return (
-          !peerQueue ||
-          peerQueue.queue.length() < config.CHUNK_POST_QUEUE_DEPTH_THRESHOLD
-        );
-      })
-      .map((peer) => peer.id);
-  }
-
-  private getPeerWeight(peer: string): number {
-    const weightedPeer = this.weightedPostChunkPeers.find((p) => p.id === peer);
-    return weightedPeer?.weight ?? 1;
-  }
-
-  private isPreferredPeer(peer: string): boolean {
-    return (
-      this.preferredChunkPostUrls.includes(peer) ||
-      this.resolvedChunkPostUrls.includes(peer)
-    );
-  }
-
-  private updateChunkPostPeerWeight(peer: string, success: boolean): void {
-    const peerIndex = this.weightedPostChunkPeers.findIndex(
-      (p) => p.id === peer,
-    );
-    if (peerIndex !== -1) {
-      const delta = config.WEIGHTED_PEERS_TEMPERATURE_DELTA;
-      const isPreferred = this.isPreferredPeer(peer);
-
-      if (success) {
-        this.weightedPostChunkPeers[peerIndex].weight = Math.min(
-          this.weightedPostChunkPeers[peerIndex].weight + delta,
-          100,
-        );
-      } else {
-        // Never decrease weight for preferred peers
-        if (!isPreferred) {
-          this.weightedPostChunkPeers[peerIndex].weight = Math.max(
-            this.weightedPostChunkPeers[peerIndex].weight - delta,
-            1,
-          );
-        } else {
-          this.log.debug('Skipping weight decrease for preferred peer', {
-            peer,
-            currentWeight: this.weightedPostChunkPeers[peerIndex].weight,
-          });
-        }
-      }
-    }
+    return this.peerManager.getPeerUrls('postChunk').filter((peerUrl) => {
+      const peerQueue = this.peerChunkQueues.get(peerUrl);
+      return (
+        !peerQueue ||
+        peerQueue.queue.length() < config.CHUNK_POST_QUEUE_DEPTH_THRESHOLD
+      );
+    });
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
@@ -733,7 +407,6 @@ export class ArweaveCompositeClient
       {
         attributes: {
           'chunk.peer': peer,
-          'chunk.peer.is_preferred': this.isPreferredPeer(peer),
           'chunk.data_root': chunk.data_root,
           'chunk.data_size': chunk.data_size,
         },
@@ -777,13 +450,13 @@ export class ArweaveCompositeClient
 
       if (result.success) {
         peerQueue.totalSuccesses++;
-        this.updateChunkPostPeerWeight(peer, true);
+        this.peerManager.reportSuccess('postChunk', peer);
         span.addEvent('Chunk POST succeeded');
       } else {
         if (result.error !== undefined) {
           span.addEvent('Chunk POST failed', { error: result.error });
         }
-        this.updateChunkPostPeerWeight(peer, false);
+        this.peerManager.reportFailure('postChunk', peer);
       }
 
       return result;
@@ -793,151 +466,6 @@ export class ArweaveCompositeClient
     } finally {
       span.end();
     }
-  }
-
-  async refreshPeers(): Promise<void> {
-    const log = this.log.child({ method: 'refreshPeers' });
-    log.debug('Refreshing peers...');
-
-    try {
-      const response = await this.trustedNodeRequest({
-        method: 'GET',
-        url: '/peers',
-      });
-      const peerHosts = response.data as string[];
-
-      // Create concurrency limiter for peer info requests
-      const peerInfoLimit = pLimit(config.PEER_REFRESH_CONCURRENCY);
-
-      await Promise.all(
-        peerHosts.map((peerHost) =>
-          peerInfoLimit(async () => {
-            if (!config.ARWEAVE_NODE_IGNORE_URLS.includes(peerHost)) {
-              try {
-                const peerUrl = `http://${peerHost}`;
-                const response = await axios({
-                  method: 'GET',
-                  url: '/info',
-                  baseURL: peerUrl,
-                  timeout: DEFAULT_PEER_INFO_TIMEOUT_MS,
-                });
-                this.peers[peerHost] = {
-                  url: peerUrl,
-                  blocks: response.data.blocks,
-                  height: response.data.height,
-                  lastSeen: new Date().getTime(),
-                };
-              } catch (error) {
-                metrics.arweavePeerInfoErrorCounter.inc();
-              }
-            } else {
-              this.log.debug('Ignoring peer:', { peerHost });
-            }
-          }),
-        ),
-      );
-      // Update chain and post chunk peers (no preferred URLs)
-      for (const peerListName of [
-        'weightedChainPeers',
-        'weightedPostChunkPeers',
-      ] as WeightedPeerListName[]) {
-        this[peerListName] = Object.values(this.peers).map((peerObject) => {
-          const previousWeight =
-            this[peerListName].find((peer) => peer.id === peerObject.url)
-              ?.weight ?? undefined;
-          return {
-            id: peerObject.url,
-            weight: previousWeight === undefined ? 50 : previousWeight,
-          };
-        });
-      }
-
-      // Update GET chunk peers (preserve resolved preferred URLs)
-      const preferredChunkGetEntries = this.weightedGetChunkPeers.filter(
-        (peer) => this.resolvedChunkGetUrls.includes(peer.id),
-      );
-
-      // Add discovered peers for chunk GET
-      const discoveredChunkGetEntries = Object.values(this.peers).map(
-        (peerObject) => {
-          const previousWeight =
-            this.weightedGetChunkPeers.find(
-              (peer) => peer.id === peerObject.url,
-            )?.weight ?? undefined;
-          return {
-            id: peerObject.url,
-            weight: previousWeight === undefined ? 1 : previousWeight,
-          };
-        },
-      );
-
-      // Combine preferred and discovered peers for chunk GET, avoiding duplicates
-      const allChunkGetEntries = [...preferredChunkGetEntries];
-      for (const discoveredPeer of discoveredChunkGetEntries) {
-        if (!allChunkGetEntries.some((peer) => peer.id === discoveredPeer.id)) {
-          allChunkGetEntries.push(discoveredPeer);
-        }
-      }
-
-      this.weightedGetChunkPeers = allChunkGetEntries;
-
-      // Update POST chunk peers (preserve preferred URLs)
-      const preferredChunkPostEntries = this.weightedPostChunkPeers.filter(
-        (peer) =>
-          this.preferredChunkPostUrls.includes(peer.id) ||
-          this.resolvedChunkPostUrls.includes(peer.id),
-      );
-
-      // Add discovered peers for chunk POST
-      const discoveredChunkPostEntries = Object.values(this.peers).map(
-        (peerObject) => {
-          const previousWeight =
-            this.weightedPostChunkPeers.find(
-              (peer) => peer.id === peerObject.url,
-            )?.weight ?? undefined;
-          return {
-            id: peerObject.url,
-            weight: previousWeight === undefined ? 50 : previousWeight,
-          };
-        },
-      );
-
-      // Combine preferred and discovered peers for chunk POST, avoiding duplicates
-      const allChunkPostEntries = [...preferredChunkPostEntries];
-      for (const discoveredPeer of discoveredChunkPostEntries) {
-        if (
-          !allChunkPostEntries.some((peer) => peer.id === discoveredPeer.id)
-        ) {
-          allChunkPostEntries.push(discoveredPeer);
-        }
-      }
-
-      this.weightedPostChunkPeers = allChunkPostEntries;
-    } catch (error: any) {
-      this.log.warn('Error refreshing peers:', {
-        message: error.message,
-        stack: error.stack,
-      });
-      metrics.arweavePeerRefreshErrorCounter.inc();
-    }
-  }
-
-  getPeers(): Record<string, Peer> {
-    return this.peers;
-  }
-
-  selectPeers(peerCount: number, peerListName: WeightedPeerListName): string[] {
-    const log = this.log.child({ method: 'selectPeers', peerListName });
-
-    if (this[peerListName].length === 0) {
-      log.debug('No weighted peers available');
-      return [];
-    }
-
-    return randomWeightedChoices<string>({
-      table: this[peerListName],
-      count: peerCount,
-    });
   }
 
   async trustedNodeRequest(request: AxiosRequestConfig) {
@@ -1079,7 +607,7 @@ export class ArweaveCompositeClient
   }
 
   async peerGetTx(url: string, retryCount = 3) {
-    const peersToTry = this.selectPeers(retryCount, 'weightedChainPeers');
+    const peersToTry = this.peerManager.selectPeers('chain', retryCount);
 
     return Promise.any(
       peersToTry.map((peerUrl) => {
@@ -1097,12 +625,7 @@ export class ArweaveCompositeClient
             // as a success and increment the weights. If the TX is invalid we
             // also decement the weight so it's a wash and a flood of invalid
             // TXs will still be counted against the peer.
-            this.handlePeerSuccess(
-              peerUrl,
-              'peerGetTx',
-              'peer',
-              'weightedChainPeers',
-            );
+            this.handlePeerSuccess(peerUrl, 'peerGetTx', 'peer', 'chain');
 
             const tx = this.arweave.transactions.fromRaw(response.data);
             const isValid = await this.arweave.transactions.verify(tx);
@@ -1114,12 +637,7 @@ export class ArweaveCompositeClient
             return response;
           } catch (err) {
             // On error, mark this peer as failed and reject the promise for this peer.
-            this.handlePeerFailure(
-              peerUrl,
-              'peerGetTx',
-              'peer',
-              'weightedChainPeers',
-            );
+            this.handlePeerFailure(peerUrl, 'peerGetTx', 'peer', 'chain');
             throw err;
           }
         })();
@@ -1246,12 +764,24 @@ export class ArweaveCompositeClient
   async getTxOffset(txId: string): Promise<JsonTransactionOffset> {
     this.failureSimulator.maybeFail();
 
-    return (
+    const response = (
       await this.trustedNodeRequestQueue.push({
         method: 'GET',
         url: `/tx/${txId}/offset`,
       })
     ).data;
+
+    // Ensure offset and size are numbers (API might return strings)
+    return {
+      offset:
+        typeof response.offset === 'string'
+          ? parseInt(response.offset)
+          : response.offset,
+      size:
+        typeof response.size === 'string'
+          ? parseInt(response.size)
+          : response.size,
+    };
   }
 
   async getTxField<K extends keyof PartialJsonTransaction>(
@@ -1314,52 +844,44 @@ export class ArweaveCompositeClient
   handlePeerSuccess(
     peer: string,
     method: string,
-    sourceType: 'trusted' | 'peer',
-    peerListName: WeightedPeerListName,
+    sourceType: 'trusted' | 'preferred' | 'peer',
+    category: ArweavePeerCategory,
+    peerType?: 'bucket' | 'general',
   ): void {
-    metrics.requestChunkTotal.inc({
-      status: 'success',
-      method,
-      class: this.constructor.name,
-      source: peer,
-      source_type: sourceType,
-    });
-    if (sourceType === 'peer') {
-      // warm the succeeding peer
-      this[peerListName].forEach((weightedPeer) => {
-        if (weightedPeer.id === peer) {
-          weightedPeer.weight = Math.min(
-            weightedPeer.weight + config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
-            100,
-          );
-        }
+    if (method === 'peerGetChunk') {
+      metrics.requestChunkTotal.inc({
+        status: 'success',
+        method,
+        class: this.constructor.name,
+        source: peer,
+        source_type: sourceType,
+        peer_type: peerType || 'unknown',
       });
+    }
+    if (sourceType === 'peer') {
+      this.peerManager.reportSuccess(category, peer);
     }
   }
 
   handlePeerFailure(
     peer: string,
     method: string,
-    sourceType: 'trusted' | 'peer',
-    peerListName: WeightedPeerListName,
+    sourceType: 'trusted' | 'preferred' | 'peer',
+    category: ArweavePeerCategory,
+    peerType?: 'bucket' | 'general',
   ): void {
-    metrics.requestChunkTotal.inc({
-      status: 'error',
-      method,
-      class: this.constructor.name,
-      source: peer,
-      source_type: sourceType,
-    });
-    if (sourceType === 'peer') {
-      // cool the failing peer
-      this[peerListName].forEach((weightedPeer) => {
-        if (weightedPeer.id === peer) {
-          weightedPeer.weight = Math.max(
-            weightedPeer.weight - config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
-            1,
-          );
-        }
+    if (method === 'peerGetChunk') {
+      metrics.requestChunkTotal.inc({
+        status: 'error',
+        method,
+        class: this.constructor.name,
+        source: peer,
+        source_type: sourceType,
+        peer_type: peerType || 'unknown',
       });
+    }
+    if (sourceType === 'peer') {
+      this.peerManager.reportFailure(category, peer);
     }
   }
 
@@ -1390,47 +912,146 @@ export class ArweaveCompositeClient
     });
 
     try {
-      for (let attempt = 0; attempt < retryCount; attempt++) {
-        span.addEvent('Starting peer attempt', {
-          attempt: attempt + 1,
-          max_attempts: retryCount,
+      // Try bucket-specific peers first, then general peers as fallback
+      const bucketPeers = this.peerManager.selectBucketPeersForOffset(
+        absoluteOffset,
+        Math.max(peerSelectionCount, retryCount), // Get more bucket peers upfront
+      );
+
+      // Get general peers as secondary fallback (excluding bucket peers to avoid duplicates)
+      const allGeneralPeers = this.peerManager.selectPeers(
+        'getChunk',
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      // Filter out bucket peers from general peers to avoid duplicates
+      const bucketPeerSet = new Set(bucketPeers);
+      const generalPeers = allGeneralPeers.filter(
+        (peer) => !bucketPeerSet.has(peer),
+      );
+
+      // Combine: bucket peers first, then general peers
+      const orderedPeers = [...bucketPeers, ...generalPeers];
+
+      this.log.debug('Peer selection for chunk request', {
+        absoluteOffset,
+        bucketPeers: bucketPeers.length,
+        generalPeers: generalPeers.length,
+        totalSelectedPeers: orderedPeers.length,
+        maxAttempts: Math.min(orderedPeers.length, retryCount),
+        peers: orderedPeers.slice(0, 3), // Log first 3 peers for debugging
+      });
+
+      if (orderedPeers.length === 0) {
+        const error = new Error('No peers available for chunk retrieval');
+        span.recordException(error);
+        this.log.error('No peers available for chunk retrieval', {
+          absoluteOffset,
         });
+        throw error;
+      }
 
-        // Select a random set of peers for each retry attempt
-        const randomPeers = this.selectPeers(
-          peerSelectionCount,
-          'weightedGetChunkPeers',
-        );
+      span.setAttributes({
+        'chunk.available_peers': orderedPeers.length,
+        'chunk.bucket_peers': bucketPeers.length,
+        'chunk.general_peers': generalPeers.length,
+      });
 
-        if (randomPeers.length === 0) {
-          const error = new Error('No peers available for chunk retrieval');
-          span.recordException(error);
-          throw error;
+      // Iterate through peers sequentially (bucket peers first, then general)
+      const maxAttempts = Math.min(orderedPeers.length, retryCount);
+      for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
+        // Check if we're transitioning from bucket peers to general peers
+        const isBucketPeer = peerIndex < bucketPeers.length;
+        const isTransition =
+          peerIndex === bucketPeers.length && bucketPeers.length > 0;
+
+        if (isTransition) {
+          span.addEvent('Transitioning to general peers', {
+            bucket_peers_tried: bucketPeers.length,
+            remaining_general_peers: generalPeers.length,
+          });
+          this.log.debug('All bucket peers failed, trying general peers', {
+            absoluteOffset,
+            bucketPeersTried: bucketPeers.length,
+            remainingGeneralPeers: generalPeers.length,
+          });
+
+          // Track transition metric
+          metrics.chunkPeerTransitionTotal.inc({
+            method: 'peerGetChunk',
+          });
         }
 
-        span.setAttribute('chunk.available_peers', randomPeers.length);
-        const randomPeer = randomPeers[0];
+        span.addEvent('Starting peer attempt', {
+          peer_index: peerIndex + 1,
+          total_peers: orderedPeers.length,
+          max_attempts: maxAttempts,
+          peer_type: isBucketPeer ? 'bucket' : 'general',
+        });
+
+        const randomPeer = orderedPeers[peerIndex];
         const peerHost = new URL(randomPeer).hostname;
 
         span.addEvent('Trying peer', {
           peer_host: peerHost,
-          attempt: attempt + 1,
+          peer_index: peerIndex + 1,
+          total_peers: orderedPeers.length,
+          peer_type: isBucketPeer ? 'bucket' : 'general',
         });
 
+        const requestUrl = `${randomPeer}/chunk/${absoluteOffset}`;
+
+        this.log.debug('Making chunk request to peer', {
+          peer: randomPeer,
+          peerHost,
+          absoluteOffset,
+          requestUrl,
+          timeout: 500,
+          peerIndex: peerIndex + 1,
+          totalPeers: orderedPeers.length,
+          peerType: isBucketPeer ? 'bucket' : 'general',
+        });
+
+        const startTime = Date.now();
+
         try {
-          const startTime = Date.now();
           const response = await axios({
             method: 'GET',
-            url: `/chunk/${absoluteOffset}`,
-            baseURL: randomPeer,
+            url: requestUrl,
             timeout: 500,
           });
           const responseTime = Date.now() - startTime;
 
+          this.log.debug('Received chunk response from peer', {
+            peer: randomPeer,
+            peerHost,
+            absoluteOffset,
+            responseTime,
+            status: response.status,
+            statusText: response.statusText,
+            contentType: response.headers['content-type'],
+            dataSize: JSON.stringify(response.data).length,
+            peerIndex: peerIndex + 1,
+            totalPeers: orderedPeers.length,
+          });
+
           const jsonChunk = response.data;
 
           // Fast fail if chunk has the wrong structure
-          sanityCheckChunk(jsonChunk);
+          try {
+            sanityCheckChunk(jsonChunk);
+          } catch (sanityError: any) {
+            this.log.warn('Chunk failed sanity check', {
+              peer: randomPeer,
+              peerHost,
+              absoluteOffset,
+              sanityError: sanityError.message,
+              chunkData: jsonChunk,
+              peerIndex: peerIndex + 1,
+              totalPeers: orderedPeers.length,
+            });
+            throw sanityError;
+          }
 
           const txPath = fromB64Url(jsonChunk.tx_path);
           const dataRootBuffer = txPath.slice(-64, -32);
@@ -1452,16 +1073,33 @@ export class ArweaveCompositeClient
             sourceHost,
           };
 
-          await validateChunk(
-            txSize,
-            chunk,
-            fromB64Url(dataRoot),
-            relativeOffset,
-          );
+          try {
+            await validateChunk(
+              txSize,
+              chunk,
+              fromB64Url(dataRoot),
+              relativeOffset,
+            );
+          } catch (validationError: any) {
+            this.log.warn('Chunk failed validation', {
+              peer: randomPeer,
+              peerHost,
+              absoluteOffset,
+              txSize,
+              dataRoot,
+              relativeOffset,
+              validationError: validationError.message,
+              chunkSize: chunk.chunk.length,
+              peerIndex: peerIndex + 1,
+              totalPeers: orderedPeers.length,
+            });
+            throw validationError;
+          }
 
           span.setAttributes({
             'chunk.successful_peer': peerHost,
-            'chunk.final_attempt': attempt + 1,
+            'chunk.final_peer_index': peerIndex + 1,
+            'chunk.total_peers_tried': peerIndex + 1,
             'chunk.response_time_ms': responseTime,
             'chunk.size': chunk.chunk.length,
           });
@@ -1475,38 +1113,65 @@ export class ArweaveCompositeClient
           this.handlePeerSuccess(
             randomPeer,
             'peerGetChunk',
-            'peer',
-            'weightedGetChunkPeers',
+            this.peerManager.isPreferredChunkGetPeer(randomPeer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
           );
 
           return chunk;
         } catch (error: any) {
+          const responseTime = Date.now() - startTime;
+
+          // Log essential error information only
+          const errorDetails = {
+            peer: randomPeer,
+            peerHost,
+            absoluteOffset,
+            peerIndex: peerIndex + 1,
+            totalPeers: orderedPeers.length,
+            responseTime,
+            error: error.message,
+            ...(axios.isAxiosError(error) && {
+              code: error.code,
+              status: error.response?.status,
+            }),
+          };
+
+          this.log.debug('Chunk request failed', errorDetails);
+
           span.addEvent('Peer request failed', {
             peer_host: peerHost,
             error: error.message,
-            attempt: attempt + 1,
+            peer_index: peerIndex + 1,
+            total_peers: orderedPeers.length,
+            error_code: error.code,
+            http_status: error.response?.status,
           });
 
           this.handlePeerFailure(
             randomPeer,
             'peerGetChunk',
-            'peer',
-            'weightedGetChunkPeers',
+            this.peerManager.isPreferredChunkGetPeer(randomPeer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
           );
 
-          // If this is the last attempt, throw the error
-          if (attempt === retryCount - 1) {
-            const finalError = new Error(
-              `Failed to fetch chunk from any peer after ${retryCount} attempts`,
-            );
-            span.recordException(finalError);
-            throw finalError;
-          }
+          // Continue to next peer (no early exit needed in for loop)
         }
       }
 
-      span.addEvent('All attempts failed');
-      const error = new Error('Failed to fetch chunk from any peer');
+      // If we exit the loop without returning, all peers failed
+      span.addEvent('All peers failed', {
+        total_peers_tried: maxAttempts,
+        available_peers: orderedPeers.length,
+      });
+      const error = new Error(
+        `Failed to fetch chunk from ${maxAttempts} peers (${orderedPeers.length} available)`,
+      );
       span.recordException(error);
       throw error;
     } catch (error: any) {
@@ -1646,10 +1311,13 @@ export class ArweaveCompositeClient
 
       const stream = Readable.from(txData);
 
+      const requestType = region ? 'range' : 'full';
+
       stream.on('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: dataResponse.config.baseURL,
+          request_type: requestType,
         });
       });
 
@@ -1657,7 +1325,28 @@ export class ArweaveCompositeClient
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: dataResponse.config.baseURL,
+          request_type: requestType,
         });
+
+        // Track bytes streamed
+        const bytesStreamed = region ? region.size : size;
+        metrics.getDataStreamBytesTotal.inc(
+          {
+            class: this.constructor.name,
+            source: dataResponse.config.baseURL,
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
+
+        metrics.getDataStreamSizeHistogram.observe(
+          {
+            class: this.constructor.name,
+            source: dataResponse.config.baseURL,
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
       });
 
       return {
@@ -1730,14 +1419,16 @@ export class ArweaveCompositeClient
 
       // 2. Get sorted peers from memoized function (cached for 10 seconds)
       const sortedPeers = this.getSortedChunkPostPeers(eligiblePeers);
-      const preferredPeerCount = sortedPeers.filter((peer) =>
-        this.isPreferredPeer(peer),
-      ).length;
-      const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
 
       span.setAttribute('chunk.sorted_peers', sortedPeers.length);
-      span.setAttribute('chunk.preferred_peers', preferredPeerCount);
-      span.setAttribute('chunk.non_preferred_peers', nonPreferredPeerCount);
+
+      // Calculate preferred vs non-preferred peer counts for logging
+      const preferredChunkPostUrls =
+        this.peerManager.getPreferredChunkPostUrls();
+      const preferredPeerCount = sortedPeers.filter((peer) =>
+        preferredChunkPostUrls.includes(peer),
+      ).length;
+      const nonPreferredPeerCount = sortedPeers.length - preferredPeerCount;
 
       // 3. Broadcast in parallel with concurrency limit
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);
@@ -1870,5 +1561,503 @@ export class ArweaveCompositeClient
 
   queueDepth(): number {
     return this.trustedNodeRequestQueue.length();
+  }
+
+  /**
+   * Find transaction that contains the given offset using binary search on the chain
+   */
+  async findTxByOffset(offset: number): Promise<{
+    txId: string;
+    txOffset: number;
+    txSize: number;
+    txStartOffset: number;
+    txEndOffset: number;
+  } | null> {
+    const searchId = Math.random().toString(36).substring(7);
+    this.log.debug('Starting binary search for transaction by offset', {
+      offset,
+      searchId,
+    });
+
+    try {
+      // First, find the block that contains this offset
+      this.log.debug('Phase 1: Searching for containing block', {
+        offset,
+        searchId,
+      });
+
+      const containingBlock = await this.binarySearchBlocks(offset);
+      if (!containingBlock) {
+        this.log.debug(
+          'Binary search completed: No block found containing offset',
+          {
+            offset,
+            searchId,
+            result: 'not_found',
+          },
+        );
+        return null;
+      }
+
+      this.log.debug('Phase 1 completed: Found containing block', {
+        blockHeight: containingBlock.height,
+        blockOffset: containingBlock.weave_size,
+        txCount: containingBlock.txs?.length || 0,
+        offset,
+        searchId,
+      });
+
+      // Then search within that block's transactions
+      this.log.debug(
+        'Phase 2: Searching for containing transaction within block',
+        {
+          offset,
+          blockHeight: containingBlock.height,
+          txCount: containingBlock.txs?.length || 0,
+          searchId,
+        },
+      );
+
+      const result = await this.binarySearchTransactions(
+        containingBlock,
+        offset,
+      );
+      if (!result) {
+        this.log.debug(
+          'Phase 2 completed: No transaction found containing offset within block',
+          {
+            offset,
+            blockHeight: containingBlock.height,
+            txCount: containingBlock.txs?.length || 0,
+            searchId,
+            result: 'not_found',
+          },
+        );
+        return null;
+      }
+
+      this.log.debug('Binary search completed successfully', {
+        txId: result.txId,
+        txOffset: result.txOffset,
+        blockHeight: containingBlock.height,
+        offset,
+        searchId,
+        result: 'found',
+      });
+
+      return result;
+    } catch (error: any) {
+      this.log.error('Binary search failed with error', {
+        offset,
+        searchId,
+        error: error.message,
+        stack: error.stack,
+        result: 'error',
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Binary search through blocks to find the one containing the given offset
+   */
+  private async binarySearchBlocks(targetOffset: number): Promise<any | null> {
+    const cacheKey = `block_for_offset_${targetOffset}`;
+    const cached = this.blockCache.get(cacheKey);
+    if (cached) {
+      this.log.debug('Block search cache hit', {
+        targetOffset,
+        cachedBlockHeight: cached.height,
+        cachedBlockOffset: cached.weave_size,
+      });
+      return cached;
+    }
+
+    try {
+      const currentHeight = await this.getHeight();
+      let left = 0;
+      let right = currentHeight;
+      let result: any | null = null;
+      let iteration = 0;
+
+      this.log.debug('Starting binary search for blocks', {
+        targetOffset,
+        heightRange: `${left}-${right}`,
+        totalBlocks: currentHeight + 1,
+      });
+
+      while (left <= right) {
+        iteration++;
+        const mid = Math.floor((left + right) / 2);
+
+        this.log.debug('Block search iteration', {
+          iteration,
+          left,
+          right,
+          mid,
+          targetOffset,
+          searchSpace: right - left + 1,
+        });
+
+        const block = await this.getBlockByHeight(mid);
+
+        if (block === undefined || block === null) {
+          this.log.debug('Block not found at height, adjusting search range', {
+            height: mid,
+            iteration,
+            newRight: mid - 1,
+            targetOffset,
+          });
+          right = mid - 1;
+          continue;
+        }
+
+        const blockOffset = parseInt(block.weave_size);
+        const decision =
+          blockOffset >= targetOffset ? 'search_left' : 'search_right';
+
+        this.log.debug('Block found, analyzing offset', {
+          height: mid,
+          blockOffset,
+          targetOffset,
+          decision,
+          iteration,
+          isCandidate: blockOffset >= targetOffset,
+        });
+
+        if (blockOffset >= targetOffset) {
+          result = block;
+          right = mid - 1;
+          this.log.debug(
+            'Block is candidate, searching left for better match',
+            {
+              candidateHeight: mid,
+              candidateOffset: blockOffset,
+              newRight: right,
+              targetOffset,
+              iteration,
+            },
+          );
+        } else {
+          left = mid + 1;
+          this.log.debug('Block offset too small, searching right', {
+            height: mid,
+            blockOffset,
+            newLeft: left,
+            targetOffset,
+            iteration,
+          });
+        }
+      }
+
+      this.log.debug('Block binary search completed', {
+        targetOffset,
+        iterations: iteration,
+        foundBlock: result
+          ? {
+              height: result.height,
+              offset: result.weave_size,
+              txCount: result.txs?.length || 0,
+            }
+          : null,
+        cacheKey,
+      });
+
+      if (result) {
+        this.blockCache.set(cacheKey, result);
+        this.log.debug('Caching block search result', {
+          targetOffset,
+          blockHeight: result.height,
+          blockOffset: result.weave_size,
+        });
+      }
+
+      return result;
+    } catch (error: any) {
+      this.log.error('Error in binary search for blocks', {
+        targetOffset,
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Linear scan through transactions in a block to find the one containing the given offset
+   * Note: Transactions in blocks are NOT sorted by offset, so binary search doesn't work
+   */
+  private async binarySearchTransactions(
+    block: any,
+    targetOffset: number,
+  ): Promise<{
+    txId: string;
+    txOffset: number;
+    txSize: number;
+    txStartOffset: number;
+    txEndOffset: number;
+  } | null> {
+    const txIds = block.txs || [];
+    if (txIds.length === 0) {
+      this.log.debug('Block has no transactions', {
+        blockHeight: block.height,
+        targetOffset,
+      });
+      return null;
+    }
+
+    this.log.debug('Starting binary search for transactions', {
+      blockHeight: block.height,
+      blockOffset: block.weave_size,
+      txCount: txIds.length,
+      targetOffset,
+      txIds: txIds.slice(0, 5), // Log first 5 tx IDs for debugging
+    });
+
+    // Sort transaction IDs by their binary representation (same as Arweave does)
+    // Arweave assigns offsets to transactions after sorting them by ID as binary data
+    const sortedTxIds = [...txIds].sort((a, b) => {
+      try {
+        // Decode base64url to binary for proper comparison
+        const decodeB64Url = (str: string): Buffer => {
+          // Add padding if needed and convert to base64
+          const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+          const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+          return Buffer.from(padded, 'base64');
+        };
+
+        const bufA = decodeB64Url(a);
+        const bufB = decodeB64Url(b);
+        return Buffer.compare(bufA, bufB);
+      } catch (error) {
+        // Fallback to string comparison if decoding fails
+        return a.localeCompare(b);
+      }
+    });
+
+    this.log.debug('Sorted transactions for binary search', {
+      originalOrder: txIds.slice(0, 3),
+      sortedOrder: sortedTxIds.slice(0, 3),
+      isSortingNeeded: JSON.stringify(txIds) !== JSON.stringify(sortedTxIds),
+    });
+
+    let left = 0;
+    let right = sortedTxIds.length - 1;
+    let result: {
+      txId: string;
+      txOffset: number;
+      txSize: number;
+      txStartOffset: number;
+      txEndOffset: number;
+    } | null = null;
+    let iteration = 0;
+    const offsetRequests: {
+      txId: string;
+      offset: number;
+      size: number;
+      fromCache: boolean;
+    }[] = [];
+
+    while (left <= right) {
+      iteration++;
+      const mid = Math.floor((left + right) / 2);
+      const txId = sortedTxIds[mid];
+
+      this.log.debug('Transaction search iteration', {
+        iteration,
+        left,
+        right,
+        mid,
+        txId,
+        targetOffset,
+        blockHeight: block.height,
+        searchSpace: right - left + 1,
+      });
+
+      // Check cache first
+      const cacheKey = `tx_offset_${txId}`;
+      const cachedData = this.txOffsetCache.get(cacheKey);
+      let txOffset: number;
+      let txSize: number;
+      let fromCache = true;
+
+      if (cachedData === undefined) {
+        fromCache = false;
+        try {
+          this.log.debug('Fetching transaction offset from chain', {
+            txId,
+            iteration,
+            blockHeight: block.height,
+            targetOffset,
+          });
+
+          const offsetResponse = await this.getTxOffset(txId);
+          txOffset = offsetResponse.offset;
+          txSize = offsetResponse.size;
+          this.txOffsetCache.set(cacheKey, { offset: txOffset, size: txSize });
+
+          this.log.debug('Successfully fetched transaction offset', {
+            txId,
+            txOffset,
+            iteration,
+            targetOffset,
+          });
+        } catch (error: any) {
+          this.log.error(
+            'Failed to get transaction offset during binary search',
+            {
+              txId,
+              blockHeight: block.height,
+              iteration,
+              targetOffset,
+              error: error.message,
+            },
+          );
+          // If we can't get the offset for this transaction, we can't reliably
+          // perform binary search, so we should fail the search
+          throw new Error(
+            `Failed to get transaction offset for ${txId}: ${error.message}`,
+          );
+        }
+      } else {
+        // Cache hit - extract data from cached object
+        if (typeof cachedData === 'number') {
+          // Handle legacy cache entries that only stored offset
+          txOffset = cachedData;
+          txSize = 0; // We don't have size for legacy entries, will need to refetch
+          fromCache = false; // Force refetch to get complete data
+
+          const offsetResponse = await this.getTxOffset(txId);
+          txOffset = offsetResponse.offset;
+          txSize = offsetResponse.size;
+          this.txOffsetCache.set(cacheKey, { offset: txOffset, size: txSize });
+        } else {
+          // New cache format with both offset and size
+          txOffset = cachedData.offset;
+          txSize = cachedData.size;
+        }
+      }
+
+      offsetRequests.push({ txId, offset: txOffset, size: txSize, fromCache });
+
+      // Check if target offset falls within this transaction's data range
+      // Calculate transaction boundaries: txStart = txOffset - txSize + 1
+      const txStartOffset = txOffset - txSize + 1;
+      const txEndOffset = txOffset;
+
+      // Check if target is within transaction boundaries
+      const isWithinTransaction =
+        targetOffset >= txStartOffset && targetOffset <= txEndOffset;
+
+      let decision: 'search_left' | 'search_right' | 'found';
+      if (isWithinTransaction) {
+        decision = 'found';
+      } else if (targetOffset < txStartOffset) {
+        // Target is before this transaction - search left (earlier transactions)
+        decision = 'search_left';
+      } else {
+        // Target is after this transaction - search right (later transactions)
+        decision = 'search_right';
+      }
+
+      const isCandidate = isWithinTransaction;
+
+      this.log.debug('Transaction offset comparison', {
+        txId,
+        txOffset,
+        txSize,
+        txStartOffset,
+        txEndOffset,
+        targetOffset,
+        isWithinTransaction,
+        decision,
+        isCandidate,
+        fromCache,
+        iteration,
+        blockHeight: block.height,
+      });
+
+      if (decision === 'found') {
+        // Found the transaction containing the target offset
+        result = { txId, txOffset, txSize, txStartOffset, txEndOffset };
+        this.log.debug('Found transaction containing target offset', {
+          txId,
+          txOffset,
+          txSize,
+          txStartOffset,
+          txEndOffset,
+          targetOffset,
+          offsetWithinTx: targetOffset - txStartOffset,
+          iteration,
+        });
+        break; // Exit the binary search loop
+      } else if (decision === 'search_left') {
+        right = mid - 1;
+        this.log.debug('Target before transaction, searching left', {
+          txId,
+          txStartOffset,
+          txEndOffset,
+          targetOffset,
+          newRight: right,
+          iteration,
+        });
+      } else {
+        // decision === 'search_right'
+        left = mid + 1;
+        this.log.debug('Target after transaction, searching right', {
+          txId,
+          txStartOffset,
+          txEndOffset,
+          targetOffset,
+          newLeft: left,
+          iteration,
+        });
+      }
+    }
+
+    this.log.debug('Transaction binary search completed', {
+      blockHeight: block.height,
+      targetOffset,
+      iterations: iteration,
+      totalOffsetRequests: offsetRequests.length,
+      cacheHits: offsetRequests.filter((r) => r.fromCache).length,
+      cacheMisses: offsetRequests.filter((r) => !r.fromCache).length,
+      foundTransaction: result
+        ? {
+            txId: result.txId,
+            txOffset: result.txOffset,
+            txSize: result.txSize,
+            txStartOffset: result.txStartOffset,
+            txEndOffset: result.txEndOffset,
+          }
+        : null,
+      offsetRequests: offsetRequests.slice(0, 10), // Log first 10 requests for debugging
+    });
+
+    return result;
+  }
+
+  /**
+   * Cleanup method to stop timers and clear caches
+   * Should be called when the client is no longer needed (e.g., in tests)
+   */
+  cleanup(): void {
+    // Clear the bucket filler interval
+    if (this.bucketFillerInterval) {
+      clearInterval(this.bucketFillerInterval);
+      this.bucketFillerInterval = undefined;
+    }
+
+    // Clear NodeCache instances and stop their internal timers
+    this.blockByHeightPromiseCache.close();
+    this.txPromiseCache.close();
+
+    // Clear LRU caches
+    this.blockCache.clear();
+    this.txOffsetCache.clear();
+    this.txDataCache.clear();
+
+    // Clear promise cache
+    this.chunkPromiseCache.clear();
   }
 }

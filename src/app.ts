@@ -20,17 +20,21 @@ import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
 import { x402Router } from './routes/x402.js';
+import { rateLimiterMiddleware } from './middleware/rate-limiter.js';
 
 // Initialize DNS resolution for preferred chunk GET nodes (non-fatal on failure)
 try {
-  await system.arweaveClient.initializeDnsResolution();
+  await system.arweavePeerManager.initializeDnsResolution();
 } catch (error: any) {
   log.warn('DNS resolution init failed; continuing with original URLs', {
     error: error?.message,
   });
 }
 
-system.arweaveClient.refreshPeers();
+// Start peer management services
+system.arweavePeerManager.startAutoRefresh();
+system.arweavePeerManager.startBucketRefresh();
+system.arweavePeerManager.refreshPeers();
 
 system.headerFsCacheCleanupWorker?.start();
 
@@ -66,6 +70,14 @@ app.use(
 );
 
 app.use(x402Router);
+
+if (config.ENABLE_RATE_LIMITER) {
+  log.info('[app] enabling rate limiter middleware');
+  app.use(rateLimiterMiddleware()); // ← before all routes
+} else {
+  log.info('[app] rate limiter middleware disabled');
+}
+
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);

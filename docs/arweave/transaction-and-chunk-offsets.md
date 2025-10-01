@@ -151,6 +151,21 @@ Additional fields in chunk proofs:
 - `block_start_offset`: Start position of block in weave
 - `block_end_offset`: End position of block in weave
 
+### Transaction Order vs Offset Order
+
+Transactions in a block appear in **inclusion order** (the order they were added to the block), but their offsets are assigned based on **ID sort order**.
+
+Before assigning offsets, Arweave sorts all transactions in a block by their transaction ID (compared as binary data). This means:
+
+- A transaction's position in a block does not indicate its offset range
+- The first transaction in a block may have a larger offset than the last transaction
+- To determine offset order, transactions must be sorted by their ID as binary data
+
+For example, in a block with transactions at indices 0 and 1:
+- The transaction at index 0 might have offset range 345449326488888-345449326492026
+- The transaction at index 1 might have offset range 345449328058615-345449412246841
+- This happens because the transaction at index 1 has an ID that sorts before the transaction at index 0
+
 ## Offset Calculations
 
 ### Converting Between Offset Types
@@ -178,8 +193,8 @@ To find which chunk contains a specific byte:
 1. **Using Relative Offset** (within transaction):
 
    ```javascript
-   const chunkIndex = Math.floor(relativeOffset / 256_144);
-   const offsetInChunk = relativeOffset % 256_144;
+   const chunkIndex = Math.floor(relativeOffset / 262_144);
+   const offsetInChunk = relativeOffset % 262_144;
    ```
 
 2. **Using Absolute Offset**:
@@ -196,9 +211,9 @@ The Merkle path parser extracts exact chunk boundaries from the data_path:
 ```javascript
 // Parsed from data_path
 {
-  startOffset: 256144,    // Start of chunk within transaction (inclusive)
-  endOffset: 512288,      // End of chunk within transaction (exclusive)
-  chunkSize: 256144,      // Actual size of this chunk
+  startOffset: 262144,    // Start of chunk within transaction (inclusive)
+  endOffset: 524288,      // End of chunk within transaction (exclusive)
+  chunkSize: 262144,      // Actual size of this chunk
 }
 
 // Combined with transaction offset to get absolute positions:

@@ -31,17 +31,22 @@
           default = pkgs.mkShell {
             name = "ar-io-node-shell";
             buildInputs = with pkgs; [
+              bash
               bc
               clickhouse
+              curl
               duckdb
               gnumake
               graphviz
+              jq
               mr
               nodePackages.typescript-language-server
               nodejs_20
               openjdk
+              pandoc
               python3WithPackages
               sqlite-interactive
+              typst
               yaml-language-server
               yarn
             ];

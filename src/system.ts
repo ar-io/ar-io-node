@@ -11,6 +11,7 @@ import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import postgres from 'postgres';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
+import { ArweavePeerManager } from './peers/arweave-peer-manager.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
 import { FilteredContiguousDataSource } from './data/filtered-contiguous-data-source.js';
@@ -19,6 +20,9 @@ import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { RootParentDataSource } from './data/root-parent-data-source.js';
 import { Ans104OffsetSource } from './data/ans104-offset-source.js';
+import { CompositeTxOffsetSource } from './data/composite-tx-offset-source.js';
+import { DatabaseTxOffsetSource } from './data/database-tx-offset-source.js';
+import { ChainTxOffsetSource } from './data/chain-tx-offset-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -83,7 +87,7 @@ import { MempoolWatcher } from './workers/mempool-watcher.js';
 import { DataVerificationWorker } from './workers/data-verification.js';
 import { ArIODataSource } from './data/ar-io-data-source.js';
 import { ArIOChunkSource } from './data/ar-io-chunk-source.js';
-import { ArIOPeerManager } from './data/ar-io-peer-manager.js';
+import { ArIOPeerManager } from './peers/ar-io-peer-manager.js';
 import { S3DataSource } from './data/s3-data-source.js';
 import { connect } from '@permaweb/aoconnect';
 import { DataContentAttributeImporter } from './workers/data-content-attribute-importer.js';
@@ -131,13 +135,25 @@ const dnsResolver =
     ? new DnsResolver({ log })
     : undefined;
 
+// Create Arweave peer manager
+export const arweavePeerManager = new ArweavePeerManager({
+  log,
+  trustedNodeUrl: config.TRUSTED_NODE_URL,
+  preferredChunkGetUrls: config.PREFERRED_CHUNK_GET_NODE_URLS,
+  preferredChunkPostUrls: config.PREFERRED_CHUNK_POST_NODE_URLS,
+  ignoreUrls: config.ARWEAVE_NODE_IGNORE_URLS,
+  peerInfoTimeoutMs: 5000,
+  refreshIntervalMs: 10 * 60 * 1000, // 10 minutes
+  temperatureDelta: config.WEIGHTED_PEERS_TEMPERATURE_DELTA,
+  dnsResolver,
+});
+
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
   trustedNodeUrl: config.TRUSTED_NODE_URL,
   skipCache: config.SKIP_CACHE,
-  preferredChunkGetUrls: config.PREFERRED_CHUNK_GET_NODE_URLS,
-  dnsResolver,
+  peerManager: arweavePeerManager,
   blockStore: makeBlockStore({
     log,
     type: config.CHAIN_CACHE_TYPE,
@@ -161,6 +177,17 @@ export const db = new StandaloneSqliteDatabase({
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
   tagSelectivity: config.TAG_SELECTIVITY,
+});
+
+// Transaction offset source with database primary and chain fallback
+export const txOffsetSource = new CompositeTxOffsetSource({
+  log,
+  primarySource: new DatabaseTxOffsetSource({ log, db }),
+  fallbackSource: config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
+    ? new ChainTxOffsetSource({ log, arweaveClient })
+    : undefined,
+  fallbackEnabled: config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED,
+  fallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
 });
 
 export const dataAttributesSource: ContiguousDataAttributesStore =
@@ -1088,7 +1115,9 @@ export const shutdown = async (exitCode = 0) => {
       await chunkDataFsCacheCleanupWorker?.stop();
       await dataVerificationWorker?.stop();
       // Stop DNS periodic re-resolution if running
-      arweaveClient.stopDnsResolution();
+      arweavePeerManager.stopDnsResolution();
+      arweavePeerManager.stopAutoRefresh();
+      arweavePeerManager.stopBucketRefresh();
       await db.stop();
       process.exit(exitCode);
     });

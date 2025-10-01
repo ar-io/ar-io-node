@@ -240,10 +240,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 'gateways.request.duration_ms': gatewayRequestDuration,
               });
 
+              const requestType = region ? 'range' : 'full';
+
               stream.on('error', () => {
                 metrics.getDataStreamErrorsTotal.inc({
                   class: this.constructor.name,
                   source: gatewayUrl,
+                  request_type: requestType,
                 });
               });
 
@@ -251,7 +254,27 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 metrics.getDataStreamSuccessesTotal.inc({
                   class: this.constructor.name,
                   source: gatewayUrl,
+                  request_type: requestType,
                 });
+
+                // Track bytes streamed
+                metrics.getDataStreamBytesTotal.inc(
+                  {
+                    class: this.constructor.name,
+                    source: gatewayUrl,
+                    request_type: requestType,
+                  },
+                  contentLength,
+                );
+
+                metrics.getDataStreamSizeHistogram.observe(
+                  {
+                    class: this.constructor.name,
+                    source: gatewayUrl,
+                    request_type: requestType,
+                  },
+                  contentLength,
+                );
               });
 
               return {

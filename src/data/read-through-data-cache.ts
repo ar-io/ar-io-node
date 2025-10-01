@@ -335,10 +335,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           'cache.check_duration_ms': cacheCheckDuration,
         });
 
+        const requestType = region ? 'range' : 'full';
+
         cacheData.stream.once('error', () => {
           metrics.getDataStreamErrorsTotal.inc({
             class: this.constructor.name,
             source: 'cache',
+            request_type: requestType,
           });
         });
 
@@ -346,7 +349,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
           metrics.getDataStreamSuccessesTotal.inc({
             class: this.constructor.name,
             source: 'cache',
+            request_type: requestType,
           });
+
+          // Track bytes streamed from cache
+          const bytesStreamed = region?.size ?? cacheData.size;
+          metrics.getDataStreamBytesTotal.inc(
+            {
+              class: this.constructor.name,
+              source: 'cache',
+              request_type: requestType,
+            },
+            bytesStreamed,
+          );
+
+          metrics.getDataStreamSizeHistogram.observe(
+            {
+              class: this.constructor.name,
+              source: 'cache',
+              request_type: requestType,
+            },
+            bytesStreamed,
+          );
         });
 
         const processedRequestAttributes =
@@ -545,10 +569,13 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         }
       }
 
+      const requestType = region ? 'range' : 'full';
+
       data.stream.once('error', () => {
         metrics.getDataStreamErrorsTotal.inc({
           class: this.constructor.name,
           source: 'cache',
+          request_type: requestType,
         });
       });
 
@@ -556,7 +583,28 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         metrics.getDataStreamSuccessesTotal.inc({
           class: this.constructor.name,
           source: 'cache',
+          request_type: requestType,
         });
+
+        // Track bytes streamed from upstream
+        const bytesStreamed = region?.size ?? data.size;
+        metrics.getDataStreamBytesTotal.inc(
+          {
+            class: this.constructor.name,
+            source: 'cache',
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
+
+        metrics.getDataStreamSizeHistogram.observe(
+          {
+            class: this.constructor.name,
+            source: 'cache',
+            request_type: requestType,
+          },
+          bytesStreamed,
+        );
       });
 
       data.stream.pause();

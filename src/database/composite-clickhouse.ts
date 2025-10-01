@@ -12,6 +12,7 @@ import { ValidationError } from 'apollo-server-express';
 import {
   b64UrlToHex,
   b64UrlToUtf8,
+  fromB64Url,
   hexToB64Url,
   utf8ToB64Url,
 } from '../lib/encoding.js';
@@ -468,7 +469,10 @@ export class CompositeClickHouseDatabase implements GqlQueryable {
         return (txA.isDataItem ? 1 : -1) * sortOrderModifier;
       }
 
-      return txA.id.localeCompare(txB.id) * sortOrderModifier;
+      // Compare transaction IDs as binary data to match ClickHouse sorting
+      const bufA = fromB64Url(txA.id);
+      const bufB = fromB64Url(txB.id);
+      return bufA.compare(bufB) * sortOrderModifier;
     });
 
     return {

@@ -414,6 +414,49 @@ export const CHUNK_METADATA_SOURCE_PARALLELISM = +env.varOrDefault(
   '1',
 );
 
+// Chain fallback for chunk offset requests
+export const CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED =
+  env.varOrDefault('CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED', 'true') === 'true';
+
+// Cache settings for chain fallback binary search
+export const CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_SIZE',
+  '2000',
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_BLOCK_CACHE_TTL_MS',
+  `${60 * 10 * 1000}`, // 10 minutes
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_SIZE',
+    '10000',
+  );
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_OFFSET_CACHE_TTL_MS',
+    `${60 * 5 * 1000}`, // 5 minutes
+  );
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE',
+  '10000',
+);
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS =
+  +env.varOrDefault(
+    'CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS',
+    `${60 * 5 * 1000}`, // 5 minutes
+  );
+
+export const CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY = +env.varOrDefault(
+  'CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY',
+  '5',
+);
+
 //
 // Indexing
 //
@@ -1091,7 +1134,59 @@ export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
 export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
 export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 
-// x402 USDC data egress
+//
+// Rate Limiter
+//
+
+export const ENABLE_RATE_LIMITER =
+  env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
+
+export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
+
+export const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
+  'RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
+  '10000',
+);
+
+export const RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
+  'RATE_LIMITER_RESOURCE_REFILL_PER_SEC',
+  '100',
+);
+
+export const RATE_LIMITER_IP_TOKENS_PER_BUCKET = +env.varOrDefault(
+  'RATE_LIMITER_IP_TOKENS_PER_BUCKET',
+  '2000',
+);
+
+export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
+  'RATE_LIMITER_IP_REFILL_PER_SEC',
+  '20',
+);
+
+export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
+  env
+    .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')
+    ?.split(',')
+    .map((ip) => ip.trim()) ?? [];
+
+export const RATE_LIMITER_REDIS_ENDPOINT = env.varOrDefault(
+  'RATE_LIMITER_REDIS_ENDPOINT',
+  'localhost:6379',
+);
+
+export const RATE_LIMITER_REDIS_USE_TLS = env.varOrDefault(
+  'RATE_LIMITER_REDIS_USE_TLS',
+  'false',
+);
+
+export const RATE_LIMITER_REDIS_USE_CLUSTER = env.varOrDefault(
+  'RATE_LIMITER_REDIS_USE_CLUSTER',
+  'false',
+);
+
+//
+// X402 (USDC)
+//
 export const ENABLE_X_402_USDC_DATA_EGRESS =
   env.varOrDefault('ENABLE_X_402_USDC_DATA_EGRESS', 'false') === 'true';
 export const X_402_USDC_NETWORK = env.varOrDefault(

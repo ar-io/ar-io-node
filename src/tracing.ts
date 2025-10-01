@@ -15,12 +15,16 @@ import {
   Span,
   SpanOptions,
 } from '@opentelemetry/api';
-import { TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-node';
+import {
+  TraceIdRatioBasedSampler,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import fs from 'node:fs';
 import * as env from './lib/env.js';
 import * as version from './version.js';
+import { FileSpanExporter } from './otel-file-exporters.js';
 
 // NOTE: These are declared here instead of config.ts because tracing needs to
 // be setup before logging and we may start logging in config.ts in the future.
@@ -40,11 +44,29 @@ const OTEL_TRACING_SAMPLING_RATE_DENOMINATOR = +env.varOrDefault(
   '1',
 );
 
+const OTEL_FILE_EXPORT_ENABLED =
+  env.varOrDefault('OTEL_FILE_EXPORT_ENABLED', 'false') === 'true';
+
+const OTEL_FILE_EXPORT_PATH = env.varOrDefault(
+  'OTEL_FILE_EXPORT_PATH',
+  'logs/otel-spans.jsonl',
+);
+
 const headersFile = process.env.OTEL_EXPORTER_OTLP_HEADERS_FILE;
 if (headersFile !== undefined && headersFile !== '') {
   process.env.OTEL_EXPORTER_OTLP_HEADERS = fs
     .readFileSync(headersFile)
     .toString('utf-8');
+}
+
+// Configure span processors based on export mode
+const spanProcessors = [];
+
+// Add file-based span exporter if enabled
+if (OTEL_FILE_EXPORT_ENABLED) {
+  const fileExporter = new FileSpanExporter(OTEL_FILE_EXPORT_PATH);
+  // Use SimpleSpanProcessor for immediate writes (better for debugging)
+  spanProcessors.push(new SimpleSpanProcessor(fileExporter));
 }
 
 const sdk: NodeSDK = new NodeSDK({
@@ -53,6 +75,7 @@ const sdk: NodeSDK = new NodeSDK({
     SampleRate: OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
   }),
   traceExporter: new OTLPTraceExporter(),
+  spanProcessors: spanProcessors.length > 0 ? spanProcessors : undefined,
   logRecordProcessor: new BatchLogRecordProcessor(new OTLPLogExporter(), {
     scheduledDelayMillis: OTEL_BATCH_LOG_PROCESSOR_SCHEDULED_DELAY_MS,
     maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
@@ -80,6 +103,9 @@ if (
   process.env.OTEL_EXPORTER_OTLP_ENDPOINT !== undefined &&
   process.env.OTEL_EXPORTER_OTLP_ENDPOINT !== ''
 ) {
+  sdk.start();
+} else if (OTEL_FILE_EXPORT_ENABLED) {
+  // Start SDK if file export is enabled, even without OTLP endpoint
   sdk.start();
 }
 
