@@ -141,7 +141,8 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
           const hasCompleteOffsets =
             result.rootOffset !== undefined &&
             result.rootDataOffset !== undefined &&
-            result.size !== undefined;
+            result.size !== undefined &&
+            result.dataSize !== undefined;
 
           if (hasCompleteOffsets) {
             log.debug('Found root TX ID with complete offsets', {
@@ -163,6 +164,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
                   hasRootOffset: result.rootOffset !== undefined,
                   hasRootDataOffset: result.rootDataOffset !== undefined,
                   hasSize: result.size !== undefined,
+                  hasDataSize: result.dataSize !== undefined,
                 },
               );
             }

@@ -98,7 +98,14 @@ This interface is typically implemented by database interaction classes.
 -   (Other methods exist for managing data, but these are key for verification).
 
 ### `DataItemRootIndex` (Interface)
--   `async getRootTx(dataId: string): Promise<string | undefined>`: For a given data item ID (which could be from a bundle), returns the ID of the root transaction that contains it.
+-   `async getRootTx(dataId: string): Promise<{ rootTxId: string; rootOffset?: number; rootDataOffset?: number; contentType?: string; size?: number; dataSize?: number } | undefined>`: For a given data item ID (which could be from a bundle), returns the root transaction metadata including:
+    -   `rootTxId`: The ID of the root transaction that contains the data item
+    -   `rootOffset?`: Optional absolute byte offset of the data item within the root transaction
+    -   `rootDataOffset?`: Optional absolute byte offset of the data item's payload within the root transaction
+    -   `contentType?`: Optional content type of the data item
+    -   `size?`: Optional total size of the data item (including headers)
+    -   `dataSize?`: Optional size of the data item's payload
+    -   Returns `undefined` if the data item is not found
 
 ### `DataRootComputer` (`src/lib/data-root.ts`)
 -   `async computeDataRoot(id: string): Promise<string | undefined>`: Fetches the data for the given ID using `ContiguousDataSource`, computes its Merkle data root, and returns it as a string. Returns `undefined` if computation fails.

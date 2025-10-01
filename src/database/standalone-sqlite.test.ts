@@ -1480,7 +1480,7 @@ describe('StandaloneSqliteDatabase', () => {
       await db.saveDataItem(normalizedDataItem);
 
       const result = await db.getRootTxId(DATA_ITEM_ID);
-      assert.equal(result?.rootTxId, dataItemRootTxId);
+      assert.equal(result, dataItemRootTxId);
     });
 
     it('should return undefined if the root transcation id of a given data item is null', async () => {
@@ -1502,7 +1502,7 @@ describe('StandaloneSqliteDatabase', () => {
       await db.saveBlockAndTxs(block, txs, missingTxIds);
 
       const result = await db.getRootTxId(l1TxId);
-      assert.equal(result?.rootTxId, l1TxId);
+      assert.equal(result, l1TxId);
     });
   });
 
