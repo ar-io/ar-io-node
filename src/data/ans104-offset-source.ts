@@ -9,11 +9,25 @@ import winston from 'winston';
 import {
   byteArrayToLong,
   deserializeTags,
+  MAX_TAG_BYTES,
   MIN_BINARY_SIZE,
 } from '@dha-team/arbundles';
 
 import { ContiguousDataSource } from '../types.js';
 import { readBytes, getReader } from '../lib/bundles.js';
+
+// Maximum ANS-104 data item header size calculation:
+// - Signature type: 2 bytes
+// - Signature (Arweave max): 512 bytes
+// - Owner (Arweave max): 512 bytes
+// - Target (flag + data): 1 + 32 = 33 bytes
+// - Anchor (flag + data): 1 + 32 = 33 bytes
+// - Tags metadata (count + bytes length): 16 bytes
+// - Tag bytes: MAX_TAG_BYTES (4096 bytes from arbundles)
+// Total: 2 + 512 + 512 + 33 + 33 + 16 + 4096 = 5204 bytes
+// Add 1KB safety margin for future-proofing
+const MAX_DATA_ITEM_HEADER_SIZE =
+  2 + 512 + 512 + 33 + 33 + 16 + MAX_TAG_BYTES + 1024;
 
 interface DataItemHeader {
   id: string;
@@ -314,7 +328,10 @@ export class Ans104OffsetSource {
     });
 
     try {
-      // Items smaller than MIN_BINARY_SIZE can't be valid ANS-104 data items
+      // ANS-104 data items have a minimum size of 80 bytes (MIN_BINARY_SIZE) based on
+      // the required structure: signature type (2 bytes), signature (varies), owner (varies),
+      // target presence (1 byte), anchor presence (1 byte), tag count (8 bytes), tag bytes (8 bytes).
+      // Items smaller than this cannot be structurally valid data items.
       if (item.size < MIN_BINARY_SIZE) {
         log.debug('Item too small to be a valid data item', {
           itemSize: item.size,
@@ -324,10 +341,9 @@ export class Ans104OffsetSource {
       }
 
       // We need to check the tags of this data item to see if it's a bundle
-      // Fetch the entire item if it's reasonably small, otherwise fetch enough for header + tags
-      // For Arweave signatures: 2 (sigType) + 512 (sig) + 512 (owner) + 33 (target) + 33 (anchor) + 16 (tags meta) = 1108 bytes minimum
-      const MAX_FETCH_SIZE = 10240; // 10KB max - fetch entire item if smaller
-      const checkSize = Math.min(item.size, MAX_FETCH_SIZE);
+      // Fetch the entire item if it's reasonably small, otherwise fetch enough for the complete header
+      // including all tags (MAX_DATA_ITEM_HEADER_SIZE accounts for max tags of 4096 bytes)
+      const checkSize = Math.min(item.size, MAX_DATA_ITEM_HEADER_SIZE);
 
       const itemData = await this.dataSource.getData({
         id: rootBundleId,
@@ -484,10 +500,9 @@ export class Ans104OffsetSource {
 
     try {
       // Fetch enough data to parse the full header including tags
-      // ANS-104 allows up to 128 tags with max 1024 byte keys and 3072 byte values
-      // Practical limit is ~10KB for most items, matching isBundle() buffer size
-      const MAX_HEADER_SIZE = 10240; // 10KB max - covers most realistic tag combinations
-      const headerSize = Math.min(totalSize, MAX_HEADER_SIZE);
+      // The arbundles library enforces MAX_TAG_BYTES (4096 bytes) as the maximum tag section size
+      // MAX_DATA_ITEM_HEADER_SIZE accounts for all header components plus this tag limit
+      const headerSize = Math.min(totalSize, MAX_DATA_ITEM_HEADER_SIZE);
 
       const headerData = await this.dataSource.getData({
         id: bundleId,
