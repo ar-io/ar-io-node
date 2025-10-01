@@ -11,6 +11,7 @@ import { LRUCache } from 'lru-cache';
 import { DataItemRootTxIndex } from '../types.js';
 import * as config from '../config.js';
 import { isValidTxId } from '../lib/validation.js';
+import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 
 export type CachedTurboOffsets = {
   parentDataItemId?: string;
@@ -113,9 +114,12 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
     const chain: TurboOffsetsResponse[] = [];
     let currentId = id;
     let depth = 0;
-    const MAX_DEPTH = 10; // Reasonable limit for nested bundles
 
-    while (currentId && !visited.has(currentId) && depth < MAX_DEPTH) {
+    while (
+      currentId &&
+      !visited.has(currentId) &&
+      depth < MAX_BUNDLE_NESTING_DEPTH
+    ) {
       visited.add(currentId);
       depth++;
 
@@ -157,7 +161,7 @@ export class TurboRootTxIndex implements DataItemRootTxIndex {
       currentId = offsets.parentDataItemId;
     }
 
-    if (depth >= MAX_DEPTH) {
+    if (depth >= MAX_BUNDLE_NESTING_DEPTH) {
       log.warn('Maximum nesting depth reached', {
         id,
         depth,

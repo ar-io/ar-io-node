@@ -11,6 +11,7 @@ import { LRUCache } from 'lru-cache';
 import { DataItemRootTxIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import * as config from '../config.js';
+import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 
 type CachedParentBundle = {
   bundleId?: string;
@@ -142,9 +143,12 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
     const visited = new Set<string>();
     let currentId = id;
     let depth = 0;
-    const MAX_DEPTH = 10; // Reasonable limit for nested bundles
 
-    while (currentId && !visited.has(currentId) && depth < MAX_DEPTH) {
+    while (
+      currentId &&
+      !visited.has(currentId) &&
+      depth < MAX_BUNDLE_NESTING_DEPTH
+    ) {
       visited.add(currentId);
       depth++;
 
@@ -182,7 +186,7 @@ export class GraphQLRootTxIndex implements DataItemRootTxIndex {
       currentId = queryResult;
     }
 
-    if (depth >= MAX_DEPTH) {
+    if (depth >= MAX_BUNDLE_NESTING_DEPTH) {
       log.warn('Maximum nesting depth reached', {
         id,
         depth,
