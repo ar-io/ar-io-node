@@ -558,13 +558,16 @@ describe('TurboRootTxIndex', () => {
         log,
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 2, // Only 2 tokens available
-        rateLimitTokensPerInterval: 1, // Refill 1 token per second
+        rateLimitTokensPerInterval: 2, // Refill 2 tokens per second
         rateLimitInterval: 'second',
       });
 
+      // Wait for tokens to accumulate (TokenBucket starts at 0)
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+
       const start = Date.now();
 
-      // First request - should be immediate
+      // First request - should be immediate (bucket has 2 tokens now)
       await turboIndex.getRootTx(`${dataItemId}-1`);
       const time1 = Date.now() - start;
       assert(time1 < 200, `First request should be immediate, took ${time1}ms`);
@@ -577,12 +580,13 @@ describe('TurboRootTxIndex', () => {
         `Second request should be immediate, took ${time2}ms`,
       );
 
-      // Third request - should be rate limited (wait ~1 second for token refill)
+      // Third request - should be rate limited (wait ~500ms for token refill)
+      // With 2 tokens/sec, need to wait 0.5s for 1 token
       await turboIndex.getRootTx(`${dataItemId}-3`);
       const time3 = Date.now() - start;
       assert(
-        time3 >= 900,
-        `Third request should be rate limited and wait ~1s, took ${time3}ms`,
+        time3 >= 400 && time3 < 800,
+        `Third request should be rate limited and wait ~500ms, took ${time3}ms`,
       );
 
       assert.equal(callCount, 3, 'Should have made 3 API calls');
