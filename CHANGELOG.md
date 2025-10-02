@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Increased rate limiter defaults to accommodate larger response payloads:
+  - `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET`: 10,000 → 1,000,000 tokens (~10 MB → ~976 MB bucket capacity)
+  - `RATE_LIMITER_IP_TOKENS_PER_BUCKET`: 2,000 → 100,000 tokens (~2 MB → ~98 MB bucket capacity)
+  - Resource refill rate remains 100 tokens/sec (~98 KB/sec)
+  - IP refill rate remains 20 tokens/sec (~20 KB/sec)
+  - Note: 1 token = 1 KB of response data, minimum 1 token per request
+  - Rate limiter remains disabled by default (`ENABLE_RATE_LIMITER=false`)
+
 ### Fixed
 
 ## [Release 52] - 2025-09-29

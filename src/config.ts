@@ -1145,7 +1145,7 @@ export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
 
 export const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
   'RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
-  '10000',
+  '1000000',
 );
 
 export const RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
@@ -1155,7 +1155,7 @@ export const RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
 
 export const RATE_LIMITER_IP_TOKENS_PER_BUCKET = +env.varOrDefault(
   'RATE_LIMITER_IP_TOKENS_PER_BUCKET',
-  '2000',
+  '100000',
 );
 
 export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(
