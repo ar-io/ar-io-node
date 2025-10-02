@@ -39,7 +39,7 @@ export class RootParentDataSource implements ContiguousDataSource {
    * @param dataAttributesSource - Source for data attributes to traverse parent chains
    * @param dataItemRootTxIndex - Index for resolving data items to root transactions (fallback)
    * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles (fallback)
-   * @param fallbackToLegacyTraversal - Whether to fall back to legacy traversal when attributes are incomplete
+   * @param fallbackToLegacyTraversal - Whether to search for data item root transaction when attributes are incomplete
    */
   constructor({
     log,

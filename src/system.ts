@@ -576,7 +576,6 @@ const ans104GatewaysOffsetSource = new Ans104OffsetSource({
 });
 
 // Offset-aware version of gateways data source that uses cached upstream offsets
-// but does not perform expensive offset searching if they're not available
 // Uses unfiltered base source to avoid blocking legitimate chunk retrieval
 const offsetAwareGatewaysDataSource = new RootParentDataSource({
   log,
@@ -584,7 +583,7 @@ const offsetAwareGatewaysDataSource = new RootParentDataSource({
   dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource: ans104GatewaysOffsetSource,
-  fallbackToLegacyTraversal: true, // No expensive offset searching
+  fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
 });
 
 // Regular chunks data source (no data item resolution)
@@ -597,7 +596,7 @@ const txChunksOffsetAwareSource = new RootParentDataSource({
   dataAttributesSource,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource: ans104ChunksOffsetSource,
-  fallbackToLegacyTraversal: config.ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK,
+  fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
 });
 
 const s3DataSource =
