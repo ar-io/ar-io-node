@@ -175,6 +175,28 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// GraphQL root TX lookup gateways (separate from data retrieval gateways)
+export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
+  env.varOrDefault(
+    'GRAPHQL_ROOT_TX_GATEWAYS_URLS',
+    '{ "https://arweave-search.goldsky.com/graphql": 1 }',
+  ),
+) as Record<string, number>;
+
+// Validate GraphQL root TX gateway URLs and weights
+Object.entries(GRAPHQL_ROOT_TX_GATEWAYS_URLS).forEach(([url, weight]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in GRAPHQL_ROOT_TX_GATEWAYS_URLS: ${url}`);
+  }
+  if (typeof weight !== 'number' || weight <= 0) {
+    throw new Error(
+      `Invalid weight in GRAPHQL_ROOT_TX_GATEWAYS_URLS for ${url}: ${weight}`,
+    );
+  }
+});
+
 // GraphQL root TX lookup rate limiting
 export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
   'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',

@@ -229,16 +229,16 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
       break;
 
     case 'graphql':
-      if (Object.keys(config.TRUSTED_GATEWAYS_URLS).length > 0) {
+      if (Object.keys(config.GRAPHQL_ROOT_TX_GATEWAYS_URLS).length > 0) {
         rootTxIndexes.push(
           new GraphQLRootTxIndex({
             log,
-            trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+            trustedGatewaysUrls: config.GRAPHQL_ROOT_TX_GATEWAYS_URLS,
             cache: rootTxCache,
           }),
         );
       } else {
-        log.warn('GraphQL source configured but no trusted gateways defined');
+        log.warn('GraphQL source configured but no GraphQL gateways defined');
       }
       break;
 
