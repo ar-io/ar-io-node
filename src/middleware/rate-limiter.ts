@@ -89,7 +89,7 @@ async function getOrCreateBucketsAndConsume(
   domain: string,
   cacheTtlSeconds: number,
   predictedTokens: number,
-  x402Payment = false, // TODO: define type
+  x402PaymentProvided = false,
 ): Promise<{
   success: boolean;
   resourceBucket?: TokenBucket;
@@ -98,7 +98,7 @@ async function getOrCreateBucketsAndConsume(
   // Tokens initially consumed from each bucket during the predictive phase
   resourceTokensConsumed?: number; // what was actually debited from resource bucket (predicted)
   ipTokensConsumed?: number; // what was actually debited from IP bucket (actual tokens needed)
-  x402Payment?: boolean; // whether x402 payment was used
+  x402PaymentProvided?: boolean; // whether x402 payment was used
 }> {
   const span = tracer.startSpan('rateLimiter.getOrCreateBucketsAndConsume');
   span.setAttributes({
@@ -120,7 +120,7 @@ async function getOrCreateBucketsAndConsume(
       now,
       cacheTtlSeconds,
       predictedTokens,
-      x402Payment,
+      x402PaymentProvided,
     );
 
     span.setAttributes({
@@ -148,7 +148,7 @@ async function getOrCreateBucketsAndConsume(
       now,
       cacheTtlSeconds,
       actualTokensNeeded,
-      x402Payment,
+      x402PaymentProvided,
     );
 
     span.setAttributes({
@@ -241,9 +241,6 @@ export function rateLimiterMiddleware(options?: {
     options?.ipAllowlist ?? config.RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST;
   const redisClient = options?.redisClient ?? getRateLimiterRedisClient();
   const x402Enabled = config.ENABLE_X_402_USDC_DATA_EGRESS;
-
-  // TODO: check x402 payment enabled and if res.x402Payment attribute exists,
-  // send 402 with those attributes from the rate limiter
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -363,7 +360,7 @@ export function rateLimiterMiddleware(options?: {
         }
 
         if (limitsEnabled) {
-          // if x402 is enabled, then return 402 instead of 429 with req.x402Payment attributes
+          // if x402 is enabled, then return 402 with payment attributes instead of a 429
           if (x402Enabled && x402PaymentProvided) {
             return sendX402Response({
               res,

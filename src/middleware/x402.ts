@@ -20,6 +20,7 @@ import { ContiguousDataAttributes } from '../types.js';
 import { getPaywallHtml, processPriceToAtomicAmount } from 'x402/shared';
 import { Request, Response, NextFunction } from 'express';
 import { DATA_PATH_REGEX } from '../constants.js';
+import logger from '../log.js';
 
 // TODO: we could move this to system.ts and use the same facilitator for all x402 requests
 const facilitator = useFacilitator({
@@ -40,7 +41,6 @@ export const sendX402Response = ({
   error?: string;
   payer?: string;
 }) => {
-  res.set('X-Payment-Required', JSON.stringify(paymentRequirements));
   res.status(402).json({
     x402Version,
     accepts: [paymentRequirements],
@@ -76,12 +76,13 @@ export const x402DataEgressMiddleware = ({
 }: {
   enabledRateLimiting?: boolean;
 } = {}): any => {
+  const isX402EgressEnabled =
+    config.ENABLE_X_402_USDC_DATA_EGRESS &&
+    config.X_402_USDC_ADDRESS !== undefined;
+
   return async (req: Request, res: Response, next: NextFunction) => {
     // skip if x402 is not enabled or no address is provided
-    if (
-      !config.ENABLE_X_402_USDC_DATA_EGRESS ||
-      config.X_402_USDC_ADDRESS === undefined
-    ) {
+    if (isX402EgressEnabled === false) {
       return next();
     }
 
@@ -106,8 +107,6 @@ export const x402DataEgressMiddleware = ({
         // No valid ID found, continue without payment check
         return next();
       }
-
-      // requested resource is /<txId>
 
       span.setAttribute('data.id', id);
 
