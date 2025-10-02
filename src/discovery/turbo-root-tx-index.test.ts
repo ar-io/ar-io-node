@@ -524,5 +524,68 @@ describe('TurboRootTxIndex', () => {
       assert.equal(result.dataSize, 95);
       assert.equal(mockAxiosInstance.get.mock.calls.length, 3);
     });
+
+    it('should apply rate limiting when tokens are exhausted', async () => {
+      const dataItemId = 'rate-limited-item';
+      let callCount = 0;
+
+      const mockAxiosInstance = {
+        get: mock.fn(() => {
+          callCount++;
+          return Promise.resolve({
+            status: 200,
+            data: {
+              rootBundleId: 'root',
+              startOffsetInRootBundle: 1000,
+              rawContentLength: 5000,
+              payloadContentType: 'text/plain',
+              payloadDataStart: 100,
+              payloadContentLength: 4900,
+            },
+          });
+        }),
+        defaults: { raxConfig: {} },
+        interceptors: {
+          request: { use: mock.fn(), eject: mock.fn() },
+          response: { use: mock.fn(), eject: mock.fn() },
+        },
+      };
+
+      mock.method(axios, 'create', () => mockAxiosInstance);
+
+      // Create index with restrictive rate limit
+      const turboIndex = new TurboRootTxIndex({
+        log,
+        turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 2, // Only 2 tokens available
+        rateLimitTokensPerInterval: 1, // Refill 1 token per second
+        rateLimitInterval: 'second',
+      });
+
+      const start = Date.now();
+
+      // First request - should be immediate
+      await turboIndex.getRootTx(`${dataItemId}-1`);
+      const time1 = Date.now() - start;
+      assert(time1 < 200, `First request should be immediate, took ${time1}ms`);
+
+      // Second request - should be immediate (using second token)
+      await turboIndex.getRootTx(`${dataItemId}-2`);
+      const time2 = Date.now() - start;
+      assert(
+        time2 < 200,
+        `Second request should be immediate, took ${time2}ms`,
+      );
+
+      // Third request - should be rate limited (wait ~1 second for token refill)
+      await turboIndex.getRootTx(`${dataItemId}-3`);
+      const time3 = Date.now() - start;
+      assert(
+        time3 >= 900,
+        `Third request should be rate limited and wait ~1s, took ${time3}ms`,
+      );
+
+      assert.equal(callCount, 3, 'Should have made 3 API calls');
+    });
   });
 });
