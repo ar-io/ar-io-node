@@ -211,11 +211,10 @@ export class TurboRootTxIndex implements DataItemRootIndex {
       const url = `${this.turboEndpoint}/tx/${id}/offsets`;
 
       // Apply rate limiting before making request
-      const tokensAvailable = this.limiter.getTokensRemaining();
-      if (tokensAvailable < 1) {
+      if (this.limiter.content < 1) {
         log.debug('Rate limiting Turbo request - waiting for tokens', {
           id,
-          tokensAvailable,
+          tokensAvailable: this.limiter.content,
         });
       }
       await this.limiter.removeTokens(1);
