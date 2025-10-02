@@ -98,6 +98,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     // If we already have absolute root offsets, use them directly without traversing
     if (
       initialAttributes.rootTransactionId !== undefined &&
+      initialAttributes.rootTransactionId.trim().length > 0 &&
       initialAttributes.rootDataItemOffset !== undefined &&
       initialAttributes.rootDataOffset !== undefined &&
       initialAttributes.size !== undefined
