@@ -31,6 +31,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   private dataItemRootTxIndex: DataItemRootIndex;
   private ans104OffsetSource: Ans104OffsetSource;
   private fallbackToLegacyTraversal: boolean;
+  private allowPassthroughWithoutOffsets: boolean;
 
   /**
    * Creates a new RootParentDataSource instance.
@@ -40,6 +41,7 @@ export class RootParentDataSource implements ContiguousDataSource {
    * @param dataItemRootTxIndex - Index for resolving data items to root transactions (fallback)
    * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles (fallback)
    * @param fallbackToLegacyTraversal - Whether to search for data item root transaction when attributes are incomplete
+   * @param allowPassthroughWithoutOffsets - Whether to allow data retrieval without offset information
    */
   constructor({
     log,
@@ -48,6 +50,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     dataItemRootTxIndex,
     ans104OffsetSource,
     fallbackToLegacyTraversal = true,
+    allowPassthroughWithoutOffsets = true,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
@@ -55,6 +58,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     dataItemRootTxIndex: DataItemRootIndex;
     ans104OffsetSource: Ans104OffsetSource;
     fallbackToLegacyTraversal?: boolean;
+    allowPassthroughWithoutOffsets?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
@@ -62,6 +66,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     this.dataItemRootTxIndex = dataItemRootTxIndex;
     this.ans104OffsetSource = ans104OffsetSource;
     this.fallbackToLegacyTraversal = fallbackToLegacyTraversal;
+    this.allowPassthroughWithoutOffsets = allowPassthroughWithoutOffsets;
   }
 
   /**
@@ -495,7 +500,21 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       if (rootTxId === undefined || rootTxId === id) {
         // Not a data item (no root found) OR already a root transaction (ID equals root ID)
-        // In both cases, pass through to underlying data source
+        // Check if passthrough without offsets is allowed
+        if (!this.allowPassthroughWithoutOffsets) {
+          const error = new Error(
+            `Cannot retrieve data for ${id} - offsets unavailable and passthrough disabled`,
+          );
+          span.recordException(error);
+          span.setAttributes({
+            'root.not_found': rootTxId === undefined,
+            'root.is_self': rootTxId === id,
+            'passthrough.blocked': true,
+          });
+          throw error;
+        }
+
+        // Pass through to underlying data source
         this.log.debug(
           'Not a data item or already root, passing through to underlying source',
           {
