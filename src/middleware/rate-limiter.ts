@@ -22,6 +22,7 @@ import {
   rateLimitRequestsTotal,
   rateLimitBytesBlockedTotal,
 } from '../metrics.js';
+import { sendX402Response, x402DataEgressMiddleware } from './x402.js';
 
 function getCanonicalPath(req: Request) {
   // baseUrl is '' at the app root, so this concatenation works there too.
@@ -88,6 +89,7 @@ async function getOrCreateBucketsAndConsume(
   domain: string,
   cacheTtlSeconds: number,
   predictedTokens: number,
+  x402Payment = false, // TODO: define type
 ): Promise<{
   success: boolean;
   resourceBucket?: TokenBucket;
@@ -96,6 +98,7 @@ async function getOrCreateBucketsAndConsume(
   // Tokens initially consumed from each bucket during the predictive phase
   resourceTokensConsumed?: number; // what was actually debited from resource bucket (predicted)
   ipTokensConsumed?: number; // what was actually debited from IP bucket (actual tokens needed)
+  x402Payment?: boolean; // whether x402 payment was used
 }> {
   const span = tracer.startSpan('rateLimiter.getOrCreateBucketsAndConsume');
   span.setAttributes({
@@ -117,6 +120,7 @@ async function getOrCreateBucketsAndConsume(
       now,
       cacheTtlSeconds,
       predictedTokens,
+      x402Payment,
     );
 
     span.setAttributes({
@@ -144,6 +148,7 @@ async function getOrCreateBucketsAndConsume(
       now,
       cacheTtlSeconds,
       actualTokensNeeded,
+      x402Payment,
     );
 
     span.setAttributes({
@@ -235,9 +240,16 @@ export function rateLimiterMiddleware(options?: {
   const ipAllowlist =
     options?.ipAllowlist ?? config.RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST;
   const redisClient = options?.redisClient ?? getRateLimiterRedisClient();
+  const x402Enabled = config.ENABLE_X_402_USDC_DATA_EGRESS;
+
+  // TODO: check x402 payment enabled and if res.x402Payment attribute exists,
+  // send 402 with those attributes from the rate limiter
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
+    // determine if x402 payment was made for this request
+    const x402PaymentProvided = !!(req as any).x402Payment;
+
     // Extract all client IPs from headers and connection
     const { clientIp, clientIps } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
@@ -321,6 +333,7 @@ export function rateLimiterMiddleware(options?: {
         domain,
         cacheTtlSeconds,
         predictedTokens,
+        x402PaymentProvided,
       );
 
       if (!bucketsResult.success) {
@@ -350,13 +363,22 @@ export function rateLimiterMiddleware(options?: {
         }
 
         if (limitsEnabled) {
-          return res.status(429).json({
-            error: 'Too Many Requests',
-            message:
-              bucketsResult.failureType === 'resource'
-                ? 'Resource rate limit exceeded'
-                : 'IP rate limit exceeded',
-          });
+          // if x402 is enabled, then return 402 instead of 429 with req.x402Payment attributes
+          if (x402Enabled && x402PaymentProvided) {
+            return sendX402Response({
+              res,
+              message: 'Payment required to access this resource',
+              paymentRequirements: (req as any).x402Payment.paymentRequirements,
+            });
+          } else {
+            return res.status(429).json({
+              error: 'Too Many Requests',
+              message:
+                bucketsResult.failureType === 'resource'
+                  ? 'Resource rate limit exceeded'
+                  : 'IP rate limit exceeded',
+            });
+          }
         } else {
           next();
           return;

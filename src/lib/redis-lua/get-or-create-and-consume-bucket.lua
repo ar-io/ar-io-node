@@ -24,6 +24,10 @@ local ttl = tonumber(ARGV[4])
 local capacity = tonumber(ARGV[1])
 local refill = tonumber(ARGV[2])
 local tokensToConsume = tonumber(ARGV[5]) or 0
+ -- Right now: just providing boolean if payment provided,
+ -- we could get more nuanced with parameters around bucket multiplication
+ -- and token refresh logic if we want.
+local x402PaymentProvided = ARGV[6] == "1"
 
 local key = KEYS[1]
 
@@ -41,6 +45,14 @@ if #all > 0 then
   -- Step 2: Refill tokens based on elapsed time (token bucket algorithm)
   local elapsed = (now - bucket.lastRefill) / 1000  -- convert to seconds
   local to_add = math.floor(elapsed * bucket.refillRate)  -- tokens to add
+
+  -- if x402PaymentProvided, double the refill rate and increase capacity 10x
+  if x402PaymentProvided then
+    bucket.refillRate = bucket.refillRate * 2
+    to_add = bucket.capacity  -- if x402 payment provided, just top off the bucket
+    bucket.capacity = bucket.capacity * 10  -- 10x the capacity of the bucket as well
+  end
+
   if to_add > 0 then
     -- Add tokens but cap at bucket capacity (prevents overflow)
     bucket.tokens = math.min(bucket.capacity, bucket.tokens + to_add)
@@ -56,6 +68,12 @@ else
     capacity = capacity,
     refillRate = refill
   }
+  -- if x402PaymentProvided, double the refill rate and increase capacity 10x
+  if x402PaymentProvided then
+    bucket.refillRate = bucket.refillRate * 2
+    bucket.capacity = bucket.capacity * 10
+    bucket.tokens = bucket.capacity  -- start with full tokens at new capacity
+  end
 end
 
 -- Step 3: Calculate actual tokens needed

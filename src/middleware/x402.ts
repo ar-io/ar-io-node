@@ -18,7 +18,8 @@ import log from '../log.js';
 import { tracer } from '../tracing.js';
 import { ContiguousDataAttributes } from '../types.js';
 import { getPaywallHtml, processPriceToAtomicAmount } from 'x402/shared';
-import { asyncMiddleware } from 'middleware-async';
+import { Request, Response, NextFunction } from 'express';
+import { DATA_PATH_REGEX } from '../constants.js';
 
 // TODO: we could move this to system.ts and use the same facilitator for all x402 requests
 const facilitator = useFacilitator({
@@ -70,8 +71,12 @@ export const calculateX402PricePerByteEgress = (
 };
 
 // custom x402 payment middleware for data egress with dynamic pricing
-export const x402DataEgressMiddleware = asyncMiddleware(
-  async (req, res, next) => {
+export const x402DataEgressMiddleware = ({
+  enabledRateLimiting = config.ENABLE_RATE_LIMITER,
+}: {
+  enabledRateLimiting?: boolean;
+} = {}): any => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     // skip if x402 is not enabled or no address is provided
     if (
       !config.ENABLE_X_402_USDC_DATA_EGRESS ||
@@ -94,13 +99,15 @@ export const x402DataEgressMiddleware = asyncMiddleware(
       /**
        * TODO: currently only handling /txId routes.
        */
-      const pathMatch = req.path.match(/\/([a-zA-Z0-9-_]{43})(?:\/.*)?$/);
+      const pathMatch = req.path.match(DATA_PATH_REGEX);
       const id = pathMatch ? pathMatch[1] : undefined;
 
       if (id === undefined) {
         // No valid ID found, continue without payment check
         return next();
       }
+
+      // requested resource is /<txId>
 
       span.setAttribute('data.id', id);
 
@@ -109,13 +116,23 @@ export const x402DataEgressMiddleware = asyncMiddleware(
       try {
         // NOTE: this should be populated if the gateway has ever seen/served the data before. The data itself does not need to be cached.
         // Additionally, we may want to add a multiplier if the resulting txId is a manifest.
-        dataAttributes = await system.contiguousDataIndex.getDataAttributes(id);
+        dataAttributes =
+          await system.dataAttributesSource.getDataAttributes(id);
       } catch (error: any) {
         log.debug('Could not get data attributes for x402 check', {
           id,
           error: error.message,
         });
         // TODO: we may just want to fallback to a default price here instead of continuing without payment check
+        return next();
+      }
+
+      // if we don't know anything about the data and rate limiting is enabled, let it determine if the resource can be served
+      if (dataAttributes === undefined && enabledRateLimiting) {
+        log.debug(
+          'Data attributes not found; cannot enforce x402 payment for unknown content length',
+          { id },
+        );
         return next();
       }
 
@@ -138,6 +155,7 @@ export const x402DataEgressMiddleware = asyncMiddleware(
       if ('error' in atomicAssetPrice) {
         // Invalid price format, continue without payment check
         log.error('Invalid x402 price format', { price });
+        // Being conservative, if price is misconfigured, continue to next middleware
         return next();
       }
 
@@ -238,6 +256,7 @@ export const x402DataEgressMiddleware = asyncMiddleware(
 
       log.debug('Payment verification response', { verifyResponse });
 
+      // isValid indicates the payment is unique and has not been settled on chain yet
       if (!verifyResponse.isValid) {
         // Payment verification failed
         span.setAttribute('x402.payment_verification_failed', true);
@@ -251,15 +270,6 @@ export const x402DataEgressMiddleware = asyncMiddleware(
 
         return;
       }
-
-      // Store payment info on request for settlement after response
-      (req as any).x402Payment = {
-        verified: true,
-        paymentPayload,
-        paymentRequirements,
-        price,
-        contentLength,
-      };
 
       span.setAttribute('x402.payment_verified', true);
 
@@ -323,6 +333,16 @@ export const x402DataEgressMiddleware = asyncMiddleware(
         }
       }
 
+      // Store payment info on request for settlement after response
+      (req as any).x402Payment = {
+        verified: true,
+        paymentPayload,
+        paymentRequirements,
+        price,
+        contentLength,
+        settled: true,
+      };
+
       // Proceed to next middleware
       return next();
     } catch (error: any) {
@@ -340,5 +360,5 @@ export const x402DataEgressMiddleware = asyncMiddleware(
     } finally {
       span.end();
     }
-  },
-);
+  };
+};

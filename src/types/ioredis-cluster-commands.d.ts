@@ -15,6 +15,7 @@ declare module 'ioredis' {
       now: number,
       ttlSeconds: number,
       tokensToConsume: number,
+      x402PaymentProvided: boolean,
     ): Promise<string>;
 
     consumeTokens(
@@ -33,6 +34,7 @@ declare module 'ioredis' {
       now: number,
       ttlSeconds: number,
       tokensToConsume: number,
+      x402PaymentProvided: boolean,
     ): Promise<string>;
 
     consumeTokens(

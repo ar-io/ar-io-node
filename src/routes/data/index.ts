@@ -15,7 +15,6 @@ import {
 } from '../../constants.js';
 import { createDataHandler, createRawDataHandler } from './handlers.js';
 import { x402DataEgressMiddleware } from '../../middleware/x402.js';
-
 // Used by ArNS Router
 export const dataHandler = createDataHandler({
   log,
@@ -27,8 +26,8 @@ export const dataHandler = createDataHandler({
 
 export const dataRouter = Router();
 
-// Apply x402 payment middleware to data routes
-dataRouter.use(x402DataEgressMiddleware);
+// Apply x402 data egress middleware to all data routes
+dataRouter.use(x402DataEgressMiddleware());
 dataRouter.get(DATA_PATH_REGEX, dataHandler);
 dataRouter.get(
   RAW_DATA_PATH_REGEX,
