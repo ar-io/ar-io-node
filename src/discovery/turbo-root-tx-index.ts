@@ -284,41 +284,99 @@ export class TurboRootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Calculates the final position of a nested data item within its root bundle.
+   * Calculates the final position of a nested data item within its root L1 transaction.
    *
-   * This method takes a chain of Turbo offset responses representing the path from
-   * a nested data item up to its root bundle, and calculates the cumulative offset
-   * required to locate the data item within the root bundle.
+   * This method takes a chain of Turbo offset responses and calculates the cumulative offset
+   * required to locate the data item within the root L1 transaction's data field (ANS-104 bundle).
    *
-   * @param chain - Array of TurboOffsetsResponse objects from child to root.
-   *                The first element is the target data item, and the last element
-   *                contains the rootBundleId.
+   * The root is always an L1 transaction (rootBundleId). All offsets are relative to the start
+   * of the L1's data field, which contains the ANS-104 bundle structure.
+   *
+   * Note: Turbo lazily populates rootBundleId and startOffsetInRootBundle fields. Any item in
+   * the chain (leaf or any ancestor) may have these fields populated. The algorithm uses the
+   * first item with root info as the starting point and calculates offsets down to the target.
+   *
+   * @param chain - Array of TurboOffsetsResponse objects representing the nesting path.
+   *                - First element: the target data item (leaf)
+   *                - Last element: the item with rootBundleId (could be leaf or any ancestor)
+   *                - Chain length varies based on where Turbo has populated root info
    *
    * @returns Object containing:
-   *   - rootTxId: The ID of the root bundle transaction
-   *   - rootOffset: Offset to the start of the data item within the root bundle
-   *   - rootDataOffset: Offset to the start of the data item's payload within the root bundle
+   *   - rootTxId: The ID of the root L1 transaction
+   *   - rootOffset: Byte offset to the data item's start within the L1's data field
+   *   - rootDataOffset: Byte offset to the data item's payload within the L1's data field
    *   - contentType: Content type of the original data item
    *   - size: Total size of the original data item (including headers)
    *   - dataSize: Size of the original data item's payload only
    *
    * @example
-   * For a 3-level chain: dataItem → parent → root
+   * Example 1 - Direct (chain length 1): Leaf item already has root offsets populated
+   * Chain: dataItem (has rootBundleId)
+   * Note: dataItem has parentDataItemId=parent, but traversal stops since dataItem
+   *       already has root info. Parent and ancestors are never queried.
    *
-   * Offset calculation:
-   * 1. Start with root's startOffsetInRootBundle (where parent begins in root)
-   * 2. Add root's payloadDataStart (to get into root's payload)
-   * 3. Add parent's startOffsetInParentDataItemPayload (where dataItem begins in parent)
-   * 4. rootDataOffset = rootOffset + dataItem's payloadDataStart
+   * L1 Transaction (rootBundleId):
+   * └─ Data field (ANS-104 bundle):
+   *     └─ [GreatGrandparent DataItem]
+   *         └─ [Grandparent DataItem]
+   *             └─ [Parent DataItem]
+   *                 └─ [Target DataItem]  ← dataItem.startOffsetInRootBundle
+   *                     ├─ Headers (signature, owner, tags, etc.)
+   *                     └─ Payload ← dataItem.startOffsetInRootBundle + payloadDataStart
    *
-   * Visual representation:
-   * ```
-   * Root Bundle:
-   * [headers] [payload-start] [parent headers] [parent payload-start] [dataItem headers] [dataItem payload]
-   *           ^                                                        ^                   ^
-   *           |                                                        |                   |
-   *           startOffsetInRootBundle                                 rootOffset          rootDataOffset
-   * ```
+   * Result:
+   *   rootOffset = dataItem.startOffsetInRootBundle
+   *   rootDataOffset = dataItem.startOffsetInRootBundle + dataItem.payloadDataStart
+   *
+   * @example
+   * Example 2 - Traversal (chain length 2): Root offsets populated on parent
+   * Chain: dataItem → parent (has rootBundleId)
+   * Note: parent has parentDataItemId=grandparent, but traversal stops since parent
+   *       already has root info. Grandparent and ancestors are never queried.
+   *
+   * L1 Transaction (rootBundleId):
+   * └─ Data field (ANS-104 bundle):
+   *     └─ [GreatGrandparent DataItem]
+   *         └─ [Grandparent DataItem]
+   *             └─ [Parent DataItem]  ← parent.startOffsetInRootBundle
+   *                 ├─ Headers
+   *                 └─ Payload
+   *                     └─ [Target DataItem]  ← dataItem.startOffsetInParentDataItemPayload
+   *                         ├─ Headers
+   *                         └─ Payload
+   *
+   * Calculation steps:
+   * 1. Start: rootOffset = parent.startOffsetInRootBundle
+   * 2. Add parent.payloadDataStart (to enter parent's payload)
+   * 3. Add dataItem.startOffsetInParentDataItemPayload (dataItem's position in parent's payload)
+   * 4. rootDataOffset = rootOffset + dataItem.payloadDataStart (to enter dataItem's payload)
+   *
+   * @example
+   * Example 3 - Traversal (chain length 3): Root offsets populated in middle of ancestry
+   * Chain: dataItem → parent → grandparent (has rootBundleId)
+   * Note: grandparent has parentDataItemId=greatGrandparent, but traversal stops since
+   *       grandparent already has root info. GreatGrandparent is never queried.
+   *
+   * L1 Transaction (rootBundleId):
+   * └─ Data field (ANS-104 bundle):
+   *     └─ [GreatGrandparent DataItem]
+   *         └─ [Grandparent DataItem]  ← grandparent.startOffsetInRootBundle
+   *             ├─ Headers
+   *             └─ Payload
+   *                 └─ [Parent DataItem]  ← parent.startOffsetInParentDataItemPayload
+   *                     ├─ Headers
+   *                     └─ Payload
+   *                         └─ [Target DataItem]  ← dataItem.startOffsetInParentDataItemPayload
+   *                             ├─ Headers
+   *                             └─ Payload
+   *
+   * Calculation steps:
+   * 1. Start: rootOffset = grandparent.startOffsetInRootBundle
+   * 2. Add grandparent.payloadDataStart (to enter grandparent's payload)
+   * 3. Add parent.startOffsetInParentDataItemPayload (parent's position in grandparent's payload)
+   * 4. Add parent.payloadDataStart (to enter parent's payload)
+   * 5. Add dataItem.startOffsetInParentDataItemPayload (dataItem's position in parent's payload)
+   * 6. rootDataOffset = rootOffset + dataItem.payloadDataStart (to enter dataItem's payload)
    */
   private calculateRootPosition(chain: TurboOffsetsResponse[]): {
     rootTxId: string;
