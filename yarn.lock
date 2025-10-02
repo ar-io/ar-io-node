@@ -13051,16 +13051,16 @@ ws@~8.17.1:
   resolved "https://registry.yarnpkg.com/ws/-/ws-8.17.1.tgz#9293da530bb548febc95371d90f9c878727d919b"
   integrity sha512-6XQFvXTkbfUOZOKKILFG1PDK2NDQs4azKQl26T0YS5CxqWLgXajbPZ+h4gZekJyRqFU8pvnbAbbs/3TgRPy+GQ==
 
-x402-express@^0.6.1:
-  version "0.6.1"
-  resolved "https://registry.yarnpkg.com/x402-express/-/x402-express-0.6.1.tgz#07b39cfe1da8dfe132bdcfaba113771a2f139aea"
-  integrity sha512-J3jDs3+mFfjSQgppYP1Tnn8NXSJFMjj7jcoTIfl9m84evgi54puJrfZKgAhCs8+1FlrP5cEj/NmkYkG3u6zA9Q==
+x402-express@0.6.5:
+  version "0.6.5"
+  resolved "https://registry.yarnpkg.com/x402-express/-/x402-express-0.6.5.tgz#c762f764e9f81900fc993f92543dc50dd2aedc19"
+  integrity sha512-sVuNr+02VmKUyUxKruVxNUx0j67ysrDS6n9sKUjAydNIhme+/L71WnEpTRYm5qB7v1c846/FDPTex1JylQrtrg==
   dependencies:
     "@coinbase/cdp-sdk" "^1.22.0"
     "@solana/kit" "^2.1.1"
     express "^4.18.2"
     viem "^2.21.26"
-    x402 "^0.6.1"
+    x402 "^0.6.5"
     zod "^3.24.2"
 
 x402-fetch@^0.6.0:
@@ -13072,10 +13072,10 @@ x402-fetch@^0.6.0:
     x402 "^0.6.0"
     zod "^3.24.2"
 
-x402@^0.6.0, x402@^0.6.1:
-  version "0.6.1"
-  resolved "https://registry.yarnpkg.com/x402/-/x402-0.6.1.tgz#b9d0f7dd9cdda752bfcf0a65d814ed00ecd714c0"
-  integrity sha512-9UmeCSsYzFGav5FdVP70VplKlR3V90P0DZ9fPSrlLVp0ifUVi1S9TztvegkmIHE9xTGZ1GWNi+bkne6N0Ea58w==
+x402@0.6.5, x402@^0.6.5:
+  version "0.6.5"
+  resolved "https://registry.yarnpkg.com/x402/-/x402-0.6.5.tgz#8085d9f5e841ee90c9e740e2f7f3544878944ed6"
+  integrity sha512-Pk+JZiCwuXSzwuhY6Dsz5mu/O9T6QnZD7VPVcgI3gixe4F/rwv4h09bUygB9kckRpq+XYYx3Hqv4nTk8uBCzvQ==
   dependencies:
     "@scure/base" "^1.2.6"
     "@solana-program/compute-budget" "^0.8.0"
@@ -13087,10 +13087,10 @@ x402@^0.6.0, x402@^0.6.1:
     wagmi "^2.15.6"
     zod "^3.24.2"
 
-x402@^0.6.5:
-  version "0.6.5"
-  resolved "https://registry.yarnpkg.com/x402/-/x402-0.6.5.tgz#8085d9f5e841ee90c9e740e2f7f3544878944ed6"
-  integrity sha512-Pk+JZiCwuXSzwuhY6Dsz5mu/O9T6QnZD7VPVcgI3gixe4F/rwv4h09bUygB9kckRpq+XYYx3Hqv4nTk8uBCzvQ==
+x402@^0.6.0:
+  version "0.6.1"
+  resolved "https://registry.yarnpkg.com/x402/-/x402-0.6.1.tgz#b9d0f7dd9cdda752bfcf0a65d814ed00ecd714c0"
+  integrity sha512-9UmeCSsYzFGav5FdVP70VplKlR3V90P0DZ9fPSrlLVp0ifUVi1S9TztvegkmIHE9xTGZ1GWNi+bkne6N0Ea58w==
   dependencies:
     "@scure/base" "^1.2.6"
     "@solana-program/compute-budget" "^0.8.0"

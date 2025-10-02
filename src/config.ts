@@ -1193,7 +1193,9 @@ export const X_402_USDC_NETWORK = env.varOrDefault(
   'X_402_USDC_NETWORK',
   'base-sepolia', // base mainnet is the default (base-sepolia is the testnet)
 ) as 'base' | 'base-sepolia';
-export const X_402_USDC_ADDRESS = env.varOrUndefined('X_402_USDC_ADDRESS');
+export const X_402_USDC_ADDRESS = env.varOrUndefined('X_402_USDC_ADDRESS') as
+  | `0x${string}`
+  | undefined;
 export const X_402_USDC_DATA_EGRESS_MIN_PRICE = +env.varOrDefault(
   'X_402_USDC_DATA_EGRESS_MIN_PRICE',
   '0.001', // minimum price of $0.001, used if we do not know the content length of data

@@ -79,10 +79,13 @@ export const x402DataEgressMiddleware = ({
   const isX402EgressEnabled =
     config.ENABLE_X_402_USDC_DATA_EGRESS &&
     config.X_402_USDC_ADDRESS !== undefined;
+  const payTo402UsdcAddress: `0x${string}` = config.X_402_USDC_ADDRESS!;
+  const x402UsdcNetwork: 'base' | 'base-sepolia' = config.X_402_USDC_NETWORK;
 
   return async (req: Request, res: Response, next: NextFunction) => {
     // skip if x402 is not enabled or no address is provided
     if (isX402EgressEnabled === false) {
+      logger.debug('x402 egress middleware is disabled');
       return next();
     }
 
@@ -135,10 +138,20 @@ export const x402DataEgressMiddleware = ({
         return next();
       }
 
-      // TODO: instead of defaulting price, update the data interface to perform HEAD checks on trusted gateways to find the content length
-      const locallyCached = dataAttributes !== undefined;
-      const contentLength = dataAttributes?.itemSize ?? 0;
+      /**
+       * TODO: manifests require some additional logic to determine the total size of the data being requested via the manifest resolution.
+       * For now, we will skip payment enforcement for manifests.
+       */
+      if (dataAttributes?.isManifest === false) {
+        log.debug(
+          'Data is a manifest; cannot enforce x402 payment for manifests',
+          { id },
+        );
+        return next();
+      }
 
+      // TODO: instead of defaulting price, update the data interface to perform HEAD checks on trusted gateways to find the content length
+      const contentLength = dataAttributes?.itemSize ?? 0;
       const price = calculateX402PricePerByteEgress(contentLength);
 
       log.debug('Calculated x402 price', { price, contentLength });
@@ -148,7 +161,7 @@ export const x402DataEgressMiddleware = ({
 
       const atomicAssetPrice = processPriceToAtomicAmount(
         price,
-        config.X_402_USDC_NETWORK,
+        x402UsdcNetwork,
       );
 
       if ('error' in atomicAssetPrice) {
@@ -162,9 +175,9 @@ export const x402DataEgressMiddleware = ({
       paymentRequirements = {
         scheme: 'exact' as const,
         description: `AR.IO Gateway data egress for ${contentLength} bytes`,
-        network: config.X_402_USDC_NETWORK,
+        network: x402UsdcNetwork,
         maxAmountRequired: atomicAssetPrice.maxAmountRequired,
-        payTo: config.X_402_USDC_ADDRESS,
+        payTo: payTo402UsdcAddress,
         asset: atomicAssetPrice.asset.address,
         resource: `${req.protocol}://${req.get('host') ?? 'localhost'}${req.originalUrl}`,
         mimeType: dataAttributes?.contentType ?? 'application/octet-stream',
@@ -191,16 +204,14 @@ export const x402DataEgressMiddleware = ({
               +paymentRequirements.maxAmountRequired /
               10 ** atomicAssetPrice.asset.decimals,
             paymentRequirements: [paymentRequirements],
-            testnet: config.X_402_USDC_NETWORK === 'base-sepolia',
+            testnet: x402UsdcNetwork === 'base-sepolia',
             currentUrl: `${req.protocol}://${req.get('host') ?? 'localhost'}${req.originalUrl}`,
           });
           res.status(402).header('Content-Type', 'text/html').send(html);
         } else {
           sendX402Response({
             res,
-            message: locallyCached
-              ? `Payment of ${price} USDC required for ${contentLength} bytes`
-              : `Payment of ${price} USDC required for unknown content length`,
+            message: `Payment of ${price} USDC required for ${contentLength} bytes`,
             paymentRequirements,
             error: 'X-PAYMENT header is required',
           });
@@ -232,7 +243,6 @@ export const x402DataEgressMiddleware = ({
           paymentRequirements,
           error: 'Payment scheme mismatch',
         });
-
         return;
       }
 
@@ -287,8 +297,8 @@ export const x402DataEgressMiddleware = ({
             paymentPayload,
             paymentRequirements,
           });
-          // TODO: handle settle timeout via config.X_402_USDC_SETTLE_TIMEOUT_MS
-          // wait for settlement to complete
+          // TODO: could add a settlement timeout via config.X_402_USDC_SETTLE_TIMEOUT_MS to limit the time spent here
+          // We may also want to consider circuit breaking if the facilitator is having issues
           const settlementResult = await facilitator.settle(
             paymentPayload,
             paymentRequirements,
@@ -302,7 +312,6 @@ export const x402DataEgressMiddleware = ({
 
           // put your header on BEFORE any bytes go out
           res.setHeader('X-Payment-Response', settlementResultHeader);
-          res.append('Access-Control-Expose-Headers', 'X-Payment-Response');
           span.setAttribute('x402.payment_settled', settlementResult.success);
 
           // NOTE: we may not want to send a 402 here and just log the failed settlement. The client has already made the request and we have verified payment,
@@ -335,11 +344,10 @@ export const x402DataEgressMiddleware = ({
       // Store payment info on request for settlement after response
       (req as any).x402Payment = {
         verified: true,
+        settled: true,
         paymentPayload,
         paymentRequirements,
         price,
-        contentLength,
-        settled: true,
       };
 
       // Proceed to next middleware
