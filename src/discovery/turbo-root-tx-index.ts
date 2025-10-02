@@ -8,6 +8,7 @@ import { default as axios, AxiosInstance } from 'axios';
 import * as rax from 'retry-axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
+import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import * as config from '../config.js';
 import { isValidTxId } from '../lib/validation.js';
@@ -43,23 +44,37 @@ export class TurboRootTxIndex implements DataItemRootIndex {
   private readonly axiosInstance: AxiosInstance;
   private readonly turboEndpoint: string;
   private readonly cache?: LRUCache<string, CachedTurboOffsets>;
+  private readonly limiter: TokenBucket;
 
   constructor({
     log,
     turboEndpoint = config.TURBO_ENDPOINT,
     requestTimeoutMs = config.TURBO_REQUEST_TIMEOUT_MS,
     requestRetryCount = config.TURBO_REQUEST_RETRY_COUNT,
+    rateLimitBurstSize = config.TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE,
+    rateLimitTokensPerInterval = config.TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
+    rateLimitInterval = config.TURBO_ROOT_TX_RATE_LIMIT_INTERVAL,
     cache,
   }: {
     log: winston.Logger;
     turboEndpoint?: string;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
+    rateLimitBurstSize?: number;
+    rateLimitTokensPerInterval?: number;
+    rateLimitInterval?: 'second' | 'minute' | 'hour' | 'day';
     cache?: LRUCache<string, CachedTurboOffsets>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.turboEndpoint = turboEndpoint;
     this.cache = cache;
+
+    // Initialize rate limiter
+    this.limiter = new TokenBucket({
+      bucketSize: rateLimitBurstSize,
+      tokensPerInterval: rateLimitTokensPerInterval,
+      interval: rateLimitInterval,
+    });
 
     // Initialize axios instance with retry configuration
     this.axiosInstance = axios.create({
@@ -194,6 +209,16 @@ export class TurboRootTxIndex implements DataItemRootIndex {
 
     try {
       const url = `${this.turboEndpoint}/tx/${id}/offsets`;
+
+      // Apply rate limiting before making request
+      if (this.limiter.content < 1) {
+        log.debug('Rate limiting Turbo request - waiting for tokens', {
+          id,
+          tokensAvailable: this.limiter.content,
+        });
+      }
+      await this.limiter.removeTokens(1);
+
       log.debug('Querying Turbo offsets endpoint', { url });
 
       const response = await this.axiosInstance.get<TurboOffsetsResponse>(url);

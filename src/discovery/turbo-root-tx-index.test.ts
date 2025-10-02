@@ -23,6 +23,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       assert(typeof turboIndex.getRootTx === 'function');
@@ -50,6 +52,8 @@ describe('TurboRootTxIndex', () => {
         log,
         turboEndpoint: 'https://turbo.example.com',
         cache,
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       assert(typeof turboIndex.getRootTx === 'function');
@@ -58,6 +62,8 @@ describe('TurboRootTxIndex', () => {
     it('should use default endpoint when not provided', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       assert(typeof turboIndex.getRootTx === 'function');
@@ -69,6 +75,8 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         requestTimeoutMs: 5000,
         requestRetryCount: 5,
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       assert(typeof turboIndex.getRootTx === 'function');
@@ -106,6 +114,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       const result = await turboIndex.getRootTx(dataItemId);
@@ -167,6 +177,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       const result = await turboIndex.getRootTx(childId);
@@ -211,6 +223,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       const result = await turboIndex.getRootTx(l1TxId);
@@ -247,6 +261,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       const result = await turboIndex.getRootTx(nonExistentId);
@@ -301,6 +317,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       const result = await turboIndex.getRootTx(id1);
@@ -362,6 +380,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       const result = await turboIndex.getRootTx('level-0');
@@ -405,6 +425,8 @@ describe('TurboRootTxIndex', () => {
         log,
         turboEndpoint: 'https://turbo.example.com',
         cache,
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       // First call - should hit API
@@ -480,6 +502,8 @@ describe('TurboRootTxIndex', () => {
       const turboIndex = new TurboRootTxIndex({
         log,
         turboEndpoint: 'https://turbo.example.com',
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
       });
 
       const result = await turboIndex.getRootTx(level1Id);

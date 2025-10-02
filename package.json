@@ -47,6 +47,7 @@
     "ioredis": "^5.8.0",
     "is-ip": "^5.0.1",
     "json-canonicalize": "^1.0.6",
+    "limiter": "^3.0.0",
     "lmdb": "^2.9.4",
     "lru-cache": "^11.2.2",
     "memoizee": "^0.4.17",
