@@ -1205,6 +1205,7 @@ export const X_402_USDC_DATA_EGRESS_MAX_PRICE = +env.varOrDefault(
 // Recommended experimental facilitator URLs:
 // https://facilitator.x402.rs -> works for both base and base-sepolia without CDP API keys
 // https://facilitator.payai.network -> works for both base and base-sepolia with CDP API keys
+// https://x402.org/facilitator - coinbase base testnet only, requires CDP API keys for base mainnet
 export const X_402_USDC_FACILITATOR_URL = env.varOrDefault(
   'X_402_USDC_FACILITATOR_URL',
   'https://facilitator.payai.network',
@@ -1213,22 +1214,3 @@ export const X_402_USDC_PER_BYTE_PRICE = +env.varOrDefault(
   'X_402_USDC_PER_BYTE_PRICE',
   '0.0000000001', // $0.0000000001 per byte = $0.10 per GB
 );
-
-/**
- * NOTE: considering how best to combine x402 + rate limiting
- *
- * Three potential configurations:
- *
- * x402 OR rate limiting (one disables the other)
- * x402 + rate limiting (x402 modifies rate limiting behavior)
- *  - x402 increments the rate limiter bucket when payment is received
- *      - faster refill rate
- *      - larger bucket size for some duration of requests
- *
- * Important note: we want to reduce reliance on arweave.net (x402 enabled by default would lead to this)
- *
- * Sensible defaults:
- * - enable rate limiting by default
- * - disable x402 by default
- *
- */

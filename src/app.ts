@@ -80,6 +80,7 @@ if (config.ENABLE_RATE_LIMITER) {
   log.info('[app] rate limiter middleware disabled');
 }
 
+app.use(x402Router); // test x402 endpoint
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);

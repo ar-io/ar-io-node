@@ -64,3 +64,6 @@ CLAUDE.local.md
 # Exceptions (keep these tracked)
 !/data/.gitkeep
 !/repos/.gitkeep
+
+# wallet files
+*wallet.json

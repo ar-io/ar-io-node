@@ -138,7 +138,7 @@ export const x402DataEgressMiddleware = ({
 
       // TODO: instead of defaulting price, update the data interface to perform HEAD checks on trusted gateways to find the content length
       const locallyCached = dataAttributes !== undefined;
-      const contentLength = dataAttributes?.size ?? 0;
+      const contentLength = dataAttributes?.itemSize ?? 0;
 
       const price = calculateX402PricePerByteEgress(contentLength);
 
