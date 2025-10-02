@@ -8,35 +8,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Root Transaction and Offset Tracking**: Comprehensive offset tracking system for nested ANS-104 bundles:
-  - Turbo `/offsets` endpoint integration for accurate root transaction discovery and offset calculations
+- **Root Transaction and Offset Tracking**: Comprehensive offset tracking
+  system for nested ANS-104 bundles:
+  - Turbo `/offsets` endpoint integration for accurate root transaction
+    discovery and offset calculations
   - Handles multi-level nested bundles with cumulative offset tracking
   - Cycle detection and maximum nesting depth protection (10 levels)
   - Database persistence of root transaction IDs and absolute offset values
-- **GraphQL Root TX Index**: Dedicated GraphQL endpoint configuration for root transaction lookups:
-  - `GRAPHQL_ROOT_TX_GATEWAYS_URLS`: JSON object mapping GraphQL endpoints to weights
+- **GraphQL Root TX Index**: Dedicated GraphQL endpoint configuration for root
+  transaction lookups:
+  - `GRAPHQL_ROOT_TX_GATEWAYS_URLS`: JSON object mapping GraphQL endpoints to
+    weights (default: `{"https://arweave-search.goldsky.com/graphql": 1}`)
   - Parent chain traversal with metadata extraction (content type, size)
   - Fallback mechanism when Turbo is unavailable
   - Configurable lookup order via `ROOT_TX_LOOKUP_ORDER` (default: "db,turbo")
-- **Database Migration**: Added offset tracking columns to `contiguous_data_ids` table:
+- **Database Migration**: Added offset tracking columns to
+  `contiguous_data_ids` table:
   - `root_transaction_id`: Top-level Arweave transaction containing the data
-  - `root_data_item_offset`: Absolute position where data item headers begin in root bundle
-  - `root_data_offset`: Absolute position where data payload begins in root bundle
+  - `root_data_item_offset`: Absolute position where data item headers begin in
+    root bundle
+  - `root_data_offset`: Absolute position where data payload begins in root
+    bundle
 - **HTTP Headers**: New headers exposing absolute root offset information:
-  - `X-AR-IO-Root-Data-Item-Offset`: Enables direct byte-range requests to data item headers
-  - `X-AR-IO-Root-Data-Offset`: Enables direct byte-range requests to data payloads
+  - `X-AR-IO-Root-Data-Item-Offset`: Enables direct byte-range requests to data
+    item headers
+  - `X-AR-IO-Root-Data-Offset`: Enables direct byte-range requests to data
+    payloads
 - **Rate Limiting for External APIs**: Token bucket rate limiting for Turbo and GraphQL:
-  - Turbo API: Configurable via `TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE`, `TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL`, `TURBO_ROOT_TX_RATE_LIMIT_INTERVAL`
-  - GraphQL API: Configurable via `GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE`, `GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL`, `GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL`
-  - Prevents excessive API usage and respects external service limits
+  - Turbo API: Configurable via `TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE` (default: 5),
+    `TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL` (default: 6),
+    `TURBO_ROOT_TX_RATE_LIMIT_INTERVAL` (default: "minute")
+  - GraphQL API: Configurable via `GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE` (default: 5),
+    `GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL` (default: 6),
+    `GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL` (default: "minute")
+  - Prevents excessive API usage and respects external service limits (defaults
+    to 6 requests per minute = 1 per 10 seconds)
 - **Configuration Options**:
-  - `ENABLE_PASSTHROUGH_WITHOUT_OFFSETS`: Control whether to allow data retrieval without offset information (default: true)
+  - `ENABLE_DATA_ITEM_ROOT_TX_SEARCH`: Enable/disable root transaction search
+    for data items in offset-aware sources (default: true)
+  - `ENABLE_PASSTHROUGH_WITHOUT_OFFSETS`: Control whether offset-aware sources
+    allow data retrieval without offset information (default: true)
   - Dedicated rate limiting configuration for Turbo and GraphQL root TX lookups
   - Separate GraphQL gateway configuration for root lookups vs data retrieval
 - **Documentation and Testing**:
-  - Comprehensive bundle offsets documentation in `docs/drafts/bundle-offsets.md`
-  - TokenBucket API verification tests confirming correct rate limiter implementation
-  - Rate limiting behavior tests validating token accumulation and request delays
+  - Comprehensive bundle offsets documentation in
+    `docs/drafts/bundle-offsets.md`
+  - Rate limiting behavior tests validating token accumulation and request
+    delays
   - Enhanced test coverage for offset tracking and nested bundle scenarios
 
 ### Changed
@@ -48,7 +66,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - IP refill rate remains 20 tokens/sec (~20 KB/sec)
   - Note: 1 token = 1 KB of response data, minimum 1 token per request
   - Rate limiter remains disabled by default (`ENABLE_RATE_LIMITER=false`)
-- **Performance Optimization**: RootParentDataSource now uses pre-computed root offsets when available:
+- **Performance Optimization**: RootParentDataSource now uses pre-computed root
+  offsets when available:
   - Skip bundle traversal entirely when offsets are cached in database
   - Direct offset-based data retrieval without parent chain traversal
   - Use `rootDataOffset` to skip headers when fetching data payloads
