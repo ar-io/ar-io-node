@@ -584,6 +584,7 @@ const offsetAwareGatewaysDataSource = new RootParentDataSource({
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource: ans104GatewaysOffsetSource,
   fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
+  allowPassthroughWithoutOffsets: config.ENABLE_PASSTHROUGH_WITHOUT_OFFSETS,
 });
 
 // Regular chunks data source (no data item resolution)
@@ -597,6 +598,7 @@ const txChunksOffsetAwareSource = new RootParentDataSource({
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource: ans104ChunksOffsetSource,
   fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
+  allowPassthroughWithoutOffsets: config.ENABLE_PASSTHROUGH_WITHOUT_OFFSETS,
 });
 
 const s3DataSource =

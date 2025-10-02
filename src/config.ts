@@ -532,6 +532,10 @@ export const ENABLE_BACKGROUND_DATA_VERIFICATION =
 export const ENABLE_DATA_ITEM_ROOT_TX_SEARCH =
   env.varOrDefault('ENABLE_DATA_ITEM_ROOT_TX_SEARCH', 'true') === 'true';
 
+// Whether to allow data retrieval without offset information in offset-aware sources
+export const ENABLE_PASSTHROUGH_WITHOUT_OFFSETS =
+  env.varOrDefault('ENABLE_PASSTHROUGH_WITHOUT_OFFSETS', 'true') === 'true';
+
 export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
   '600', // 10 minutes
