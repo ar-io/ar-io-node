@@ -175,6 +175,20 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// GraphQL root TX lookup rate limiting
+export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '5',
+);
+export const GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '6', // 6 per minute = 1 per 10 seconds
+);
+export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
   .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo')
@@ -205,6 +219,20 @@ export const TURBO_REQUEST_RETRY_COUNT = +env.varOrDefault(
   'TURBO_REQUEST_RETRY_COUNT',
   '3',
 );
+
+// Turbo root TX lookup rate limiting
+export const TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '5',
+);
+export const TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '6', // 6 per minute = 1 per 10 seconds
+);
+export const TURBO_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'TURBO_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
 
 // Circuit breaker configuration for root TX index lookups
 // Support both old and new environment variable names for backward compatibility

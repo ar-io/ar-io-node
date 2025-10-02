@@ -8,6 +8,7 @@ import { default as axios, AxiosInstance } from 'axios';
 import * as rax from 'retry-axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
+import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
 import * as config from '../config.js';
@@ -54,22 +55,36 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
   private trustedGateways: Map<number, string[]>;
   private readonly axiosInstance: AxiosInstance;
   private readonly cache?: LRUCache<string, CachedParentBundle>;
+  private readonly limiter: TokenBucket;
 
   constructor({
     log,
     trustedGatewaysUrls,
     requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
     requestRetryCount = DEFAULT_REQUEST_RETRY_COUNT,
+    rateLimitBurstSize = config.GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE,
+    rateLimitTokensPerInterval = config.GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
+    rateLimitInterval = config.GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL,
     cache,
   }: {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, number>;
     requestTimeoutMs?: number;
     requestRetryCount?: number;
+    rateLimitBurstSize?: number;
+    rateLimitTokensPerInterval?: number;
+    rateLimitInterval?: 'second' | 'minute' | 'hour' | 'day';
     cache?: LRUCache<string, CachedParentBundle>;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.cache = cache;
+
+    // Initialize rate limiter
+    this.limiter = new TokenBucket({
+      bucketSize: rateLimitBurstSize,
+      tokensPerInterval: rateLimitTokensPerInterval,
+      interval: rateLimitInterval,
+    });
 
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
@@ -243,6 +258,15 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
 
         for (const gatewayUrl of shuffledGateways) {
           try {
+            // Apply rate limiting before making request
+            if (this.limiter.content < 1) {
+              log.debug('Rate limiting GraphQL request - waiting for tokens', {
+                id,
+                tokensAvailable: this.limiter.content,
+              });
+            }
+            await this.limiter.removeTokens(1);
+
             const response = await this.axiosInstance.post(
               `${gatewayUrl}/graphql`,
               {
@@ -324,6 +348,18 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
 
         for (const gatewayUrl of shuffledGateways) {
           try {
+            // Apply rate limiting before making request
+            if (this.limiter.content < 1) {
+              log.debug(
+                'Rate limiting GraphQL metadata request - waiting for tokens',
+                {
+                  id,
+                  tokensAvailable: this.limiter.content,
+                },
+              );
+            }
+            await this.limiter.removeTokens(1);
+
             const response = await this.axiosInstance.post(
               `${gatewayUrl}/graphql`,
               {
