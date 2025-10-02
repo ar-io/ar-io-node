@@ -1210,7 +1210,7 @@ export const X_402_USDC_DATA_EGRESS_MAX_PRICE = +env.varOrDefault(
 // https://x402.org/facilitator - coinbase base testnet only, requires CDP API keys for base mainnet
 export const X_402_USDC_FACILITATOR_URL = env.varOrDefault(
   'X_402_USDC_FACILITATOR_URL',
-  'https://facilitator.payai.network',
+  'https://facilitator.x402.rs',
 ) as `${string}://${string}`;
 export const X_402_USDC_PER_BYTE_PRICE = +env.varOrDefault(
   'X_402_USDC_PER_BYTE_PRICE',

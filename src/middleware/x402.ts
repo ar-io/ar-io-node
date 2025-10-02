@@ -182,6 +182,7 @@ export const x402DataEgressMiddleware = ({
         resource: `${req.protocol}://${req.get('host') ?? 'localhost'}${req.originalUrl}`,
         mimeType: dataAttributes?.contentType ?? 'application/octet-stream',
         maxTimeoutSeconds: 300, // 5 minutes
+        // TODO: we could include additional attributes here
         extra: (atomicAssetPrice.asset as ERC20TokenAmount['asset']).eip712,
       };
 
