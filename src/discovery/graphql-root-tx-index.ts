@@ -201,22 +201,29 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
       currentId = queryResult;
     }
 
+    // Check if loop exited due to abort conditions
     if (depth >= MAX_BUNDLE_NESTING_DEPTH) {
-      log.warn('Maximum nesting depth reached', {
+      log.warn('Maximum nesting depth reached - aborting traversal', {
         id,
         depth,
         visited: Array.from(visited),
       });
+      return undefined;
     }
 
     if (visited.has(currentId)) {
-      log.warn('Circular reference detected in bundle chain', {
-        id,
-        circularId: currentId,
-        visited: Array.from(visited),
-      });
+      log.warn(
+        'Circular reference detected in bundle chain - aborting traversal',
+        {
+          id,
+          circularId: currentId,
+          visited: Array.from(visited),
+        },
+      );
+      return undefined;
     }
 
+    // If we get here, currentId should be falsy (loop exited normally)
     return currentId
       ? {
           rootTxId: currentId,
