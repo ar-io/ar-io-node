@@ -18,7 +18,7 @@ import {
   ContiguousDataIndex,
   ContiguousDataSource,
   ContiguousDataStore,
-  DataAttributesSource,
+  ContiguousDataAttributesStore,
   RequestAttributes,
   ContiguousMetadata,
 } from '../types.js';
@@ -60,7 +60,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
   private metadataStore: KvJsonStore<ContiguousMetadata>;
   private dataStore: ContiguousDataStore;
   private contiguousDataIndex: ContiguousDataIndex;
-  private dataAttributesSource: DataAttributesSource;
+  private dataAttributesStore: ContiguousDataAttributesStore;
   private dataContentAttributeImporter: DataContentAttributeImporter;
   private skipCache: boolean;
 
@@ -70,7 +70,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metadataStore,
     dataStore,
     contiguousDataIndex,
-    dataAttributesSource,
+    dataAttributesStore,
     dataContentAttributeImporter,
     skipCache = false,
   }: {
@@ -79,7 +79,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     metadataStore: KvJsonStore<ContiguousMetadata>;
     dataStore: ContiguousDataStore;
     contiguousDataIndex: ContiguousDataIndex;
-    dataAttributesSource: DataAttributesSource;
+    dataAttributesStore: ContiguousDataAttributesStore;
     dataContentAttributeImporter: DataContentAttributeImporter;
     skipCache?: boolean;
   }) {
@@ -88,7 +88,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     this.metadataStore = metadataStore;
     this.dataStore = dataStore;
     this.contiguousDataIndex = contiguousDataIndex;
-    this.dataAttributesSource = dataAttributesSource;
+    this.dataAttributesStore = dataAttributesStore;
     this.dataContentAttributeImporter = dataContentAttributeImporter;
     this.skipCache = skipCache;
   }
@@ -287,7 +287,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
 
     try {
       // Get data attributes
-      const attributes = await this.dataAttributesSource.getDataAttributes(id);
+      const attributes = await this.dataAttributesStore.getDataAttributes(id);
 
       if (attributes) {
         span.setAttributes({
@@ -491,7 +491,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                       // Fetch attributes again to get any updates (like root offsets)
                       // that were set by the upstream data source during getData
                       const updatedAttributes =
-                        await this.dataAttributesSource.getDataAttributes(id);
+                        await this.dataAttributesStore.getDataAttributes(id);
 
                       this.dataContentAttributeImporter.queueDataContentAttributes(
                         {
@@ -511,6 +511,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
                           dataItemSize: updatedAttributes?.itemSize,
                         },
                       );
+
+                      // Update the in-memory cache with the hash so subsequent requests can find it
+                      // This prevents cache misses due to stale cache entries with offsets but no hash
+                      await this.dataAttributesStore.setDataAttributes(id, {
+                        hash,
+                        size: data.size,
+                        contentType: data.sourceContentType,
+                      });
                     }
                   } catch (error: any) {
                     this.log.error('Error saving data content attributes:', {

@@ -20,7 +20,7 @@ import {
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
   let dataSource: ContiguousDataSource;
-  let dataAttributesSource: ContiguousDataAttributesStore;
+  let dataAttributesStore: ContiguousDataAttributesStore;
   let dataItemRootTxIndex: DataItemRootIndex;
   let ans104OffsetSource: Ans104OffsetSource;
   let rootParentDataSource: RootParentDataSource;
@@ -32,7 +32,7 @@ describe('RootParentDataSource', () => {
     dataSource = {
       getData: mock.fn(),
     };
-    dataAttributesSource = {
+    dataAttributesStore = {
       getDataAttributes: mock.fn(),
       setDataAttributes: mock.fn(),
     };
@@ -45,7 +45,7 @@ describe('RootParentDataSource', () => {
     rootParentDataSource = new RootParentDataSource({
       log,
       dataSource,
-      dataAttributesSource,
+      dataAttributesStore: dataAttributesStore,
       dataItemRootTxIndex,
       ans104OffsetSource,
     });
@@ -62,7 +62,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('test data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -136,7 +136,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('partial data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -186,7 +186,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('truncated')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -234,7 +234,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('tx data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -285,7 +285,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('bundle data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -333,7 +333,7 @@ describe('RootParentDataSource', () => {
       const rootTxId = 'root-tx-id';
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -370,7 +370,7 @@ describe('RootParentDataSource', () => {
       const rootTxId = 'root-tx-id';
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -420,7 +420,7 @@ describe('RootParentDataSource', () => {
       const fetchError = new Error('Failed to fetch data');
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -468,7 +468,7 @@ describe('RootParentDataSource', () => {
       };
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -518,7 +518,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('test data')]);
 
       // Mock attributes for child (has parent)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === dataItemId) {
             return {
@@ -554,21 +554,21 @@ describe('RootParentDataSource', () => {
 
       // Verify we called getDataAttributes for the original item + both items during traversal
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         3,
       );
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls[0]
+        (dataAttributesStore.getDataAttributes as any).mock.calls[0]
           .arguments[0],
         dataItemId,
       );
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls[1]
+        (dataAttributesStore.getDataAttributes as any).mock.calls[1]
           .arguments[0],
         dataItemId,
       );
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls[2]
+        (dataAttributesStore.getDataAttributes as any).mock.calls[2]
           .arguments[0],
         parentId,
       );
@@ -597,7 +597,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('nested data')]);
 
       // Mock attributes for three-level chain
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === dataItemId) {
             return {
@@ -655,7 +655,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('root data')]);
 
       // Mock attributes for root that references itself
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === rootId) {
             return {
@@ -692,7 +692,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('test data')]);
 
       // Mock attributes with pre-computed root offsets
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === dataItemId) {
             return {
@@ -727,7 +727,7 @@ describe('RootParentDataSource', () => {
       // 1. getData for content type
       // 2. traverseToRootUsingAttributes early check (finds pre-computed offsets)
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         2,
       );
 
@@ -748,7 +748,7 @@ describe('RootParentDataSource', () => {
       const itemB = 'item-b';
 
       // Create circular reference: A -> B -> A
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === itemA) {
             return {
@@ -800,7 +800,7 @@ describe('RootParentDataSource', () => {
       // 3. Traverse to itemB
       // 4. Traverse back to itemA (cycle detected on next iteration)
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         4,
       );
 
@@ -821,7 +821,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('fallback data')]);
 
       // Mock missing attributes
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -852,7 +852,7 @@ describe('RootParentDataSource', () => {
 
       // Should have tried attributes (once at start + once during traversal attempt)
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         2,
       );
 
@@ -874,14 +874,14 @@ describe('RootParentDataSource', () => {
       const noFallbackSource = new RootParentDataSource({
         log,
         dataSource,
-        dataAttributesSource,
+        dataAttributesStore: dataAttributesStore,
         dataItemRootTxIndex,
         ans104OffsetSource,
         fallbackToLegacyTraversal: false,
       });
 
       // Mock missing attributes
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -893,7 +893,7 @@ describe('RootParentDataSource', () => {
 
       // Should have tried attributes (once at start + once during traversal attempt)
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         2,
       );
 
@@ -914,7 +914,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('partial data')]);
 
       // Mock attributes
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === dataItemId) {
             return {

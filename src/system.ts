@@ -191,7 +191,7 @@ export const txOffsetSource = new CompositeTxOffsetSource({
   fallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
 });
 
-export const dataAttributesSource: ContiguousDataAttributesStore =
+export const dataAttributesStore: ContiguousDataAttributesStore =
   new CompositeDataAttributesSource({
     log,
     source: db,
@@ -524,7 +524,7 @@ export const arIOPeerManager = new ArIOPeerManager({
 export const arIODataSource = new ArIODataSource({
   log,
   peerManager: arIOPeerManager,
-  dataAttributesSource,
+  dataAttributesStore,
 });
 
 export const arIOChunkSource = new ArIOChunkSource({
@@ -580,7 +580,7 @@ const ans104GatewaysOffsetSource = new Ans104OffsetSource({
 const offsetAwareGatewaysDataSource = new RootParentDataSource({
   log,
   dataSource: baseGatewaysDataSource,
-  dataAttributesSource,
+  dataAttributesStore,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource: ans104GatewaysOffsetSource,
   fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
@@ -594,7 +594,7 @@ const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
 const txChunksOffsetAwareSource = new RootParentDataSource({
   log,
   dataSource: baseTxChunksDataSource,
-  dataAttributesSource,
+  dataAttributesStore,
   dataItemRootTxIndex: rootTxIndex,
   ans104OffsetSource: ans104ChunksOffsetSource,
   fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
@@ -644,7 +644,7 @@ const turboDynamoDBDataSource =
         region: config.AWS_DYNAMODB_TURBO_REGION,
         endpoint: config.AWS_DYNAMODB_TURBO_ENDPOINT,
         assumeRoleArn: config.AWS_DYNAMODB_TURBO_ASSUME_ROLE_ARN,
-        dataAttributesSource,
+        dataAttributesStore,
       })
     : undefined;
 
@@ -758,7 +758,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
-  dataAttributesSource,
+  dataAttributesStore,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
 });
@@ -772,7 +772,7 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
-  dataAttributesSource,
+  dataAttributesStore,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
 });

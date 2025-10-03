@@ -27,7 +27,7 @@ import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 export class RootParentDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
-  private dataAttributesSource: ContiguousDataAttributesStore;
+  private dataAttributesStore: ContiguousDataAttributesStore;
   private dataItemRootTxIndex: DataItemRootIndex;
   private ans104OffsetSource: Ans104OffsetSource;
   private fallbackToLegacyTraversal: boolean;
@@ -37,7 +37,7 @@ export class RootParentDataSource implements ContiguousDataSource {
    * Creates a new RootParentDataSource instance.
    * @param log - Winston logger for debugging and error reporting
    * @param dataSource - Underlying data source for fetching actual data
-   * @param dataAttributesSource - Source for data attributes to traverse parent chains
+   * @param dataAttributesStore - Source for data attributes to traverse parent chains
    * @param dataItemRootTxIndex - Index for resolving data items to root transactions (fallback)
    * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles (fallback)
    * @param fallbackToLegacyTraversal - Whether to search for data item root transaction when attributes are incomplete
@@ -46,7 +46,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   constructor({
     log,
     dataSource,
-    dataAttributesSource,
+    dataAttributesStore,
     dataItemRootTxIndex,
     ans104OffsetSource,
     fallbackToLegacyTraversal = true,
@@ -54,7 +54,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
-    dataAttributesSource: ContiguousDataAttributesStore;
+    dataAttributesStore: ContiguousDataAttributesStore;
     dataItemRootTxIndex: DataItemRootIndex;
     ans104OffsetSource: Ans104OffsetSource;
     fallbackToLegacyTraversal?: boolean;
@@ -62,7 +62,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
-    this.dataAttributesSource = dataAttributesSource;
+    this.dataAttributesStore = dataAttributesStore;
     this.dataItemRootTxIndex = dataItemRootTxIndex;
     this.ans104OffsetSource = ans104OffsetSource;
     this.fallbackToLegacyTraversal = fallbackToLegacyTraversal;
@@ -88,7 +88,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
     // First, check if we can get the initial attributes
     const initialAttributes =
-      await this.dataAttributesSource.getDataAttributes(dataItemId);
+      await this.dataAttributesStore.getDataAttributes(dataItemId);
 
     if (!initialAttributes) {
       log.debug('No attributes found for data item');
@@ -211,7 +211,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       // Fetch attributes for the next iteration
       currentAttributes =
-        await this.dataAttributesSource.getDataAttributes(currentId);
+        await this.dataAttributesStore.getDataAttributes(currentId);
     }
   }
 
@@ -248,7 +248,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       let originalContentType: string | undefined;
       try {
         const originalAttributes =
-          await this.dataAttributesSource.getDataAttributes(id);
+          await this.dataAttributesStore.getDataAttributes(id);
         originalContentType = originalAttributes?.contentType;
       } catch (error) {
         this.log.debug('Failed to get content type for data item', {
@@ -282,7 +282,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
         // Store the discovered offsets for future use
         try {
-          await this.dataAttributesSource.setDataAttributes(id, {
+          await this.dataAttributesStore.setDataAttributes(id, {
             rootTransactionId: rootTxId,
             rootDataItemOffset: totalOffset,
             rootDataOffset: rootDataOffset,
@@ -475,7 +475,7 @@ export class RootParentDataSource implements ContiguousDataSource {
               attributesToStore.size = rootResult.dataSize;
             }
 
-            await this.dataAttributesSource.setDataAttributes(
+            await this.dataAttributesStore.setDataAttributes(
               id,
               attributesToStore,
             );
@@ -647,7 +647,7 @@ export class RootParentDataSource implements ContiguousDataSource {
                 attributesToStore.contentType = bundleParseResult.contentType;
               }
 
-              await this.dataAttributesSource.setDataAttributes(
+              await this.dataAttributesStore.setDataAttributes(
                 id,
                 attributesToStore,
               );
