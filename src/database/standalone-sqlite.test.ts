@@ -1470,17 +1470,17 @@ describe('StandaloneSqliteDatabase', () => {
     });
   });
 
-  describe('getRootTxId', () => {
+  describe('getRootTx', () => {
     it('should return undefined if id is not found', async () => {
-      const rootTxId = await db.getRootTxId(DATA_ITEM_ID);
-      assert.equal(rootTxId, undefined);
+      const result = await db.getRootTx(DATA_ITEM_ID);
+      assert.equal(result, undefined);
     });
 
     it('should return root transcation id of a given data item', async () => {
       await db.saveDataItem(normalizedDataItem);
 
-      const result = await db.getRootTxId(DATA_ITEM_ID);
-      assert.equal(result, dataItemRootTxId);
+      const result = await db.getRootTx(DATA_ITEM_ID);
+      assert.equal(result?.rootTxId, dataItemRootTxId);
     });
 
     it('should return undefined if the root transcation id of a given data item is null', async () => {
@@ -1488,8 +1488,8 @@ describe('StandaloneSqliteDatabase', () => {
       dataItem.root_tx_id = null;
       await db.saveDataItem(dataItem);
 
-      const rootTxId = await db.getRootTxId(DATA_ITEM_ID);
-      assert.equal(rootTxId, undefined);
+      const result = await db.getRootTx(DATA_ITEM_ID);
+      assert.equal(result, undefined);
     });
 
     it('should return the same L1 transcation id given an L1 transaction ', async () => {
@@ -1501,8 +1501,8 @@ describe('StandaloneSqliteDatabase', () => {
 
       await db.saveBlockAndTxs(block, txs, missingTxIds);
 
-      const result = await db.getRootTxId(l1TxId);
-      assert.equal(result, l1TxId);
+      const result = await db.getRootTx(l1TxId);
+      assert.equal(result?.rootTxId, l1TxId);
     });
   });
 

@@ -812,7 +812,17 @@ export interface ContiguousDataIndex {
   getVerifiableDataIds(options?: {
     minVerificationPriority?: number;
   }): Promise<string[]>;
-  getRootTxId(id: string): Promise<string | undefined>;
+  getRootTx(id: string): Promise<
+    | {
+        rootTxId: string;
+        rootOffset?: number;
+        rootDataOffset?: number;
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | undefined
+  >;
   saveVerificationStatus(id: string): Promise<void>;
   incrementVerificationRetryCount(id: string): Promise<void>;
   saveVerificationPriority(id: string, priority: number): Promise<void>;

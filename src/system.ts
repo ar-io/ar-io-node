@@ -242,6 +242,10 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
       }
       break;
 
+    case 'db':
+      rootTxIndexes.push(db as DataItemRootIndex);
+      break;
+
     default:
       log.warn('Unknown root TX source in configuration', {
         source: sourceName,
