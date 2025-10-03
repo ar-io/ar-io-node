@@ -2665,19 +2665,29 @@ export class StandaloneSqliteDatabaseWorker {
     return dataIds.map((row) => toB64Url(row.id));
   }
 
-  getRootTxIdFromCoreAndBundles(id: string) {
+  getRootTxFromCoreAndBundles(id: string) {
     const row = this.stmts.core.selectRootTxId.get({ id: fromB64Url(id) });
     if (row?.root_transaction_id) {
-      return toB64Url(row.root_transaction_id);
+      return {
+        rootTxId: toB64Url(row.root_transaction_id),
+        contentType: row.content_type ?? undefined,
+        dataSize: row.data_size ?? undefined,
+      };
     }
 
     return;
   }
 
-  getRootTxIdFromData(id: string) {
+  getRootTxFromData(id: string) {
     const row = this.stmts.data.selectRootTransactionId.get({ id: fromB64Url(id) });
     if (row?.root_transaction_id) {
-      return toB64Url(row.root_transaction_id);
+      return {
+        rootTxId: toB64Url(row.root_transaction_id),
+        rootOffset: row.root_parent_offset ?? undefined,
+        rootDataOffset: row.root_data_offset ?? undefined,
+        size: row.data_item_size ?? undefined,
+        dataSize: row.data_size ?? undefined,
+      };
     }
     return;
   }
@@ -3561,14 +3571,14 @@ export class StandaloneSqliteDatabase
     return this.queueRead('data', 'getVerifiableDataIds', undefined);
   }
 
-  async getRootTxId(id: string) {
+  async getRootTx(id: string) {
     // First try to get from data DB
-    const rootTxIdFromData = await this.queueRead('data', 'getRootTxIdFromData', [id]);
-    if (rootTxIdFromData) {
-      return rootTxIdFromData;
+    const rootTxFromData = await this.queueRead('data', 'getRootTxFromData', [id]);
+    if (rootTxFromData) {
+      return rootTxFromData;
     }
     // Fall back to core and bundles
-    return this.queueRead('core', 'getRootTxIdFromCoreAndBundles', [id]);
+    return this.queueRead('core', 'getRootTxFromCoreAndBundles', [id]);
   }
 
   async saveVerificationStatus(id: string) {
@@ -3809,13 +3819,13 @@ if (!isMainThread) {
           const ids = worker.getVerifiableDataIds();
           parentPort?.postMessage(ids);
           break;
-        case 'getRootTxIdFromCoreAndBundles':
-          const rootTxId = worker.getRootTxIdFromCoreAndBundles(args[0]);
-          parentPort?.postMessage(rootTxId);
+        case 'getRootTxFromCoreAndBundles':
+          const rootTx = worker.getRootTxFromCoreAndBundles(args[0]);
+          parentPort?.postMessage(rootTx);
           break;
-        case 'getRootTxIdFromData':
-          const rootTxIdFromData = worker.getRootTxIdFromData(args[0]);
-          parentPort?.postMessage(rootTxIdFromData);
+        case 'getRootTxFromData':
+          const rootTxFromData = worker.getRootTxFromData(args[0]);
+          parentPort?.postMessage(rootTxFromData);
           break;
         case 'saveVerificationStatus':
           worker.saveVerificationStatus(args[0]);
