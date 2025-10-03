@@ -1193,17 +1193,9 @@ export const X_402_USDC_NETWORK = env.varOrDefault(
   'X_402_USDC_NETWORK',
   'base-sepolia', // base mainnet is the default (base-sepolia is the testnet)
 ) as 'base' | 'base-sepolia';
-export const X_402_USDC_ADDRESS = env.varOrUndefined('X_402_USDC_ADDRESS') as
-  | `0x${string}`
-  | undefined;
-export const X_402_USDC_DATA_EGRESS_MIN_PRICE = +env.varOrDefault(
-  'X_402_USDC_DATA_EGRESS_MIN_PRICE',
-  '0.001', // minimum price of $0.001, used if we do not know the content length of data
-);
-export const X_402_USDC_DATA_EGRESS_MAX_PRICE = +env.varOrDefault(
-  'X_402_USDC_DATA_EGRESS_MAX_PRICE',
-  '1.00', // maximum price of $1.00
-);
+export const X_402_USDC_WALLET_ADDRESS = env.varOrUndefined(
+  'X_402_USDC_WALLET_ADDRESS',
+) as `0x${string}` | undefined;
 // Recommended experimental facilitator URLs:
 // https://facilitator.x402.rs -> works for both base and base-sepolia without CDP API keys
 // https://facilitator.payai.network -> works for both base and base-sepolia with CDP API keys
@@ -1212,6 +1204,14 @@ export const X_402_USDC_FACILITATOR_URL = env.varOrDefault(
   'X_402_USDC_FACILITATOR_URL',
   'https://facilitator.x402.rs',
 ) as `${string}://${string}`;
+export const X_402_USDC_DATA_EGRESS_MIN_PRICE = +env.varOrDefault(
+  'X_402_USDC_DATA_EGRESS_MIN_PRICE',
+  '0.001', // minimum price of $0.000001, used if we do not know the content length of data
+);
+export const X_402_USDC_DATA_EGRESS_MAX_PRICE = +env.varOrDefault(
+  'X_402_USDC_DATA_EGRESS_MAX_PRICE',
+  '1.00', // maximum price of $1.00
+);
 export const X_402_USDC_PER_BYTE_PRICE = +env.varOrDefault(
   'X_402_USDC_PER_BYTE_PRICE',
   '0.0000000001', // $0.0000000001 per byte = $0.10 per GB

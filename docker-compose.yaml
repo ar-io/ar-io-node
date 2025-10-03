@@ -194,6 +194,14 @@ services:
       - OTEL_EXPORTER_OTLP_HEADERS_FILE=${OTEL_EXPORTER_OTLP_HEADERS_FILE:-}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # x402 USDC Egress
+      - ENABLE_X_402_USDC_DATA_EGRESS=${ENABLE_X_402_USDC_DATA_EGRESS:-}
+      - X_402_USDC_NETWORK=${X_402_USDC_NETWORK:-}
+      - X_402_USDC_WALLET_ADDRESS=${X_402_USDC_WALLET_ADDRESS:-}
+      - X_402_USDC_DATA_EGRESS_MIN_PRICE=${X_402_USDC_DATA_EGRESS_MIN_PRICE:-}
+      - X_402_USDC_DATA_EGRESS_MAX_PRICE=${X_402_USDC_DATA_EGRESS_MAX_PRICE:-}
+      - X_402_USDC_FACILITATOR_URL=${X_402_USDC_FACILITATOR_URL:-}
+      - X_402_USDC_PER_BYTE_PRICE=${X_402_USDC_PER_BYTE_PRICE:-}
     networks:
       - ar-io-network
     depends_on:
@@ -206,7 +214,7 @@ services:
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: unless-stopped
     ports:
-      - '6379' # don't expose redis externally by default
+      - "6379" # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
     networks:

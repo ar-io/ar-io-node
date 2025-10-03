@@ -78,8 +78,8 @@ export const x402DataEgressMiddleware = ({
 } = {}): any => {
   const isX402EgressEnabled =
     config.ENABLE_X_402_USDC_DATA_EGRESS &&
-    config.X_402_USDC_ADDRESS !== undefined;
-  const payTo402UsdcAddress: `0x${string}` = config.X_402_USDC_ADDRESS!;
+    config.X_402_USDC_WALLET_ADDRESS !== undefined;
+  const payTo402UsdcAddress: `0x${string}` = config.X_402_USDC_WALLET_ADDRESS!;
   const x402UsdcNetwork: 'base' | 'base-sepolia' = config.X_402_USDC_NETWORK;
 
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -151,6 +151,7 @@ export const x402DataEgressMiddleware = ({
       }
 
       // TODO: instead of defaulting price, update the data interface to perform HEAD checks on trusted gateways to find the content length
+      // TODO: properly handle byteRange requests by parsing out the range(s) and calculate the price based on the total size of the ranges requested
       const contentLength = dataAttributes?.itemSize ?? 0;
       const price = calculateX402PricePerByteEgress(contentLength);
 
@@ -231,7 +232,7 @@ export const x402DataEgressMiddleware = ({
         sendX402Response({
           res,
           paymentRequirements,
-          error: 'Invalid payment header format',
+          error: 'Invalid payment header',
         });
         return;
       }

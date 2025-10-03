@@ -10,10 +10,10 @@ import * as config from '../config.js';
 
 const x402Router = Router();
 
-if (config.X_402_USDC_ADDRESS !== undefined) {
+if (config.X_402_USDC_WALLET_ADDRESS !== undefined) {
   x402Router.use(
     paymentMiddleware(
-      config.X_402_USDC_ADDRESS! as `0x${string}`,
+      config.X_402_USDC_WALLET_ADDRESS! as `0x${string}`,
       {
         'GET /ar-io/x402/*': {
           price: '$0.001',

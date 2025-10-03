@@ -22,7 +22,7 @@ import {
   rateLimitRequestsTotal,
   rateLimitBytesBlockedTotal,
 } from '../metrics.js';
-import { sendX402Response, x402DataEgressMiddleware } from './x402.js';
+import { sendX402Response } from './x402.js';
 
 function getCanonicalPath(req: Request) {
   // baseUrl is '' at the app root, so this concatenation works there too.
