@@ -22,7 +22,7 @@ const testParentId = 'ParentDataIdForTesting123456789AbCdEfGhI'; // Valid base64
 let log: winston.Logger;
 let turboDynamoDbDataSource: TurboDynamoDbDataSource;
 let mockDynamoClient: any;
-let mockDataAttributesSource: any;
+let mockDataAttributesStore: any;
 
 before(async () => {
   log = winston.createLogger({ silent: true });
@@ -35,7 +35,7 @@ beforeEach(async () => {
   };
 
   // Create mock data attributes source
-  mockDataAttributesSource = {
+  mockDataAttributesStore = {
     getDataAttributes: mock.fn(async () => undefined),
     setDataAttributes: mock.fn(async () => {}),
   };
@@ -43,7 +43,7 @@ beforeEach(async () => {
   // Create instance with injected DynamoDB mock
   turboDynamoDbDataSource = new TurboDynamoDbDataSource({
     dynamoClient: mockDynamoClient as any,
-    dataAttributesSource: mockDataAttributesSource,
+    dataAttributesStore: mockDataAttributesStore,
     log,
   });
 });
@@ -57,7 +57,7 @@ describe('TurboDynamoDbDataSource', () => {
     it('should create instance with provided DynamoDB client', () => {
       const dataSource = new TurboDynamoDbDataSource({
         dynamoClient: mockDynamoClient as any,
-        dataAttributesSource: mockDataAttributesSource,
+        dataAttributesStore: mockDataAttributesStore,
         log,
       });
       // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
@@ -67,7 +67,7 @@ describe('TurboDynamoDbDataSource', () => {
     it('should create instance with region configuration', () => {
       const dataSource = new TurboDynamoDbDataSource({
         region: 'us-east-1',
-        dataAttributesSource: mockDataAttributesSource,
+        dataAttributesStore: mockDataAttributesStore,
         log,
       });
       // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
@@ -77,7 +77,7 @@ describe('TurboDynamoDbDataSource', () => {
     it('should throw error when neither client nor region provided', () => {
       assert.throws(() => {
         new TurboDynamoDbDataSource({
-          dataAttributesSource: mockDataAttributesSource,
+          dataAttributesStore: mockDataAttributesStore,
           log,
         });
       }, /TurboDynamoDbDataSource requires either a DynamoDBClient instance or region configuration/);
@@ -87,7 +87,7 @@ describe('TurboDynamoDbDataSource', () => {
       assert.throws(() => {
         new TurboDynamoDbDataSource({
           region: '',
-          dataAttributesSource: mockDataAttributesSource,
+          dataAttributesStore: mockDataAttributesStore,
           log,
         });
       }, /TurboDynamoDbDataSource requires either a DynamoDBClient instance or region configuration/);
