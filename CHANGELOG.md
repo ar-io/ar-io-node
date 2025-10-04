@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 53] - 2025-10-06
 
 ### Added
 
@@ -74,6 +74,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Significantly reduces latency for nested bundle data retrieval
 
 ### Fixed
+
+- **Security**: Resolved transitive dependency vulnerabilities by adding yarn
+  resolutions:
+  - `ws@7.5.10`: Fixed DoS vulnerability when handling requests with many HTTP
+    headers (CVE in ws <7.5.10)
+  - `semver@7.6.3`: Fixed Regular Expression Denial of Service (ReDoS)
+    vulnerability (CVE in semver <7.5.2)
 
 ## [Release 52] - 2025-09-29
 
