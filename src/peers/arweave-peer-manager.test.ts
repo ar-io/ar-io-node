@@ -176,6 +176,99 @@ describe('ArweavePeerManager', () => {
     });
   });
 
+  describe('preferred peer weight preservation', () => {
+    beforeEach(() => {
+      // Set up preferred GET peers
+      (peerManager as any).weightedGetChunkPeers = [
+        { id: 'http://preferred-get.example.com', weight: 100 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+
+      // Set up preferred POST peers
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://preferred-post.example.com', weight: 100 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+    });
+
+    it('should not decrement preferred GET peer weight on failure', () => {
+      const initialWeight = (peerManager as any).weightedGetChunkPeers[0]
+        .weight;
+
+      peerManager.reportFailure('getChunk', 'http://preferred-get.example.com');
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[0].weight;
+      assert.equal(newWeight, initialWeight);
+      assert.equal(newWeight, 100);
+    });
+
+    it('should not decrement preferred POST peer weight on failure', () => {
+      const initialWeight = (peerManager as any).weightedPostChunkPeers[0]
+        .weight;
+
+      peerManager.reportFailure(
+        'postChunk',
+        'http://preferred-post.example.com',
+      );
+
+      const newWeight = (peerManager as any).weightedPostChunkPeers[0].weight;
+      assert.equal(newWeight, initialWeight);
+      assert.equal(newWeight, 100);
+    });
+
+    it('should not increment preferred GET peer weight on success', () => {
+      // Set weight to 95 to test it doesn't increment
+      (peerManager as any).weightedGetChunkPeers[0].weight = 95;
+
+      peerManager.reportSuccess(
+        'getChunk',
+        'http://preferred-get.example.com',
+        {
+          responseTimeMs: 50,
+        },
+      );
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[0].weight;
+      assert.equal(newWeight, 95);
+    });
+
+    it('should not increment preferred POST peer weight on success', () => {
+      // Set weight to 95 to test it doesn't increment
+      (peerManager as any).weightedPostChunkPeers[0].weight = 95;
+
+      peerManager.reportSuccess(
+        'postChunk',
+        'http://preferred-post.example.com',
+        { responseTimeMs: 50 },
+      );
+
+      const newWeight = (peerManager as any).weightedPostChunkPeers[0].weight;
+      assert.equal(newWeight, 95);
+    });
+
+    it('should still adjust weight for non-preferred peers on failure', () => {
+      const initialWeight = (peerManager as any).weightedGetChunkPeers[1]
+        .weight;
+
+      peerManager.reportFailure('getChunk', 'http://regular-peer.example.com');
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[1].weight;
+      assert.ok(newWeight < initialWeight);
+    });
+
+    it('should still adjust weight for non-preferred peers on success', () => {
+      const initialWeight = (peerManager as any).weightedGetChunkPeers[1]
+        .weight;
+
+      peerManager.reportSuccess('getChunk', 'http://regular-peer.example.com', {
+        responseTimeMs: 50,
+      });
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[1].weight;
+      assert.ok(newWeight > initialWeight);
+    });
+  });
+
   describe('peer refresh', () => {
     it('should fetch peers from trusted node', async () => {
       // Mock axios for /peers endpoint
