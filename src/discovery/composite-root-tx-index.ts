@@ -6,16 +6,27 @@
  */
 import winston from 'winston';
 import CircuitBreaker from 'opossum';
-import { DataItemRootTxIndex } from '../types.js';
+import { DataItemRootIndex } from '../types.js';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
-export class CompositeRootTxIndex implements DataItemRootTxIndex {
+export class CompositeRootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
-  private indexes: DataItemRootTxIndex[];
+  private indexes: DataItemRootIndex[];
   private circuitBreakers: Map<
     string,
-    CircuitBreaker<[string], string | undefined>
+    CircuitBreaker<
+      [string],
+      | {
+          rootTxId: string;
+          rootOffset?: number;
+          rootDataOffset?: number;
+          contentType?: string;
+          size?: number;
+          dataSize?: number;
+        }
+      | undefined
+    >
   >;
 
   constructor({
@@ -30,7 +41,7 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     },
   }: {
     log: winston.Logger;
-    indexes: DataItemRootTxIndex[];
+    indexes: DataItemRootIndex[];
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -45,13 +56,10 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     this.circuitBreakers = new Map();
     for (const index of indexes) {
       const name = index.constructor.name;
-      const breaker = new CircuitBreaker(
-        (id: string) => index.getRootTxId(id),
-        {
-          ...circuitBreakerOptions,
-          name,
-        },
-      );
+      const breaker = new CircuitBreaker((id: string) => index.getRootTx(id), {
+        ...circuitBreakerOptions,
+        name,
+      });
 
       // Register metrics for this circuit breaker
       // Map class names to BreakerSource values
@@ -76,8 +84,30 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
     }
   }
 
-  async getRootTxId(id: string): Promise<string | undefined> {
-    const log = this.log.child({ method: 'getRootTxId', id });
+  async getRootTx(id: string): Promise<
+    | {
+        rootTxId: string;
+        rootOffset?: number;
+        rootDataOffset?: number;
+        contentType?: string;
+        size?: number;
+        dataSize?: number;
+      }
+    | undefined
+  > {
+    const log = this.log.child({ method: 'getRootTx', id });
+
+    // Keep track of incomplete result as fallback
+    let fallbackResult:
+      | {
+          rootTxId: string;
+          rootOffset?: number;
+          rootDataOffset?: number;
+          contentType?: string;
+          size?: number;
+          dataSize?: number;
+        }
+      | undefined;
 
     for (let i = 0; i < this.indexes.length; i++) {
       const index = this.indexes[i];
@@ -103,21 +133,49 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
         });
 
         // Execute with circuit breaker protection
-        const rootTxId = await circuitBreaker.fire(id);
+        const result = await circuitBreaker.fire(id);
 
-        if (rootTxId !== undefined) {
-          log.debug('Found root TX ID', {
-            rootTxId,
+        if (result !== undefined) {
+          // Check if result has complete offset information
+          // If offsets are missing, try next index (e.g., Turbo) for complete data
+          const hasCompleteOffsets =
+            result.rootOffset !== undefined &&
+            result.rootDataOffset !== undefined &&
+            result.size !== undefined &&
+            result.dataSize !== undefined;
+
+          if (hasCompleteOffsets) {
+            log.debug('Found root TX ID with complete offsets', {
+              rootTxId: result.rootTxId,
+              indexNumber: i + 1,
+              indexClass: indexName,
+            });
+            return result;
+          } else {
+            // Save as fallback if we don't have one yet
+            if (fallbackResult === undefined) {
+              fallbackResult = result;
+              log.debug(
+                'Found root TX ID but missing offsets, saving as fallback',
+                {
+                  rootTxId: result.rootTxId,
+                  indexNumber: i + 1,
+                  indexClass: indexName,
+                  hasRootOffset: result.rootOffset !== undefined,
+                  hasRootDataOffset: result.rootDataOffset !== undefined,
+                  hasSize: result.size !== undefined,
+                  hasDataSize: result.dataSize !== undefined,
+                },
+              );
+            }
+            // Continue to next index for complete data
+          }
+        } else {
+          log.debug('Index returned undefined', {
             indexNumber: i + 1,
             indexClass: indexName,
           });
-          return rootTxId;
         }
-
-        log.debug('Index returned undefined', {
-          indexNumber: i + 1,
-          indexClass: indexName,
-        });
       } catch (error: any) {
         log.debug('Index failed with error', {
           indexNumber: i + 1,
@@ -127,6 +185,17 @@ export class CompositeRootTxIndex implements DataItemRootTxIndex {
         });
         // Continue to next index
       }
+    }
+
+    // If we have a fallback result (incomplete but has rootTxId), return it
+    if (fallbackResult !== undefined) {
+      log.debug('Returning fallback result with incomplete offsets', {
+        rootTxId: fallbackResult.rootTxId,
+        hasRootOffset: fallbackResult.rootOffset !== undefined,
+        hasRootDataOffset: fallbackResult.rootDataOffset !== undefined,
+        hasSize: fallbackResult.size !== undefined,
+      });
+      return fallbackResult;
     }
 
     log.debug('All indexes failed to find root TX ID', {

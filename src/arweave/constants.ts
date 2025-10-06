@@ -6,3 +6,10 @@
  */
 
 export const MAX_FORK_DEPTH = 18;
+
+/**
+ * Maximum depth for nested ANS-104 bundles during traversal.
+ * This limit prevents excessive recursion when following parent chains
+ * in nested bundle structures.
+ */
+export const MAX_BUNDLE_NESTING_DEPTH = 10;

@@ -11,7 +11,7 @@ CREATE TABLE contiguous_data_ids (
   verified BOOLEAN NOT NULL DEFAULT FALSE,
   indexed_at INTEGER NOT NULL,
   verified_at INTEGER
-, verification_retry_count INTEGER, verification_priority INTEGER, first_verification_attempted_at INTEGER, last_verification_attempted_at INTEGER, root_transaction_id BLOB, root_parent_offset INTEGER, data_offset INTEGER, data_size INTEGER, data_item_offset INTEGER, data_item_size INTEGER, format_id INTEGER);
+, verification_retry_count INTEGER, verification_priority INTEGER, first_verification_attempted_at INTEGER, last_verification_attempted_at INTEGER, root_transaction_id BLOB, root_parent_offset INTEGER, data_offset INTEGER, data_size INTEGER, data_item_offset INTEGER, data_item_size INTEGER, format_id INTEGER, root_data_item_offset INTEGER, root_data_offset INTEGER);
 CREATE INDEX contiguous_data_ids_contiguous_data_hash_idx ON contiguous_data_ids (contiguous_data_hash);
 CREATE TABLE data_roots (
   data_root BLOB PRIMARY KEY,

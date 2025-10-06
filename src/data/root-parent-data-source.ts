@@ -9,14 +9,16 @@ import { Span } from '@opentelemetry/api';
 
 import {
   ContiguousData,
+  ContiguousDataAttributes,
   ContiguousDataAttributesStore,
   ContiguousDataSource,
-  DataItemRootTxIndex,
+  DataItemRootIndex,
   Region,
   RequestAttributes,
 } from '../types.js';
 import { startChildSpan } from '../tracing.js';
 import { Ans104OffsetSource } from './ans104-offset-source.js';
+import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 
 /**
  * Data source that resolves data items to their root bundles before fetching data.
@@ -25,41 +27,46 @@ import { Ans104OffsetSource } from './ans104-offset-source.js';
 export class RootParentDataSource implements ContiguousDataSource {
   private log: winston.Logger;
   private dataSource: ContiguousDataSource;
-  private dataAttributesSource: ContiguousDataAttributesStore;
-  private dataItemRootTxIndex: DataItemRootTxIndex;
+  private dataAttributesStore: ContiguousDataAttributesStore;
+  private dataItemRootTxIndex: DataItemRootIndex;
   private ans104OffsetSource: Ans104OffsetSource;
   private fallbackToLegacyTraversal: boolean;
+  private allowPassthroughWithoutOffsets: boolean;
 
   /**
    * Creates a new RootParentDataSource instance.
    * @param log - Winston logger for debugging and error reporting
    * @param dataSource - Underlying data source for fetching actual data
-   * @param dataAttributesSource - Source for data attributes to traverse parent chains
+   * @param dataAttributesStore - Source for data attributes to traverse parent chains
    * @param dataItemRootTxIndex - Index for resolving data items to root transactions (fallback)
    * @param ans104OffsetSource - Source for finding data item offsets within ANS-104 bundles (fallback)
-   * @param fallbackToLegacyTraversal - Whether to fall back to legacy traversal when attributes are incomplete
+   * @param fallbackToLegacyTraversal - Whether to search for data item root transaction when attributes are incomplete
+   * @param allowPassthroughWithoutOffsets - Whether to allow data retrieval without offset information
    */
   constructor({
     log,
     dataSource,
-    dataAttributesSource,
+    dataAttributesStore,
     dataItemRootTxIndex,
     ans104OffsetSource,
     fallbackToLegacyTraversal = true,
+    allowPassthroughWithoutOffsets = true,
   }: {
     log: winston.Logger;
     dataSource: ContiguousDataSource;
-    dataAttributesSource: ContiguousDataAttributesStore;
-    dataItemRootTxIndex: DataItemRootTxIndex;
+    dataAttributesStore: ContiguousDataAttributesStore;
+    dataItemRootTxIndex: DataItemRootIndex;
     ans104OffsetSource: Ans104OffsetSource;
     fallbackToLegacyTraversal?: boolean;
+    allowPassthroughWithoutOffsets?: boolean;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dataSource = dataSource;
-    this.dataAttributesSource = dataAttributesSource;
+    this.dataAttributesStore = dataAttributesStore;
     this.dataItemRootTxIndex = dataItemRootTxIndex;
     this.ans104OffsetSource = ans104OffsetSource;
     this.fallbackToLegacyTraversal = fallbackToLegacyTraversal;
+    this.allowPassthroughWithoutOffsets = allowPassthroughWithoutOffsets;
   }
 
   /**
@@ -69,6 +76,7 @@ export class RootParentDataSource implements ContiguousDataSource {
   private async traverseToRootUsingAttributes(dataItemId: string): Promise<{
     rootTxId: string;
     totalOffset: number;
+    rootDataOffset: number;
     size: number;
   } | null> {
     const log = this.log.child({
@@ -78,11 +86,48 @@ export class RootParentDataSource implements ContiguousDataSource {
 
     log.debug('Starting parent traversal using attributes');
 
+    // First, check if we can get the initial attributes
+    const initialAttributes =
+      await this.dataAttributesStore.getDataAttributes(dataItemId);
+
+    if (!initialAttributes) {
+      log.debug('No attributes found for data item');
+      return null;
+    }
+
+    // If we already have absolute root offsets, use them directly without traversing
+    if (
+      initialAttributes.rootTransactionId !== undefined &&
+      initialAttributes.rootTransactionId.trim().length > 0 &&
+      initialAttributes.rootDataItemOffset !== undefined &&
+      initialAttributes.rootDataOffset !== undefined &&
+      initialAttributes.size !== undefined
+    ) {
+      log.debug('Using pre-computed root offsets from attributes', {
+        rootTransactionId: initialAttributes.rootTransactionId,
+        rootDataItemOffset: initialAttributes.rootDataItemOffset,
+        rootDataOffset: initialAttributes.rootDataOffset,
+        size: initialAttributes.size,
+      });
+
+      return {
+        rootTxId: initialAttributes.rootTransactionId,
+        totalOffset: initialAttributes.rootDataItemOffset,
+        rootDataOffset: initialAttributes.rootDataOffset,
+        size: initialAttributes.size,
+      };
+    }
+
+    log.debug('Root offsets not available, traversing parent chain');
+
     let currentId = dataItemId;
     let totalOffset = 0;
     const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
+    let originalItemDataOffset: number | undefined;
+    let currentAttributes: ContiguousDataAttributes | undefined =
+      initialAttributes; // Reuse the initial attributes we already fetched
 
     while (true) {
       // Cycle detection
@@ -96,23 +141,10 @@ export class RootParentDataSource implements ContiguousDataSource {
       visited.add(currentId);
       traversalPath.push(currentId);
 
-      // Get attributes for current item
-      const attributes =
-        await this.dataAttributesSource.getDataAttributes(currentId);
+      // Use current attributes (already fetched for first iteration)
+      const attributes = currentAttributes;
 
-      if (!attributes) {
-        // If this is the first item and has no attributes, traversal fails
-        if (traversalPath.length === 1) {
-          log.debug(
-            'No attributes found for initial item, traversal incomplete',
-            {
-              currentId,
-              traversalPath,
-            },
-          );
-          return null;
-        }
-
+      if (attributes === null || attributes === undefined) {
         // If we've traversed to this item via parent links, it's the root
         log.debug('Reached root transaction (no attributes after traversal)', {
           rootTxId: currentId,
@@ -123,13 +155,15 @@ export class RootParentDataSource implements ContiguousDataSource {
         return {
           rootTxId: currentId,
           totalOffset,
+          rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
         };
       }
 
-      // Remember the original item size (the item we're looking for)
+      // Remember the original item size and data offset (the item we're looking for)
       if (originalItemSize === undefined) {
         originalItemSize = attributes.size;
+        originalItemDataOffset = attributes.dataOffset;
       }
 
       // If no parent, this is the root
@@ -142,7 +176,8 @@ export class RootParentDataSource implements ContiguousDataSource {
         return {
           rootTxId: currentId,
           totalOffset,
-          size: originalItemSize,
+          rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
+          size: originalItemSize!,
         };
       }
 
@@ -166,13 +201,17 @@ export class RootParentDataSource implements ContiguousDataSource {
       currentId = attributes.parentId;
 
       // Safety check for excessive traversal depth
-      if (traversalPath.length > 10) {
+      if (traversalPath.length > MAX_BUNDLE_NESTING_DEPTH) {
         log.warn('Excessive traversal depth, aborting', {
           depth: traversalPath.length,
           traversalPath,
         });
         return null;
       }
+
+      // Fetch attributes for the next iteration
+      currentAttributes =
+        await this.dataAttributesStore.getDataAttributes(currentId);
     }
   }
 
@@ -209,7 +248,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       let originalContentType: string | undefined;
       try {
         const originalAttributes =
-          await this.dataAttributesSource.getDataAttributes(id);
+          await this.dataAttributesStore.getDataAttributes(id);
         originalContentType = originalAttributes?.contentType;
       } catch (error) {
         this.log.debug('Failed to get content type for data item', {
@@ -223,7 +262,8 @@ export class RootParentDataSource implements ContiguousDataSource {
       const attributesTraversal = await this.traverseToRootUsingAttributes(id);
 
       if (attributesTraversal) {
-        const { rootTxId, totalOffset, size } = attributesTraversal;
+        const { rootTxId, totalOffset, rootDataOffset, size } =
+          attributesTraversal;
 
         this.log.debug('Successfully traversed using attributes', {
           id,
@@ -240,12 +280,38 @@ export class RootParentDataSource implements ContiguousDataSource {
           'data.item.size': size,
         });
 
+        // Store the discovered offsets for future use
+        try {
+          await this.dataAttributesStore.setDataAttributes(id, {
+            rootTransactionId: rootTxId,
+            rootDataItemOffset: totalOffset,
+            rootDataOffset: rootDataOffset,
+            size: size,
+          });
+          this.log.debug('Stored root offsets from attributes traversal', {
+            id,
+            rootTransactionId: rootTxId,
+            rootDataItemOffset: totalOffset,
+            rootDataOffset: rootDataOffset,
+            size: size,
+          });
+        } catch (error: any) {
+          this.log.warn(
+            'Failed to store root offsets from attributes traversal',
+            {
+              id,
+              error: error.message,
+            },
+          );
+        }
+
         // Calculate final region using discovered offset
         let finalRegion: Region;
         if (region) {
           // If a region was requested, adjust it relative to the discovered offset
+          // Use rootDataOffset (payload start) not totalOffset (item start)
           finalRegion = {
-            offset: totalOffset + (region.offset || 0),
+            offset: rootDataOffset + (region.offset || 0),
             size: region.size || size,
           };
 
@@ -270,9 +336,10 @@ export class RootParentDataSource implements ContiguousDataSource {
             }
           }
         } else {
-          // No region requested, use the full data item
+          // No region requested, use the full data item payload
+          // Use rootDataOffset (payload start) not totalOffset (item start)
           finalRegion = {
-            offset: totalOffset,
+            offset: rootDataOffset,
             size,
           };
         }
@@ -372,19 +439,83 @@ export class RootParentDataSource implements ContiguousDataSource {
       );
 
       let rootTxId: string | undefined;
+      let rootResult: any;
       try {
-        rootTxId = await this.dataItemRootTxIndex.getRootTxId(id);
+        rootResult = await this.dataItemRootTxIndex.getRootTx(id);
+        rootTxId = rootResult?.rootTxId;
         rootTxLookupSpan.setAttributes({
           'root.tx_id': rootTxId ?? 'not_found',
           'root.found': rootTxId !== undefined,
         });
+
+        // Store the discovered offsets if available (from Turbo)
+        if (
+          rootTxId !== undefined &&
+          rootResult?.rootOffset !== undefined &&
+          rootResult?.rootDataOffset !== undefined
+        ) {
+          try {
+            const attributesToStore: {
+              rootTransactionId: string;
+              rootDataItemOffset: number;
+              rootDataOffset: number;
+              itemSize?: number;
+              size?: number;
+            } = {
+              rootTransactionId: rootTxId,
+              rootDataItemOffset: rootResult.rootOffset,
+              rootDataOffset: rootResult.rootDataOffset,
+            };
+
+            // Store both itemSize and size if available
+            if (rootResult.size !== undefined) {
+              attributesToStore.itemSize = rootResult.size;
+            }
+            if (rootResult.dataSize !== undefined) {
+              attributesToStore.size = rootResult.dataSize;
+            }
+
+            await this.dataAttributesStore.setDataAttributes(
+              id,
+              attributesToStore,
+            );
+
+            this.log.debug('Stored root offsets from root TX index', {
+              id,
+              rootTransactionId: rootTxId,
+              rootDataItemOffset: rootResult.rootOffset,
+              rootDataOffset: rootResult.rootDataOffset,
+              itemSize: rootResult.size,
+              size: rootResult.dataSize,
+            });
+          } catch (error: any) {
+            this.log.warn('Failed to store root offsets from root TX index', {
+              id,
+              error: error.message,
+            });
+          }
+        }
       } finally {
         rootTxLookupSpan.end();
       }
 
       if (rootTxId === undefined || rootTxId === id) {
         // Not a data item (no root found) OR already a root transaction (ID equals root ID)
-        // In both cases, pass through to underlying data source
+        // Check if passthrough without offsets is allowed
+        if (!this.allowPassthroughWithoutOffsets) {
+          const error = new Error(
+            `Cannot retrieve data for ${id} - offsets unavailable and passthrough disabled`,
+          );
+          span.recordException(error);
+          span.setAttributes({
+            'root.not_found': rootTxId === undefined,
+            'root.is_self': rootTxId === id,
+            'passthrough.blocked': true,
+          });
+          throw error;
+        }
+
+        // Pass through to underlying data source
         this.log.debug(
           'Not a data item or already root, passing through to underlying source',
           {
@@ -419,53 +550,153 @@ export class RootParentDataSource implements ContiguousDataSource {
 
       this.log.debug('Found root transaction', { id, rootTxId });
 
-      // Step 2: Parse bundle to find offset
-      span.addEvent('Parsing bundle for offset');
-      const offsetParseSpan = startChildSpan(
-        'RootParentDataSource.parseOffset',
-        {
-          attributes: {
-            'data.id': id,
-            'root.tx_id': rootTxId,
-          },
-        },
-        span,
-      );
+      // Step 2: Get offset and size (use Turbo offsets if available, otherwise parse bundle)
+      let offset: { offset: number; size: number } | undefined;
 
-      let offset: { offset: number; size: number } | null = null;
-      try {
-        offset = await this.ans104OffsetSource.getDataItemOffset(id, rootTxId);
-        offsetParseSpan.setAttributes({
-          'offset.found': offset !== null,
-          'offset.value': offset?.offset,
-          'offset.size': offset?.size,
-        });
-      } finally {
-        offsetParseSpan.end();
-      }
+      if (
+        rootResult?.rootDataOffset !== undefined &&
+        rootResult?.dataSize !== undefined
+      ) {
+        // Use Turbo offsets directly
+        offset = {
+          offset: rootResult.rootDataOffset,
+          size: rootResult.dataSize,
+        };
 
-      if (offset === null) {
-        const error = new Error(
-          `Data item ${id} not found in root bundle ${rootTxId}`,
-        );
-        span.recordException(error);
+        // Extract content type from Turbo if available
+        if (rootResult.contentType !== undefined) {
+          originalContentType = rootResult.contentType;
+        }
+
+        span.addEvent('Using Turbo offsets');
         span.setAttributes({
-          'offset.not_found': true,
+          'offset.source': 'turbo',
+          'offset.value': offset.offset,
+          'offset.size': offset.size,
         });
-        throw error;
+
+        this.log.debug('Using offsets from root TX index', {
+          id,
+          rootTxId,
+          offset: offset.offset,
+          size: offset.size,
+          contentType: rootResult.contentType,
+        });
+      } else {
+        // Parse bundle to find offset
+        span.addEvent('Parsing bundle for offset');
+        const offsetParseSpan = startChildSpan(
+          'RootParentDataSource.parseOffset',
+          {
+            attributes: {
+              'data.id': id,
+              'root.tx_id': rootTxId,
+            },
+          },
+          span,
+        );
+
+        let bundleParseResult: {
+          itemOffset: number;
+          dataOffset: number;
+          itemSize: number;
+          dataSize: number;
+          contentType?: string;
+        } | null = null;
+
+        try {
+          bundleParseResult = await this.ans104OffsetSource.getDataItemOffset(
+            id,
+            rootTxId,
+          );
+          offsetParseSpan.setAttributes({
+            'offset.found': bundleParseResult !== null,
+            'offset.data_offset': bundleParseResult?.dataOffset,
+            'offset.data_size': bundleParseResult?.dataSize,
+          });
+
+          if (bundleParseResult !== null) {
+            offset = {
+              offset: bundleParseResult.dataOffset,
+              size: bundleParseResult.dataSize,
+            };
+
+            // Set content type from bundle parsing
+            if (bundleParseResult.contentType !== undefined) {
+              originalContentType = bundleParseResult.contentType;
+            }
+
+            // Store discovered offsets for future use (avoid re-parsing)
+            try {
+              const attributesToStore: {
+                rootTransactionId: string;
+                rootDataItemOffset: number;
+                rootDataOffset: number;
+                itemSize: number;
+                size: number;
+                contentType?: string;
+              } = {
+                rootTransactionId: rootTxId,
+                rootDataItemOffset: bundleParseResult.itemOffset,
+                rootDataOffset: bundleParseResult.dataOffset,
+                itemSize: bundleParseResult.itemSize,
+                size: bundleParseResult.dataSize,
+              };
+
+              if (bundleParseResult.contentType !== undefined) {
+                attributesToStore.contentType = bundleParseResult.contentType;
+              }
+
+              await this.dataAttributesStore.setDataAttributes(
+                id,
+                attributesToStore,
+              );
+
+              this.log.debug('Stored offsets from bundle parsing', {
+                id,
+                rootTransactionId: rootTxId,
+                rootDataItemOffset: bundleParseResult.itemOffset,
+                rootDataOffset: bundleParseResult.dataOffset,
+                itemSize: bundleParseResult.itemSize,
+                size: bundleParseResult.dataSize,
+                contentType: bundleParseResult.contentType,
+              });
+            } catch (error: any) {
+              this.log.warn('Failed to store offsets from bundle parsing', {
+                id,
+                error: error.message,
+              });
+              // Don't fail the request if storage fails
+            }
+          }
+        } finally {
+          offsetParseSpan.end();
+        }
+
+        if (bundleParseResult === null || !offset) {
+          const error = new Error(
+            `Data item ${id} not found in root bundle ${rootTxId}`,
+          );
+          span.recordException(error);
+          span.setAttributes({
+            'offset.not_found': true,
+          });
+          throw error;
+        }
+
+        span.setAttributes({
+          'offset.source': 'bundle_parse',
+          'offset.value': offset.offset,
+          'offset.size': offset.size,
+        });
+
+        this.log.debug('Found data item offset from bundle parsing', {
+          id,
+          rootTxId,
+          offset: offset.offset,
+          size: offset.size,
+        });
       }
-
-      span.setAttributes({
-        'offset.value': offset.offset,
-        'offset.size': offset.size,
-      });
-
-      this.log.debug('Found data item offset', {
-        id,
-        rootTxId,
-        offset: offset.offset,
-        size: offset.size,
-      });
 
       // Step 3: Calculate final region (combine discovered offset with requested region)
       let finalRegion: Region;

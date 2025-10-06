@@ -28,6 +28,8 @@ export type DataContentAttributeProperties = {
   dataItemSize?: number;
   dataItemOffset?: number;
   formatId?: number;
+  rootDataItemOffset?: number;
+  rootDataOffset?: number;
 };
 
 export class DataContentAttributeImporter {
@@ -65,7 +67,11 @@ export class DataContentAttributeImporter {
     if (this.queue.length() >= this.maxQueueSize) {
       log.debug('Skipping save data content attributes, queue is full.');
     } else {
-      log.debug('Queueing data content attributes to be saved...');
+      log.debug('Queueing data content attributes to be saved...', {
+        rootTransactionId: properties.rootTransactionId,
+        rootDataItemOffset: properties.rootDataItemOffset,
+        rootDataOffset: properties.rootDataOffset,
+      });
       this.queue.push(properties);
       log.debug('Data content attributes queued.');
     }
@@ -75,7 +81,11 @@ export class DataContentAttributeImporter {
     properties: DataContentAttributeProperties,
   ): Promise<void> {
     const log = this.log.child({ id: properties.id });
-    log.debug('Saving data content attributes...');
+    log.debug('Saving data content attributes...', {
+      rootTransactionId: properties.rootTransactionId,
+      rootDataItemOffset: properties.rootDataItemOffset,
+      rootDataOffset: properties.rootDataOffset,
+    });
     await this.contiguousDataIndex.saveDataContentAttributes(properties);
     log.debug('Data content attributes saved...');
   }
