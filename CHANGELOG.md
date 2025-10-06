@@ -59,6 +59,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Observer**: Increased `OFFSET_SAMPLE_COUNT` default from 3 to 4 to improve
+  chunk validation success rate with early stopping
 - Increased rate limiter defaults to accommodate larger response payloads:
   - `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET`: 10,000 → 1,000,000 tokens (~10 MB → ~976 MB bucket capacity)
   - `RATE_LIMITER_IP_TOKENS_PER_BUCKET`: 2,000 → 100,000 tokens (~2 MB → ~98 MB bucket capacity)
