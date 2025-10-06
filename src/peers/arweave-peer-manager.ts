@@ -312,8 +312,8 @@ export class ArweavePeerManager {
 
   /**
    * Select peers for an operation
-   * - postChunk: deterministic ordering by weight (highest first)
-   * - chain/getChunk: weighted random selection
+   * - getChunk/postChunk: deterministic ordering by weight (highest first)
+   * - chain: weighted random selection
    */
   selectPeers(category: ArweavePeerCategory, count: number): string[] {
     const log = this.log.child({ method: 'selectPeers', category });
@@ -326,9 +326,10 @@ export class ArweavePeerManager {
       return [];
     }
 
-    // Use deterministic weight-based ordering for POST operations
+    // Use deterministic weight-based ordering for chunk operations
     // This ensures preferred peers (weight 100) are always selected first
-    if (category === 'postChunk') {
+    // and provides predictable fallback order for resilience
+    if (category === 'getChunk' || category === 'postChunk') {
       return peerList
         .slice() // Create copy to avoid mutating original
         .sort((a, b) => b.weight - a.weight) // Descending by weight
@@ -336,7 +337,7 @@ export class ArweavePeerManager {
         .map((peer) => peer.id);
     }
 
-    // Use weighted random selection for other operations (chain, getChunk)
+    // Use weighted random selection for chain operations
     return randomWeightedChoices<string>({
       table: peerList,
       count,
