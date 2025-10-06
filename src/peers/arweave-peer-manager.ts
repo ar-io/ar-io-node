@@ -351,6 +351,21 @@ export class ArweavePeerManager {
     peerUrl: string,
     metrics?: ArweavePeerSuccessMetrics,
   ): void {
+    // Don't increment weights for preferred peers - keep them at initial weight (100)
+    if (this.isPreferredPeer(peerUrl)) {
+      if (metrics?.responseTimeMs !== undefined) {
+        this.log.silly(
+          'Peer success reported (preferred peer, weight preserved)',
+          {
+            category,
+            peerUrl,
+            responseTimeMs: metrics.responseTimeMs,
+          },
+        );
+      }
+      return;
+    }
+
     if (metrics?.responseTimeMs !== undefined) {
       this.log.silly('Peer success reported', {
         category,
@@ -377,6 +392,18 @@ export class ArweavePeerManager {
    * Report failed interaction with a peer
    */
   reportFailure(category: ArweavePeerCategory, peerUrl: string): void {
+    // Don't decrement weights for preferred peers - preserve operator configuration
+    if (this.isPreferredPeer(peerUrl)) {
+      this.log.silly(
+        'Peer failure reported (preferred peer, weight preserved)',
+        {
+          category,
+          peerUrl,
+        },
+      );
+      return;
+    }
+
     this.log.silly('Peer failure reported', {
       category,
       peerUrl,
@@ -680,6 +707,16 @@ export class ArweavePeerManager {
    */
   isPreferredChunkGetPeer(peerUrl: string): boolean {
     return this.resolvedChunkGetUrls.includes(peerUrl);
+  }
+
+  /**
+   * Check if a peer URL is a preferred peer for any chunk operation (GET or POST)
+   */
+  private isPreferredPeer(peerUrl: string): boolean {
+    return (
+      this.resolvedChunkGetUrls.includes(peerUrl) ||
+      this.resolvedChunkPostUrls.includes(peerUrl)
+    );
   }
 
   /**
