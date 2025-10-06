@@ -179,6 +179,61 @@ describe('ArweavePeerManager', () => {
       // All three should be selected
       assert.equal(peers1.length, 3);
     });
+
+    it('should select getChunk peers in deterministic weight order', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedGetChunkPeers = [
+        { id: 'http://peer-weight-100.example.com', weight: 100 },
+        { id: 'http://peer-weight-75.example.com', weight: 75 },
+        { id: 'http://peer-weight-50.example.com', weight: 50 },
+        { id: 'http://peer-weight-1.example.com', weight: 1 },
+      ];
+
+      // Select 3 peers - should always get the top 3 by weight
+      const peers = peerManager.selectPeers('getChunk', 3);
+
+      assert.equal(peers.length, 3);
+      assert.equal(peers[0], 'http://peer-weight-100.example.com');
+      assert.equal(peers[1], 'http://peer-weight-75.example.com');
+      assert.equal(peers[2], 'http://peer-weight-50.example.com');
+    });
+
+    it('should return same getChunk peers on repeated selections', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedGetChunkPeers = [
+        { id: 'http://preferred-get.example.com', weight: 100 },
+        { id: 'http://peer-b.example.com', weight: 1 },
+        { id: 'http://peer-c.example.com', weight: 1 },
+      ];
+
+      // Multiple selections should return same peers in same order
+      const selection1 = peerManager.selectPeers('getChunk', 2);
+      const selection2 = peerManager.selectPeers('getChunk', 2);
+      const selection3 = peerManager.selectPeers('getChunk', 2);
+
+      assert.deepEqual(selection1, selection2);
+      assert.deepEqual(selection2, selection3);
+      assert.equal(selection1[0], 'http://preferred-get.example.com');
+    });
+
+    it('should prioritize preferred peer for getChunk with many discovered peers', () => {
+      // Simulate real-world scenario: 1 preferred + 500 discovered
+      const peers = [{ id: 'http://preferred-get.example.com', weight: 100 }];
+
+      // Add 500 discovered peers at weight 1
+      for (let i = 0; i < 500; i++) {
+        peers.push({ id: `http://discovered-${i}.example.com`, weight: 1 });
+      }
+
+      (peerManager as any).weightedGetChunkPeers = peers;
+
+      // Select 10 peers
+      const selected = peerManager.selectPeers('getChunk', 10);
+
+      // First peer should ALWAYS be the preferred peer
+      assert.equal(selected[0], 'http://preferred-get.example.com');
+      assert.equal(selected.length, 10);
+    });
   });
 
   describe('success/failure reporting', () => {
