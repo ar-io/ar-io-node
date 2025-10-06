@@ -125,6 +125,60 @@ describe('ArweavePeerManager', () => {
           peers.length === 1,
       );
     });
+
+    it('should select postChunk peers in deterministic weight order', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://peer-weight-100.example.com', weight: 100 },
+        { id: 'http://peer-weight-75.example.com', weight: 75 },
+        { id: 'http://peer-weight-50.example.com', weight: 50 },
+        { id: 'http://peer-weight-25.example.com', weight: 25 },
+      ];
+
+      // Select 3 peers - should always get the top 3 by weight
+      const peers = peerManager.selectPeers('postChunk', 3);
+
+      assert.equal(peers.length, 3);
+      assert.equal(peers[0], 'http://peer-weight-100.example.com');
+      assert.equal(peers[1], 'http://peer-weight-75.example.com');
+      assert.equal(peers[2], 'http://peer-weight-50.example.com');
+    });
+
+    it('should return same postChunk peers on repeated selections', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://peer-a.example.com', weight: 100 },
+        { id: 'http://peer-b.example.com', weight: 50 },
+        { id: 'http://peer-c.example.com', weight: 25 },
+      ];
+
+      // Multiple selections should return same peers in same order
+      const selection1 = peerManager.selectPeers('postChunk', 2);
+      const selection2 = peerManager.selectPeers('postChunk', 2);
+      const selection3 = peerManager.selectPeers('postChunk', 2);
+
+      assert.deepEqual(selection1, selection2);
+      assert.deepEqual(selection2, selection3);
+      assert.equal(selection1[0], 'http://peer-a.example.com');
+      assert.equal(selection1[1], 'http://peer-b.example.com');
+    });
+
+    it('should handle equal weights consistently for postChunk', () => {
+      // Set up peers with some equal weights
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://peer-x.example.com', weight: 100 },
+        { id: 'http://peer-y.example.com', weight: 100 },
+        { id: 'http://peer-z.example.com', weight: 50 },
+      ];
+
+      // Selection should be consistent (stable sort)
+      const peers1 = peerManager.selectPeers('postChunk', 3);
+      const peers2 = peerManager.selectPeers('postChunk', 3);
+
+      assert.deepEqual(peers1, peers2);
+      // All three should be selected
+      assert.equal(peers1.length, 3);
+    });
   });
 
   describe('success/failure reporting', () => {
