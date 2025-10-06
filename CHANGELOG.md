@@ -34,7 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     item headers
   - `X-AR-IO-Root-Data-Offset`: Enables direct byte-range requests to data
     payloads
-- **Rate Limiting for External APIs**: Token bucket rate limiting for Turbo and GraphQL:
+- **Outbound Rate Limiting for External APIs**: Token bucket rate limiting for
+  outbound calls to Turbo and GraphQL services (separate from the Redis-based
+  inbound rate limiter added in Release 52):
   - Turbo API: Configurable via `TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE` (default: 5),
     `TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL` (default: 6),
     `TURBO_ROOT_TX_RATE_LIMIT_INTERVAL` (default: "minute")
