@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 53] - 2025-10-06
 
+This is an optional release that introduces root transaction offset tracking for nested bundles and observer performance improvements. The release enables more efficient data retrieval through comprehensive offset tracking with Turbo and GraphQL integration, while improving observer reliability with increased chunk validation success rates.
+
 ### Added
 
 - **Root Transaction and Offset Tracking**: Comprehensive offset tracking
