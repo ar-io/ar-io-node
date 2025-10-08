@@ -376,6 +376,42 @@ describe('ArweavePeerManager', () => {
       const newWeight = (peerManager as any).weightedGetChunkPeers[1].weight;
       assert.ok(newWeight > initialWeight);
     });
+
+    it('should adjust weight for preferred chunk peers in chain operations on failure', () => {
+      // Set up a preferred chunk peer in the chain pool
+      (peerManager as any).weightedChainPeers = [
+        { id: 'http://preferred-get.example.com', weight: 100 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+
+      const initialWeight = (peerManager as any).weightedChainPeers[0].weight;
+
+      // Report failure for chain operation
+      peerManager.reportFailure('chain', 'http://preferred-get.example.com');
+
+      const newWeight = (peerManager as any).weightedChainPeers[0].weight;
+      // Should decrease for chain operations even though it's a preferred chunk peer
+      assert.ok(newWeight < initialWeight);
+    });
+
+    it('should adjust weight for preferred chunk peers in chain operations on success', () => {
+      // Set up a preferred chunk peer in the chain pool
+      (peerManager as any).weightedChainPeers = [
+        { id: 'http://preferred-post.example.com', weight: 50 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+
+      const initialWeight = (peerManager as any).weightedChainPeers[0].weight;
+
+      // Report success for chain operation
+      peerManager.reportSuccess('chain', 'http://preferred-post.example.com', {
+        responseTimeMs: 50,
+      });
+
+      const newWeight = (peerManager as any).weightedChainPeers[0].weight;
+      // Should increase for chain operations even though it's a preferred chunk peer
+      assert.ok(newWeight > initialWeight);
+    });
   });
 
   describe('peer refresh', () => {
