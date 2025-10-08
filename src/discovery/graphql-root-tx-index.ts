@@ -190,7 +190,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
         return {
           rootTxId: currentId,
           contentType: originalMetadata?.contentType,
-          size:
+          dataSize:
             originalMetadata?.size != null
               ? parseInt(originalMetadata.size, 10)
               : undefined,
@@ -228,7 +228,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
       ? {
           rootTxId: currentId,
           contentType: originalMetadata?.contentType,
-          size:
+          dataSize:
             originalMetadata?.size != null
               ? parseInt(originalMetadata.size, 10)
               : undefined,
@@ -266,13 +266,14 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
         for (const gatewayUrl of shuffledGateways) {
           try {
             // Apply rate limiting before making request
-            if (this.limiter.content < 1) {
-              log.debug('Rate limiting GraphQL request - waiting for tokens', {
+            if (!this.limiter.tryRemoveTokens(1)) {
+              log.debug('Rate limit exceeded - skipping gateway', {
                 id,
+                gateway: gatewayUrl,
                 tokensAvailable: this.limiter.content,
               });
+              continue;
             }
-            await this.limiter.removeTokens(1);
 
             const response = await this.axiosInstance.post(
               `${gatewayUrl}/graphql`,
@@ -356,16 +357,14 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
         for (const gatewayUrl of shuffledGateways) {
           try {
             // Apply rate limiting before making request
-            if (this.limiter.content < 1) {
-              log.debug(
-                'Rate limiting GraphQL metadata request - waiting for tokens',
-                {
-                  id,
-                  tokensAvailable: this.limiter.content,
-                },
-              );
+            if (!this.limiter.tryRemoveTokens(1)) {
+              log.debug('Rate limit exceeded - skipping gateway for metadata', {
+                id,
+                gateway: gatewayUrl,
+                tokensAvailable: this.limiter.content,
+              });
+              continue;
             }
-            await this.limiter.removeTokens(1);
 
             const response = await this.axiosInstance.post(
               `${gatewayUrl}/graphql`,
