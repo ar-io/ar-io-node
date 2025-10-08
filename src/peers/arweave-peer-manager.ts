@@ -373,8 +373,11 @@ export class ArweavePeerManager {
     peerUrl: string,
     metrics?: ArweavePeerSuccessMetrics,
   ): void {
-    // Don't increment weights for preferred peers - keep them at initial weight (100)
-    if (this.isPreferredPeer(peerUrl)) {
+    // Don't increment weights for preferred peers in chunk operations - keep them at initial weight (100)
+    if (
+      (category === 'getChunk' || category === 'postChunk') &&
+      this.isPreferredPeer(peerUrl)
+    ) {
       if (metrics?.responseTimeMs !== undefined) {
         this.log.silly(
           'Peer success reported (preferred peer, weight preserved)',
@@ -414,8 +417,11 @@ export class ArweavePeerManager {
    * Report failed interaction with a peer
    */
   reportFailure(category: ArweavePeerCategory, peerUrl: string): void {
-    // Don't decrement weights for preferred peers - preserve operator configuration
-    if (this.isPreferredPeer(peerUrl)) {
+    // Don't decrement weights for preferred peers in chunk operations - preserve operator configuration
+    if (
+      (category === 'getChunk' || category === 'postChunk') &&
+      this.isPreferredPeer(peerUrl)
+    ) {
       this.log.silly(
         'Peer failure reported (preferred peer, weight preserved)',
         {
