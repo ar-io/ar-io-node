@@ -892,12 +892,12 @@ export class ArweavePeerManager {
       // Update peer info (we already have the peer reference)
       peer.syncBuckets = buckets;
       peer.bucketsLastUpdated = Date.now();
-      log.debug('Updated sync buckets', { bucketCount: buckets.size });
+      log.silly('Updated sync buckets', { bucketCount: buckets.size });
 
       // Record successful update
       metrics.arweavePeerSyncBucketUpdateCounter.inc();
     } catch (error: any) {
-      log.debug('Failed to fetch sync buckets', { error: error.message });
+      log.silly('Failed to fetch sync buckets', { error: error.message });
 
       // Record error
       metrics.arweavePeerSyncBucketErrorCounter.inc();
@@ -921,7 +921,7 @@ export class ArweavePeerManager {
   private async parseETFSyncBuckets(data: ArrayBuffer): Promise<Set<number>> {
     try {
       const result = parseETFSyncBuckets(data);
-      this.log.debug('Parsed ETF sync buckets', {
+      this.log.silly('Parsed ETF sync buckets', {
         bucketSize: result.bucketSize,
         bucketCount: result.buckets.size,
       });
