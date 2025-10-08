@@ -70,21 +70,21 @@ export class DnsResolver {
       }
 
       // Resolve hostname to IP addresses
-      log.debug('Resolving hostname to IP addresses');
+      log.silly('Resolving hostname to IP addresses');
       let ips: string[] = [];
 
       try {
         // Try IPv4 first
         const ipv4Addresses = await dns.resolve4(hostname);
         ips = ipv4Addresses;
-        log.debug('Resolved IPv4 addresses', { hostname, ips });
+        log.silly('Resolved IPv4 addresses', { hostname, ips });
       } catch (error) {
         // If IPv4 fails, try IPv6
-        log.debug('IPv4 resolution failed, trying IPv6', { hostname });
+        log.silly('IPv4 resolution failed, trying IPv6', { hostname });
         try {
           const ipv6Addresses = await dns.resolve6(hostname);
           ips = ipv6Addresses;
-          log.debug('Resolved IPv6 addresses', { hostname, ips });
+          log.silly('Resolved IPv6 addresses', { hostname, ips });
         } catch (ipv6Error) {
           throw new Error(`Failed to resolve hostname: ${hostname}`);
         }
@@ -113,7 +113,7 @@ export class DnsResolver {
       };
 
       this.resolvedUrls.set(hostname, result);
-      log.info('Successfully resolved URL', {
+      log.debug('Successfully resolved URL', {
         hostname,
         selectedIp,
         totalIps: ips.length,
