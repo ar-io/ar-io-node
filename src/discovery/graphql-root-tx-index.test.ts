@@ -123,7 +123,10 @@ describe('GraphQLRootTxIndex', () => {
                 },
               },
             });
-          } else if (body.query.includes('getBundleParent') && body.variables.id === dataItemId) {
+          } else if (
+            body.query.includes('getBundleParent') &&
+            body.variables.id === dataItemId
+          ) {
             // Query for data item - it's bundled in root
             return Promise.resolve({
               status: 200,
@@ -138,7 +141,10 @@ describe('GraphQLRootTxIndex', () => {
                 },
               },
             });
-          } else if (body.query.includes('getBundleParent') && body.variables.id === rootBundleId) {
+          } else if (
+            body.query.includes('getBundleParent') &&
+            body.variables.id === rootBundleId
+          ) {
             // Query for root bundle - it's not bundled
             return Promise.resolve({
               status: 200,
@@ -338,7 +344,9 @@ describe('GraphQLRootTxIndex', () => {
             });
           }
           // Bundle queries should use cache and not be called
-          return Promise.reject(new Error('Should use cache for bundle lookup'));
+          return Promise.reject(
+            new Error('Should use cache for bundle lookup'),
+          );
         }),
         defaults: { raxConfig: {} },
         interceptors: {
@@ -447,7 +455,10 @@ describe('GraphQLRootTxIndex', () => {
                 },
               },
             });
-          } else if (body.query.includes('getBundleParent') && body.variables.id === dataItemId) {
+          } else if (
+            body.query.includes('getBundleParent') &&
+            body.variables.id === dataItemId
+          ) {
             return Promise.resolve({
               status: 200,
               data: {
@@ -461,7 +472,10 @@ describe('GraphQLRootTxIndex', () => {
                 },
               },
             });
-          } else if (body.query.includes('getBundleParent') && body.variables.id === rootBundleId) {
+          } else if (
+            body.query.includes('getBundleParent') &&
+            body.variables.id === rootBundleId
+          ) {
             return Promise.resolve({
               status: 200,
               data: {

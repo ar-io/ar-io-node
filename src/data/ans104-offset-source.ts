@@ -14,20 +14,20 @@ import {
 } from '@dha-team/arbundles';
 
 import { ContiguousDataSource } from '../types.js';
-import { readBytes, getReader } from '../lib/bundles.js';
+import { readBytes, getReader, getSignatureMeta } from '../lib/bundles.js';
 
 // Maximum ANS-104 data item header size calculation:
 // - Signature type: 2 bytes
-// - Signature (Arweave max): 512 bytes
-// - Owner (Arweave max): 512 bytes
+// - Signature (MultiAptos max): 64 * 32 + 4 = 2052 bytes
+// - Owner (MultiAptos max): 32 * 32 + 1 = 1025 bytes
 // - Target (flag + data): 1 + 32 = 33 bytes
 // - Anchor (flag + data): 1 + 32 = 33 bytes
 // - Tags metadata (count + bytes length): 16 bytes
 // - Tag bytes: MAX_TAG_BYTES (4096 bytes from arbundles)
-// Total: 2 + 512 + 512 + 33 + 33 + 16 + 4096 = 5204 bytes
+// Total: 2 + 2052 + 1025 + 33 + 33 + 16 + 4096 = 7257 bytes
 // Add 1KB safety margin for future-proofing
 const MAX_DATA_ITEM_HEADER_SIZE =
-  2 + 512 + 512 + 33 + 33 + 16 + MAX_TAG_BYTES + 1024;
+  2 + 2052 + 1025 + 33 + 33 + 16 + MAX_TAG_BYTES + 1024;
 
 interface DataItemHeader {
   id: string;
@@ -358,20 +358,15 @@ export class Ans104OffsetSource {
       const signatureType = byteArrayToLong(bytes.subarray(0, 2));
       bytes = bytes.subarray(2);
 
-      // Get signature length based on type
-      // Using simplified signature lengths for common types
-      const sigLength = this.getSignatureLength(signatureType);
+      const { sigLength, pubLength } = getSignatureMeta(signatureType);
 
       // Skip signature
       bytes = await readBytes(reader, bytes, sigLength);
       bytes = bytes.subarray(sigLength);
 
-      // Get owner length based on signature type
-      const ownerLength = this.getOwnerLength(signatureType);
-
       // Skip owner
-      bytes = await readBytes(reader, bytes, ownerLength);
-      bytes = bytes.subarray(ownerLength);
+      bytes = await readBytes(reader, bytes, pubLength);
+      bytes = bytes.subarray(pubLength);
 
       // Skip target (1 byte flag + optional 32 bytes)
       bytes = await readBytes(reader, bytes, 1);
@@ -454,38 +449,6 @@ export class Ans104OffsetSource {
     }
   }
 
-  private getSignatureLength(signatureType: number): number {
-    // Common signature types and their lengths
-    switch (signatureType) {
-      case 1: // Arweave
-        return 512;
-      case 2: // ED25519
-        return 64;
-      case 3: // Ethereum
-        return 65;
-      case 4: // Solana
-        return 64;
-      default:
-        throw new Error(`Unknown signature type: ${signatureType}`);
-    }
-  }
-
-  private getOwnerLength(signatureType: number): number {
-    // Owner length based on signature type
-    switch (signatureType) {
-      case 1: // Arweave
-        return 512;
-      case 2: // ED25519
-        return 32;
-      case 3: // Ethereum
-        return 20;
-      case 4: // Solana
-        return 32;
-      default:
-        throw new Error(`Unknown signature type: ${signatureType}`);
-    }
-  }
-
   private async parseDataItemHeader(
     bundleId: string,
     itemOffset: number,
@@ -523,17 +486,17 @@ export class Ans104OffsetSource {
       bytes = bytes.subarray(2);
       headerOffset += 2;
 
+      const { sigLength, pubLength } = getSignatureMeta(signatureType);
+
       // Skip signature
-      const sigLength = this.getSignatureLength(signatureType);
       bytes = await readBytes(reader, bytes, sigLength);
       bytes = bytes.subarray(sigLength);
       headerOffset += sigLength;
 
       // Skip owner
-      const ownerLength = this.getOwnerLength(signatureType);
-      bytes = await readBytes(reader, bytes, ownerLength);
-      bytes = bytes.subarray(ownerLength);
-      headerOffset += ownerLength;
+      bytes = await readBytes(reader, bytes, pubLength);
+      bytes = bytes.subarray(pubLength);
+      headerOffset += pubLength;
 
       // Skip target (1 byte flag + optional 32 bytes)
       bytes = await readBytes(reader, bytes, 1);
