@@ -67,7 +67,7 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
-// Default preferred chunk GET nodes (data-1 through data-12.arweave.xyz)
+// Default preferred chunk GET nodes (data-1 through data-17 and tip-1 through tip-5.arweave.xyz)
 const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-1.arweave.xyz:1984',
   'http://data-2.arweave.xyz:1984',
@@ -81,6 +81,16 @@ const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-10.arweave.xyz:1984',
   'http://data-11.arweave.xyz:1984',
   'http://data-12.arweave.xyz:1984',
+  'http://data-13.arweave.xyz:1984',
+  'http://data-14.arweave.xyz:1984',
+  'http://data-15.arweave.xyz:1984',
+  'http://data-16.arweave.xyz:1984',
+  'http://data-17.arweave.xyz:1984',
+  'http://tip-1.arweave.xyz:1984',
+  'http://tip-2.arweave.xyz:1984',
+  'http://tip-3.arweave.xyz:1984',
+  'http://tip-4.arweave.xyz:1984',
+  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred URLs for chunk GET requests (comma-separated URLs)
