@@ -312,8 +312,16 @@ export class ArweavePeerManager {
 
   /**
    * Select peers for an operation
+   *
+   * Strategy by operation type:
    * - getChunk/postChunk: deterministic ordering by weight (highest first)
-   * - chain: weighted random selection
+   *   Ensures preferred peers (weight 100) are always selected first,
+   *   providing predictable failover to lower-weighted discovered peers
+   * - chain: weighted random selection for load distribution
+   *
+   * @param category - The peer category/operation type
+   * @param count - Maximum number of peer URLs to return
+   * @returns Array of peer URLs, up to `count` length (may be fewer if not enough peers available)
    */
   selectPeers(category: ArweavePeerCategory, count: number): string[] {
     const log = this.log.child({ method: 'selectPeers', category });
@@ -724,7 +732,14 @@ export class ArweavePeerManager {
   }
 
   /**
-   * Check if a peer URL is a preferred peer for any chunk operation (GET or POST)
+   * Check if a peer URL is a preferred peer for chunk operations.
+   *
+   * Checks both operator-configured GET and POST preferred peer lists
+   * (from PREFERRED_CHUNK_GET_NODES and PREFERRED_CHUNK_POST_NODES env vars).
+   * Preferred peers maintain a constant weight of 100 and are always prioritized.
+   *
+   * @param peerUrl - The peer URL to check
+   * @returns true if the peer is in either preferred GET or POST lists
    */
   private isPreferredPeer(peerUrl: string): boolean {
     return (
