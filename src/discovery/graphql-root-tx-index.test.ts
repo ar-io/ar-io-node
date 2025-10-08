@@ -179,8 +179,10 @@ describe('GraphQLRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (graphqlIndex as any)['limiter'].content = (graphqlIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await graphqlIndex.getRootTx(dataItemId);
 
@@ -245,8 +247,10 @@ describe('GraphQLRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (graphqlIndex as any)['limiter'].content = (graphqlIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await graphqlIndex.getRootTx(rootTxId);
 
@@ -289,8 +293,10 @@ describe('GraphQLRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (graphqlIndex as any)['limiter'].content = (graphqlIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await graphqlIndex.getRootTx(dataItemId);
 
@@ -368,8 +374,10 @@ describe('GraphQLRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (graphqlIndex as any)['limiter'].content = (graphqlIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await graphqlIndex.getRootTx(dataItemId);
 
@@ -509,8 +517,10 @@ describe('GraphQLRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (graphqlIndex as any)['limiter'].content = (graphqlIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await graphqlIndex.getRootTx(dataItemId);
 

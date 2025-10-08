@@ -119,8 +119,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(dataItemId);
 
@@ -186,8 +188,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(childId);
 
@@ -236,8 +240,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(l1TxId);
 
@@ -278,8 +284,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(nonExistentId);
 
@@ -338,8 +346,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(id1);
 
@@ -405,8 +415,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx('level-0');
 
@@ -454,8 +466,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       // First call - should hit API
       const result1 = await turboIndex.getRootTx(dataItemId);
@@ -535,8 +549,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(level1Id);
 
@@ -594,8 +610,10 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       // First two requests should succeed (using 2 tokens)
       const result1 = await turboIndex.getRootTx(`${dataItemId}-1`);
