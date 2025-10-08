@@ -609,9 +609,17 @@ describe('TurboRootTxIndex', () => {
       const result3 = await turboIndex.getRootTx(`${dataItemId}-3`);
       const elapsed = Date.now() - start;
 
-      assert.equal(result3, undefined, 'Third request should return undefined when rate limited');
+      assert.equal(
+        result3,
+        undefined,
+        'Third request should return undefined when rate limited',
+      );
       assert(elapsed < 100, `Should return immediately, took ${elapsed}ms`);
-      assert.equal(callCount, 2, 'Should have made only 2 API calls (third was rate limited)');
+      assert.equal(
+        callCount,
+        2,
+        'Should have made only 2 API calls (third was rate limited)',
+      );
     });
   });
 });
