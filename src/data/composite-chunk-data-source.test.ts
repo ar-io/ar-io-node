@@ -6,7 +6,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 
 import {
   ChunkData,
@@ -14,6 +13,7 @@ import {
   ChunkDataByAnySourceParams,
 } from '../types.js';
 import { CompositeChunkDataSource } from './composite-chunk-data-source.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const TEST_PARAMS: ChunkDataByAnySourceParams = {
   txSize: 256000,
@@ -54,10 +54,10 @@ class MockChunkDataSource implements ChunkDataByAnySource {
 }
 
 describe('CompositeChunkDataSource', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'CompositeChunkDataSource' });
   });
 
   afterEach(() => {

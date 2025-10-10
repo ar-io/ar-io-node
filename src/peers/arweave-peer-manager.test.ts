@@ -6,7 +6,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 import axios from 'axios';
 
 import {
@@ -14,12 +13,13 @@ import {
   ArweavePeerManagerConfig,
 } from './arweave-peer-manager.js';
 import { DnsResolver, ResolvedUrl } from '../lib/dns-resolver.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let peerManager: ArweavePeerManager;
 
 const TEST_CONFIG: ArweavePeerManagerConfig = {
-  log: winston.createLogger({ silent: true }),
+  log: createTestLogger({ suite: 'ArweavePeerManager' }),
   trustedNodeUrl: 'http://trusted-node.example.com',
   preferredChunkGetUrls: ['http://preferred-get.example.com'],
   preferredChunkPostUrls: ['http://preferred-post.example.com'],
@@ -30,7 +30,7 @@ const TEST_CONFIG: ArweavePeerManagerConfig = {
 };
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'ArweavePeerManager' });
 });
 
 beforeEach(async () => {

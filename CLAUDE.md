@@ -63,6 +63,41 @@ When adding a new database method:
 - Mock functions in tests use: `mock.fn()` and reset with `mock.restoreAll()` in afterEach
 - Database schemas in tests come from `test/*.sql` files
 
+### Test Logging
+
+- All test output is automatically logged to `logs/test.log` instead of the console
+- Test log file is overwritten on each test run for a clean slate
+- Use `createTestLogger()` from `test/test-logger.ts` in all test files
+- Logger automatically includes test context (suite name, test case name) in log entries
+- Never use `winston.createLogger({ silent: true })` - always use the test logger helper
+
+#### Creating Test Loggers
+
+```typescript
+import { createTestLogger } from '../../test/test-logger.js';
+
+// Basic usage with suite name
+const log = createTestLogger({ suite: 'ArIOChunkSource' });
+
+// With suite and test name
+const log = createTestLogger({
+  suite: 'ArIOChunkSource',
+  test: 'should fetch chunk data'
+});
+
+// With additional metadata
+const log = createTestLogger({
+  suite: 'DataIndex',
+  metadata: { database: 'test.db' }
+});
+```
+
+#### Viewing Test Logs
+
+- Check `logs/test.log` after running tests to debug failures
+- Log format matches production format (JSON or simple based on LOG_FORMAT)
+- Test context included in each log entry (testSuite, testCase fields)
+
 ## Database Schemas
 
 - Main schemas: `core` (blocks/transactions), `data` (contiguous data), `bundles` (ANS-104), `moderation`

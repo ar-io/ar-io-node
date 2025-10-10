@@ -8,9 +8,9 @@ import { describe, it, before, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mock } from 'node:test';
 import { gzipSync } from 'node:zlib';
-import winston from 'winston';
 
 import { TurboDynamoDbDataSource } from './turbo-dynamodb-data-source.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 // Table names that match the actual implementation
 const CACHE_TABLE = 'upload-service-cache-local';
@@ -19,13 +19,13 @@ const OFFSETS_TABLE = 'upload-service-offsets-local';
 const testDataId = 'UavUNnE2MGZgnkZ_lZor361AX2jBhcRUi3gEbHvPrFQ'; // Valid base64url
 const testParentId = 'ParentDataIdForTesting123456789AbCdEfGhI'; // Valid base64url
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let turboDynamoDbDataSource: TurboDynamoDbDataSource;
 let mockDynamoClient: any;
 let mockDataAttributesSource: any;
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'TurboDynamoDbDataSource' });
 });
 
 beforeEach(async () => {

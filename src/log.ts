@@ -41,6 +41,19 @@ const filterFormat = format((info) => {
   return isMatching ? info : false; // Return `false` to discard
 });
 
+// Detect test environment
+const isTestEnvironment = process.env.NODE_TEST_CONTEXT !== undefined;
+
+// Configure transport based on environment
+const loggerTransports = isTestEnvironment
+  ? [
+      new transports.File({
+        filename: 'logs/test.log',
+        options: { flags: 'w' }, // Overwrite file for each test run
+      }),
+    ]
+  : [new transports.Console()];
+
 const logger = createLogger({
   level: LOG_LEVEL,
   defaultMeta: { instanceId: INSTANCE_ID },
@@ -51,7 +64,7 @@ const logger = createLogger({
     format.timestamp(),
     LOG_FORMAT === 'json' ? format.json() : format.simple(),
   ),
-  transports: new transports.Console(),
+  transports: loggerTransports,
 });
 
 export default logger;

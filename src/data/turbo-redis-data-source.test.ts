@@ -15,12 +15,12 @@ import {
   mock,
 } from 'node:test';
 import { Readable } from 'node:stream';
-import * as winston from 'winston';
 
 import { TurboRedisDataSource } from './turbo-redis-data-source.js';
 import { RequestAttributes } from '../types.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let turboRedisDataSource: TurboRedisDataSource;
 let mockRedis: any;
 let mockCircuitBreaker: any;
@@ -29,7 +29,7 @@ const testDataId = 'test-data-id';
 const testParentId = 'test-parent-id';
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'TurboRedisDataSource' });
 });
 
 beforeEach(async () => {

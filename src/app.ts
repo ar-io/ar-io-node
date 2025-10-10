@@ -73,7 +73,9 @@ app.use(
 if (config.ENABLE_RATE_LIMITER) {
   log.info('[app] enabling rate limiter middleware');
   app.use(
-    x402DataEgressMiddleware(), // ← before all routes
+    x402DataEgressMiddleware({
+      dataAttributesSource: system.dataAttributesSource,
+    }), // ← before all routes
   );
   app.use(rateLimiterMiddleware()); // ← before all routes
 } else {
@@ -103,6 +105,17 @@ apolloServerInstanceGql.start().then(() => {
   });
   server = app.listen(config.PORT, () => {
     log.info(`Listening on port ${config.PORT}`);
+
+    // Register server cleanup handler with system shutdown registry
+    system.registerCleanupHandler('http-server', async () => {
+      return new Promise<void>((resolve) => {
+        log.debug('Closing HTTP server...');
+        server.close(() => {
+          log.debug('HTTP server closed');
+          resolve();
+        });
+      });
+    });
   });
 });
 

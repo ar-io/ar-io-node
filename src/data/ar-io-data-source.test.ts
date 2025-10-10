@@ -6,7 +6,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 import axios from 'axios';
 import { AoARIORead, ARIO } from '@ar.io/sdk';
 import { Readable } from 'node:stream';
@@ -17,8 +16,9 @@ import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { headerNames } from '../constants.js';
 import { release } from '../version.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let dataSource: ArIODataSource;
 let peerManager: ArIOPeerManager;
 const nodeUrl = 'localNode.com';
@@ -28,7 +28,7 @@ let mockedAxiosGet: any;
 let mockDataAttributesSource: ContiguousDataAttributesStore;
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'ArIODataSource' });
 });
 
 beforeEach(async () => {

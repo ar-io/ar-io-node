@@ -7,7 +7,6 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable, Writable } from 'node:stream';
-import * as winston from 'winston';
 import {
   ContiguousData,
   ContiguousDataAttributes,
@@ -25,9 +24,10 @@ import {
   DataContentAttributeProperties,
 } from '../workers/data-content-attribute-importer.js';
 import { makeContiguousMetadataStore } from '../init/metadata-store.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('ReadThroughDataCache', function () {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let mockContiguousDataSource: ContiguousDataSource;
   let mockContiguousDataStore: ContiguousDataStore;
   let mockContiguousDataIndex: ContiguousDataIndex;
@@ -37,7 +37,7 @@ describe('ReadThroughDataCache', function () {
   let requestAttributes: RequestAttributes;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'ReadThroughDataCache' });
   });
 
   beforeEach(() => {

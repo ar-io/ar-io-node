@@ -6,7 +6,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 
 import {
   ChunkMetadata,
@@ -14,6 +13,7 @@ import {
   ChunkDataByAnySourceParams,
 } from '../types.js';
 import { CompositeChunkMetadataSource } from './composite-chunk-metadata-source.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const TEST_PARAMS: ChunkDataByAnySourceParams = {
   txSize: 256000,
@@ -57,10 +57,10 @@ class MockChunkMetadataSource implements ChunkMetadataByAnySource {
 }
 
 describe('CompositeChunkMetadataSource', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'CompositeChunkMetadataSource' });
   });
 
   afterEach(() => {

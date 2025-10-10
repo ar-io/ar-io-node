@@ -13,10 +13,12 @@ import {
 } from 'x402/types';
 import { decodePayment } from 'x402/schemes';
 import * as config from '../config.js';
-import * as system from '../system.js';
 import log from '../log.js';
 import { tracer } from '../tracing.js';
-import { ContiguousDataAttributes } from '../types.js';
+import {
+  ContiguousDataAttributes,
+  ContiguousDataAttributesStore,
+} from '../types.js';
 import { getPaywallHtml, processPriceToAtomicAmount } from 'x402/shared';
 import { Request, Response, NextFunction } from 'express';
 import { DATA_PATH_REGEX } from '../constants.js';
@@ -72,8 +74,10 @@ export const calculateX402PricePerByteEgress = (
 
 // custom x402 payment middleware for data egress with dynamic pricing
 export const x402DataEgressMiddleware = ({
+  dataAttributesSource,
   enabledRateLimiting = config.ENABLE_RATE_LIMITER,
 }: {
+  dataAttributesSource?: ContiguousDataAttributesStore;
   enabledRateLimiting?: boolean;
 } = {}): any => {
   const isX402EgressEnabled =
@@ -118,8 +122,9 @@ export const x402DataEgressMiddleware = ({
       try {
         // NOTE: this should be populated if the gateway has ever seen/served the data before. The data itself does not need to be cached.
         // Additionally, we may want to add a multiplier if the resulting txId is a manifest.
-        dataAttributes =
-          await system.dataAttributesSource.getDataAttributes(id);
+        if (dataAttributesSource) {
+          dataAttributes = await dataAttributesSource.getDataAttributes(id);
+        }
       } catch (error: any) {
         log.debug('Could not get data attributes for x402 check', {
           id,

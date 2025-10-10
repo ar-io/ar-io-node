@@ -9,19 +9,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
-import * as winston from 'winston';
 import crypto from 'node:crypto';
 
 import { FsChunkDataStore } from './fs-chunk-data-store.js';
 import { ChunkData } from '../types.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('FsChunkDataStore', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let tempDir: string;
   let store: FsChunkDataStore;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'FsChunkDataStore' });
   });
 
   beforeEach(() => {

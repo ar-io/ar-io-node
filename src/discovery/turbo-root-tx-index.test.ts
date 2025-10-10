@@ -6,11 +6,11 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { TurboRootTxIndex } from './turbo-root-tx-index.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-const log = winston.createLogger({ silent: true });
+const log = createTestLogger({ suite: 'TurboRootTxIndex' });
 
 describe('TurboRootTxIndex', () => {
   describe('getRootTxId', () => {
