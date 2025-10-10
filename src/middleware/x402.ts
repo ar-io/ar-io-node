@@ -9,6 +9,7 @@ import {
   ERC20TokenAmount,
   PaymentPayload,
   PaymentRequirements,
+  SettleResponse,
   settleResponseHeader,
 } from 'x402/types';
 import { decodePayment } from 'x402/schemes';
@@ -381,9 +382,9 @@ export const x402DataEgressMiddleware = ({
           });
           // Wrap settlement with timeout to prevent indefinite hanging
           // We may also want to consider circuit breaking if the facilitator is having issues
-          const settlementResult = await Promise.race([
+          const settlementResult = await Promise.race<SettleResponse>([
             facilitator.settle(paymentPayload, paymentRequirements),
-            new Promise((_, reject) =>
+            new Promise<SettleResponse>((_, reject) =>
               setTimeout(
                 () => reject(new Error('Settlement timeout')),
                 config.X_402_USDC_SETTLE_TIMEOUT_MS,
