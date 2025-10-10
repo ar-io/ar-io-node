@@ -56,13 +56,16 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     now: number,
     ttlSeconds: number,
     tokensToConsume: number,
+    x402PaymentProvided: boolean = false,
+    capacityMultiplier: number = 10,
+    refillMultiplier: number = 2,
   ): Promise<BucketConsumptionResult> {
     this.callCounts.getOrCreateBucketAndConsume++;
 
     let bucket = this.buckets.get(key);
 
     if (!bucket) {
-      // Create new bucket with full capacity
+      // Create new bucket with base capacity
       bucket = {
         key,
         tokens: capacity,
@@ -70,14 +73,43 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
         capacity,
         refillRate,
       };
+      // If x402 payment provided, start with boosted tokens (but keep base capacity/refill in bucket)
+      if (x402PaymentProvided) {
+        const effectiveCapacity = capacity * capacityMultiplier;
+        bucket.tokens = effectiveCapacity;
+      }
     } else {
-      // Calculate tokens to refill based on elapsed time
-      const elapsedSeconds = Math.max(0, (now - bucket.lastRefill) / 1000);
-      const tokensToAdd = Math.floor(elapsedSeconds * refillRate);
+      // Calculate effective capacity and refill rate for this operation
+      let effectiveCapacity = bucket.capacity;
+      let effectiveRefillRate = bucket.refillRate;
 
-      // Refill tokens, capped at capacity
-      bucket.tokens = Math.min(capacity, bucket.tokens + tokensToAdd);
-      bucket.lastRefill = now;
+      // For unpaid requests, cap existing tokens at base capacity
+      // (in case previous paid request left more tokens than base capacity)
+      if (!x402PaymentProvided) {
+        bucket.tokens = Math.min(bucket.capacity, bucket.tokens);
+      }
+
+      // If x402 payment provided, apply multipliers
+      if (x402PaymentProvided) {
+        effectiveRefillRate = effectiveRefillRate * refillMultiplier;
+        effectiveCapacity = effectiveCapacity * capacityMultiplier;
+        // Top off the bucket to boosted capacity
+        bucket.tokens = effectiveCapacity;
+        bucket.lastRefill = now;
+      } else {
+        // Normal refill based on elapsed time
+        const elapsedSeconds = Math.max(0, (now - bucket.lastRefill) / 1000);
+        const tokensToAdd = Math.floor(elapsedSeconds * effectiveRefillRate);
+
+        if (tokensToAdd > 0) {
+          // Refill tokens, capped at effective capacity
+          bucket.tokens = Math.min(
+            effectiveCapacity,
+            bucket.tokens + tokensToAdd,
+          );
+          bucket.lastRefill = now;
+        }
+      }
     }
 
     // Determine actual tokens needed (may override prediction with cached contentLength)

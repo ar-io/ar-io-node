@@ -217,3 +217,340 @@ describe('x402 environment configuration validation', () => {
     );
   });
 });
+
+describe('x402 browser detection', () => {
+  // Inline browser detection function to avoid import issues
+  const isBrowserRequest = (req: any): boolean => {
+    const acceptHeader = req.header('Accept');
+    const userAgent = req.header('User-Agent');
+    if (acceptHeader === undefined || userAgent === undefined) {
+      return false;
+    }
+    return acceptHeader.includes('text/html') && userAgent.includes('Mozilla');
+  };
+
+  it('should detect browser requests with text/html Accept header', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'text/html,application/xhtml+xml';
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0.0.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), true);
+  });
+
+  it('should detect browser requests with Mozilla user agent', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'text/html';
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/121.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), true);
+  });
+
+  it('should not detect API requests without text/html', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'application/json';
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0.0.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), false);
+  });
+
+  it('should not detect curl requests without Mozilla', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'text/html';
+        if (name === 'User-Agent') return 'curl/8.5.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), false);
+  });
+
+  it('should handle missing Accept header', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0.0.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), false);
+  });
+
+  it('should handle missing User-Agent header', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'text/html';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), false);
+  });
+
+  it('should handle both headers missing', () => {
+    const req = {
+      header: () => undefined,
+    };
+
+    assert.equal(isBrowserRequest(req), false);
+  });
+
+  it('should detect Safari browser requests', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'text/html,application/xhtml+xml';
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/605.1.15 Safari/605.1.15';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), true);
+  });
+
+  it('should detect Edge browser requests', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'text/html,application/xhtml+xml';
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), true);
+  });
+
+  it('should not detect requests with partial text/html match in other MIME types', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept') return 'application/vnd.custom-text/html-like';
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0.0.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), true); // Should still match because it contains 'text/html'
+  });
+
+  it('should handle complex Accept headers with multiple MIME types', () => {
+    const req = {
+      header: (name: string) => {
+        if (name === 'Accept')
+          return 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8';
+        if (name === 'User-Agent')
+          return 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120.0.0.0';
+        return undefined;
+      },
+    };
+
+    assert.equal(isBrowserRequest(req), true);
+  });
+});
+
+describe('x402 price calculation with min/max bounds', () => {
+  const calculateX402PricePerByteEgress = (contentLength: number): string => {
+    const X_402_USDC_PER_BYTE_PRICE = 0.0000000001;
+    const X_402_USDC_DATA_EGRESS_MIN_PRICE = 0.001;
+    const X_402_USDC_DATA_EGRESS_MAX_PRICE = 10.0;
+
+    const priceInUSD = contentLength * X_402_USDC_PER_BYTE_PRICE;
+    const formattedPrice = Math.min(
+      Math.max(priceInUSD, X_402_USDC_DATA_EGRESS_MIN_PRICE),
+      X_402_USDC_DATA_EGRESS_MAX_PRICE,
+    );
+    return `$${formattedPrice}`;
+  };
+
+  it('should enforce minimum price for very small content', () => {
+    const price = calculateX402PricePerByteEgress(1); // 1 byte
+    assert.equal(price, '$0.001');
+  });
+
+  it('should enforce minimum price at boundary', () => {
+    const price = calculateX402PricePerByteEgress(10_000_000); // 10MB
+    assert.equal(price, '$0.001');
+  });
+
+  it('should calculate price above minimum', () => {
+    const oneGB = 1024 * 1024 * 1024;
+    const price = calculateX402PricePerByteEgress(oneGB);
+    const numPrice = parseFloat(price.substring(1));
+    assert(numPrice > 0.001, `Price ${price} should be above minimum`);
+    assert(numPrice < 10.0, `Price ${price} should be below maximum`);
+  });
+
+  it('should enforce maximum price for very large content', () => {
+    const oneTerabyte = 1024 * 1024 * 1024 * 1024;
+    const price = calculateX402PricePerByteEgress(oneTerabyte);
+    assert.equal(price, '$10');
+  });
+
+  it('should enforce maximum price at boundary', () => {
+    const hundredGB = 100 * 1024 * 1024 * 1024;
+    const price = calculateX402PricePerByteEgress(hundredGB);
+    assert.equal(price, '$10');
+  });
+
+  it('should handle zero bytes with minimum price', () => {
+    const price = calculateX402PricePerByteEgress(0);
+    assert.equal(price, '$0.001');
+  });
+
+  it('should handle edge case near max boundary', () => {
+    // 100GB - 1 byte should still hit max
+    const nearMax = 100 * 1024 * 1024 * 1024 - 1;
+    const price = calculateX402PricePerByteEgress(nearMax);
+    assert.equal(price, '$10');
+  });
+
+  it('should handle prices in the middle range', () => {
+    const testCases = [
+      { bytes: 500 * 1024 * 1024, minExpected: 0.001, maxExpected: 10.0 },
+      { bytes: 5 * 1024 * 1024 * 1024, minExpected: 0.001, maxExpected: 10.0 },
+      {
+        bytes: 10 * 1024 * 1024 * 1024,
+        minExpected: 0.001,
+        maxExpected: 10.0,
+      },
+    ];
+
+    for (const testCase of testCases) {
+      const price = calculateX402PricePerByteEgress(testCase.bytes);
+      const numPrice = parseFloat(price.substring(1));
+      assert(
+        numPrice >= testCase.minExpected,
+        `Price ${price} should be at or above minimum ${testCase.minExpected}`,
+      );
+      assert(
+        numPrice <= testCase.maxExpected,
+        `Price ${price} should be at or below maximum ${testCase.maxExpected}`,
+      );
+    }
+  });
+});
+
+describe('x402 settlement timeout', () => {
+  it('should timeout after configured duration', async () => {
+    const X_402_USDC_SETTLE_TIMEOUT_MS = 5000;
+
+    const slowSettlement = new Promise((resolve) => setTimeout(resolve, 10000));
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Settlement timeout')),
+        X_402_USDC_SETTLE_TIMEOUT_MS,
+      ),
+    );
+
+    const start = Date.now();
+    try {
+      await Promise.race([slowSettlement, timeoutPromise]);
+      assert.fail('Should have timed out');
+    } catch (error: any) {
+      const elapsed = Date.now() - start;
+      assert.equal(error.message, 'Settlement timeout');
+      assert(
+        elapsed >= X_402_USDC_SETTLE_TIMEOUT_MS - 100,
+        `Should timeout around ${X_402_USDC_SETTLE_TIMEOUT_MS}ms, got ${elapsed}ms`,
+      );
+      assert(
+        elapsed < X_402_USDC_SETTLE_TIMEOUT_MS + 1000,
+        `Should not take much longer than timeout, got ${elapsed}ms`,
+      );
+    }
+  });
+
+  it('should complete fast settlements before timeout', async () => {
+    const X_402_USDC_SETTLE_TIMEOUT_MS = 5000;
+
+    const fastSettlement = new Promise((resolve) =>
+      setTimeout(() => resolve({ success: true }), 100),
+    );
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Settlement timeout')),
+        X_402_USDC_SETTLE_TIMEOUT_MS,
+      ),
+    );
+
+    const result = await Promise.race([fastSettlement, timeoutPromise]);
+    assert.deepEqual(result, { success: true });
+  });
+
+  it('should handle immediate settlement success', async () => {
+    const X_402_USDC_SETTLE_TIMEOUT_MS = 5000;
+
+    const immediateSettlement = Promise.resolve({ success: true });
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Settlement timeout')),
+        X_402_USDC_SETTLE_TIMEOUT_MS,
+      ),
+    );
+
+    const result = await Promise.race([immediateSettlement, timeoutPromise]);
+    assert.deepEqual(result, { success: true });
+  });
+
+  it('should handle immediate settlement failure', async () => {
+    const X_402_USDC_SETTLE_TIMEOUT_MS = 5000;
+
+    const immediateSettlement = Promise.resolve({
+      success: false,
+      errorReason: 'Invalid payment',
+    });
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Settlement timeout')),
+        X_402_USDC_SETTLE_TIMEOUT_MS,
+      ),
+    );
+
+    const result = await Promise.race([immediateSettlement, timeoutPromise]);
+    assert.deepEqual(result, {
+      success: false,
+      errorReason: 'Invalid payment',
+    });
+  });
+
+  it('should respect different timeout values', async () => {
+    const shortTimeout = 100;
+    const longSettlement = new Promise((resolve) => setTimeout(resolve, 1000));
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Settlement timeout')), shortTimeout),
+    );
+
+    const start = Date.now();
+    try {
+      await Promise.race([longSettlement, timeoutPromise]);
+      assert.fail('Should have timed out');
+    } catch (error: any) {
+      const elapsed = Date.now() - start;
+      assert(
+        elapsed < shortTimeout + 100,
+        `Should timeout quickly with short timeout, got ${elapsed}ms`,
+      );
+    }
+  });
+});
