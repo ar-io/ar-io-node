@@ -70,14 +70,16 @@ app.use(
   }),
 );
 
+// x402 payment middleware - runs before rate limiter to set payment status
+app.use(
+  x402DataEgressMiddleware({
+    dataAttributesSource: system.dataAttributesSource,
+  }),
+);
+
 if (config.ENABLE_RATE_LIMITER) {
   log.info('[app] enabling rate limiter middleware');
-  app.use(
-    x402DataEgressMiddleware({
-      dataAttributesSource: system.dataAttributesSource,
-    }), // ← before all routes
-  );
-  app.use(rateLimiterMiddleware()); // ← before all routes
+  app.use(rateLimiterMiddleware());
 } else {
   log.info('[app] rate limiter middleware disabled');
 }
