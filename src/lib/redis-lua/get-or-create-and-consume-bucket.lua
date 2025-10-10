@@ -19,6 +19,8 @@ and consuming them, which is critical for accurate rate limiting.
 -- ARGV[4] = ttl (bucket expiration time in seconds)
 -- ARGV[5] = tokensToConsume (predicted tokens needed, defaults to 0)
 -- ARGV[6] = x402PaymentProvided (1 if x402 payment was provided, else 0)
+-- ARGV[7] = capacityMultiplier (multiplier for bucket capacity when payment provided)
+-- ARGV[8] = refillMultiplier (multiplier for refill rate when payment provided)
 
 -- Parse input arguments with proper type conversion
 local now = tonumber(ARGV[3])
@@ -27,6 +29,8 @@ local capacity = tonumber(ARGV[1])
 local refill = tonumber(ARGV[2])
 local tokensToConsume = tonumber(ARGV[5]) or 0
 local x402PaymentProvided = ARGV[6] == "1"
+local capacityMultiplier = tonumber(ARGV[7]) or 10
+local refillMultiplier = tonumber(ARGV[8]) or 2
 
 local key = KEYS[1]
 
@@ -45,11 +49,11 @@ if #all > 0 then
   local elapsed = (now - bucket.lastRefill) / 1000  -- convert to seconds
   local to_add = math.floor(elapsed * bucket.refillRate)  -- tokens to add
 
-  -- if x402PaymentProvided, double the refill rate and increase capacity 10x
+  -- if x402PaymentProvided, apply multipliers to refill rate and capacity
   if x402PaymentProvided then
-    bucket.refillRate = bucket.refillRate * 2
+    bucket.refillRate = bucket.refillRate * refillMultiplier
     to_add = bucket.capacity  -- if x402 payment provided, just top off the bucket
-    bucket.capacity = bucket.capacity * 10  -- 10x the capacity of the bucket as well
+    bucket.capacity = bucket.capacity * capacityMultiplier
   end
 
   if to_add > 0 then
@@ -67,10 +71,10 @@ else
     capacity = capacity,
     refillRate = refill
   }
-  -- if x402PaymentProvided, double the refill rate and increase capacity 10x
+  -- if x402PaymentProvided, apply multipliers to refill rate and capacity
   if x402PaymentProvided then
-    bucket.refillRate = bucket.refillRate * 2
-    bucket.capacity = bucket.capacity * 10
+    bucket.refillRate = bucket.refillRate * refillMultiplier
+    bucket.capacity = bucket.capacity * capacityMultiplier
     bucket.tokens = bucket.capacity  -- start with full tokens at new capacity
   end
 end

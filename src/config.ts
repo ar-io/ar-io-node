@@ -1216,3 +1216,11 @@ export const X_402_USDC_PER_BYTE_PRICE = +env.varOrDefault(
   'X_402_USDC_PER_BYTE_PRICE',
   '0.0000000001', // $0.0000000001 per byte = $0.10 per GB
 );
+export const X_402_RATE_LIMIT_CAPACITY_MULTIPLIER = +env.varOrDefault(
+  'X_402_RATE_LIMIT_CAPACITY_MULTIPLIER',
+  '10', // 10x capacity for paid tier
+);
+export const X_402_RATE_LIMIT_REFILL_MULTIPLIER = +env.varOrDefault(
+  'X_402_RATE_LIMIT_REFILL_MULTIPLIER',
+  '2', // 2x refill rate for paid tier
+);

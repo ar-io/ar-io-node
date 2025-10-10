@@ -40,6 +40,8 @@ export interface RateLimiterRedisClient {
     ttlSeconds: number,
     tokensToConsume: number,
     x402PaymentProvided: boolean,
+    capacityMultiplier: number,
+    refillMultiplier: number,
   ): Promise<BucketConsumptionResult>;
   consumeTokens(
     key: string,
@@ -124,6 +126,8 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
         ttlSeconds: number,
         tokensToConsume: number,
         x402PaymentProvided: boolean,
+        capacityMultiplier: number,
+        refillMultiplier: number,
       ): Promise<BucketConsumptionResult> => {
         const result = await client.getOrCreateBucketAndConsume(
           key,
@@ -133,6 +137,8 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
           ttlSeconds,
           tokensToConsume,
           x402PaymentProvided,
+          capacityMultiplier,
+          refillMultiplier,
         );
         return JSON.parse(result);
       },

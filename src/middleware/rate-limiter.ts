@@ -121,6 +121,8 @@ async function getOrCreateBucketsAndConsume(
       cacheTtlSeconds,
       predictedTokens,
       x402PaymentProvided,
+      config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
+      config.X_402_RATE_LIMIT_REFILL_MULTIPLIER,
     );
 
     span.setAttributes({
@@ -149,6 +151,8 @@ async function getOrCreateBucketsAndConsume(
       cacheTtlSeconds,
       actualTokensNeeded,
       x402PaymentProvided,
+      config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
+      config.X_402_RATE_LIMIT_REFILL_MULTIPLIER,
     );
 
     span.setAttributes({
@@ -360,6 +364,17 @@ export function rateLimiterMiddleware(options?: {
         }
 
         if (limitsEnabled) {
+          log.info(
+            '[rateLimiter] Rate limit exceeded - checking x402 payment',
+            {
+              x402Enabled,
+              x402PaymentProvided,
+              hasX402Payment: !!(req as any).x402Payment,
+              hasPaymentRequirements: !!(req as any).x402Payment
+                ?.paymentRequirements,
+            },
+          );
+
           // If x402 is enabled and payment was not provided, try to return 402 if we have payment requirements
           // Otherwise, return 429 for rate limit exceeded
           const x402Payment = (req as any).x402Payment;
@@ -368,6 +383,7 @@ export function rateLimiterMiddleware(options?: {
             !x402PaymentProvided &&
             x402Payment?.paymentRequirements
           ) {
+            log.info('[rateLimiter] Returning 402 with payment requirements');
             // This case is rare - payment wasn't considered "provided" but requirements exist
             return sendX402Response({
               res,
@@ -380,6 +396,7 @@ export function rateLimiterMiddleware(options?: {
           // - Payment was provided but limits still exceeded
           // - x402 is disabled
           // - Payment requirements not available
+          log.info('[rateLimiter] Returning 429 rate limit exceeded');
           return res.status(429).json({
             error: 'Too Many Requests',
             message:
