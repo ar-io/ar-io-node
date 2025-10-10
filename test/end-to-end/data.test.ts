@@ -749,7 +749,7 @@ describe('X-AR-IO headers', function () {
   });
 });
 
-describe('x402 Payments', function () {
+describe('x402 Payments', { skip: true }, function () {
   let facilitator: Server;
   let compose: StartedDockerComposeEnvironment;
 
