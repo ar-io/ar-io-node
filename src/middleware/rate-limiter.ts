@@ -387,8 +387,10 @@ export function rateLimiterMiddleware(options?: {
             // This case is rare - payment wasn't considered "provided" but requirements exist
             return sendX402Response({
               res,
+              req,
               message: 'Payment required to access this resource',
               paymentRequirements: x402Payment.paymentRequirements,
+              price: x402Payment.price,
             });
           }
 

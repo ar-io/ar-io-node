@@ -19,7 +19,11 @@ import {
   ContiguousDataAttributes,
   ContiguousDataAttributesStore,
 } from '../types.js';
-import { getPaywallHtml, processPriceToAtomicAmount } from 'x402/shared';
+import {
+  getPaywallHtml,
+  processPriceToAtomicAmount,
+  toJsonSafe,
+} from 'x402/shared';
 import { Request, Response, NextFunction } from 'express';
 import {
   DATA_PATH_REGEX,
@@ -27,6 +31,18 @@ import {
   FARCASTER_FRAME_DATA_PATH_REGEX,
 } from '../constants.js';
 import logger from '../log.js';
+
+/**
+ * Detects if a request is coming from a web browser based on Accept header and User-Agent
+ */
+function isBrowserRequest(req: Request): boolean {
+  const acceptHeader = req.header('Accept');
+  const userAgent = req.header('User-Agent');
+  if (acceptHeader === undefined || userAgent === undefined) {
+    return false;
+  }
+  return acceptHeader.includes('text/html') && userAgent.includes('Mozilla');
+}
 
 // TODO: we could move this to system.ts and use the same facilitator for all x402 requests
 const facilitator = useFacilitator({
@@ -36,17 +52,50 @@ const x402Version = 1;
 
 export const sendX402Response = ({
   res,
+  req,
   message,
   paymentRequirements,
   error,
   payer,
+  price,
 }: {
-  res: any;
+  res: Response;
+  req?: Request;
   message?: string;
   paymentRequirements: PaymentRequirements;
   error?: string;
   payer?: string;
+  price?: string;
 }) => {
+  // Check if this is a browser request and return HTML paywall
+  if (req !== undefined && isBrowserRequest(req)) {
+    // Calculate display amount from price or payment requirements
+    let displayAmount: number;
+    if (price !== undefined && price.length > 0) {
+      // Parse price like "$0.001"
+      const parsed = price.replace('$', '');
+      displayAmount = parseFloat(parsed);
+    } else {
+      // Calculate from maxAmountRequired (which is in atomic units)
+      // For USDC, 6 decimals
+      displayAmount = parseInt(paymentRequirements.maxAmountRequired) / 1000000;
+    }
+
+    const html = getPaywallHtml({
+      amount: displayAmount,
+      paymentRequirements: toJsonSafe([paymentRequirements]) as any,
+      currentUrl: req.originalUrl,
+      testnet: config.X_402_USDC_NETWORK === 'base-sepolia',
+      cdpClientKey: config.X_402_CDP_CLIENT_KEY,
+      appName: config.X_402_APP_NAME,
+      appLogo: config.X_402_APP_LOGO,
+      sessionTokenEndpoint: config.X_402_SESSION_TOKEN_ENDPOINT,
+    });
+    res.status(402).send(html);
+    return;
+  }
+
+  // Return JSON for API clients
   res.status(402).json({
     x402Version,
     accepts: [paymentRequirements],
@@ -254,8 +303,10 @@ export const x402DataEgressMiddleware = ({
         span.setAttribute('x402.payment_verification_failed', true);
         sendX402Response({
           res,
+          req,
           paymentRequirements,
           error: 'Invalid payment header',
+          price,
         });
         return;
       }
@@ -265,8 +316,10 @@ export const x402DataEgressMiddleware = ({
         span.setAttribute('x402.payment_verification_failed', true);
         sendX402Response({
           res,
+          req,
           paymentRequirements,
           error: 'Payment scheme mismatch',
+          price,
         });
         return;
       }
@@ -275,8 +328,10 @@ export const x402DataEgressMiddleware = ({
         span.setAttribute('x402.payment_verification_failed', true);
         sendX402Response({
           res,
+          req,
           paymentRequirements,
           error: 'Payment network mismatch',
+          price,
         });
 
         return;
@@ -296,10 +351,12 @@ export const x402DataEgressMiddleware = ({
         span.setAttribute('x402.payment_verification_failed', true);
         sendX402Response({
           res,
+          req,
           paymentRequirements,
           error: 'Payment verification failed',
           message: verifyResponse.invalidReason || 'Invalid payment',
           payer: verifyResponse.payer,
+          price,
         });
 
         return;

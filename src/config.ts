@@ -1196,13 +1196,14 @@ export const X_402_USDC_NETWORK = env.varOrDefault(
 export const X_402_USDC_WALLET_ADDRESS = env.varOrUndefined(
   'X_402_USDC_WALLET_ADDRESS',
 ) as `0x${string}` | undefined;
-// Recommended experimental facilitator URLs:
-// https://facilitator.x402.rs -> works for both base and base-sepolia without CDP API keys
-// https://facilitator.payai.network -> works for both base and base-sepolia with CDP API keys
-// https://x402.org/facilitator - coinbase base testnet only, requires CDP API keys for base mainnet
+// Recommended facilitator URLs:
+// https://x402.org/facilitator -> official Coinbase facilitator for testnet (base-sepolia)
+// https://facilitator.x402.rs -> experimental facilitator, works for both base and base-sepolia without CDP API keys
+// https://facilitator.payai.network -> experimental facilitator, works for both base and base-sepolia with CDP API keys
+// For mainnet: requires CDP API keys (see @coinbase/x402 package)
 export const X_402_USDC_FACILITATOR_URL = env.varOrDefault(
   'X_402_USDC_FACILITATOR_URL',
-  'https://facilitator.x402.rs',
+  'https://x402.org/facilitator',
 ) as `${string}://${string}`;
 export const X_402_USDC_DATA_EGRESS_MIN_PRICE = +env.varOrDefault(
   'X_402_USDC_DATA_EGRESS_MIN_PRICE',
@@ -1223,4 +1224,15 @@ export const X_402_RATE_LIMIT_CAPACITY_MULTIPLIER = +env.varOrDefault(
 export const X_402_RATE_LIMIT_REFILL_MULTIPLIER = +env.varOrDefault(
   'X_402_RATE_LIMIT_REFILL_MULTIPLIER',
   '2', // 2x refill rate for paid tier
+);
+
+// Paywall customization (optional)
+export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+export const X_402_APP_NAME = env.varOrDefault(
+  'X_402_APP_NAME',
+  'AR.IO Gateway',
+);
+export const X_402_APP_LOGO = env.varOrUndefined('X_402_APP_LOGO');
+export const X_402_SESSION_TOKEN_ENDPOINT = env.varOrUndefined(
+  'X_402_SESSION_TOKEN_ENDPOINT',
 );
