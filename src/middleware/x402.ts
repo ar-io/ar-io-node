@@ -147,7 +147,7 @@ export const x402DataEgressMiddleware = ({
        * TODO: manifests require some additional logic to determine the total size of the data being requested via the manifest resolution.
        * For now, we will skip payment enforcement for manifests.
        */
-      if (dataAttributes?.isManifest === false) {
+      if (dataAttributes?.isManifest) {
         log.debug(
           'Data is a manifest; cannot enforce x402 payment for manifests',
           { id },
