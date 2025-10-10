@@ -248,8 +248,8 @@ export function rateLimiterMiddleware(options?: {
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
-    // determine if x402 payment was made for this request
-    const x402PaymentProvided = !!(req as any).x402Payment;
+    // determine if x402 payment was verified for this request
+    const x402PaymentProvided = !!(req as any).x402Payment?.verified;
 
     // Extract all client IPs from headers and connection
     const { clientIp, clientIps } = extractAllClientIPs(req);
