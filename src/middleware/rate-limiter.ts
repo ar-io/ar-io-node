@@ -360,22 +360,33 @@ export function rateLimiterMiddleware(options?: {
         }
 
         if (limitsEnabled) {
-          // if x402 is enabled, then return 402 with payment attributes instead of a 429
-          if (x402Enabled && x402PaymentProvided) {
+          // If x402 is enabled and payment was not provided, try to return 402 if we have payment requirements
+          // Otherwise, return 429 for rate limit exceeded
+          const x402Payment = (req as any).x402Payment;
+          if (
+            x402Enabled &&
+            !x402PaymentProvided &&
+            x402Payment?.paymentRequirements
+          ) {
+            // This case is rare - payment wasn't considered "provided" but requirements exist
             return sendX402Response({
               res,
               message: 'Payment required to access this resource',
-              paymentRequirements: (req as any).x402Payment.paymentRequirements,
-            });
-          } else {
-            return res.status(429).json({
-              error: 'Too Many Requests',
-              message:
-                bucketsResult.failureType === 'resource'
-                  ? 'Resource rate limit exceeded'
-                  : 'IP rate limit exceeded',
+              paymentRequirements: x402Payment.paymentRequirements,
             });
           }
+
+          // Standard rate limit response for:
+          // - Payment was provided but limits still exceeded
+          // - x402 is disabled
+          // - Payment requirements not available
+          return res.status(429).json({
+            error: 'Too Many Requests',
+            message:
+              bucketsResult.failureType === 'resource'
+                ? 'Resource rate limit exceeded'
+                : 'IP rate limit exceeded',
+          });
         } else {
           next();
           return;
