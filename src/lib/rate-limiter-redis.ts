@@ -136,7 +136,7 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
           now,
           ttlSeconds,
           tokensToConsume,
-          x402PaymentProvided,
+          x402PaymentProvided ? '1' : '0', // Convert boolean to string for Lua
           capacityMultiplier,
           refillMultiplier,
         );

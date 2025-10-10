@@ -47,35 +47,46 @@ if #all > 0 then
 
   -- Step 2: Refill tokens based on elapsed time (token bucket algorithm)
   local elapsed = (now - bucket.lastRefill) / 1000  -- convert to seconds
-  local to_add = math.floor(elapsed * bucket.refillRate)  -- tokens to add
 
-  -- if x402PaymentProvided, apply multipliers to refill rate and capacity
+  -- Calculate effective capacity and refill rate for this operation
+  -- IMPORTANT: DO NOT modify bucket.capacity or bucket.refillRate - they must remain at base values
+  local effectiveCapacity = bucket.capacity
+  local effectiveRefillRate = bucket.refillRate
+
+  -- For unpaid requests, cap existing tokens at base capacity
+  -- (in case previous paid request left more tokens than base capacity)
+  if not x402PaymentProvided then
+    bucket.tokens = math.min(bucket.capacity, bucket.tokens)
+  end
+
+  local to_add = math.floor(elapsed * effectiveRefillRate)  -- tokens to add
+
+  -- if x402PaymentProvided, apply multipliers to LOCAL variables only
   if x402PaymentProvided then
-    bucket.refillRate = bucket.refillRate * refillMultiplier
-    to_add = bucket.capacity  -- if x402 payment provided, just top off the bucket
-    bucket.capacity = bucket.capacity * capacityMultiplier
+    effectiveRefillRate = effectiveRefillRate * refillMultiplier
+    effectiveCapacity = effectiveCapacity * capacityMultiplier
+    to_add = effectiveCapacity  -- if x402 payment provided, just top off the bucket
   end
 
   if to_add > 0 then
-    -- Add tokens but cap at bucket capacity (prevents overflow)
-    bucket.tokens = math.min(bucket.capacity, bucket.tokens + to_add)
+    -- Add tokens but cap at effective capacity (prevents overflow)
+    bucket.tokens = math.min(effectiveCapacity, bucket.tokens + to_add)
     bucket.lastRefill = now  -- update last refill timestamp
   end
 
 else
-  -- Step 2: Create new bucket with full capacity
+  -- Step 2: Create new bucket with full capacity at base values
   bucket = {
     key = key,
     tokens = capacity,      -- start with full tokens
     lastRefill = now,       -- current time as baseline
-    capacity = capacity,
-    refillRate = refill
+    capacity = capacity,    -- base capacity (not multiplied)
+    refillRate = refill     -- base refill rate (not multiplied)
   }
-  -- if x402PaymentProvided, apply multipliers to refill rate and capacity
+  -- if x402PaymentProvided, start with boosted tokens (but keep base capacity/refill in bucket)
   if x402PaymentProvided then
-    bucket.refillRate = bucket.refillRate * refillMultiplier
-    bucket.capacity = bucket.capacity * capacityMultiplier
-    bucket.tokens = bucket.capacity  -- start with full tokens at new capacity
+    local effectiveCapacity = capacity * capacityMultiplier
+    bucket.tokens = effectiveCapacity  -- start with full tokens at boosted capacity
   end
 end
 
