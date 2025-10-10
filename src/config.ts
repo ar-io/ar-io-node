@@ -1225,6 +1225,10 @@ export const X_402_RATE_LIMIT_REFILL_MULTIPLIER = +env.varOrDefault(
   'X_402_RATE_LIMIT_REFILL_MULTIPLIER',
   '2', // 2x refill rate for paid tier
 );
+export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
+  'X_402_USDC_SETTLE_TIMEOUT_MS',
+  '5000', // 5 seconds
+);
 
 // Paywall customization (optional)
 export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');

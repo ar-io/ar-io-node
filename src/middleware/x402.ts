@@ -379,12 +379,17 @@ export const x402DataEgressMiddleware = ({
             paymentPayload,
             paymentRequirements,
           });
-          // TODO: could add a settlement timeout via config.X_402_USDC_SETTLE_TIMEOUT_MS to limit the time spent here
+          // Wrap settlement with timeout to prevent indefinite hanging
           // We may also want to consider circuit breaking if the facilitator is having issues
-          const settlementResult = await facilitator.settle(
-            paymentPayload,
-            paymentRequirements,
-          );
+          const settlementResult = await Promise.race([
+            facilitator.settle(paymentPayload, paymentRequirements),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('Settlement timeout')),
+                config.X_402_USDC_SETTLE_TIMEOUT_MS,
+              ),
+            ),
+          ]);
           const settlementResultHeader = settleResponseHeader(settlementResult);
 
           log.debug('Payment settlement result', {
