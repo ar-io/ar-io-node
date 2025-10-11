@@ -17,7 +17,6 @@ declare module 'ioredis' {
       tokensToConsume: number,
       x402PaymentProvided: string,
       capacityMultiplier: number,
-      refillMultiplier: number,
       contentLengthForTopOff: number,
     ): Promise<string>;
 
@@ -39,7 +38,6 @@ declare module 'ioredis' {
       tokensToConsume: number,
       x402PaymentProvided: string,
       capacityMultiplier: number,
-      refillMultiplier: number,
       contentLengthForTopOff: number,
     ): Promise<string>;
 

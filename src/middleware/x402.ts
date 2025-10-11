@@ -21,9 +21,9 @@ import {
   ContiguousDataAttributesStore,
 } from '../types.js';
 import {
-  getPaywallHtml,
   processPriceToAtomicAmount,
   toJsonSafe,
+  getPaywallHtml,
 } from 'x402/shared';
 import { Request, Response, NextFunction } from 'express';
 import {

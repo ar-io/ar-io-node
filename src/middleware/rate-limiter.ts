@@ -673,7 +673,10 @@ export function rateLimiterMiddleware(options?: {
       }
 
       log.error('[rateLimiter] Error in rate limiter', {
-        error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        errorName:
+          error instanceof Error ? error.constructor.name : typeof error,
       });
       // In case of error, allow the request to proceed
       next();
