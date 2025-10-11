@@ -128,6 +128,27 @@ export const calculateX402PricePerByteEgress = (
   return `$${formattedPrice}`;
 };
 
+/**
+ * Calculate content length to use for rate limiter bucket top-off.
+ * When actual content would result in a price exceeding the max, cap the
+ * content length proportionally to what was actually paid for.
+ *
+ * @param contentLength - Actual content length in bytes
+ * @returns Content length to use for bucket top-off (capped if price would exceed max)
+ */
+export const getContentLengthForTopOff = (contentLength: number): number => {
+  const uncappedPrice = contentLength * config.X_402_USDC_PER_BYTE_PRICE;
+  if (uncappedPrice > config.X_402_USDC_DATA_EGRESS_MAX_PRICE) {
+    // Calculate max content length that corresponds to max price
+    // This ensures bucket top-off is proportional to what user actually paid
+    return Math.floor(
+      config.X_402_USDC_DATA_EGRESS_MAX_PRICE /
+        config.X_402_USDC_PER_BYTE_PRICE,
+    );
+  }
+  return contentLength;
+};
+
 // custom x402 payment middleware for data egress with dynamic pricing
 export const x402DataEgressMiddleware = ({
   dataAttributesSource,
@@ -240,8 +261,15 @@ export const x402DataEgressMiddleware = ({
       // TODO: properly handle byteRange requests by parsing out the range(s) and calculate the price based on the total size of the ranges requested
       const contentLength = dataAttributes?.itemSize ?? 0;
       const price = calculateX402PricePerByteEgress(contentLength);
+      // Calculate capped content length for rate limiter bucket top-off
+      // This ensures users only get bucket capacity proportional to what they paid
+      const contentLengthForTopOff = getContentLengthForTopOff(contentLength);
 
-      log.debug('Calculated x402 price', { price, contentLength });
+      log.debug('Calculated x402 price', {
+        price,
+        contentLength,
+        contentLengthForTopOff,
+      });
 
       span.setAttribute('x402.price', price);
       span.setAttribute('x402.content_size', contentLength);
@@ -274,12 +302,13 @@ export const x402DataEgressMiddleware = ({
       };
 
       // Store payment requirements for rate limiter (even if no payment provided)
+      // Use contentLengthForTopOff (capped) so bucket top-up is proportional to price paid
       (req as any).x402Payment = {
         verified: false,
         settled: false,
         paymentRequirements,
         price,
-        contentLength,
+        contentLength: contentLengthForTopOff,
       };
 
       // Check for existing payment header
@@ -433,13 +462,14 @@ export const x402DataEgressMiddleware = ({
       }
 
       // Update payment info with verified and settled status
+      // Use contentLengthForTopOff (capped) so bucket top-up is proportional to price paid
       (req as any).x402Payment = {
         verified: true,
         settled: true,
         paymentPayload,
         paymentRequirements,
         price,
-        contentLength,
+        contentLength: contentLengthForTopOff,
       };
 
       span.setAttribute('x402.payment_provided', true);

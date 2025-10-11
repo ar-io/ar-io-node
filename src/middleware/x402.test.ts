@@ -6,7 +6,10 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import { calculateX402PricePerByteEgress } from './x402.js';
+import {
+  calculateX402PricePerByteEgress,
+  getContentLengthForTopOff,
+} from './x402.js';
 
 describe('x402 pricing utility functions', () => {
   // Note: These tests use the actual config defaults from config.ts:
@@ -103,6 +106,58 @@ describe('x402 pricing utility functions', () => {
 
       // 1TB * 0.0000000001 = 109.951 USD, but max is 1.0, formatted to 3 decimals
       assert.equal(price, '$1.000');
+    });
+  });
+
+  describe('getContentLengthForTopOff', () => {
+    // Tests for content length capping to prevent overpaying for bucket top-off
+    // Config defaults: X_402_USDC_PER_BYTE_PRICE = 0.0000000001, MAX_PRICE = 1.0
+    // Max content length at max price: 1.0 / 0.0000000001 = 10,000,000,000 bytes (~9.3GB)
+
+    it('should return original content length when under max price', () => {
+      const oneGB = 1024 * 1024 * 1024;
+      const result = getContentLengthForTopOff(oneGB);
+      assert.equal(result, oneGB);
+    });
+
+    it('should return original content length at exactly max price threshold', () => {
+      // Max content length = 1.0 / 0.0000000001 = 10,000,000,000 bytes
+      const maxContentLength = 10_000_000_000;
+      const result = getContentLengthForTopOff(maxContentLength);
+      assert.equal(result, maxContentLength);
+    });
+
+    it('should cap content length when it would exceed max price', () => {
+      const hundredGB = 100 * 1024 * 1024 * 1024;
+      const result = getContentLengthForTopOff(hundredGB);
+      // Should be capped to max content length (10 billion bytes)
+      const expectedCap = 10_000_000_000;
+      assert.equal(result, expectedCap);
+    });
+
+    it('should cap very large content sizes', () => {
+      const oneTB = 1024 * 1024 * 1024 * 1024;
+      const result = getContentLengthForTopOff(oneTB);
+      // Should be capped to max content length
+      const expectedCap = 10_000_000_000;
+      assert.equal(result, expectedCap);
+    });
+
+    it('should handle zero bytes', () => {
+      const result = getContentLengthForTopOff(0);
+      assert.equal(result, 0);
+    });
+
+    it('should handle small content sizes', () => {
+      const result = getContentLengthForTopOff(1024); // 1KB
+      assert.equal(result, 1024);
+    });
+
+    it('should return floor value for max content length', () => {
+      // Ensure we're using Math.floor for consistency
+      const result = getContentLengthForTopOff(100_000_000_000);
+      const expectedCap = Math.floor(1.0 / 0.0000000001);
+      assert.equal(result, expectedCap);
     });
   });
 });
