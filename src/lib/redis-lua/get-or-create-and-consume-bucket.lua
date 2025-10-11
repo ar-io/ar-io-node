@@ -4,8 +4,8 @@ Token Bucket Rate Limiter - Atomic Get/Create and Consume Operation
 This Lua script implements a token bucket algorithm that atomically:
 1. Gets or creates a bucket with token refill logic
 2. Attempts to consume tokens for a request
-3. Doubles refill rate and increases capacity if x402 payment is provided
-3. Returns the bucket state and consumption result
+3. Provides instant capacity top-off if x402 payment is provided
+4. Returns the bucket state and consumption result
 
 The atomic nature prevents race conditions between checking token availability
 and consuming them, which is critical for accurate rate limiting.
@@ -20,8 +20,7 @@ and consuming them, which is critical for accurate rate limiting.
 -- ARGV[5] = tokensToConsume (predicted tokens needed, defaults to 0)
 -- ARGV[6] = x402PaymentProvided (1 if x402 payment was provided, else 0)
 -- ARGV[7] = capacityMultiplier (multiplier for bucket capacity when payment provided)
--- ARGV[8] = refillMultiplier (multiplier for refill rate when payment provided, currently unused)
--- ARGV[9] = contentLengthForTopOff (content size in bytes for proportional top-off calculation)
+-- ARGV[8] = contentLengthForTopOff (content size in bytes for proportional top-off calculation)
 
 -- Parse input arguments with proper type conversion
 local now = tonumber(ARGV[3])
@@ -31,8 +30,7 @@ local refill = tonumber(ARGV[2])
 local tokensToConsume = tonumber(ARGV[5]) or 0
 local x402PaymentProvided = ARGV[6] == "1"
 local capacityMultiplier = tonumber(ARGV[7]) or 10
-local refillMultiplier = tonumber(ARGV[8]) or 2
-local contentLengthForTopOff = tonumber(ARGV[9]) or 0
+local contentLengthForTopOff = tonumber(ARGV[8]) or 0
 
 local key = KEYS[1]
 

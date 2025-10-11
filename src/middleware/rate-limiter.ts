@@ -123,7 +123,6 @@ async function getOrCreateBucketsAndConsume(
       predictedTokens,
       x402PaymentProvided,
       config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
-      config.X_402_RATE_LIMIT_REFILL_MULTIPLIER,
       contentLengthForTopOff,
     );
 
@@ -154,7 +153,6 @@ async function getOrCreateBucketsAndConsume(
       actualTokensNeeded,
       x402PaymentProvided,
       config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
-      config.X_402_RATE_LIMIT_REFILL_MULTIPLIER,
       contentLengthForTopOff,
     );
 
