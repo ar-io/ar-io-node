@@ -22,6 +22,7 @@ import {
   rateLimitRequestsTotal,
   rateLimitBytesBlockedTotal,
 } from '../metrics.js';
+import { sendX402Response } from './x402.js';
 
 function getCanonicalPath(req: Request) {
   // baseUrl is '' at the app root, so this concatenation works there too.
@@ -88,6 +89,8 @@ async function getOrCreateBucketsAndConsume(
   domain: string,
   cacheTtlSeconds: number,
   predictedTokens: number,
+  x402PaymentProvided = false,
+  contentLengthForTopOff = 0,
 ): Promise<{
   success: boolean;
   resourceBucket?: TokenBucket;
@@ -96,6 +99,7 @@ async function getOrCreateBucketsAndConsume(
   // Tokens initially consumed from each bucket during the predictive phase
   resourceTokensConsumed?: number; // what was actually debited from resource bucket (predicted)
   ipTokensConsumed?: number; // what was actually debited from IP bucket (actual tokens needed)
+  x402PaymentProvided?: boolean; // whether x402 payment was used
 }> {
   const span = tracer.startSpan('rateLimiter.getOrCreateBucketsAndConsume');
   span.setAttributes({
@@ -117,6 +121,9 @@ async function getOrCreateBucketsAndConsume(
       now,
       cacheTtlSeconds,
       predictedTokens,
+      x402PaymentProvided,
+      config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
+      contentLengthForTopOff,
     );
 
     span.setAttributes({
@@ -144,6 +151,9 @@ async function getOrCreateBucketsAndConsume(
       now,
       cacheTtlSeconds,
       actualTokensNeeded,
+      x402PaymentProvided,
+      config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
+      contentLengthForTopOff,
     );
 
     span.setAttributes({
@@ -235,9 +245,13 @@ export function rateLimiterMiddleware(options?: {
   const ipAllowlist =
     options?.ipAllowlist ?? config.RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST;
   const redisClient = options?.redisClient ?? getRateLimiterRedisClient();
+  const x402Enabled = config.ENABLE_X_402_USDC_DATA_EGRESS;
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
+    // determine if x402 payment was verified for this request
+    const x402PaymentProvided = !!(req as any).x402Payment?.verified;
+
     // Extract all client IPs from headers and connection
     const { clientIp, clientIps } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
@@ -310,6 +324,11 @@ export function rateLimiterMiddleware(options?: {
       rateLimitSpan.addEvent(
         'Getting both buckets and consuming predicted tokens',
       );
+
+      // Get contentLength from x402Payment if available
+      const contentLengthForTopOff =
+        (req as any).x402Payment?.contentLength ?? 0;
+
       const bucketsResult = await getOrCreateBucketsAndConsume(
         redisClient,
         resourceKey,
@@ -321,6 +340,8 @@ export function rateLimiterMiddleware(options?: {
         domain,
         cacheTtlSeconds,
         predictedTokens,
+        x402PaymentProvided,
+        contentLengthForTopOff,
       );
 
       if (!bucketsResult.success) {
@@ -350,6 +371,41 @@ export function rateLimiterMiddleware(options?: {
         }
 
         if (limitsEnabled) {
+          log.info(
+            '[rateLimiter] Rate limit exceeded - checking x402 payment',
+            {
+              x402Enabled,
+              x402PaymentProvided,
+              hasX402Payment: !!(req as any).x402Payment,
+              hasPaymentRequirements: !!(req as any).x402Payment
+                ?.paymentRequirements,
+            },
+          );
+
+          // If x402 is enabled and payment was not provided, try to return 402 if we have payment requirements
+          // Otherwise, return 429 for rate limit exceeded
+          const x402Payment = (req as any).x402Payment;
+          if (
+            x402Enabled &&
+            !x402PaymentProvided &&
+            x402Payment?.paymentRequirements
+          ) {
+            log.info('[rateLimiter] Returning 402 with payment requirements');
+            // This case is rare - payment wasn't considered "provided" but requirements exist
+            return sendX402Response({
+              res,
+              req,
+              message: 'Payment required to access this resource',
+              paymentRequirements: x402Payment.paymentRequirements,
+              price: x402Payment.price,
+            });
+          }
+
+          // Standard rate limit response for:
+          // - Payment was provided but limits still exceeded
+          // - x402 is disabled
+          // - Payment requirements not available
+          log.info('[rateLimiter] Returning 429 rate limit exceeded');
           return res.status(429).json({
             error: 'Too Many Requests',
             message:
@@ -617,7 +673,10 @@ export function rateLimiterMiddleware(options?: {
       }
 
       log.error('[rateLimiter] Error in rate limiter', {
-        error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        errorName:
+          error instanceof Error ? error.constructor.name : typeof error,
       });
       // In case of error, allow the request to proceed
       next();

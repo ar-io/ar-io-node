@@ -28,7 +28,6 @@ import {
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container.js';
 import { isTestFiltered } from '../utils.js';
 import { DataItem } from '@dha-team/arbundles';
-import { release } from '../../src/version.js';
 
 const projectRootPath = process.cwd();
 
@@ -41,7 +40,7 @@ const tx1 = 'jdcXEvTOkkhSfGTVzHZ4gNZ1nzfK4MrbLKK5IWgOgzY';
 // manifest with valid index
 const tx2 = 'yecPZWBFO8FnspfrC6y_xChBHYfInssITIip-3OF5kM';
 
-// non-manifest tx
+// non-manifest tx (178 bytes)
 const tx3 = 'lbeIMUvoEqR2q-pKsT4Y5tz6mm9ppemReyLnQ8P7XpM';
 
 // manifest with paths without trailing slash
@@ -746,6 +745,225 @@ describe('X-AR-IO headers', function () {
       );
 
       assert.equal(reqWithHeaders.headers['x-ar-io-hops'], '12');
+    });
+  });
+});
+
+describe('x402 Payments', { skip: true }, function () {
+  let facilitator: Server;
+  let compose: StartedDockerComposeEnvironment;
+
+  const config = {
+    START_WRITERS: 'false',
+    ENABLE_X_402_USDC_DATA_EGRESS: 'true',
+    X_402_USDC_PER_BYTE_PRICE: '0.0000000001', // 0.0000000001 USDC per byte = $0.001 for 10KB
+    X_402_USDC_DATA_EGRESS_MIN_PRICE: '0.001', // minimum charge of $0.002 USDC
+    X_402_USDC_DATA_EGRESS_MAX_PRICE: '0.1', // maximum charge of $0.1 USDC
+    X_402_USDC_NETWORK: 'base-sepolia', // asset address is 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+    X_402_USDC_WALLET_ADDRESS: '0x1234567890123456789012345678901234567890',
+  };
+
+  before(async function () {
+    await cleanDb();
+
+    // setup a fake facilitator
+    facilitator = createServer((_, res) => {
+      res.statusCode = 200;
+      res.end('valid x402 valid payment');
+    });
+    facilitator.listen(4002);
+
+    // use the facilitator in the core container
+    compose = await composeUp({
+      ...config,
+      X_402_USDC_FACILITATOR_URL: 'http://host.testcontainers.internal:4002',
+    });
+
+    // Expose host port for docker containers to access
+    await TestContainers.exposeHostPorts(4002);
+  });
+
+  after(async function () {
+    await compose.down();
+    facilitator.close();
+  });
+
+  describe('Transaction ID Validation', function () {
+    it('should skip payment check for invalid transaction IDs', async function () {
+      const res = await axios.get(`http://localhost:4000/invalid-tx-id`, {
+        validateStatus: (status) => status !== 402,
+      });
+
+      // Should not require payment for invalid IDs (they skip payment middleware)
+      assert.notEqual(res.status, 402);
+    });
+
+    it('should skip payment check for very short IDs', async function () {
+      const res = await axios.get(`http://localhost:4000/short`, {
+        validateStatus: (status) => status !== 402,
+      });
+
+      // Should not require payment for short IDs
+      assert.notEqual(res.status, 402);
+    });
+
+    it('should require payment for valid 43-character transaction IDs', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+
+      assert.equal(res.status, 402);
+      assert.equal(res.data.error, 'X-PAYMENT header is required');
+    });
+
+    it.skip('should skip x402 payments for known manifests', async function () {
+      // then request it again, should skip payment check as its a known manifest
+      const res = await axios.get(`http://localhost:4000/${tx2}`, {
+        validateStatus: (status) => status !== 402,
+      });
+
+      assert.notEqual(res.status, 402);
+    });
+  });
+
+  describe('Data Egress', function () {
+    it('should return 402 for a txId when payment is required', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx3}`, {
+        validateStatus: (status) => status === 402,
+      });
+      // content length is 178 bytes
+      const expectedPrice = Math.max(
+        178 * parseFloat(config.X_402_USDC_PER_BYTE_PRICE),
+        parseFloat(config.X_402_USDC_DATA_EGRESS_MIN_PRICE),
+      );
+      assert.equal(res.status, 402);
+      assert(res.headers['content-type'].includes('application/json'));
+      assert.equal(res.data.error, 'X-PAYMENT header is required');
+      assert(
+        res.data.message.includes(`Payment of $${expectedPrice} USDC required`),
+      );
+      // enforce the requirements matches x402 payment spec
+      assert(res.data.x402Version === 1);
+      assert(Array.isArray(res.data.accepts));
+      const paymentReq = res.data.accepts[0];
+      assert(paymentReq);
+      assert(paymentReq.scheme === 'exact', 'x402scheme should be exact');
+      assert(
+        paymentReq.network === config.X_402_USDC_NETWORK,
+        'x402 network mismatch',
+      );
+      assert(
+        paymentReq.asset === '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        'x402 asset mismatch',
+      );
+      assert(
+        paymentReq.payTo === config.X_402_USDC_WALLET_ADDRESS,
+        'x402 payTo mismatch',
+      );
+      assert(
+        paymentReq.mimeType === 'application/octet-stream',
+        'x402 mimeType mismatch',
+      );
+      assert(paymentReq.maxTimeoutSeconds === 300, 'x402 maxTimeoutSeconds');
+      assert(
+        +paymentReq.maxAmountRequired === expectedPrice * 10 ** 6,
+        `x402 maxAmountRequired mismatch (expected ${expectedPrice * 10 ** 6} got ${paymentReq.maxAmountRequired})`,
+      );
+      assert(
+        paymentReq.description.includes('AR.IO Gateway data egress'),
+        'x402 description mismatch',
+      );
+      assert(paymentReq.extra);
+      assert(paymentReq.extra.name === 'USDC', 'x402 extra.name mismatch');
+      assert(paymentReq.extra.version === '2', 'x402 extra.version mismatch');
+    });
+
+    describe('Invalid Payment Header', function () {
+      it('should return 402 for invalid payment header format', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx3}`, {
+          headers: {
+            'x-payment': 'invalid-payment-format',
+          },
+          validateStatus: (status) => status === 402,
+        });
+
+        assert.equal(res.status, 402);
+        assert.equal(res.data.error, 'Invalid payment header');
+      });
+
+      it('should return 402 for malformed JWT payment', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx3}`, {
+          headers: {
+            'x-payment': 'not.a.valid.jwt.token.at.all',
+          },
+          validateStatus: (status) => status === 402,
+        });
+
+        assert.equal(res.status, 402);
+        assert.equal(res.data.error, 'Invalid payment header');
+      });
+
+      it('should return 402 for empty payment header', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx3}`, {
+          headers: {
+            'x-payment': '',
+          },
+          validateStatus: (status) => status === 402,
+        });
+
+        assert.equal(res.status, 402);
+        assert.equal(res.data.error, 'Invalid payment header');
+      });
+    });
+
+    describe('Range Requests', function () {
+      it('should require payment for range requests', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx3}`, {
+          headers: {
+            Range: 'bytes=0-99',
+          },
+          validateStatus: (status) => status === 402,
+        });
+
+        assert.equal(res.status, 402);
+        assert.equal(res.data.error, 'X-PAYMENT header is required');
+      });
+
+      it('should calculate payment for full content size on range requests', async function () {
+        const res = await axios.get(`http://localhost:4000/${tx3}`, {
+          headers: {
+            Range: 'bytes=0-10',
+          },
+          validateStatus: (status) => status === 402,
+        });
+
+        assert.equal(res.status, 402);
+        // TODO: inspect the price to match the range of bytes requested
+      });
+    });
+
+    describe('HEAD Requests', function () {
+      it('should require payment for HEAD requests', async function () {
+        const res = await axios.head(`http://localhost:4000/${tx3}`, {
+          validateStatus: (status) => status === 402,
+        });
+
+        assert.equal(res.status, 402);
+      });
+    });
+
+    // TODO: this test is intended to use the stubbed facilitator for verification and settlement and then serve the resource
+    it('should accept a valid payment token and serve the request', async function () {
+      const res = await axios.get(`http://localhost:4000/${tx3}`, {
+        headers: {
+          //b64url encoded valid x402 payment token
+          'x-payment':
+            'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAiLCJzdWIiOiJ3ZWJ0aHJ1c3RlZCIsImV4cCI6MjUwMDAwMDAwMCwiaWF0IjoxNjcwMDAwMDAwLCJhc3NlcnQiOnsicmVxdWlyZW1lbnRzIjp7Im5ldHdvcmsiOiJiYXNlLXNlcG9saWEiLCJhc3NldCI6IjB4MDM2Q2JENTM4NDJjNTQyNjYzNGU3OTI5NTQxZUMyMzE4ZjNkQ0Y3ZSIsInBheVRvIjoiMHgxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL29jdGV0LXN0cmVhbSIsIm1heFRpbWVvdXRTZWNvbmRzIjozMDAsIm1heEFtb3VudFJlcXVpcmVkIjoxMH0sIm1pbWVUb3RhbENoYXJnZSI6MTE3OCwicGF5bWVudFR5cGUiOiJkYXRhLWVyZ2VzcyIsInJlcXVpcmVtZW50SWQiOiJhcjEtMV8xMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1',
+        },
+        validateStatus: (status) => status === 200,
+      });
+
+      assert.equal(res.status, 200);
     });
   });
 });

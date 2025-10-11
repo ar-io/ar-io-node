@@ -6,14 +6,14 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, mock } from 'node:test';
-import winston from 'winston';
 import { CompositeArNSResolver } from './composite-arns-resolver.js';
 import { NameResolution, NameResolver } from '../types.js';
 import { KvArNSResolutionStore } from '../store/kv-arns-name-resolution-store.js';
 import { KvArNSRegistryStore } from '../store/kv-arns-base-name-store.js';
 import { ArNSNamesCache } from './arns-names-cache.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-const log = winston.createLogger({ silent: true });
+const log = createTestLogger({ suite: 'CompositeArNSResolver' });
 const mockResolution: NameResolution = {
   name: 'test.ar',
   resolvedId: 'tx1',

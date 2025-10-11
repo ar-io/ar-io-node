@@ -7,12 +7,12 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import axios from 'axios';
-import * as winston from 'winston';
 import { GatewaysDataSource } from './gateways-data-source.js';
 import { RequestAttributes } from '../types.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable, axiosStreamData } from './test-utils.js';
 import { Readable } from 'node:stream';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const axiosMockCommonParams = (config: any) => ({
   interceptors: {
@@ -22,13 +22,13 @@ const axiosMockCommonParams = (config: any) => ({
   defaults: config,
 });
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let dataSource: GatewaysDataSource;
 let mockedAxiosInstance: any;
 let requestAttributes: RequestAttributes;
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'GatewaysDataSource' });
 });
 
 beforeEach(async () => {

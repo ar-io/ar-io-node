@@ -1,0 +1,28 @@
+{
+  "network": "base-sepolia",
+  "scheme": "exact",
+  "x402Version": 1,
+  "payload": {
+    "signature": "0xf6ac8352cadf17833100640575da755dad1928c85463b3bb4d4afebe0888ddeb3cc10dc3cf6f03f67f3f98b0160b8cab75f0ba5d7777d2a98855a26e13fd78851b",
+    "authorization": {
+      "from": "0x3bbfe640b49eCb09F8e7cEDB36EA8C4d89198cB6",
+      "nonce": "0x3fbf7ad531b4d50bf7fed56e2fc5cbb7ed8ca8968f71eeb0a1bd955e62271afc",
+      "to": "0x2Dfb1cD40f630CF209Cc915a1DF5De66C016323C",
+      "validAfter": "1759432092",
+      "validBefore": "1759432992",
+      "value": "100"
+    }
+  },
+  "paymentRequirements": {
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "description": "AR.IO Gateway data egress for 0 bytes",
+    "extra": { "name": "USDC", "version": "2" },
+    "maxAmountRequired": "100",
+    "maxTimeoutSeconds": 300,
+    "mimeType": "application/x.arweave-manifest+json",
+    "network": "base-sepolia",
+    "payTo": "0x2Dfb1cD40f630CF209Cc915a1DF5De66C016323C",
+    "resource": "http://localhost:4000/4jBV3ofWh41KhuTs2pFvj-KBZWUkbrbCYlJH0vLA6LM",
+    "scheme": "exact"
+  }
+}

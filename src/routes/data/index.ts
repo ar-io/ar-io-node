@@ -14,7 +14,6 @@ import {
   FARCASTER_FRAME_DATA_PATH_REGEX,
 } from '../../constants.js';
 import { createDataHandler, createRawDataHandler } from './handlers.js';
-
 // Used by ArNS Router
 export const dataHandler = createDataHandler({
   log,
@@ -25,6 +24,7 @@ export const dataHandler = createDataHandler({
 });
 
 export const dataRouter = Router();
+
 dataRouter.get(DATA_PATH_REGEX, dataHandler);
 dataRouter.get(
   RAW_DATA_PATH_REGEX,

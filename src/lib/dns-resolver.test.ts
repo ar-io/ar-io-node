@@ -6,16 +6,16 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
-import * as winston from 'winston';
 import { promises as dns } from 'node:dns';
 import { DnsResolver } from './dns-resolver.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('DnsResolver', () => {
   let dnsResolver: DnsResolver;
-  let logger: winston.Logger;
+  let logger: ReturnType<typeof createTestLogger>;
 
   beforeEach(() => {
-    logger = winston.createLogger({ silent: true });
+    logger = createTestLogger({ suite: 'DnsResolver' });
     dnsResolver = new DnsResolver({ log: logger });
   });
 

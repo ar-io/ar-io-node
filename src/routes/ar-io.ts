@@ -29,6 +29,15 @@ const getParquetExporter = () => {
       bundlesDbPath: 'data/sqlite/bundles.db',
       coreDbPath: 'data/sqlite/core.db',
     });
+
+    // Register cleanup handler when exporter is first created
+    system.registerCleanupHandler('parquet-exporter', async () => {
+      if (parquetExporter !== null) {
+        log.debug('Stopping parquet exporter...');
+        parquetExporter.stop();
+        log.debug('Parquet exporter stopped');
+      }
+    });
   }
 
   return parquetExporter;

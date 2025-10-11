@@ -15,9 +15,9 @@ import {
   it,
   mock,
 } from 'node:test';
-import winston from 'winston';
 import { ContiguousDataSource } from '../types.js';
 import { DataImporter } from './data-importer.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 class Ans104UnbundlerStub {
   async queueItem(): Promise<void> {
@@ -34,7 +34,7 @@ class Ans104UnbundlerStub {
 }
 
 describe('DataImporter', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let bundleDataImporter: DataImporter;
   let bundleDataImporterWithFullQueue: DataImporter;
   let contiguousDataSource: ContiguousDataSource;
@@ -42,8 +42,7 @@ describe('DataImporter', () => {
   let mockItem: any;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
-    // log = winston.createLogger();
+    log = createTestLogger({ suite: 'DataImporter' });
 
     mockItem = { id: 'testId', index: 1 };
 

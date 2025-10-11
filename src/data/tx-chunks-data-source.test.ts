@@ -6,7 +6,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 
 import {
   ArweaveChainSourceStub,
@@ -15,18 +14,19 @@ import {
 import { TxChunksDataSource } from './tx-chunks-data-source.js';
 import { RequestAttributes } from '../types.js';
 import * as metrics from '../metrics.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const TX_ID = '----LT69qUmuIeC4qb0MZHlxVp7UxLu_14rEkA_9n6w';
 
 describe('TxChunksDataSource', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let chainSource: ArweaveChainSourceStub;
   let chunkSource: ArweaveChunkSourceStub;
   let txChunkRetriever: TxChunksDataSource;
   let requestAttributes: RequestAttributes;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'TxChunksDataSource' });
 
     chainSource = new ArweaveChainSourceStub();
     chunkSource = new ArweaveChunkSourceStub();

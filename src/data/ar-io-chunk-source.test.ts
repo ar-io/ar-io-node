@@ -11,6 +11,7 @@ import { AoARIORead } from '@ar.io/sdk';
 import { ChunkDataByAnySourceParams } from '../types.js';
 import { ArIOChunkSource } from './ar-io-chunk-source.js';
 import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 let log: winston.Logger;
 let chunkSource: ArIOChunkSource;
@@ -26,7 +27,7 @@ const TEST_PARAMS: ChunkDataByAnySourceParams = {
 };
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'ArIOChunkSource' });
 });
 
 beforeEach(async () => {

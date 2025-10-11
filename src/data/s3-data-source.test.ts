@@ -7,15 +7,15 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable } from 'node:stream';
-import * as winston from 'winston';
 import { AwsLiteS3 } from '@aws-lite/s3-types';
 import { AwsLiteClient } from '@aws-lite/client';
 
 import { S3DataSource } from './s3-data-source.js';
 import * as metrics from '../metrics.js';
 import { TestDestroyedReadable } from './test-utils.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let s3DataSource: S3DataSource;
 let mockS3Client: AwsLiteS3;
 let mockAwsClient: AwsLiteClient;
@@ -25,7 +25,7 @@ const testPrefix = 'test-prefix';
 const testId = 'test-data-id';
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'S3DataSource' });
 });
 
 beforeEach(async () => {

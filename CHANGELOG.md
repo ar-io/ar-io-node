@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **X402 Payment Protocol (Experimental)**: Optional USDC-based payment
+  system for accessing rate-limited content. This feature is experimental
+  and will be rapidly built out in upcoming releases.
+  - Dynamic content-based pricing (default: $0.0000000001/byte = $0.10/GB)
+  - USDC payments via Coinbase facilitator on Base network (mainnet and
+    testnet supported)
+  - Rate limiter integration with 10x capacity multiplier for paid tier
+  - Proportional bucket top-off capped to actual price paid
+  - HTML paywall for browser clients, JSON responses for API clients
+  - Settlement timeout protection (5s default)
+  - Configuration via 13 new `X_402_*` environment variables (see
+    `.env.example` for details)
+  - **Note**: Currently only applies to `/<id>` and `/raw/<id>` endpoints
+    for non-manifests
 - Expanded default preferred chunk GET node pool from 12 to 22 nodes,
   adding data-13 through data-17 (5 additional data nodes) and tip-1
   through tip-5 (5 tip nodes) for improved redundancy and load
@@ -62,6 +76,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   rather than waiting indefinitely, preventing request blocking and
   improving responsiveness. Also fixed GraphQL service to return
   `dataSize` instead of incorrect `size` field.
+
+### Known Issues
+
+- The x402 browser paywall currently uses blob URLs for content delivery
+  after successful payment. This causes issues with content-type handling
+  and browser behavior as the blob URL doesn't preserve the original
+  content metadata. **We plan to fix this in upcoming releases** by
+  either contributing to the x402 SDK to add a page reload option, or
+  implementing a custom paywall template that properly handles redirects
+  after payment verification.
 
 ## [Release 53] - 2025-10-06
 

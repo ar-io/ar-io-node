@@ -7,12 +7,12 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 import { Readable } from 'node:stream';
-import * as winston from 'winston';
 
 import { FilteredContiguousDataSource } from './filtered-contiguous-data-source.js';
 import { ContiguousDataSource, RequestAttributes } from '../types.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let mockDataSource: ContiguousDataSource;
 let filteredDataSource: FilteredContiguousDataSource;
 
@@ -30,7 +30,7 @@ const mockContiguousData = {
 };
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'FilteredContiguousDataSource' });
 });
 
 beforeEach(async () => {

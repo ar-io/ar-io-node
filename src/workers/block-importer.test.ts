@@ -26,10 +26,10 @@ import {
   moderationDbPath,
 } from '../../test/sqlite-helpers.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
-import * as winston from 'winston';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('BlockImporter', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let eventEmitter: EventEmitter;
   let blockImporter: BlockImporter;
   let chainSource: ArweaveChainSourceStub;
@@ -56,7 +56,7 @@ describe('BlockImporter', () => {
   };
 
   before(async () => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'BlockImporter' });
     eventEmitter = new EventEmitter();
     chainSource = new ArweaveChainSourceStub();
     db = new StandaloneSqliteDatabase({
