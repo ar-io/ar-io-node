@@ -67,7 +67,7 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
-// Default preferred chunk GET nodes (data-1 through data-12.arweave.xyz)
+// Default preferred chunk GET nodes (data-1 through data-17 and tip-1 through tip-5.arweave.xyz)
 const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-1.arweave.xyz:1984',
   'http://data-2.arweave.xyz:1984',
@@ -81,6 +81,16 @@ const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-10.arweave.xyz:1984',
   'http://data-11.arweave.xyz:1984',
   'http://data-12.arweave.xyz:1984',
+  'http://data-13.arweave.xyz:1984',
+  'http://data-14.arweave.xyz:1984',
+  'http://data-15.arweave.xyz:1984',
+  'http://data-16.arweave.xyz:1984',
+  'http://data-17.arweave.xyz:1984',
+  'http://tip-1.arweave.xyz:1984',
+  'http://tip-2.arweave.xyz:1984',
+  'http://tip-3.arweave.xyz:1984',
+  'http://tip-4.arweave.xyz:1984',
+  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred URLs for chunk GET requests (comma-separated URLs)
@@ -175,9 +185,45 @@ export const TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   '10000',
 );
 
+// GraphQL root TX lookup gateways (separate from data retrieval gateways)
+export const GRAPHQL_ROOT_TX_GATEWAYS_URLS = JSON.parse(
+  env.varOrDefault(
+    'GRAPHQL_ROOT_TX_GATEWAYS_URLS',
+    '{ "https://arweave-search.goldsky.com/graphql": 1 }',
+  ),
+) as Record<string, number>;
+
+// Validate GraphQL root TX gateway URLs and weights
+Object.entries(GRAPHQL_ROOT_TX_GATEWAYS_URLS).forEach(([url, weight]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in GRAPHQL_ROOT_TX_GATEWAYS_URLS: ${url}`);
+  }
+  if (typeof weight !== 'number' || weight <= 0) {
+    throw new Error(
+      `Invalid weight in GRAPHQL_ROOT_TX_GATEWAYS_URLS for ${url}: ${weight}`,
+    );
+  }
+});
+
+// GraphQL root TX lookup rate limiting
+export const GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '5',
+);
+export const GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '6', // 6 per minute = 1 per 10 seconds
+);
+export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo,graphql')
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -205,6 +251,20 @@ export const TURBO_REQUEST_RETRY_COUNT = +env.varOrDefault(
   'TURBO_REQUEST_RETRY_COUNT',
   '3',
 );
+
+// Turbo root TX lookup rate limiting
+export const TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '5',
+);
+export const TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL = +env.varOrDefault(
+  'TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+  '6', // 6 per minute = 1 per 10 seconds
+);
+export const TURBO_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'TURBO_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
 
 // Circuit breaker configuration for root TX index lookups
 // Support both old and new environment variable names for backward compatibility
@@ -478,9 +538,13 @@ export const STOP_HEIGHT = +env.varOrDefault('STOP_HEIGHT', 'Infinity');
 export const ENABLE_BACKGROUND_DATA_VERIFICATION =
   env.varOrDefault('ENABLE_BACKGROUND_DATA_VERIFICATION', 'true') === 'true';
 
-// Whether to fallback to legacy root traversal when attributes are incomplete
-export const ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK =
-  env.varOrDefault('ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK', 'true') === 'true';
+// Whether to enable data item root transaction search when attributes are incomplete
+export const ENABLE_DATA_ITEM_ROOT_TX_SEARCH =
+  env.varOrDefault('ENABLE_DATA_ITEM_ROOT_TX_SEARCH', 'true') === 'true';
+
+// Whether to allow data retrieval without offset information in offset-aware sources
+export const ENABLE_PASSTHROUGH_WITHOUT_OFFSETS =
+  env.varOrDefault('ENABLE_PASSTHROUGH_WITHOUT_OFFSETS', 'true') === 'true';
 
 export const BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS = +env.varOrDefault(
   'BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS',
@@ -1145,7 +1209,7 @@ export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
 
 export const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
   'RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET',
-  '10000',
+  '1000000',
 );
 
 export const RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
@@ -1155,7 +1219,7 @@ export const RATE_LIMITER_RESOURCE_REFILL_PER_SEC = +env.varOrDefault(
 
 export const RATE_LIMITER_IP_TOKENS_PER_BUCKET = +env.varOrDefault(
   'RATE_LIMITER_IP_TOKENS_PER_BUCKET',
-  '2000',
+  '100000',
 );
 
 export const RATE_LIMITER_IP_REFILL_PER_SEC = +env.varOrDefault(

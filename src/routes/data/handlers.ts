@@ -151,6 +151,22 @@ const setDataHeaders = ({
     res.header(headerNames.rootTransactionId, dataAttributes.rootTransactionId);
   }
 
+  // Set absolute root offset headers
+  if (dataAttributes?.rootDataItemOffset != null) {
+    res.header(
+      headerNames.rootDataItemOffset,
+      dataAttributes.rootDataItemOffset.toString(),
+    );
+  }
+
+  if (dataAttributes?.rootDataOffset != null) {
+    res.header(
+      headerNames.rootDataOffset,
+      dataAttributes.rootDataOffset.toString(),
+    );
+  }
+
+  // Set relative offset headers for backward compatibility
   if (dataAttributes?.rootParentOffset != null) {
     res.header(
       headerNames.dataItemRootParentOffset,

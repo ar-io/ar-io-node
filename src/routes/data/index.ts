@@ -17,7 +17,7 @@ import { createDataHandler, createRawDataHandler } from './handlers.js';
 // Used by ArNS Router
 export const dataHandler = createDataHandler({
   log,
-  dataAttributesSource: system.dataAttributesSource,
+  dataAttributesSource: system.dataAttributesStore,
   dataSource: system.onDemandContiguousDataSource,
   dataBlockListValidator: system.dataBlockListValidator,
   manifestPathResolver: system.manifestPathResolver,
@@ -30,7 +30,7 @@ dataRouter.get(
   RAW_DATA_PATH_REGEX,
   createRawDataHandler({
     log,
-    dataAttributesSource: system.dataAttributesSource,
+    dataAttributesSource: system.dataAttributesStore,
     dataSource: system.onDemandContiguousDataSource,
     dataBlockListValidator: system.dataBlockListValidator,
   }),

@@ -311,7 +311,17 @@ export class ArweavePeerManager {
   }
 
   /**
-   * Select weighted random peers for an operation
+   * Select peers for an operation
+   *
+   * Strategy by operation type:
+   * - getChunk/postChunk: deterministic ordering by weight (highest first)
+   *   Ensures preferred peers (weight 100) are always selected first,
+   *   providing predictable failover to lower-weighted discovered peers
+   * - chain: weighted random selection for load distribution
+   *
+   * @param category - The peer category/operation type
+   * @param count - Maximum number of peer URLs to return
+   * @returns Array of peer URLs, up to `count` length (may be fewer if not enough peers available)
    */
   selectPeers(category: ArweavePeerCategory, count: number): string[] {
     const log = this.log.child({ method: 'selectPeers', category });
@@ -324,6 +334,18 @@ export class ArweavePeerManager {
       return [];
     }
 
+    // Use deterministic weight-based ordering for chunk operations
+    // This ensures preferred peers (weight 100) are always selected first
+    // and provides predictable fallback order for resilience
+    if (category === 'getChunk' || category === 'postChunk') {
+      return peerList
+        .slice() // Create copy to avoid mutating original
+        .sort((a, b) => b.weight - a.weight) // Descending by weight
+        .slice(0, count) // Take top N
+        .map((peer) => peer.id);
+    }
+
+    // Use weighted random selection for chain operations
     return randomWeightedChoices<string>({
       table: peerList,
       count,
@@ -351,6 +373,24 @@ export class ArweavePeerManager {
     peerUrl: string,
     metrics?: ArweavePeerSuccessMetrics,
   ): void {
+    // Don't increment weights for preferred peers in chunk operations - keep them at initial weight (100)
+    if (
+      (category === 'getChunk' || category === 'postChunk') &&
+      this.isPreferredPeer(peerUrl)
+    ) {
+      if (metrics?.responseTimeMs !== undefined) {
+        this.log.silly(
+          'Peer success reported (preferred peer, weight preserved)',
+          {
+            category,
+            peerUrl,
+            responseTimeMs: metrics.responseTimeMs,
+          },
+        );
+      }
+      return;
+    }
+
     if (metrics?.responseTimeMs !== undefined) {
       this.log.silly('Peer success reported', {
         category,
@@ -377,6 +417,21 @@ export class ArweavePeerManager {
    * Report failed interaction with a peer
    */
   reportFailure(category: ArweavePeerCategory, peerUrl: string): void {
+    // Don't decrement weights for preferred peers in chunk operations - preserve operator configuration
+    if (
+      (category === 'getChunk' || category === 'postChunk') &&
+      this.isPreferredPeer(peerUrl)
+    ) {
+      this.log.silly(
+        'Peer failure reported (preferred peer, weight preserved)',
+        {
+          category,
+          peerUrl,
+        },
+      );
+      return;
+    }
+
     this.log.silly('Peer failure reported', {
       category,
       peerUrl,
@@ -683,6 +738,23 @@ export class ArweavePeerManager {
   }
 
   /**
+   * Check if a peer URL is a preferred peer for chunk operations.
+   *
+   * Checks both operator-configured GET and POST preferred peer lists
+   * (from PREFERRED_CHUNK_GET_NODES and PREFERRED_CHUNK_POST_NODES env vars).
+   * Preferred peers maintain a constant weight of 100 and are always prioritized.
+   *
+   * @param peerUrl - The peer URL to check
+   * @returns true if the peer is in either preferred GET or POST lists
+   */
+  private isPreferredPeer(peerUrl: string): boolean {
+    return (
+      this.resolvedChunkGetUrls.includes(peerUrl) ||
+      this.resolvedChunkPostUrls.includes(peerUrl)
+    );
+  }
+
+  /**
    * Select peers that have data for a specific offset
    */
   selectPeersForOffset(offset: number, count: number = 3): string[] {
@@ -841,12 +913,12 @@ export class ArweavePeerManager {
       // Update peer info (we already have the peer reference)
       peer.syncBuckets = buckets;
       peer.bucketsLastUpdated = Date.now();
-      log.debug('Updated sync buckets', { bucketCount: buckets.size });
+      log.silly('Updated sync buckets', { bucketCount: buckets.size });
 
       // Record successful update
       metrics.arweavePeerSyncBucketUpdateCounter.inc();
     } catch (error: any) {
-      log.debug('Failed to fetch sync buckets', { error: error.message });
+      log.silly('Failed to fetch sync buckets', { error: error.message });
 
       // Record error
       metrics.arweavePeerSyncBucketErrorCounter.inc();
@@ -870,7 +942,7 @@ export class ArweavePeerManager {
   private async parseETFSyncBuckets(data: ArrayBuffer): Promise<Set<number>> {
     try {
       const result = parseETFSyncBuckets(data);
-      this.log.debug('Parsed ETF sync buckets', {
+      this.log.silly('Parsed ETF sync buckets', {
         bucketSize: result.bucketSize,
         bucketCount: result.buckets.size,
       });

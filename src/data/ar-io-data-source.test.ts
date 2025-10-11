@@ -25,14 +25,14 @@ const nodeUrl = 'localNode.com';
 let requestAttributes: RequestAttributes;
 let mockedArIOInstance: AoARIORead;
 let mockedAxiosGet: any;
-let mockDataAttributesSource: ContiguousDataAttributesStore;
+let mockDataAttributesStore: ContiguousDataAttributesStore;
 
 before(async () => {
   log = createTestLogger({ suite: 'ArIODataSource' });
 });
 
 beforeEach(async () => {
-  mockDataAttributesSource = {
+  mockDataAttributesStore = {
     getDataAttributes: mock.fn(() => Promise.resolve(undefined)),
     setDataAttributes: mock.fn(() => Promise.resolve()),
   };
@@ -94,7 +94,7 @@ beforeEach(async () => {
   dataSource = new ArIODataSource({
     log,
     peerManager,
-    dataAttributesSource: mockDataAttributesSource,
+    dataAttributesStore: mockDataAttributesStore,
   });
 
   requestAttributes = { origin: 'node-url', hops: 0 };
@@ -478,7 +478,7 @@ describe('ArIODataSource', () => {
         const streamData = Readable.from(['valid data']);
 
         // Mock data attributes source to return expected hash
-        mockDataAttributesSource.getDataAttributes = mock.fn(() =>
+        mockDataAttributesStore.getDataAttributes = mock.fn(() =>
           Promise.resolve({
             hash: expectedHash,
             size: 10,
@@ -535,7 +535,7 @@ describe('ArIODataSource', () => {
         const streamData = Readable.from(['invalid data']);
 
         // Mock data attributes source to return expected hash
-        mockDataAttributesSource.getDataAttributes = mock.fn(() =>
+        mockDataAttributesStore.getDataAttributes = mock.fn(() =>
           Promise.resolve({
             hash: expectedHash,
             size: 10,

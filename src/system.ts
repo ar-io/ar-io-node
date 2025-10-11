@@ -42,6 +42,7 @@ import {
   CompositeRootTxIndex,
   GraphQLRootTxIndex,
   TurboRootTxIndex,
+  CachedTurboOffsets,
 } from './discovery/index.js';
 import { LRUCache } from 'lru-cache';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
@@ -54,7 +55,7 @@ import {
   DataBlockListValidator,
   NameBlockListValidator,
   BundleIndex,
-  DataItemRootTxIndex,
+  DataItemRootIndex,
   ChainIndex,
   ChainOffsetIndex,
   ContiguousDataIndex,
@@ -211,7 +212,7 @@ export const txOffsetSource = new CompositeTxOffsetSource({
   fallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
 });
 
-export const dataAttributesSource: ContiguousDataAttributesStore =
+export const dataAttributesStore: ContiguousDataAttributesStore =
   new CompositeDataAttributesSource({
     log,
     source: db,
@@ -225,16 +226,17 @@ const rootTxCache = new LRUCache<string, CachedParentBundle>({
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
 
+// Create separate cache for Turbo offsets
+const turboOffsetsCache = new LRUCache<string, CachedTurboOffsets>({
+  max: config.ROOT_TX_CACHE_MAX_SIZE,
+  ttl: config.ROOT_TX_CACHE_TTL_MS,
+});
+
 // Build indexes based on configuration
-const rootTxIndexes: DataItemRootTxIndex[] = [];
+const rootTxIndexes: DataItemRootIndex[] = [];
 
 for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
   switch (sourceName.toLowerCase()) {
-    case 'db':
-      // Database is always available and doesn't need cache
-      rootTxIndexes.push(db);
-      break;
-
     case 'turbo':
       rootTxIndexes.push(
         new TurboRootTxIndex({
@@ -242,23 +244,27 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
           turboEndpoint: config.TURBO_ENDPOINT,
           requestTimeoutMs: config.TURBO_REQUEST_TIMEOUT_MS,
           requestRetryCount: config.TURBO_REQUEST_RETRY_COUNT,
-          cache: rootTxCache,
+          cache: turboOffsetsCache,
         }),
       );
       break;
 
     case 'graphql':
-      if (Object.keys(config.TRUSTED_GATEWAYS_URLS).length > 0) {
+      if (Object.keys(config.GRAPHQL_ROOT_TX_GATEWAYS_URLS).length > 0) {
         rootTxIndexes.push(
           new GraphQLRootTxIndex({
             log,
-            trustedGatewaysUrls: config.TRUSTED_GATEWAYS_URLS,
+            trustedGatewaysUrls: config.GRAPHQL_ROOT_TX_GATEWAYS_URLS,
             cache: rootTxCache,
           }),
         );
       } else {
-        log.warn('GraphQL source configured but no trusted gateways defined');
+        log.warn('GraphQL source configured but no GraphQL gateways defined');
       }
+      break;
+
+    case 'db':
+      rootTxIndexes.push(db as DataItemRootIndex);
       break;
 
     default:
@@ -268,10 +274,11 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
   }
 }
 
-// Fallback if no valid sources configured
+// Validate that at least one source is configured
 if (rootTxIndexes.length === 0) {
-  log.warn('No valid root TX sources configured, using default (db only)');
-  rootTxIndexes.push(db);
+  log.warn(
+    'No valid root TX sources configured - root resolution will be unavailable',
+  );
 }
 
 // Create composite root TX index with circuit breakers
@@ -542,7 +549,7 @@ export const arIOPeerManager = new ArIOPeerManager({
 export const arIODataSource = new ArIODataSource({
   log,
   peerManager: arIOPeerManager,
-  dataAttributesSource,
+  dataAttributesStore,
 });
 
 export const arIOChunkSource = new ArIOChunkSource({
@@ -581,22 +588,28 @@ const baseTxChunksDataSource = new TxChunksDataSource({
   chunkSource,
 });
 
-// ANS-104 offset source for parsing bundle headers
-const ans104OffsetSource = new Ans104OffsetSource({
+// ANS-104 offset source for parsing bundle headers from chunks
+const ans104ChunksOffsetSource = new Ans104OffsetSource({
   log,
   dataSource: baseTxChunksDataSource,
 });
 
+// ANS-104 offset source for parsing bundle headers from trusted gateways
+const ans104GatewaysOffsetSource = new Ans104OffsetSource({
+  log,
+  dataSource: baseGatewaysDataSource,
+});
+
 // Offset-aware version of gateways data source that uses cached upstream offsets
-// but does not perform expensive offset searching if they're not available
 // Uses unfiltered base source to avoid blocking legitimate chunk retrieval
 const offsetAwareGatewaysDataSource = new RootParentDataSource({
   log,
   dataSource: baseGatewaysDataSource,
-  dataAttributesSource,
+  dataAttributesStore,
   dataItemRootTxIndex: rootTxIndex,
-  ans104OffsetSource,
-  fallbackToLegacyTraversal: false, // No expensive offset searching
+  ans104OffsetSource: ans104GatewaysOffsetSource,
+  fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
+  allowPassthroughWithoutOffsets: config.ENABLE_PASSTHROUGH_WITHOUT_OFFSETS,
 });
 
 // Regular chunks data source (no data item resolution)
@@ -606,10 +619,11 @@ const txChunksDataSource: ContiguousDataSource = baseTxChunksDataSource;
 const txChunksOffsetAwareSource = new RootParentDataSource({
   log,
   dataSource: baseTxChunksDataSource,
-  dataAttributesSource,
+  dataAttributesStore,
   dataItemRootTxIndex: rootTxIndex,
-  ans104OffsetSource,
-  fallbackToLegacyTraversal: config.ENABLE_LEGACY_ROOT_TRAVERSAL_FALLBACK,
+  ans104OffsetSource: ans104ChunksOffsetSource,
+  fallbackToLegacyTraversal: config.ENABLE_DATA_ITEM_ROOT_TX_SEARCH,
+  allowPassthroughWithoutOffsets: config.ENABLE_PASSTHROUGH_WITHOUT_OFFSETS,
 });
 
 const s3DataSource =
@@ -655,7 +669,7 @@ const turboDynamoDBDataSource =
         region: config.AWS_DYNAMODB_TURBO_REGION,
         endpoint: config.AWS_DYNAMODB_TURBO_ENDPOINT,
         assumeRoleArn: config.AWS_DYNAMODB_TURBO_ASSUME_ROLE_ARN,
-        dataAttributesSource,
+        dataAttributesStore,
       })
     : undefined;
 
@@ -769,7 +783,7 @@ export const onDemandContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
-  dataAttributesSource,
+  dataAttributesStore,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
 });
@@ -783,7 +797,7 @@ export const backgroundContiguousDataSource = new ReadThroughDataCache({
   metadataStore: contiguousMetadataStore,
   dataStore: contiguousDataStore,
   contiguousDataIndex,
-  dataAttributesSource,
+  dataAttributesStore,
   dataContentAttributeImporter,
   skipCache: config.SKIP_DATA_CACHE,
 });

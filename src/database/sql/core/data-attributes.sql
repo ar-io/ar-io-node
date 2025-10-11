@@ -52,9 +52,34 @@ FROM (
 LIMIT 1;
 
 -- selectRootTxId
-SELECT COALESCE(
-  (SELECT root_transaction_id FROM bundles.stable_data_items WHERE id = @id),
-  (SELECT root_transaction_id FROM bundles.new_data_items WHERE id = @id),
-  (SELECT id FROM stable_transactions WHERE id = @id),
-  (SELECT id FROM new_transactions WHERE id = @id)
-) AS root_transaction_id;
+SELECT *
+FROM (
+  SELECT
+    root_transaction_id,
+    content_type,
+    data_size
+  FROM bundles.stable_data_items
+  WHERE id = @id
+  UNION
+  SELECT
+    root_transaction_id,
+    content_type,
+    data_size
+  FROM bundles.new_data_items
+  WHERE id = @id
+  UNION
+  SELECT
+    id AS root_transaction_id,
+    NULL AS content_type,
+    NULL AS data_size
+  FROM stable_transactions
+  WHERE id = @id
+  UNION
+  SELECT
+    id AS root_transaction_id,
+    NULL AS content_type,
+    NULL AS data_size
+  FROM new_transactions
+  WHERE id = @id
+)
+LIMIT 1;

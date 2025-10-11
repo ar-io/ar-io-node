@@ -152,7 +152,7 @@ function idToBinary(dataItemId: TransactionId): Uint8Array {
 export class TurboDynamoDbDataSource implements ContiguousDataSource {
   private dynamoClient: DynamoDBClient;
   private log: winston.Logger;
-  private dataAttributesSource: ContiguousDataAttributesStore;
+  private dataAttributesStore: ContiguousDataAttributesStore;
   private circuitBreakerWrapper: {
     fire<T>(task: DynamoTask<T>): Promise<T>;
     breaker: CircuitBreaker<[DynamoTask<unknown>], unknown>;
@@ -165,7 +165,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     credentials,
     assumeRoleArn,
     log,
-    dataAttributesSource,
+    dataAttributesStore,
   }: {
     dynamoClient?: DynamoDBClient;
     endpoint?: string;
@@ -177,10 +177,10 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
     };
     assumeRoleArn?: string;
     log: winston.Logger;
-    dataAttributesSource: ContiguousDataAttributesStore;
+    dataAttributesStore: ContiguousDataAttributesStore;
   }) {
     this.log = log.child({ class: this.constructor.name });
-    this.dataAttributesSource = dataAttributesSource;
+    this.dataAttributesStore = dataAttributesStore;
 
     // If a client is provided, use it
     if (dynamoClient) {
@@ -279,7 +279,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
             offset: offsetsInfo.rootParentInfo.startOffsetInRootTx,
           };
 
-          this.dataAttributesSource
+          this.dataAttributesStore
             .setDataAttributes(id, attributes)
             .catch((error) => {
               this.log.warn(
@@ -342,7 +342,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
         };
 
-        this.dataAttributesSource
+        this.dataAttributesStore
           .setDataAttributes(id, attributes)
           .catch((error) => {
             this.log.warn('Failed to cache attributes from DynamoDB offsets', {
@@ -426,7 +426,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
 
         // Cache attributes discovered from raw data item
         // Not awaiting to avoid blocking the response
-        this.dataAttributesSource
+        this.dataAttributesStore
           .setDataAttributes(id, {
             size: dataItem.buffer.length - dataItem.info.payloadDataStart,
             dataOffset: dataItem.info.payloadDataStart,

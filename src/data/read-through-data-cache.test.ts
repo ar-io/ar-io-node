@@ -31,7 +31,7 @@ describe('ReadThroughDataCache', function () {
   let mockContiguousDataSource: ContiguousDataSource;
   let mockContiguousDataStore: ContiguousDataStore;
   let mockContiguousDataIndex: ContiguousDataIndex;
-  let mockDataAttributesSource: DataAttributesSource;
+  let mockDataAttributesStore: DataAttributesSource;
   let mockDataContentAttributeImporter: DataContentAttributeImporter;
   let readThroughDataCache: ReadThroughDataCache;
   let requestAttributes: RequestAttributes;
@@ -121,7 +121,7 @@ describe('ReadThroughDataCache', function () {
       },
     } as unknown as ContiguousDataIndex;
 
-    mockDataAttributesSource = {
+    mockDataAttributesStore = {
       getDataAttributes: async (id: string) => {
         if (id === 'knownId') {
           return {
@@ -153,7 +153,7 @@ describe('ReadThroughDataCache', function () {
       dataStore: mockContiguousDataStore,
       metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
       contiguousDataIndex: mockContiguousDataIndex,
-      dataAttributesSource: mockDataAttributesSource,
+      dataAttributesStore: mockDataAttributesStore,
       dataContentAttributeImporter: mockDataContentAttributeImporter,
     });
 
@@ -250,7 +250,7 @@ describe('ReadThroughDataCache', function () {
   describe('getData', function () {
     it('should fetch cached data successfully', async function () {
       let calledWithArgument: string;
-      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
         return Promise.resolve({
           hash: 'test-hash',
           size: 100,
@@ -314,7 +314,7 @@ describe('ReadThroughDataCache', function () {
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore
       let calledWithArgument: string;
-      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
         return Promise.resolve({
           hash: 'test-hash',
           size: 100,
@@ -485,7 +485,7 @@ describe('ReadThroughDataCache', function () {
 
     it('should fetch cached data successfully with region', async function () {
       const region = { offset: 10, size: 50 };
-      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
         return Promise.resolve({
           hash: 'test-hash',
           size: 100,
@@ -646,7 +646,7 @@ describe('ReadThroughDataCache', function () {
         dataStore: mockContiguousDataStore,
         metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
         contiguousDataIndex: mockContiguousDataIndex,
-        dataAttributesSource: mockDataAttributesSource,
+        dataAttributesStore: mockDataAttributesStore,
         dataContentAttributeImporter: mockDataContentAttributeImporter,
         skipCache: true,
       });
@@ -700,13 +700,13 @@ describe('ReadThroughDataCache', function () {
         dataStore: mockContiguousDataStore,
         metadataStore: makeContiguousMetadataStore({ log, type: 'node' }),
         contiguousDataIndex: mockContiguousDataIndex,
-        dataAttributesSource: mockDataAttributesSource,
+        dataAttributesStore: mockDataAttributesStore,
         dataContentAttributeImporter: mockDataContentAttributeImporter,
         skipCache: true,
       });
 
       // Mock data attributes to ensure we would normally cache this data
-      mock.method(mockDataAttributesSource, 'getDataAttributes', () => {
+      mock.method(mockDataAttributesStore, 'getDataAttributes', () => {
         return Promise.resolve({
           hash: 'test-hash',
           size: 100,

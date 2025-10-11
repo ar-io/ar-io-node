@@ -1,6 +1,7 @@
 {
   "name": "ar-io-node",
   "description": "The AR.IO gateway core service",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "main": "./dist/app.js",
   "private": true,
@@ -46,6 +47,7 @@
     "ioredis": "^5.8.0",
     "is-ip": "^5.0.1",
     "json-canonicalize": "^1.0.6",
+    "limiter": "^3.0.0",
     "lmdb": "^2.9.4",
     "lru-cache": "^11.2.2",
     "memoizee": "^0.4.17",
@@ -75,7 +77,9 @@
   },
   "resolutions": {
     "secp256k1": "5.0.1",
-    "elliptic": "6.6.1"
+    "elliptic": "6.6.1",
+    "ws": "7.5.10",
+    "semver": "7.6.3"
   },
   "devDependencies": {
     "@aws-lite/s3-types": "^0.2.6",

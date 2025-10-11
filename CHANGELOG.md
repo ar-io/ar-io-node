@@ -8,9 +8,148 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Expanded default preferred chunk GET node pool from 12 to 22 nodes,
+  adding data-13 through data-17 (5 additional data nodes) and tip-1
+  through tip-5 (5 tip nodes) for improved redundancy and load
+  distribution across the Arweave network.
+- Added GraphQL as third fallback option in `ROOT_TX_LOOKUP_ORDER` (after
+  db and turbo) to prevent lookup failures when Turbo's circuit breaker
+  is open, enabling more resilient root transaction discovery.
+- Added deterministic weight-based peer selection for chunk operations
+  (both GET and POST). Peers are now sorted by weight in descending order
+  and top N selected, ensuring preferred peers (weight 100) are always
+  tried first instead of probabilistic selection.
+- Added preferred peer weight preservation for chunk operations to prevent
+  weight degradation for operator-configured preferred peers during
+  temporary failures. Preferred peers maintain their initial weight (100)
+  regardless of success/failure, honoring operator configuration while
+  allowing discovered peers to adapt based on performance.
+
 ### Changed
 
+- **Observer**: Enabled offset observation enforcement by default.
+  `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED` now defaults to `true` instead
+  of `false`. Gateway assessments will fail if offset validation fails,
+  strengthening network reliability requirements. Operators can opt-out by
+  explicitly setting `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=false`.
+- Reduced logging verbosity by moving DNS resolution and sync bucket
+  operational logs from debug/info to silly level. DNS resolution messages
+  ('Resolving hostname', 'Resolved IPv4/IPv6 addresses') and sync bucket
+  updates ('Parsed ETF sync buckets', 'Updated sync buckets') now use
+  silly level, while completion and peer selection messages remain at
+  debug level for visibility.
+
 ### Fixed
+
+- Fixed preferred peer weight preservation to only apply to chunk
+  operations (GET/POST) instead of all operation categories. Previously,
+  preferred chunk peers maintained constant weight across chain, getChunk,
+  and postChunk operations. Now preferred chunk peers can undergo normal
+  warming/cooling when used for chain operations, preventing indefinite
+  selection of peers that perform poorly for chain operations while still
+  maintaining constant weight for chunk operations.
+- Fixed ANS-104 data item header parsing for Ethereum signatures (type 3)
+  by using correct 65-byte uncompressed public key length instead of
+  20-byte address length. This resolves "Invalid buffer" errors when
+  parsing Ethereum-signed data items. Also updated
+  `MAX_DATA_ITEM_HEADER_SIZE` from 6228 to 8257 bytes to account for
+  MultiAptos signature type (largest supported), and replaced custom
+  signature/owner length methods with `getSignatureMeta()` from arbundles
+  library for consistency.
+- Fixed root TX discovery to use non-blocking rate limiting instead of
+  blocking when rate limits are reached. Services now use
+  `tryRemoveTokens()` and skip rate-limited gateways/sources immediately
+  rather than waiting indefinitely, preventing request blocking and
+  improving responsiveness. Also fixed GraphQL service to return
+  `dataSize` instead of incorrect `size` field.
+
+## [Release 53] - 2025-10-06
+
+This is an optional release that introduces root transaction offset tracking
+for nested bundles and observer performance improvements. The release enables
+more efficient data retrieval through comprehensive offset tracking with Turbo
+and GraphQL integration, while improving observer reliability with increased
+chunk validation success rates.
+
+### Added
+
+- **Root Transaction and Offset Tracking**: Comprehensive offset tracking
+  system for nested ANS-104 bundles:
+  - Turbo `/offsets` endpoint integration for accurate root transaction
+    discovery and offset calculations
+  - Handles multi-level nested bundles with cumulative offset tracking
+  - Cycle detection and maximum nesting depth protection (10 levels)
+  - Database persistence of root transaction IDs and absolute offset values
+- **GraphQL Root TX Index**: Dedicated GraphQL endpoint configuration for root
+  transaction lookups:
+  - `GRAPHQL_ROOT_TX_GATEWAYS_URLS`: JSON object mapping GraphQL endpoints to
+    weights (default: `{"https://arweave-search.goldsky.com/graphql": 1}`)
+  - Parent chain traversal with metadata extraction (content type, size)
+  - Fallback mechanism when Turbo is unavailable
+  - Configurable lookup order via `ROOT_TX_LOOKUP_ORDER` (default: "db,turbo")
+- **Database Migration**: Added offset tracking columns to
+  `contiguous_data_ids` table:
+  - `root_transaction_id`: Top-level Arweave transaction containing the data
+  - `root_data_item_offset`: Absolute position where data item headers begin in
+    root bundle
+  - `root_data_offset`: Absolute position where data payload begins in root
+    bundle
+- **HTTP Headers**: New headers exposing absolute root offset information:
+  - `X-AR-IO-Root-Data-Item-Offset`: Enables direct byte-range requests to data
+    item headers
+  - `X-AR-IO-Root-Data-Offset`: Enables direct byte-range requests to data
+    payloads
+- **Outbound Rate Limiting for External APIs**: Token bucket rate limiting for
+  outbound calls to Turbo and GraphQL services (separate from the Redis-based
+  inbound rate limiter added in Release 52):
+  - Turbo API: Configurable via `TURBO_ROOT_TX_RATE_LIMIT_BURST_SIZE` (default: 5),
+    `TURBO_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL` (default: 6),
+    `TURBO_ROOT_TX_RATE_LIMIT_INTERVAL` (default: "minute")
+  - GraphQL API: Configurable via `GRAPHQL_ROOT_TX_RATE_LIMIT_BURST_SIZE` (default: 5),
+    `GRAPHQL_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL` (default: 6),
+    `GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL` (default: "minute")
+  - Prevents excessive API usage and respects external service limits (defaults
+    to 6 requests per minute = 1 per 10 seconds)
+- **Configuration Options**:
+  - `ENABLE_DATA_ITEM_ROOT_TX_SEARCH`: Enable/disable root transaction search
+    for data items in offset-aware sources (default: true)
+  - `ENABLE_PASSTHROUGH_WITHOUT_OFFSETS`: Control whether offset-aware sources
+    allow data retrieval without offset information (default: true)
+  - Dedicated rate limiting configuration for Turbo and GraphQL root TX lookups
+  - Separate GraphQL gateway configuration for root lookups vs data retrieval
+- **Documentation and Testing**:
+  - Comprehensive bundle offsets documentation in
+    `docs/drafts/bundle-offsets.md`
+  - Rate limiting behavior tests validating token accumulation and request
+    delays
+  - Enhanced test coverage for offset tracking and nested bundle scenarios
+
+### Changed
+
+- **Observer**: Increased `OFFSET_SAMPLE_COUNT` default from 3 to 4 to improve
+  chunk validation success rate with early stopping
+- Increased rate limiter defaults to accommodate larger response payloads:
+  - `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET`: 10,000 → 1,000,000 tokens (~10 MB → ~976 MB bucket capacity)
+  - `RATE_LIMITER_IP_TOKENS_PER_BUCKET`: 2,000 → 100,000 tokens (~2 MB → ~98 MB bucket capacity)
+  - Resource refill rate remains 100 tokens/sec (~98 KB/sec)
+  - IP refill rate remains 20 tokens/sec (~20 KB/sec)
+  - Note: 1 token = 1 KB of response data, minimum 1 token per request
+  - Rate limiter remains disabled by default (`ENABLE_RATE_LIMITER=false`)
+- **Performance Optimization**: RootParentDataSource now uses pre-computed root
+  offsets when available:
+  - Skip bundle traversal entirely when offsets are cached in database
+  - Direct offset-based data retrieval without parent chain traversal
+  - Use `rootDataOffset` to skip headers when fetching data payloads
+  - Significantly reduces latency for nested bundle data retrieval
+
+### Fixed
+
+- **Security**: Resolved transitive dependency vulnerabilities by adding yarn
+  resolutions:
+  - `ws@7.5.10`: Fixed DoS vulnerability when handling requests with many HTTP
+    headers (CVE in ws <7.5.10)
+  - `semver@7.6.3`: Fixed Regular Expression Denial of Service (ReDoS)
+    vulnerability (CVE in semver <7.5.2)
 
 ## [Release 52] - 2025-09-29
 

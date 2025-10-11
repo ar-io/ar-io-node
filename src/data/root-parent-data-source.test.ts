@@ -14,14 +14,14 @@ import { Ans104OffsetSource } from './ans104-offset-source.js';
 import {
   ContiguousDataSource,
   ContiguousDataAttributesStore,
-  DataItemRootTxIndex,
+  DataItemRootIndex,
 } from '../types.js';
 
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
   let dataSource: ContiguousDataSource;
-  let dataAttributesSource: ContiguousDataAttributesStore;
-  let dataItemRootTxIndex: DataItemRootTxIndex;
+  let dataAttributesStore: ContiguousDataAttributesStore;
+  let dataItemRootTxIndex: DataItemRootIndex;
   let ans104OffsetSource: Ans104OffsetSource;
   let rootParentDataSource: RootParentDataSource;
 
@@ -32,12 +32,12 @@ describe('RootParentDataSource', () => {
     dataSource = {
       getData: mock.fn(),
     };
-    dataAttributesSource = {
+    dataAttributesStore = {
       getDataAttributes: mock.fn(),
       setDataAttributes: mock.fn(),
     };
     dataItemRootTxIndex = {
-      getRootTxId: mock.fn(),
+      getRootTx: mock.fn(),
     };
     ans104OffsetSource = {
       getDataItemOffset: mock.fn(),
@@ -45,7 +45,7 @@ describe('RootParentDataSource', () => {
     rootParentDataSource = new RootParentDataSource({
       log,
       dataSource,
-      dataAttributesSource,
+      dataAttributesStore: dataAttributesStore,
       dataItemRootTxIndex,
       ans104OffsetSource,
     });
@@ -62,18 +62,24 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('test data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
       // Mock root TX lookup
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
 
       // Mock offset parsing
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Mock data fetch
@@ -95,11 +101,11 @@ describe('RootParentDataSource', () => {
 
       // Verify call order
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls[0].arguments[0],
+        (dataItemRootTxIndex.getRootTx as any).mock.calls[0].arguments[0],
         dataItemId,
       );
 
@@ -130,16 +136,22 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('partial data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Request a region within the data item
@@ -174,16 +186,22 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('truncated')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Request a region that extends beyond the data item
@@ -216,11 +234,11 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('tx data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
         async () => undefined,
       );
 
@@ -238,13 +256,13 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.verified, true);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have called getRootTxId
+      // Should have called getRootTx
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls[0].arguments[0],
+        (dataItemRootTxIndex.getRootTx as any).mock.calls[0].arguments[0],
         txId,
       );
 
@@ -267,13 +285,13 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('bundle data')]);
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      // When getRootTxId returns the same ID, it means it's already a root transaction
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => txId,
+      // When getRootTx returns the same ID, it means it's already a root transaction
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: txId }),
       );
 
       (dataSource.getData as any).mock.mockImplementation(async () => ({
@@ -290,9 +308,9 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(result.verified, true);
       assert.strictEqual(result.stream, dataStream);
 
-      // Should have called getRootTxId
+      // Should have called getRootTx
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
 
@@ -315,12 +333,12 @@ describe('RootParentDataSource', () => {
       const rootTxId = 'root-tx-id';
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
@@ -337,7 +355,7 @@ describe('RootParentDataSource', () => {
       );
 
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -352,16 +370,22 @@ describe('RootParentDataSource', () => {
       const rootTxId = 'root-tx-id';
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       // Request a region that starts beyond the data item
@@ -380,7 +404,7 @@ describe('RootParentDataSource', () => {
       );
 
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -396,16 +420,22 @@ describe('RootParentDataSource', () => {
       const fetchError = new Error('Failed to fetch data');
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       (dataSource.getData as any).mock.mockImplementation(async () => {
@@ -417,7 +447,7 @@ describe('RootParentDataSource', () => {
       }, fetchError);
 
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -438,16 +468,22 @@ describe('RootParentDataSource', () => {
       };
 
       // Mock attributes to return null (fallback to legacy)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
 
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
 
       (dataSource.getData as any).mock.mockImplementation(async () => ({
@@ -482,7 +518,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('test data')]);
 
       // Mock attributes for child (has parent)
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === dataItemId) {
             return {
@@ -518,21 +554,21 @@ describe('RootParentDataSource', () => {
 
       // Verify we called getDataAttributes for the original item + both items during traversal
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         3,
       );
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls[0]
+        (dataAttributesStore.getDataAttributes as any).mock.calls[0]
           .arguments[0],
         dataItemId,
       );
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls[1]
+        (dataAttributesStore.getDataAttributes as any).mock.calls[1]
           .arguments[0],
         dataItemId,
       );
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls[2]
+        (dataAttributesStore.getDataAttributes as any).mock.calls[2]
           .arguments[0],
         parentId,
       );
@@ -545,7 +581,7 @@ describe('RootParentDataSource', () => {
 
       // Should not use legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         0,
       );
       assert.strictEqual(
@@ -561,7 +597,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('nested data')]);
 
       // Mock attributes for three-level chain
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === dataItemId) {
             return {
@@ -609,7 +645,7 @@ describe('RootParentDataSource', () => {
 
       // Should not use legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         0,
       );
     });
@@ -619,7 +655,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('root data')]);
 
       // Mock attributes for root that references itself
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === rootId) {
             return {
@@ -650,12 +686,69 @@ describe('RootParentDataSource', () => {
       assert.strictEqual(dataCall.region, undefined);
     });
 
+    it('should use pre-computed root offsets when available', async () => {
+      const dataItemId = 'test-item';
+      const rootTxId = 'root-bundle-id';
+      const dataStream = Readable.from([Buffer.from('test data')]);
+
+      // Mock attributes with pre-computed root offsets
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 500,
+              offset: 100,
+              parentId: 'parent-id',
+              contentType: 'text/plain',
+              // Pre-computed absolute offsets
+              rootTransactionId: rootTxId,
+              rootDataItemOffset: 1234,
+              rootDataOffset: 1334,
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: false,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({ id: dataItemId });
+
+      assert.strictEqual(result.size, 500);
+      assert.strictEqual(result.stream, dataStream);
+
+      // Should have called getDataAttributes twice:
+      // 1. getData for content type
+      // 2. traverseToRootUsingAttributes early check (finds pre-computed offsets)
+      assert.strictEqual(
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
+        2,
+      );
+
+      // Should NOT have traversed parents (optimization worked!)
+      // Only the initial attributes fetch, no parent chain traversal
+
+      // Should have fetched from root using pre-computed offsets
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, rootTxId);
+      assert.deepStrictEqual(dataCall.region, {
+        offset: 1334, // rootDataOffset (where payload starts, skipping headers)
+        size: 500, // payload size
+      });
+    });
+
     it('should detect cycles in parent chain', async () => {
       const itemA = 'item-a';
       const itemB = 'item-b';
 
       // Create circular reference: A -> B -> A
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === itemA) {
             return {
@@ -676,11 +769,17 @@ describe('RootParentDataSource', () => {
       );
 
       // Should fallback to legacy when cycle detected
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => 'fallback-root',
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId: 'fallback-root' }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 1000, size: 500 }),
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500,
+          contentType: 'text/plain',
+        }),
       );
       (dataSource.getData as any).mock.mockImplementation(async () => ({
         stream: Readable.from([Buffer.from('fallback data')]),
@@ -695,15 +794,19 @@ describe('RootParentDataSource', () => {
       // Should succeed using fallback
       assert.strictEqual(result.size, 500);
 
-      // Should have attempted attributes lookup (once at start + once for each item in cycle)
+      // Should have attempted attributes lookup:
+      // 1. getData for content type
+      // 2. traverseToRootUsingAttributes initial check
+      // 3. Traverse to itemB
+      // 4. Traverse back to itemA (cycle detected on next iteration)
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
-        3,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
+        4,
       );
 
       // Should have fallen back to legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -718,16 +821,21 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('fallback data')]);
 
       // Mock missing attributes
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
       // Mock legacy methods
-      (dataItemRootTxIndex.getRootTxId as any).mock.mockImplementation(
-        async () => rootTxId,
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
       );
       (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
-        async () => ({ offset: 2000, size: 800 }),
+        async () => ({
+          itemOffset: 1900,
+          dataOffset: 2000,
+          itemSize: 900,
+          dataSize: 800,
+        }),
       );
       (dataSource.getData as any).mock.mockImplementation(async () => ({
         stream: dataStream,
@@ -744,13 +852,13 @@ describe('RootParentDataSource', () => {
 
       // Should have tried attributes (once at start + once during traversal attempt)
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         2,
       );
 
       // Should have fallen back to legacy
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         1,
       );
       assert.strictEqual(
@@ -766,14 +874,14 @@ describe('RootParentDataSource', () => {
       const noFallbackSource = new RootParentDataSource({
         log,
         dataSource,
-        dataAttributesSource,
+        dataAttributesStore: dataAttributesStore,
         dataItemRootTxIndex,
         ans104OffsetSource,
         fallbackToLegacyTraversal: false,
       });
 
       // Mock missing attributes
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async () => null,
       );
 
@@ -785,13 +893,13 @@ describe('RootParentDataSource', () => {
 
       // Should have tried attributes (once at start + once during traversal attempt)
       assert.strictEqual(
-        (dataAttributesSource.getDataAttributes as any).mock.calls.length,
+        (dataAttributesStore.getDataAttributes as any).mock.calls.length,
         2,
       );
 
       // Should NOT have tried legacy methods
       assert.strictEqual(
-        (dataItemRootTxIndex.getRootTxId as any).mock.calls.length,
+        (dataItemRootTxIndex.getRootTx as any).mock.calls.length,
         0,
       );
       assert.strictEqual(
@@ -806,7 +914,7 @@ describe('RootParentDataSource', () => {
       const dataStream = Readable.from([Buffer.from('partial data')]);
 
       // Mock attributes
-      (dataAttributesSource.getDataAttributes as any).mock.mockImplementation(
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
         async (id: string) => {
           if (id === dataItemId) {
             return {

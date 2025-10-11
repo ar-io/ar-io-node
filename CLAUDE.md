@@ -15,6 +15,13 @@
 
 - Releases are tagged with rN in git where N is a monotonically increasing
   integer value.
+- Release automation scripts are in `tools/`:
+  - `release-status` - Check if repo is ready for release
+  - `prepare-release` - Automate version updates and changelog
+  - `finalize-release` - Update docker images with commit SHAs after builds
+  - `test-release` - Test all docker compose profiles
+  - `post-release` - Cleanup and prepare for next development cycle
+  - See `tools/README.md` for detailed documentation of each script
 
 ## Database Migrations
 

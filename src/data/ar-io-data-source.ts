@@ -39,19 +39,19 @@ export class ArIODataSource implements ContiguousDataSource {
   private maxHopsAllowed: number;
   private requestTimeoutMs: number;
   private peerManager: ArIOPeerManager;
-  private dataAttributesSource: ContiguousDataAttributesStore;
+  private dataAttributesStore: ContiguousDataAttributesStore;
   peers: Record<string, string> = {};
 
   constructor({
     log,
     peerManager,
-    dataAttributesSource,
+    dataAttributesStore,
     maxHopsAllowed = MAX_DATA_HOPS,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   }: {
     log: winston.Logger;
     peerManager: ArIOPeerManager;
-    dataAttributesSource: ContiguousDataAttributesStore;
+    dataAttributesStore: ContiguousDataAttributesStore;
     maxHopsAllowed?: number;
     requestTimeoutMs?: number;
   }) {
@@ -59,7 +59,7 @@ export class ArIODataSource implements ContiguousDataSource {
     this.maxHopsAllowed = maxHopsAllowed;
     this.requestTimeoutMs = requestTimeoutMs;
     this.peerManager = peerManager;
-    this.dataAttributesSource = dataAttributesSource;
+    this.dataAttributesStore = dataAttributesStore;
     this.peers = peerManager.getPeers();
   }
 
@@ -199,7 +199,7 @@ export class ArIODataSource implements ContiguousDataSource {
 
       // Get data attributes if available
       const dataAttributes =
-        await this.dataAttributesSource.getDataAttributes(id);
+        await this.dataAttributesStore.getDataAttributes(id);
 
       for (let i = 0; i < randomPeers.length; i++) {
         const currentPeer = randomPeers[i];
