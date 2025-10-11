@@ -90,6 +90,7 @@ async function getOrCreateBucketsAndConsume(
   cacheTtlSeconds: number,
   predictedTokens: number,
   x402PaymentProvided = false,
+  contentLengthForTopOff = 0,
 ): Promise<{
   success: boolean;
   resourceBucket?: TokenBucket;
@@ -123,6 +124,7 @@ async function getOrCreateBucketsAndConsume(
       x402PaymentProvided,
       config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
       config.X_402_RATE_LIMIT_REFILL_MULTIPLIER,
+      contentLengthForTopOff,
     );
 
     span.setAttributes({
@@ -153,6 +155,7 @@ async function getOrCreateBucketsAndConsume(
       x402PaymentProvided,
       config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
       config.X_402_RATE_LIMIT_REFILL_MULTIPLIER,
+      contentLengthForTopOff,
     );
 
     span.setAttributes({
@@ -323,6 +326,11 @@ export function rateLimiterMiddleware(options?: {
       rateLimitSpan.addEvent(
         'Getting both buckets and consuming predicted tokens',
       );
+
+      // Get contentLength from x402Payment if available
+      const contentLengthForTopOff =
+        (req as any).x402Payment?.contentLength ?? 0;
+
       const bucketsResult = await getOrCreateBucketsAndConsume(
         redisClient,
         resourceKey,
@@ -335,6 +343,7 @@ export function rateLimiterMiddleware(options?: {
         cacheTtlSeconds,
         predictedTokens,
         x402PaymentProvided,
+        contentLengthForTopOff,
       );
 
       if (!bucketsResult.success) {

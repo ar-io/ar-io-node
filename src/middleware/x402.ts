@@ -277,6 +277,7 @@ export const x402DataEgressMiddleware = ({
         settled: false,
         paymentRequirements,
         price,
+        contentLength,
       };
 
       // Check for existing payment header
@@ -436,6 +437,7 @@ export const x402DataEgressMiddleware = ({
         paymentPayload,
         paymentRequirements,
         price,
+        contentLength,
       };
 
       span.setAttribute('x402.payment_provided', true);
