@@ -119,10 +119,12 @@ export const calculateX402PricePerByteEgress = (
   contentLength: number,
 ): string => {
   const priceInUSD = contentLength * config.X_402_USDC_PER_BYTE_PRICE;
-  const formattedPrice = Math.min(
+  const clampedPrice = Math.min(
     Math.max(priceInUSD, config.X_402_USDC_DATA_EGRESS_MIN_PRICE),
     config.X_402_USDC_DATA_EGRESS_MAX_PRICE,
   );
+  // Format to 3 decimal places for consistent, readable pricing
+  const formattedPrice = clampedPrice.toFixed(3);
   return `$${formattedPrice}`;
 };
 

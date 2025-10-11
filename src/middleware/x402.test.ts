@@ -6,21 +6,13 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import { calculateX402PricePerByteEgress } from './x402.js';
 
 describe('x402 pricing utility functions', () => {
-  // Define the function inline to avoid import issues
-  const calculateX402PricePerByteEgress = (contentLength: number): string => {
-    const X_402_USDC_PER_BYTE_PRICE = 0.0000000001; // $0.0000000001 per byte = $0.10 per GB
-
-    // Calculate price based on per-byte rate
-    const priceInUSD = contentLength * X_402_USDC_PER_BYTE_PRICE;
-
-    // Format as USD string with appropriate precision
-    // Ensure minimum price of $0.001
-    const formattedPrice = Math.max(priceInUSD, 0.001).toFixed(3);
-
-    return `$${formattedPrice}`;
-  };
+  // Note: These tests use the actual config defaults from config.ts:
+  // X_402_USDC_PER_BYTE_PRICE = 0.0000000001 ($0.10 per GB)
+  // X_402_USDC_DATA_EGRESS_MIN_PRICE = 0.001
+  // X_402_USDC_DATA_EGRESS_MAX_PRICE = 1.0
 
   describe('calculateX402PricePerByteEgress', () => {
     it('should calculate minimum price for small content', () => {
@@ -41,14 +33,14 @@ describe('x402 pricing utility functions', () => {
 
     it('should calculate correct price for 1GB content', () => {
       const price = calculateX402PricePerByteEgress(1024 * 1024 * 1024); // 1GB
-      // 1GB * 0.0000000001 = 0.1073741824
+      // 1GB * 0.0000000001 = 0.1073741824, formatted to 3 decimals
       assert.equal(price, '$0.107');
     });
 
-    it('should calculate correct price for 10GB content', () => {
+    it('should calculate correct price for 10GB content (capped at max)', () => {
       const price = calculateX402PricePerByteEgress(10 * 1024 * 1024 * 1024); // 10GB
-      // 10GB * 0.0000000001 = 1.073741824
-      assert.equal(price, '$1.074');
+      // 10GB * 0.0000000001 = 1.073741824, but max is 1.0, formatted to 3 decimals
+      assert.equal(price, '$1.000');
     });
 
     it('should handle zero bytes', () => {
@@ -84,7 +76,13 @@ describe('x402 pricing utility functions', () => {
 
       for (const size of sizes) {
         const price = calculateX402PricePerByteEgress(size);
-        const priceNum = parseFloat(price.substring(1)); // Remove $
+
+        // Should start with $
+        assert.equal(price[0], '$', `Price ${price} should start with $`);
+
+        // Should be a valid number after removing $
+        const priceNum = parseFloat(price.substring(1));
+        assert(!isNaN(priceNum), `Price ${price} should be a valid number`);
 
         // Should have exactly 3 decimal places
         const decimalPlaces = price.split('.')[1]?.length || 0;
@@ -94,8 +92,8 @@ describe('x402 pricing utility functions', () => {
           `Price ${price} should have 3 decimal places`,
         );
 
-        // Should be a valid number
-        assert(!isNaN(priceNum), `Price ${price} should be a valid number`);
+        // Should be positive
+        assert(priceNum > 0, `Price ${price} should be positive`);
       }
     });
 
@@ -103,8 +101,8 @@ describe('x402 pricing utility functions', () => {
       const oneTerabyte = 1024 * 1024 * 1024 * 1024; // 1TB
       const price = calculateX402PricePerByteEgress(oneTerabyte);
 
-      // 1TB * 0.0000000001 = 109.951 USD
-      assert.equal(price, '$109.951');
+      // 1TB * 0.0000000001 = 109.951 USD, but max is 1.0, formatted to 3 decimals
+      assert.equal(price, '$1.000');
     });
   });
 });
@@ -366,18 +364,9 @@ describe('x402 browser detection', () => {
 });
 
 describe('x402 price calculation with min/max bounds', () => {
-  const calculateX402PricePerByteEgress = (contentLength: number): string => {
-    const X_402_USDC_PER_BYTE_PRICE = 0.0000000001;
-    const X_402_USDC_DATA_EGRESS_MIN_PRICE = 0.001;
-    const X_402_USDC_DATA_EGRESS_MAX_PRICE = 10.0;
-
-    const priceInUSD = contentLength * X_402_USDC_PER_BYTE_PRICE;
-    const formattedPrice = Math.min(
-      Math.max(priceInUSD, X_402_USDC_DATA_EGRESS_MIN_PRICE),
-      X_402_USDC_DATA_EGRESS_MAX_PRICE,
-    );
-    return `$${formattedPrice}`;
-  };
+  // Uses the real implementation from x402.ts
+  // Note: Config default X_402_USDC_DATA_EGRESS_MAX_PRICE = 1.0, not 10.0
+  // Tests updated to reflect actual config values
 
   it('should enforce minimum price for very small content', () => {
     const price = calculateX402PricePerByteEgress(1); // 1 byte
@@ -394,19 +383,19 @@ describe('x402 price calculation with min/max bounds', () => {
     const price = calculateX402PricePerByteEgress(oneGB);
     const numPrice = parseFloat(price.substring(1));
     assert(numPrice > 0.001, `Price ${price} should be above minimum`);
-    assert(numPrice < 10.0, `Price ${price} should be below maximum`);
+    assert(numPrice < 1.0, `Price ${price} should be below maximum`);
   });
 
   it('should enforce maximum price for very large content', () => {
     const oneTerabyte = 1024 * 1024 * 1024 * 1024;
     const price = calculateX402PricePerByteEgress(oneTerabyte);
-    assert.equal(price, '$10');
+    assert.equal(price, '$1.000');
   });
 
   it('should enforce maximum price at boundary', () => {
     const hundredGB = 100 * 1024 * 1024 * 1024;
     const price = calculateX402PricePerByteEgress(hundredGB);
-    assert.equal(price, '$10');
+    assert.equal(price, '$1.000');
   });
 
   it('should handle zero bytes with minimum price', () => {
@@ -418,17 +407,17 @@ describe('x402 price calculation with min/max bounds', () => {
     // 100GB - 1 byte should still hit max
     const nearMax = 100 * 1024 * 1024 * 1024 - 1;
     const price = calculateX402PricePerByteEgress(nearMax);
-    assert.equal(price, '$10');
+    assert.equal(price, '$1.000');
   });
 
   it('should handle prices in the middle range', () => {
     const testCases = [
-      { bytes: 500 * 1024 * 1024, minExpected: 0.001, maxExpected: 10.0 },
-      { bytes: 5 * 1024 * 1024 * 1024, minExpected: 0.001, maxExpected: 10.0 },
+      { bytes: 500 * 1024 * 1024, minExpected: 0.001, maxExpected: 1.0 },
+      { bytes: 5 * 1024 * 1024 * 1024, minExpected: 0.001, maxExpected: 1.0 },
       {
         bytes: 10 * 1024 * 1024 * 1024,
         minExpected: 0.001,
-        maxExpected: 10.0,
+        maxExpected: 1.0,
       },
     ];
 
