@@ -13,15 +13,15 @@ const x402Router = Router();
 if (config.X_402_USDC_WALLET_ADDRESS !== undefined) {
   x402Router.use(
     paymentMiddleware(
-      config.X_402_USDC_WALLET_ADDRESS! as `0x${string}`,
+      config.X_402_USDC_WALLET_ADDRESS as `0x${string}`,
       {
         'GET /ar-io/x402/*': {
-          price: '$0.001',
-          network: 'base-sepolia',
+          price: `$${config.X_402_USDC_DATA_EGRESS_MIN_PRICE}`,
+          network: config.X_402_USDC_NETWORK,
         },
       },
       {
-        url: config.X_402_USDC_FACILITATOR_URL!,
+        url: config.X_402_USDC_FACILITATOR_URL,
       },
     ),
   );
