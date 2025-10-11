@@ -73,7 +73,7 @@ app.use(
 // x402 payment middleware - runs before rate limiter to set payment status
 app.use(
   x402DataEgressMiddleware({
-    dataAttributesSource: system.dataAttributesSource,
+    dataAttributesSource: system.dataAttributesStore,
   }),
 );
 
