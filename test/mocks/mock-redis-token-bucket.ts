@@ -58,7 +58,6 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     tokensToConsume: number,
     x402PaymentProvided: boolean = false,
     capacityMultiplier: number = 10,
-    refillMultiplier: number = 2,
     contentLengthForTopOff: number = 0,
   ): Promise<BucketConsumptionResult> {
     this.callCounts.getOrCreateBucketAndConsume++;

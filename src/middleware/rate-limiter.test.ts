@@ -854,7 +854,6 @@ describe('Rate Limiter Tests', () => {
           0, // Don't consume any tokens
           true, // x402 payment provided
           10, // capacityMultiplier
-          2, // refillMultiplier
           0, // contentLengthForTopOff
         );
 
@@ -879,7 +878,6 @@ describe('Rate Limiter Tests', () => {
           50, // Consume 50 tokens
           false, // No payment
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -893,7 +891,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment provided
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -916,7 +913,6 @@ describe('Rate Limiter Tests', () => {
           100, // Consume 100, leaving 900
           true, // x402 payment
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -930,7 +926,6 @@ describe('Rate Limiter Tests', () => {
           0,
           false, // No payment
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -952,7 +947,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -966,7 +960,6 @@ describe('Rate Limiter Tests', () => {
           500,
           true, // Payment provided for this request too
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -990,7 +983,6 @@ describe('Rate Limiter Tests', () => {
           1500, // Try to consume more than available
           true, // x402 payment
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1017,7 +1009,6 @@ describe('Rate Limiter Tests', () => {
           50, // Consume 50
           false,
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1034,7 +1025,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // Payment
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1057,7 +1047,6 @@ describe('Rate Limiter Tests', () => {
           90, // Consume 90, leaving 10
           false,
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1074,7 +1063,6 @@ describe('Rate Limiter Tests', () => {
           0,
           false, // No payment
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1098,7 +1086,6 @@ describe('Rate Limiter Tests', () => {
           200,
           true, // Paid
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 800); // 1000 - 200
@@ -1113,7 +1100,6 @@ describe('Rate Limiter Tests', () => {
           0,
           false, // Unpaid
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 100); // Capped at base capacity when refilling
@@ -1128,7 +1114,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // Paid again
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 1000); // Topped off
@@ -1148,7 +1133,6 @@ describe('Rate Limiter Tests', () => {
           300,
           true,
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 700); // 1000 - 300
@@ -1163,7 +1147,6 @@ describe('Rate Limiter Tests', () => {
           500,
           true, // Another paid request
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 500); // 1000 - 500
@@ -1178,7 +1161,6 @@ describe('Rate Limiter Tests', () => {
           100,
           true,
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 900); // 1000 - 100
@@ -1198,7 +1180,6 @@ describe('Rate Limiter Tests', () => {
           200,
           true,
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1212,7 +1193,6 @@ describe('Rate Limiter Tests', () => {
           30,
           false,
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 70); // 100 (capped) - 30
@@ -1228,7 +1208,6 @@ describe('Rate Limiter Tests', () => {
           20,
           false,
           10,
-          2,
           0, // contentLengthForTopOff
         );
         assert.strictEqual(result.bucket.tokens, 60); // 70 + 10 (refill) - 20
@@ -1250,7 +1229,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true,
           customMultiplier,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1259,47 +1237,7 @@ describe('Rate Limiter Tests', () => {
         assert.strictEqual(result.bucket.capacity, baseCapacity);
       });
 
-      it('should support custom refill multiplier', async () => {
-        const now = Date.now();
-        const baseCapacity = 100;
-        const baseRefillRate = 10;
-        const customRefillMultiplier = 3; // 3x instead of 2x
-
-        // Create bucket and consume tokens
-        await mockRedis.getOrCreateBucketAndConsume(
-          'test-key',
-          baseCapacity,
-          baseRefillRate,
-          now,
-          60,
-          50,
-          false,
-          10,
-          2,
-          0, // contentLengthForTopOff
-        );
-
-        // Note: With payment, it just tops off regardless of refill multiplier
-        // The refill multiplier would be used in the Lua script for time-based refills
-        // but in our mock, paid requests always top off to full capacity
-        const result = await mockRedis.getOrCreateBucketAndConsume(
-          'test-key',
-          baseCapacity,
-          baseRefillRate,
-          now + 1000,
-          60,
-          0,
-          true,
-          10,
-          customRefillMultiplier,
-          0, // contentLengthForTopOff
-        );
-
-        // Should top off to full paid capacity
-        assert.strictEqual(result.bucket.tokens, 1000);
-      });
-
-      it('should work with 1x multipliers (effectively disabled)', async () => {
+      it('should work with 1x multiplier (effectively disabled)', async () => {
         const now = Date.now();
         const baseCapacity = 100;
 
@@ -1312,7 +1250,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // Payment provided
           1, // 1x capacity (no boost)
-          1, // 1x refill (no boost)
           0, // contentLengthForTopOff
         );
 
@@ -1334,7 +1271,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true,
           10,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1356,7 +1292,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true,
           largeMultiplier,
-          2,
           0, // contentLengthForTopOff
         );
 
@@ -1364,7 +1299,7 @@ describe('Rate Limiter Tests', () => {
         assert.strictEqual(result.bucket.tokens, 100000);
       });
 
-      it('should handle fractional multipliers', async () => {
+      it('should handle fractional capacity multipliers', async () => {
         const now = Date.now();
         const baseCapacity = 100;
 
@@ -1377,7 +1312,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true,
           2.5, // 2.5x multiplier
-          1.5,
           0, // contentLengthForTopOff
         );
 
@@ -1402,7 +1336,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           capacityMultiplier,
-          2,
           contentLength, // 1KB file
         );
 
@@ -1426,7 +1359,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           capacityMultiplier,
-          2,
           contentLength,
         );
 
@@ -1449,7 +1381,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           capacityMultiplier,
-          2,
           contentLength,
         );
 
@@ -1474,7 +1405,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           capacityMultiplier,
-          2,
           0, // No contentLength provided
         );
 
@@ -1497,7 +1427,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           capacityMultiplier,
-          2,
           contentLength,
         );
 
@@ -1520,7 +1449,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           capacityMultiplier,
-          2,
           contentLength,
         );
 
@@ -1544,7 +1472,6 @@ describe('Rate Limiter Tests', () => {
           0,
           true, // x402 payment
           capacityMultiplier,
-          2,
           contentLength,
         );
 
@@ -1558,7 +1485,6 @@ describe('Rate Limiter Tests', () => {
           50, // Consume 50 tokens
           false, // Unpaid request
           capacityMultiplier,
-          2,
           0,
         );
 
@@ -1584,7 +1510,6 @@ describe('Rate Limiter Tests', () => {
           largeConsumption, // Try to consume 500 tokens
           true, // x402 payment
           capacityMultiplier,
-          2,
           smallContentLength, // But only paid for 1KB
         );
 
