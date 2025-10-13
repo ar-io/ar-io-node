@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 54] - 2025-10-13
+
+This is a **recommended release** due to the improvements to chunk observation
+and retrieval. The release enhances peer selection for chunk operations,
+introduces experimental X402 payment protocol support, and enables offset
+observation enforcement by default to strengthen network reliability.
 
 ### Added
 
