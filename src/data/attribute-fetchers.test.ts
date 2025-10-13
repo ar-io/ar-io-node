@@ -7,7 +7,6 @@
 
 import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, mock } from 'node:test';
-import * as winston from 'winston';
 import {
   AttributeFetchers,
   OwnerFetcher,
@@ -22,8 +21,9 @@ import {
   SignatureStore,
   OwnerStore,
 } from '../types.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-const log = winston.createLogger({ silent: true });
+const log = createTestLogger({ suite: 'AttributeFetcher' });
 interface Mocks {
   dataSource: ContiguousDataSource;
   dataIndex: ContiguousDataIndex;

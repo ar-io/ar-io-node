@@ -6,16 +6,16 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 import { EventEmitter } from 'node:events';
 import axios from 'axios';
 
 import { WebhookEmitter } from '../../src/workers/webhook-emitter.js';
 import { AlwaysMatch, NeverMatch } from '../filters.js';
 import wait from '../lib/wait.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('WebhookEmitter', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let eventEmitter: EventEmitter;
   let webhookEmitter: WebhookEmitter;
   const targetServersUrls = ['http://localhost:3000', 'https://localhost:3001'];
@@ -23,7 +23,7 @@ describe('WebhookEmitter', () => {
 
   before(async () => {
     eventEmitter = new EventEmitter();
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'WebhookEmitter' });
   });
 
   afterEach(async () => {

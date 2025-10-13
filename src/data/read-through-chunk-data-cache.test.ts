@@ -7,26 +7,26 @@
 import fs from 'node:fs';
 import { strict as assert } from 'node:assert';
 import { afterEach, before, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 
 import { ArweaveChunkSourceStub } from '../../test/stubs.js';
 import { fromB64Url } from '../lib/encoding.js';
 import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
 import { Chunk, ChunkData, ChunkDataStore } from '../types.js';
 import { ReadThroughChunkDataCache } from './read-through-chunk-data-cache.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const B64_DATA_ROOT = 'wRq6f05oRupfTW_M5dcYBtwK5P8rSNYu20vC6D_o-M4';
 const TX_SIZE = 256000;
 const ABSOLUTE_OFFSET = 51530681327863;
 const RELATIVE_OFFSET = 0;
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let chunkSource: ArweaveChunkSourceStub;
 let chunkDataStore: ChunkDataStore;
 let chunkCache: ReadThroughChunkDataCache;
 
 before(() => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'ReadThroughChunkDataCache' });
   chunkSource = new ArweaveChunkSourceStub();
   chunkDataStore = new FsChunkDataStore({
     log,

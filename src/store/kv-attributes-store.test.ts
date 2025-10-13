@@ -6,13 +6,13 @@
  */
 import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach } from 'node:test';
-import winston from 'winston';
 import { NodeKvStore } from './node-kv-store.js';
 import {
   KvJsonStore,
   KvDataItemAttributesStore,
   KvTransactionAttributesStore,
 } from './kv-attributes-store.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('KvJsonStore', () => {
   const key = 'testKey';
@@ -33,7 +33,7 @@ describe('KvJsonStore', () => {
       });
 
       kvJsonStore = new KvJsonStore<TestType>({
-        log: winston.createLogger({ silent: true }),
+        log: createTestLogger({ suite: 'KvJsonStore' }),
         kvBufferStore,
       });
     });
@@ -89,7 +89,7 @@ describe('KvJsonStore', () => {
       });
 
       dataItemStore = new KvDataItemAttributesStore({
-        log: winston.createLogger({ silent: true }),
+        log: createTestLogger({ suite: 'KvJsonStore' }),
         kvBufferStore,
       });
     });
@@ -121,7 +121,7 @@ describe('KvJsonStore', () => {
       });
 
       transactionStore = new KvTransactionAttributesStore({
-        log: winston.createLogger({ silent: true }),
+        log: createTestLogger({ suite: 'KvJsonStore' }),
         kvBufferStore,
       });
     });

@@ -4,7 +4,101 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 54] - 2025-10-13
+
+This is a **recommended release** due to the improvements to chunk observation
+and retrieval. The release enhances peer selection for chunk operations,
+introduces experimental X402 payment protocol support, and enables offset
+observation enforcement by default to strengthen network reliability.
+
+### Added
+
+- **X402 Payment Protocol (Experimental)**: Optional USDC-based payment
+  system for accessing rate-limited content. This feature is experimental
+  and will be rapidly built out in upcoming releases.
+  - Dynamic content-based pricing (default: $0.0000000001/byte = $0.10/GB)
+  - USDC payments via Coinbase facilitator on Base network (mainnet and
+    testnet supported)
+  - Rate limiter integration with 10x capacity multiplier for paid tier
+  - Proportional bucket top-off capped to actual price paid
+  - HTML paywall for browser clients, JSON responses for API clients
+  - Settlement timeout protection (5s default)
+  - Configuration via 13 new `X_402_*` environment variables (see
+    `.env.example` for details)
+  - **Note**: Currently only applies to `/<id>` and `/raw/<id>` endpoints
+    for non-manifests
+- Expanded default preferred chunk GET node pool from 12 to 22 nodes,
+  adding data-13 through data-17 (5 additional data nodes) and tip-1
+  through tip-5 (5 tip nodes) for improved redundancy and load
+  distribution across the Arweave network.
+- Added GraphQL as third fallback option in `ROOT_TX_LOOKUP_ORDER` (after
+  db and turbo) to prevent lookup failures when Turbo's circuit breaker
+  is open, enabling more resilient root transaction discovery.
+- Added deterministic weight-based peer selection for chunk operations
+  (both GET and POST). Peers are now sorted by weight in descending order
+  and top N selected, ensuring preferred peers (weight 100) are always
+  tried first instead of probabilistic selection.
+- Added preferred peer weight preservation for chunk operations to prevent
+  weight degradation for operator-configured preferred peers during
+  temporary failures. Preferred peers maintain their initial weight (100)
+  regardless of success/failure, honoring operator configuration while
+  allowing discovered peers to adapt based on performance.
+
+### Changed
+
+- **Observer**: Enabled offset observation enforcement by default.
+  `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED` now defaults to `true` instead
+  of `false`. Gateway assessments will fail if offset validation fails,
+  strengthening network reliability requirements. Operators can opt-out by
+  explicitly setting `OFFSET_OBSERVATION_ENFORCEMENT_ENABLED=false`.
+- Reduced logging verbosity by moving DNS resolution and sync bucket
+  operational logs from debug/info to silly level. DNS resolution messages
+  ('Resolving hostname', 'Resolved IPv4/IPv6 addresses') and sync bucket
+  updates ('Parsed ETF sync buckets', 'Updated sync buckets') now use
+  silly level, while completion and peer selection messages remain at
+  debug level for visibility.
+
+### Fixed
+
+- Fixed preferred peer weight preservation to only apply to chunk
+  operations (GET/POST) instead of all operation categories. Previously,
+  preferred chunk peers maintained constant weight across chain, getChunk,
+  and postChunk operations. Now preferred chunk peers can undergo normal
+  warming/cooling when used for chain operations, preventing indefinite
+  selection of peers that perform poorly for chain operations while still
+  maintaining constant weight for chunk operations.
+- Fixed ANS-104 data item header parsing for Ethereum signatures (type 3)
+  by using correct 65-byte uncompressed public key length instead of
+  20-byte address length. This resolves "Invalid buffer" errors when
+  parsing Ethereum-signed data items. Also updated
+  `MAX_DATA_ITEM_HEADER_SIZE` from 6228 to 8257 bytes to account for
+  MultiAptos signature type (largest supported), and replaced custom
+  signature/owner length methods with `getSignatureMeta()` from arbundles
+  library for consistency.
+- Fixed root TX discovery to use non-blocking rate limiting instead of
+  blocking when rate limits are reached. Services now use
+  `tryRemoveTokens()` and skip rate-limited gateways/sources immediately
+  rather than waiting indefinitely, preventing request blocking and
+  improving responsiveness. Also fixed GraphQL service to return
+  `dataSize` instead of incorrect `size` field.
+
+### Known Issues
+
+- The x402 browser paywall currently uses blob URLs for content delivery
+  after successful payment. This causes issues with content-type handling
+  and browser behavior as the blob URL doesn't preserve the original
+  content metadata. **We plan to fix this in upcoming releases** by
+  either contributing to the x402 SDK to add a page reload option, or
+  implementing a custom paywall template that properly handles redirects
+  after payment verification.
+
 ## [Release 53] - 2025-10-06
+
+This is an optional release that introduces root transaction offset tracking
+for nested bundles and observer performance improvements. The release enables
+more efficient data retrieval through comprehensive offset tracking with Turbo
+and GraphQL integration, while improving observer reliability with increased
+chunk validation success rates.
 
 ### Added
 

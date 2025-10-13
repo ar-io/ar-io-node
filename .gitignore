@@ -68,3 +68,6 @@ CLAUDE.local.md
 !/data/.gitkeep
 !/repos/.gitkeep
 !/design/.gitkeep
+
+# wallet files
+*wallet.json

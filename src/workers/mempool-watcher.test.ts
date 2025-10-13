@@ -6,19 +6,19 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import winston from 'winston';
 import { MempoolWatcher } from './mempool-watcher.js';
 import { ArweaveChainSourceStub } from '../../test/stubs.js';
 import wait from '../lib/wait.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('MempoolWatcher', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let chainSource: ArweaveChainSourceStub;
   let txFetcher: any;
   let mempoolWatcher: MempoolWatcher;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'MempoolWatcher' });
   });
 
   beforeEach(() => {

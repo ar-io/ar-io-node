@@ -8,10 +8,10 @@ import { strict as assert } from 'node:assert';
 import { describe, it, beforeEach, mock, afterEach } from 'node:test';
 import { Ans104Unbundler, UnbundleableItem } from './ans104-unbundler.js';
 import { EventEmitter } from 'node:events';
-import * as winston from 'winston';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('Ans104Unbundler', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let eventEmitter: EventEmitter;
   let filter: any;
   let contiguousDataSource: any;
@@ -20,7 +20,7 @@ describe('Ans104Unbundler', () => {
   let mockAns104Parser: any;
 
   beforeEach(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'Ans104Unbundler' });
     eventEmitter = new EventEmitter();
     filter = { match: () => true };
     contiguousDataSource = {};

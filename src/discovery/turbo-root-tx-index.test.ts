@@ -6,12 +6,12 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, describe, it, mock } from 'node:test';
-import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { TurboRootTxIndex } from './turbo-root-tx-index.js';
 import axios from 'axios';
+import { createTestLogger } from '../../test/test-logger.js';
 
-const log = winston.createLogger({ silent: true });
+const log = createTestLogger({ suite: 'TurboRootTxIndex' });
 
 describe('TurboRootTxIndex', () => {
   afterEach(() => {
@@ -116,7 +116,13 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(dataItemId);
 
@@ -179,7 +185,13 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(childId);
 
@@ -225,7 +237,13 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(l1TxId);
 
@@ -263,7 +281,13 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(nonExistentId);
 
@@ -319,7 +343,13 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(id1);
 
@@ -382,7 +412,13 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx('level-0');
 
@@ -427,7 +463,13 @@ describe('TurboRootTxIndex', () => {
         cache,
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       // First call - should hit API
       const result1 = await turboIndex.getRootTx(dataItemId);
@@ -504,7 +546,13 @@ describe('TurboRootTxIndex', () => {
         turboEndpoint: 'https://turbo.example.com',
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
       });
+
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
       const result = await turboIndex.getRootTx(level1Id);
 
@@ -525,7 +573,7 @@ describe('TurboRootTxIndex', () => {
       assert.equal(mockAxiosInstance.get.mock.calls.length, 3);
     });
 
-    it('should apply rate limiting when tokens are exhausted', async () => {
+    it('should return undefined when rate limited (non-blocking)', async () => {
       const dataItemId = 'rate-limited-item';
       let callCount = 0;
 
@@ -562,34 +610,34 @@ describe('TurboRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Wait for tokens to accumulate (TokenBucket starts at 0)
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Prefill rate limiter to avoid waiting for token bucket refill
+      (turboIndex as any)['limiter'].content = (turboIndex as any)[
+        'limiter'
+      ].bucketSize;
 
+      // First two requests should succeed (using 2 tokens)
+      const result1 = await turboIndex.getRootTx(`${dataItemId}-1`);
+      assert(result1 !== undefined, 'First request should succeed');
+
+      const result2 = await turboIndex.getRootTx(`${dataItemId}-2`);
+      assert(result2 !== undefined, 'Second request should succeed');
+
+      // Third request should be rate limited and return undefined immediately
       const start = Date.now();
+      const result3 = await turboIndex.getRootTx(`${dataItemId}-3`);
+      const elapsed = Date.now() - start;
 
-      // First request - should be immediate (bucket has 2 tokens now)
-      await turboIndex.getRootTx(`${dataItemId}-1`);
-      const time1 = Date.now() - start;
-      assert(time1 < 200, `First request should be immediate, took ${time1}ms`);
-
-      // Second request - should be immediate (using second token)
-      await turboIndex.getRootTx(`${dataItemId}-2`);
-      const time2 = Date.now() - start;
-      assert(
-        time2 < 200,
-        `Second request should be immediate, took ${time2}ms`,
+      assert.equal(
+        result3,
+        undefined,
+        'Third request should return undefined when rate limited',
       );
-
-      // Third request - should be rate limited (wait ~500ms for token refill)
-      // With 2 tokens/sec, need to wait 0.5s for 1 token
-      await turboIndex.getRootTx(`${dataItemId}-3`);
-      const time3 = Date.now() - start;
-      assert(
-        time3 >= 400 && time3 < 800,
-        `Third request should be rate limited and wait ~500ms, took ${time3}ms`,
+      assert(elapsed < 100, `Should return immediately, took ${elapsed}ms`);
+      assert.equal(
+        callCount,
+        2,
+        'Should have made only 2 API calls (third was rate limited)',
       );
-
-      assert.equal(callCount, 3, 'Should have made 3 API calls');
     });
   });
 });

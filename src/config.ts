@@ -67,7 +67,7 @@ export const TRUSTED_NODE_URL = env.varOrDefault(
   'https://arweave.net',
 );
 
-// Default preferred chunk GET nodes (data-1 through data-12.arweave.xyz)
+// Default preferred chunk GET nodes (data-1 through data-17 and tip-1 through tip-5.arweave.xyz)
 const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-1.arweave.xyz:1984',
   'http://data-2.arweave.xyz:1984',
@@ -81,6 +81,16 @@ const DEFAULT_PREFERRED_CHUNK_GET_NODE_URLS = [
   'http://data-10.arweave.xyz:1984',
   'http://data-11.arweave.xyz:1984',
   'http://data-12.arweave.xyz:1984',
+  'http://data-13.arweave.xyz:1984',
+  'http://data-14.arweave.xyz:1984',
+  'http://data-15.arweave.xyz:1984',
+  'http://data-16.arweave.xyz:1984',
+  'http://data-17.arweave.xyz:1984',
+  'http://tip-1.arweave.xyz:1984',
+  'http://tip-2.arweave.xyz:1984',
+  'http://tip-3.arweave.xyz:1984',
+  'http://tip-4.arweave.xyz:1984',
+  'http://tip-5.arweave.xyz:1984',
 ];
 
 // Preferred URLs for chunk GET requests (comma-separated URLs)
@@ -213,7 +223,7 @@ export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
 
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo,graphql')
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -1188,12 +1198,12 @@ export const AO_GRAPHQL_URL = env.varOrUndefined('AO_GRAPHQL_URL');
 export const AO_GATEWAY_URL = env.varOrUndefined('AO_GATEWAY_URL');
 export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 
-export const ENABLE_RATE_LIMITER =
-  env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
-
 //
 // Rate Limiter
 //
+
+export const ENABLE_RATE_LIMITER =
+  env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
 export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
 
@@ -1236,4 +1246,57 @@ export const RATE_LIMITER_REDIS_USE_TLS = env.varOrDefault(
 export const RATE_LIMITER_REDIS_USE_CLUSTER = env.varOrDefault(
   'RATE_LIMITER_REDIS_USE_CLUSTER',
   'false',
+);
+
+//
+// X402 (USDC)
+//
+export const ENABLE_X_402_USDC_DATA_EGRESS =
+  env.varOrDefault('ENABLE_X_402_USDC_DATA_EGRESS', 'false') === 'true';
+export const X_402_USDC_NETWORK = env.varOrDefault(
+  'X_402_USDC_NETWORK',
+  'base-sepolia', // base mainnet is the default (base-sepolia is the testnet)
+) as 'base' | 'base-sepolia';
+export const X_402_USDC_WALLET_ADDRESS = env.varOrUndefined(
+  'X_402_USDC_WALLET_ADDRESS',
+) as `0x${string}` | undefined;
+// Recommended facilitator URLs:
+// https://x402.org/facilitator -> official Coinbase facilitator for testnet (base-sepolia)
+// https://facilitator.x402.rs -> experimental facilitator, works for both base and base-sepolia without CDP API keys
+// https://facilitator.payai.network -> experimental facilitator, works for both base and base-sepolia with CDP API keys
+// For mainnet: requires CDP API keys (see @coinbase/x402 package)
+export const X_402_USDC_FACILITATOR_URL = env.varOrDefault(
+  'X_402_USDC_FACILITATOR_URL',
+  'https://x402.org/facilitator',
+) as `${string}://${string}`;
+export const X_402_USDC_DATA_EGRESS_MIN_PRICE = +env.varOrDefault(
+  'X_402_USDC_DATA_EGRESS_MIN_PRICE',
+  '0.001', // minimum price of $0.000001, used if we do not know the content length of data
+);
+export const X_402_USDC_DATA_EGRESS_MAX_PRICE = +env.varOrDefault(
+  'X_402_USDC_DATA_EGRESS_MAX_PRICE',
+  '1.00', // maximum price of $1.00
+);
+export const X_402_USDC_PER_BYTE_PRICE = +env.varOrDefault(
+  'X_402_USDC_PER_BYTE_PRICE',
+  '0.0000000001', // $0.0000000001 per byte = $0.10 per GB
+);
+export const X_402_RATE_LIMIT_CAPACITY_MULTIPLIER = +env.varOrDefault(
+  'X_402_RATE_LIMIT_CAPACITY_MULTIPLIER',
+  '10', // 10x capacity for paid tier
+);
+export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
+  'X_402_USDC_SETTLE_TIMEOUT_MS',
+  '5000', // 5 seconds
+);
+
+// Paywall customization (optional)
+export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+export const X_402_APP_NAME = env.varOrDefault(
+  'X_402_APP_NAME',
+  'AR.IO Gateway',
+);
+export const X_402_APP_LOGO = env.varOrUndefined('X_402_APP_LOGO');
+export const X_402_SESSION_TOKEN_ENDPOINT = env.varOrUndefined(
+  'X_402_SESSION_TOKEN_ENDPOINT',
 );

@@ -16,20 +16,20 @@ import {
   it,
   mock,
 } from 'node:test';
-import winston from 'winston';
 import { ContiguousDataIndex, ContiguousDataSource } from '../types.js';
 
 import { DataVerificationWorker } from './data-verification.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('DataVerificationWorker', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
   let dataVerificationWorker: DataVerificationWorker;
   let contiguousDataIndex: ContiguousDataIndex;
   let incrementVerificationRetryCountMock: any;
   let contiguousDataSource: ContiguousDataSource;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'DataVerificationWorker' });
 
     incrementVerificationRetryCountMock = mock.fn(() => Promise.resolve());
 

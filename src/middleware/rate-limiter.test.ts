@@ -837,4 +837,688 @@ describe('Rate Limiter Tests', () => {
       mockRedis.getOrCreateBucketAndConsume = originalGetOrCreate;
     });
   });
+
+  describe('x402 Paid Tier Rate Limiting', () => {
+    describe('Capacity Multiplier', () => {
+      it('should apply 10x capacity multiplier for paid requests on new bucket', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const expectedCapacity = baseCapacity * 10; // 10x multiplier
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0, // Don't consume any tokens
+          true, // x402 payment provided
+          10, // capacityMultiplier
+          0, // contentLengthForTopOff
+        );
+
+        // Should start with 10x tokens
+        assert.strictEqual(result.bucket.tokens, expectedCapacity);
+        // But base capacity should remain unchanged
+        assert.strictEqual(result.bucket.capacity, baseCapacity);
+        assert.strictEqual(result.success, true);
+      });
+
+      it('should top off existing bucket to 10x capacity when payment provided', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        // Create bucket with some tokens consumed
+        await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          50, // Consume 50 tokens
+          false, // No payment
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Make paid request - should top off to 1000 tokens
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment provided
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Should have topped off to 10x capacity
+        assert.strictEqual(result.bucket.tokens, 1000);
+        assert.strictEqual(result.bucket.capacity, baseCapacity);
+      });
+
+      it('should preserve tokens from paid request for unpaid requests', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        // Make paid request - starts with 1000 tokens
+        await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          100, // Consume 100, leaving 900
+          true, // x402 payment
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Make unpaid request immediately (no time elapsed) - should keep the 900 tokens
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          false, // No payment
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Should preserve topped-up tokens since no time has passed (no refill needed)
+        assert.strictEqual(result.bucket.tokens, 900);
+      });
+
+      it('should allow consuming up to 10x capacity with payment', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        // Create bucket with payment - 1000 tokens
+        await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Try to consume 500 tokens (more than base, but within paid tier)
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          500,
+          true, // Payment provided for this request too
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Should succeed because we have 1000 tokens
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.consumed, 500);
+        assert.strictEqual(result.bucket.tokens, 500);
+      });
+
+      it('should fail to consume more than 10x capacity even with payment', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        // Create bucket with payment - 1000 tokens
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          1500, // Try to consume more than available
+          true, // x402 payment
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Should fail - not enough tokens
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.consumed, 0);
+        assert.strictEqual(result.bucket.tokens, 1000); // Unchanged
+      });
+    });
+
+    describe('Refill Multiplier', () => {
+      it('should not use refill multiplier (just tops off) when payment provided', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const baseRefillRate = 10;
+
+        // Create bucket with some consumption
+        await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          baseRefillRate,
+          now,
+          60,
+          50, // Consume 50
+          false,
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Wait 2 seconds
+        const later = now + 2000;
+
+        // Make paid request - should top off to 1000 regardless of time
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          baseRefillRate,
+          later,
+          60,
+          0,
+          true, // Payment
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Should have topped off to full paid capacity
+        assert.strictEqual(result.bucket.tokens, 1000);
+      });
+
+      it('should use base refill rate for unpaid requests', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const baseRefillRate = 10; // 10 tokens/second
+
+        // Create bucket and consume most tokens
+        await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          baseRefillRate,
+          now,
+          60,
+          90, // Consume 90, leaving 10
+          false,
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Wait 5 seconds
+        const later = now + 5000;
+
+        // Make unpaid request - should refill at base rate
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          baseRefillRate,
+          later,
+          60,
+          0,
+          false, // No payment
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Should have: 10 remaining + (10 tokens/sec * 5 sec) = 60 tokens
+        assert.strictEqual(result.bucket.tokens, 60);
+      });
+    });
+
+    describe('Payment State Transitions', () => {
+      it('should handle paid -> unpaid -> paid transitions correctly', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        // 1. Paid request - starts with 1000
+        let result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          200,
+          true, // Paid
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 800); // 1000 - 200
+
+        // 2. Unpaid request after 1 second - should refill 10 tokens and cap at base (100)
+        result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now + 1000,
+          60,
+          0,
+          false, // Unpaid
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 100); // Capped at base capacity when refilling
+
+        // 3. Paid request - should top off to 1000 again
+        result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now + 2000,
+          60,
+          0,
+          true, // Paid again
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 1000); // Topped off
+      });
+
+      it('should handle multiple consecutive paid requests correctly', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        // First paid request
+        let result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          300,
+          true,
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 700); // 1000 - 300
+
+        // Second paid request - should top off to 1000 again
+        result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now + 1000,
+          60,
+          500,
+          true, // Another paid request
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 500); // 1000 - 500
+
+        // Third paid request
+        result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now + 2000,
+          60,
+          100,
+          true,
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 900); // 1000 - 100
+      });
+
+      it('should handle multiple consecutive unpaid requests after paid', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        // Paid request - leaves 800 tokens
+        await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          200,
+          true,
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // First unpaid request after 1 second - should refill 10 and cap at 100, then consume 30
+        let result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now + 1000,
+          60,
+          30,
+          false,
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 70); // 100 (capped) - 30
+
+        // Second unpaid request - should refill and consume
+        // From 70 tokens, wait 1 second (10 tokens/sec refill), then consume 20
+        result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now + 2000,
+          60,
+          20,
+          false,
+          10,
+          0, // contentLengthForTopOff
+        );
+        assert.strictEqual(result.bucket.tokens, 60); // 70 + 10 (refill) - 20
+      });
+    });
+
+    describe('Custom Multipliers', () => {
+      it('should support custom capacity multiplier', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const customMultiplier = 5; // 5x instead of 10x
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true,
+          customMultiplier,
+          0, // contentLengthForTopOff
+        );
+
+        // Should have 5x capacity
+        assert.strictEqual(result.bucket.tokens, 500);
+        assert.strictEqual(result.bucket.capacity, baseCapacity);
+      });
+
+      it('should work with 1x multiplier (effectively disabled)', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // Payment provided
+          1, // 1x capacity (no boost)
+          0, // contentLengthForTopOff
+        );
+
+        // Should have base capacity even with payment
+        assert.strictEqual(result.bucket.tokens, baseCapacity);
+      });
+    });
+
+    describe('Edge Cases', () => {
+      it('should handle zero capacity correctly', async () => {
+        const now = Date.now();
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          0, // Zero base capacity
+          10,
+          now,
+          60,
+          0,
+          true,
+          10,
+          0, // contentLengthForTopOff
+        );
+
+        // Should have 0 * 10 = 0 tokens even with payment
+        assert.strictEqual(result.bucket.tokens, 0);
+      });
+
+      it('should handle very large multipliers', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const largeMultiplier = 1000;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true,
+          largeMultiplier,
+          0, // contentLengthForTopOff
+        );
+
+        // Should have 100 * 1000 = 100,000 tokens
+        assert.strictEqual(result.bucket.tokens, 100000);
+      });
+
+      it('should handle fractional capacity multipliers', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true,
+          2.5, // 2.5x multiplier
+          0, // contentLengthForTopOff
+        );
+
+        // Should have 100 * 2.5 = 250 tokens
+        assert.strictEqual(result.bucket.tokens, 250);
+      });
+    });
+
+    describe('Proportional Top-Off', () => {
+      it('should top off proportionally for small files (1KB)', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const contentLength = 1024; // 1KB
+        const capacityMultiplier = 10;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          capacityMultiplier,
+          contentLength, // 1KB file
+        );
+
+        // Should top off to: ceil(1024 / 1024) * 10 = 1 * 10 = 10 tokens
+        assert.strictEqual(result.bucket.tokens, 10);
+        assert.strictEqual(result.bucket.capacity, baseCapacity); // Base capacity unchanged
+      });
+
+      it('should top off proportionally for medium files (100KB)', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const contentLength = 100 * 1024; // 100KB
+        const capacityMultiplier = 10;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          capacityMultiplier,
+          contentLength,
+        );
+
+        // Should top off to: ceil(102400 / 1024) * 10 = 100 * 10 = 1000 tokens
+        assert.strictEqual(result.bucket.tokens, 1000);
+      });
+
+      it('should top off proportionally for large files (1GB)', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const contentLength = 1024 * 1024 * 1024; // 1GB
+        const capacityMultiplier = 10;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          capacityMultiplier,
+          contentLength,
+        );
+
+        // Should top off to: ceil(1073741824 / 1024) * 10 = 1048576 * 10 = 10485760 tokens
+        const expectedTokens =
+          Math.ceil(contentLength / 1024) * capacityMultiplier;
+        assert.strictEqual(result.bucket.tokens, expectedTokens);
+        assert.strictEqual(result.bucket.tokens, 10485760);
+      });
+
+      it('should fall back to base multiplier when contentLength is 0', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const capacityMultiplier = 10;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          capacityMultiplier,
+          0, // No contentLength provided
+        );
+
+        // Should fall back to: baseCapacity * capacityMultiplier = 100 * 10 = 1000
+        assert.strictEqual(result.bucket.tokens, 1000);
+      });
+
+      it('should handle fractional KB correctly (round up)', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const contentLength = 1500; // 1.46KB - should round up to 2KB
+        const capacityMultiplier = 10;
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          capacityMultiplier,
+          contentLength,
+        );
+
+        // Should top off to: ceil(1500 / 1024) * 10 = 2 * 10 = 20 tokens
+        assert.strictEqual(result.bucket.tokens, 20);
+      });
+
+      it('should respect custom capacity multipliers with proportional top-off', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const contentLength = 10 * 1024; // 10KB
+        const capacityMultiplier = 5; // Custom 5x multiplier
+
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          capacityMultiplier,
+          contentLength,
+        );
+
+        // Should top off to: ceil(10240 / 1024) * 5 = 10 * 5 = 50 tokens
+        assert.strictEqual(result.bucket.tokens, 50);
+      });
+
+      it('should allow consuming proportionally topped-off tokens', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const contentLength = 50 * 1024; // 50KB
+        const capacityMultiplier = 10;
+
+        // Create bucket with proportional top-off
+        await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          0,
+          true, // x402 payment
+          capacityMultiplier,
+          contentLength,
+        );
+
+        // Consume the actual content (50 tokens)
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          50, // Consume 50 tokens
+          false, // Unpaid request
+          capacityMultiplier,
+          0,
+        );
+
+        // Should have: 500 (topped off) - 50 (consumed) = 450 tokens
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.bucket.tokens, 450);
+      });
+
+      it('should prevent gaming with small payments', async () => {
+        const now = Date.now();
+        const baseCapacity = 100;
+        const smallContentLength = 1024; // Pay for 1KB
+        const largeConsumption = 500; // Try to consume 500KB worth
+        const capacityMultiplier = 10;
+
+        // Pay for small file (1KB)
+        const result = await mockRedis.getOrCreateBucketAndConsume(
+          'test-key',
+          baseCapacity,
+          10,
+          now,
+          60,
+          largeConsumption, // Try to consume 500 tokens
+          true, // x402 payment
+          capacityMultiplier,
+          smallContentLength, // But only paid for 1KB
+        );
+
+        // Should only get: ceil(1024 / 1024) * 10 = 10 tokens
+        // Trying to consume 500 should fail
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.consumed, 0);
+        assert.strictEqual(result.bucket.tokens, 10); // Still have the 10 topped-off tokens
+      });
+    });
+  });
 });

@@ -6,7 +6,9 @@
  */
 import crypto from 'node:crypto';
 
-import log from '../log.js';
+function isTestEnvironment(): boolean {
+  return process.env.NODE_TEST_CONTEXT !== undefined;
+}
 
 export function varOrDefault(envVarName: string, defaultValue: string): string {
   const value = process.env[envVarName];
@@ -22,7 +24,12 @@ export function varOrRandom(envVarName: string): string {
   const value = process.env[envVarName];
   if (value === undefined) {
     const value = crypto.randomBytes(32).toString('base64url');
-    log.info(`${envVarName} not provided, generated random value: ${value}`);
+    // Only log in non-test environments
+    if (!isTestEnvironment()) {
+      console.log(
+        `${envVarName} not provided, generated random value: ${value}`,
+      );
+    }
     return value;
   }
   return value;

@@ -95,8 +95,6 @@ import { DataContentAttributeImporter } from './workers/data-content-attribute-i
 import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
-import { parquetExporter } from './routes/ar-io.js';
-import { server } from './app.js';
 import { awsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
@@ -105,6 +103,29 @@ import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 import { CompositeDataAttributesSource } from './data/composite-data-attributes-source.js';
 import { ContiguousDataAttributesStore } from './types.js';
+
+// Shutdown registry for managing cleanup handlers
+type CleanupHandler = {
+  name: string;
+  handler: () => Promise<void>;
+};
+
+const cleanupHandlers: CleanupHandler[] = [];
+
+/**
+ * Register a cleanup handler to be called during shutdown.
+ * Handlers are called in the order they are registered.
+ *
+ * @param name - Descriptive name for the handler (for logging)
+ * @param handler - Async function that performs cleanup
+ */
+export function registerCleanupHandler(
+  name: string,
+  handler: () => Promise<void>,
+): void {
+  cleanupHandlers.push({ name, handler });
+  log.debug(`Registered cleanup handler: ${name}`);
+}
 
 process.on('uncaughtException', (error) => {
   metrics.uncaughtExceptionCounter.inc();
@@ -1102,39 +1123,54 @@ export const shutdown = async (exitCode = 0) => {
   } else {
     isShuttingDown = true;
     log.info('Shutting down...');
-    server.close(async () => {
-      log.debug('Web server stopped successfully');
-      eventEmitter.removeAllListeners();
-      arIOPeerManager.stopUpdatingPeers();
-      dataSqliteWalCleanupWorker?.stop();
-      parquetExporter?.stop();
-      await arnsResolutionCache.close();
-      await arnsRegistryCache.close();
-      await mempoolWatcher?.stop();
-      await blockImporter.stop();
-      await dataItemIndexer.stop();
-      await txRepairWorker.stop();
-      await txImporter.stop();
-      await txFetcher.stop();
-      await txOffsetImporter.stop();
-      await txOffsetRepairWorker.stop();
-      await verificationDataImporter.stop();
-      await bundleDataImporter.stop();
-      await bundleRepairWorker.stop();
-      await ans104DataIndexer.stop();
-      await ans104Unbundler.stop();
-      await webhookEmitter.stop();
-      await headerFsCacheCleanupWorker?.stop();
-      await contiguousDataFsCacheCleanupWorker?.stop();
-      await chunkDataFsCacheCleanupWorker?.stop();
-      await dataVerificationWorker?.stop();
-      // Stop DNS periodic re-resolution if running
-      arweavePeerManager.stopDnsResolution();
-      arweavePeerManager.stopAutoRefresh();
-      arweavePeerManager.stopBucketRefresh();
-      await db.stop();
-      process.exit(exitCode);
-    });
+
+    // Call registered cleanup handlers first (e.g., HTTP server, parquet exporter)
+    for (const { name, handler } of cleanupHandlers) {
+      try {
+        log.debug(`Running cleanup handler: ${name}`);
+        await handler();
+        log.debug(`Cleanup handler completed: ${name}`);
+      } catch (error: any) {
+        log.error(`Error in cleanup handler: ${name}`, {
+          error: error.message,
+          stack: error.stack,
+        });
+      }
+    }
+
+    // Clean up system components
+    eventEmitter.removeAllListeners();
+    arIOPeerManager.stopUpdatingPeers();
+    dataSqliteWalCleanupWorker?.stop();
+    await arnsResolutionCache.close();
+    await arnsRegistryCache.close();
+    await mempoolWatcher?.stop();
+    await blockImporter.stop();
+    await dataItemIndexer.stop();
+    await txRepairWorker.stop();
+    await txImporter.stop();
+    await txFetcher.stop();
+    await txOffsetImporter.stop();
+    await txOffsetRepairWorker.stop();
+    await verificationDataImporter.stop();
+    await bundleDataImporter.stop();
+    await bundleRepairWorker.stop();
+    await ans104DataIndexer.stop();
+    await ans104Unbundler.stop();
+    await webhookEmitter.stop();
+    await headerFsCacheCleanupWorker?.stop();
+    await contiguousDataFsCacheCleanupWorker?.stop();
+    await chunkDataFsCacheCleanupWorker?.stop();
+    await dataVerificationWorker?.stop();
+
+    // Stop DNS periodic re-resolution if running
+    arweavePeerManager.stopDnsResolution();
+    arweavePeerManager.stopAutoRefresh();
+    arweavePeerManager.stopBucketRefresh();
+    await db.stop();
+
+    log.info('Shutdown complete');
+    process.exit(exitCode);
   }
 };
 

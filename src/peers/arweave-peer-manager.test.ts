@@ -6,7 +6,6 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 import axios from 'axios';
 
 import {
@@ -14,12 +13,13 @@ import {
   ArweavePeerManagerConfig,
 } from './arweave-peer-manager.js';
 import { DnsResolver, ResolvedUrl } from '../lib/dns-resolver.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let peerManager: ArweavePeerManager;
 
 const TEST_CONFIG: ArweavePeerManagerConfig = {
-  log: winston.createLogger({ silent: true }),
+  log: createTestLogger({ suite: 'ArweavePeerManager' }),
   trustedNodeUrl: 'http://trusted-node.example.com',
   preferredChunkGetUrls: ['http://preferred-get.example.com'],
   preferredChunkPostUrls: ['http://preferred-post.example.com'],
@@ -30,7 +30,7 @@ const TEST_CONFIG: ArweavePeerManagerConfig = {
 };
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'ArweavePeerManager' });
 });
 
 beforeEach(async () => {
@@ -125,6 +125,115 @@ describe('ArweavePeerManager', () => {
           peers.length === 1,
       );
     });
+
+    it('should select postChunk peers in deterministic weight order', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://peer-weight-100.example.com', weight: 100 },
+        { id: 'http://peer-weight-75.example.com', weight: 75 },
+        { id: 'http://peer-weight-50.example.com', weight: 50 },
+        { id: 'http://peer-weight-25.example.com', weight: 25 },
+      ];
+
+      // Select 3 peers - should always get the top 3 by weight
+      const peers = peerManager.selectPeers('postChunk', 3);
+
+      assert.equal(peers.length, 3);
+      assert.equal(peers[0], 'http://peer-weight-100.example.com');
+      assert.equal(peers[1], 'http://peer-weight-75.example.com');
+      assert.equal(peers[2], 'http://peer-weight-50.example.com');
+    });
+
+    it('should return same postChunk peers on repeated selections', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://peer-a.example.com', weight: 100 },
+        { id: 'http://peer-b.example.com', weight: 50 },
+        { id: 'http://peer-c.example.com', weight: 25 },
+      ];
+
+      // Multiple selections should return same peers in same order
+      const selection1 = peerManager.selectPeers('postChunk', 2);
+      const selection2 = peerManager.selectPeers('postChunk', 2);
+      const selection3 = peerManager.selectPeers('postChunk', 2);
+
+      assert.deepEqual(selection1, selection2);
+      assert.deepEqual(selection2, selection3);
+      assert.equal(selection1[0], 'http://peer-a.example.com');
+      assert.equal(selection1[1], 'http://peer-b.example.com');
+    });
+
+    it('should handle equal weights consistently for postChunk', () => {
+      // Set up peers with some equal weights
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://peer-x.example.com', weight: 100 },
+        { id: 'http://peer-y.example.com', weight: 100 },
+        { id: 'http://peer-z.example.com', weight: 50 },
+      ];
+
+      // Selection should be consistent (stable sort)
+      const peers1 = peerManager.selectPeers('postChunk', 3);
+      const peers2 = peerManager.selectPeers('postChunk', 3);
+
+      assert.deepEqual(peers1, peers2);
+      // All three should be selected
+      assert.equal(peers1.length, 3);
+    });
+
+    it('should select getChunk peers in deterministic weight order', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedGetChunkPeers = [
+        { id: 'http://peer-weight-100.example.com', weight: 100 },
+        { id: 'http://peer-weight-75.example.com', weight: 75 },
+        { id: 'http://peer-weight-50.example.com', weight: 50 },
+        { id: 'http://peer-weight-1.example.com', weight: 1 },
+      ];
+
+      // Select 3 peers - should always get the top 3 by weight
+      const peers = peerManager.selectPeers('getChunk', 3);
+
+      assert.equal(peers.length, 3);
+      assert.equal(peers[0], 'http://peer-weight-100.example.com');
+      assert.equal(peers[1], 'http://peer-weight-75.example.com');
+      assert.equal(peers[2], 'http://peer-weight-50.example.com');
+    });
+
+    it('should return same getChunk peers on repeated selections', () => {
+      // Set up peers with different weights
+      (peerManager as any).weightedGetChunkPeers = [
+        { id: 'http://preferred-get.example.com', weight: 100 },
+        { id: 'http://peer-b.example.com', weight: 1 },
+        { id: 'http://peer-c.example.com', weight: 1 },
+      ];
+
+      // Multiple selections should return same peers in same order
+      const selection1 = peerManager.selectPeers('getChunk', 2);
+      const selection2 = peerManager.selectPeers('getChunk', 2);
+      const selection3 = peerManager.selectPeers('getChunk', 2);
+
+      assert.deepEqual(selection1, selection2);
+      assert.deepEqual(selection2, selection3);
+      assert.equal(selection1[0], 'http://preferred-get.example.com');
+    });
+
+    it('should prioritize preferred peer for getChunk with many discovered peers', () => {
+      // Simulate real-world scenario: 1 preferred + 500 discovered
+      const peers = [{ id: 'http://preferred-get.example.com', weight: 100 }];
+
+      // Add 500 discovered peers at weight 1
+      for (let i = 0; i < 500; i++) {
+        peers.push({ id: `http://discovered-${i}.example.com`, weight: 1 });
+      }
+
+      (peerManager as any).weightedGetChunkPeers = peers;
+
+      // Select 10 peers
+      const selected = peerManager.selectPeers('getChunk', 10);
+
+      // First peer should ALWAYS be the preferred peer
+      assert.equal(selected[0], 'http://preferred-get.example.com');
+      assert.equal(selected.length, 10);
+    });
   });
 
   describe('success/failure reporting', () => {
@@ -173,6 +282,135 @@ describe('ArweavePeerManager', () => {
 
       const newWeight = (peerManager as any).weightedChainPeers[0].weight;
       assert.equal(newWeight, 100);
+    });
+  });
+
+  describe('preferred peer weight preservation', () => {
+    beforeEach(() => {
+      // Set up preferred GET peers
+      (peerManager as any).weightedGetChunkPeers = [
+        { id: 'http://preferred-get.example.com', weight: 100 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+
+      // Set up preferred POST peers
+      (peerManager as any).weightedPostChunkPeers = [
+        { id: 'http://preferred-post.example.com', weight: 100 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+    });
+
+    it('should not decrement preferred GET peer weight on failure', () => {
+      const initialWeight = (peerManager as any).weightedGetChunkPeers[0]
+        .weight;
+
+      peerManager.reportFailure('getChunk', 'http://preferred-get.example.com');
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[0].weight;
+      assert.equal(newWeight, initialWeight);
+      assert.equal(newWeight, 100);
+    });
+
+    it('should not decrement preferred POST peer weight on failure', () => {
+      const initialWeight = (peerManager as any).weightedPostChunkPeers[0]
+        .weight;
+
+      peerManager.reportFailure(
+        'postChunk',
+        'http://preferred-post.example.com',
+      );
+
+      const newWeight = (peerManager as any).weightedPostChunkPeers[0].weight;
+      assert.equal(newWeight, initialWeight);
+      assert.equal(newWeight, 100);
+    });
+
+    it('should not increment preferred GET peer weight on success', () => {
+      // Set weight to 95 to test it doesn't increment
+      (peerManager as any).weightedGetChunkPeers[0].weight = 95;
+
+      peerManager.reportSuccess(
+        'getChunk',
+        'http://preferred-get.example.com',
+        {
+          responseTimeMs: 50,
+        },
+      );
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[0].weight;
+      assert.equal(newWeight, 95);
+    });
+
+    it('should not increment preferred POST peer weight on success', () => {
+      // Set weight to 95 to test it doesn't increment
+      (peerManager as any).weightedPostChunkPeers[0].weight = 95;
+
+      peerManager.reportSuccess(
+        'postChunk',
+        'http://preferred-post.example.com',
+        { responseTimeMs: 50 },
+      );
+
+      const newWeight = (peerManager as any).weightedPostChunkPeers[0].weight;
+      assert.equal(newWeight, 95);
+    });
+
+    it('should still adjust weight for non-preferred peers on failure', () => {
+      const initialWeight = (peerManager as any).weightedGetChunkPeers[1]
+        .weight;
+
+      peerManager.reportFailure('getChunk', 'http://regular-peer.example.com');
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[1].weight;
+      assert.ok(newWeight < initialWeight);
+    });
+
+    it('should still adjust weight for non-preferred peers on success', () => {
+      const initialWeight = (peerManager as any).weightedGetChunkPeers[1]
+        .weight;
+
+      peerManager.reportSuccess('getChunk', 'http://regular-peer.example.com', {
+        responseTimeMs: 50,
+      });
+
+      const newWeight = (peerManager as any).weightedGetChunkPeers[1].weight;
+      assert.ok(newWeight > initialWeight);
+    });
+
+    it('should adjust weight for preferred chunk peers in chain operations on failure', () => {
+      // Set up a preferred chunk peer in the chain pool
+      (peerManager as any).weightedChainPeers = [
+        { id: 'http://preferred-get.example.com', weight: 100 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+
+      const initialWeight = (peerManager as any).weightedChainPeers[0].weight;
+
+      // Report failure for chain operation
+      peerManager.reportFailure('chain', 'http://preferred-get.example.com');
+
+      const newWeight = (peerManager as any).weightedChainPeers[0].weight;
+      // Should decrease for chain operations even though it's a preferred chunk peer
+      assert.ok(newWeight < initialWeight);
+    });
+
+    it('should adjust weight for preferred chunk peers in chain operations on success', () => {
+      // Set up a preferred chunk peer in the chain pool
+      (peerManager as any).weightedChainPeers = [
+        { id: 'http://preferred-post.example.com', weight: 50 },
+        { id: 'http://regular-peer.example.com', weight: 50 },
+      ];
+
+      const initialWeight = (peerManager as any).weightedChainPeers[0].weight;
+
+      // Report success for chain operation
+      peerManager.reportSuccess('chain', 'http://preferred-post.example.com', {
+        responseTimeMs: 50,
+      });
+
+      const newWeight = (peerManager as any).weightedChainPeers[0].weight;
+      // Should increase for chain operations even though it's a preferred chunk peer
+      assert.ok(newWeight > initialWeight);
     });
   });
 

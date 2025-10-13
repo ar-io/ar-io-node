@@ -39,6 +39,9 @@ export interface RateLimiterRedisClient {
     now: number,
     ttlSeconds: number,
     tokensToConsume: number,
+    x402PaymentProvided: boolean,
+    capacityMultiplier: number,
+    contentLengthForTopOff: number,
   ): Promise<BucketConsumptionResult>;
   consumeTokens(
     key: string,
@@ -122,6 +125,9 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
         now: number,
         ttlSeconds: number,
         tokensToConsume: number,
+        x402PaymentProvided: boolean,
+        capacityMultiplier: number,
+        contentLengthForTopOff: number,
       ): Promise<BucketConsumptionResult> => {
         const result = await client.getOrCreateBucketAndConsume(
           key,
@@ -130,6 +136,9 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
           now,
           ttlSeconds,
           tokensToConsume,
+          x402PaymentProvided ? '1' : '0', // Convert boolean to string for Lua
+          capacityMultiplier,
+          contentLengthForTopOff,
         );
         return JSON.parse(result);
       },

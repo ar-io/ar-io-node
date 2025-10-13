@@ -6,10 +6,10 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 
 import { ContiguousDataAttributes, DataAttributesSource } from '../types.js';
 import { CompositeDataAttributesSource } from './composite-data-attributes-source.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const TEST_DATA_ATTRIBUTES: ContiguousDataAttributes = {
   hash: 'test-hash',
@@ -61,10 +61,10 @@ class MockDataAttributesSource implements DataAttributesSource {
 }
 
 describe('CompositeDataAttributesSource', () => {
-  let log: winston.Logger;
+  let log: ReturnType<typeof createTestLogger>;
 
   before(() => {
-    log = winston.createLogger({ silent: true });
+    log = createTestLogger({ suite: 'CompositeDataAttributesSource' });
   });
 
   afterEach(() => {

@@ -6,11 +6,11 @@
  */
 import { strict as assert } from 'node:assert';
 import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
-import * as winston from 'winston';
 import { AoARIORead } from '@ar.io/sdk';
 import { ArIOPeerManager } from './ar-io-peer-manager.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
-let log: winston.Logger;
+let log: ReturnType<typeof createTestLogger>;
 let peerManager: ArIOPeerManager;
 let mockedArIOInstance: AoARIORead;
 
@@ -21,7 +21,7 @@ const INITIAL_PEERS = {
 };
 
 before(async () => {
-  log = winston.createLogger({ silent: true });
+  log = createTestLogger({ suite: 'ArIOPeerManager' });
 });
 
 beforeEach(async () => {

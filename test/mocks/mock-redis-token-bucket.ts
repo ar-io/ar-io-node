@@ -56,13 +56,16 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     now: number,
     ttlSeconds: number,
     tokensToConsume: number,
+    x402PaymentProvided: boolean = false,
+    capacityMultiplier: number = 10,
+    contentLengthForTopOff: number = 0,
   ): Promise<BucketConsumptionResult> {
     this.callCounts.getOrCreateBucketAndConsume++;
 
     let bucket = this.buckets.get(key);
 
     if (!bucket) {
-      // Create new bucket with full capacity
+      // Create new bucket with base capacity
       bucket = {
         key,
         tokens: capacity,
@@ -70,14 +73,53 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
         capacity,
         refillRate,
       };
+      // If x402 payment provided, start with boosted tokens based on content size
+      if (x402PaymentProvided) {
+        let effectiveCapacity;
+        if (contentLengthForTopOff > 0) {
+          // Calculate proportional top-off based on content size
+          const baseTokens = Math.max(
+            1,
+            Math.ceil(contentLengthForTopOff / 1024),
+          );
+          effectiveCapacity = baseTokens * capacityMultiplier;
+        } else {
+          // Fallback to base capacity multiplier if no content length provided
+          effectiveCapacity = capacity * capacityMultiplier;
+        }
+        bucket.tokens = effectiveCapacity;
+      }
     } else {
-      // Calculate tokens to refill based on elapsed time
+      // Calculate effective capacity for this operation
       const elapsedSeconds = Math.max(0, (now - bucket.lastRefill) / 1000);
-      const tokensToAdd = Math.floor(elapsedSeconds * refillRate);
+      let effectiveCapacity = bucket.capacity;
+      let toAdd = 0;
 
-      // Refill tokens, capped at capacity
-      bucket.tokens = Math.min(capacity, bucket.tokens + tokensToAdd);
-      bucket.lastRefill = now;
+      // Apply multipliers and calculate tokens to add based on payment status
+      if (x402PaymentProvided) {
+        // For paid requests: calculate proportional top-off based on content size
+        if (contentLengthForTopOff > 0) {
+          const baseTokens = Math.max(
+            1,
+            Math.ceil(contentLengthForTopOff / 1024),
+          );
+          effectiveCapacity = baseTokens * capacityMultiplier;
+        } else {
+          // Fallback to base capacity multiplier if no content length provided
+          effectiveCapacity = effectiveCapacity * capacityMultiplier;
+        }
+        // Top-off to effective capacity (instant refill for paid requests)
+        toAdd = effectiveCapacity;
+      } else {
+        // For unpaid requests: normal time-based refill at base rate
+        toAdd = Math.floor(elapsedSeconds * bucket.refillRate);
+      }
+
+      // Add tokens but cap at effective capacity (prevents overflow)
+      if (toAdd > 0) {
+        bucket.tokens = Math.min(effectiveCapacity, bucket.tokens + toAdd);
+        bucket.lastRefill = now;
+      }
     }
 
     // Determine actual tokens needed (may override prediction with cached contentLength)

@@ -30,7 +30,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-3a1db3ee7f73ae436dec2c11fa502efbdcaf4b9a}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-924aea15ff816b197b995c770e912641ba050313}
     build:
       context: .
     restart: unless-stopped
@@ -137,7 +137,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-53}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-54}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS=${CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
@@ -194,6 +194,14 @@ services:
       - OTEL_EXPORTER_OTLP_HEADERS_FILE=${OTEL_EXPORTER_OTLP_HEADERS_FILE:-}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # x402 USDC Egress
+      - ENABLE_X_402_USDC_DATA_EGRESS=${ENABLE_X_402_USDC_DATA_EGRESS:-}
+      - X_402_USDC_NETWORK=${X_402_USDC_NETWORK:-}
+      - X_402_USDC_WALLET_ADDRESS=${X_402_USDC_WALLET_ADDRESS:-}
+      - X_402_USDC_DATA_EGRESS_MIN_PRICE=${X_402_USDC_DATA_EGRESS_MIN_PRICE:-}
+      - X_402_USDC_DATA_EGRESS_MAX_PRICE=${X_402_USDC_DATA_EGRESS_MAX_PRICE:-}
+      - X_402_USDC_FACILITATOR_URL=${X_402_USDC_FACILITATOR_URL:-}
+      - X_402_USDC_PER_BYTE_PRICE=${X_402_USDC_PER_BYTE_PRICE:-}
     networks:
       - ar-io-network
     depends_on:
@@ -206,7 +214,7 @@ services:
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: unless-stopped
     ports:
-      - '6379' # don't expose redis externally by default
+      - "6379" # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
     networks:
@@ -268,7 +276,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-d21ea765b0dae92154439394a878e5d857d24dc3}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-7384807c660228579b312474090c47ea9b7727ec}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -287,7 +295,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-53}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-54}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
       - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
