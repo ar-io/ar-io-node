@@ -21,10 +21,7 @@ export function createPaymentProcessor(): PaymentProcessor | undefined {
     return undefined;
   }
 
-  if (
-    config.X_402_USDC_WALLET_ADDRESS === undefined ||
-    config.X_402_USDC_WALLET_ADDRESS === ''
-  ) {
+  if (config.X_402_USDC_WALLET_ADDRESS === undefined) {
     log.warn(
       '[PaymentProcessor] x402 USDC enabled but no wallet address configured',
     );

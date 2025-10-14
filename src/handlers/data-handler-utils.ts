@@ -101,7 +101,7 @@ export async function checkPaymentAndRateLimits({
   res,
   id,
   dataAttributes,
-  requestAttributes,
+  requestAttributes: _requestAttributes,
   rangeHeader,
   rateLimiter,
   paymentProcessor,

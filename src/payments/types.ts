@@ -6,12 +6,7 @@
  */
 
 import { Request, Response } from 'express';
-import {
-  PaymentPayload,
-  PaymentRequirements,
-  VerifyResponse,
-  SettleResponse,
-} from 'x402/types';
+import { PaymentPayload, PaymentRequirements } from 'x402/types';
 
 /**
  * Result of payment verification

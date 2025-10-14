@@ -19,7 +19,6 @@ import {
   toJsonSafe,
   getPaywallHtml,
 } from 'x402/shared';
-import * as config from '../config.js';
 import log from '../log.js';
 import {
   PaymentProcessor,
@@ -212,7 +211,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
       // Wrap settlement with timeout to prevent indefinite hanging
       const settlementResult = await Promise.race([
         this.facilitator.settle(paymentPayload, requirements),
-        new Promise((_, reject) =>
+        new Promise<never>((_, reject) =>
           setTimeout(
             () => reject(new Error('Settlement timeout')),
             this.config.settleTimeoutMs,

@@ -6,7 +6,6 @@
  */
 
 import { Request, Response } from 'express';
-import { isIP } from 'is-ip';
 import { isAnyIpAllowlisted } from '../lib/ip-utils.js';
 import log from '../log.js';
 import {
@@ -63,28 +62,6 @@ export class MemoryRateLimiter implements RateLimiter {
     const full = `${req.baseUrl || ''}${req.path || ''}`;
     const normalized = full === '' ? '/' : full.replace(/\/{2,}/g, '/');
     return normalized.slice(0, 256);
-  }
-
-  /**
-   * Extract domain from host header
-   */
-  private extractDomain(host: string): string {
-    if (!host) {
-      return 'unknown';
-    }
-
-    const hostWithoutPort = host.split(':')[0];
-
-    if (isIP(hostWithoutPort)) {
-      return 'unknown';
-    }
-
-    const parts = hostWithoutPort.split('.');
-    if (parts.length >= 2) {
-      return parts.slice(-2).join('.');
-    }
-
-    return hostWithoutPort;
   }
 
   /**

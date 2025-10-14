@@ -1205,6 +1205,11 @@ export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
+export const RATE_LIMITER_TYPE = env.varOrDefault(
+  'RATE_LIMITER_TYPE',
+  'memory',
+) as 'memory' | 'redis';
+
 export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
 
 export const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
