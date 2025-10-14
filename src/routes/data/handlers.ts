@@ -58,6 +58,57 @@ const handleIfNoneMatch = (req: Request, res: Response): boolean => {
   return false;
 };
 
+/**
+ * Calculate actual response size based on data size and optional range header
+ * For range requests, includes multipart boundaries and headers
+ */
+const calculateResponseSize = (
+  dataSize: number,
+  rangeHeader?: string,
+): number => {
+  if (rangeHeader === undefined) {
+    return dataSize; // Full content
+  }
+
+  const ranges = rangeParser(dataSize, rangeHeader);
+
+  // Malformed or unsatisfiable range - would send full content or error
+  if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
+    return dataSize;
+  }
+
+  // Single range: just the range size
+  if (ranges.length === 1) {
+    return ranges[0].end - ranges[0].start + 1;
+  }
+
+  // Multiple ranges: calculate total including boundaries and headers
+  // This matches the logic in handleRangeRequest
+  const boundary = '--------------------------' + '0'.repeat(24); // Approximate boundary size
+  const partBoundary = `--${boundary}\r\n`;
+  const finalBoundary = `--${boundary}--\r\n`;
+  const blankLine = '\r\n';
+
+  let totalSize = 0;
+
+  for (const range of ranges) {
+    totalSize += Buffer.byteLength(partBoundary);
+    totalSize += Buffer.byteLength(
+      `Content-Type: application/octet-stream\r\n`,
+    );
+    totalSize += Buffer.byteLength(
+      `Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`,
+    );
+    totalSize += Buffer.byteLength(blankLine);
+    totalSize += range.end - range.start + 1; // Actual data
+    totalSize += Buffer.byteLength(blankLine);
+  }
+
+  totalSize += Buffer.byteLength(finalBoundary);
+
+  return totalSize;
+};
+
 const setDigestStableVerifiedHeaders = ({
   req,
   res,
@@ -628,33 +679,17 @@ export const createRawDataHandler = ({
             return;
           }
 
-          // Only track response size if rate limiter consumed tokens
+          // Schedule token adjustment based on actual response size
           if (
             rateLimiter &&
             (limitCheck.resourceTokensConsumed !== undefined ||
               limitCheck.ipTokensConsumed !== undefined)
           ) {
-            let responseSize = 0;
-            const originalWrite = res.write.bind(res);
-            const originalEnd = res.end.bind(res);
-
-            res.write = function (chunk: any, ...args: any[]): boolean {
-              if (chunk) {
-                responseSize += Buffer.isBuffer(chunk)
-                  ? chunk.length
-                  : Buffer.byteLength(chunk);
-              }
-              return originalWrite(chunk, ...args);
-            };
-
-            res.end = function (chunk?: any, ...args: any[]): any {
-              if (chunk) {
-                responseSize += Buffer.isBuffer(chunk)
-                  ? chunk.length
-                  : Buffer.byteLength(chunk);
-              }
-              return originalEnd(chunk, ...args);
-            };
+            // Calculate response size from data.size and range header
+            const responseSize = calculateResponseSize(
+              data.size,
+              req.headers.range,
+            );
 
             // Adjust tokens after response is sent (run in background)
             res.on('finish', () => {
@@ -843,33 +878,17 @@ const sendManifestResponse = async ({
         return true; // Response was sent (402 or 429)
       }
 
-      // Only track response size if rate limiter consumed tokens
+      // Schedule token adjustment based on actual response size
       if (
         rateLimiter &&
         (limitCheck.resourceTokensConsumed !== undefined ||
           limitCheck.ipTokensConsumed !== undefined)
       ) {
-        let responseSize = 0;
-        const originalWrite = res.write.bind(res);
-        const originalEnd = res.end.bind(res);
-
-        res.write = function (chunk: any, ...args: any[]): boolean {
-          if (chunk) {
-            responseSize += Buffer.isBuffer(chunk)
-              ? chunk.length
-              : Buffer.byteLength(chunk);
-          }
-          return originalWrite(chunk, ...args);
-        };
-
-        res.end = function (chunk?: any, ...args: any[]): any {
-          if (chunk) {
-            responseSize += Buffer.isBuffer(chunk)
-              ? chunk.length
-              : Buffer.byteLength(chunk);
-          }
-          return originalEnd(chunk, ...args);
-        };
+        // Calculate response size from data.size and range header
+        const responseSize = calculateResponseSize(
+          data.size,
+          req.headers.range,
+        );
 
         // Adjust tokens after response is sent (run in background)
         res.on('finish', () => {
@@ -1178,33 +1197,17 @@ export const createDataHandler = ({
             return;
           }
 
-          // Only track response size if rate limiter consumed tokens
+          // Schedule token adjustment based on actual response size
           if (
             rateLimiter &&
             (limitCheck.resourceTokensConsumed !== undefined ||
               limitCheck.ipTokensConsumed !== undefined)
           ) {
-            let responseSize = 0;
-            const originalWrite = res.write.bind(res);
-            const originalEnd = res.end.bind(res);
-
-            res.write = function (chunk: any, ...args: any[]): boolean {
-              if (chunk) {
-                responseSize += Buffer.isBuffer(chunk)
-                  ? chunk.length
-                  : Buffer.byteLength(chunk);
-              }
-              return originalWrite(chunk, ...args);
-            };
-
-            res.end = function (chunk?: any, ...args: any[]): any {
-              if (chunk) {
-                responseSize += Buffer.isBuffer(chunk)
-                  ? chunk.length
-                  : Buffer.byteLength(chunk);
-              }
-              return originalEnd(chunk, ...args);
-            };
+            // Calculate response size from data.size and range header
+            const responseSize = calculateResponseSize(
+              data.size,
+              req.headers.range,
+            );
 
             // Adjust tokens after response is sent (run in background)
             res.on('finish', () => {
