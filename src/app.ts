@@ -20,8 +20,6 @@ import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
 import { x402Router } from './routes/x402.js';
-import { rateLimiterMiddleware } from './middleware/rate-limiter.js';
-import { x402DataEgressMiddleware } from './middleware/x402.js';
 
 // Initialize DNS resolution for preferred chunk GET nodes (non-fatal on failure)
 try {
@@ -69,20 +67,6 @@ app.use(
     ],
   }),
 );
-
-// x402 payment middleware - runs before rate limiter to set payment status
-app.use(
-  x402DataEgressMiddleware({
-    dataAttributesSource: system.dataAttributesStore,
-  }),
-);
-
-if (config.ENABLE_RATE_LIMITER) {
-  log.info('[app] enabling rate limiter middleware');
-  app.use(rateLimiterMiddleware());
-} else {
-  log.info('[app] rate limiter middleware disabled');
-}
 
 app.use(x402Router); // test x402 endpoint
 app.use(arnsRouter);
