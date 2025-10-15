@@ -681,14 +681,26 @@ export const createRawDataHandler = ({
 
           // Schedule token adjustment based on actual response size
           if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-            // Calculate response size from data.size and range header
-            const responseSize = calculateResponseSize(
-              data.size,
-              req.headers.range,
-            );
-
+            const dataSize = data.size; // Capture size for closure
             // Adjust tokens after response is sent (run in background)
             res.on('finish', () => {
+              // Check response status - don't charge for 304 or HEAD responses
+              let responseSize: number;
+              if (
+                res.statusCode === 304 ||
+                req.method === REQUEST_METHOD_HEAD
+              ) {
+                // 304 Not Modified and HEAD requests send no body
+                // Note: adjustTokens will still consume minimum 1 token to prevent spam
+                responseSize = 0;
+              } else {
+                // Calculate actual response size from data.size and range header
+                responseSize = calculateResponseSize(
+                  dataSize,
+                  req.headers.range,
+                );
+              }
+
               adjustRateLimitTokens({
                 req,
                 responseSize,
@@ -876,14 +888,20 @@ const sendManifestResponse = async ({
 
       // Schedule token adjustment based on actual response size
       if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-        // Calculate response size from data.size and range header
-        const responseSize = calculateResponseSize(
-          data.size,
-          req.headers.range,
-        );
-
+        const dataSize = data.size; // Capture size for closure
         // Adjust tokens after response is sent (run in background)
         res.on('finish', () => {
+          // Check response status - don't charge for 304 or HEAD responses
+          let responseSize: number;
+          if (res.statusCode === 304 || req.method === REQUEST_METHOD_HEAD) {
+            // 304 Not Modified and HEAD requests send no body
+            // Note: adjustTokens will still consume minimum 1 token to prevent spam
+            responseSize = 0;
+          } else {
+            // Calculate actual response size from data.size and range header
+            responseSize = calculateResponseSize(dataSize, req.headers.range);
+          }
+
           adjustRateLimitTokens({
             req,
             responseSize,
@@ -1191,14 +1209,26 @@ export const createDataHandler = ({
 
           // Schedule token adjustment based on actual response size
           if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-            // Calculate response size from data.size and range header
-            const responseSize = calculateResponseSize(
-              data.size,
-              req.headers.range,
-            );
-
+            const dataSize = data.size; // Capture size for closure
             // Adjust tokens after response is sent (run in background)
             res.on('finish', () => {
+              // Check response status - don't charge for 304 or HEAD responses
+              let responseSize: number;
+              if (
+                res.statusCode === 304 ||
+                req.method === REQUEST_METHOD_HEAD
+              ) {
+                // 304 Not Modified and HEAD requests send no body
+                // Note: adjustTokens will still consume minimum 1 token to prevent spam
+                responseSize = 0;
+              } else {
+                // Calculate actual response size from data.size and range header
+                responseSize = calculateResponseSize(
+                  dataSize,
+                  req.headers.range,
+                );
+              }
+
               adjustRateLimitTokens({
                 req,
                 responseSize,
