@@ -115,4 +115,21 @@ export interface PaymentProcessor {
    * @returns PaymentPayload or undefined if no payment header
    */
   extractPayment(req: Request): PaymentPayload | undefined;
+
+  /**
+   * Check if request should use redirect mode (for browser paywall)
+   * This checks for the x-redirect query parameter to determine if
+   * the payment-authorized response should redirect instead of delivering content
+   * @param req Express request object
+   * @returns boolean indicating if redirect mode should be used
+   */
+  shouldUseRedirectMode(req: Request): boolean;
+
+  /**
+   * Send an HTML redirect response after successful payment verification
+   * This is used in redirect mode to avoid blob URLs that lose content metadata
+   * @param req Express request object
+   * @param res Express response object
+   */
+  sendRedirectResponse(req: Request, res: Response): void;
 }

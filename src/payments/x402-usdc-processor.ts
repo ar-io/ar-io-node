@@ -250,6 +250,46 @@ export class X402UsdcProcessor implements PaymentProcessor {
   }
 
   /**
+   * Check if request should use redirect mode (for browser paywall)
+   */
+  public shouldUseRedirectMode(req: Request): boolean {
+    // Check for x-redirect query parameter
+    const url = new URL(
+      req.originalUrl,
+      `${req.protocol}://${req.get('host')}`,
+    );
+    return url.searchParams.get('x-redirect') === '1';
+  }
+
+  /**
+   * Send an HTML redirect response after successful payment verification
+   */
+  public sendRedirectResponse(req: Request, res: Response): void {
+    // Build redirect URL without the x-redirect parameter
+    const url = new URL(
+      req.originalUrl,
+      `${req.protocol}://${req.get('host')}`,
+    );
+    url.searchParams.delete('x-redirect');
+    const redirectUrl = url.pathname + url.search + url.hash;
+
+    // Return HTML with meta refresh to trigger SDK's HTML handling
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="refresh" content="0;url=${redirectUrl}">
+  <title>Payment Verified</title>
+</head>
+<body>
+  <p>Payment verified. Redirecting...</p>
+</body>
+</html>`;
+
+    res.setHeader('Content-Type', 'text/html');
+    res.status(200).send(html);
+  }
+
+  /**
    * Send a 402 payment required response
    */
   public sendPaymentRequiredResponse(
@@ -277,10 +317,19 @@ export class X402UsdcProcessor implements PaymentProcessor {
         displayAmount = parseInt(requirements.maxAmountRequired) / 1000000;
       }
 
+      // Add x-redirect=1 parameter to enable redirect mode
+      // This ensures payment-authorized requests return HTML redirect instead of blob URLs
+      const url = new URL(
+        req.originalUrl,
+        `${req.protocol}://${req.get('host')}`,
+      );
+      url.searchParams.set('x-redirect', '1');
+      const paywallUrl = url.pathname + url.search + url.hash;
+
       const html = getPaywallHtml({
         amount: displayAmount,
         paymentRequirements: toJsonSafe([requirements]) as any,
-        currentUrl: req.originalUrl,
+        currentUrl: paywallUrl,
         testnet: this.config.network === 'base-sepolia',
         cdpClientKey: this.config.cdpClientKey,
         appName: this.config.appName,
