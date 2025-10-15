@@ -196,7 +196,7 @@ export class MemoryRateLimiter implements RateLimiter {
     const host = (req.headers.host ?? '').slice(0, 256);
     const primaryClientIp = req.ip ?? '0.0.0.0';
 
-    const { resourceKey, ipKey } = this.buildBucketKeys(
+    const { ipKey } = this.buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -205,47 +205,7 @@ export class MemoryRateLimiter implements RateLimiter {
 
     const now = Date.now();
 
-    // Get or create resource bucket
-    const resourceBucket = this.getOrCreateBucket(
-      resourceKey,
-      this.config.resourceCapacity,
-      this.config.resourceRefillRate,
-      now,
-    );
-
-    // Top off resource bucket if payment provided
-    if (x402PaymentProvided && contentLengthForTopOff > 0) {
-      this.topOffBucket(
-        resourceBucket,
-        contentLengthForTopOff,
-        this.config.capacityMultiplier,
-      );
-    }
-
-    // Calculate actual tokens needed from cached content length
-    const actualTokensNeeded =
-      resourceBucket.contentLength != null && resourceBucket.contentLength > 0
-        ? Math.max(1, Math.ceil(resourceBucket.contentLength / 1024))
-        : predictedTokens;
-
-    // Consume from resource bucket
-    const resourceSuccess = this.consumeTokens(resourceBucket, predictedTokens);
-
-    if (!resourceSuccess) {
-      log.info('[MemoryRateLimiter] Resource limit exceeded', {
-        key: resourceKey,
-        tokens: resourceBucket.tokens,
-        needed: predictedTokens,
-      });
-
-      return {
-        allowed: false,
-        limitType: 'resource',
-        cachedContentLength: resourceBucket.contentLength,
-      };
-    }
-
-    // Get or create IP bucket
+    // Get or create IP bucket - this is the only rate limit we check
     const ipBucket = this.getOrCreateBucket(
       ipKey,
       this.config.ipCapacity,
@@ -263,34 +223,27 @@ export class MemoryRateLimiter implements RateLimiter {
     }
 
     // Consume from IP bucket
-    const ipSuccess = this.consumeTokens(ipBucket, actualTokensNeeded);
+    const ipSuccess = this.consumeTokens(ipBucket, predictedTokens);
 
     if (!ipSuccess) {
-      // Rollback resource bucket consumption
-      resourceBucket.tokens += predictedTokens;
-
       log.info('[MemoryRateLimiter] IP limit exceeded', {
         key: ipKey,
         tokens: ipBucket.tokens,
-        needed: actualTokensNeeded,
+        needed: predictedTokens,
       });
 
       return {
         allowed: false,
         limitType: 'ip',
-        cachedContentLength: resourceBucket.contentLength,
       };
     }
 
-    // Store buckets in request for later adjustment
-    (req as any).resourceBucket = resourceBucket;
+    // Store bucket in request for later adjustment
     (req as any).ipBucket = ipBucket;
 
     return {
       allowed: true,
-      resourceTokensConsumed: predictedTokens,
-      ipTokensConsumed: actualTokensNeeded,
-      cachedContentLength: resourceBucket.contentLength,
+      ipTokensConsumed: predictedTokens,
     };
   }
 
@@ -301,13 +254,10 @@ export class MemoryRateLimiter implements RateLimiter {
     req: Request,
     context: TokenAdjustmentContext,
   ): Promise<void> {
-    const resourceBucket = (req as any).resourceBucket as
-      | TokenBucket
-      | undefined;
     const ipBucket = (req as any).ipBucket as TokenBucket | undefined;
 
-    if (!resourceBucket || !ipBucket) {
-      log.warn('[MemoryRateLimiter] No buckets found for token adjustment');
+    if (!ipBucket) {
+      log.warn('[MemoryRateLimiter] No IP bucket found for token adjustment');
       return;
     }
 
@@ -316,28 +266,14 @@ export class MemoryRateLimiter implements RateLimiter {
       1,
       Math.ceil(context.responseSize / 1024),
     );
-    const resourceTokenAdjustment =
-      totalTokensNeeded - context.initialResourceTokens;
     const ipTokenAdjustment = totalTokensNeeded - context.initialIpTokens;
 
     log.debug('[MemoryRateLimiter] Adjusting tokens', {
       responseSize: context.responseSize,
       totalTokensNeeded,
-      resourceAdjustment: resourceTokenAdjustment,
       ipAdjustment: ipTokenAdjustment,
-      resourceBefore: resourceBucket.tokens,
       ipBefore: ipBucket.tokens,
     });
-
-    // Adjust resource bucket
-    if (resourceTokenAdjustment !== 0) {
-      resourceBucket.tokens = Math.max(
-        0,
-        resourceBucket.tokens - resourceTokenAdjustment,
-      );
-      // Cache content length for future requests
-      resourceBucket.contentLength = context.responseSize;
-    }
 
     // Adjust IP bucket
     if (ipTokenAdjustment !== 0) {
@@ -345,7 +281,6 @@ export class MemoryRateLimiter implements RateLimiter {
     }
 
     log.debug('[MemoryRateLimiter] Tokens adjusted', {
-      resourceAfter: resourceBucket.tokens,
       ipAfter: ipBucket.tokens,
     });
   }

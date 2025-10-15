@@ -103,48 +103,15 @@ export class RedisRateLimiter implements RateLimiter {
     const now = Date.now();
 
     try {
-      // Consume from the resource bucket first
-      const resourceResult = await this.redisClient.getOrCreateBucketAndConsume(
-        resourceKey,
-        this.config.resourceCapacity,
-        this.config.resourceRefillRate,
-        now,
-        this.config.cacheTtlSeconds,
-        predictedTokens,
-        x402PaymentProvided,
-        this.config.capacityMultiplier,
-        contentLengthForTopOff,
-      );
-
-      if (!resourceResult.success) {
-        log.info('[RedisRateLimiter] Resource limit exceeded', {
-          key: resourceKey,
-          tokens: resourceResult.bucket.tokens,
-          needed: predictedTokens,
-        });
-
-        return {
-          allowed: false,
-          limitType: 'resource',
-          cachedContentLength: resourceResult.bucket.contentLength,
-        };
-      }
-
-      // Calculate actual tokens needed from resource bucket's cached contentLength
-      const actualTokensNeeded =
-        resourceResult.bucket.contentLength != null &&
-        resourceResult.bucket.contentLength > 0
-          ? Math.max(1, Math.ceil(resourceResult.bucket.contentLength / 1024))
-          : predictedTokens;
-
-      // Consume from IP bucket
+      // Consume from IP bucket first - this is the primary rate limit
+      // If IP has enough tokens, skip resource bucket entirely
       const ipResult = await this.redisClient.getOrCreateBucketAndConsume(
         ipKey,
         this.config.ipCapacity,
         this.config.ipRefillRate,
         now,
         this.config.cacheTtlSeconds,
-        actualTokensNeeded,
+        predictedTokens,
         x402PaymentProvided,
         this.config.capacityMultiplier,
         contentLengthForTopOff,
@@ -154,44 +121,21 @@ export class RedisRateLimiter implements RateLimiter {
         log.info('[RedisRateLimiter] IP limit exceeded', {
           key: ipKey,
           tokens: ipResult.bucket.tokens,
-          needed: actualTokensNeeded,
+          needed: predictedTokens,
         });
-
-        // Rollback: return tokens to resource bucket
-        try {
-          await this.redisClient.consumeTokens(
-            resourceKey,
-            -resourceResult.consumed,
-            this.config.cacheTtlSeconds,
-          );
-        } catch (rollbackError) {
-          log.error(
-            '[RedisRateLimiter] Failed to rollback resource tokens after IP failure',
-            {
-              error: rollbackError,
-              resourceKey,
-              tokensToRollback: actualTokensNeeded,
-            },
-          );
-        }
 
         return {
           allowed: false,
           limitType: 'ip',
-          cachedContentLength: resourceResult.bucket.contentLength,
         };
       }
 
       // Store bucket keys and initial consumption in request for later adjustment
-      (req as any).resourceBucketKey = resourceKey;
       (req as any).ipBucketKey = ipKey;
-      (req as any).cachedContentLength = resourceResult.bucket.contentLength;
 
       return {
         allowed: true,
-        resourceTokensConsumed: resourceResult.consumed,
         ipTokensConsumed: ipResult.consumed,
-        cachedContentLength: resourceResult.bucket.contentLength,
       };
     } catch (error) {
       log.error('[RedisRateLimiter] Error checking rate limit', {
@@ -214,11 +158,12 @@ export class RedisRateLimiter implements RateLimiter {
     req: Request,
     context: TokenAdjustmentContext,
   ): Promise<void> {
-    const resourceKey = (req as any).resourceBucketKey as string | undefined;
     const ipKey = (req as any).ipBucketKey as string | undefined;
 
-    if (resourceKey === undefined || ipKey === undefined) {
-      log.warn('[RedisRateLimiter] No bucket keys found for token adjustment');
+    if (ipKey === undefined) {
+      log.warn(
+        '[RedisRateLimiter] No IP bucket key found for token adjustment',
+      );
       return;
     }
 
@@ -227,65 +172,31 @@ export class RedisRateLimiter implements RateLimiter {
       1,
       Math.ceil(context.responseSize / 1024),
     );
-    const resourceTokenAdjustment =
-      totalTokensNeeded - context.initialResourceTokens;
     const ipTokenAdjustment = totalTokensNeeded - context.initialIpTokens;
 
     log.debug('[RedisRateLimiter] Adjusting tokens', {
       responseSize: context.responseSize,
       totalTokensNeeded,
-      resourceAdjustment: resourceTokenAdjustment,
       ipAdjustment: ipTokenAdjustment,
     });
 
-    const adjustmentPromises: Promise<number>[] = [];
-    const adjustmentLabels: string[] = [];
-
-    // Adjust resource bucket and cache content length
-    if (resourceTokenAdjustment !== 0) {
-      adjustmentPromises.push(
-        this.redisClient.consumeTokens(
-          resourceKey,
-          resourceTokenAdjustment,
-          this.config.cacheTtlSeconds,
-          context.responseSize, // Cache content length
-        ),
-      );
-      adjustmentLabels.push('resource');
-    }
-
-    // Adjust IP bucket
+    // Adjust IP bucket only
     if (ipTokenAdjustment !== 0) {
-      adjustmentPromises.push(
-        this.redisClient.consumeTokens(
+      try {
+        await this.redisClient.consumeTokens(
           ipKey,
           ipTokenAdjustment,
           this.config.cacheTtlSeconds,
-        ),
-      );
-      adjustmentLabels.push('ip');
-    }
+        );
 
-    if (adjustmentPromises.length > 0) {
-      try {
-        const results = await Promise.allSettled(adjustmentPromises);
-
-        results.forEach((result, index) => {
-          const label = adjustmentLabels[index];
-          if (result.status === 'rejected') {
-            log.error('[RedisRateLimiter] Token adjustment failed for bucket', {
-              label,
-              error: result.reason,
-            });
-          }
-        });
-
-        log.debug('[RedisRateLimiter] Token adjustments completed', {
-          adjustedBuckets: adjustmentLabels,
+        log.debug('[RedisRateLimiter] Token adjustment completed', {
+          bucket: 'ip',
+          adjustment: ipTokenAdjustment,
         });
       } catch (error) {
-        log.error('[RedisRateLimiter] Error adjusting tokens', {
+        log.error('[RedisRateLimiter] Token adjustment failed', {
           error: error instanceof Error ? error.message : String(error),
+          ipKey,
         });
       }
     }

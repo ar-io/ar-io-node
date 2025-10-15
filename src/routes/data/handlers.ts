@@ -680,11 +680,7 @@ export const createRawDataHandler = ({
           }
 
           // Schedule token adjustment based on actual response size
-          if (
-            rateLimiter &&
-            (limitCheck.resourceTokensConsumed !== undefined ||
-              limitCheck.ipTokensConsumed !== undefined)
-          ) {
+          if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
             // Calculate response size from data.size and range header
             const responseSize = calculateResponseSize(
               data.size,
@@ -879,11 +875,7 @@ const sendManifestResponse = async ({
       }
 
       // Schedule token adjustment based on actual response size
-      if (
-        rateLimiter &&
-        (limitCheck.resourceTokensConsumed !== undefined ||
-          limitCheck.ipTokensConsumed !== undefined)
-      ) {
+      if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
         // Calculate response size from data.size and range header
         const responseSize = calculateResponseSize(
           data.size,
@@ -1198,11 +1190,7 @@ export const createDataHandler = ({
           }
 
           // Schedule token adjustment based on actual response size
-          if (
-            rateLimiter &&
-            (limitCheck.resourceTokensConsumed !== undefined ||
-              limitCheck.ipTokensConsumed !== undefined)
-          ) {
+          if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
             // Calculate response size from data.size and range header
             const responseSize = calculateResponseSize(
               data.size,

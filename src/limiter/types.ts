@@ -14,13 +14,9 @@ export interface RateLimitCheckResult {
   /** Whether the request is allowed */
   allowed: boolean;
   /** Type of limit that was exceeded, if any */
-  limitType?: 'resource' | 'ip' | 'unknown';
-  /** Number of tokens consumed from resource bucket */
-  resourceTokensConsumed?: number;
+  limitType?: 'ip' | 'unknown';
   /** Number of tokens consumed from IP bucket */
   ipTokensConsumed?: number;
-  /** Cached content length from previous requests, if available */
-  cachedContentLength?: number;
 }
 
 /**

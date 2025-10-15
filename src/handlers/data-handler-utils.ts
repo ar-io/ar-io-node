@@ -44,9 +44,7 @@ export interface CheckPaymentAndRateLimitsParams {
  */
 export interface CheckPaymentAndRateLimitsResult {
   allowed: boolean;
-  resourceTokensConsumed?: number;
   ipTokensConsumed?: number;
-  cachedContentLength?: number;
   paymentVerified?: boolean;
   paymentSettled?: boolean;
 }
@@ -374,10 +372,7 @@ export async function checkPaymentAndRateLimits({
               // Return 429 rate limit exceeded
               res.status(429).json({
                 error: 'Too Many Requests',
-                message:
-                  limitResult.limitType === 'resource'
-                    ? 'Resource rate limit exceeded'
-                    : 'IP rate limit exceeded',
+                message: 'IP rate limit exceeded',
               });
             }
 
@@ -386,11 +381,22 @@ export async function checkPaymentAndRateLimits({
         }
 
         // Rate limit check passed
+        // Check if redirect mode should be used (for browser paywall after payment)
+        // This must happen AFTER rate limiter tops off buckets
+        if (
+          paymentProcessor !== undefined &&
+          paymentVerified &&
+          paymentProcessor.shouldUseRedirectMode(req)
+        ) {
+          rateLimitSpan.setAttribute('payment.redirect_mode', true);
+          log.debug('[DataHandler] Using redirect mode after payment', { id });
+          paymentProcessor.sendRedirectResponse(req, res);
+          return { allowed: false }; // Request handled via redirect
+        }
+
         return {
           allowed: true,
-          resourceTokensConsumed: limitResult.resourceTokensConsumed,
           ipTokensConsumed: limitResult.ipTokensConsumed,
-          cachedContentLength: limitResult.cachedContentLength,
           paymentVerified,
           paymentSettled,
         };
@@ -439,10 +445,7 @@ export async function adjustRateLimitTokens({
     return;
   }
 
-  if (
-    initialResult.resourceTokensConsumed === undefined ||
-    initialResult.ipTokensConsumed === undefined
-  ) {
+  if (initialResult.ipTokensConsumed === undefined) {
     // No initial consumption to adjust
     return;
   }
@@ -450,7 +453,6 @@ export async function adjustRateLimitTokens({
   const span = startChildSpan('adjustRateLimitTokens', {
     attributes: {
       response_size: responseSize,
-      initial_resource_tokens: initialResult.resourceTokensConsumed,
       initial_ip_tokens: initialResult.ipTokensConsumed,
     },
   });
@@ -458,13 +460,12 @@ export async function adjustRateLimitTokens({
   try {
     await rateLimiter.adjustTokens(req, {
       responseSize,
-      initialResourceTokens: initialResult.resourceTokensConsumed,
+      initialResourceTokens: 0, // No longer using resource tokens
       initialIpTokens: initialResult.ipTokensConsumed,
     });
 
     log.debug('[DataHandler] Adjusted rate limit tokens', {
       responseSize,
-      initialResourceTokens: initialResult.resourceTokensConsumed,
       initialIpTokens: initialResult.ipTokensConsumed,
     });
   } catch (error: any) {
