@@ -45,6 +45,8 @@ export interface CheckPaymentAndRateLimitsParams {
 export interface CheckPaymentAndRateLimitsResult {
   allowed: boolean;
   ipTokensConsumed?: number;
+  ipX402TokensConsumed?: number;
+  ipRegularTokensConsumed?: number;
   paymentVerified?: boolean;
   paymentSettled?: boolean;
 }
@@ -397,6 +399,8 @@ export async function checkPaymentAndRateLimits({
         return {
           allowed: true,
           ipTokensConsumed: limitResult.ipTokensConsumed,
+          ipX402TokensConsumed: limitResult.ipX402TokensConsumed,
+          ipRegularTokensConsumed: limitResult.ipRegularTokensConsumed,
           paymentVerified,
           paymentSettled,
         };
@@ -461,12 +465,16 @@ export async function adjustRateLimitTokens({
     await rateLimiter.adjustTokens(req, {
       responseSize,
       initialResourceTokens: 0, // No longer using resource tokens
-      initialIpTokens: initialResult.ipTokensConsumed,
+      initialIpTokens: initialResult.ipTokensConsumed ?? 0,
+      initialIpX402Tokens: initialResult.ipX402TokensConsumed ?? 0,
+      initialIpRegularTokens: initialResult.ipRegularTokensConsumed ?? 0,
     });
 
     log.debug('[DataHandler] Adjusted rate limit tokens', {
       responseSize,
       initialIpTokens: initialResult.ipTokensConsumed,
+      initialIpX402Tokens: initialResult.ipX402TokensConsumed,
+      initialIpRegularTokens: initialResult.ipRegularTokensConsumed,
     });
   } catch (error: any) {
     span.recordException(error);

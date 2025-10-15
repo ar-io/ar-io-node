@@ -45,37 +45,37 @@ if #all > 0 then
   -- Convert hash fields back to bucket object
   for i = 1, #all, 2 do bucket[all[i]] = tonumber(all[i+1]) or all[i+1] end
 
+  -- Ensure x402Tokens exists (for backward compatibility with old buckets)
+  bucket.x402Tokens = bucket.x402Tokens or 0
+
   -- Step 2: Refill tokens based on elapsed time (token bucket algorithm)
   local elapsed = (now - bucket.lastRefill) / 1000  -- convert to seconds
 
-  -- Calculate effective capacity for this operation
   -- IMPORTANT: DO NOT modify bucket.capacity or bucket.refillRate - they must remain at base values
-  local effectiveCapacity = bucket.capacity
   local to_add = 0
 
   -- Apply multipliers and calculate tokens to add based on payment status
   if x402PaymentProvided then
-    -- For paid requests: calculate proportional top-off based on content size
+    -- For paid requests: add x402 tokens based on content size
     if contentLengthForTopOff > 0 then
       -- Calculate base tokens from content length (1 token = 1 KB)
       local baseTokens = math.max(1, math.ceil(contentLengthForTopOff / 1024))
-      -- Apply capacity multiplier to get effective capacity
-      effectiveCapacity = baseTokens * capacityMultiplier
+      -- Apply capacity multiplier to get x402 tokens to add
+      to_add = baseTokens * capacityMultiplier
     else
       -- Fallback to base capacity multiplier if no content length provided
-      effectiveCapacity = effectiveCapacity * capacityMultiplier
+      to_add = capacity * capacityMultiplier
     end
-    -- Top-off to effective capacity (instant refill for paid requests)
-    to_add = effectiveCapacity
+    -- Add to x402 token pool (no cap - paid tokens accumulate)
+    bucket.x402Tokens = bucket.x402Tokens + to_add
   else
-    -- For unpaid requests: normal time-based refill at base rate
+    -- For unpaid requests: normal time-based refill of regular tokens at base rate
     to_add = math.floor(elapsed * bucket.refillRate)
-  end
-
-  -- Add tokens but cap at effective capacity (prevents overflow)
-  if to_add > 0 then
-    bucket.tokens = math.min(effectiveCapacity, bucket.tokens + to_add)
-    bucket.lastRefill = now  -- update last refill timestamp
+    -- Add tokens but cap at base capacity (prevents overflow)
+    if to_add > 0 then
+      bucket.tokens = math.min(bucket.capacity, bucket.tokens + to_add)
+      bucket.lastRefill = now  -- update last refill timestamp
+    end
   end
 
 else
@@ -83,22 +83,23 @@ else
   bucket = {
     key = key,
     tokens = capacity,      -- start with full tokens at base capacity
+    x402Tokens = 0,         -- no x402 tokens initially
     lastRefill = now,       -- current time as baseline
     capacity = capacity,    -- base capacity (not multiplied)
     refillRate = refill     -- base refill rate (not multiplied)
   }
-  -- if x402PaymentProvided, start with boosted tokens based on content size
+  -- if x402PaymentProvided, start with x402 tokens based on content size
   if x402PaymentProvided then
-    local effectiveCapacity
+    local x402TokensToAdd
     if contentLengthForTopOff > 0 then
-      -- Calculate proportional top-off based on content size
+      -- Calculate proportional x402 tokens based on content size
       local baseTokens = math.max(1, math.ceil(contentLengthForTopOff / 1024))
-      effectiveCapacity = baseTokens * capacityMultiplier
+      x402TokensToAdd = baseTokens * capacityMultiplier
     else
       -- Fallback to base capacity multiplier if no content length provided
-      effectiveCapacity = capacity * capacityMultiplier
+      x402TokensToAdd = capacity * capacityMultiplier
     end
-    bucket.tokens = effectiveCapacity  -- start with full tokens at boosted capacity
+    bucket.x402Tokens = x402TokensToAdd
   end
 end
 
@@ -110,20 +111,55 @@ if tokensToConsume > 0 and bucket.contentLength and bucket.contentLength > 0 the
   actualTokensNeeded = math.max(1, math.ceil(bucket.contentLength / 1024))
 end
 
--- Step 4: Attempt atomic token consumption
+-- Step 4: Attempt atomic token consumption - consume from x402 tokens first, then regular
 local consumed = 0
+local x402Consumed = 0
+local regularConsumed = 0
 local success = true
 
 if actualTokensNeeded > 0 then
-  if bucket.tokens >= actualTokensNeeded then
-    -- Sufficient tokens available - consume them
-    bucket.tokens = bucket.tokens - actualTokensNeeded
+  -- First, consume from x402 tokens
+  if bucket.x402Tokens >= actualTokensNeeded then
+    -- Sufficient x402 tokens to cover entire request
+    bucket.x402Tokens = bucket.x402Tokens - actualTokensNeeded
+    x402Consumed = actualTokensNeeded
+    regularConsumed = 0
     consumed = actualTokensNeeded
     success = true
+  elseif bucket.x402Tokens > 0 then
+    -- Partial x402 tokens available, need to use regular tokens too
+    x402Consumed = bucket.x402Tokens
+    local remainingNeeded = actualTokensNeeded - x402Consumed
+
+    if bucket.tokens >= remainingNeeded then
+      -- Sufficient regular tokens for the remainder
+      bucket.x402Tokens = 0
+      bucket.tokens = bucket.tokens - remainingNeeded
+      regularConsumed = remainingNeeded
+      consumed = actualTokensNeeded
+      success = true
+    else
+      -- Insufficient total tokens - fail the request (no partial consumption)
+      x402Consumed = 0
+      regularConsumed = 0
+      consumed = 0
+      success = false
+    end
   else
-    -- Insufficient tokens - fail the request (no partial consumption)
-    consumed = 0
-    success = false
+    -- No x402 tokens, consume from regular tokens only
+    if bucket.tokens >= actualTokensNeeded then
+      bucket.tokens = bucket.tokens - actualTokensNeeded
+      x402Consumed = 0
+      regularConsumed = actualTokensNeeded
+      consumed = actualTokensNeeded
+      success = true
+    else
+      -- Insufficient tokens - fail the request (no partial consumption)
+      x402Consumed = 0
+      regularConsumed = 0
+      consumed = 0
+      success = false
+    end
   end
 end
 
@@ -131,7 +167,8 @@ end
 -- Step 5: Persist bucket state to Redis using hash for efficiency
 local hset_args = {
   key,
-  'tokens',      bucket.tokens,      -- remaining tokens after consumption
+  'tokens',      bucket.tokens,      -- remaining regular tokens after consumption
+  'x402Tokens',  bucket.x402Tokens,  -- remaining x402 tokens after consumption
   'lastRefill',  bucket.lastRefill,  -- timestamp of last refill
   'capacity',    bucket.capacity,    -- maximum bucket capacity
   'refillRate',  bucket.refillRate   -- tokens added per second
@@ -149,9 +186,11 @@ redis.call('EXPIRE', key, ttl)
 
 -- Step 6: Return structured result for the application
 local result = {
-  bucket = bucket,    -- current bucket state
-  consumed = consumed, -- tokens actually consumed
-  success = success   -- whether the consumption succeeded
+  bucket = bucket,              -- current bucket state
+  consumed = consumed,          -- total tokens consumed
+  x402Consumed = x402Consumed,  -- tokens consumed from x402 pool
+  regularConsumed = regularConsumed, -- tokens consumed from regular pool
+  success = success             -- whether the consumption succeeded
 }
 
 return cjson.encode(result)

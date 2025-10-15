@@ -115,6 +115,12 @@ that provide metadata about the resolution process, including the resolved
 [item ID](#item-id), TTL (Time To Live), process ID, and [undername](#undername)
 information.
 
+**Rate Limiter Token Types** - The rate limiter tracks two separate token pools:
+**x402 tokens** (purchased through micropayments) and **regular tokens** (replenished
+over time). When consuming tokens, x402 tokens are used first, providing clear
+accounting of paid vs. free data egress. Regular tokens refill at a configured rate,
+while x402 tokens only accumulate through payment and do not refill automatically.
+
 ## Databases
 
 **Bundles Database** - SQLite database storing ANS-104 bundle metadata,

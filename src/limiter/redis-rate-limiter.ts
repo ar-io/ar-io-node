@@ -136,6 +136,8 @@ export class RedisRateLimiter implements RateLimiter {
       return {
         allowed: true,
         ipTokensConsumed: ipResult.consumed,
+        ipX402TokensConsumed: ipResult.x402Consumed,
+        ipRegularTokensConsumed: ipResult.regularConsumed,
       };
     } catch (error) {
       log.error('[RedisRateLimiter] Error checking rate limit', {

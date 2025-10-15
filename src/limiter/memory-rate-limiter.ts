@@ -20,6 +20,7 @@ import {
 interface TokenBucket {
   key: string;
   tokens: number;
+  x402Tokens: number; // Tokens purchased via x402 payment
   capacity: number;
   lastRefill: number;
   refillRate: number;
@@ -96,6 +97,7 @@ export class MemoryRateLimiter implements RateLimiter {
       bucket = {
         key,
         tokens: capacity,
+        x402Tokens: 0, // No x402 tokens initially
         capacity,
         lastRefill: now,
         refillRate,
@@ -103,13 +105,14 @@ export class MemoryRateLimiter implements RateLimiter {
       this.buckets.set(key, bucket);
       this.evictIfNeeded();
     } else {
-      // Refill tokens based on elapsed time
+      // Refill tokens based on elapsed time (only regular tokens refill)
       const elapsedSeconds = (now - bucket.lastRefill) / 1000;
       const tokensToAdd = elapsedSeconds * refillRate;
       bucket.tokens = Math.min(capacity, bucket.tokens + tokensToAdd);
       bucket.lastRefill = now;
       bucket.capacity = capacity; // Update capacity in case config changed
       bucket.refillRate = refillRate; // Update refill rate in case config changed
+      // Note: x402Tokens do not refill - they're only added by payment
     }
 
     // Update access order for LRU
@@ -144,18 +147,46 @@ export class MemoryRateLimiter implements RateLimiter {
   }
 
   /**
-   * Consume tokens from a bucket
+   * Consume tokens from a bucket - prioritize x402 tokens first
+   * Returns breakdown of consumption
    */
-  private consumeTokens(bucket: TokenBucket, tokens: number): boolean {
-    if (bucket.tokens >= tokens) {
-      bucket.tokens -= tokens;
-      return true;
+  private consumeTokens(
+    bucket: TokenBucket,
+    tokens: number,
+  ): { success: boolean; x402: number; regular: number } {
+    // First, try to consume from x402 tokens
+    if (bucket.x402Tokens >= tokens) {
+      // Sufficient x402 tokens to cover entire request
+      bucket.x402Tokens -= tokens;
+      return { success: true, x402: tokens, regular: 0 };
+    } else if (bucket.x402Tokens > 0) {
+      // Partial x402 tokens available, need to use regular tokens too
+      const x402Used = bucket.x402Tokens;
+      const remainingNeeded = tokens - x402Used;
+
+      if (bucket.tokens >= remainingNeeded) {
+        // Sufficient regular tokens for the remainder
+        bucket.x402Tokens = 0;
+        bucket.tokens -= remainingNeeded;
+        return { success: true, x402: x402Used, regular: remainingNeeded };
+      } else {
+        // Insufficient total tokens
+        return { success: false, x402: 0, regular: 0 };
+      }
+    } else {
+      // No x402 tokens, consume from regular tokens only
+      if (bucket.tokens >= tokens) {
+        bucket.tokens -= tokens;
+        return { success: true, x402: 0, regular: tokens };
+      } else {
+        // Insufficient tokens
+        return { success: false, x402: 0, regular: 0 };
+      }
     }
-    return false;
   }
 
   /**
-   * Top off bucket capacity with payment
+   * Top off bucket with x402 tokens from payment
    */
   private topOffBucket(
     bucket: TokenBucket,
@@ -163,14 +194,11 @@ export class MemoryRateLimiter implements RateLimiter {
     capacityMultiplier: number,
   ): void {
     const tokensToAdd = Math.ceil(contentLength / 1024) * capacityMultiplier;
-    const newCapacity = bucket.capacity + tokensToAdd;
-    bucket.capacity = newCapacity;
-    bucket.tokens = Math.min(newCapacity, bucket.tokens + tokensToAdd);
-    log.debug('[MemoryRateLimiter] Topped off bucket', {
+    bucket.x402Tokens += tokensToAdd;
+    log.debug('[MemoryRateLimiter] Topped off bucket with x402 tokens', {
       key: bucket.key,
-      tokensAdded: tokensToAdd,
-      newCapacity,
-      newTokens: bucket.tokens,
+      x402TokensAdded: tokensToAdd,
+      totalX402Tokens: bucket.x402Tokens,
     });
   }
 
@@ -222,13 +250,14 @@ export class MemoryRateLimiter implements RateLimiter {
       );
     }
 
-    // Consume from IP bucket
-    const ipSuccess = this.consumeTokens(ipBucket, predictedTokens);
+    // Consume from IP bucket - returns breakdown of x402 vs regular
+    const consumeResult = this.consumeTokens(ipBucket, predictedTokens);
 
-    if (!ipSuccess) {
+    if (!consumeResult.success) {
       log.info('[MemoryRateLimiter] IP limit exceeded', {
         key: ipKey,
-        tokens: ipBucket.tokens,
+        regularTokens: ipBucket.tokens,
+        x402Tokens: ipBucket.x402Tokens,
         needed: predictedTokens,
       });
 
@@ -244,6 +273,8 @@ export class MemoryRateLimiter implements RateLimiter {
     return {
       allowed: true,
       ipTokensConsumed: predictedTokens,
+      ipX402TokensConsumed: consumeResult.x402,
+      ipRegularTokensConsumed: consumeResult.regular,
     };
   }
 
@@ -272,16 +303,32 @@ export class MemoryRateLimiter implements RateLimiter {
       responseSize: context.responseSize,
       totalTokensNeeded,
       ipAdjustment: ipTokenAdjustment,
-      ipBefore: ipBucket.tokens,
+      ipBefore: {
+        regular: ipBucket.tokens,
+        x402: ipBucket.x402Tokens,
+      },
     });
 
-    // Adjust IP bucket
-    if (ipTokenAdjustment !== 0) {
-      ipBucket.tokens = Math.max(0, ipBucket.tokens - ipTokenAdjustment);
+    // Adjust IP bucket - consume additional or refund
+    if (ipTokenAdjustment > 0) {
+      // Need to consume more tokens - use the dual-token logic
+      this.consumeTokens(ipBucket, ipTokenAdjustment);
+    } else if (ipTokenAdjustment < 0) {
+      // Refund tokens to regular pool (not x402)
+      ipBucket.tokens = Math.max(
+        0,
+        Math.min(
+          ipBucket.capacity,
+          ipBucket.tokens - ipTokenAdjustment, // subtract negative = add
+        ),
+      );
     }
 
     log.debug('[MemoryRateLimiter] Tokens adjusted', {
-      ipAfter: ipBucket.tokens,
+      ipAfter: {
+        regular: ipBucket.tokens,
+        x402: ipBucket.x402Tokens,
+      },
     });
   }
 }

@@ -19,6 +19,7 @@ import logger from '../log.js';
 export interface TokenBucket {
   key: string;
   tokens: number;
+  x402Tokens: number; // Tokens purchased via x402 payment
   lastRefill: number;
   capacity: number;
   refillRate: number;
@@ -27,7 +28,9 @@ export interface TokenBucket {
 
 export interface BucketConsumptionResult {
   bucket: TokenBucket;
-  consumed: number;
+  consumed: number; // Total tokens consumed
+  x402Consumed: number; // Tokens consumed from x402 pool
+  regularConsumed: number; // Tokens consumed from regular pool
   success: boolean;
 }
 
