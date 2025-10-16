@@ -142,8 +142,11 @@ describe('Rate Limiter Tests', () => {
       );
 
       // Use consumeTokens which allows negative tokens
-      const remaining = await mockRedis.consumeTokens('test-key', 20, 60);
-      assert.strictEqual(remaining, -10);
+      const result = await mockRedis.consumeTokens('test-key', 20, 60);
+      assert.strictEqual(result.bucket.tokens, -10);
+      assert.strictEqual(result.consumed, 20);
+      assert.strictEqual(result.regularConsumed, 20);
+      assert.strictEqual(result.paidConsumed, 0);
     });
 
     it('should store content length in bucket', async () => {

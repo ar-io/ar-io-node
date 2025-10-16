@@ -25,7 +25,7 @@ declare module 'ioredis' {
       tokensToConsume: number,
       ttlSeconds: number,
       contentLength?: number,
-    ): Promise<number>;
+    ): Promise<string>;
   }
 
   interface Redis {
@@ -46,7 +46,7 @@ declare module 'ioredis' {
       tokensToConsume: number,
       ttlSeconds: number,
       contentLength?: number,
-    ): Promise<number>;
+    ): Promise<string>;
   }
 }
 

@@ -253,7 +253,7 @@ export class RedisRateLimiter implements RateLimiter {
     // Adjust IP bucket
     if (ipTokenAdjustment !== 0) {
       try {
-        await this.redisClient.consumeTokens(
+        const ipAdjustResult = await this.redisClient.consumeTokens(
           ipKey,
           ipTokenAdjustment,
           this.config.cacheTtlSeconds,
@@ -262,6 +262,14 @@ export class RedisRateLimiter implements RateLimiter {
         log.debug('[RedisRateLimiter] Token adjustment completed', {
           bucket: 'ip',
           adjustment: ipTokenAdjustment,
+          consumed: {
+            paid: ipAdjustResult.paidConsumed,
+            regular: ipAdjustResult.regularConsumed,
+          },
+          after: {
+            regular: ipAdjustResult.bucket.tokens,
+            paid: ipAdjustResult.bucket.paidTokens,
+          },
         });
       } catch (error) {
         log.error('[RedisRateLimiter] IP token adjustment failed', {
@@ -274,7 +282,7 @@ export class RedisRateLimiter implements RateLimiter {
     // Adjust resource bucket if it was checked
     if (resourceKey !== undefined && resourceTokenAdjustment !== 0) {
       try {
-        await this.redisClient.consumeTokens(
+        const resourceAdjustResult = await this.redisClient.consumeTokens(
           resourceKey,
           resourceTokenAdjustment,
           this.config.cacheTtlSeconds,
@@ -283,6 +291,14 @@ export class RedisRateLimiter implements RateLimiter {
         log.debug('[RedisRateLimiter] Token adjustment completed', {
           bucket: 'resource',
           adjustment: resourceTokenAdjustment,
+          consumed: {
+            paid: resourceAdjustResult.paidConsumed,
+            regular: resourceAdjustResult.regularConsumed,
+          },
+          after: {
+            regular: resourceAdjustResult.bucket.tokens,
+            paid: resourceAdjustResult.bucket.paidTokens,
+          },
         });
       } catch (error) {
         log.error('[RedisRateLimiter] Resource token adjustment failed', {

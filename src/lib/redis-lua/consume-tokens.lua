@@ -64,5 +64,12 @@ end
 -- Refresh TTL
 redis.call('EXPIRE', key, ttl)
 
--- Return remaining regular tokens
-return bucket.tokens
+-- Return structured result matching getOrCreateBucketAndConsume
+local result = {
+  bucket = bucket,
+  consumed = paidConsumed + regularConsumed,
+  paidConsumed = paidConsumed,
+  regularConsumed = regularConsumed
+}
+
+return cjson.encode(result)

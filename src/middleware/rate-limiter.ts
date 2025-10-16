@@ -11,6 +11,7 @@ import { isIP } from 'is-ip';
 import { tracer } from '../tracing.js';
 import {
   TokenBucket,
+  BucketConsumptionResult,
   RateLimiterRedisClient,
   getRateLimiterRedisClient,
 } from '../lib/rate-limiter-redis.js';
@@ -496,7 +497,7 @@ export function rateLimiterMiddleware(options?: {
           );
 
           // Only adjust tokens if there's a difference per bucket and buckets exist
-          const adjustmentPromises: Promise<number>[] = [];
+          const adjustmentPromises: Promise<BucketConsumptionResult>[] = [];
           const adjustmentLabels: string[] = [];
 
           if (resourceTokenAdjustment !== 0 && req.resourceBucket) {
@@ -539,7 +540,7 @@ export function rateLimiterMiddleware(options?: {
 
               if (settlement.status === 'fulfilled') {
                 successes++;
-                const tokensAfter = settlement.value;
+                const result = settlement.value;
                 const perBucketAdjustment =
                   label === 'resource'
                     ? resourceTokenAdjustment
@@ -548,13 +549,16 @@ export function rateLimiterMiddleware(options?: {
                   key: bucket?.key,
                   tokensBeforeAdjustment: tokensBefore,
                   tokensDeducted: perBucketAdjustment,
-                  tokensAfterAdjustment: tokensAfter,
-                  tokensConsumedTotal: tokensBefore - tokensAfter,
+                  tokensAfterAdjustment: result.bucket.tokens,
+                  paidTokensConsumed: result.paidConsumed,
+                  regularTokensConsumed: result.regularConsumed,
+                  tokensConsumedTotal: result.consumed,
                   capacity: bucket?.capacity,
                   utilizationPercent:
                     bucket?.capacity != null && bucket.capacity > 0
                       ? Math.round(
-                          ((bucket.capacity - tokensAfter) / bucket.capacity) *
+                          ((bucket.capacity - result.bucket.tokens) /
+                            bucket.capacity) *
                             100,
                         )
                       : 0,
@@ -562,7 +566,19 @@ export function rateLimiterMiddleware(options?: {
                 };
                 consumeSpan?.setAttribute(
                   `${label}_tokens_remaining`,
-                  tokensAfter,
+                  result.bucket.tokens,
+                );
+                consumeSpan?.setAttribute(
+                  `${label}_paid_tokens_consumed`,
+                  result.paidConsumed,
+                );
+                consumeSpan?.setAttribute(
+                  `${label}_regular_tokens_consumed`,
+                  result.regularConsumed,
+                );
+                consumeSpan?.setAttribute(
+                  `${label}_total_tokens_consumed`,
+                  result.consumed,
                 );
               } else {
                 failures++;

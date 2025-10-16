@@ -51,7 +51,7 @@ export interface RateLimiterRedisClient {
     tokensToConsume: number,
     ttlSeconds: number,
     contentLength?: number,
-  ): Promise<number>;
+  ): Promise<BucketConsumptionResult>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -120,7 +120,20 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
 
     // Create wrapper object that implements our interface
     _rlIoRedisClient = {
-      consumeTokens: client.consumeTokens.bind(client),
+      consumeTokens: async (
+        key: string,
+        tokensToConsume: number,
+        ttlSeconds: number,
+        contentLength?: number,
+      ): Promise<BucketConsumptionResult> => {
+        const result = await client.consumeTokens(
+          key,
+          tokensToConsume,
+          ttlSeconds,
+          contentLength,
+        );
+        return JSON.parse(result);
+      },
       getOrCreateBucketAndConsume: async (
         key: string,
         capacity: number,
