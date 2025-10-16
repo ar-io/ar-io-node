@@ -1296,7 +1296,23 @@ export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
 );
 
 // Paywall customization (optional)
-export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+export let X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+
+const X_402_CDP_CLIENT_KEY_FILE = env.varOrUndefined(
+  'X_402_CDP_CLIENT_KEY_FILE',
+);
+
+if (X_402_CDP_CLIENT_KEY_FILE !== undefined) {
+  if (!existsSync(X_402_CDP_CLIENT_KEY_FILE)) {
+    throw new Error(
+      `X_402_CDP_CLIENT_KEY_FILE not found: ${X_402_CDP_CLIENT_KEY_FILE}`,
+    );
+  }
+  X_402_CDP_CLIENT_KEY = readFileSync(X_402_CDP_CLIENT_KEY_FILE)
+    .toString()
+    .trim();
+}
+
 export const X_402_APP_NAME = env.varOrDefault(
   'X_402_APP_NAME',
   'AR.IO Gateway',
