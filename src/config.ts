@@ -1238,6 +1238,14 @@ export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
     ?.split(',')
     .map((ip) => ip.trim()) ?? [];
 
+// ArNS names to exclude from rate limiting
+export const RATE_LIMITER_ARNS_ALLOWLIST =
+  env
+    .varOrUndefined('RATE_LIMITER_ARNS_ALLOWLIST')
+    ?.split(',')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0) ?? [];
+
 export const RATE_LIMITER_REDIS_ENDPOINT = env.varOrDefault(
   'RATE_LIMITER_REDIS_ENDPOINT',
   'localhost:6379',

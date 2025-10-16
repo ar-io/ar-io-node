@@ -136,6 +136,22 @@ export async function checkPaymentAndRateLimits({
       return { allowed: true };
     }
 
+    // Check if ArNS name is allowlisted - if so, skip all checks
+    const arnsName = req.arns?.name;
+    if (
+      arnsName !== undefined &&
+      arnsName !== '' &&
+      config.RATE_LIMITER_ARNS_ALLOWLIST.includes(arnsName)
+    ) {
+      span.setAttribute('arns_allowlisted', true);
+      span.setAttribute('arns_name', arnsName);
+      log.debug('[DataHandler] ArNS name is allowlisted, skipping checks', {
+        id,
+        arnsName,
+      });
+      return { allowed: true };
+    }
+
     // Track request for metrics
     const host = req.headers.host ?? '';
     const domain = extractDomain(host);
