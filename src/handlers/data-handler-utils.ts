@@ -45,10 +45,10 @@ export interface CheckPaymentAndRateLimitsParams {
 export interface CheckPaymentAndRateLimitsResult {
   allowed: boolean;
   ipTokensConsumed?: number;
-  ipX402TokensConsumed?: number;
+  ipPaidTokensConsumed?: number;
   ipRegularTokensConsumed?: number;
   resourceTokensConsumed?: number;
-  resourceX402TokensConsumed?: number;
+  resourcePaidTokensConsumed?: number;
   resourceRegularTokensConsumed?: number;
   paymentVerified?: boolean;
   paymentSettled?: boolean;
@@ -402,10 +402,10 @@ export async function checkPaymentAndRateLimits({
         return {
           allowed: true,
           ipTokensConsumed: limitResult.ipTokensConsumed,
-          ipX402TokensConsumed: limitResult.ipX402TokensConsumed,
+          ipPaidTokensConsumed: limitResult.ipPaidTokensConsumed,
           ipRegularTokensConsumed: limitResult.ipRegularTokensConsumed,
           resourceTokensConsumed: limitResult.resourceTokensConsumed,
-          resourceX402TokensConsumed: limitResult.resourceX402TokensConsumed,
+          resourcePaidTokensConsumed: limitResult.resourcePaidTokensConsumed,
           resourceRegularTokensConsumed:
             limitResult.resourceRegularTokensConsumed,
           paymentVerified,
@@ -472,21 +472,21 @@ export async function adjustRateLimitTokens({
     await rateLimiter.adjustTokens(req, {
       responseSize,
       initialResourceTokens: initialResult.resourceTokensConsumed ?? 0,
-      initialResourceX402Tokens: initialResult.resourceX402TokensConsumed ?? 0,
+      initialResourcePaidTokens: initialResult.resourcePaidTokensConsumed ?? 0,
       initialResourceRegularTokens:
         initialResult.resourceRegularTokensConsumed ?? 0,
       initialIpTokens: initialResult.ipTokensConsumed ?? 0,
-      initialIpX402Tokens: initialResult.ipX402TokensConsumed ?? 0,
+      initialIpPaidTokens: initialResult.ipPaidTokensConsumed ?? 0,
       initialIpRegularTokens: initialResult.ipRegularTokensConsumed ?? 0,
     });
 
     log.debug('[DataHandler] Adjusted rate limit tokens', {
       responseSize,
       initialIpTokens: initialResult.ipTokensConsumed,
-      initialIpX402Tokens: initialResult.ipX402TokensConsumed,
+      initialIpPaidTokens: initialResult.ipPaidTokensConsumed,
       initialIpRegularTokens: initialResult.ipRegularTokensConsumed,
       initialResourceTokens: initialResult.resourceTokensConsumed,
-      initialResourceX402Tokens: initialResult.resourceX402TokensConsumed,
+      initialResourcePaidTokens: initialResult.resourcePaidTokensConsumed,
       initialResourceRegularTokens: initialResult.resourceRegularTokensConsumed,
     });
   } catch (error: any) {

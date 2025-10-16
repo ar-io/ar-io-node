@@ -132,9 +132,9 @@ export class RedisRateLimiter implements RateLimiter {
       // Store bucket key and initial consumption in request for later adjustment
       (req as any).ipBucketKey = ipKey;
 
-      // Check resource bucket ONLY if no x402 tokens were consumed
+      // Check resource bucket ONLY if no paid tokens were consumed
       // (paid requests bypass per-resource limits)
-      if (ipResult.x402Consumed === 0) {
+      if (ipResult.paidConsumed === 0) {
         const resourceResult =
           await this.redisClient.getOrCreateBucketAndConsume(
             resourceKey,
@@ -186,10 +186,10 @@ export class RedisRateLimiter implements RateLimiter {
         return {
           allowed: true,
           ipTokensConsumed: ipResult.consumed,
-          ipX402TokensConsumed: ipResult.x402Consumed,
+          ipPaidTokensConsumed: ipResult.paidConsumed,
           ipRegularTokensConsumed: ipResult.regularConsumed,
           resourceTokensConsumed: resourceResult.consumed,
-          resourceX402TokensConsumed: resourceResult.x402Consumed,
+          resourcePaidTokensConsumed: resourceResult.paidConsumed,
           resourceRegularTokensConsumed: resourceResult.regularConsumed,
         };
       }
@@ -198,7 +198,7 @@ export class RedisRateLimiter implements RateLimiter {
       return {
         allowed: true,
         ipTokensConsumed: ipResult.consumed,
-        ipX402TokensConsumed: ipResult.x402Consumed,
+        ipPaidTokensConsumed: ipResult.paidConsumed,
         ipRegularTokensConsumed: ipResult.regularConsumed,
       };
     } catch (error) {

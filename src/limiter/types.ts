@@ -17,14 +17,14 @@ export interface RateLimitCheckResult {
   limitType?: 'ip' | 'resource' | 'unknown';
   /** Number of tokens consumed from IP bucket */
   ipTokensConsumed?: number;
-  /** Number of x402 tokens consumed from IP bucket */
-  ipX402TokensConsumed?: number;
+  /** Number of paid tokens consumed from IP bucket */
+  ipPaidTokensConsumed?: number;
   /** Number of regular tokens consumed from IP bucket */
   ipRegularTokensConsumed?: number;
   /** Number of tokens consumed from resource bucket */
   resourceTokensConsumed?: number;
-  /** Number of x402 tokens consumed from resource bucket */
-  resourceX402TokensConsumed?: number;
+  /** Number of paid tokens consumed from resource bucket */
+  resourcePaidTokensConsumed?: number;
   /** Number of regular tokens consumed from resource bucket */
   resourceRegularTokensConsumed?: number;
 }
@@ -37,14 +37,14 @@ export interface TokenAdjustmentContext {
   responseSize: number;
   /** Initial tokens consumed from resource bucket */
   initialResourceTokens: number;
-  /** Initial x402 tokens consumed from resource bucket */
-  initialResourceX402Tokens: number;
+  /** Initial paid tokens consumed from resource bucket */
+  initialResourcePaidTokens: number;
   /** Initial regular tokens consumed from resource bucket */
   initialResourceRegularTokens: number;
   /** Initial tokens consumed from IP bucket */
   initialIpTokens: number;
-  /** Initial x402 tokens consumed from IP bucket */
-  initialIpX402Tokens: number;
+  /** Initial paid tokens consumed from IP bucket */
+  initialIpPaidTokens: number;
   /** Initial regular tokens consumed from IP bucket */
   initialIpRegularTokens: number;
 }

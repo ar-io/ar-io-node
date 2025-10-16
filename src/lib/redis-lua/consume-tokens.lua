@@ -21,29 +21,29 @@ for i = 1, #all, 2 do
   bucket[all[i]] = tonumber(all[i+1]) or all[i+1]
 end
 
--- Ensure x402Tokens exists (for backward compatibility)
-bucket.x402Tokens = bucket.x402Tokens or 0
+-- Ensure paidTokens exists (for backward compatibility)
+bucket.paidTokens = bucket.paidTokens or 0
 bucket.tokens = bucket.tokens or 0
 
--- Consume tokens: prioritize x402 tokens first, then regular tokens
-local x402Consumed = 0
+-- Consume tokens: prioritize paid tokens first, then regular tokens
+local paidConsumed = 0
 local regularConsumed = 0
 
 if cost > 0 then
   -- Positive cost: consume tokens
-  if bucket.x402Tokens >= cost then
-    -- Sufficient x402 tokens
-    bucket.x402Tokens = bucket.x402Tokens - cost
-    x402Consumed = cost
-  elseif bucket.x402Tokens > 0 then
-    -- Partial x402, remainder from regular
-    x402Consumed = bucket.x402Tokens
-    local remainder = cost - x402Consumed
-    bucket.x402Tokens = 0
+  if bucket.paidTokens >= cost then
+    -- Sufficient paid tokens
+    bucket.paidTokens = bucket.paidTokens - cost
+    paidConsumed = cost
+  elseif bucket.paidTokens > 0 then
+    -- Partial paid, remainder from regular
+    paidConsumed = bucket.paidTokens
+    local remainder = cost - paidConsumed
+    bucket.paidTokens = 0
     bucket.tokens = bucket.tokens - remainder
     regularConsumed = remainder
   else
-    -- No x402 tokens, use regular only
+    -- No paid tokens, use regular only
     bucket.tokens = bucket.tokens - cost
     regularConsumed = cost
   end
@@ -54,7 +54,7 @@ end
 
 -- Update bucket in Redis
 redis.call('HSET', key, 'tokens', bucket.tokens)
-redis.call('HSET', key, 'x402Tokens', bucket.x402Tokens)
+redis.call('HSET', key, 'paidTokens', bucket.paidTokens)
 
 -- Store contentLength if provided
 if contentLength then
