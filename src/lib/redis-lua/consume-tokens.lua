@@ -41,8 +41,11 @@ bucket.paidTokens = bucket.paidTokens or 0
 bucket.tokens = bucket.tokens or 0
 
 -- Consume tokens: prioritize regular tokens first, then paid tokens
+-- INVARIANT: paidTokens must never go negative
+-- Regular tokens can go negative (over-consumption), but paid tokens cannot
 local paidConsumed = 0
 local regularConsumed = 0
+local success = true
 
 if cost > 0 then
   -- Positive cost: consume tokens
@@ -54,13 +57,32 @@ if cost > 0 then
     -- Partial regular, remainder from paid
     regularConsumed = bucket.tokens
     local remainder = cost - regularConsumed
-    bucket.tokens = 0
-    bucket.paidTokens = bucket.paidTokens - remainder
-    paidConsumed = remainder
+
+    -- Validate sufficient paid tokens before consuming
+    if bucket.paidTokens >= remainder then
+      -- Sufficient paid tokens for remainder
+      bucket.tokens = 0
+      bucket.paidTokens = bucket.paidTokens - remainder
+      paidConsumed = remainder
+    else
+      -- Insufficient paid tokens - consume what's available (partial consumption)
+      bucket.tokens = 0
+      paidConsumed = bucket.paidTokens
+      bucket.paidTokens = 0
+      success = false
+    end
   else
-    -- No regular tokens, use paid only
-    bucket.paidTokens = bucket.paidTokens - cost
-    paidConsumed = cost
+    -- No regular tokens, validate and use paid only
+    if bucket.paidTokens >= cost then
+      -- Sufficient paid tokens
+      bucket.paidTokens = bucket.paidTokens - cost
+      paidConsumed = cost
+    else
+      -- Insufficient paid tokens - consume all available (partial consumption)
+      paidConsumed = bucket.paidTokens
+      bucket.paidTokens = 0
+      success = false
+    end
   end
 elseif cost < 0 then
   -- Negative cost: refund tokens (return to regular pool)
@@ -85,7 +107,7 @@ local result = {
   consumed = paidConsumed + regularConsumed,
   paidConsumed = paidConsumed,
   regularConsumed = regularConsumed,
-  success = true
+  success = success
 }
 
 return cjson.encode(result)

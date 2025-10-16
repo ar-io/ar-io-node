@@ -279,6 +279,24 @@ export class RedisRateLimiter implements RateLimiter {
           ipAdjustResult.regularConsumed,
         );
 
+        // Log warning if partial consumption occurred
+        if (!ipAdjustResult.success) {
+          log.warn(
+            '[RedisRateLimiter] Partial token consumption - insufficient paid tokens',
+            {
+              bucket: 'ip',
+              requested: ipTokenAdjustment,
+              consumed: ipAdjustResult.consumed,
+              paidConsumed: ipAdjustResult.paidConsumed,
+              regularConsumed: ipAdjustResult.regularConsumed,
+              after: {
+                regular: ipAdjustResult.bucket.tokens,
+                paid: ipAdjustResult.bucket.paidTokens,
+              },
+            },
+          );
+        }
+
         log.debug('[RedisRateLimiter] Token adjustment completed', {
           bucket: 'ip',
           adjustment: ipTokenAdjustment,
@@ -290,6 +308,7 @@ export class RedisRateLimiter implements RateLimiter {
             regular: ipAdjustResult.bucket.tokens,
             paid: ipAdjustResult.bucket.paidTokens,
           },
+          success: ipAdjustResult.success,
         });
       } catch (error) {
         log.error('[RedisRateLimiter] IP token adjustment failed', {
@@ -327,6 +346,24 @@ export class RedisRateLimiter implements RateLimiter {
           resourceAdjustResult.regularConsumed,
         );
 
+        // Log warning if partial consumption occurred
+        if (!resourceAdjustResult.success) {
+          log.warn(
+            '[RedisRateLimiter] Partial token consumption - insufficient paid tokens',
+            {
+              bucket: 'resource',
+              requested: resourceTokenAdjustment,
+              consumed: resourceAdjustResult.consumed,
+              paidConsumed: resourceAdjustResult.paidConsumed,
+              regularConsumed: resourceAdjustResult.regularConsumed,
+              after: {
+                regular: resourceAdjustResult.bucket.tokens,
+                paid: resourceAdjustResult.bucket.paidTokens,
+              },
+            },
+          );
+        }
+
         log.debug('[RedisRateLimiter] Token adjustment completed', {
           bucket: 'resource',
           adjustment: resourceTokenAdjustment,
@@ -338,6 +375,7 @@ export class RedisRateLimiter implements RateLimiter {
             regular: resourceAdjustResult.bucket.tokens,
             paid: resourceAdjustResult.bucket.paidTokens,
           },
+          success: resourceAdjustResult.success,
         });
       } catch (error) {
         log.error('[RedisRateLimiter] Resource token adjustment failed', {

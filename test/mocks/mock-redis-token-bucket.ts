@@ -205,6 +205,9 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
   /**
    * Simulates the Redis Lua script for consumeTokens
    * Consumes tokens from the bucket, prioritizing regular tokens first
+   *
+   * INVARIANT: paidTokens must never go negative
+   * Regular tokens can go negative (over-consumption), but paid tokens cannot
    */
   async consumeTokens(
     key: string,
@@ -240,6 +243,7 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
 
     let paidConsumed = 0;
     let regularConsumed = 0;
+    let success = true;
 
     if (tokensToConsume > 0) {
       // Positive cost: consume tokens prioritizing regular first
@@ -251,13 +255,32 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
         // Partial regular, remainder from paid
         regularConsumed = bucket.tokens;
         const remainder = tokensToConsume - regularConsumed;
-        bucket.tokens = 0;
-        bucket.paidTokens -= remainder;
-        paidConsumed = remainder;
+
+        // Validate sufficient paid tokens before consuming
+        if (bucket.paidTokens >= remainder) {
+          // Sufficient paid tokens for remainder
+          bucket.tokens = 0;
+          bucket.paidTokens -= remainder;
+          paidConsumed = remainder;
+        } else {
+          // Insufficient paid tokens - consume what's available (partial consumption)
+          bucket.tokens = 0;
+          paidConsumed = bucket.paidTokens;
+          bucket.paidTokens = 0;
+          success = false;
+        }
       } else {
-        // No regular tokens, use paid only
-        bucket.paidTokens -= tokensToConsume;
-        paidConsumed = tokensToConsume;
+        // No regular tokens, validate and use paid only
+        if (bucket.paidTokens >= tokensToConsume) {
+          // Sufficient paid tokens
+          bucket.paidTokens -= tokensToConsume;
+          paidConsumed = tokensToConsume;
+        } else {
+          // Insufficient paid tokens - consume all available (partial consumption)
+          paidConsumed = bucket.paidTokens;
+          bucket.paidTokens = 0;
+          success = false;
+        }
       }
     } else if (tokensToConsume < 0) {
       // Negative cost: refund tokens (return to regular pool)
@@ -278,7 +301,7 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       consumed: paidConsumed + regularConsumed,
       paidConsumed,
       regularConsumed,
-      success: true,
+      success,
     };
   }
 
