@@ -64,5 +64,5 @@ end
 -- Refresh TTL
 redis.call('EXPIRE', key, ttl)
 
--- Return remaining regular tokens (for backward compatibility)
+-- Return remaining regular tokens
 return bucket.tokens
