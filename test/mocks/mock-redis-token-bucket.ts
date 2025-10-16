@@ -137,7 +137,7 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       bucket.paidTokens = 0;
     }
 
-    // Attempt to consume actual tokens needed, prioritizing paid tokens
+    // Attempt to consume actual tokens needed, prioritizing regular tokens first
     let consumed = 0;
     let paidConsumed = 0;
     let regularConsumed = 0;
@@ -146,22 +146,23 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     if (actualTokensNeeded === 0) {
       // No tokens needed, always succeed
       success = true;
-    } else if (bucket.paidTokens >= actualTokensNeeded) {
-      // Sufficient paid tokens to cover entire request
-      bucket.paidTokens -= actualTokensNeeded;
-      paidConsumed = actualTokensNeeded;
+    } else if (bucket.tokens >= actualTokensNeeded) {
+      // Sufficient regular tokens to cover entire request
+      bucket.tokens -= actualTokensNeeded;
+      regularConsumed = actualTokensNeeded;
+      paidConsumed = 0;
       consumed = actualTokensNeeded;
       success = true;
-    } else if (bucket.paidTokens > 0) {
-      // Partial paid tokens, need to use regular tokens too
-      paidConsumed = bucket.paidTokens;
-      const remainingNeeded = actualTokensNeeded - paidConsumed;
+    } else if (bucket.tokens > 0) {
+      // Partial regular tokens available, need to use paid tokens too
+      regularConsumed = bucket.tokens;
+      const remainingNeeded = actualTokensNeeded - regularConsumed;
 
-      if (bucket.tokens >= remainingNeeded) {
-        // Sufficient regular tokens for the remainder
-        bucket.paidTokens = 0;
-        bucket.tokens -= remainingNeeded;
-        regularConsumed = remainingNeeded;
+      if (bucket.paidTokens >= remainingNeeded) {
+        // Sufficient paid tokens for the remainder
+        bucket.tokens = 0;
+        bucket.paidTokens -= remainingNeeded;
+        paidConsumed = remainingNeeded;
         consumed = actualTokensNeeded;
         success = true;
       } else {
@@ -171,18 +172,21 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
         paidConsumed = 0;
         regularConsumed = 0;
       }
-    } else if (bucket.tokens >= actualTokensNeeded) {
-      // No paid tokens, consume from regular tokens only
-      bucket.tokens -= actualTokensNeeded;
-      regularConsumed = actualTokensNeeded;
-      consumed = actualTokensNeeded;
-      success = true;
     } else {
-      // Insufficient tokens - fail the consumption (don't go negative in atomic operation)
-      success = false;
-      consumed = 0;
-      paidConsumed = 0;
-      regularConsumed = 0;
+      // No regular tokens, consume from paid tokens only
+      if (bucket.paidTokens >= actualTokensNeeded) {
+        bucket.paidTokens -= actualTokensNeeded;
+        paidConsumed = actualTokensNeeded;
+        regularConsumed = 0;
+        consumed = actualTokensNeeded;
+        success = true;
+      } else {
+        // Insufficient tokens - fail the consumption (don't go negative in atomic operation)
+        success = false;
+        consumed = 0;
+        paidConsumed = 0;
+        regularConsumed = 0;
+      }
     }
 
     // Set TTL and save bucket
@@ -200,7 +204,7 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
 
   /**
    * Simulates the Redis Lua script for consumeTokens
-   * Consumes tokens from the bucket, prioritizing paid tokens first
+   * Consumes tokens from the bucket, prioritizing regular tokens first
    */
   async consumeTokens(
     key: string,
@@ -238,22 +242,22 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     let regularConsumed = 0;
 
     if (tokensToConsume > 0) {
-      // Positive cost: consume tokens prioritizing paid first
-      if (bucket.paidTokens >= tokensToConsume) {
-        // Sufficient paid tokens
-        bucket.paidTokens -= tokensToConsume;
-        paidConsumed = tokensToConsume;
-      } else if (bucket.paidTokens > 0) {
-        // Partial paid, remainder from regular
-        paidConsumed = bucket.paidTokens;
-        const remainder = tokensToConsume - paidConsumed;
-        bucket.paidTokens = 0;
-        bucket.tokens -= remainder;
-        regularConsumed = remainder;
-      } else {
-        // No paid tokens, use regular only
+      // Positive cost: consume tokens prioritizing regular first
+      if (bucket.tokens >= tokensToConsume) {
+        // Sufficient regular tokens
         bucket.tokens -= tokensToConsume;
         regularConsumed = tokensToConsume;
+      } else if (bucket.tokens > 0) {
+        // Partial regular, remainder from paid
+        regularConsumed = bucket.tokens;
+        const remainder = tokensToConsume - regularConsumed;
+        bucket.tokens = 0;
+        bucket.paidTokens -= remainder;
+        paidConsumed = remainder;
+      } else {
+        // No regular tokens, use paid only
+        bucket.paidTokens -= tokensToConsume;
+        paidConsumed = tokensToConsume;
       }
     } else if (tokensToConsume < 0) {
       // Negative cost: refund tokens (return to regular pool)
