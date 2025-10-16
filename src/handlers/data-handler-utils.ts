@@ -47,6 +47,9 @@ export interface CheckPaymentAndRateLimitsResult {
   ipTokensConsumed?: number;
   ipX402TokensConsumed?: number;
   ipRegularTokensConsumed?: number;
+  resourceTokensConsumed?: number;
+  resourceX402TokensConsumed?: number;
+  resourceRegularTokensConsumed?: number;
   paymentVerified?: boolean;
   paymentSettled?: boolean;
 }
@@ -401,6 +404,10 @@ export async function checkPaymentAndRateLimits({
           ipTokensConsumed: limitResult.ipTokensConsumed,
           ipX402TokensConsumed: limitResult.ipX402TokensConsumed,
           ipRegularTokensConsumed: limitResult.ipRegularTokensConsumed,
+          resourceTokensConsumed: limitResult.resourceTokensConsumed,
+          resourceX402TokensConsumed: limitResult.resourceX402TokensConsumed,
+          resourceRegularTokensConsumed:
+            limitResult.resourceRegularTokensConsumed,
           paymentVerified,
           paymentSettled,
         };
@@ -464,7 +471,10 @@ export async function adjustRateLimitTokens({
   try {
     await rateLimiter.adjustTokens(req, {
       responseSize,
-      initialResourceTokens: 0, // No longer using resource tokens
+      initialResourceTokens: initialResult.resourceTokensConsumed ?? 0,
+      initialResourceX402Tokens: initialResult.resourceX402TokensConsumed ?? 0,
+      initialResourceRegularTokens:
+        initialResult.resourceRegularTokensConsumed ?? 0,
       initialIpTokens: initialResult.ipTokensConsumed ?? 0,
       initialIpX402Tokens: initialResult.ipX402TokensConsumed ?? 0,
       initialIpRegularTokens: initialResult.ipRegularTokensConsumed ?? 0,
@@ -475,6 +485,9 @@ export async function adjustRateLimitTokens({
       initialIpTokens: initialResult.ipTokensConsumed,
       initialIpX402Tokens: initialResult.ipX402TokensConsumed,
       initialIpRegularTokens: initialResult.ipRegularTokensConsumed,
+      initialResourceTokens: initialResult.resourceTokensConsumed,
+      initialResourceX402Tokens: initialResult.resourceX402TokensConsumed,
+      initialResourceRegularTokens: initialResult.resourceRegularTokensConsumed,
     });
   } catch (error: any) {
     span.recordException(error);

@@ -224,7 +224,7 @@ export class MemoryRateLimiter implements RateLimiter {
     const host = (req.headers.host ?? '').slice(0, 256);
     const primaryClientIp = req.ip ?? '0.0.0.0';
 
-    const { ipKey } = this.buildBucketKeys(
+    const { resourceKey, ipKey } = this.buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -233,7 +233,7 @@ export class MemoryRateLimiter implements RateLimiter {
 
     const now = Date.now();
 
-    // Get or create IP bucket - this is the only rate limit we check
+    // Get or create IP bucket - this is the primary rate limit
     const ipBucket = this.getOrCreateBucket(
       ipKey,
       this.config.ipCapacity,
@@ -270,6 +270,59 @@ export class MemoryRateLimiter implements RateLimiter {
     // Store bucket in request for later adjustment
     (req as any).ipBucket = ipBucket;
 
+    // Check resource bucket ONLY if no x402 tokens were consumed
+    // (paid requests bypass per-resource limits)
+    if (consumeResult.x402 === 0) {
+      const resourceBucket = this.getOrCreateBucket(
+        resourceKey,
+        this.config.resourceCapacity,
+        this.config.resourceRefillRate,
+        now,
+      );
+
+      // Consume from resource bucket
+      const resourceConsumeResult = this.consumeTokens(
+        resourceBucket,
+        predictedTokens,
+      );
+
+      if (!resourceConsumeResult.success) {
+        // Resource limit exceeded - refund IP tokens and deny
+        if (consumeResult.regular > 0) {
+          ipBucket.tokens = Math.min(
+            ipBucket.capacity,
+            ipBucket.tokens + consumeResult.regular,
+          );
+        }
+
+        log.info('[MemoryRateLimiter] Resource limit exceeded', {
+          key: resourceKey,
+          regularTokens: resourceBucket.tokens,
+          x402Tokens: resourceBucket.x402Tokens,
+          needed: predictedTokens,
+        });
+
+        return {
+          allowed: false,
+          limitType: 'resource',
+        };
+      }
+
+      // Resource check passed - store bucket for later adjustment
+      (req as any).resourceBucket = resourceBucket;
+
+      return {
+        allowed: true,
+        ipTokensConsumed: predictedTokens,
+        ipX402TokensConsumed: consumeResult.x402,
+        ipRegularTokensConsumed: consumeResult.regular,
+        resourceTokensConsumed: predictedTokens,
+        resourceX402TokensConsumed: resourceConsumeResult.x402,
+        resourceRegularTokensConsumed: resourceConsumeResult.regular,
+      };
+    }
+
+    // Paid request - skip resource check
     return {
       allowed: true,
       ipTokensConsumed: predictedTokens,
@@ -286,6 +339,9 @@ export class MemoryRateLimiter implements RateLimiter {
     context: TokenAdjustmentContext,
   ): Promise<void> {
     const ipBucket = (req as any).ipBucket as TokenBucket | undefined;
+    const resourceBucket = (req as any).resourceBucket as
+      | TokenBucket
+      | undefined;
 
     if (!ipBucket) {
       log.warn('[MemoryRateLimiter] No IP bucket found for token adjustment');
@@ -298,15 +354,25 @@ export class MemoryRateLimiter implements RateLimiter {
       Math.ceil(context.responseSize / 1024),
     );
     const ipTokenAdjustment = totalTokensNeeded - context.initialIpTokens;
+    const resourceTokenAdjustment = resourceBucket
+      ? totalTokensNeeded - context.initialResourceTokens
+      : 0;
 
     log.debug('[MemoryRateLimiter] Adjusting tokens', {
       responseSize: context.responseSize,
       totalTokensNeeded,
       ipAdjustment: ipTokenAdjustment,
+      resourceAdjustment: resourceTokenAdjustment,
       ipBefore: {
         regular: ipBucket.tokens,
         x402: ipBucket.x402Tokens,
       },
+      resourceBefore: resourceBucket
+        ? {
+            regular: resourceBucket.tokens,
+            x402: resourceBucket.x402Tokens,
+          }
+        : undefined,
     });
 
     // Adjust IP bucket - consume additional or refund
@@ -324,11 +390,34 @@ export class MemoryRateLimiter implements RateLimiter {
       );
     }
 
+    // Adjust resource bucket if it was checked
+    if (resourceBucket) {
+      if (resourceTokenAdjustment > 0) {
+        // Need to consume more tokens - use the dual-token logic
+        this.consumeTokens(resourceBucket, resourceTokenAdjustment);
+      } else if (resourceTokenAdjustment < 0) {
+        // Refund tokens to regular pool (not x402)
+        resourceBucket.tokens = Math.max(
+          0,
+          Math.min(
+            resourceBucket.capacity,
+            resourceBucket.tokens - resourceTokenAdjustment, // subtract negative = add
+          ),
+        );
+      }
+    }
+
     log.debug('[MemoryRateLimiter] Tokens adjusted', {
       ipAfter: {
         regular: ipBucket.tokens,
         x402: ipBucket.x402Tokens,
       },
+      resourceAfter: resourceBucket
+        ? {
+            regular: resourceBucket.tokens,
+            x402: resourceBucket.x402Tokens,
+          }
+        : undefined,
     });
   }
 }
