@@ -321,6 +321,93 @@ describe('MemoryRateLimiter', () => {
     });
   });
 
+  describe('topOffPaidTokens', () => {
+    it('should add paid tokens directly with capacity multiplier', async () => {
+      const req = createMockRequest();
+      const res = createMockResponse();
+
+      // Exhaust regular tokens
+      await limiter.checkLimit(req, res, 500);
+
+      // Top off with 100 tokens (should become 1000 with 10x multiplier)
+      await limiter.topOffPaidTokens(req, 100);
+
+      // Should now be able to consume 1000 tokens (from paid pool)
+      const result = await limiter.checkLimit(req, res, 1000);
+      assert.strictEqual(result.allowed, true);
+      assert.strictEqual(result.ipPaidTokensConsumed, 1000);
+      assert.strictEqual(result.ipRegularTokensConsumed, 0);
+    });
+
+    it('should allow subsequent requests after payment top-off', async () => {
+      const req = createMockRequest();
+      const res = createMockResponse();
+
+      // Exhaust regular tokens
+      await limiter.checkLimit(req, res, 500);
+
+      // Top off with tokens for 10KB worth (10 tokens → 100 with multiplier)
+      await limiter.topOffPaidTokens(req, 10);
+
+      // First request should use paid tokens
+      const result1 = await limiter.checkLimit(req, res, 50);
+      assert.strictEqual(result1.allowed, true);
+      assert.strictEqual(result1.ipPaidTokensConsumed, 50);
+
+      // Second request should also use paid tokens
+      const result2 = await limiter.checkLimit(req, res, 50);
+      assert.strictEqual(result2.allowed, true);
+      assert.strictEqual(result2.ipPaidTokensConsumed, 50);
+    });
+
+    it('should work with different capacity multipliers', async () => {
+      const customLimiter = new MemoryRateLimiter({
+        resourceCapacity: 1000,
+        resourceRefillRate: 10,
+        ipCapacity: 500,
+        ipRefillRate: 5,
+        limitsEnabled: true,
+        ipAllowlist: [],
+        capacityMultiplier: 20, // Different multiplier
+        maxBuckets: 100,
+      });
+
+      const req = createMockRequest();
+      const res = createMockResponse();
+
+      // Exhaust regular tokens
+      await customLimiter.checkLimit(req, res, 500);
+
+      // Top off with 10 tokens (should become 200 with 20x multiplier)
+      await customLimiter.topOffPaidTokens(req, 10);
+
+      // Should be able to consume 200 tokens
+      const result = await customLimiter.checkLimit(req, res, 200);
+      assert.strictEqual(result.allowed, true);
+      assert.strictEqual(result.ipPaidTokensConsumed, 200);
+    });
+
+    it('should bypass resource limits when paid tokens added', async () => {
+      const req = createMockRequest();
+      const res = createMockResponse();
+
+      // Exhaust both regular and resource buckets
+      await limiter.checkLimit(req, res, 500);
+      const req2 = createMockRequest({ ip: '10.0.0.2' });
+      await limiter.checkLimit(req2, res, 500);
+      // Resource bucket now has 0 tokens
+
+      // Top off paid tokens
+      await limiter.topOffPaidTokens(req, 100);
+
+      // Should bypass resource check due to paid tokens
+      const result = await limiter.checkLimit(req, res, 500);
+      assert.strictEqual(result.allowed, true);
+      // Resource check should be skipped
+      assert.strictEqual(result.resourceTokensConsumed, undefined);
+    });
+  });
+
   describe('Cached content length', () => {
     it('should use cached content length for token calculation', async () => {
       const req = createMockRequest();

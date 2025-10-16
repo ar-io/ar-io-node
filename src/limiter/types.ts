@@ -86,4 +86,12 @@ export interface RateLimiter {
    * @returns boolean indicating if any IP is allowlisted
    */
   isAllowlisted(clientIps: string[]): boolean;
+
+  /**
+   * Top off bucket with paid tokens directly
+   * @param req Express request object
+   * @param tokens Number of tokens to add to paid bucket
+   * @returns Promise<void>
+   */
+  topOffPaidTokens(req: Request, tokens: number): Promise<void>;
 }

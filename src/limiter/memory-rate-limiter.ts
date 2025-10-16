@@ -466,4 +466,43 @@ export class MemoryRateLimiter implements RateLimiter {
         : undefined,
     });
   }
+
+  /**
+   * Top off bucket with paid tokens directly (for payment-based top-off)
+   */
+  public async topOffPaidTokens(req: Request, tokens: number): Promise<void> {
+    const method = req.method;
+    const canonicalPath = this.getCanonicalPath(req);
+    const host = (req.headers.host ?? '').slice(0, 256);
+    const primaryClientIp = req.ip ?? '0.0.0.0';
+
+    const { ipKey } = this.buildBucketKeys(
+      method,
+      canonicalPath,
+      primaryClientIp,
+      host,
+    );
+
+    const now = Date.now();
+
+    // Get or create IP bucket
+    const ipBucket = this.getOrCreateBucket(
+      ipKey,
+      this.config.ipCapacity,
+      this.config.ipRefillRate,
+      now,
+    );
+
+    // Apply capacity multiplier to match topOffBucket behavior
+    const tokensWithMultiplier = tokens * this.config.capacityMultiplier;
+    ipBucket.paidTokens += tokensWithMultiplier;
+
+    log.debug('[MemoryRateLimiter] Topped off bucket with paid tokens', {
+      key: ipKey,
+      tokensInput: tokens,
+      capacityMultiplier: this.config.capacityMultiplier,
+      paidTokensAdded: tokensWithMultiplier,
+      totalPaidTokens: ipBucket.paidTokens,
+    });
+  }
 }

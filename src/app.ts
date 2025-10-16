@@ -19,7 +19,7 @@ import { apolloServer } from './routes/graphql/index.js';
 import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
-import { x402Router } from './routes/x402.js';
+import { createX402Router } from './routes/x402.js';
 
 // Initialize DNS resolution for preferred chunk GET nodes (non-fatal on failure)
 try {
@@ -68,7 +68,13 @@ app.use(
   }),
 );
 
-app.use(x402Router); // test x402 endpoint
+app.use(
+  createX402Router({
+    log,
+    rateLimiter: system.rateLimiter,
+    paymentProcessor: system.paymentProcessor,
+  }),
+);
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);

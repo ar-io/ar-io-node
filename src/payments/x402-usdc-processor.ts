@@ -75,6 +75,35 @@ export class X402UsdcProcessor implements PaymentProcessor {
   }
 
   /**
+   * Convert payment amount to rate limiter tokens
+   * @param paymentAmountAtomic Payment amount in atomic units (for USDC: 6 decimals)
+   * @returns Number of tokens for rate limiter (1 token ≈ 1 KB)
+   */
+  public paymentToTokens(paymentAmountAtomic: string): number {
+    // Convert atomic units to USD (USDC has 6 decimals)
+    const paymentAmountUsd = parseInt(paymentAmountAtomic) / 1000000;
+
+    // Calculate equivalent content length from payment
+    // priceInUSD = contentLength * perBytePrice
+    // contentLength = priceInUSD / perBytePrice
+    const equivalentContentLength = paymentAmountUsd / this.config.perBytePrice;
+
+    // Convert content length to tokens (1 token = 1 KB)
+    // This matches the rate limiter's calculation: Math.ceil(contentLength / 1024)
+    const tokens = Math.ceil(equivalentContentLength / 1024);
+
+    log.debug('[X402UsdcProcessor] Payment to tokens conversion', {
+      paymentAmountAtomic,
+      paymentAmountUsd,
+      perBytePrice: this.config.perBytePrice,
+      equivalentContentLength,
+      tokens,
+    });
+
+    return tokens;
+  }
+
+  /**
    * Check if a request is from a browser
    */
   public isBrowserRequest(req: Request): boolean {
@@ -250,46 +279,6 @@ export class X402UsdcProcessor implements PaymentProcessor {
   }
 
   /**
-   * Check if request should use redirect mode (for browser paywall)
-   */
-  public shouldUseRedirectMode(req: Request): boolean {
-    // Check for x-redirect query parameter
-    const url = new URL(
-      req.originalUrl,
-      `${req.protocol}://${req.get('host')}`,
-    );
-    return url.searchParams.get('x-redirect') === '1';
-  }
-
-  /**
-   * Send an HTML redirect response after successful payment verification
-   */
-  public sendRedirectResponse(req: Request, res: Response): void {
-    // Build redirect URL without the x-redirect parameter
-    const url = new URL(
-      req.originalUrl,
-      `${req.protocol}://${req.get('host')}`,
-    );
-    url.searchParams.delete('x-redirect');
-    const redirectUrl = url.pathname + url.search + url.hash;
-
-    // Return HTML with meta refresh to trigger SDK's HTML handling
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta http-equiv="refresh" content="0;url=${redirectUrl}">
-  <title>Payment Verified</title>
-</head>
-<body>
-  <p>Payment verified. Redirecting...</p>
-</body>
-</html>`;
-
-    res.setHeader('Content-Type', 'text/html');
-    res.status(200).send(html);
-  }
-
-  /**
    * Send a 402 payment required response
    */
   public sendPaymentRequiredResponse(
@@ -317,14 +306,9 @@ export class X402UsdcProcessor implements PaymentProcessor {
         displayAmount = parseInt(requirements.maxAmountRequired) / 1000000;
       }
 
-      // Add x-redirect=1 parameter to enable redirect mode
-      // This ensures payment-authorized requests return HTML redirect instead of blob URLs
-      const url = new URL(
-        req.originalUrl,
-        `${req.protocol}://${req.get('host')}`,
-      );
-      url.searchParams.set('x-redirect', '1');
-      const paywallUrl = url.pathname + url.search + url.hash;
+      // Encode original URL to base64url for redirect endpoint
+      const encodedUrl = Buffer.from(req.originalUrl).toString('base64url');
+      const paywallUrl = `/ar-io/x402/redirect/${encodedUrl}`;
 
       const html = getPaywallHtml({
         amount: displayAmount,

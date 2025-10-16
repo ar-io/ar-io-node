@@ -386,19 +386,6 @@ export async function checkPaymentAndRateLimits({
         }
 
         // Rate limit check passed
-        // Check if redirect mode should be used (for browser paywall after payment)
-        // This must happen AFTER rate limiter tops off buckets
-        if (
-          paymentProcessor !== undefined &&
-          paymentVerified &&
-          paymentProcessor.shouldUseRedirectMode(req)
-        ) {
-          rateLimitSpan.setAttribute('payment.redirect_mode', true);
-          log.debug('[DataHandler] Using redirect mode after payment', { id });
-          paymentProcessor.sendRedirectResponse(req, res);
-          return { allowed: false }; // Request handled via redirect
-        }
-
         return {
           allowed: true,
           ipTokensConsumed: limitResult.ipTokensConsumed,

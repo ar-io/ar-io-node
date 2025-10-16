@@ -34,6 +34,11 @@ export interface BucketConsumptionResult {
   success: boolean;
 }
 
+export interface AddPaidTokensResult {
+  bucket: TokenBucket;
+  paidTokensAdded: number; // Tokens added to paid pool
+}
+
 export interface RateLimiterRedisClient {
   getOrCreateBucketAndConsume(
     key: string,
@@ -52,6 +57,14 @@ export interface RateLimiterRedisClient {
     ttlSeconds: number,
     contentLength?: number,
   ): Promise<BucketConsumptionResult>;
+  addPaidTokens(
+    key: string,
+    capacity: number,
+    refillRate: number,
+    now: number,
+    ttlSeconds: number,
+    paidTokensToAdd: number,
+  ): Promise<AddPaidTokensResult>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -118,6 +131,14 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
       ),
     });
 
+    client.defineCommand('addPaidTokens', {
+      numberOfKeys: 1,
+      lua: fs.readFileSync(
+        path.join(__dirname, 'redis-lua/add-paid-tokens.lua'),
+        'utf8',
+      ),
+    });
+
     // Create wrapper object that implements our interface
     _rlIoRedisClient = {
       consumeTokens: async (
@@ -155,6 +176,24 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
           x402PaymentProvided ? '1' : '0', // Convert boolean to string for Lua
           capacityMultiplier,
           contentLengthForTopOff,
+        );
+        return JSON.parse(result);
+      },
+      addPaidTokens: async (
+        key: string,
+        capacity: number,
+        refillRate: number,
+        now: number,
+        ttlSeconds: number,
+        paidTokensToAdd: number,
+      ): Promise<AddPaidTokensResult> => {
+        const result = await client.addPaidTokens(
+          key,
+          capacity,
+          refillRate,
+          now,
+          ttlSeconds,
+          paidTokensToAdd,
         );
         return JSON.parse(result);
       },

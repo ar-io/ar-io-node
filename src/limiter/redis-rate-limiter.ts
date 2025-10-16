@@ -385,4 +385,50 @@ export class RedisRateLimiter implements RateLimiter {
       }
     }
   }
+
+  /**
+   * Top off bucket with paid tokens directly (for payment-based top-off)
+   */
+  public async topOffPaidTokens(req: Request, tokens: number): Promise<void> {
+    const method = req.method;
+    const canonicalPath = this.getCanonicalPath(req);
+    const host = (req.headers.host ?? '').slice(0, 256);
+    const primaryClientIp = req.ip ?? '0.0.0.0';
+
+    const { ipKey } = this.buildBucketKeys(
+      method,
+      canonicalPath,
+      primaryClientIp,
+      host,
+    );
+
+    const now = Date.now();
+
+    try {
+      // Apply capacity multiplier to match topOffBucket behavior
+      const tokensWithMultiplier = tokens * this.config.capacityMultiplier;
+
+      const result = await this.redisClient.addPaidTokens(
+        ipKey,
+        this.config.ipCapacity,
+        this.config.ipRefillRate,
+        now,
+        this.config.cacheTtlSeconds,
+        tokensWithMultiplier,
+      );
+
+      log.debug('[RedisRateLimiter] Topped off bucket with paid tokens', {
+        key: ipKey,
+        tokensInput: tokens,
+        capacityMultiplier: this.config.capacityMultiplier,
+        paidTokensAdded: tokensWithMultiplier,
+        totalPaidTokens: result.bucket.paidTokens,
+      });
+    } catch (error) {
+      log.error('[RedisRateLimiter] Failed to top off paid tokens', {
+        error: error instanceof Error ? error.message : String(error),
+        ipKey,
+      });
+    }
+  }
 }
