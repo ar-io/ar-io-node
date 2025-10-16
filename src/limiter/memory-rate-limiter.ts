@@ -148,37 +148,37 @@ export class MemoryRateLimiter implements RateLimiter {
   }
 
   /**
-   * Consume tokens from a bucket - prioritize paid tokens first
+   * Consume tokens from a bucket - prioritize regular tokens first
    * Returns breakdown of consumption
    */
   private consumeTokens(
     bucket: TokenBucket,
     tokens: number,
   ): { success: boolean; paid: number; regular: number } {
-    // First, try to consume from paid tokens
-    if (bucket.paidTokens >= tokens) {
-      // Sufficient paid tokens to cover entire request
-      bucket.paidTokens -= tokens;
-      return { success: true, paid: tokens, regular: 0 };
-    } else if (bucket.paidTokens > 0) {
-      // Partial paid tokens available, need to use regular tokens too
-      const paidUsed = bucket.paidTokens;
-      const remainingNeeded = tokens - paidUsed;
+    // First, try to consume from regular tokens
+    if (bucket.tokens >= tokens) {
+      // Sufficient regular tokens to cover entire request
+      bucket.tokens -= tokens;
+      return { success: true, paid: 0, regular: tokens };
+    } else if (bucket.tokens > 0) {
+      // Partial regular tokens available, need to use paid tokens too
+      const regularUsed = bucket.tokens;
+      const remainingNeeded = tokens - regularUsed;
 
-      if (bucket.tokens >= remainingNeeded) {
-        // Sufficient regular tokens for the remainder
-        bucket.paidTokens = 0;
-        bucket.tokens -= remainingNeeded;
-        return { success: true, paid: paidUsed, regular: remainingNeeded };
+      if (bucket.paidTokens >= remainingNeeded) {
+        // Sufficient paid tokens for the remainder
+        bucket.tokens = 0;
+        bucket.paidTokens -= remainingNeeded;
+        return { success: true, paid: remainingNeeded, regular: regularUsed };
       } else {
         // Insufficient total tokens
         return { success: false, paid: 0, regular: 0 };
       }
     } else {
-      // No paid tokens, consume from regular tokens only
-      if (bucket.tokens >= tokens) {
-        bucket.tokens -= tokens;
-        return { success: true, paid: 0, regular: tokens };
+      // No regular tokens, consume from paid tokens only
+      if (bucket.paidTokens >= tokens) {
+        bucket.paidTokens -= tokens;
+        return { success: true, paid: tokens, regular: 0 };
       } else {
         // Insufficient tokens
         return { success: false, paid: 0, regular: 0 };
@@ -271,9 +271,9 @@ export class MemoryRateLimiter implements RateLimiter {
     // Store bucket in request for later adjustment
     (req as any).ipBucket = ipBucket;
 
-    // Check resource bucket ONLY if no paid tokens were consumed
-    // (paid requests bypass per-resource limits)
-    if (consumeResult.paid === 0) {
+    // Check resource bucket ONLY if no paid tokens are available
+    // (having paid tokens grants bypass of per-resource limits)
+    if (ipBucket.paidTokens === 0) {
       const resourceBucket = this.getOrCreateBucket(
         resourceKey,
         this.config.resourceCapacity,

@@ -40,27 +40,27 @@ end
 bucket.paidTokens = bucket.paidTokens or 0
 bucket.tokens = bucket.tokens or 0
 
--- Consume tokens: prioritize paid tokens first, then regular tokens
+-- Consume tokens: prioritize regular tokens first, then paid tokens
 local paidConsumed = 0
 local regularConsumed = 0
 
 if cost > 0 then
   -- Positive cost: consume tokens
-  if bucket.paidTokens >= cost then
-    -- Sufficient paid tokens
-    bucket.paidTokens = bucket.paidTokens - cost
-    paidConsumed = cost
-  elseif bucket.paidTokens > 0 then
-    -- Partial paid, remainder from regular
-    paidConsumed = bucket.paidTokens
-    local remainder = cost - paidConsumed
-    bucket.paidTokens = 0
-    bucket.tokens = bucket.tokens - remainder
-    regularConsumed = remainder
-  else
-    -- No paid tokens, use regular only
+  if bucket.tokens >= cost then
+    -- Sufficient regular tokens
     bucket.tokens = bucket.tokens - cost
     regularConsumed = cost
+  elseif bucket.tokens > 0 then
+    -- Partial regular, remainder from paid
+    regularConsumed = bucket.tokens
+    local remainder = cost - regularConsumed
+    bucket.tokens = 0
+    bucket.paidTokens = bucket.paidTokens - remainder
+    paidConsumed = remainder
+  else
+    -- No regular tokens, use paid only
+    bucket.paidTokens = bucket.paidTokens - cost
+    paidConsumed = cost
   end
 elseif cost < 0 then
   -- Negative cost: refund tokens (return to regular pool)

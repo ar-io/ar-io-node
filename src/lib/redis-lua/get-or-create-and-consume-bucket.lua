@@ -111,31 +111,31 @@ if tokensToConsume > 0 and bucket.contentLength and bucket.contentLength > 0 the
   actualTokensNeeded = math.max(1, math.ceil(bucket.contentLength / 1024))
 end
 
--- Step 4: Attempt atomic token consumption - consume from paid tokens first, then regular
+-- Step 4: Attempt atomic token consumption - consume from regular tokens first, then paid
 local consumed = 0
 local paidConsumed = 0
 local regularConsumed = 0
 local success = true
 
 if actualTokensNeeded > 0 then
-  -- First, consume from paid tokens
-  if bucket.paidTokens >= actualTokensNeeded then
-    -- Sufficient paid tokens to cover entire request
-    bucket.paidTokens = bucket.paidTokens - actualTokensNeeded
-    paidConsumed = actualTokensNeeded
-    regularConsumed = 0
+  -- First, consume from regular tokens
+  if bucket.tokens >= actualTokensNeeded then
+    -- Sufficient regular tokens to cover entire request
+    bucket.tokens = bucket.tokens - actualTokensNeeded
+    regularConsumed = actualTokensNeeded
+    paidConsumed = 0
     consumed = actualTokensNeeded
     success = true
-  elseif bucket.paidTokens > 0 then
-    -- Partial paid tokens available, need to use regular tokens too
-    paidConsumed = bucket.paidTokens
-    local remainingNeeded = actualTokensNeeded - paidConsumed
+  elseif bucket.tokens > 0 then
+    -- Partial regular tokens available, need to use paid tokens too
+    regularConsumed = bucket.tokens
+    local remainingNeeded = actualTokensNeeded - regularConsumed
 
-    if bucket.tokens >= remainingNeeded then
-      -- Sufficient regular tokens for the remainder
-      bucket.paidTokens = 0
-      bucket.tokens = bucket.tokens - remainingNeeded
-      regularConsumed = remainingNeeded
+    if bucket.paidTokens >= remainingNeeded then
+      -- Sufficient paid tokens for the remainder
+      bucket.tokens = 0
+      bucket.paidTokens = bucket.paidTokens - remainingNeeded
+      paidConsumed = remainingNeeded
       consumed = actualTokensNeeded
       success = true
     else
@@ -146,11 +146,11 @@ if actualTokensNeeded > 0 then
       success = false
     end
   else
-    -- No paid tokens, consume from regular tokens only
-    if bucket.tokens >= actualTokensNeeded then
-      bucket.tokens = bucket.tokens - actualTokensNeeded
-      paidConsumed = 0
-      regularConsumed = actualTokensNeeded
+    -- No regular tokens, consume from paid tokens only
+    if bucket.paidTokens >= actualTokensNeeded then
+      bucket.paidTokens = bucket.paidTokens - actualTokensNeeded
+      paidConsumed = actualTokensNeeded
+      regularConsumed = 0
       consumed = actualTokensNeeded
       success = true
     else

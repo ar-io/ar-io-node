@@ -133,9 +133,9 @@ export class RedisRateLimiter implements RateLimiter {
       // Store bucket key and initial consumption in request for later adjustment
       (req as any).ipBucketKey = ipKey;
 
-      // Check resource bucket ONLY if no paid tokens were consumed
-      // (paid requests bypass per-resource limits)
-      if (ipResult.paidConsumed === 0) {
+      // Check resource bucket ONLY if no paid tokens are available
+      // (having paid tokens grants bypass of per-resource limits)
+      if (ipResult.bucket.paidTokens === 0) {
         const resourceResult =
           await this.redisClient.getOrCreateBucketAndConsume(
             resourceKey,
