@@ -104,21 +104,25 @@ export function createX402Router({
         // Convert payment amount to tokens
         if (paymentProcessor instanceof X402UsdcProcessor) {
           // Use the actual payment amount from the payment payload, not requirements
-          const actualPaymentAmount =
-            payment.payload.authorization.value.toString();
-          const tokens = paymentProcessor.paymentToTokens(actualPaymentAmount);
+          // Only EVM payments have authorization field
+          if ('authorization' in payment.payload) {
+            const actualPaymentAmount =
+              payment.payload.authorization.value.toString();
+            const tokens =
+              paymentProcessor.paymentToTokens(actualPaymentAmount);
 
-          log.debug('[X402Redirect] Topping off rate limiter', {
-            paymentAmount: actualPaymentAmount,
-            tokens,
-          });
+            log.debug('[X402Redirect] Topping off rate limiter', {
+              paymentAmount: actualPaymentAmount,
+              tokens,
+            });
 
-          // Top off rate limiter bucket
-          await rateLimiter.topOffPaidTokens(req, tokens);
+            // Top off rate limiter bucket
+            await rateLimiter.topOffPaidTokens(req, tokens);
 
-          log.info('[X402Redirect] Payment settled and bucket topped off', {
-            tokens,
-          });
+            log.info('[X402Redirect] Payment settled and bucket topped off', {
+              tokens,
+            });
+          }
         }
 
         // Send redirect HTML

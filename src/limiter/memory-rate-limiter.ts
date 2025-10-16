@@ -271,9 +271,9 @@ export class MemoryRateLimiter implements RateLimiter {
     // Store bucket in request for later adjustment
     (req as any).ipBucket = ipBucket;
 
-    // Check resource bucket ONLY if no paid tokens are available
-    // (having paid tokens grants bypass of per-resource limits)
-    if (ipBucket.paidTokens === 0) {
+    // Check resource bucket ONLY if no payment was provided AND no paid tokens were used
+    // (payment or using paid tokens grants bypass of per-resource limits)
+    if (!x402PaymentProvided && consumeResult.paid === 0) {
       const resourceBucket = this.getOrCreateBucket(
         resourceKey,
         this.config.resourceCapacity,

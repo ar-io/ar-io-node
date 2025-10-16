@@ -335,8 +335,15 @@ describe('MemoryRateLimiter', () => {
       // Should now be able to consume 1000 tokens (from paid pool)
       const result = await limiter.checkLimit(req, res, 1000);
       assert.strictEqual(result.allowed, true);
-      assert.strictEqual(result.ipPaidTokensConsumed, 1000);
-      assert.strictEqual(result.ipRegularTokensConsumed, 0);
+      // Allow small tolerance for refilled regular tokens (floating point precision)
+      assert.ok(
+        (result.ipPaidTokensConsumed ?? 0) > 999,
+        `Expected ipPaidTokensConsumed to be > 999, got ${result.ipPaidTokensConsumed}`,
+      );
+      assert.ok(
+        (result.ipRegularTokensConsumed ?? 0) < 1,
+        `Expected ipRegularTokensConsumed to be < 1, got ${result.ipRegularTokensConsumed}`,
+      );
     });
 
     it('should allow subsequent requests after payment top-off', async () => {

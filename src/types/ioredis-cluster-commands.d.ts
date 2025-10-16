@@ -26,6 +26,15 @@ declare module 'ioredis' {
       ttlSeconds: number,
       contentLength?: number,
     ): Promise<string>;
+
+    addPaidTokens(
+      key: string,
+      capacity: number,
+      refillRate: number,
+      now: number,
+      ttlSeconds: number,
+      paidTokensToAdd: number,
+    ): Promise<string>;
   }
 
   interface Redis {
@@ -46,6 +55,15 @@ declare module 'ioredis' {
       tokensToConsume: number,
       ttlSeconds: number,
       contentLength?: number,
+    ): Promise<string>;
+
+    addPaidTokens(
+      key: string,
+      capacity: number,
+      refillRate: number,
+      now: number,
+      ttlSeconds: number,
+      paidTokensToAdd: number,
     ): Promise<string>;
   }
 }
