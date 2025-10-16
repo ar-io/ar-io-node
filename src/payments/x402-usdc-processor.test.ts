@@ -8,8 +8,8 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { Request, Response } from 'express';
-import { X402UsdcProcessor } from '../src/payments/x402-usdc-processor.js';
-import { createTestLogger } from './test-logger.js';
+import { X402UsdcProcessor } from './x402-usdc-processor.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'X402UsdcProcessor' });
 

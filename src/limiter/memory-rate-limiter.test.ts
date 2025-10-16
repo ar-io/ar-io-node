@@ -8,8 +8,8 @@
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { Request, Response } from 'express';
-import { MemoryRateLimiter } from '../src/limiter/memory-rate-limiter.js';
-import { createTestLogger } from './test-logger.js';
+import { MemoryRateLimiter } from './memory-rate-limiter.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'MemoryRateLimiter' });
 
