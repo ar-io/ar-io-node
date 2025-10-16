@@ -13,6 +13,7 @@ import {
   RateLimitCheckResult,
   TokenAdjustmentContext,
 } from './types.js';
+import { rateLimitTokensConsumedTotal } from '../metrics.js';
 
 /**
  * Token bucket stored in memory
@@ -378,7 +379,28 @@ export class MemoryRateLimiter implements RateLimiter {
     // Adjust IP bucket - consume additional or refund
     if (ipTokenAdjustment > 0) {
       // Need to consume more tokens - use the dual-token logic
-      this.consumeTokens(ipBucket, ipTokenAdjustment);
+      const ipConsumeResult = this.consumeTokens(ipBucket, ipTokenAdjustment);
+
+      // Track metrics for additional consumption
+      if (ipConsumeResult.success) {
+        rateLimitTokensConsumedTotal.inc(
+          {
+            bucket_type: 'ip',
+            token_type: 'paid',
+            domain: context.domain,
+          },
+          ipConsumeResult.paid,
+        );
+
+        rateLimitTokensConsumedTotal.inc(
+          {
+            bucket_type: 'ip',
+            token_type: 'regular',
+            domain: context.domain,
+          },
+          ipConsumeResult.regular,
+        );
+      }
     } else if (ipTokenAdjustment < 0) {
       // Refund tokens to regular pool (not paid)
       ipBucket.tokens = Math.max(
@@ -394,7 +416,31 @@ export class MemoryRateLimiter implements RateLimiter {
     if (resourceBucket) {
       if (resourceTokenAdjustment > 0) {
         // Need to consume more tokens - use the dual-token logic
-        this.consumeTokens(resourceBucket, resourceTokenAdjustment);
+        const resourceConsumeResult = this.consumeTokens(
+          resourceBucket,
+          resourceTokenAdjustment,
+        );
+
+        // Track metrics for additional consumption
+        if (resourceConsumeResult.success) {
+          rateLimitTokensConsumedTotal.inc(
+            {
+              bucket_type: 'resource',
+              token_type: 'paid',
+              domain: context.domain,
+            },
+            resourceConsumeResult.paid,
+          );
+
+          rateLimitTokensConsumedTotal.inc(
+            {
+              bucket_type: 'resource',
+              token_type: 'regular',
+              domain: context.domain,
+            },
+            resourceConsumeResult.regular,
+          );
+        }
       } else if (resourceTokenAdjustment < 0) {
         // Refund tokens to regular pool (not paid)
         resourceBucket.tokens = Math.max(

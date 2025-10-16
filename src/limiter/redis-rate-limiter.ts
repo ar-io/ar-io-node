@@ -17,6 +17,7 @@ import {
   RateLimitCheckResult,
   TokenAdjustmentContext,
 } from './types.js';
+import { rateLimitTokensConsumedTotal } from '../metrics.js';
 
 /**
  * Configuration options for Redis rate limiter
@@ -259,6 +260,25 @@ export class RedisRateLimiter implements RateLimiter {
           this.config.cacheTtlSeconds,
         );
 
+        // Track metrics
+        rateLimitTokensConsumedTotal.inc(
+          {
+            bucket_type: 'ip',
+            token_type: 'paid',
+            domain: context.domain,
+          },
+          ipAdjustResult.paidConsumed,
+        );
+
+        rateLimitTokensConsumedTotal.inc(
+          {
+            bucket_type: 'ip',
+            token_type: 'regular',
+            domain: context.domain,
+          },
+          ipAdjustResult.regularConsumed,
+        );
+
         log.debug('[RedisRateLimiter] Token adjustment completed', {
           bucket: 'ip',
           adjustment: ipTokenAdjustment,
@@ -286,6 +306,25 @@ export class RedisRateLimiter implements RateLimiter {
           resourceKey,
           resourceTokenAdjustment,
           this.config.cacheTtlSeconds,
+        );
+
+        // Track metrics
+        rateLimitTokensConsumedTotal.inc(
+          {
+            bucket_type: 'resource',
+            token_type: 'paid',
+            domain: context.domain,
+          },
+          resourceAdjustResult.paidConsumed,
+        );
+
+        rateLimitTokensConsumedTotal.inc(
+          {
+            bucket_type: 'resource',
+            token_type: 'regular',
+            domain: context.domain,
+          },
+          resourceAdjustResult.regularConsumed,
         );
 
         log.debug('[RedisRateLimiter] Token adjustment completed', {

@@ -47,6 +47,8 @@ export interface TokenAdjustmentContext {
   initialIpPaidTokens: number;
   /** Initial regular tokens consumed from IP bucket */
   initialIpRegularTokens: number;
+  /** Domain name for metrics tracking */
+  domain: string;
 }
 
 /**

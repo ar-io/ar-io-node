@@ -469,6 +469,10 @@ export async function adjustRateLimitTokens({
   });
 
   try {
+    // Extract domain for metrics
+    const host = req.headers.host ?? '';
+    const domain = extractDomain(host);
+
     await rateLimiter.adjustTokens(req, {
       responseSize,
       initialResourceTokens: initialResult.resourceTokensConsumed ?? 0,
@@ -478,6 +482,7 @@ export async function adjustRateLimitTokens({
       initialIpTokens: initialResult.ipTokensConsumed ?? 0,
       initialIpPaidTokens: initialResult.ipPaidTokensConsumed ?? 0,
       initialIpRegularTokens: initialResult.ipRegularTokensConsumed ?? 0,
+      domain,
     });
 
     log.debug('[DataHandler] Adjusted rate limit tokens', {

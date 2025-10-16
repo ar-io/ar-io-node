@@ -561,3 +561,9 @@ export const rateLimitBytesBlockedTotal = new promClient.Counter({
   help: 'Total number of bytes that would have been served if not rate limited',
   labelNames: ['domain'],
 });
+
+export const rateLimitTokensConsumedTotal = new promClient.Counter({
+  name: 'rate_limit_tokens_consumed_total',
+  help: 'Total tokens consumed by rate limiter with breakdown by bucket and token type',
+  labelNames: ['bucket_type', 'token_type', 'domain'],
+});
