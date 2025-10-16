@@ -12,8 +12,23 @@ local key = KEYS[1]
 -- Get current bucket state
 local all = redis.call('HGETALL', key)
 if #all == 0 then
-  -- Bucket doesn't exist - this shouldn't happen in normal flow
-  return 0
+  -- Bucket doesn't exist - return structured failure for consistency
+  local emptyBucket = {
+    key = key,
+    tokens = 0,
+    paidTokens = 0,
+    lastRefill = 0,
+    capacity = 0,
+    refillRate = 0
+  }
+  local result = {
+    bucket = emptyBucket,
+    consumed = 0,
+    paidConsumed = 0,
+    regularConsumed = 0,
+    success = false
+  }
+  return cjson.encode(result)
 end
 
 local bucket = {}
@@ -69,7 +84,8 @@ local result = {
   bucket = bucket,
   consumed = paidConsumed + regularConsumed,
   paidConsumed = paidConsumed,
-  regularConsumed = regularConsumed
+  regularConsumed = regularConsumed,
+  success = true
 }
 
 return cjson.encode(result)
