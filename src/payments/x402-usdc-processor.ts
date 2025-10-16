@@ -320,11 +320,13 @@ export class X402UsdcProcessor implements PaymentProcessor {
         appLogo: this.config.appLogo,
         sessionTokenEndpoint: this.config.sessionTokenEndpoint,
       });
+      res.setHeader('Cache-Control', 'no-store');
       res.status(402).send(html);
       return;
     }
 
     // Return JSON for API clients
+    res.setHeader('Cache-Control', 'no-store');
     res.status(402).json({
       x402Version: this.config.version,
       accepts: [requirements],

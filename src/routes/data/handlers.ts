@@ -517,6 +517,7 @@ export const sendPaymentRequired = (
   res: Response,
   text = 'Payment required',
 ) => {
+  res.setHeader('Cache-Control', 'no-store');
   res.status(402).send(text);
 };
 
