@@ -166,11 +166,11 @@ chunk validation success rates.
 - **Observer**: Increased `OFFSET_SAMPLE_COUNT` default from 3 to 4 to improve
   chunk validation success rate with early stopping
 - Increased rate limiter defaults to accommodate larger response payloads:
-  - `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET`: 10,000 → 1,000,000 tokens (~10 MB → ~976 MB bucket capacity)
-  - `RATE_LIMITER_IP_TOKENS_PER_BUCKET`: 2,000 → 100,000 tokens (~2 MB → ~98 MB bucket capacity)
-  - Resource refill rate remains 100 tokens/sec (~98 KB/sec)
-  - IP refill rate remains 20 tokens/sec (~20 KB/sec)
-  - Note: 1 token = 1 KB of response data, minimum 1 token per request
+  - `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET`: 10,000 → 1,000,000 tokens (~10 MiB → ~976 MiB bucket capacity)
+  - `RATE_LIMITER_IP_TOKENS_PER_BUCKET`: 2,000 → 100,000 tokens (~2 MiB → ~98 MiB bucket capacity)
+  - Resource refill rate remains 100 tokens/second (~98 KiB/s)
+  - IP refill rate remains 20 tokens/second (~20 KiB/s)
+  - Note: 1 token = 1 KiB (where 1 KiB = 1,024 bytes) of response data, minimum 1 token per request
   - Rate limiter remains disabled by default (`ENABLE_RATE_LIMITER=false`)
 - **Performance Optimization**: RootParentDataSource now uses pre-computed root
   offsets when available:
