@@ -48,6 +48,9 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
   /**
    * Simulates the Redis Lua script for getOrCreateBucketAndConsume
    * Creates/refills bucket and attempts to consume tokens atomically
+   *
+   * @returns BucketConsumptionResult with bucket state, consumption breakdown
+   *          (paidConsumed, regularConsumed), and success status
    */
   async getOrCreateBucketAndConsume(
     key: string,
@@ -208,6 +211,9 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
    *
    * INVARIANT: paidTokens must never go negative
    * Regular tokens can go negative (over-consumption), but paid tokens cannot
+   *
+   * @returns BucketConsumptionResult with bucket state, consumption breakdown
+   *          (paidConsumed, regularConsumed), and success status
    */
   async consumeTokens(
     key: string,

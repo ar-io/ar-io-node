@@ -53,6 +53,10 @@ export class X402UsdcProcessor implements PaymentProcessor {
   private config: X402UsdcProcessorConfig;
   private facilitator: ReturnType<typeof useFacilitator>;
 
+  /**
+   * Create a new X402 USDC payment processor
+   * @param config Payment processor configuration
+   */
   constructor(config: X402UsdcProcessorConfig) {
     this.config = config;
     this.facilitator = useFacilitator({
