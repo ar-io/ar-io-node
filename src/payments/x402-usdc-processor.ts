@@ -308,7 +308,19 @@ export class X402UsdcProcessor implements PaymentProcessor {
       }
 
       // Encode original URL to base64url for redirect endpoint
-      const encodedUrl = Buffer.from(req.originalUrl).toString('base64url');
+      // Defensive check: ensure originalUrl is a defined string before encoding
+      let urlToEncode = req.originalUrl;
+      if (typeof urlToEncode !== 'string') {
+        log.warn(
+          '[X402UsdcProcessor] req.originalUrl is not a string, using fallback',
+          {
+            originalUrl: urlToEncode,
+            fallback: req.url,
+          },
+        );
+        urlToEncode = req.url || '';
+      }
+      const encodedUrl = Buffer.from(urlToEncode).toString('base64url');
       const paywallUrl = `/ar-io/x402/redirect/${encodedUrl}`;
 
       const html = getPaywallHtml({
