@@ -81,7 +81,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
    */
   public paymentToTokens(paymentAmountAtomic: string): number {
     // Convert atomic units to USD (USDC has 6 decimals)
-    const paymentAmountUsd = parseInt(paymentAmountAtomic) / 1000000;
+    const paymentAmountUsd = parseInt(paymentAmountAtomic, 10) / 1_000_000;
 
     // Calculate equivalent content length from payment
     // priceInUSD = contentLength * perBytePrice
@@ -303,7 +303,8 @@ export class X402UsdcProcessor implements PaymentProcessor {
       } else {
         // Calculate from maxAmountRequired (which is in atomic units)
         // For USDC, 6 decimals
-        displayAmount = parseInt(requirements.maxAmountRequired) / 1000000;
+        displayAmount =
+          parseInt(requirements.maxAmountRequired, 10) / 1_000_000;
       }
 
       // Encode original URL to base64url for redirect endpoint
