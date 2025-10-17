@@ -122,6 +122,11 @@ export function createX402Router({
           return;
         }
 
+        // Set settlement response header if available
+        if (settlementResult.responseHeader !== undefined) {
+          res.setHeader('X-Payment-Response', settlementResult.responseHeader);
+        }
+
         // Convert payment amount to tokens
         if (paymentProcessor instanceof X402UsdcProcessor) {
           // Use the actual payment amount from the payment payload, not requirements
