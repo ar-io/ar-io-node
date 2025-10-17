@@ -268,24 +268,34 @@ export class RedisRateLimiter implements RateLimiter {
           this.config.cacheTtlSeconds,
         );
 
-        // Track metrics
-        rateLimitTokensConsumedTotal.inc(
-          {
-            bucket_type: 'ip',
-            token_type: 'paid',
-            domain: context.domain,
-          },
-          ipAdjustResult.paidConsumed,
-        );
+        // Track metrics - only increment for positive, finite values
+        if (
+          Number.isFinite(ipAdjustResult.paidConsumed) &&
+          ipAdjustResult.paidConsumed > 0
+        ) {
+          rateLimitTokensConsumedTotal.inc(
+            {
+              bucket_type: 'ip',
+              token_type: 'paid',
+              domain: context.domain,
+            },
+            ipAdjustResult.paidConsumed,
+          );
+        }
 
-        rateLimitTokensConsumedTotal.inc(
-          {
-            bucket_type: 'ip',
-            token_type: 'regular',
-            domain: context.domain,
-          },
-          ipAdjustResult.regularConsumed,
-        );
+        if (
+          Number.isFinite(ipAdjustResult.regularConsumed) &&
+          ipAdjustResult.regularConsumed > 0
+        ) {
+          rateLimitTokensConsumedTotal.inc(
+            {
+              bucket_type: 'ip',
+              token_type: 'regular',
+              domain: context.domain,
+            },
+            ipAdjustResult.regularConsumed,
+          );
+        }
 
         // Log warning if partial consumption occurred
         if (!ipAdjustResult.success) {
@@ -335,24 +345,34 @@ export class RedisRateLimiter implements RateLimiter {
           this.config.cacheTtlSeconds,
         );
 
-        // Track metrics
-        rateLimitTokensConsumedTotal.inc(
-          {
-            bucket_type: 'resource',
-            token_type: 'paid',
-            domain: context.domain,
-          },
-          resourceAdjustResult.paidConsumed,
-        );
+        // Track metrics - only increment for positive, finite values
+        if (
+          Number.isFinite(resourceAdjustResult.paidConsumed) &&
+          resourceAdjustResult.paidConsumed > 0
+        ) {
+          rateLimitTokensConsumedTotal.inc(
+            {
+              bucket_type: 'resource',
+              token_type: 'paid',
+              domain: context.domain,
+            },
+            resourceAdjustResult.paidConsumed,
+          );
+        }
 
-        rateLimitTokensConsumedTotal.inc(
-          {
-            bucket_type: 'resource',
-            token_type: 'regular',
-            domain: context.domain,
-          },
-          resourceAdjustResult.regularConsumed,
-        );
+        if (
+          Number.isFinite(resourceAdjustResult.regularConsumed) &&
+          resourceAdjustResult.regularConsumed > 0
+        ) {
+          rateLimitTokensConsumedTotal.inc(
+            {
+              bucket_type: 'resource',
+              token_type: 'regular',
+              domain: context.domain,
+            },
+            resourceAdjustResult.regularConsumed,
+          );
+        }
 
         // Log warning if partial consumption occurred
         if (!resourceAdjustResult.success) {
