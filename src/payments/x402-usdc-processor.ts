@@ -108,6 +108,30 @@ export class X402UsdcProcessor implements PaymentProcessor {
   }
 
   /**
+   * Convert payment amount to equivalent content size
+   * @param paymentAmountAtomic Payment amount in atomic units (for USDC: 6 decimals)
+   * @returns Equivalent content size in bytes
+   */
+  public paymentToContentSize(paymentAmountAtomic: string): number {
+    // Convert atomic units to USD (USDC has 6 decimals)
+    const paymentAmountUsd = parseInt(paymentAmountAtomic, 10) / 1_000_000;
+
+    // Calculate equivalent content length from payment
+    // priceInUSD = contentLength * perBytePrice
+    // contentLength = priceInUSD / perBytePrice
+    const equivalentContentLength = paymentAmountUsd / this.config.perBytePrice;
+
+    log.debug('[X402UsdcProcessor] Payment to content size conversion', {
+      paymentAmountAtomic,
+      paymentAmountUsd,
+      perBytePrice: this.config.perBytePrice,
+      equivalentContentLength,
+    });
+
+    return Math.floor(equivalentContentLength);
+  }
+
+  /**
    * Check if a request is from a browser
    */
   public isBrowserRequest(req: Request): boolean {

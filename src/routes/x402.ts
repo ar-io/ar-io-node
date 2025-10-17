@@ -81,11 +81,31 @@ export function createX402Router({
           return;
         }
 
-        // Create payment requirements with maximum price
-        // We don't know the actual content size, so use max price
+        // Calculate equivalent content size from payment amount
+        // This ensures verification/settlement use requirements matching what user paid
+        let contentSize = 0;
+        if (
+          paymentProcessor instanceof X402UsdcProcessor &&
+          'authorization' in payment.payload
+        ) {
+          const actualPaymentAmount =
+            payment.payload.authorization.value.toString();
+          contentSize =
+            paymentProcessor.paymentToContentSize(actualPaymentAmount);
+          log.debug('[X402Redirect] Calculated content size from payment', {
+            actualPaymentAmount,
+            contentSize,
+          });
+        } else {
+          log.warn(
+            '[X402Redirect] Unable to extract payment amount, using contentSize: 0',
+          );
+        }
+
+        // Create payment requirements based on actual payment amount
         const requirements: PaymentRequirements =
           paymentProcessor.calculateRequirements({
-            contentSize: 0, // Will be ignored due to max price clamping
+            contentSize,
             contentType: 'application/octet-stream',
             protocol: req.protocol,
             host: req.headers.host ?? '',
