@@ -311,7 +311,7 @@ export async function checkPaymentAndRateLimits({
     }
 
     // === RATE LIMITING ===
-    if (rateLimiter !== undefined) {
+    if (rateLimiter !== undefined && config.ENABLE_RATE_LIMITER) {
       span.addEvent('Checking rate limits');
       const rateLimitSpan = startChildSpan(
         'checkRateLimits',
@@ -365,40 +365,38 @@ export async function checkPaymentAndRateLimits({
           // Track bytes blocked
           rateLimitBytesBlockedTotal.inc({ domain }, contentSize);
 
-          if (config.ENABLE_RATE_LIMITER) {
-            // If payment processor exists and payment not verified, return 402
-            if (
-              paymentProcessor !== undefined &&
-              !paymentVerified &&
-              dataAttributes !== undefined
-            ) {
-              const requirements = paymentProcessor.calculateRequirements({
-                contentSize,
-                protocol: req.protocol,
-                host: host,
-                originalUrl: req.originalUrl,
-                contentType:
-                  dataAttributes.contentType ?? 'application/octet-stream',
-              } as PaymentRequirementsContext);
+          // If payment processor exists and payment not verified, return 402
+          if (
+            paymentProcessor !== undefined &&
+            !paymentVerified &&
+            dataAttributes !== undefined
+          ) {
+            const requirements = paymentProcessor.calculateRequirements({
+              contentSize,
+              protocol: req.protocol,
+              host: host,
+              originalUrl: req.originalUrl,
+              contentType:
+                dataAttributes.contentType ?? 'application/octet-stream',
+            } as PaymentRequirementsContext);
 
-              paymentProcessor.sendPaymentRequiredResponse(
-                req,
-                res,
-                requirements,
-                {
-                  message: 'Payment required to access this resource',
-                },
-              );
-            } else {
-              // Return 429 rate limit exceeded
-              res.status(429).json({
-                error: 'Too Many Requests',
-                message: 'IP rate limit exceeded',
-              });
-            }
-
-            return { allowed: false };
+            paymentProcessor.sendPaymentRequiredResponse(
+              req,
+              res,
+              requirements,
+              {
+                message: 'Payment required to access this resource',
+              },
+            );
+          } else {
+            // Return 429 rate limit exceeded
+            res.status(429).json({
+              error: 'Too Many Requests',
+              message: 'IP rate limit exceeded',
+            });
           }
+
+          return { allowed: false };
         }
 
         // Rate limit check passed
