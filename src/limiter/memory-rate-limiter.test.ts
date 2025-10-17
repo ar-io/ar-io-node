@@ -469,6 +469,11 @@ describe('MemoryRateLimiter', () => {
         responseSize: 10240, // 10KB = 10 tokens
         initialResourceTokens: 10,
         initialIpTokens: 10,
+        initialResourcePaidTokens: 0,
+        initialResourceRegularTokens: 10,
+        initialIpPaidTokens: 0,
+        initialIpRegularTokens: 10,
+        domain: 'test.example.com',
       });
 
       // Check that adjustment was made (can't directly verify internal state,
@@ -487,6 +492,11 @@ describe('MemoryRateLimiter', () => {
         responseSize: 1024, // 1KB = 1 token
         initialResourceTokens: 100,
         initialIpTokens: 100,
+        initialResourcePaidTokens: 0,
+        initialResourceRegularTokens: 100,
+        initialIpPaidTokens: 0,
+        initialIpRegularTokens: 100,
+        domain: 'test.example.com',
       });
 
       // Tokens should be returned (99 tokens returned)
@@ -504,6 +514,11 @@ describe('MemoryRateLimiter', () => {
         responseSize: 10240, // 10KB = 10 tokens
         initialResourceTokens: 10,
         initialIpTokens: 10,
+        initialResourcePaidTokens: 0,
+        initialResourceRegularTokens: 10,
+        initialIpPaidTokens: 0,
+        initialIpRegularTokens: 10,
+        domain: 'test.example.com',
       });
 
       // No adjustment needed
@@ -517,6 +532,11 @@ describe('MemoryRateLimiter', () => {
         responseSize: 1024,
         initialResourceTokens: 10,
         initialIpTokens: 10,
+        initialResourcePaidTokens: 0,
+        initialResourceRegularTokens: 10,
+        initialIpPaidTokens: 0,
+        initialIpRegularTokens: 10,
+        domain: 'test.example.com',
       });
 
       // Should not throw
@@ -594,6 +614,11 @@ describe('MemoryRateLimiter', () => {
         responseSize: 0,
         initialResourceTokens: 100,
         initialIpTokens: 100,
+        initialResourcePaidTokens: 0,
+        initialResourceRegularTokens: 100,
+        initialIpPaidTokens: 0,
+        initialIpRegularTokens: 100,
+        domain: 'test.example.com',
       });
 
       // Next request should use prediction since cached is 0
