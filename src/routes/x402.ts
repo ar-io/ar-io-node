@@ -35,11 +35,32 @@ export function createX402Router({
       try {
         // Decode the original URL from base64url
         const encoded = req.params.encoded;
-        const originalUrl = Buffer.from(encoded, 'base64url').toString('utf-8');
+        let decodedUrl: string;
+        let validatedUrl: string;
+
+        try {
+          decodedUrl = Buffer.from(encoded, 'base64url').toString('utf-8');
+        } catch (error) {
+          log.warn('[X402Redirect] Invalid base64url encoding', { encoded });
+          res.status(400).send('Invalid encoded URL');
+          return;
+        }
+
+        // Validate and normalize the URL
+        try {
+          validatedUrl = validateRedirectUrl(decodedUrl);
+        } catch (error: any) {
+          log.warn('[X402Redirect] Invalid redirect URL', {
+            decodedUrl,
+            error: error.message,
+          });
+          res.status(400).send('Invalid redirect URL');
+          return;
+        }
 
         log.debug('[X402Redirect] Processing redirect request', {
           encoded,
-          originalUrl,
+          validatedUrl,
         });
 
         // If no payment processor or rate limiter, just redirect
@@ -47,7 +68,7 @@ export function createX402Router({
           log.warn(
             '[X402Redirect] No payment processor or rate limiter configured',
           );
-          sendRedirectHtml(res, originalUrl);
+          sendRedirectHtml(res, validatedUrl);
           return;
         }
 
@@ -56,7 +77,7 @@ export function createX402Router({
 
         if (payment === undefined) {
           log.warn('[X402Redirect] No payment header found');
-          sendRedirectHtml(res, originalUrl);
+          sendRedirectHtml(res, validatedUrl);
           return;
         }
 
@@ -68,7 +89,7 @@ export function createX402Router({
             contentType: 'application/octet-stream',
             protocol: req.protocol,
             host: req.headers.host ?? '',
-            originalUrl,
+            originalUrl: validatedUrl,
           });
 
         // Verify payment
@@ -82,7 +103,7 @@ export function createX402Router({
           log.warn('[X402Redirect] Payment verification failed', {
             reason: verifyResult.invalidReason,
           });
-          sendRedirectHtml(res, originalUrl);
+          sendRedirectHtml(res, validatedUrl);
           return;
         }
 
@@ -97,7 +118,7 @@ export function createX402Router({
           log.error('[X402Redirect] Payment settlement failed', {
             error: settlementResult.errorReason,
           });
-          sendRedirectHtml(res, originalUrl);
+          sendRedirectHtml(res, validatedUrl);
           return;
         }
 
@@ -126,7 +147,7 @@ export function createX402Router({
         }
 
         // Send redirect HTML
-        sendRedirectHtml(res, originalUrl);
+        sendRedirectHtml(res, validatedUrl);
       } catch (error: any) {
         log.error('[X402Redirect] Error processing redirect', {
           error: error.message,
@@ -161,6 +182,40 @@ export function createX402Router({
   });
 
   return x402Router;
+}
+
+/**
+ * Validate and normalize a redirect URL
+ * Only allows http/https schemes or relative URLs (same-origin paths)
+ * @param urlString - URL string to validate
+ * @returns Normalized URL string
+ * @throws Error if URL is invalid or uses disallowed scheme
+ */
+export function validateRedirectUrl(urlString: string): string {
+  // Try to parse as URL
+  try {
+    const url = new URL(urlString);
+
+    // Only allow http and https schemes
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(`Invalid URL scheme: ${url.protocol}`);
+    }
+
+    return url.toString();
+  } catch (error) {
+    // If URL parsing fails, check if it's a relative path
+    // Relative paths should start with / and not contain protocol-like patterns
+    if (
+      urlString.startsWith('/') &&
+      !urlString.includes(':') &&
+      !urlString.startsWith('//')
+    ) {
+      return urlString;
+    }
+
+    // Otherwise it's invalid
+    throw new Error('Invalid redirect URL');
+  }
 }
 
 /**
