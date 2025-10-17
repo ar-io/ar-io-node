@@ -133,9 +133,9 @@ export class RedisRateLimiter implements RateLimiter {
       // Store bucket key and initial consumption in request for later adjustment
       (req as any).ipBucketKey = ipKey;
 
-      // Check resource bucket ONLY if the current paid token balance in the IP bucket is zero
-      // (having paid tokens grants bypass of per-resource limits)
-      if (ipResult.bucket.paidTokens === 0) {
+      // Check resource bucket ONLY if no paid tokens were consumed for this request
+      // (consuming paid tokens grants bypass of per-resource limits)
+      if (ipResult.paidConsumed === 0) {
         const resourceResult =
           await this.redisClient.getOrCreateBucketAndConsume(
             resourceKey,
@@ -151,11 +151,13 @@ export class RedisRateLimiter implements RateLimiter {
 
         if (!resourceResult.success) {
           // Resource limit exceeded - refund IP tokens and deny
-          if (ipResult.regularConsumed > 0) {
+          const totalConsumed =
+            ipResult.regularConsumed + ipResult.paidConsumed;
+          if (totalConsumed > 0) {
             try {
               await this.redisClient.consumeTokens(
                 ipKey,
-                -ipResult.regularConsumed, // Negative to refund
+                -totalConsumed, // Negative to refund (returns to regular pool)
                 this.config.cacheTtlSeconds,
               );
             } catch (refundError) {
@@ -165,6 +167,9 @@ export class RedisRateLimiter implements RateLimiter {
                     ? refundError.message
                     : String(refundError),
                 ipKey,
+                totalRefunded: totalConsumed,
+                regularConsumed: ipResult.regularConsumed,
+                paidConsumed: ipResult.paidConsumed,
               });
             }
           }
@@ -173,6 +178,9 @@ export class RedisRateLimiter implements RateLimiter {
             key: resourceKey,
             tokens: resourceResult.bucket.tokens,
             needed: predictedTokens,
+            refunded: totalConsumed,
+            regularConsumed: ipResult.regularConsumed,
+            paidConsumed: ipResult.paidConsumed,
           });
 
           return {

@@ -421,6 +421,32 @@ describe('MemoryRateLimiter', () => {
       // Resource check should be skipped
       assert.strictEqual(result.resourceTokensConsumed, undefined);
     });
+
+    it('should bypass resource check when consuming paid tokens brings balance to zero', async () => {
+      const req = createMockRequest();
+      const res = createMockResponse();
+
+      // Exhaust regular tokens and resource bucket
+      await limiter.checkLimit(req, res, 500);
+      const req2 = createMockRequest({ ip: '10.0.0.2' });
+      await limiter.checkLimit(req2, res, 1000);
+      // Resource bucket now has 0 tokens, IP regular bucket has 0 tokens
+
+      // Top off with exactly 150 tokens (1500 with 10x multiplier)
+      await limiter.topOffPaidTokens(req, 150);
+
+      // Consume exactly all paid tokens (balance will be 0 after consumption)
+      // This should STILL bypass resource check because paid tokens were consumed
+      const result = await limiter.checkLimit(req, res, 1500);
+      assert.strictEqual(result.allowed, true);
+      // Resource check should be bypassed despite paid balance reaching zero
+      assert.strictEqual(result.resourceTokensConsumed, undefined);
+      // Verify paid tokens were consumed
+      assert.ok(
+        (result.ipPaidTokensConsumed ?? 0) > 1499,
+        `Expected ipPaidTokensConsumed to be > 1499, got ${result.ipPaidTokensConsumed}`,
+      );
+    });
   });
 
   describe('Cached content length', () => {
