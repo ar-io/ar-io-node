@@ -209,12 +209,8 @@ export function validateRedirectUrl(urlString: string): string {
     return url.toString();
   } catch (error) {
     // If URL parsing fails, check if it's a relative path
-    // Relative paths should start with / and not contain protocol-like patterns
-    if (
-      urlString.startsWith('/') &&
-      !urlString.includes(':') &&
-      !urlString.startsWith('//')
-    ) {
+    // Relative paths must start with / but not // (scheme-relative URLs)
+    if (urlString.startsWith('/') && !urlString.startsWith('//')) {
       return urlString;
     }
 
