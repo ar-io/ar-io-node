@@ -163,7 +163,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
       log.error('[X402UsdcProcessor] Failed to decode payment header', {
         error: error.message,
       });
-      throw new Error('Invalid payment header');
+      return undefined;
     }
   }
 
