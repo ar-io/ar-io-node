@@ -164,13 +164,30 @@ export function createX402Router({
 }
 
 /**
+ * Escape HTML special characters to prevent XSS attacks
+ * @param text - Text to escape
+ * @returns HTML-safe escaped text
+ */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+/**
  * Send HTML redirect response
+ * SECURITY: targetUrl must be HTML-escaped to prevent XSS attacks
  */
 function sendRedirectHtml(res: Response, targetUrl: string): void {
+  const escapedUrl = escapeHtml(targetUrl);
+
   const html = `<!DOCTYPE html>
 <html>
 <head>
-  <meta http-equiv="refresh" content="0;url=${targetUrl}">
+  <meta http-equiv="refresh" content="0;url=${escapedUrl}">
   <title>Redirecting...</title>
 </head>
 <body>
