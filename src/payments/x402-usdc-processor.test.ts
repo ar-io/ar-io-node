@@ -81,6 +81,10 @@ describe('X402UsdcProcessor', () => {
     });
   });
 
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
   describe('isBrowserRequest', () => {
     it('should return true for browser requests', () => {
       const req = createMockRequest({
