@@ -296,15 +296,23 @@ export class X402UsdcProcessor implements PaymentProcessor {
     if (this.isBrowserRequest(req)) {
       // Calculate display amount from price or payment requirements
       let displayAmount: number;
+
+      // Try to parse price string first if provided
       if (options?.price !== undefined && options.price.length > 0) {
-        // Parse price like "$0.001"
-        const parsed = options.price.replace('$', '');
-        displayAmount = parseFloat(parsed);
+        const cleaned = options.price.replace(/[$,]/g, '').trim();
+        const parsed = parseFloat(cleaned);
+        displayAmount = Number.isFinite(parsed) ? parsed : NaN;
       } else {
-        // Calculate from maxAmountRequired (which is in atomic units)
-        // For USDC, 6 decimals
-        displayAmount =
-          parseInt(requirements.maxAmountRequired, 10) / 1_000_000;
+        displayAmount = NaN;
+      }
+
+      // Fall back to computing from maxAmountRequired if parsing failed
+      if (!Number.isFinite(displayAmount)) {
+        const atomicAmount = parseInt(requirements.maxAmountRequired, 10);
+        if (Number.isNaN(atomicAmount)) {
+          throw new Error('Invalid payment requirements');
+        }
+        displayAmount = atomicAmount / 1_000_000; // USDC has 6 decimals
       }
 
       // Encode original URL to base64url for redirect endpoint
