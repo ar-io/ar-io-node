@@ -65,11 +65,9 @@ if cost > 0 then
       bucket.paidTokens = bucket.paidTokens - remainder
       paidConsumed = remainder
     else
-      -- Insufficient paid tokens - consume what's available (partial consumption)
-      bucket.tokens = 0
-      paidConsumed = bucket.paidTokens
-      bucket.paidTokens = 0
+      -- Insufficient paid tokens - fail without consuming (no partial consumption)
       success = false
+      -- Don't modify bucket.tokens, bucket.paidTokens, or consumption counters
     end
   else
     -- No regular tokens, validate and use paid only
@@ -78,10 +76,9 @@ if cost > 0 then
       bucket.paidTokens = bucket.paidTokens - cost
       paidConsumed = cost
     else
-      -- Insufficient paid tokens - consume all available (partial consumption)
-      paidConsumed = bucket.paidTokens
-      bucket.paidTokens = 0
+      -- Insufficient paid tokens - fail without consuming (no partial consumption)
       success = false
+      -- Don't modify bucket.paidTokens or consumption counters
     end
   end
 elseif cost < 0 then

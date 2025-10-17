@@ -253,8 +253,8 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
         regularConsumed = tokensToConsume;
       } else if (bucket.tokens > 0) {
         // Partial regular, remainder from paid
-        regularConsumed = bucket.tokens;
-        const remainder = tokensToConsume - regularConsumed;
+        const tempRegularConsumed = bucket.tokens;
+        const remainder = tokensToConsume - tempRegularConsumed;
 
         // Validate sufficient paid tokens before consuming
         if (bucket.paidTokens >= remainder) {
@@ -262,12 +262,11 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
           bucket.tokens = 0;
           bucket.paidTokens -= remainder;
           paidConsumed = remainder;
+          regularConsumed = tempRegularConsumed;
         } else {
-          // Insufficient paid tokens - consume what's available (partial consumption)
-          bucket.tokens = 0;
-          paidConsumed = bucket.paidTokens;
-          bucket.paidTokens = 0;
+          // Insufficient paid tokens - fail without consuming (no partial consumption)
           success = false;
+          // Don't modify bucket.tokens, bucket.paidTokens, or consumption counters
         }
       } else {
         // No regular tokens, validate and use paid only
@@ -276,10 +275,9 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
           bucket.paidTokens -= tokensToConsume;
           paidConsumed = tokensToConsume;
         } else {
-          // Insufficient paid tokens - consume all available (partial consumption)
-          paidConsumed = bucket.paidTokens;
-          bucket.paidTokens = 0;
+          // Insufficient paid tokens - fail without consuming (no partial consumption)
           success = false;
+          // Don't modify bucket.paidTokens or consumption counters
         }
       }
     } else if (tokensToConsume < 0) {
