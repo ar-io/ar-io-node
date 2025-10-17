@@ -55,12 +55,12 @@ if cost > 0 then
     regularConsumed = cost
   elseif bucket.tokens > 0 then
     -- Partial regular, remainder from paid
-    regularConsumed = bucket.tokens
-    local remainder = cost - regularConsumed
+    local remainder = cost - bucket.tokens
 
     -- Validate sufficient paid tokens before consuming
     if bucket.paidTokens >= remainder then
       -- Sufficient paid tokens for remainder
+      regularConsumed = bucket.tokens
       bucket.tokens = 0
       bucket.paidTokens = bucket.paidTokens - remainder
       paidConsumed = remainder
