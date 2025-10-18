@@ -4,41 +4,63 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 55] - 2025-10-20
+
+This release represents a major milestone for the x402 payment protocol. The
+x402 feature has evolved from an MVP supporting only limited data endpoints to
+a full, mostly feature-complete solution. The browser paywall now uses redirect
+mode to properly handle content-type metadata, and rate limiting has been
+extended to work correctly across all content delivery paths including
+manifests, ArNS names, and range requests.
 
 ### Added
 
-- **Token Consumption Metrics**: New `rate_limit_tokens_consumed_total` Prometheus counter for monitoring rate limiter usage with labels:
+- **Token Consumption Metrics**: New `rate_limit_tokens_consumed_total`
+  Prometheus counter for monitoring rate limiter usage with labels:
   - `bucket_type` (ip/resource) - Which bucket consumed tokens
   - `token_type` (paid/regular) - Which token pool was used
   - `domain` - Domain consuming the tokens
   - Enables monitoring and alerting on token consumption patterns
 - **Environment Variables**:
-  - `RATE_LIMITER_TYPE`: Configure rate limiter implementation ("memory" for development/testing, "redis" for production)
-  - `X_402_CDP_CLIENT_KEY_FILE`: Load CDP client key from file instead of environment variable for improved security
+  - `RATE_LIMITER_TYPE`: Configure rate limiter implementation ("memory" for
+    development/testing, "redis" for production)
+  - `X_402_CDP_CLIENT_KEY_FILE`: Load CDP client key from file instead of
+    environment variable for improved security
+  - `RATE_LIMITER_ARNS_ALLOWLIST`: Comma-separated list of ArNS names that
+    bypass rate limiting and payment verification
 
 ### Changed
 
-- **Token Consumption Priority**: Changed token consumption order to prioritize regular tokens:
+- **Token Consumption Priority**: Changed token consumption order to prioritize
+  regular tokens:
   - Regular tokens consumed first, then paid tokens
-  - Paid tokens now act as overflow capacity instead of being consumed immediately
+  - Paid tokens now act as overflow capacity instead of being consumed
+    immediately
   - Paid token balance still provides bypass of per-resource rate limits
-  - This change provides better value to paying users as paid tokens last longer
-- **Rate Limiting and Payment Architecture**: Refactored internal architecture for improved maintainability (no operator-visible behavior changes beyond those listed above)
+  - This change provides better value to paying users as paid tokens last
+    longer
+- **Rate Limiting and Payment Architecture**: Refactored internal architecture
+  for improved maintainability (no operator-visible behavior changes beyond those
+  listed above)
 
 ### Fixed
 
-- **X402 Browser Paywall**: Implemented redirect mode to fix blob URL content-type handling issues:
+- **X402 Browser Paywall**: Implemented redirect mode to fix blob URL
+  content-type handling issues:
   - Browser requests now receive proper redirects after payment verification
   - Resolves content-type metadata loss that occurred with blob URLs
   - Preserves original content metadata in browser delivery
-- **Rate Limiting for Manifests and ArNS**: Fixed rate limits to correctly apply to manifest-resolved and ArNS resources:
+- **Rate Limiting for Manifests and ArNS**: Fixed rate limits to correctly
+  apply to manifest-resolved and ArNS resources:
   - Rate limits now apply after manifest resolution to actual content size
   - ArNS resources are now properly rate limited
   - Ensures consistent rate limiting across all content delivery paths
-- **Range Request Token Consumption**: Fixed rate limiter to charge tokens based on actual bytes served in range requests instead of full content size
-- **Rate Limiter Token Tracking**: Fixed internal token bucket tracking to properly record consumption in all edge cases
-- **Token Consumption for Non-Data Responses**: Prevented token consumption for 304 Not Modified and HEAD responses which don't transfer content data
+- **Range Request Token Consumption**: Fixed rate limiter to charge tokens
+  based on actual bytes served in range requests instead of full content size
+- **Rate Limiter Token Tracking**: Fixed internal token bucket tracking to
+  properly record consumption in all edge cases
+- **Token Consumption for Non-Data Responses**: Prevented token consumption for
+  304 Not Modified and HEAD responses which don't transfer content data
 
 ## [Release 54] - 2025-10-13
 
