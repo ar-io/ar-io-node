@@ -1205,6 +1205,11 @@ export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
+export const RATE_LIMITER_TYPE = env.varOrDefault(
+  'RATE_LIMITER_TYPE',
+  'memory',
+) as 'memory' | 'redis';
+
 export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
 
 export const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
@@ -1232,6 +1237,14 @@ export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
     .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')
     ?.split(',')
     .map((ip) => ip.trim()) ?? [];
+
+// ArNS names to exclude from rate limiting
+export const RATE_LIMITER_ARNS_ALLOWLIST =
+  env
+    .varOrUndefined('RATE_LIMITER_ARNS_ALLOWLIST')
+    ?.split(',')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0) ?? [];
 
 export const RATE_LIMITER_REDIS_ENDPOINT = env.varOrDefault(
   'RATE_LIMITER_REDIS_ENDPOINT',
@@ -1291,7 +1304,23 @@ export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
 );
 
 // Paywall customization (optional)
-export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+export let X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+
+const X_402_CDP_CLIENT_KEY_FILE = env.varOrUndefined(
+  'X_402_CDP_CLIENT_KEY_FILE',
+);
+
+if (X_402_CDP_CLIENT_KEY_FILE !== undefined) {
+  if (!existsSync(X_402_CDP_CLIENT_KEY_FILE)) {
+    throw new Error(
+      `X_402_CDP_CLIENT_KEY_FILE not found: ${X_402_CDP_CLIENT_KEY_FILE}`,
+    );
+  }
+  X_402_CDP_CLIENT_KEY = readFileSync(X_402_CDP_CLIENT_KEY_FILE)
+    .toString()
+    .trim();
+}
+
 export const X_402_APP_NAME = env.varOrDefault(
   'X_402_APP_NAME',
   'AR.IO Gateway',

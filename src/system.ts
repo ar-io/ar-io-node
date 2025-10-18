@@ -103,6 +103,8 @@ import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 import { CompositeDataAttributesSource } from './data/composite-data-attributes-source.js';
 import { ContiguousDataAttributesStore } from './types.js';
+import { createRateLimiter } from './limiter/factory.js';
+import { createPaymentProcessor } from './payments/factory.js';
 
 // Shutdown registry for managing cleanup handlers
 type CleanupHandler = {
@@ -191,6 +193,10 @@ export const arweaveClient = new ArweaveCompositeClient({
 metrics.registerQueueLengthGauge('arweaveClientRequests', {
   length: () => arweaveClient.queueDepth(),
 });
+
+// Rate limiter and payment processor
+export const rateLimiter = createRateLimiter();
+export const paymentProcessor = createPaymentProcessor();
 
 export const db = new StandaloneSqliteDatabase({
   log,

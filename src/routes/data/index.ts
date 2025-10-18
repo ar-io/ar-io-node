@@ -21,6 +21,8 @@ export const dataHandler = createDataHandler({
   dataSource: system.onDemandContiguousDataSource,
   dataBlockListValidator: system.dataBlockListValidator,
   manifestPathResolver: system.manifestPathResolver,
+  rateLimiter: system.rateLimiter,
+  paymentProcessor: system.paymentProcessor,
 });
 
 export const dataRouter = Router();
@@ -33,6 +35,8 @@ dataRouter.get(
     dataAttributesSource: system.dataAttributesStore,
     dataSource: system.onDemandContiguousDataSource,
     dataBlockListValidator: system.dataBlockListValidator,
+    rateLimiter: system.rateLimiter,
+    paymentProcessor: system.paymentProcessor,
   }),
 );
 dataRouter.get(FARCASTER_FRAME_DATA_PATH_REGEX, dataHandler);
