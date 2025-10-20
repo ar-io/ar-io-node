@@ -1,0 +1,1677 @@
+# X402 Payment Protocol and Rate Limiting
+
+This guide covers the AR.IO Gateway's x402 payment protocol integration and rate
+limiting capabilities, including how to configure and use these features for
+traffic management and content monetization.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Getting Started](#getting-started)
+- [Rate Limiter Deep Dive](#rate-limiter-deep-dive)
+- [X402 Payment Protocol Deep Dive](#x402-payment-protocol-deep-dive)
+- [Integration Topics](#integration-topics)
+- [Reference](#reference)
+- [Troubleshooting](#troubleshooting)
+- [Examples](#examples)
+
+## Overview
+
+### What is the Rate Limiter?
+
+The AR.IO Gateway includes a flexible rate limiting system that uses a **token
+bucket algorithm** to control traffic. It provides:
+
+- **Two-tier limiting**: Per-resource limits (for individual content) and per-IP
+  limits (for clients)
+- **Dual token system**: Regular tokens (refilling over time) and paid tokens
+  (acquired through payments)
+- **Multiple implementations**: In-memory (single-node) or Redis-based
+  (distributed)
+- **Allowlists**: Exempt specific IPs/CIDRs or ArNS names from rate limiting
+
+The rate limiter tracks data egress in "tokens" where **1 token = 1 KiB (1,024
+bytes)**. Buckets refill automatically over time and can be topped off with
+payments.
+
+### What is X402?
+
+**x402** is Coinbase's payment protocol for HTTP API monetization. It enables
+micropayments using USDC (USD Coin) on the Base blockchain network. The AR.IO
+Gateway integrates x402 to:
+
+- Monetize data egress with per-byte pricing
+- Provide premium rate limit tiers for paying users
+- Support both browser-based payments (with visual paywall) and programmatic API
+  payments
+- Verify and settle payments using Coinbase facilitators
+
+### How They Work Together
+
+When both features are enabled:
+
+1. **Free tier**: Users consume regular tokens from their rate limit buckets
+2. **Payment option**: When rate limited, users can make a USDC payment
+3. **Paid tier**: Payments add paid tokens to the user's bucket with a
+   configurable multiplier (default 10x)
+4. **Priority consumption**: Paid tokens are used first, providing faster access
+5. **Resource bypass**: Paid requests bypass per-resource limits (only IP limits
+   apply)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Request Flow                           │
+└─────────────────────────────────────────────────────────────┘
+         │
+         ▼
+   ┌──────────┐
+   │  Request │
+   └──────────┘
+         │
+         ▼
+   ┌──────────────────┐      No      ┌────────────────┐
+   │ X402 Payment     ├─────────────▶│ Check Regular  │
+   │ Header Present?  │              │ Rate Limits    │
+   └────────┬─────────┘              └────────┬───────┘
+            │ Yes                             │
+            ▼                                 │
+   ┌──────────────────┐                       │
+   │ Verify Payment   │                       │
+   └────────┬─────────┘                       │
+            │                                 │
+            ▼                                 │
+   ┌──────────────────┐                       │
+   │ Settle Payment   │                       │
+   └────────┬─────────┘                       │
+            │                                 │
+            ▼                                 │
+   ┌──────────────────┐                       │
+   │ Top Off Bucket   │                       │
+   │ with Paid Tokens │                       │
+   │ (10x multiplier) │                       │
+   └────────┬─────────┘                       │
+            │                                 │
+            ▼                                 ▼
+   ┌──────────────────────────────────────────────┐
+   │  Check Rate Limits (prioritize paid tokens)  │
+   └────────────────┬─────────────────────────────┘
+                    │
+         ┌──────────┴──────────┐
+         │                     │
+         ▼                     ▼
+    ┌─────────┐         ┌──────────┐
+    │ Allowed │         │ Denied   │
+    └────┬────┘         │ Return   │
+         │              │ 402 or   │
+         ▼              │ 429      │
+    ┌─────────┐         └──────────┘
+    │ Serve   │
+    │ Content │
+    └─────────┘
+```
+
+### Network Options
+
+The x402 integration supports two Base blockchain networks:
+
+| Feature                 | Base Sepolia (Testnet)            | Base (Mainnet)                    |
+| ----------------------- | --------------------------------- | --------------------------------- |
+| **USDC**                | Free testnet USDC (faucet)        | Real USDC (costs $$$)             |
+| **CDP API Key**         | Not required                      | Required for official facilitator |
+| **Default Facilitator** | https://x402.org/facilitator      | Must configure                    |
+| **Use Case**            | Development, testing              | Production monetization           |
+| **Configuration**       | `X_402_USDC_NETWORK=base-sepolia` | `X_402_USDC_NETWORK=base`         |
+
+### Use Cases
+
+**Rate Limiter Only:**
+
+- Protect gateway resources from abuse
+- Ensure fair access across users
+- Manage operational costs
+
+**X402 Payments Only:**
+
+- Monetize data egress
+- Cover infrastructure costs
+- Generate revenue from content delivery
+
+**Combined (Recommended):**
+
+- Free tier for casual users
+- Premium tier for power users
+- Flexible traffic management
+- Sustainable business model
+
+## Getting Started
+
+### Quick Start: Rate Limiter Only
+
+Enable basic rate limiting without payments:
+
+**1. Add to `.env` file:**
+
+```bash
+# Enable rate limiting
+ENABLE_RATE_LIMITER=true
+
+# Rate limiter uses Redis by default (recommended for production)
+# For development/testing only, you can override to use memory:
+# RATE_LIMITER_TYPE=memory
+
+# Configure bucket sizes and refill rates
+# IP bucket: ~98 MiB capacity, ~20 KiB/s refill
+RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
+RATE_LIMITER_IP_REFILL_PER_SEC=20
+
+# Resource bucket: ~976 MiB capacity, ~100 KiB/s refill
+RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
+RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
+```
+
+**2. Start the gateway:**
+
+```bash
+docker-compose up -d
+```
+
+**3. Test rate limiting:**
+
+```bash
+# Make requests until you hit the limit
+for i in {1..100}; do
+  curl -i http://localhost:3000/YOUR_TX_ID
+done
+
+# You should eventually see:
+# HTTP/1.1 429 Too Many Requests
+```
+
+**4. Monitor rate limit metrics:**
+
+Rate limit metrics are exposed at `/ar-io/__gateway_metrics`:
+
+```bash
+# Through envoy (default port 3000)
+curl http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
+
+# Or directly to core (port 4000)
+curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
+```
+
+### Quick Start: X402 Payments (Base Sepolia Testnet)
+
+Set up testnet payments for development and testing:
+
+**1. Get testnet USDC:**
+
+- Create or use an existing Ethereum wallet
+- Visit the
+  [Base Sepolia faucet](https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet)
+  to get testnet ETH
+- Get testnet USDC from [Circle's testnet faucet](https://faucet.circle.com/)
+
+**2. Add to `.env` file:**
+
+```bash
+# Enable x402
+ENABLE_X_402_USDC_DATA_EGRESS=true
+
+# Use testnet
+X_402_USDC_NETWORK=base-sepolia
+
+# Your wallet address (where payments will be received)
+X_402_USDC_WALLET_ADDRESS=0x1234567890123456789012345678901234567890
+
+# Use default testnet facilitator (no CDP API key needed)
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+
+# Pricing: $0.10 per GB (default)
+X_402_USDC_PER_BYTE_PRICE=0.0000000001
+X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
+X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
+```
+
+**3. Test with the example script:**
+
+```bash
+# Set your test wallet private key
+export X402_TEST_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+
+# Run the test script
+npm run x402:fetch -- YOUR_TX_ID
+```
+
+**4. Test with browser:**
+
+Visit `http://localhost:3000/YOUR_TX_ID` in a browser. If rate limited, you'll
+see a paywall UI prompting for payment.
+
+### Quick Start: X402 Payments (Base Mainnet)
+
+Set up mainnet payments for production:
+
+**1. Prerequisites:**
+
+- Ethereum wallet with Base mainnet access
+- Real USDC on Base network
+- **Coinbase Developer Platform (CDP) API key** (for official facilitator)
+
+**2. Obtain CDP API key:**
+
+- Visit [Coinbase Developer Platform](https://portal.cdp.coinbase.com/)
+- Create an account and project
+- Generate an API key
+- **Important**: Store securely, never commit to git
+
+**3. Add to `.env` file:**
+
+```bash
+# Enable x402
+ENABLE_X_402_USDC_DATA_EGRESS=true
+
+# Use mainnet
+X_402_USDC_NETWORK=base
+
+# Your wallet address
+X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
+
+# Option A: Official Coinbase facilitator (requires CDP API key)
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key  # Recommended
+# OR
+X_402_CDP_CLIENT_KEY=your_api_key  # Less secure
+
+# Option B: Alternative facilitator (no CDP API key needed)
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
+# OR
+X_402_USDC_FACILITATOR_URL=https://facilitator.payai.network
+
+# Pricing configuration (adjust for your needs)
+X_402_USDC_PER_BYTE_PRICE=0.0000000001  # $0.10 per GB
+X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001  # $0.001 minimum
+X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00   # $1.00 maximum
+```
+
+**4. Security best practices:**
+
+```bash
+# Use file-based key storage with restricted permissions
+echo "YOUR_CDP_KEY" > /run/secrets/cdp_client_key
+chmod 600 /run/secrets/cdp_client_key
+```
+
+**5. Test carefully:**
+
+Start with small transactions and monitor payment settlement before going fully
+live.
+
+### Quick Start: Combined Setup (Rate Limiting + Payments)
+
+Enable both features for a complete monetization and traffic management
+solution:
+
+**1. Add to `.env` file:**
+
+```bash
+# Rate Limiter (uses Redis by default)
+ENABLE_RATE_LIMITER=true
+RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
+RATE_LIMITER_IP_REFILL_PER_SEC=20
+RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
+RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
+
+# X402 Payments (choose testnet or mainnet)
+ENABLE_X_402_USDC_DATA_EGRESS=true
+X_402_USDC_NETWORK=base-sepolia  # or 'base' for mainnet
+X_402_USDC_WALLET_ADDRESS=0xYOUR_WALLET
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+X_402_USDC_PER_BYTE_PRICE=0.0000000001
+
+# Integration: paid tier gets 10x capacity
+X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
+```
+
+**2. Test the complete flow:**
+
+```bash
+# 1. Hit rate limit with free tier
+for i in {1..200}; do curl http://localhost:3000/TX_ID; done
+
+# 2. Make a payment (using x402-fetch wrapper)
+npm run x402:fetch -- TX_ID
+
+# 3. Bucket is now topped off with paid tokens (10x multiplier)
+# 4. Continue accessing with paid tier limits
+```
+
+## Rate Limiter Deep Dive
+
+### Concepts
+
+#### Token Bucket Algorithm
+
+The rate limiter uses the **token bucket algorithm**:
+
+- Each bucket has a **capacity** (maximum tokens)
+- Tokens **refill** at a constant rate per second
+- Requests **consume** tokens based on data size
+- Requests are **denied** when insufficient tokens available
+
+**Token calculation**: `tokens = ceil(bytes / 1024)`
+
+Example: A 5,000-byte response consumes `ceil(5000 / 1024) = 5` tokens
+
+#### Two-Tier Limiting
+
+The system enforces limits at two levels:
+
+**1. Per-Resource Limits:**
+
+- Applies to each unique resource (e.g., specific transaction ID)
+- Prevents any single resource from monopolizing bandwidth
+- Key format: `rl:{METHOD}:{HOST}:{PATH}:resource`
+- Example: `rl:GET:example.com:/tx123:resource`
+
+**2. Per-IP Limits:**
+
+- Applies to each client IP address
+- Prevents any single client from overwhelming the gateway
+- Key format: `rl:ip:{IP_ADDRESS}`
+- Example: `rl:ip:192.168.1.100`
+
+**Request flow:**
+
+1. Check IP bucket first (primary rate limit)
+2. If IP bucket has tokens, check resource bucket
+3. If both pass, serve request
+4. If either fails, return 429 (rate limited)
+
+**Exception**: Requests using paid tokens skip resource bucket checks.
+
+#### Dual Token System
+
+Each bucket contains two types of tokens:
+
+**Regular Tokens:**
+
+- Refill automatically based on configured rate
+- Reset to capacity at bucket creation
+- Consumed when paid tokens unavailable
+
+**Paid Tokens:**
+
+- Added through x402 payments
+- Do NOT refill automatically
+- Consumed first (priority over regular tokens)
+- Can exceed regular capacity
+
+**Consumption priority:**
+
+1. Try consuming from regular tokens
+2. If insufficient, use paid tokens
+3. If still insufficient, deny request
+
+#### Token Prediction and Adjustment
+
+To avoid blocking on unknown response sizes:
+
+**1. Prediction (before streaming):**
+
+- Predict tokens based on `Content-Length` header (if available)
+- Use minimum of 1 token if size unknown
+- For range requests, calculate actual range size
+
+**2. Adjustment (after streaming):**
+
+- Measure actual bytes transferred
+- Calculate actual tokens needed
+- Adjust buckets (consume more or refund difference)
+
+This allows streaming while ensuring accurate token accounting.
+
+### Configuration Reference
+
+#### Core Settings
+
+**`ENABLE_RATE_LIMITER`** (boolean, default: `false`)
+
+- Master switch for rate limiting
+- When `false`, limits are tracked but not enforced (monitoring only)
+- When `true`, requests are denied (429) when limits exceeded
+
+**`RATE_LIMITER_TYPE`** (string, default: `redis`)
+
+- Implementation to use: `memory` or `redis`
+- `memory`: In-memory buckets (for development and testing only)
+- `redis`: Redis-based buckets (recommended for all production deployments)
+- Defaults to `redis` in `docker-compose.yaml` (reads from `.env` with fallback)
+
+#### Bucket Capacity Configuration
+
+**`RATE_LIMITER_IP_TOKENS_PER_BUCKET`** (number, default: `100000`)
+
+- Maximum tokens in IP bucket
+- 1 token = 1 KiB
+- Default: ~98 MiB per IP
+- Adjust based on expected user traffic patterns
+
+**`RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET`** (number, default: `1000000`)
+
+- Maximum tokens in resource bucket
+- Default: ~976 MiB per resource
+- Adjust based on content sizes
+
+#### Refill Rate Configuration
+
+**`RATE_LIMITER_IP_REFILL_PER_SEC`** (number, default: `20`)
+
+- Tokens added per second to IP bucket
+- Default: ~20 KiB/s sustained throughput per IP
+- Lower values = more restrictive
+
+**`RATE_LIMITER_RESOURCE_REFILL_PER_SEC`** (number, default: `100`)
+
+- Tokens added per second to resource bucket
+- Default: ~100 KiB/s sustained throughput per resource
+- Higher values = more permissive
+
+#### Redis Configuration
+
+These settings have sensible defaults in `docker-compose.yaml` and rarely need
+changes for standard deployments. Override in `.env` file only for custom Redis
+setups.
+
+**`RATE_LIMITER_REDIS_ENDPOINT`** (string, default: `redis://redis:6379`)
+
+- Redis connection URL
+- Only used when `RATE_LIMITER_TYPE=redis`
+
+**`RATE_LIMITER_REDIS_USE_TLS`** (boolean, default: `false`)
+
+- Enable TLS for Redis connection
+
+**`RATE_LIMITER_REDIS_USE_CLUSTER`** (boolean, default: `false`)
+
+- Use Redis cluster mode
+
+#### Allowlist Configuration
+
+**`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`** (comma-separated string, default:
+`""`)
+
+- IPs and CIDR ranges to exempt from rate limiting
+- Example: `192.168.1.0/24,10.0.0.1,172.16.0.0/16`
+- Allowlisted IPs skip all rate limit checks
+
+**`RATE_LIMITER_ARNS_ALLOWLIST`** (comma-separated string, default: `""`)
+
+- ArNS names to exempt from rate limiting and payment verification
+- Example: `my-free-app,public-docs,community-resources`
+- Useful for providing free access to specific content
+
+### Implementation Comparison
+
+#### Memory Rate Limiter
+
+**Pros:**
+
+- Fast (no network overhead)
+- Simple setup (no external dependencies)
+- Suitable for development and testing
+
+**Cons:**
+
+- Not suitable for multi-node deployments
+- Buckets lost on restart
+- Limited by process memory
+- Not recommended for production
+
+**When to use:**
+
+- **Development and testing only, not recommended for production**
+
+#### Redis Rate Limiter
+
+**Pros:**
+
+- Supports multi-node deployments (shared state)
+- Persistent across restarts
+- Scales horizontally
+- Pre-configured in Docker Compose
+
+**Cons:**
+
+- Network latency (Redis calls)
+- Requires Redis infrastructure
+- Slightly more complex setup
+
+**When to use:**
+
+- **Recommended for all production deployments**
+
+### Architecture
+
+#### Integration with Data Handlers
+
+The rate limiter integrates at the HTTP handler level:
+
+```
+Request → Rate Limit Check → Data Handler → Token Adjustment → Response
+```
+
+See `src/routes/data/handlers.ts` and `src/handlers/data-handler-utils.ts` for
+implementation details.
+
+#### Metrics
+
+The rate limiter exposes Prometheus metrics at `/ar-io/__gateway_metrics`:
+
+**`rate_limit_tokens_consumed_total`** (counter)
+
+- Total tokens consumed
+- Labels:
+  - `bucket_type`: `ip` or `resource`
+  - `token_type`: `paid` or `regular`
+  - `domain`: Request domain/host
+
+Example PromQL query:
+
+```promql
+# Paid tokens consumed per IP
+rate(rate_limit_tokens_consumed_total{bucket_type="ip",token_type="paid"}[5m])
+
+# Regular tokens consumed per resource
+rate(rate_limit_tokens_consumed_total{bucket_type="resource",token_type="regular"}[5m])
+```
+
+## X402 Payment Protocol Deep Dive
+
+### Concepts
+
+#### Payment Flow
+
+The complete payment flow involves several steps:
+
+**1. Client Request (no payment):**
+
+- Client requests content
+- Gateway checks rate limits
+- If limited, gateway returns 402 Payment Required
+- Response includes payment requirements in `x402` format
+
+**2. Payment Generation (client-side):**
+
+- Client reviews payment requirements
+- Client signs payment authorization (EIP-712)
+- Client retries request with `X-Payment` header
+
+**3. Payment Verification (gateway):**
+
+- Gateway extracts payment from header
+- Gateway calls facilitator `/verify` endpoint
+- Facilitator checks:
+  - Signature validity
+  - Payment amount matches requirements
+  - Payment not already settled (uniqueness)
+
+**4. Content Delivery:**
+
+- Gateway serves content
+- Gateway measures actual bytes transferred
+
+**5. Payment Settlement (gateway):**
+
+- Gateway calls facilitator `/settle` endpoint
+- Facilitator:
+  - Marks payment as settled (prevents replay)
+  - Initiates on-chain USDC transfer
+  - Returns settlement receipt
+- Gateway returns `X-Payment-Response` header to client
+
+**6. Token Top-Off (if rate limiter enabled):**
+
+- Gateway calculates tokens from payment amount
+- Applies capacity multiplier (default 10x)
+- Adds paid tokens to user's IP bucket
+
+#### Browser Paywall vs API Payments
+
+**Browser Paywall Mode:**
+
+- Detected via `Accept: text/html` header
+- Returns HTML paywall UI (Coinbase SDK)
+- User connects wallet in browser
+- Payment auto-generated and submitted
+- Redirect mechanism to avoid blob URL issues
+
+**API Payment Mode:**
+
+- Detected via non-browser user agent
+- Returns JSON 402 response with requirements
+- Client uses `x402-fetch` or similar library
+- Payment header sent in subsequent request
+
+#### Facilitator Role
+
+The **facilitator** is a service that:
+
+- Verifies payment signatures
+- Tracks payment uniqueness (prevents replay attacks)
+- Settles payments on-chain
+- Returns settlement receipts
+
+**Available facilitators:**
+
+| Facilitator       | URL                               | Networks           | CDP Key Required |
+| ----------------- | --------------------------------- | ------------------ | ---------------- |
+| Coinbase Official | https://x402.org/facilitator      | base-sepolia       | No (testnet)     |
+| x402.rs           | https://facilitator.x402.rs       | base, base-sepolia | No               |
+| payai.network     | https://facilitator.payai.network | base, base-sepolia | Yes (mainnet)    |
+
+### Network Selection
+
+#### Base Sepolia (Testnet)
+
+**Characteristics:**
+
+- Free testnet USDC (no real value)
+- Default facilitator available
+- No CDP API key required
+- Suitable for development and testing
+
+**Setup:**
+
+```bash
+X_402_USDC_NETWORK=base-sepolia
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+```
+
+**Getting Testnet USDC:**
+
+1. Get Base Sepolia ETH:
+   https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet
+2. Get testnet USDC: https://faucet.circle.com/
+
+#### Base (Mainnet)
+
+**Characteristics:**
+
+- Real USDC (actual value)
+- Requires CDP API key (for official facilitator) or alternative facilitator
+- Production-ready
+
+**Setup with official facilitator:**
+
+```bash
+X_402_USDC_NETWORK=base
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key
+```
+
+**Setup with alternative facilitator:**
+
+```bash
+X_402_USDC_NETWORK=base
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
+# No CDP key needed
+```
+
+### Configuration Reference
+
+#### Core Settings
+
+**`ENABLE_X_402_USDC_DATA_EGRESS`** (boolean, default: `false`)
+
+- Master switch for x402 payments
+- When `false`, payment headers ignored
+- When `true`, payments accepted and verified
+
+**`X_402_USDC_NETWORK`** (string, default: `base-sepolia`)
+
+- Blockchain network to use
+- Options: `base` (mainnet) or `base-sepolia` (testnet)
+- Must match your wallet and USDC holdings
+
+**`X_402_USDC_WALLET_ADDRESS`** (hex string, required if enabled)
+
+- Ethereum wallet address to receive payments
+- Format: `0x...` (42 characters)
+- Must be a valid Ethereum address
+
+**`X_402_USDC_FACILITATOR_URL`** (URL, default: `https://x402.org/facilitator`)
+
+- Facilitator endpoint for verification and settlement
+- Must include protocol (`https://`)
+
+#### Pricing Configuration
+
+**`X_402_USDC_PER_BYTE_PRICE`** (number, default: `0.0000000001`)
+
+- Price in USDC per byte of data egress
+- Default: $0.10 per GB
+- Examples:
+  - $0.10/GB = `0.0000000001`
+  - $0.50/GB = `0.0000000005`
+  - $1.00/GB = `0.000000001`
+
+**`X_402_USDC_DATA_EGRESS_MIN_PRICE`** (number, default: `0.001`)
+
+- Minimum price in USDC per request
+- Used when content length unknown
+- Prevents free access to small files
+
+**`X_402_USDC_DATA_EGRESS_MAX_PRICE`** (number, default: `1.00`)
+
+- Maximum price in USDC per request
+- Caps cost for very large files
+- Protects users from unexpected charges
+
+**Price calculation:**
+
+```javascript
+const priceUSD = contentLength * perBytePrice;
+const clampedPrice = Math.min(Math.max(priceUSD, minPrice), maxPrice);
+```
+
+#### CDP API Key Configuration
+
+**`X_402_CDP_CLIENT_KEY`** (string, **SENSITIVE SECRET**)
+
+- Coinbase Developer Platform API client key
+- Required for mainnet with official facilitator
+- **Never commit to git or log this value**
+
+**`X_402_CDP_CLIENT_KEY_FILE`** (file path, **SENSITIVE SECRET**)
+
+- Path to file containing CDP API key
+- **Takes precedence over `X_402_CDP_CLIENT_KEY`**
+- Recommended approach for production
+- **Restrict file permissions**: `chmod 600`
+
+**Security requirements:**
+
+- Store in secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.)
+- Use file-based config with restricted permissions
+- Never expose in logs or error messages
+- Apply principle of least privilege
+
+#### Settlement Configuration
+
+**`X_402_USDC_SETTLE_TIMEOUT_MS`** (number, default: `5000`)
+
+- Timeout in milliseconds for settlement operations
+- Prevents indefinite hanging on facilitator issues
+- Adjust based on facilitator performance
+
+#### Paywall Customization
+
+**`X_402_APP_NAME`** (string, default: `"AR.IO Gateway"`)
+
+- Application name displayed in browser paywall UI
+
+**`X_402_APP_LOGO`** (URL, optional)
+
+- URL to application logo for paywall UI
+- Recommended: square image, 200x200px or larger
+
+**`X_402_SESSION_TOKEN_ENDPOINT`** (URL, optional)
+
+- Custom session token endpoint for payment authentication
+- Advanced use cases only
+
+### Architecture
+
+#### Payment Processor Implementation
+
+See `src/payments/x402-usdc-processor.ts`:
+
+Key components:
+
+- `calculateRequirements()`: Generates payment requirements from content context
+- `extractPayment()`: Decodes payment from `X-Payment` header
+- `verifyPayment()`: Calls facilitator to verify payment
+- `settlePayment()`: Calls facilitator to settle payment
+- `sendPaymentRequiredResponse()`: Returns 402 with paywall or JSON
+
+#### Integration with Rate Limiter
+
+When both features enabled:
+
+1. Payment settled successfully
+2. Gateway extracts payment amount (atomic USDC units)
+3. Gateway calculates equivalent tokens:
+   ```javascript
+   paymentUSD = atomicAmount / 1_000_000; // USDC has 6 decimals
+   contentLength = paymentUSD / perBytePrice;
+   tokens = ceil(contentLength / 1024);
+   tokensWithMultiplier = tokens * capacityMultiplier;
+   ```
+4. Gateway adds paid tokens to IP bucket
+5. Paid tokens consumed first on subsequent requests
+
+See `src/routes/x402.ts:149-171` for redirect endpoint implementation.
+
+#### Browser Paywall Rendering
+
+For browser requests (`Accept: text/html`):
+
+1. Gateway returns HTML with Coinbase SDK
+2. SDK prompts user to connect wallet
+3. User approves payment (EIP-712 signature)
+4. SDK submits payment to redirect endpoint
+5. Gateway verifies and settles payment
+6. Gateway redirects to original URL with topped-off bucket
+
+See `src/payments/x402-usdc-processor.ts:312-375` for paywall implementation.
+
+## Integration Topics
+
+### Payment + Rate Limiter Integration
+
+#### Capacity Multiplier
+
+**`X_402_RATE_LIMIT_CAPACITY_MULTIPLIER`** (number, default: `10`)
+
+- Multiplier applied to paid token amounts
+- Provides premium tier with enhanced limits
+- Example: $1 payment with default pricing ($0.10/GB):
+  - Pays for ~10 GB of data
+  - Token calculation: `ceil(10 * 1024^3 / 1024) = 10485760` tokens
+  - With 10x multiplier: `104857600` tokens (~100 GB worth)
+
+#### Paid Token Priority
+
+Tokens consumed in this order:
+
+1. **Regular tokens** (if available)
+2. **Paid tokens** (if regular tokens insufficient)
+
+This prioritization:
+
+- Maximizes value of free tier
+- Extends paid token longevity
+- Provides fairness (paid users don't subsidize free usage)
+
+#### Resource Limit Bypass
+
+Requests using paid tokens **bypass per-resource limits**:
+
+- Only IP bucket checked (not resource bucket)
+- Prevents payment from being blocked by popular resource limits
+- Still enforces fair IP-level limits
+
+Logic (see `src/limiter/redis-rate-limiter.ts:136-150`):
+
+```javascript
+if (paidTokensConsumed === 0) {
+  // Check resource bucket
+} else {
+  // Skip resource bucket check
+}
+```
+
+### Client Implementation
+
+#### Using x402-fetch
+
+The `x402-fetch` library provides automatic payment handling:
+
+**Installation:**
+
+```bash
+npm install x402-fetch viem
+```
+
+**Usage:**
+
+```typescript
+import { wrapFetchWithPayment } from 'x402-fetch';
+import { privateKeyToAccount } from 'viem/accounts';
+
+// Create account from private key
+const account = privateKeyToAccount('0xYOUR_PRIVATE_KEY');
+
+// Wrap fetch with payment support
+const fetchWithPayment = wrapFetchWithPayment(fetch, account);
+
+// Use like normal fetch - payments automatic
+const response = await fetchWithPayment('http://gateway.example.com/tx123');
+const data = await response.arrayBuffer();
+```
+
+See `scripts/x402/fetch-data.ts` for complete example.
+
+#### Payment Header Format
+
+When implementing custom client:
+
+**Request:**
+
+```http
+GET /tx123 HTTP/1.1
+X-Payment: <base64-encoded-payment-payload>
+```
+
+**Payment payload structure** (see x402 SDK for encoding):
+
+- Scheme (exact, range, etc.)
+- Network (base, base-sepolia)
+- Authorization (EIP-712 signature)
+- Asset (USDC contract address)
+- Amount (atomic units)
+
+**Response:**
+
+```http
+HTTP/1.1 200 OK
+X-Payment-Response: <base64-encoded-settlement-result>
+```
+
+#### Error Handling
+
+**402 Payment Required:**
+
+```json
+{
+  "x402Version": 1,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "base-sepolia",
+      "maxAmountRequired": "100000",
+      "payTo": "0x...",
+      "asset": "0x...",
+      "resource": "http://gateway.example.com/tx123",
+      "mimeType": "application/octet-stream",
+      "maxTimeoutSeconds": 300
+    }
+  ],
+  "error": "insufficient_payment",
+  "message": "Payment required"
+}
+```
+
+**429 Rate Limited:**
+
+```json
+{
+  "error": "Rate limit exceeded",
+  "limitType": "ip"
+}
+```
+
+**Retry strategy:**
+
+1. On 402: Generate payment, retry with `X-Payment` header
+2. On 429: Exponential backoff or payment (if configured)
+3. On 5xx: Exponential backoff
+
+### Testnet to Mainnet Migration
+
+#### Checklist
+
+- [ ] Obtain CDP API key from Coinbase Developer Platform
+- [ ] Configure CDP key securely (`X_402_CDP_CLIENT_KEY_FILE` recommended)
+- [ ] Update network: `X_402_USDC_NETWORK=base`
+- [ ] Update wallet to mainnet address with real USDC
+- [ ] Choose facilitator (official or alternative)
+- [ ] Adjust pricing for mainnet usage
+- [ ] Test with small transactions first
+- [ ] Monitor payment settlement and errors
+- [ ] Set up alerting for payment failures
+- [ ] Document pricing for users
+
+#### Configuration Changes
+
+**Testnet:**
+
+```bash
+ENABLE_X_402_USDC_DATA_EGRESS=true
+X_402_USDC_NETWORK=base-sepolia
+X_402_USDC_WALLET_ADDRESS=0xYOUR_TESTNET_WALLET
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+```
+
+**Mainnet (official facilitator):**
+
+```bash
+ENABLE_X_402_USDC_DATA_EGRESS=true
+X_402_USDC_NETWORK=base
+X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key
+```
+
+**Mainnet (alternative facilitator):**
+
+```bash
+ENABLE_X_402_USDC_DATA_EGRESS=true
+X_402_USDC_NETWORK=base
+X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
+# No CDP key needed
+```
+
+### Security Considerations
+
+#### Wallet Private Key Management
+
+**Never:**
+
+- Commit private keys to git
+- Log private keys
+- Store in plain text configuration files
+- Share or expose publicly
+
+**Always:**
+
+- Use environment variables or secure files
+- Restrict file permissions: `chmod 600`
+- Use secrets managers in production
+- Rotate keys periodically
+- Use separate keys for test and production
+
+#### CDP API Key Protection
+
+The CDP API key is a **SENSITIVE SECRET**:
+
+**Storage:**
+
+- **Recommended**: File-based with restricted permissions
+  ```bash
+  echo "YOUR_KEY" > /run/secrets/cdp_client_key
+  chmod 600 /run/secrets/cdp_client_key
+  ```
+- **Alternative**: Environment variable (less secure)
+- **Production**: Use secrets manager (AWS Secrets Manager, HashiCorp Vault)
+
+**Access Control:**
+
+- Apply principle of least privilege
+- Limit access to operators only
+- Audit access logs
+- Rotate regularly
+
+**Logging:**
+
+- Never log the key value
+- Mask in error messages
+- Exclude from diagnostic output
+
+#### Redirect URL Validation
+
+The paywall redirect endpoint validates URLs to prevent XSS:
+
+**Allowed:**
+
+- `http://` and `https://` absolute URLs
+- Same-origin relative paths (starting with `/`)
+
+**Blocked:**
+
+- `javascript:` URLs
+- `data:` URLs
+- Scheme-relative URLs (`//example.com`)
+- Non-HTTP(S) schemes
+
+See `src/routes/x402.ts:219-240` for validation implementation.
+
+#### Payment Verification
+
+The facilitator provides several security guarantees:
+
+**Signature verification:**
+
+- EIP-712 typed structured data signing
+- Verifies payment signed by claimed payer
+- Prevents payment forgery
+
+**Uniqueness:**
+
+- Tracks settled payments
+- Prevents replay attacks
+- Each payment can only be settled once
+
+**Amount verification:**
+
+- Ensures payment amount matches requirements
+- Prevents underpayment
+
+## Reference
+
+### Environment Variables Quick Reference
+
+#### Rate Limiter Variables
+
+| Variable                                  | Type    | Default              | Description                              |
+| ----------------------------------------- | ------- | -------------------- | ---------------------------------------- |
+| `ENABLE_RATE_LIMITER`                     | boolean | `false`              | Enable rate limiting enforcement         |
+| `RATE_LIMITER_TYPE`                       | string  | `memory`             | Implementation type: `memory` or `redis` |
+| `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET` | number  | `1000000`            | Resource bucket capacity (~976 MiB)      |
+| `RATE_LIMITER_RESOURCE_REFILL_PER_SEC`    | number  | `100`                | Resource refill rate (~100 KiB/s)        |
+| `RATE_LIMITER_IP_TOKENS_PER_BUCKET`       | number  | `100000`             | IP bucket capacity (~98 MiB)             |
+| `RATE_LIMITER_IP_REFILL_PER_SEC`          | number  | `20`                 | IP refill rate (~20 KiB/s)               |
+| `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`    | string  | `""`                 | Comma-separated IP/CIDR allowlist        |
+| `RATE_LIMITER_ARNS_ALLOWLIST`             | string  | `""`                 | Comma-separated ArNS name allowlist      |
+| `RATE_LIMITER_REDIS_ENDPOINT`             | string  | `redis://redis:6379` | Redis connection URL                     |
+| `RATE_LIMITER_REDIS_USE_TLS`              | boolean | `false`              | Enable TLS for Redis                     |
+| `RATE_LIMITER_REDIS_USE_CLUSTER`          | boolean | `false`              | Use Redis cluster mode                   |
+
+#### X402 Variables
+
+| Variable                               | Type       | Default                        | Description                       |
+| -------------------------------------- | ---------- | ------------------------------ | --------------------------------- |
+| `ENABLE_X_402_USDC_DATA_EGRESS`        | boolean    | `false`                        | Enable x402 payments              |
+| `X_402_USDC_NETWORK`                   | string     | `base-sepolia`                 | Network: `base` or `base-sepolia` |
+| `X_402_USDC_WALLET_ADDRESS`            | hex string | undefined                      | Payment receiving wallet (0x...)  |
+| `X_402_USDC_FACILITATOR_URL`           | URL        | `https://x402.org/facilitator` | Facilitator endpoint              |
+| `X_402_USDC_PER_BYTE_PRICE`            | number     | `0.0000000001`                 | Price per byte ($0.10/GB)         |
+| `X_402_USDC_DATA_EGRESS_MIN_PRICE`     | number     | `0.001`                        | Minimum price per request         |
+| `X_402_USDC_DATA_EGRESS_MAX_PRICE`     | number     | `1.00`                         | Maximum price per request         |
+| `X_402_RATE_LIMIT_CAPACITY_MULTIPLIER` | number     | `10`                           | Paid tier capacity multiplier     |
+| `X_402_USDC_SETTLE_TIMEOUT_MS`         | number     | `5000`                         | Settlement timeout (ms)           |
+| `X_402_CDP_CLIENT_KEY`                 | string     | undefined                      | **SECRET**: CDP API key           |
+| `X_402_CDP_CLIENT_KEY_FILE`            | path       | undefined                      | **SECRET**: CDP API key file      |
+| `X_402_APP_NAME`                       | string     | `"AR.IO Gateway"`              | Paywall app name                  |
+| `X_402_APP_LOGO`                       | URL        | undefined                      | Paywall logo URL                  |
+| `X_402_SESSION_TOKEN_ENDPOINT`         | URL        | undefined                      | Custom session token endpoint     |
+
+### Network Comparison
+
+| Feature                      | Base Sepolia (Testnet)            | Base (Mainnet)                                 |
+| ---------------------------- | --------------------------------- | ---------------------------------------------- |
+| **Purpose**                  | Development, testing              | Production monetization                        |
+| **USDC**                     | Free testnet USDC                 | Real USDC (costs money)                        |
+| **USDC Faucet**              | https://faucet.circle.com/        | N/A (purchase required)                        |
+| **CDP API Key**              | Not required                      | Required (official facilitator)                |
+| **Default Facilitator**      | https://x402.org/facilitator      | Must configure                                 |
+| **Alternative Facilitators** | facilitator.x402.rs               | facilitator.x402.rs, facilitator.payai.network |
+| **Config**                   | `X_402_USDC_NETWORK=base-sepolia` | `X_402_USDC_NETWORK=base`                      |
+| **Risk**                     | No financial risk                 | Real financial transactions                    |
+| **Blockchain**               | Base Sepolia testnet              | Base mainnet                                   |
+
+### Facilitator Comparison
+
+| Facilitator           | URL                               | Networks Supported | CDP Key Required  | Notes                                      |
+| --------------------- | --------------------------------- | ------------------ | ----------------- | ------------------------------------------ |
+| **Coinbase Official** | https://x402.org/facilitator      | base-sepolia       | No (testnet only) | Default for testnet                        |
+| **x402.rs**           | https://facilitator.x402.rs       | base, base-sepolia | No                | Experimental, no CDP key needed            |
+| **payai.network**     | https://facilitator.payai.network | base, base-sepolia | Yes (mainnet)     | Experimental, requires CDP key for mainnet |
+
+## Troubleshooting
+
+### Rate Limiter Issues
+
+#### Limits Not Being Enforced
+
+**Symptom**: Requests never return 429, even when exceeding limits
+
+**Possible causes:**
+
+1. `ENABLE_RATE_LIMITER=false` (monitoring mode)
+2. IP is allowlisted
+3. ArNS name is allowlisted
+
+**Solutions:**
+
+- Check `ENABLE_RATE_LIMITER` is set to `true`
+- Review allowlists: `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`,
+  `RATE_LIMITER_ARNS_ALLOWLIST`
+- Check logs for rate limit checks: `grep -i "rate limit" logs/core.log`
+
+#### Tokens Not Refilling
+
+**Symptom**: Bucket stays empty even after waiting
+
+**Possible causes:**
+
+1. Refill rate set to 0
+2. Redis connection issues (Redis mode)
+3. Clock skew
+
+**Solutions:**
+
+- Verify refill rates > 0:
+  - `RATE_LIMITER_IP_REFILL_PER_SEC`
+  - `RATE_LIMITER_RESOURCE_REFILL_PER_SEC`
+- Check Redis connectivity: `redis-cli ping`
+- Verify system time is correct: `date`
+
+#### Redis Connection Errors
+
+**Symptom**: Errors in logs about Redis connectivity
+
+**Solutions:**
+
+- Verify Redis is running: `docker-compose ps redis`
+- Check Redis endpoint: `RATE_LIMITER_REDIS_ENDPOINT`
+- Test Redis connection: `redis-cli -u $RATE_LIMITER_REDIS_ENDPOINT ping`
+- Check Redis logs: `docker-compose logs redis`
+
+### X402 Payment Issues
+
+#### Payment Verification Failed
+
+**Symptom**: 402 errors even with valid payment
+
+**Possible causes:**
+
+1. Network mismatch (testnet payment on mainnet gateway)
+2. Signature invalid
+3. Payment already settled
+4. Facilitator unreachable
+
+**Solutions:**
+
+- Verify network matches:
+  - Client: Check wallet network (Base vs Base Sepolia)
+  - Gateway: Check `X_402_USDC_NETWORK`
+- Check facilitator connectivity:
+  ```bash
+  curl https://x402.org/facilitator/health
+  ```
+- Review gateway logs for verification errors:
+  ```bash
+  grep "Payment verification" logs/core.log
+  ```
+- Try fresh payment (may be replay attempt)
+
+#### Settlement Timeout
+
+**Symptom**: 500 errors with "Settlement timeout" in logs
+
+**Possible causes:**
+
+1. Facilitator slow or unreachable
+2. Settlement timeout too short
+3. Network congestion (mainnet)
+
+**Solutions:**
+
+- Check facilitator status
+- Increase `X_402_USDC_SETTLE_TIMEOUT_MS` (default 5000ms)
+- Try alternative facilitator
+- Review facilitator logs (if self-hosted)
+
+#### CDP API Key Errors (Mainnet)
+
+**Symptom**: 401 or 403 errors from facilitator
+
+**Possible causes:**
+
+1. Invalid or expired CDP API key
+2. Key not provided (mainnet with official facilitator)
+3. File permissions preventing key read
+
+**Solutions:**
+
+- Verify CDP key is valid (check Coinbase Developer Platform)
+- Check file exists and is readable:
+  ```bash
+  ls -l /run/secrets/cdp_client_key
+  cat /run/secrets/cdp_client_key
+  ```
+- Verify environment variable set (if using `X_402_CDP_CLIENT_KEY`)
+- Try alternative facilitator (no CDP key required)
+
+#### Paywall Not Displaying (Browser)
+
+**Symptom**: Browser shows JSON instead of paywall UI
+
+**Possible causes:**
+
+1. User-Agent detection failed
+2. Accept header not set to `text/html`
+
+**Solutions:**
+
+- Verify request headers in browser dev tools:
+  - `Accept: text/html`
+  - `User-Agent: Mozilla/...`
+- Try different browser
+- Check gateway logs for paywall rendering
+
+#### Wallet Address Invalid
+
+**Symptom**: Startup error about invalid wallet address
+
+**Solutions:**
+
+- Verify format: Must be `0x` followed by 40 hex characters
+- Example: `0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb`
+- Check for typos or missing characters
+
+### Integration Issues
+
+#### Paid Tokens Not Being Added
+
+**Symptom**: Payments succeed but rate limits not improved
+
+**Possible causes:**
+
+1. Rate limiter disabled
+2. Integration issue
+
+**Solutions:**
+
+- Verify both features enabled:
+  - `ENABLE_RATE_LIMITER=true`
+  - `ENABLE_X_402_USDC_DATA_EGRESS=true`
+- Check logs for "Topped off bucket" messages:
+  ```bash
+  grep "Topped off" logs/core.log
+  ```
+- Review metrics for paid token consumption:
+  ```bash
+  curl http://localhost:3000/ar-io/__gateway_metrics | grep 'token_type="paid"'
+  ```
+
+#### Resource Limits Still Apply (Paid Requests)
+
+**Symptom**: Paid requests still hitting resource limits
+
+**Possible causes:**
+
+1. Payment not detected
+2. Token accounting issue
+
+**Solutions:**
+
+- Verify payment header present: `X-Payment: ...`
+- Check if paid tokens actually consumed (should skip resource check)
+- Review logs for payment processing in redirect endpoint
+
+### Monitoring and Debugging
+
+#### View Token Consumption Metrics
+
+```bash
+# Total tokens consumed by type
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
+
+# Paid tokens consumed (IP bucket)
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep 'bucket_type="ip".*token_type="paid"'
+
+# Regular tokens consumed (resource bucket)
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep 'bucket_type="resource".*token_type="regular"'
+```
+
+#### Check Current Bucket State (Redis)
+
+```bash
+# List all rate limiter keys
+redis-cli --scan --pattern "rl:*"
+
+# Inspect specific bucket
+redis-cli GET "rl:ip:192.168.1.100"
+
+# Inspect bucket with paid tokens
+redis-cli GET "rl:ip:192.168.1.100" | jq .paidTokens
+```
+
+#### Enable Debug Logging
+
+```bash
+# In environment configuration
+LOG_LEVEL=debug
+
+# View relevant logs
+docker-compose logs -f core | grep -i "rate limit\|x402\|payment"
+```
+
+## Examples
+
+### Example 1: Development Setup (Memory Limiter + Testnet)
+
+**Use case**: Local development and testing
+
+**docker-compose.override.yml:**
+
+```yaml
+services:
+  core:
+    environment:
+      # Rate limiter (memory-based, single node)
+      - ENABLE_RATE_LIMITER=true
+      - RATE_LIMITER_TYPE=memory
+      - RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
+      - RATE_LIMITER_IP_REFILL_PER_SEC=20
+      - RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
+      - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
+
+      # X402 payments (testnet)
+      - ENABLE_X_402_USDC_DATA_EGRESS=true
+      - X_402_USDC_NETWORK=base-sepolia
+      - X_402_USDC_WALLET_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
+      - X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+      - X_402_USDC_PER_BYTE_PRICE=0.0000000001
+      - X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
+      - X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
+
+      # Integration
+      - X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
+```
+
+**Testing:**
+
+```bash
+# Start gateway
+docker-compose up -d
+
+# Test rate limiting
+for i in {1..200}; do curl http://localhost:3000/TX_ID; done
+
+# Test payment (requires X402_TEST_PRIVATE_KEY)
+npm run x402:fetch -- TX_ID
+```
+
+### Example 2: Production Setup (Redis Limiter + Mainnet)
+
+**Use case**: Multi-node production deployment with real payments
+
+**docker-compose.override.yml:**
+
+```yaml
+services:
+  core:
+    environment:
+      # Rate limiter (Redis-based, distributed)
+      - ENABLE_RATE_LIMITER=true
+      - RATE_LIMITER_TYPE=redis
+      - RATE_LIMITER_REDIS_ENDPOINT=redis://redis:6379
+      - RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
+      - RATE_LIMITER_IP_REFILL_PER_SEC=20
+      - RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
+      - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
+
+      # X402 payments (mainnet with official facilitator)
+      - ENABLE_X_402_USDC_DATA_EGRESS=true
+      - X_402_USDC_NETWORK=base
+      - X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
+      - X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+      - X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key
+      - X_402_USDC_PER_BYTE_PRICE=0.0000000001
+      - X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
+      - X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
+
+      # Integration
+      - X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
+
+      # Paywall customization
+      - X_402_APP_NAME=My AR.IO Gateway
+      - X_402_APP_LOGO=https://example.com/logo.png
+
+    volumes:
+      - /run/secrets/cdp_client_key:/run/secrets/cdp_client_key:ro
+```
+
+**Security setup:**
+
+```bash
+# Create secrets directory with restricted permissions
+sudo mkdir -p /run/secrets
+sudo chmod 700 /run/secrets
+
+# Store CDP key securely
+echo "YOUR_CDP_KEY" | sudo tee /run/secrets/cdp_client_key > /dev/null
+sudo chmod 600 /run/secrets/cdp_client_key
+sudo chown root:root /run/secrets/cdp_client_key
+```
+
+### Example 3: Production with Alternative Facilitator (No CDP Key)
+
+**Use case**: Mainnet without CDP API key requirement
+
+**docker-compose.override.yml:**
+
+```yaml
+services:
+  core:
+    environment:
+      # Rate limiter
+      - ENABLE_RATE_LIMITER=true
+      - RATE_LIMITER_TYPE=redis
+      - RATE_LIMITER_REDIS_ENDPOINT=redis://redis:6379
+
+      # X402 payments (mainnet with alternative facilitator)
+      - ENABLE_X_402_USDC_DATA_EGRESS=true
+      - X_402_USDC_NETWORK=base
+      - X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
+      - X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
+      # No CDP key needed!
+      - X_402_USDC_PER_BYTE_PRICE=0.0000000001
+
+      # Integration
+      - X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
+```
+
+### Example 4: Client-Side Payment Integration
+
+**TypeScript/JavaScript client:**
+
+```typescript
+import { wrapFetchWithPayment } from 'x402-fetch';
+import { privateKeyToAccount } from 'viem/accounts';
+
+// Initialize wallet
+const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
+const account = privateKeyToAccount(privateKey);
+
+// Wrap fetch with payment support
+const fetchWithPayment = wrapFetchWithPayment(fetch, account);
+
+// Function to download data with automatic payments
+async function downloadData(txId: string): Promise<ArrayBuffer> {
+  try {
+    const response = await fetchWithPayment(
+      `https://gateway.example.com/${txId}`,
+      { method: 'GET' },
+    );
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    // Check for payment response header
+    const paymentResponse = response.headers.get('X-Payment-Response');
+    if (paymentResponse) {
+      console.log('Payment settled:', paymentResponse);
+    }
+
+    return await response.arrayBuffer();
+  } catch (error) {
+    console.error('Download failed:', error);
+    throw error;
+  }
+}
+
+// Usage
+const data = await downloadData('YOUR_TX_ID');
+console.log(`Downloaded ${data.byteLength} bytes`);
+```
+
+**Python client (using requests):**
+
+```python
+import requests
+from web3 import Web3
+from eth_account import Account
+from eth_account.messages import encode_structured_data
+import base64
+import json
+
+def fetch_with_payment(url, private_key):
+    # Initial request to get payment requirements
+    response = requests.get(url)
+
+    if response.status_code == 402:
+        # Parse payment requirements
+        requirements = response.json()['accepts'][0]
+
+        # Sign payment (EIP-712)
+        account = Account.from_key(private_key)
+        # ... (implement EIP-712 signing based on requirements)
+
+        # Retry with payment header
+        payment_header = base64.b64encode(json.dumps({
+            # ... payment payload
+        }).encode()).decode()
+
+        response = requests.get(url, headers={
+            'X-Payment': payment_header
+        })
+
+    return response.content
+
+# Usage
+data = fetch_with_payment('https://gateway.example.com/TX_ID', 'YOUR_PRIVATE_KEY')
+```
+
+### Example 5: Monitoring Dashboard (Prometheus + Grafana)
+
+**Prometheus queries:**
+
+```promql
+# Paid token consumption rate (per second)
+rate(rate_limit_tokens_consumed_total{token_type="paid"}[5m])
+
+# Regular token consumption rate
+rate(rate_limit_tokens_consumed_total{token_type="regular"}[5m])
+
+# Ratio of paid to regular tokens
+sum(rate(rate_limit_tokens_consumed_total{token_type="paid"}[5m]))
+/
+sum(rate(rate_limit_tokens_consumed_total{token_type="regular"}[5m]))
+
+# Top domains by token consumption
+topk(10, sum by (domain) (rate(rate_limit_tokens_consumed_total[5m])))
+```
+
+**Grafana panels:**
+
+1. **Token Consumption Over Time** (Graph)
+   - Metric: `rate(rate_limit_tokens_consumed_total[5m])`
+   - Legend: `{{bucket_type}} - {{token_type}}`
+
+2. **Paid vs Regular Token Ratio** (Gauge)
+   - Shows percentage of paid token usage
+
+3. **Rate Limit Denials** (Counter)
+   - Track 429 responses
+   - Alert on high denial rates
+
+4. **Payment Settlement Success** (Counter)
+   - Track successful payments
+   - Alert on settlement failures
+
+---
+
+## Additional Resources
+
+- **X402 Protocol**: https://docs.cdp.coinbase.com/x402/
+- **Coinbase Developer Platform**: https://portal.cdp.coinbase.com/
+- **Base Network**: https://base.org/
+- **AR.IO Documentation**: https://docs.ar.io/
+- **Environment Variables Reference**: [docs/envs.md](envs.md)
+- **Glossary**: [docs/glossary.md](glossary.md)
