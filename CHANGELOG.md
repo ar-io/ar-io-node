@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 55] - 2025-10-20
 
+This is an optional release focused on x402 payment protocol improvements.
+
 This release represents a major milestone in the gateway x402 payment protocol
 implementation. The x402 capabilities have evolved from an MVP supporting only
 limited data endpoints to a full, mostly feature-complete solution. The browser
