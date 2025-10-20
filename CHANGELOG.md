@@ -6,12 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 55] - 2025-10-20
 
-This release represents a major milestone for the x402 payment protocol. The
-x402 feature has evolved from an MVP supporting only limited data endpoints to
-a full, mostly feature-complete solution. The browser paywall now uses redirect
-mode to properly handle content-type metadata, and rate limiting has been
-extended to work correctly across all content delivery paths including
-manifests, ArNS names, and range requests.
+This release represents a major milestone in the gateway x402 payment protocol
+implementation. The x402 capabilities have evolved from an MVP supporting only
+limited data endpoints to a full, mostly feature-complete solution. The browser
+paywall now uses redirect mode to properly handle content-type metadata, and
+rate limiting has been extended to work correctly across all content delivery
+paths including manifests, ArNS names, and range requests.
 
 ### Added
 
