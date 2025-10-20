@@ -215,6 +215,9 @@ class ReleaseTester {
         message: `Failed: ${error}`
       });
       console.log(`  ❌ Failed: ${error}`);
+    } finally {
+      // Clean up after test
+      await this.executeCommand('docker compose down > /dev/null 2>&1');
     }
   }
 
@@ -258,6 +261,9 @@ class ReleaseTester {
         message: `Failed: ${error}`
       });
       console.log(`  ❌ Failed: ${error}`);
+    } finally {
+      // Clean up after test
+      await this.executeCommand('docker compose --profile clickhouse down > /dev/null 2>&1');
     }
   }
 
@@ -309,6 +315,9 @@ class ReleaseTester {
         message: `Failed: ${error}`
       });
       console.log(`  ❌ Failed: ${error}`);
+    } finally {
+      // Clean up after test
+      await this.executeCommand('docker compose --profile litestream down > /dev/null 2>&1');
     }
   }
 
@@ -367,6 +376,9 @@ class ReleaseTester {
         message: `Failed: ${error}`
       });
       console.log(`  ❌ Failed: ${error}`);
+    } finally {
+      // Clean up after test
+      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down > /dev/null 2>&1');
     }
   }
 
