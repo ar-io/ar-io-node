@@ -524,6 +524,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 500,
               offset: 100,
+              dataOffset: 150, // offset + header size (assume 50 byte header)
               parentId: parentId,
             };
           }
@@ -576,7 +577,7 @@ describe('RootParentDataSource', () => {
       // Verify data was fetched from parent with correct offset
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, parentId);
-      assert.strictEqual(dataCall.region.offset, 100); // child's offset in parent
+      assert.strictEqual(dataCall.region.offset, 150); // child's dataOffset (payload start)
       assert.strictEqual(dataCall.region.size, 500); // child's size
 
       // Should not use legacy methods
@@ -603,6 +604,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 200,
               offset: 50, // offset in child
+              dataOffset: 50, // payload start (absolute: 50 + 0, no header for contiguous data)
               parentId: childId,
             };
           }
@@ -611,7 +613,7 @@ describe('RootParentDataSource', () => {
               size: 800,
               offset: 300, // offset in parent
               parentId: parentId,
-              dataOffset: 20, // payload start
+              dataOffset: 320, // payload start (absolute: 300 + 20)
             };
           }
           if (id === parentId) {
@@ -637,7 +639,7 @@ describe('RootParentDataSource', () => {
 
       assert.strictEqual(result.size, 200);
 
-      // Verify total offset calculation: 50 (grandchild in child) + 300 (child in parent) + 20 (dataOffset) = 370
+      // Verify: child payload at 320 in parent, grandchild payload at 50 in child = 320 + 50 = 370
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, parentId);
       assert.strictEqual(dataCall.region.offset, 370);
@@ -754,6 +756,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 500,
               offset: 100,
+              dataOffset: 150, // offset + header size
               parentId: itemB,
             };
           }
@@ -761,6 +764,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 800,
               offset: 200,
+              dataOffset: 250, // offset + header size
               parentId: itemA, // Cycle!
             };
           }
@@ -920,6 +924,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 500,
               offset: 100, // child offset in parent
+              dataOffset: 150, // payload start (offset + header size)
               parentId: parentId,
             };
           }
@@ -950,11 +955,59 @@ describe('RootParentDataSource', () => {
 
       assert.strictEqual(result.size, 200);
 
-      // Should request data from parent with combined offset: 100 (child offset) + 50 (region offset) = 150
+      // Should request data from parent with combined offset: 150 (child dataOffset) + 50 (region offset) = 200
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, parentId);
-      assert.strictEqual(dataCall.region.offset, 150);
+      assert.strictEqual(dataCall.region.offset, 200);
       assert.strictEqual(dataCall.region.size, 200);
+    });
+
+    it('should correctly handle dataOffset for target item (not double-count)', async () => {
+      const dataItemId = 'child-item';
+      const parentId = 'parent-item';
+      const dataStream = Readable.from([Buffer.from('test data')]);
+
+      // Mock attributes where TARGET item has a dataOffset
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 500, // payload size
+              offset: 100, // item offset in parent
+              dataOffset: 150, // payload position in parent (absolute: 100 + 50)
+              parentId: parentId,
+            };
+          }
+          if (id === parentId) {
+            return {
+              size: 2000,
+              offset: 0,
+              // root
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({ id: dataItemId });
+
+      assert.strictEqual(result.size, 500);
+
+      // Critical test: dataOffset should only be added ONCE (not during traversal AND at end)
+      // Correct: target's dataOffset is 150 (absolute), added once at end = 0 + 150 = 150
+      // Bug would double-count by adding during traversal too = 0 + 150 + 150 = 300
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, parentId);
+      assert.strictEqual(dataCall.region.offset, 150); // NOT 300!
+      assert.strictEqual(dataCall.region.size, 500);
     });
   });
 });

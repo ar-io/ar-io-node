@@ -160,10 +160,19 @@ export class RootParentDataSource implements ContiguousDataSource {
         };
       }
 
-      // Remember the original item size and data offset (the item we're looking for)
-      if (originalItemSize === undefined) {
+      // Remember the original item (the item we're looking for)
+      const isTargetItem = originalItemSize === undefined;
+      if (isTargetItem) {
         originalItemSize = attributes.size;
         originalItemDataOffset = attributes.dataOffset;
+
+        // If dataOffset is missing, we can't use attributes-based traversal
+        if (originalItemDataOffset === undefined) {
+          log.debug(
+            'dataOffset missing for target item, falling back to legacy traversal',
+          );
+          return null;
+        }
       }
 
       // If no parent, this is the root
@@ -181,11 +190,9 @@ export class RootParentDataSource implements ContiguousDataSource {
         };
       }
 
-      // Add this item's offset to the total
-      totalOffset += attributes.offset;
-
-      // Add dataOffset if present (for payload positioning)
-      if (attributes.dataOffset !== undefined) {
+      // For intermediate parents, accumulate dataOffset (which is absolute: offset + header size)
+      // For target item, we don't accumulate during traversal - it gets added at the end
+      if (!isTargetItem && attributes.dataOffset !== undefined) {
         totalOffset += attributes.dataOffset;
       }
 
