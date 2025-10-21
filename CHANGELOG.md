@@ -12,6 +12,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Docker Compose Configuration**: Added `ENABLE_DATA_ITEM_ROOT_TX_SEARCH` and
+  `ENABLE_PASSTHROUGH_WITHOUT_OFFSETS` environment variables to
+  `docker-compose.yaml`, `.env.example`, and `docs/envs.md`. These options
+  control offset-aware data source behavior and were previously only defined in
+  `src/config.ts`, making them unavailable for Docker Compose users to configure
+  via `.env` files
+  - `ENABLE_DATA_ITEM_ROOT_TX_SEARCH` (default: `true`) - Controls whether to
+    query external APIs (GraphQL/Turbo) to find root transactions when local
+    database attributes are incomplete
+  - `ENABLE_PASSTHROUGH_WITHOUT_OFFSETS` (default: `true`) - Controls whether
+    offset-aware data sources allow data retrieval without offset information
+
 ## [Release 55] - 2025-10-20
 
 This is an optional release focused on x402 payment protocol improvements.
