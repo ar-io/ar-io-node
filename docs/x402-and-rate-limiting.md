@@ -54,7 +54,8 @@ When both features are enabled:
 2. **Payment option**: When rate limited, users can make a USDC payment
 3. **Paid tier**: Payments add paid tokens to the user's bucket with a
    configurable multiplier (default 10x)
-4. **Priority consumption**: Paid tokens are used first, providing faster access
+4. **Priority consumption**: Regular tokens are consumed first, then paid tokens
+   (paid tokens act as overflow capacity)
 5. **Resource bypass**: Paid requests bypass per-resource limits (only IP limits
    apply)
 
@@ -255,14 +256,17 @@ Set up mainnet payments for production:
 
 - Ethereum wallet with Base mainnet access
 - Real USDC on Base network
-- **Coinbase Developer Platform (CDP) API key** (for official facilitator)
+- **Optional**: Coinbase Developer Platform (CDP) account for Onramp integration
 
-**2. Obtain CDP API key:**
+**2. Optional - Obtain CDP API keys for Onramp:**
+
+If you want to integrate Coinbase Onramp for easy USDC purchases in your browser
+paywall:
 
 - Visit [Coinbase Developer Platform](https://portal.cdp.coinbase.com/)
 - Create an account and project
-- Generate an API key
-- **Important**: Store securely, never commit to git
+- Generate API keys (both public client key and secret API key)
+- **Important**: Store secret keys securely, never commit to git
 
 **3. Add to `.env` file:**
 
@@ -276,16 +280,15 @@ X_402_USDC_NETWORK=base
 # Your wallet address
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
 
-# Option A: Official Coinbase facilitator (requires CDP API key)
-X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
-X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key  # Recommended
+# Facilitator configuration
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator  # Coinbase official (testnet)
 # OR
-X_402_CDP_CLIENT_KEY=your_api_key  # Less secure
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs    # Alternative (no auth)
 
-# Option B: Alternative facilitator (no CDP API key needed)
-X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
-# OR
-X_402_USDC_FACILITATOR_URL=https://facilitator.payai.network
+# Optional: Coinbase Onramp integration (for browser paywall with onramp)
+# X_402_CDP_CLIENT_KEY=your_public_client_key              # Public key (browser)
+# CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key     # Secret key (server)
+# CDP_API_KEY_ID=your_api_key_id                          # API key ID (server)
 
 # Pricing configuration (adjust for your needs)
 X_402_USDC_PER_BYTE_PRICE=0.0000000001  # $0.10 per GB
@@ -293,12 +296,12 @@ X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001  # $0.001 minimum
 X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00   # $1.00 maximum
 ```
 
-**4. Security best practices:**
+**4. Security best practices (for Onramp keys):**
 
 ```bash
-# Use file-based key storage with restricted permissions
-echo "YOUR_CDP_KEY" > /run/secrets/cdp_client_key
-chmod 600 /run/secrets/cdp_client_key
+# Use file-based storage for sensitive CDP API secret with restricted permissions
+echo "YOUR_CDP_SECRET_KEY" > /run/secrets/cdp_secret_key
+chmod 600 /run/secrets/cdp_secret_key
 ```
 
 **5. Test carefully:**
@@ -403,14 +406,18 @@ Each bucket contains two types of tokens:
 
 - Added through x402 payments
 - Do NOT refill automatically
-- Consumed first (priority over regular tokens)
+- Consumed after regular tokens (act as overflow capacity)
 - Can exceed regular capacity
 
 **Consumption priority:**
 
-1. Try consuming from regular tokens
+1. Try consuming from regular tokens first
 2. If insufficient, use paid tokens
 3. If still insufficient, deny request
+
+This priority order ensures paid tokens last longer and provide better value to
+paying users, as they act as overflow capacity rather than being consumed
+immediately.
 
 #### Token Prediction and Adjustment
 
@@ -663,11 +670,15 @@ The **facilitator** is a service that:
 
 **Available facilitators:**
 
-| Facilitator       | URL                               | Networks           | CDP Key Required |
-| ----------------- | --------------------------------- | ------------------ | ---------------- |
-| Coinbase Official | https://x402.org/facilitator      | base-sepolia       | No (testnet)     |
-| x402.rs           | https://facilitator.x402.rs       | base, base-sepolia | No               |
-| payai.network     | https://facilitator.payai.network | base, base-sepolia | Yes (mainnet)    |
+| Facilitator       | URL                               | Networks           | Auth Required | Notes                    |
+| ----------------- | --------------------------------- | ------------------ | ------------- | ------------------------ |
+| Coinbase Official | https://x402.org/facilitator      | base-sepolia       | No            | Default for testnet      |
+| x402.rs           | https://facilitator.x402.rs       | base, base-sepolia | No            | No authentication needed |
+| payai.network     | https://facilitator.payai.network | base, base-sepolia | Varies        | Check facilitator docs   |
+
+**Note**: CDP keys (`X_402_CDP_CLIENT_KEY`, `CDP_API_KEY_SECRET`, etc.) are for
+**Coinbase Onramp integration** (browser paywall with easy USDC purchase), not
+for facilitator authentication.
 
 ### Network Selection
 
@@ -774,22 +785,37 @@ const priceUSD = contentLength * perBytePrice;
 const clampedPrice = Math.min(Math.max(priceUSD, minPrice), maxPrice);
 ```
 
-#### CDP API Key Configuration
+#### CDP API Key Configuration (Onramp Integration)
 
-**`X_402_CDP_CLIENT_KEY`** (string, **SENSITIVE SECRET**)
+These keys are optional and only needed if integrating Coinbase Onramp for easy
+USDC purchases in the browser paywall.
 
-- Coinbase Developer Platform API client key
-- Required for mainnet with official facilitator
-- **Never commit to git or log this value**
+**`X_402_CDP_CLIENT_KEY`** (string, **PUBLIC** - safe for client-side)
 
-**`X_402_CDP_CLIENT_KEY_FILE`** (file path, **SENSITIVE SECRET**)
+- Coinbase Developer Platform public client API key
+- Used in browser paywall for Onramp widget
+- Safe to expose in client-side code
 
-- Path to file containing CDP API key
-- **Takes precedence over `X_402_CDP_CLIENT_KEY`**
+**`CDP_API_KEY_ID`** (string, **SENSITIVE SECRET**)
+
+- Coinbase Developer Platform secret API key ID
+- Used server-side for Onramp session token generation
+- **Never commit to git or expose in logs**
+
+**`CDP_API_KEY_SECRET`** (string, **SENSITIVE SECRET**)
+
+- Coinbase Developer Platform secret API key secret
+- Used server-side for Onramp session token generation
+- **Never commit to git or expose in logs**
+
+**`CDP_API_KEY_SECRET_FILE`** (file path, **SENSITIVE SECRET**)
+
+- Path to file containing CDP API secret
+- **Takes precedence over `CDP_API_KEY_SECRET` if set**
 - Recommended approach for production
 - **Restrict file permissions**: `chmod 600`
 
-**Security requirements:**
+**Security requirements for secret keys:**
 
 - Store in secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.)
 - Use file-based config with restricted permissions
@@ -884,14 +910,15 @@ See `src/payments/x402-usdc-processor.ts:312-375` for paywall implementation.
 
 Tokens consumed in this order:
 
-1. **Regular tokens** (if available)
-2. **Paid tokens** (if regular tokens insufficient)
+1. **Regular tokens first** (consumed before paid tokens)
+2. **Paid tokens second** (used when regular tokens insufficient)
 
-This prioritization:
+This prioritization (changed in Release 55):
 
-- Maximizes value of free tier
-- Extends paid token longevity
-- Provides fairness (paid users don't subsidize free usage)
+- Maximizes value to paying users (paid tokens last longer)
+- Paid tokens act as overflow capacity rather than primary pool
+- Regular tokens still refill over time for baseline access
+- Provides better long-term value for paid tier
 
 #### Resource Limit Bypass
 
@@ -1011,8 +1038,10 @@ X-Payment-Response: <base64-encoded-settlement-result>
 
 #### Checklist
 
-- [ ] Obtain CDP API key from Coinbase Developer Platform
-- [ ] Configure CDP key securely (`X_402_CDP_CLIENT_KEY_FILE` recommended)
+- [ ] Optional: Obtain CDP API keys from Coinbase Developer Platform (for
+      Onramp)
+- [ ] Optional: Configure CDP secret key securely (`CDP_API_KEY_SECRET_FILE`
+      recommended)
 - [ ] Update network: `X_402_USDC_NETWORK=base`
 - [ ] Update wallet to mainnet address with real USDC
 - [ ] Choose facilitator (official or alternative)
@@ -1033,24 +1062,27 @@ X_402_USDC_WALLET_ADDRESS=0xYOUR_TESTNET_WALLET
 X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
 ```
 
-**Mainnet (official facilitator):**
+**Mainnet (with Onramp integration):**
 
 ```bash
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
 X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
-X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key
+# Onramp integration (optional)
+X_402_CDP_CLIENT_KEY=your_public_client_key
+CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
+CDP_API_KEY_ID=your_api_key_id
 ```
 
-**Mainnet (alternative facilitator):**
+**Mainnet (without Onramp):**
 
 ```bash
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
 X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
-# No CDP key needed
+# No CDP keys needed
 ```
 
 ### Security Considerations
@@ -1072,16 +1104,18 @@ X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
 - Rotate keys periodically
 - Use separate keys for test and production
 
-#### CDP API Key Protection
+#### CDP API Key Protection (Onramp Integration)
 
-The CDP API key is a **SENSITIVE SECRET**:
+The CDP secret API keys (`CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`) are
+**SENSITIVE SECRETS** (the public client key `X_402_CDP_CLIENT_KEY` is safe for
+client-side use):
 
 **Storage:**
 
 - **Recommended**: File-based with restricted permissions
   ```bash
-  echo "YOUR_KEY" > /run/secrets/cdp_client_key
-  chmod 600 /run/secrets/cdp_client_key
+  echo "YOUR_SECRET_KEY" > /run/secrets/cdp_secret_key
+  chmod 600 /run/secrets/cdp_secret_key
   ```
 - **Alternative**: Environment variable (less secure)
 - **Production**: Use secrets manager (AWS Secrets Manager, HashiCorp Vault)
@@ -1095,9 +1129,10 @@ The CDP API key is a **SENSITIVE SECRET**:
 
 **Logging:**
 
-- Never log the key value
+- Never log the secret key values
 - Mask in error messages
 - Exclude from diagnostic output
+- Public client key (`X_402_CDP_CLIENT_KEY`) is safe to log
 
 #### Redirect URL Validation
 
@@ -1144,38 +1179,40 @@ The facilitator provides several security guarantees:
 
 #### Rate Limiter Variables
 
-| Variable                                  | Type    | Default              | Description                              |
-| ----------------------------------------- | ------- | -------------------- | ---------------------------------------- |
-| `ENABLE_RATE_LIMITER`                     | boolean | `false`              | Enable rate limiting enforcement         |
-| `RATE_LIMITER_TYPE`                       | string  | `memory`             | Implementation type: `memory` or `redis` |
-| `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET` | number  | `1000000`            | Resource bucket capacity (~976 MiB)      |
-| `RATE_LIMITER_RESOURCE_REFILL_PER_SEC`    | number  | `100`                | Resource refill rate (~100 KiB/s)        |
-| `RATE_LIMITER_IP_TOKENS_PER_BUCKET`       | number  | `100000`             | IP bucket capacity (~98 MiB)             |
-| `RATE_LIMITER_IP_REFILL_PER_SEC`          | number  | `20`                 | IP refill rate (~20 KiB/s)               |
-| `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`    | string  | `""`                 | Comma-separated IP/CIDR allowlist        |
-| `RATE_LIMITER_ARNS_ALLOWLIST`             | string  | `""`                 | Comma-separated ArNS name allowlist      |
-| `RATE_LIMITER_REDIS_ENDPOINT`             | string  | `redis://redis:6379` | Redis connection URL                     |
-| `RATE_LIMITER_REDIS_USE_TLS`              | boolean | `false`              | Enable TLS for Redis                     |
-| `RATE_LIMITER_REDIS_USE_CLUSTER`          | boolean | `false`              | Use Redis cluster mode                   |
+| Variable                                  | Type    | Default                                 | Description                              |
+| ----------------------------------------- | ------- | --------------------------------------- | ---------------------------------------- |
+| `ENABLE_RATE_LIMITER`                     | boolean | `false`                                 | Enable rate limiting enforcement         |
+| `RATE_LIMITER_TYPE`                       | string  | `redis` (docker), `memory` (standalone) | Implementation type: `memory` or `redis` |
+| `RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET` | number  | `1000000`                               | Resource bucket capacity (~976 MiB)      |
+| `RATE_LIMITER_RESOURCE_REFILL_PER_SEC`    | number  | `100`                                   | Resource refill rate (~100 KiB/s)        |
+| `RATE_LIMITER_IP_TOKENS_PER_BUCKET`       | number  | `100000`                                | IP bucket capacity (~98 MiB)             |
+| `RATE_LIMITER_IP_REFILL_PER_SEC`          | number  | `20`                                    | IP refill rate (~20 KiB/s)               |
+| `RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`    | string  | `""`                                    | Comma-separated IP/CIDR allowlist        |
+| `RATE_LIMITER_ARNS_ALLOWLIST`             | string  | `""`                                    | Comma-separated ArNS name allowlist      |
+| `RATE_LIMITER_REDIS_ENDPOINT`             | string  | `redis://redis:6379`                    | Redis connection URL                     |
+| `RATE_LIMITER_REDIS_USE_TLS`              | boolean | `false`                                 | Enable TLS for Redis                     |
+| `RATE_LIMITER_REDIS_USE_CLUSTER`          | boolean | `false`                                 | Use Redis cluster mode                   |
 
 #### X402 Variables
 
-| Variable                               | Type       | Default                        | Description                       |
-| -------------------------------------- | ---------- | ------------------------------ | --------------------------------- |
-| `ENABLE_X_402_USDC_DATA_EGRESS`        | boolean    | `false`                        | Enable x402 payments              |
-| `X_402_USDC_NETWORK`                   | string     | `base-sepolia`                 | Network: `base` or `base-sepolia` |
-| `X_402_USDC_WALLET_ADDRESS`            | hex string | undefined                      | Payment receiving wallet (0x...)  |
-| `X_402_USDC_FACILITATOR_URL`           | URL        | `https://x402.org/facilitator` | Facilitator endpoint              |
-| `X_402_USDC_PER_BYTE_PRICE`            | number     | `0.0000000001`                 | Price per byte ($0.10/GB)         |
-| `X_402_USDC_DATA_EGRESS_MIN_PRICE`     | number     | `0.001`                        | Minimum price per request         |
-| `X_402_USDC_DATA_EGRESS_MAX_PRICE`     | number     | `1.00`                         | Maximum price per request         |
-| `X_402_RATE_LIMIT_CAPACITY_MULTIPLIER` | number     | `10`                           | Paid tier capacity multiplier     |
-| `X_402_USDC_SETTLE_TIMEOUT_MS`         | number     | `5000`                         | Settlement timeout (ms)           |
-| `X_402_CDP_CLIENT_KEY`                 | string     | undefined                      | **SECRET**: CDP API key           |
-| `X_402_CDP_CLIENT_KEY_FILE`            | path       | undefined                      | **SECRET**: CDP API key file      |
-| `X_402_APP_NAME`                       | string     | `"AR.IO Gateway"`              | Paywall app name                  |
-| `X_402_APP_LOGO`                       | URL        | undefined                      | Paywall logo URL                  |
-| `X_402_SESSION_TOKEN_ENDPOINT`         | URL        | undefined                      | Custom session token endpoint     |
+| Variable                               | Type       | Default                        | Description                          |
+| -------------------------------------- | ---------- | ------------------------------ | ------------------------------------ |
+| `ENABLE_X_402_USDC_DATA_EGRESS`        | boolean    | `false`                        | Enable x402 payments                 |
+| `X_402_USDC_NETWORK`                   | string     | `base-sepolia`                 | Network: `base` or `base-sepolia`    |
+| `X_402_USDC_WALLET_ADDRESS`            | hex string | undefined                      | Payment receiving wallet (0x...)     |
+| `X_402_USDC_FACILITATOR_URL`           | URL        | `https://x402.org/facilitator` | Facilitator endpoint                 |
+| `X_402_USDC_PER_BYTE_PRICE`            | number     | `0.0000000001`                 | Price per byte ($0.10/GB)            |
+| `X_402_USDC_DATA_EGRESS_MIN_PRICE`     | number     | `0.001`                        | Minimum price per request            |
+| `X_402_USDC_DATA_EGRESS_MAX_PRICE`     | number     | `1.00`                         | Maximum price per request            |
+| `X_402_RATE_LIMIT_CAPACITY_MULTIPLIER` | number     | `10`                           | Paid tier capacity multiplier        |
+| `X_402_USDC_SETTLE_TIMEOUT_MS`         | number     | `5000`                         | Settlement timeout (ms)              |
+| `X_402_CDP_CLIENT_KEY`                 | string     | undefined                      | Public CDP client key (Onramp)       |
+| `CDP_API_KEY_ID`                       | string     | undefined                      | **SECRET**: CDP API key ID (Onramp)  |
+| `CDP_API_KEY_SECRET`                   | string     | undefined                      | **SECRET**: CDP API secret (Onramp)  |
+| `CDP_API_KEY_SECRET_FILE`              | path       | undefined                      | **SECRET**: CDP secret file (Onramp) |
+| `X_402_APP_NAME`                       | string     | `"AR.IO Gateway"`              | Paywall app name                     |
+| `X_402_APP_LOGO`                       | URL        | undefined                      | Paywall logo URL                     |
+| `X_402_SESSION_TOKEN_ENDPOINT`         | URL        | undefined                      | Custom session token endpoint        |
 
 ### Network Comparison
 
@@ -1184,7 +1221,7 @@ The facilitator provides several security guarantees:
 | **Purpose**                  | Development, testing              | Production monetization                        |
 | **USDC**                     | Free testnet USDC                 | Real USDC (costs money)                        |
 | **USDC Faucet**              | https://faucet.circle.com/        | N/A (purchase required)                        |
-| **CDP API Key**              | Not required                      | Required (official facilitator)                |
+| **CDP API Key (Onramp)**     | Optional                          | Optional (for browser paywall onramp)          |
 | **Default Facilitator**      | https://x402.org/facilitator      | Must configure                                 |
 | **Alternative Facilitators** | facilitator.x402.rs               | facilitator.x402.rs, facilitator.payai.network |
 | **Config**                   | `X_402_USDC_NETWORK=base-sepolia` | `X_402_USDC_NETWORK=base`                      |
@@ -1193,11 +1230,14 @@ The facilitator provides several security guarantees:
 
 ### Facilitator Comparison
 
-| Facilitator           | URL                               | Networks Supported | CDP Key Required  | Notes                                      |
-| --------------------- | --------------------------------- | ------------------ | ----------------- | ------------------------------------------ |
-| **Coinbase Official** | https://x402.org/facilitator      | base-sepolia       | No (testnet only) | Default for testnet                        |
-| **x402.rs**           | https://facilitator.x402.rs       | base, base-sepolia | No                | Experimental, no CDP key needed            |
-| **payai.network**     | https://facilitator.payai.network | base, base-sepolia | Yes (mainnet)     | Experimental, requires CDP key for mainnet |
+| Facilitator           | URL                               | Networks Supported | Auth Required | Notes                           |
+| --------------------- | --------------------------------- | ------------------ | ------------- | ------------------------------- |
+| **Coinbase Official** | https://x402.org/facilitator      | base-sepolia       | No            | Default for testnet             |
+| **x402.rs**           | https://facilitator.x402.rs       | base, base-sepolia | No            | No authentication needed        |
+| **payai.network**     | https://facilitator.payai.network | base, base-sepolia | Varies        | Check facilitator documentation |
+
+**Note**: CDP keys are for Coinbase Onramp integration (browser paywall with
+easy USDC purchase), not for facilitator authentication.
 
 ## Troubleshooting
 
@@ -1294,26 +1334,29 @@ The facilitator provides several security guarantees:
 - Try alternative facilitator
 - Review facilitator logs (if self-hosted)
 
-#### CDP API Key Errors (Mainnet)
+#### CDP API Key Errors (Onramp Integration)
 
-**Symptom**: 401 or 403 errors from facilitator
+**Symptom**: Errors when using browser paywall with Onramp
 
 **Possible causes:**
 
-1. Invalid or expired CDP API key
-2. Key not provided (mainnet with official facilitator)
+1. Invalid or expired CDP API keys
+2. Keys not provided (when Onramp integration enabled)
 3. File permissions preventing key read
 
 **Solutions:**
 
-- Verify CDP key is valid (check Coinbase Developer Platform)
-- Check file exists and is readable:
+- Verify CDP keys are valid (check Coinbase Developer Platform)
+- Check secret key file exists and is readable:
   ```bash
-  ls -l /run/secrets/cdp_client_key
-  cat /run/secrets/cdp_client_key
+  ls -l /run/secrets/cdp_secret_key
+  cat /run/secrets/cdp_secret_key
   ```
-- Verify environment variable set (if using `X_402_CDP_CLIENT_KEY`)
-- Try alternative facilitator (no CDP key required)
+- Verify environment variables set correctly:
+  - `X_402_CDP_CLIENT_KEY` (public client key)
+  - `CDP_API_KEY_ID` and `CDP_API_KEY_SECRET` (or `CDP_API_KEY_SECRET_FILE`)
+- Note: CDP keys are only needed for Onramp integration, not for basic x402
+  payments
 
 #### Paywall Not Displaying (Browser)
 
@@ -1485,12 +1528,14 @@ services:
       - RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
       - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
 
-      # X402 payments (mainnet with official facilitator)
+      # X402 payments (mainnet with Onramp integration)
       - ENABLE_X_402_USDC_DATA_EGRESS=true
       - X_402_USDC_NETWORK=base
       - X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
       - X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
-      - X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key
+      - X_402_CDP_CLIENT_KEY=YOUR_PUBLIC_CLIENT_KEY
+      - CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
+      - CDP_API_KEY_ID=YOUR_API_KEY_ID
       - X_402_USDC_PER_BYTE_PRICE=0.0000000001
       - X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
       - X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
@@ -1503,7 +1548,7 @@ services:
       - X_402_APP_LOGO=https://example.com/logo.png
 
     volumes:
-      - /run/secrets/cdp_client_key:/run/secrets/cdp_client_key:ro
+      - /run/secrets/cdp_secret_key:/run/secrets/cdp_secret_key:ro
 ```
 
 **Security setup:**
@@ -1513,10 +1558,10 @@ services:
 sudo mkdir -p /run/secrets
 sudo chmod 700 /run/secrets
 
-# Store CDP key securely
-echo "YOUR_CDP_KEY" | sudo tee /run/secrets/cdp_client_key > /dev/null
-sudo chmod 600 /run/secrets/cdp_client_key
-sudo chown root:root /run/secrets/cdp_client_key
+# Store CDP secret key securely
+echo "YOUR_CDP_SECRET_KEY" | sudo tee /run/secrets/cdp_secret_key > /dev/null
+sudo chmod 600 /run/secrets/cdp_secret_key
+sudo chown root:root /run/secrets/cdp_secret_key
 ```
 
 ### Example 3: Production with Alternative Facilitator (No CDP Key)
