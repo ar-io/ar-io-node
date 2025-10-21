@@ -26,8 +26,8 @@ paths including manifests, ArNS names, and range requests.
 - **Environment Variables**:
   - `RATE_LIMITER_TYPE`: Configure rate limiter implementation ("memory" for
     development/testing, "redis" for production)
-  - `X_402_CDP_CLIENT_KEY_FILE`: Load CDP client key from file instead of
-    environment variable for improved security
+  - `CDP_API_KEY_SECRET_FILE`: Load CDP secret API key from file instead of
+    environment variable for improved security (for Coinbase Onramp integration)
   - `RATE_LIMITER_ARNS_ALLOWLIST`: Comma-separated list of ArNS names that
     bypass rate limiting and payment verification
 

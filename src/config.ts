@@ -1304,19 +1304,20 @@ export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
 );
 
 // Paywall customization (optional)
-export let X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
 
-const X_402_CDP_CLIENT_KEY_FILE = env.varOrUndefined(
-  'X_402_CDP_CLIENT_KEY_FILE',
-);
+// CDP Secret API Key for session token generation (optional)
+// Load from file if CDP_API_KEY_SECRET_FILE is set, otherwise use CDP_API_KEY_SECRET
+const CDP_API_KEY_SECRET_FILE = env.varOrUndefined('CDP_API_KEY_SECRET_FILE');
 
-if (X_402_CDP_CLIENT_KEY_FILE !== undefined) {
-  if (!existsSync(X_402_CDP_CLIENT_KEY_FILE)) {
+if (CDP_API_KEY_SECRET_FILE !== undefined) {
+  if (!existsSync(CDP_API_KEY_SECRET_FILE)) {
     throw new Error(
-      `X_402_CDP_CLIENT_KEY_FILE not found: ${X_402_CDP_CLIENT_KEY_FILE}`,
+      `CDP_API_KEY_SECRET_FILE not found: ${CDP_API_KEY_SECRET_FILE}`,
     );
   }
-  X_402_CDP_CLIENT_KEY = readFileSync(X_402_CDP_CLIENT_KEY_FILE)
+  // Set as environment variable so x402-express session-token handler can access it
+  process.env.CDP_API_KEY_SECRET = readFileSync(CDP_API_KEY_SECRET_FILE)
     .toString()
     .trim();
 }
