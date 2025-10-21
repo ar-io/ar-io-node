@@ -592,9 +592,10 @@ export interface ContiguousDataAttributes {
   size: number;
 
   /**
-   * Position of this item within its immediate parent.
+   * ABSOLUTE position of this item within its immediate parent.
    * - For transactions: the transaction offset (end position) in the weave
-   * - For data items: position within the parent bundle's payload
+   * - For data items: absolute position where data item begins within the parent bundle's payload (NOT relative to anything else)
+   * This represents where the data item structure starts, including headers.
    */
   offset: number;
 
@@ -636,9 +637,13 @@ export interface ContiguousDataAttributes {
   rootParentOffset?: number;
 
   /**
-   * Starting position of the data payload within this data item, relative to the parent bundle.
-   * Calculated as: data item's offset + header size.
+   * ABSOLUTE position where the data payload begins within the parent bundle.
+   * This is NOT relative to the data item itself, but absolute within the parent bundle.
+   * Calculated as: offset + header size (i.e., where data item starts + size of all headers).
    * Used with rootParentOffset to calculate rootDataOffset: rootParentOffset + dataOffset.
+   *
+   * Example: If a data item starts at offset 100 with 50 bytes of headers,
+   * then offset=100 and dataOffset=150 (both absolute positions in parent bundle).
    */
   dataOffset?: number;
 
