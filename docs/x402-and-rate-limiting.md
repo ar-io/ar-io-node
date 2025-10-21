@@ -46,17 +46,25 @@ Gateway integrates x402 to:
   payments
 - Verify and settle payments using Coinbase facilitators
 
+**Important**: X402 **requires the rate limiter to be enabled**. Payment
+requests (402 responses) are only sent when rate limits are exceeded. The x402
+protocol is not a standalone feature - it works as an extension of the rate
+limiting system to allow users to purchase additional capacity.
+
 ### How They Work Together
 
-When both features are enabled:
+To use x402 payments, you must enable both features (`ENABLE_RATE_LIMITER=true`
+and `ENABLE_X_402_USDC_DATA_EGRESS=true`). Here's how they integrate:
 
 1. **Free tier**: Users consume regular tokens from their rate limit buckets
-2. **Payment option**: When rate limited, users can make a USDC payment
-3. **Paid tier**: Payments add paid tokens to the user's bucket with a
+2. **Rate limit exceeded**: When limits are exceeded, gateway sends 402 Payment
+   Required response (instead of 429)
+3. **Payment option**: Users can make a USDC payment to continue access
+4. **Paid tier**: Payments add paid tokens to the user's bucket with a
    configurable multiplier (default 10x)
-4. **Priority consumption**: Regular tokens are consumed first, then paid tokens
+5. **Priority consumption**: Regular tokens are consumed first, then paid tokens
    (paid tokens act as overflow capacity)
-5. **Resource bypass**: Paid requests bypass per-resource limits (only IP limits
+6. **Resource bypass**: Paid requests bypass per-resource limits (only IP limits
    apply)
 
 ```
@@ -200,68 +208,78 @@ curl http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_cons
 curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
 ```
 
-### Quick Start: X402 Payments (Base Sepolia Testnet)
+### Quick Start: Rate Limiting with X402 Payments
 
-Set up testnet payments for development and testing:
+**Important**: X402 requires the rate limiter to be enabled. Both features must
+be configured together.
 
-**1. Get testnet USDC:**
+#### Testnet Setup (Development/Testing)
 
-- Create or use an existing Ethereum wallet
-- Visit the
+Use Base Sepolia testnet for development and testing:
+
+**1. Prerequisites:**
+
+- Ethereum wallet
+- Testnet ETH from
   [Base Sepolia faucet](https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet)
-  to get testnet ETH
-- Get testnet USDC from [Circle's testnet faucet](https://faucet.circle.com/)
+- Testnet USDC from [Circle's faucet](https://faucet.circle.com/)
 
 **2. Add to `.env` file:**
 
 ```bash
-# Enable x402
+# Rate Limiter (required for x402)
+ENABLE_RATE_LIMITER=true
+RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000       # ~98 MiB per IP
+RATE_LIMITER_IP_REFILL_PER_SEC=20              # ~20 KiB/s refill
+RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000 # ~976 MiB per resource
+RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100       # ~100 KiB/s refill
+
+# X402 Payments (testnet)
 ENABLE_X_402_USDC_DATA_EGRESS=true
-
-# Use testnet
 X_402_USDC_NETWORK=base-sepolia
-
-# Your wallet address (where payments will be received)
-X_402_USDC_WALLET_ADDRESS=0x1234567890123456789012345678901234567890
-
-# Use default testnet facilitator (no CDP API key needed)
+X_402_USDC_WALLET_ADDRESS=0xYOUR_TESTNET_WALLET
 X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+X_402_USDC_PER_BYTE_PRICE=0.0000000001         # $0.10 per GB
+X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001         # $0.001 minimum
+X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00          # $1.00 maximum
 
-# Pricing: $0.10 per GB (default)
-X_402_USDC_PER_BYTE_PRICE=0.0000000001
-X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
-X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
+# Integration: paid tier gets 10x capacity
+X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
 ```
 
-**3. Test with the example script:**
+**3. Start the gateway:**
+
+```bash
+docker-compose up -d
+```
+
+**4. Test the payment flow:**
 
 ```bash
 # Set your test wallet private key
 export X402_TEST_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
 
-# Run the test script
+# Test with the x402-fetch script
 npm run x402:fetch -- YOUR_TX_ID
+
+# Or test in browser - visit http://localhost:3000/YOUR_TX_ID
+# After hitting rate limit, you'll see the paywall UI
 ```
 
-**4. Test with browser:**
+#### Mainnet Setup (Production)
 
-Visit `http://localhost:3000/YOUR_TX_ID` in a browser. If rate limited, you'll
-see a paywall UI prompting for payment.
-
-### Quick Start: X402 Payments (Base Mainnet)
-
-Set up mainnet payments for production:
+Use Base mainnet for production with real payments:
 
 **1. Prerequisites:**
 
 - Ethereum wallet with Base mainnet access
 - Real USDC on Base network
 - **Optional**: Coinbase Developer Platform (CDP) account for Onramp integration
+  (browser paywall with easy USDC purchase)
 
-**2. Optional - Obtain CDP API keys for Onramp:**
+**2. Optional - CDP API keys for Onramp:**
 
-If you want to integrate Coinbase Onramp for easy USDC purchases in your browser
-paywall:
+If you want to integrate Coinbase Onramp:
 
 - Visit [Coinbase Developer Platform](https://portal.cdp.coinbase.com/)
 - Create an account and project
@@ -271,35 +289,35 @@ paywall:
 **3. Add to `.env` file:**
 
 ```bash
-# Enable x402
+# Rate Limiter (required for x402)
+ENABLE_RATE_LIMITER=true
+RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
+RATE_LIMITER_IP_REFILL_PER_SEC=20
+RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
+RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
+
+# X402 Payments (mainnet)
 ENABLE_X_402_USDC_DATA_EGRESS=true
-
-# Use mainnet
 X_402_USDC_NETWORK=base
-
-# Your wallet address
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator  # or alternative
+X_402_USDC_PER_BYTE_PRICE=0.0000000001         # $0.10 per GB (adjust as needed)
+X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
+X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
 
-# Facilitator configuration
-X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator  # Coinbase official (testnet)
-# OR
-X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs    # Alternative (no auth)
+# Optional: Coinbase Onramp integration
+# X_402_CDP_CLIENT_KEY=your_public_client_key
+# CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
+# CDP_API_KEY_ID=your_api_key_id
 
-# Optional: Coinbase Onramp integration (for browser paywall with onramp)
-# X_402_CDP_CLIENT_KEY=your_public_client_key              # Public key (browser)
-# CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key     # Secret key (server)
-# CDP_API_KEY_ID=your_api_key_id                          # API key ID (server)
-
-# Pricing configuration (adjust for your needs)
-X_402_USDC_PER_BYTE_PRICE=0.0000000001  # $0.10 per GB
-X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001  # $0.001 minimum
-X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00   # $1.00 maximum
+# Integration settings
+X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
 ```
 
-**4. Security best practices (for Onramp keys):**
+**4. Security best practices:**
 
 ```bash
-# Use file-based storage for sensitive CDP API secret with restricted permissions
+# Store CDP secret key with restricted permissions (if using Onramp)
 echo "YOUR_CDP_SECRET_KEY" > /run/secrets/cdp_secret_key
 chmod 600 /run/secrets/cdp_secret_key
 ```
@@ -308,45 +326,6 @@ chmod 600 /run/secrets/cdp_secret_key
 
 Start with small transactions and monitor payment settlement before going fully
 live.
-
-### Quick Start: Combined Setup (Rate Limiting + Payments)
-
-Enable both features for a complete monetization and traffic management
-solution:
-
-**1. Add to `.env` file:**
-
-```bash
-# Rate Limiter (uses Redis by default)
-ENABLE_RATE_LIMITER=true
-RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
-RATE_LIMITER_IP_REFILL_PER_SEC=20
-RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
-RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
-
-# X402 Payments (choose testnet or mainnet)
-ENABLE_X_402_USDC_DATA_EGRESS=true
-X_402_USDC_NETWORK=base-sepolia  # or 'base' for mainnet
-X_402_USDC_WALLET_ADDRESS=0xYOUR_WALLET
-X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
-X_402_USDC_PER_BYTE_PRICE=0.0000000001
-
-# Integration: paid tier gets 10x capacity
-X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
-```
-
-**2. Test the complete flow:**
-
-```bash
-# 1. Hit rate limit with free tier
-for i in {1..200}; do curl http://localhost:3000/TX_ID; done
-
-# 2. Make a payment (using x402-fetch wrapper)
-npm run x402:fetch -- TX_ID
-
-# 3. Bucket is now topped off with paid tokens (10x multiplier)
-# 4. Continue accessing with paid tier limits
-```
 
 ## Rate Limiter Deep Dive
 
@@ -593,6 +572,12 @@ rate(rate_limit_tokens_consumed_total{bucket_type="resource",token_type="regular
 ```
 
 ## X402 Payment Protocol Deep Dive
+
+**⚠️ IMPORTANT**: X402 **requires** the rate limiter to be enabled
+(`ENABLE_RATE_LIMITER=true`). The payment protocol is not a standalone feature -
+it is an extension of the rate limiting system. 402 Payment Required responses
+are only sent when rate limits are exceeded. Without the rate limiter, x402
+payments will not function.
 
 ### Concepts
 
@@ -1056,6 +1041,10 @@ X-Payment-Response: <base64-encoded-settlement-result>
 **Testnet:**
 
 ```bash
+# Rate limiter (required for x402)
+ENABLE_RATE_LIMITER=true
+
+# X402 Payments
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base-sepolia
 X_402_USDC_WALLET_ADDRESS=0xYOUR_TESTNET_WALLET
@@ -1065,6 +1054,10 @@ X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
 **Mainnet (with Onramp integration):**
 
 ```bash
+# Rate limiter (required for x402)
+ENABLE_RATE_LIMITER=true
+
+# X402 Payments
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
@@ -1078,6 +1071,10 @@ CDP_API_KEY_ID=your_api_key_id
 **Mainnet (without Onramp):**
 
 ```bash
+# Rate limiter (required for x402)
+ENABLE_RATE_LIMITER=true
+
+# X402 Payments
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
@@ -1290,6 +1287,34 @@ easy USDC purchase), not for facilitator authentication.
 - Check Redis logs: `docker-compose logs redis`
 
 ### X402 Payment Issues
+
+#### Paywall Never Appears / 402 Responses Not Sent
+
+**Symptom**: X402 is enabled but requests never return 402 Payment Required
+responses
+
+**Possible causes:**
+
+1. Rate limiter not enabled (`ENABLE_RATE_LIMITER=false`)
+2. Rate limits not being exceeded
+3. Payment processor not initialized
+
+**Solutions:**
+
+- **Verify both features enabled**:
+  ```bash
+  # Both must be true
+  grep ENABLE_RATE_LIMITER .env
+  grep ENABLE_X_402_USDC_DATA_EGRESS .env
+  ```
+- **Verify rate limits are being exceeded**: Make enough requests to exceed the
+  configured limits. X402 only sends 402 responses when rate limits are
+  exceeded.
+- **Check logs** for payment processor initialization:
+  ```bash
+  grep -i "payment processor" logs/core.log
+  ```
+- Remember: X402 requires the rate limiter. It is not a standalone feature.
 
 #### Payment Verification Failed
 
