@@ -115,6 +115,14 @@ that provide metadata about the resolution process, including the resolved
 [item ID](#item-id), TTL (Time To Live), process ID, and [undername](#undername)
 information.
 
+**Rate Limiter Token Types** - The rate limiter tracks two separate token pools:
+**paid tokens** (purchased through micropayments) and **regular tokens** (replenished
+over time). When consuming tokens, regular tokens are consumed first, then paid tokens.
+Paid tokens act as overflow capacity and are only used when regular tokens are exhausted.
+Regular tokens refill at a configured rate, while paid tokens only accumulate through
+payment and do not refill automatically. See CHANGELOG for details on the Token
+Consumption Priority change.
+
 ## Databases
 
 **Bundles Database** - SQLite database storing ANS-104 bundle metadata,

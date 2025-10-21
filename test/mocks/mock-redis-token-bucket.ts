@@ -48,6 +48,9 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
   /**
    * Simulates the Redis Lua script for getOrCreateBucketAndConsume
    * Creates/refills bucket and attempts to consume tokens atomically
+   *
+   * @returns BucketConsumptionResult with bucket state, consumption breakdown
+   *          (paidConsumed, regularConsumed), and success status
    */
   async getOrCreateBucketAndConsume(
     key: string,
@@ -132,21 +135,61 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
       actualTokensNeeded = Math.max(1, Math.ceil(bucket.contentLength / 1024));
     }
 
-    // Attempt to consume actual tokens needed
+    // Ensure paidTokens field exists (for backward compatibility)
+    if (bucket.paidTokens === undefined) {
+      bucket.paidTokens = 0;
+    }
+
+    // Attempt to consume actual tokens needed, prioritizing regular tokens first
     let consumed = 0;
+    let paidConsumed = 0;
+    let regularConsumed = 0;
     let success = false;
+
     if (actualTokensNeeded === 0) {
       // No tokens needed, always succeed
       success = true;
     } else if (bucket.tokens >= actualTokensNeeded) {
-      // Sufficient tokens - consume them
-      bucket.tokens = bucket.tokens - actualTokensNeeded;
+      // Sufficient regular tokens to cover entire request
+      bucket.tokens -= actualTokensNeeded;
+      regularConsumed = actualTokensNeeded;
+      paidConsumed = 0;
       consumed = actualTokensNeeded;
       success = true;
+    } else if (bucket.tokens > 0) {
+      // Partial regular tokens available, need to use paid tokens too
+      regularConsumed = bucket.tokens;
+      const remainingNeeded = actualTokensNeeded - regularConsumed;
+
+      if (bucket.paidTokens >= remainingNeeded) {
+        // Sufficient paid tokens for the remainder
+        bucket.tokens = 0;
+        bucket.paidTokens -= remainingNeeded;
+        paidConsumed = remainingNeeded;
+        consumed = actualTokensNeeded;
+        success = true;
+      } else {
+        // Insufficient total tokens - fail the request (no partial consumption)
+        success = false;
+        consumed = 0;
+        paidConsumed = 0;
+        regularConsumed = 0;
+      }
     } else {
-      // Insufficient tokens - fail the consumption (don't go negative in atomic operation)
-      success = false;
-      consumed = 0;
+      // No regular tokens, consume from paid tokens only
+      if (bucket.paidTokens >= actualTokensNeeded) {
+        bucket.paidTokens -= actualTokensNeeded;
+        paidConsumed = actualTokensNeeded;
+        regularConsumed = 0;
+        consumed = actualTokensNeeded;
+        success = true;
+      } else {
+        // Insufficient tokens - fail the consumption (don't go negative in atomic operation)
+        success = false;
+        consumed = 0;
+        paidConsumed = 0;
+        regularConsumed = 0;
+      }
     }
 
     // Set TTL and save bucket
@@ -156,30 +199,97 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     return {
       bucket,
       consumed,
+      paidConsumed,
+      regularConsumed,
       success,
     };
   }
 
   /**
    * Simulates the Redis Lua script for consumeTokens
-   * Consumes tokens from the bucket
+   * Consumes tokens from the bucket, prioritizing regular tokens first
+   *
+   * INVARIANT: paidTokens must never go negative
+   * Regular tokens can go negative (over-consumption), but paid tokens cannot
+   *
+   * @returns BucketConsumptionResult with bucket state, consumption breakdown
+   *          (paidConsumed, regularConsumed), and success status
    */
   async consumeTokens(
     key: string,
     tokensToConsume: number,
     ttlSeconds: number,
     contentLength?: number,
-  ): Promise<number> {
+  ): Promise<BucketConsumptionResult> {
     this.callCounts.consumeTokens++;
 
     const bucket = this.buckets.get(key);
     if (!bucket) {
-      return -1; // Bucket doesn't exist
+      // Return error state if bucket doesn't exist
+      return {
+        bucket: {
+          key,
+          tokens: 0,
+          paidTokens: 0,
+          lastRefill: 0,
+          capacity: 0,
+          refillRate: 0,
+        },
+        consumed: 0,
+        paidConsumed: 0,
+        regularConsumed: 0,
+        success: false,
+      };
     }
 
-    // Consume tokens (can go negative in real implementation)
-    // Note: We no longer refill tokens here or update lastRefill - that's only done in getOrCreateBucket
-    bucket.tokens = bucket.tokens - tokensToConsume;
+    // Ensure paidTokens field exists (for backward compatibility)
+    if (bucket.paidTokens === undefined) {
+      bucket.paidTokens = 0;
+    }
+
+    let paidConsumed = 0;
+    let regularConsumed = 0;
+    let success = true;
+
+    if (tokensToConsume > 0) {
+      // Positive cost: consume tokens prioritizing regular first
+      if (bucket.tokens >= tokensToConsume) {
+        // Sufficient regular tokens
+        bucket.tokens -= tokensToConsume;
+        regularConsumed = tokensToConsume;
+      } else if (bucket.tokens > 0) {
+        // Partial regular, remainder from paid
+        const tempRegularConsumed = bucket.tokens;
+        const remainder = tokensToConsume - tempRegularConsumed;
+
+        // Validate sufficient paid tokens before consuming
+        if (bucket.paidTokens >= remainder) {
+          // Sufficient paid tokens for remainder
+          bucket.tokens = 0;
+          bucket.paidTokens -= remainder;
+          paidConsumed = remainder;
+          regularConsumed = tempRegularConsumed;
+        } else {
+          // Insufficient paid tokens - fail without consuming (no partial consumption)
+          success = false;
+          // Don't modify bucket.tokens, bucket.paidTokens, or consumption counters
+        }
+      } else {
+        // No regular tokens, validate and use paid only
+        if (bucket.paidTokens >= tokensToConsume) {
+          // Sufficient paid tokens
+          bucket.paidTokens -= tokensToConsume;
+          paidConsumed = tokensToConsume;
+        } else {
+          // Insufficient paid tokens - fail without consuming (no partial consumption)
+          success = false;
+          // Don't modify bucket.paidTokens or consumption counters
+        }
+      }
+    } else if (tokensToConsume < 0) {
+      // Negative cost: refund tokens (return to regular pool)
+      bucket.tokens -= tokensToConsume; // subtract negative = add
+    }
 
     // Store content length if provided (for resource buckets)
     if (contentLength !== undefined) {
@@ -190,7 +300,13 @@ export class MockRedisTokenBucketClient implements RateLimiterRedisClient {
     this.setTTL(key, ttlSeconds * 1000);
     this.buckets.set(key, bucket);
 
-    return bucket.tokens;
+    return {
+      bucket,
+      consumed: paidConsumed + regularConsumed,
+      paidConsumed,
+      regularConsumed,
+      success,
+    };
   }
 
   /**

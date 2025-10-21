@@ -1205,6 +1205,11 @@ export const AO_ANT_HYPERBEAM_URL = env.varOrUndefined('AO_ANT_HYPERBEAM_URL');
 export const ENABLE_RATE_LIMITER =
   env.varOrDefault('ENABLE_RATE_LIMITER', 'false') === 'true';
 
+export const RATE_LIMITER_TYPE = env.varOrDefault(
+  'RATE_LIMITER_TYPE',
+  'memory',
+) as 'memory' | 'redis';
+
 export const RATE_LIMITER_CACHE_TTL_SECONDS = 60 * 90; // 90 mins
 
 export const RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET = +env.varOrDefault(
@@ -1232,6 +1237,14 @@ export const RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST =
     .varOrUndefined('RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST')
     ?.split(',')
     .map((ip) => ip.trim()) ?? [];
+
+// ArNS names to exclude from rate limiting
+export const RATE_LIMITER_ARNS_ALLOWLIST =
+  env
+    .varOrUndefined('RATE_LIMITER_ARNS_ALLOWLIST')
+    ?.split(',')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0) ?? [];
 
 export const RATE_LIMITER_REDIS_ENDPOINT = env.varOrDefault(
   'RATE_LIMITER_REDIS_ENDPOINT',
@@ -1292,6 +1305,23 @@ export const X_402_USDC_SETTLE_TIMEOUT_MS = +env.varOrDefault(
 
 // Paywall customization (optional)
 export const X_402_CDP_CLIENT_KEY = env.varOrUndefined('X_402_CDP_CLIENT_KEY');
+
+// CDP Secret API Key for session token generation (optional)
+// Load from file if CDP_API_KEY_SECRET_FILE is set, otherwise use CDP_API_KEY_SECRET
+const CDP_API_KEY_SECRET_FILE = env.varOrUndefined('CDP_API_KEY_SECRET_FILE');
+
+if (CDP_API_KEY_SECRET_FILE !== undefined) {
+  if (!existsSync(CDP_API_KEY_SECRET_FILE)) {
+    throw new Error(
+      `CDP_API_KEY_SECRET_FILE not found: ${CDP_API_KEY_SECRET_FILE}`,
+    );
+  }
+  // Set as environment variable so x402-express session-token handler can access it
+  process.env.CDP_API_KEY_SECRET = readFileSync(CDP_API_KEY_SECRET_FILE)
+    .toString()
+    .trim();
+}
+
 export const X_402_APP_NAME = env.varOrDefault(
   'X_402_APP_NAME',
   'AR.IO Gateway',

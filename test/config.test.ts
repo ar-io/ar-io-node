@@ -92,3 +92,62 @@ describe('Config auto-unbundling behavior', () => {
     assert.strictEqual(config.ANS104_DOWNLOAD_WORKERS, 10);
   });
 });
+
+describe('Rate limiter ArNS allowlist configuration', () => {
+  it('should return empty array when no allowlist is set', async () => {
+    delete process.env.RATE_LIMITER_ARNS_ALLOWLIST;
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.deepStrictEqual(config.RATE_LIMITER_ARNS_ALLOWLIST, []);
+  });
+
+  it('should parse allowlist from comma-separated base names', async () => {
+    process.env.RATE_LIMITER_ARNS_ALLOWLIST = 'name1, name2, name3';
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.deepStrictEqual(config.RATE_LIMITER_ARNS_ALLOWLIST, [
+      'name1',
+      'name2',
+      'name3',
+    ]);
+  });
+
+  it('should parse allowlist with full names (including undernames)', async () => {
+    process.env.RATE_LIMITER_ARNS_ALLOWLIST =
+      'basename1, subdomain_basename2, app_service_basename3';
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.deepStrictEqual(config.RATE_LIMITER_ARNS_ALLOWLIST, [
+      'basename1',
+      'subdomain_basename2',
+      'app_service_basename3',
+    ]);
+  });
+
+  it('should support mix of base names and full names', async () => {
+    process.env.RATE_LIMITER_ARNS_ALLOWLIST =
+      'myapp, special_myapp, anotherapp';
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.deepStrictEqual(config.RATE_LIMITER_ARNS_ALLOWLIST, [
+      'myapp',
+      'special_myapp',
+      'anotherapp',
+    ]);
+  });
+
+  it('should filter out empty strings from allowlist', async () => {
+    process.env.RATE_LIMITER_ARNS_ALLOWLIST = 'name1, , name2, ,';
+
+    const config = await import(`../src/config.js?t=${Date.now()}`);
+
+    assert.deepStrictEqual(config.RATE_LIMITER_ARNS_ALLOWLIST, [
+      'name1',
+      'name2',
+    ]);
+  });
+});
