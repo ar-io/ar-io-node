@@ -133,24 +133,24 @@ The x402 integration supports two Base blockchain networks:
 
 ### Use Cases
 
-**Rate Limiter Only:**
+**Rate Limiter Only (No Payments):**
 
 - Protect gateway resources from abuse
 - Ensure fair access across users
 - Manage operational costs
+- Simple configuration without payment infrastructure
 
-**X402 Payments Only:**
+**Rate Limiter + X402 Payments (Recommended for Production):**
 
-- Monetize data egress
-- Cover infrastructure costs
-- Generate revenue from content delivery
-
-**Combined (Recommended):**
-
-- Free tier for casual users
-- Premium tier for power users
+- Monetize data egress to cover infrastructure costs
+- Free tier for casual users (rate limited)
+- Premium tier for power users (pay to bypass limits)
 - Flexible traffic management
 - Sustainable business model
+- Generate revenue from content delivery
+
+**Note:** X402 payments require the rate limiter to be enabled. There is no
+"payments only" configuration.
 
 ## Getting Started
 
