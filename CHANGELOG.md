@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Chunk Endpoint Payment and Rate Limiting**: Added x402 payment and rate
+  limiting support to `GET /chunk/:offset` endpoint for gateway monetization
+  and traffic control:
+  - Uses fixed size assumption (~360 KiB) for predictable pricing without
+    waiting for chunk retrieval
+  - Configurable via `CHUNK_GET_BASE64_SIZE_BYTES` environment variable
+    (default: 368,640 bytes)
+  - HEAD requests consume zero tokens
+  - 304 Not Modified responses consume zero tokens
+  - Compatible with all existing x402 and rate limiter configuration
 - **Configuration Validation**: Added startup validation that ensures
   `ENABLE_RATE_LIMITER=true` when `ENABLE_X_402_USDC_DATA_EGRESS=true`. The
   application will fail to start with a clear error message if x402 is enabled
@@ -25,12 +35,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Payment and Rate Limiting Utilities**: Refactored `checkPaymentAndRateLimits()`
+  to accept simple `contentSize` and `contentType` parameters instead of complex
+  `dataAttributes` objects, improving code reusability and testability. Exported
+  `calculateContentSize()` function for shared use across endpoints
 - **x402 and Rate Limiter Documentation**: Improved and clarified
   `docs/x402-and-rate-limiting.md` with concrete structural changes:
   - Replaced docker-compose override examples with simpler `.env` file
     configurations
   - Added secrets volume mount to `docker-compose.yaml` for file-based secret
     management
+  - Updated rate limited endpoints list to include `GET /chunk/:offset`
+  - Added note explaining chunk endpoint fixed size pricing model
 - **Glossary**: Added new "Rate Limiter & x402 Payment Protocol" section
   consolidating related terms:
   - Facilitator - Payment verification and settlement service

@@ -8,6 +8,7 @@
 import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
 import {
+  CHUNK_GET_BASE64_SIZE_BYTES,
   CHUNK_POST_ABORT_TIMEOUT_MS,
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
   CHUNK_POST_MIN_SUCCESS_COUNT,
@@ -19,6 +20,12 @@ import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
 import { getRequestAttributes } from '../data/handlers.js';
+import { RateLimiter } from '../../limiter/types.js';
+import { PaymentProcessor } from '../../payments/types.js';
+import {
+  checkPaymentAndRateLimits,
+  adjustRateLimitTokens,
+} from '../../handlers/data-handler-utils.js';
 
 const handleIfNoneMatch = (req: Request, res: Response): boolean => {
   const ifNoneMatch = req.get('if-none-match');
@@ -37,10 +44,14 @@ const handleIfNoneMatch = (req: Request, res: Response): boolean => {
 export const createChunkOffsetHandler = ({
   chunkSource,
   txOffsetSource,
+  rateLimiter,
+  paymentProcessor,
   log,
 }: {
   chunkSource: ChunkByAnySource;
   txOffsetSource: TxOffsetSource;
+  rateLimiter?: RateLimiter;
+  paymentProcessor?: PaymentProcessor;
   log: Logger;
 }) => {
   return asyncHandler(async (request: Request, response: Response) => {
@@ -114,6 +125,58 @@ export const createChunkOffsetHandler = ({
 
       // Extract request attributes for hop tracking
       const requestAttributes = getRequestAttributes(request, response);
+
+      // === PAYMENT AND RATE LIMIT CHECK ===
+      // Only perform checks if at least one enforcement mechanism is configured
+      if (rateLimiter !== undefined || paymentProcessor !== undefined) {
+        // For HEAD requests, use zero tokens since no body is sent
+        // For GET requests, use fixed size assumption
+        const contentSize =
+          request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
+
+        const limitCheck = await checkPaymentAndRateLimits({
+          req: request,
+          res: response,
+          id: finalId,
+          contentSize,
+          contentType: undefined, // Chunks don't have content type
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          parentSpan: span,
+        });
+
+        if (!limitCheck.allowed) {
+          // Payment required (402) or rate limit exceeded (429) response already sent
+          return;
+        }
+
+        // Schedule token adjustment based on actual response size
+        if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
+          response.on('finish', () => {
+            // Calculate actual response size based on status code
+            let actualSize = 0;
+            if (response.statusCode === 304 || request.method === 'HEAD') {
+              // 304 Not Modified or HEAD request - no body sent
+              actualSize = 0;
+            } else if (response.statusCode === 200) {
+              // GET request with body - calculate JSON response size
+              // This will be calculated after chunk is retrieved
+              const contentLength = response.getHeader('content-length');
+              if (contentLength !== undefined) {
+                actualSize = parseInt(contentLength.toString(), 10);
+              }
+            }
+
+            adjustRateLimitTokens({
+              req: request,
+              responseSize: actualSize,
+              initialResult: limitCheck,
+              rateLimiter,
+            });
+          });
+        }
+      }
 
       // composite-chunk-source returns chunk metadata and chunk data
       let chunk: Chunk | undefined = undefined;

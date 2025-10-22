@@ -32,6 +32,7 @@ import { PaymentProcessor } from '../../payments/types.js';
 import {
   checkPaymentAndRateLimits,
   adjustRateLimitTokens,
+  calculateContentSize,
 } from '../../handlers/data-handler-utils.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
@@ -662,14 +663,23 @@ export const createRawDataHandler = ({
 
         // === PAYMENT AND RATE LIMIT CHECK ===
         // Only perform checks if at least one enforcement mechanism is configured
-        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
+        if (
+          (rateLimiter !== undefined || paymentProcessor !== undefined) &&
+          dataAttributes !== undefined
+        ) {
+          // Calculate content size accounting for range requests
+          const contentSize = calculateContentSize(
+            dataAttributes.size,
+            req.headers.range,
+          );
+
           const limitCheck = await checkPaymentAndRateLimits({
             req,
             res,
             id,
-            dataAttributes,
+            contentSize,
+            contentType: dataAttributes.contentType,
             requestAttributes,
-            rangeHeader: req.headers.range,
             rateLimiter,
             paymentProcessor,
             parentSpan: span,
@@ -869,14 +879,23 @@ const sendManifestResponse = async ({
 
     // === PAYMENT AND RATE LIMIT CHECK ===
     // Only perform checks if at least one enforcement mechanism is configured
-    if (rateLimiter !== undefined || paymentProcessor !== undefined) {
+    if (
+      (rateLimiter !== undefined || paymentProcessor !== undefined) &&
+      dataAttributes !== undefined
+    ) {
+      // Calculate content size accounting for range requests
+      const contentSize = calculateContentSize(
+        dataAttributes.size,
+        req.headers.range,
+      );
+
       const limitCheck = await checkPaymentAndRateLimits({
         req,
         res,
         id: resolvedId,
-        dataAttributes,
+        contentSize,
+        contentType: dataAttributes.contentType,
         requestAttributes,
-        rangeHeader: req.headers.range,
         rateLimiter,
         paymentProcessor,
         parentSpan,
@@ -1190,14 +1209,23 @@ export const createDataHandler = ({
 
         // === PAYMENT AND RATE LIMIT CHECK ===
         // Only perform checks if at least one enforcement mechanism is configured
-        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
+        if (
+          (rateLimiter !== undefined || paymentProcessor !== undefined) &&
+          dataAttributes !== undefined
+        ) {
+          // Calculate content size accounting for range requests
+          const contentSize = calculateContentSize(
+            dataAttributes.size,
+            req.headers.range,
+          );
+
           const limitCheck = await checkPaymentAndRateLimits({
             req,
             res,
             id,
-            dataAttributes,
+            contentSize,
+            contentType: dataAttributes.contentType,
             requestAttributes,
-            rangeHeader: req.headers.range,
             rateLimiter,
             paymentProcessor,
             parentSpan: span,

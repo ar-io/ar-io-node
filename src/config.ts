@@ -389,6 +389,13 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
 
+// Assumed size for base64-encoded chunk GET responses (used for x402 payment and rate limiting)
+// Default: 368,640 bytes (360 KiB) = 256 KiB raw data * 1.4 base64url encoding overhead
+export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
+  'CHUNK_GET_BASE64_SIZE_BYTES',
+  '368640',
+);
+
 // Arweave network peer post success goal
 // setting to 0 means this behaviour is disabled.
 export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
