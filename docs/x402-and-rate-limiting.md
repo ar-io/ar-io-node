@@ -1591,34 +1591,7 @@ sudo chmod 600 /run/secrets/cdp_secret_key
 sudo chown root:root /run/secrets/cdp_secret_key
 ```
 
-### Example 3: Production with Alternative Facilitator (No CDP Key)
-
-**Use case**: Mainnet without CDP API key requirement
-
-**docker-compose.override.yml:**
-
-```yaml
-services:
-  core:
-    environment:
-      # Rate limiter
-      - ENABLE_RATE_LIMITER=true
-      - RATE_LIMITER_TYPE=redis
-      - RATE_LIMITER_REDIS_ENDPOINT=redis://redis:6379
-
-      # X402 payments (mainnet with alternative facilitator)
-      - ENABLE_X_402_USDC_DATA_EGRESS=true
-      - X_402_USDC_NETWORK=base
-      - X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
-      - X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
-      # No CDP key needed!
-      - X_402_USDC_PER_BYTE_PRICE=0.0000000001
-
-      # Integration
-      - X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
-```
-
-### Example 4: Client-Side Payment Integration
+### Example 3: Client-Side Payment Integration
 
 **TypeScript/JavaScript client:**
 
@@ -1663,44 +1636,7 @@ const data = await downloadData('YOUR_TX_ID');
 console.log(`Downloaded ${data.byteLength} bytes`);
 ```
 
-**Python client (using requests):**
-
-```python
-import requests
-from web3 import Web3
-from eth_account import Account
-from eth_account.messages import encode_structured_data
-import base64
-import json
-
-def fetch_with_payment(url, private_key):
-    # Initial request to get payment requirements
-    response = requests.get(url)
-
-    if response.status_code == 402:
-        # Parse payment requirements
-        requirements = response.json()['accepts'][0]
-
-        # Sign payment (EIP-712)
-        account = Account.from_key(private_key)
-        # ... (implement EIP-712 signing based on requirements)
-
-        # Retry with payment header
-        payment_header = base64.b64encode(json.dumps({
-            # ... payment payload
-        }).encode()).decode()
-
-        response = requests.get(url, headers={
-            'X-Payment': payment_header
-        })
-
-    return response.content
-
-# Usage
-data = fetch_with_payment('https://gateway.example.com/TX_ID', 'YOUR_PRIVATE_KEY')
-```
-
-### Example 5: Monitoring Dashboard (Prometheus + Grafana)
+### Example 4: Monitoring Dashboard (Prometheus + Grafana)
 
 **Prometheus queries:**
 
