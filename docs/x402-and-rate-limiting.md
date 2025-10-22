@@ -36,15 +36,29 @@ payments.
 
 ### What is x402?
 
-**x402** is Coinbase's payment protocol for HTTP API monetization. It enables
-micropayments using USDC (USD Coin) on the Base blockchain network. The AR.IO
-Gateway integrates x402 to:
+**x402** is an open-source payment protocol built by Coinbase that leverages the
+HTTP 402 "Payment Required" status code to enable frictionless cryptocurrency
+payments for web APIs. The protocol is chain-agnostic and token-agnostic,
+allowing developers to accept payments without traditional friction points like
+account creation, email verification, or OAuth flows.
+
+Key features of the x402 protocol:
+
+- **Zero protocol fees**: No intermediaries or payment processing costs
+- **Fast settlement**: Payments settle in approximately 2 seconds
+- **Minimal integration**: Simple HTTP status codes and headers
+- **Privacy-focused**: No account creation or personal information required
+
+**AR.IO Gateway Implementation:**
+
+The AR.IO Gateway integrates x402 using USDC (USD Coin) on the Base blockchain
+network to:
 
 - Monetize data egress with per-byte pricing
 - Provide premium rate limit tiers for paying users
 - Support both browser-based payments (with visual paywall) and programmatic API
   payments
-- Verify and settle payments using Coinbase facilitators
+- Verify and settle payments using x402 facilitators
 
 **Important**: x402 **requires the rate limiter to be enabled**. Payment
 requests (402 responses) are only sent when rate limits are exceeded. The x402
