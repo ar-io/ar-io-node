@@ -895,7 +895,7 @@ Tokens consumed in this order:
 1. **Regular tokens first** (consumed before paid tokens)
 2. **Paid tokens second** (used when regular tokens insufficient)
 
-This prioritization (changed in Release 55):
+This prioritization:
 
 - Maximizes value to paying users (paid tokens last longer)
 - Paid tokens act as overflow capacity rather than primary pool
