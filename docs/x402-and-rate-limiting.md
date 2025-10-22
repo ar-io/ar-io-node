@@ -1,4 +1,4 @@
-# X402 Payment Protocol and Rate Limiting
+# x402 Payment Protocol and Rate Limiting
 
 This guide covers the AR.IO Gateway's x402 payment protocol integration and rate
 limiting capabilities, including how to configure and use these features for
@@ -9,7 +9,7 @@ traffic management and content monetization.
 - [Overview](#overview)
 - [Getting Started](#getting-started)
 - [Rate Limiter Deep Dive](#rate-limiter-deep-dive)
-- [X402 Payment Protocol Deep Dive](#x402-payment-protocol-deep-dive)
+- [x402 Payment Protocol Deep Dive](#x402-payment-protocol-deep-dive)
 - [Integration Topics](#integration-topics)
 - [Reference](#reference)
 - [Troubleshooting](#troubleshooting)
@@ -34,7 +34,7 @@ The rate limiter tracks data egress in "tokens" where **1 token = 1 KiB (1,024
 bytes)**. Buckets refill automatically over time and can be topped off with
 payments.
 
-### What is X402?
+### What is x402?
 
 **x402** is Coinbase's payment protocol for HTTP API monetization. It enables
 micropayments using USDC (USD Coin) on the Base blockchain network. The AR.IO
@@ -46,7 +46,7 @@ Gateway integrates x402 to:
   payments
 - Verify and settle payments using Coinbase facilitators
 
-**Important**: X402 **requires the rate limiter to be enabled**. Payment
+**Important**: x402 **requires the rate limiter to be enabled**. Payment
 requests (402 responses) are only sent when rate limits are exceeded. The x402
 protocol is not a standalone feature - it works as an extension of the rate
 limiting system to allow users to purchase additional capacity.
@@ -79,7 +79,7 @@ and `ENABLE_X_402_USDC_DATA_EGRESS=true`). Here's how they integrate:
          │
          ▼
    ┌──────────────────┐      No      ┌────────────────┐
-   │ X402 Payment     ├─────────────▶│ Check Regular  │
+   │ x402 Payment     ├─────────────▶│ Check Regular  │
    │ Header Present?  │              │ Rate Limits    │
    └────────┬─────────┘              └────────┬───────┘
             │ Yes                             │
@@ -140,7 +140,7 @@ The x402 integration supports two Base blockchain networks:
 - Manage operational costs
 - Simple configuration without payment infrastructure
 
-**Rate Limiter + X402 Payments (Recommended for Production):**
+**Rate Limiter + x402 Payments (Recommended for Production):**
 
 - Monetize data egress to cover infrastructure costs
 - Free tier for casual users (rate limited)
@@ -149,7 +149,7 @@ The x402 integration supports two Base blockchain networks:
 - Sustainable business model
 - Generate revenue from content delivery
 
-**Note:** X402 payments require the rate limiter to be enabled. There is no
+**Note:** x402 payments require the rate limiter to be enabled. There is no
 "payments only" configuration.
 
 ## Getting Started
@@ -208,9 +208,9 @@ curl http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_cons
 curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
 ```
 
-### Quick Start: Rate Limiting with X402 Payments
+### Quick Start: Rate Limiting with x402 Payments
 
-**Important**: X402 requires the rate limiter to be enabled. Both features must
+**Important**: x402 requires the rate limiter to be enabled. Both features must
 be configured together.
 
 #### Testnet Setup (Development/Testing)
@@ -234,7 +234,7 @@ RATE_LIMITER_IP_REFILL_PER_SEC=20              # ~20 KiB/s refill
 RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000 # ~976 MiB per resource
 RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100       # ~100 KiB/s refill
 
-# X402 Payments (testnet)
+# x402 Payments (testnet)
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base-sepolia
 X_402_USDC_WALLET_ADDRESS=0xYOUR_TESTNET_WALLET
@@ -294,7 +294,7 @@ RATE_LIMITER_IP_REFILL_PER_SEC=20
 RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
 RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
 
-# X402 Payments (mainnet)
+# x402 Payments (mainnet)
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
@@ -566,9 +566,9 @@ rate(rate_limit_tokens_consumed_total{bucket_type="ip",token_type="paid"}[5m])
 rate(rate_limit_tokens_consumed_total{bucket_type="resource",token_type="regular"}[5m])
 ```
 
-## X402 Payment Protocol Deep Dive
+## x402 Payment Protocol Deep Dive
 
-**⚠️ IMPORTANT**: X402 **requires** the rate limiter to be enabled
+**⚠️ IMPORTANT**: x402 **requires** the rate limiter to be enabled
 (`ENABLE_RATE_LIMITER=true`). The payment protocol is not a standalone feature -
 it is an extension of the rate limiting system. 402 Payment Required responses
 are only sent when rate limits are exceeded. Without the rate limiter, x402
@@ -1026,7 +1026,7 @@ X-Payment-Response: <base64-encoded-settlement-result>
 # Rate limiter (required for x402)
 ENABLE_RATE_LIMITER=true
 
-# X402 Payments
+# x402 Payments
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base-sepolia
 X_402_USDC_WALLET_ADDRESS=0xYOUR_TESTNET_WALLET
@@ -1039,7 +1039,7 @@ X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
 # Rate limiter (required for x402)
 ENABLE_RATE_LIMITER=true
 
-# X402 Payments
+# x402 Payments
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
@@ -1156,7 +1156,7 @@ The facilitator provides several security guarantees:
 | `RATE_LIMITER_REDIS_USE_TLS`              | boolean | `false`                                 | Enable TLS for Redis                     |
 | `RATE_LIMITER_REDIS_USE_CLUSTER`          | boolean | `false`                                 | Use Redis cluster mode                   |
 
-#### X402 Variables
+#### x402 Variables
 
 | Variable                               | Type       | Default                        | Description                          |
 | -------------------------------------- | ---------- | ------------------------------ | ------------------------------------ |
@@ -1252,20 +1252,20 @@ easy USDC purchase), not for facilitator authentication.
 - Test Redis connection: `redis-cli -u $RATE_LIMITER_REDIS_ENDPOINT ping`
 - Check Redis logs: `docker-compose logs redis`
 
-### X402 Payment Issues
+### x402 Payment Issues
 
 #### Paywall Never Appears / 402 Responses Not Sent
 
-**Symptom**: X402 is enabled but requests never return 402 Payment Required
+**Symptom**: x402 is enabled but requests never return 402 Payment Required
 responses
 
-**Note**: As of recent versions, the application will **fail to start** if X402
+**Note**: As of recent versions, the application will **fail to start** if x402
 is enabled without the rate limiter. You will see this error:
 
 ```
 Error: ENABLE_X_402_USDC_DATA_EGRESS requires ENABLE_RATE_LIMITER to be enabled.
-X402 payments are not a standalone feature - they work as an extension of the
-rate limiting system. Set ENABLE_RATE_LIMITER=true to enable X402 payments.
+x402 payments are not a standalone feature - they work as an extension of the
+rate limiting system. Set ENABLE_RATE_LIMITER=true to enable x402 payments.
 ```
 
 If your application starts successfully, the rate limiter is properly enabled.
@@ -1278,7 +1278,7 @@ If your application starts successfully, the rate limiter is properly enabled.
 **Solutions:**
 
 - **Verify rate limits are being exceeded**: Make enough requests to exceed the
-  configured limits. X402 only sends 402 responses when rate limits are
+  configured limits. x402 only sends 402 responses when rate limits are
   exceeded.
 - **Check logs** for payment processor initialization:
   ```bash
@@ -1480,7 +1480,7 @@ services:
       - RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
       - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
 
-      # X402 payments (testnet)
+      # x402 payments (testnet)
       - ENABLE_X_402_USDC_DATA_EGRESS=true
       - X_402_USDC_NETWORK=base-sepolia
       - X_402_USDC_WALLET_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
@@ -1528,7 +1528,7 @@ services:
       - RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
       - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
 
-      # X402 payments (mainnet with Onramp integration)
+      # x402 payments (mainnet with Onramp integration)
       - ENABLE_X_402_USDC_DATA_EGRESS=true
       - X_402_USDC_NETWORK=base
       - X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
@@ -1650,7 +1650,7 @@ topk(10, sum by (domain) (rate(rate_limit_tokens_consumed_total[5m])))
 
 ## Additional Resources
 
-- **X402 Protocol**: https://docs.cdp.coinbase.com/x402/
+- **x402 Protocol**: https://docs.cdp.coinbase.com/x402/
 - **Coinbase Developer Platform**: https://portal.cdp.coinbase.com/
 - **Base Network**: https://base.org/
 - **AR.IO Documentation**: https://docs.ar.io/
