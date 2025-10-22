@@ -832,18 +832,6 @@ the browser paywall. Optional for testnet only.
 
 ### Architecture
 
-#### Payment Processor Implementation
-
-See `src/payments/x402-usdc-processor.ts`:
-
-Key components:
-
-- `calculateRequirements()`: Generates payment requirements from content context
-- `extractPayment()`: Decodes payment from `X-Payment` header
-- `verifyPayment()`: Calls facilitator to verify payment
-- `settlePayment()`: Calls facilitator to settle payment
-- `sendPaymentRequiredResponse()`: Returns 402 with paywall or JSON
-
 #### Integration with Rate Limiter
 
 When both features enabled:
