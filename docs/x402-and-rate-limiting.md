@@ -65,6 +65,21 @@ requests (402 responses) are only sent when rate limits are exceeded. The x402
 protocol is not a standalone feature - it works as an extension of the rate
 limiting system to allow users to purchase additional capacity.
 
+**Rate Limited Endpoints:**
+
+The rate limiter and x402 payment system apply to data egress endpoints:
+
+- **Transaction/Data Item requests**: `/:txid` and `/:txid/path`
+- **Raw data requests**: `/raw/:txid`
+- **ArNS resolved content**: All requests resolved through ArNS names
+- **Farcaster frames**: `/local/farcaster/frame/:txid`
+
+**Not rate limited** (currently):
+
+- GraphQL queries (`/graphql`)
+- Chunk endpoint (`/chunk/:offset`)
+- Administrative endpoints (`/ar-io/*`)
+
 ### How They Work Together
 
 To use x402 payments, you must enable both features (`ENABLE_RATE_LIMITER=true`
