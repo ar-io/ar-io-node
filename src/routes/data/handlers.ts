@@ -34,6 +34,10 @@ import {
   adjustRateLimitTokens,
   calculateContentSize,
 } from '../../handlers/data-handler-utils.js';
+import {
+  buildMultipartResponseParts,
+  generateBoundary,
+} from '../../lib/http-range-utils.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
@@ -57,57 +61,6 @@ const handleIfNoneMatch = (req: Request, res: Response): boolean => {
     return true;
   }
   return false;
-};
-
-/**
- * Calculate actual response size based on data size and optional range header
- * For range requests, includes multipart boundaries and headers
- */
-const calculateResponseSize = (
-  dataSize: number,
-  rangeHeader?: string,
-): number => {
-  if (rangeHeader === undefined) {
-    return dataSize; // Full content
-  }
-
-  const ranges = rangeParser(dataSize, rangeHeader);
-
-  // Malformed or unsatisfiable range - would send full content or error
-  if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
-    return dataSize;
-  }
-
-  // Single range: just the range size
-  if (ranges.length === 1) {
-    return ranges[0].end - ranges[0].start + 1;
-  }
-
-  // Multiple ranges: calculate total including boundaries and headers
-  // This matches the logic in handleRangeRequest
-  const boundary = '--------------------------' + '0'.repeat(24); // Approximate boundary size
-  const partBoundary = `--${boundary}\r\n`;
-  const finalBoundary = `--${boundary}--\r\n`;
-  const blankLine = '\r\n';
-
-  let totalSize = 0;
-
-  for (const range of ranges) {
-    totalSize += Buffer.byteLength(partBoundary);
-    totalSize += Buffer.byteLength(
-      `Content-Type: application/octet-stream\r\n`,
-    );
-    totalSize += Buffer.byteLength(
-      `Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`,
-    );
-    totalSize += Buffer.byteLength(blankLine);
-    totalSize += range.end - range.start + 1; // Actual data
-    totalSize += Buffer.byteLength(blankLine);
-  }
-
-  totalSize += Buffer.byteLength(finalBoundary);
-
-  return totalSize;
 };
 
 /**
@@ -143,10 +96,30 @@ export async function handleDataRateLimitingAndPayment({
     return true;
   }
 
+  // Determine actual content type that will be used in response
+  const contentType =
+    dataAttributes?.contentType ??
+    data.sourceContentType ??
+    'application/octet-stream';
+
+  // Generate boundary once for multipart requests (random but consistent within request)
+  const boundary =
+    req.headers.range !== undefined ? generateBoundary() : undefined;
+
+  // Store boundary in request for use in handleRangeRequest
+  if (boundary !== undefined) {
+    (req as any).multipartBoundary = boundary;
+  }
+
   // Calculate content size accounting for range requests
   // Prefer data.size (always available) over dataAttributes.size (only when indexed)
   const size = data.size ?? dataAttributes?.size ?? 0;
-  const contentSize = calculateContentSize(size, req.headers.range);
+  const contentSize = calculateContentSize(
+    size,
+    req.headers.range,
+    contentType,
+    boundary,
+  );
 
   const limitCheck = await checkPaymentAndRateLimits({
     req,
@@ -167,7 +140,9 @@ export async function handleDataRateLimitingAndPayment({
 
   // Schedule token adjustment based on actual response size
   if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-    const dataSize = data.size; // Capture size for closure
+    // Capture values for closure
+    const calculatedContentSize = contentSize;
+
     // Adjust tokens after response is sent (run in background)
     res.on('finish', () => {
       // Check response status - don't charge for 304 or HEAD responses
@@ -177,8 +152,8 @@ export async function handleDataRateLimitingAndPayment({
         // Note: adjustTokens will still consume minimum 1 token to prevent spam
         responseSize = 0;
       } else {
-        // Calculate actual response size from data.size and range header
-        responseSize = calculateResponseSize(dataSize, req.headers.range);
+        // Reuse the already-calculated content size (no recalculation needed)
+        responseSize = calculatedContentSize;
       }
 
       adjustRateLimitTokens({
@@ -448,8 +423,6 @@ const handleRangeRequest = async ({
 
     setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
 
-    // FIXME: calculate Content-Length appropriately
-
     if (isSingleRange) {
       const totalSize = data.size;
       const start = ranges[0].start;
@@ -484,18 +457,9 @@ const handleRangeRequest = async ({
 
       rangeData.stream.pipe(res);
     } else {
-      const generateBoundary = () => {
-        // This generates a 50 character boundary similar to those used by Firefox.
-        // They are optimized for boyer-moore parsing.
-        // https://github.com/rexxars/byte-range-stream/blob/98a8e06e46193afc45219b63bc2dc5d9c7f77459/src/index.js#L115-L124
-        let boundary = '--------------------------';
-        for (let i = 0; i < 24; i++) {
-          boundary += Math.floor(Math.random() * 10).toString(16);
-        }
+      // Get boundary from request (stored by data-handler-utils) or generate new one
+      const boundary = (req as any).multipartBoundary ?? generateBoundary();
 
-        return boundary;
-      };
-      const boundary = generateBoundary();
       res.status(206); // Partial Content
       res.setHeader(
         'Content-Type',
@@ -503,26 +467,13 @@ const handleRangeRequest = async ({
       );
       res.setHeader('Accept-Ranges', 'bytes');
 
-      // Pre-build all multipart response parts
-      const partBoundary = `--${boundary}\r\n`;
-      const finalBoundary = `--${boundary}--\r\n`;
-      const contentTypeHeader = `Content-Type: ${contentType}\r\n`;
-      const blankLine = '\r\n';
-
-      type ResponsePart = string | { type: 'data'; range: rangeParser.Range };
-      const responseParts: ResponsePart[] = [];
-
-      for (const range of ranges) {
-        responseParts.push(partBoundary);
-        responseParts.push(contentTypeHeader);
-        responseParts.push(
-          `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
-        );
-        responseParts.push(blankLine);
-        responseParts.push({ type: 'data', range });
-        responseParts.push(blankLine);
-      }
-      responseParts.push(finalBoundary);
+      // Build all multipart response parts using utility
+      const responseParts = buildMultipartResponseParts(
+        ranges,
+        data.size,
+        contentType,
+        boundary,
+      );
 
       // Calculate Content-Length from pre-built parts
       let totalLength = 0;
