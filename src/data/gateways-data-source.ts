@@ -21,6 +21,10 @@ import * as metrics from '../metrics.js';
 import * as config from '../config.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
+import {
+  buildRangeHeader,
+  parseContentLength,
+} from '../lib/http-range-utils.js';
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -178,9 +182,10 @@ export class GatewaysDataSource implements ContiguousDataSource {
                   ...requestAttributesHeaders?.headers,
                   ...(region
                     ? {
-                        Range: `bytes=${region.offset}-${
-                          region.offset + region.size - 1
-                        }`,
+                        Range: buildRangeHeader(
+                          region.offset,
+                          region.offset + region.size - 1,
+                        ),
                       }
                     : {}),
                 },
@@ -219,9 +224,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
               }
 
               const stream = response.data;
-              const contentLength = parseInt(
-                response.headers['content-length'],
-              );
+              const contentLength = parseContentLength(response.headers) ?? NaN;
 
               span.setAttributes({
                 'gateway.successful_url': gatewayUrl,

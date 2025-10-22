@@ -26,6 +26,7 @@ import {
   checkPaymentAndRateLimits,
   adjustRateLimitTokens,
 } from '../../handlers/data-handler-utils.js';
+import { parseContentLength } from '../../lib/http-range-utils.js';
 
 const handleIfNoneMatch = (req: Request, res: Response): boolean => {
   const ifNoneMatch = req.get('if-none-match');
@@ -161,10 +162,12 @@ export const createChunkOffsetHandler = ({
               actualSize = 0;
             } else if (response.statusCode === 200) {
               // GET request with body - calculate JSON response size
-              // This will be calculated after chunk is retrieved
-              const contentLength = response.getHeader('content-length');
+              const headers = {
+                'content-length': response.getHeader('content-length'),
+              };
+              const contentLength = parseContentLength(headers);
               if (contentLength !== undefined) {
-                actualSize = parseInt(contentLength.toString(), 10);
+                actualSize = contentLength;
               }
             }
 

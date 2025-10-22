@@ -7,7 +7,6 @@
 
 import { Request, Response } from 'express';
 import { Span } from '@opentelemetry/api';
-import rangeParser from 'range-parser';
 import log from '../log.js';
 import * as config from '../config.js';
 import { startChildSpan } from '../tracing.js';
@@ -23,6 +22,7 @@ import {
   PaymentProcessor,
   PaymentRequirementsContext,
 } from '../payments/types.js';
+import { calculateRangeResponseSize } from '../lib/http-range-utils.js';
 
 /**
  * Parameters for checking payment and rate limits
@@ -65,28 +65,23 @@ export interface AdjustRateLimitTokensParams {
 }
 
 /**
- * Calculate the exact content size accounting for range requests
+ * Calculate the exact content size accounting for range requests.
+ * Uses calculateRangeResponseSize from http-range-utils which properly
+ * accounts for multipart overhead in multiple range requests.
+ *
+ * @param size - Total data size
+ * @param rangeHeader - Range header from request
+ * @param contentType - Content type to use in multipart headers
+ * @param boundary - Optional boundary for multipart (will be generated if needed)
+ * @returns Exact response size including multipart overhead
  */
 export function calculateContentSize(
   size: number,
-  rangeHeader?: string,
+  rangeHeader: string | undefined,
+  contentType: string,
+  boundary?: string,
 ): number {
-  if (rangeHeader === undefined) {
-    return size; // Full content
-  }
-
-  const ranges = rangeParser(size, rangeHeader);
-
-  // Malformed or unsatisfiable range - charge for full content
-  if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
-    return size;
-  }
-
-  // Calculate total bytes across all ranges
-  return ranges.reduce(
-    (total, range) => total + (range.end - range.start + 1),
-    0,
-  );
+  return calculateRangeResponseSize(size, rangeHeader, contentType, boundary);
 }
 
 /**
