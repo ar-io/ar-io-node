@@ -300,15 +300,15 @@ RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
-X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator  # or alternative
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
 X_402_USDC_PER_BYTE_PRICE=0.0000000001         # $0.10 per GB (adjust as needed)
 X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
 X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
 
-# Optional: Coinbase Onramp integration
-# X_402_CDP_CLIENT_KEY=your_public_client_key
-# CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
-# CDP_API_KEY_ID=your_api_key_id
+# Coinbase Onramp integration (required for mainnet)
+X_402_CDP_CLIENT_KEY=your_public_client_key
+CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
+CDP_API_KEY_ID=your_api_key_id
 
 # Integration settings
 X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
@@ -701,7 +701,7 @@ X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
 
 ```bash
 X_402_USDC_NETWORK=base
-X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
 X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key
 ```
 
@@ -1023,10 +1023,9 @@ X-Payment-Response: <base64-encoded-settlement-result>
 
 #### Checklist
 
-- [ ] Optional: Obtain CDP API keys from Coinbase Developer Platform (for
-      Onramp)
-- [ ] Optional: Configure CDP secret key securely (`CDP_API_KEY_SECRET_FILE`
-      recommended)
+- [ ] Obtain CDP API keys from Coinbase Developer Platform (required for
+      mainnet)
+- [ ] Configure CDP secret key securely (`CDP_API_KEY_SECRET_FILE` recommended)
 - [ ] Update network: `X_402_USDC_NETWORK=base`
 - [ ] Update wallet to mainnet address with real USDC
 - [ ] Choose facilitator (official or alternative)
@@ -1061,8 +1060,8 @@ ENABLE_RATE_LIMITER=true
 ENABLE_X_402_USDC_DATA_EGRESS=true
 X_402_USDC_NETWORK=base
 X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
-X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
-# Onramp integration (optional)
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
+# Coinbase Onramp integration (required for mainnet)
 X_402_CDP_CLIENT_KEY=your_public_client_key
 CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
 CDP_API_KEY_ID=your_api_key_id
@@ -1380,8 +1379,8 @@ responses
 - Verify environment variables set correctly:
   - `X_402_CDP_CLIENT_KEY` (public client key)
   - `CDP_API_KEY_ID` and `CDP_API_KEY_SECRET` (or `CDP_API_KEY_SECRET_FILE`)
-- Note: CDP keys are only needed for Onramp integration, not for basic x402
-  payments
+- Note: CDP keys are required for mainnet deployments. On testnet, they may be
+  omitted if Onramp integration is not needed
 
 #### Paywall Not Displaying (Browser)
 
@@ -1557,7 +1556,7 @@ services:
       - ENABLE_X_402_USDC_DATA_EGRESS=true
       - X_402_USDC_NETWORK=base
       - X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
-      - X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+      - X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
       - X_402_CDP_CLIENT_KEY=YOUR_PUBLIC_CLIENT_KEY
       - CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
       - CDP_API_KEY_ID=YOUR_API_KEY_ID
