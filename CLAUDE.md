@@ -6,6 +6,16 @@
 - Organize new terms into the appropriate existing sections
 - When modifying code, add or improve JSDoc comments where possible to enhance documentation
 
+### Rate Limiter and x402 Documentation
+
+- Comprehensive operator guide at `docs/x402-and-rate-limiting.md`
+- When modifying rate limiting functionality, update the guide:
+  - If adding/removing rate limited endpoints: update "Rate Limited Endpoints" section
+  - If changing environment variables: update both the guide and `docs/envs.md`
+  - If changing payment flow or token consumption: update "How They Work Together" section
+  - If changing configuration options: update configuration reference tables
+- When adding rate limiter or x402 related terms, add them to the "Rate Limiter & x402 Payment Protocol" section in the glossary
+
 ## Processes
 
 - Process documentation is located in `docs/processes/`
