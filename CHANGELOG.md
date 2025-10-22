@@ -63,6 +63,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   control offset-aware data source behavior and were previously only defined in
   `src/config.ts`, making them unavailable for Docker Compose users to configure
   via `.env` files
+- **Data Handler Rate Limiting**: Fixed rate limiting for non-indexed data by:
+  - Removing `dataAttributes !== undefined` check that prevented rate limiting
+    before data indexing
+  - Using `data.size` (always available) as primary source for content size
+    calculation with fallback to `dataAttributes?.size`
+  - Aligning content size calculation with actual `Content-Length` header values
+  - Ensuring consistent rate limiting across all data endpoints (raw data,
+    manifest, and bundled data)
   - `ENABLE_DATA_ITEM_ROOT_TX_SEARCH` (default: `true`) - Controls whether to
     query external APIs (GraphQL/Turbo) to find root transactions when local
     database attributes are incomplete
