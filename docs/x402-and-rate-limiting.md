@@ -1273,20 +1273,24 @@ easy USDC purchase), not for facilitator authentication.
 **Symptom**: X402 is enabled but requests never return 402 Payment Required
 responses
 
-**Possible causes:**
+**Note**: As of recent versions, the application will **fail to start** if X402
+is enabled without the rate limiter. You will see this error:
 
-1. Rate limiter not enabled (`ENABLE_RATE_LIMITER=false`)
-2. Rate limits not being exceeded
-3. Payment processor not initialized
+```
+Error: ENABLE_X_402_USDC_DATA_EGRESS requires ENABLE_RATE_LIMITER to be enabled.
+X402 payments are not a standalone feature - they work as an extension of the
+rate limiting system. Set ENABLE_RATE_LIMITER=true to enable X402 payments.
+```
+
+If your application starts successfully, the rate limiter is properly enabled.
+
+**Possible causes for missing 402 responses:**
+
+1. Rate limits not being exceeded
+2. Payment processor not initialized correctly
 
 **Solutions:**
 
-- **Verify both features enabled**:
-  ```bash
-  # Both must be true
-  grep ENABLE_RATE_LIMITER .env
-  grep ENABLE_X_402_USDC_DATA_EGRESS .env
-  ```
 - **Verify rate limits are being exceeded**: Make enough requests to exceed the
   configured limits. X402 only sends 402 responses when rate limits are
   exceeded.
@@ -1294,7 +1298,6 @@ responses
   ```bash
   grep -i "payment processor" logs/core.log
   ```
-- Remember: X402 requires the rate limiter. It is not a standalone feature.
 
 #### Payment Verification Failed
 

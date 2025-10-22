@@ -1322,6 +1322,15 @@ if (CDP_API_KEY_SECRET_FILE !== undefined) {
     .trim();
 }
 
+// Validate X402 requires rate limiter
+if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {
+  throw new Error(
+    'ENABLE_X_402_USDC_DATA_EGRESS requires ENABLE_RATE_LIMITER to be enabled. ' +
+      'X402 payments are not a standalone feature - they work as an extension of the rate limiting system. ' +
+      'Set ENABLE_RATE_LIMITER=true to enable X402 payments.',
+  );
+}
+
 export const X_402_APP_NAME = env.varOrDefault(
   'X_402_APP_NAME',
   'AR.IO Gateway',
