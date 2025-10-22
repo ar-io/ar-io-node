@@ -626,7 +626,9 @@ The complete payment flow involves several steps:
 
 **Browser Paywall Mode:**
 
-- Detected via `Accept: text/html` header
+- Detected when request has BOTH:
+  - `Accept` header includes `text/html`
+  - `User-Agent` header includes `Mozilla`
 - Returns HTML paywall UI (Coinbase SDK)
 - User connects wallet in browser
 - Payment auto-generated and submitted
@@ -634,7 +636,7 @@ The complete payment flow involves several steps:
 
 **API Payment Mode:**
 
-- Detected via non-browser user agent
+- Any request that doesn't meet browser detection criteria
 - Returns JSON 402 response with requirements
 - Client uses `x402-fetch` or similar library
 - Payment header sent in subsequent request
@@ -847,7 +849,8 @@ When both features enabled:
 
 #### Browser Paywall Rendering
 
-For browser requests (`Accept: text/html`):
+For browser requests (Accept includes `text/html` AND User-Agent includes
+`Mozilla`):
 
 1. Gateway returns HTML with Coinbase SDK
 2. SDK prompts user to connect wallet
@@ -1366,14 +1369,17 @@ responses
 
 **Possible causes:**
 
-1. User-Agent detection failed
-2. Accept header not set to `text/html`
+Browser detection requires BOTH headers - missing or incorrect values will show
+JSON instead:
+
+1. `Accept` header missing or doesn't include `text/html`
+2. `User-Agent` header missing or doesn't include `Mozilla`
 
 **Solutions:**
 
-- Verify request headers in browser dev tools:
-  - `Accept: text/html`
-  - `User-Agent: Mozilla/...`
+- Verify request headers in browser dev tools (both required):
+  - `Accept` must include `text/html`
+  - `User-Agent` must include `Mozilla`
 - Try different browser
 - Check gateway logs for paywall rendering
 
