@@ -32,11 +32,11 @@ import { PaymentProcessor } from '../../payments/types.js';
 import {
   checkPaymentAndRateLimits,
   adjustRateLimitTokens,
-  calculateContentSize,
 } from '../../handlers/data-handler-utils.js';
 import {
   buildMultipartResponseParts,
   generateBoundary,
+  calculateRangeResponseSize,
 } from '../../lib/http-range-utils.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
@@ -114,7 +114,7 @@ export async function handleDataRateLimitingAndPayment({
   // Calculate content size accounting for range requests
   // Prefer data.size (always available) over dataAttributes.size (only when indexed)
   const size = data.size ?? dataAttributes?.size ?? 0;
-  const contentSize = calculateContentSize(
+  const contentSize = calculateRangeResponseSize(
     size,
     req.headers.range,
     contentType,

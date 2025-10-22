@@ -22,7 +22,6 @@ import {
   PaymentProcessor,
   PaymentRequirementsContext,
 } from '../payments/types.js';
-import { calculateRangeResponseSize } from '../lib/http-range-utils.js';
 
 /**
  * Parameters for checking payment and rate limits
@@ -62,26 +61,6 @@ export interface AdjustRateLimitTokensParams {
   responseSize: number;
   initialResult: CheckPaymentAndRateLimitsResult;
   rateLimiter?: RateLimiter;
-}
-
-/**
- * Calculate the exact content size accounting for range requests.
- * Uses calculateRangeResponseSize from http-range-utils which properly
- * accounts for multipart overhead in multiple range requests.
- *
- * @param size - Total data size
- * @param rangeHeader - Range header from request
- * @param contentType - Content type to use in multipart headers
- * @param boundary - Optional boundary for multipart (will be generated if needed)
- * @returns Exact response size including multipart overhead
- */
-export function calculateContentSize(
-  size: number,
-  rangeHeader: string | undefined,
-  contentType: string,
-  boundary?: string,
-): number {
-  return calculateRangeResponseSize(size, rangeHeader, contentType, boundary);
 }
 
 /**
