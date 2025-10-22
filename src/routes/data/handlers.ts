@@ -663,22 +663,18 @@ export const createRawDataHandler = ({
 
         // === PAYMENT AND RATE LIMIT CHECK ===
         // Only perform checks if at least one enforcement mechanism is configured
-        if (
-          (rateLimiter !== undefined || paymentProcessor !== undefined) &&
-          dataAttributes !== undefined
-        ) {
+        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
           // Calculate content size accounting for range requests
-          const contentSize = calculateContentSize(
-            dataAttributes.size,
-            req.headers.range,
-          );
+          // Prefer data.size (always available) over dataAttributes.size (only when indexed)
+          const size = data.size ?? dataAttributes?.size ?? 0;
+          const contentSize = calculateContentSize(size, req.headers.range);
 
           const limitCheck = await checkPaymentAndRateLimits({
             req,
             res,
             id,
             contentSize,
-            contentType: dataAttributes.contentType,
+            contentType: dataAttributes?.contentType,
             requestAttributes,
             rateLimiter,
             paymentProcessor,
@@ -879,22 +875,18 @@ const sendManifestResponse = async ({
 
     // === PAYMENT AND RATE LIMIT CHECK ===
     // Only perform checks if at least one enforcement mechanism is configured
-    if (
-      (rateLimiter !== undefined || paymentProcessor !== undefined) &&
-      dataAttributes !== undefined
-    ) {
+    if (rateLimiter !== undefined || paymentProcessor !== undefined) {
       // Calculate content size accounting for range requests
-      const contentSize = calculateContentSize(
-        dataAttributes.size,
-        req.headers.range,
-      );
+      // Prefer data.size (always available) over dataAttributes.size (only when indexed)
+      const size = data.size ?? dataAttributes?.size ?? 0;
+      const contentSize = calculateContentSize(size, req.headers.range);
 
       const limitCheck = await checkPaymentAndRateLimits({
         req,
         res,
         id: resolvedId,
         contentSize,
-        contentType: dataAttributes.contentType,
+        contentType: dataAttributes?.contentType,
         requestAttributes,
         rateLimiter,
         paymentProcessor,
@@ -1209,22 +1201,18 @@ export const createDataHandler = ({
 
         // === PAYMENT AND RATE LIMIT CHECK ===
         // Only perform checks if at least one enforcement mechanism is configured
-        if (
-          (rateLimiter !== undefined || paymentProcessor !== undefined) &&
-          dataAttributes !== undefined
-        ) {
+        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
           // Calculate content size accounting for range requests
-          const contentSize = calculateContentSize(
-            dataAttributes.size,
-            req.headers.range,
-          );
+          // Prefer data.size (always available) over dataAttributes.size (only when indexed)
+          const size = data.size ?? dataAttributes?.size ?? 0;
+          const contentSize = calculateContentSize(size, req.headers.range);
 
           const limitCheck = await checkPaymentAndRateLimits({
             req,
             res,
             id,
             contentSize,
-            contentType: dataAttributes.contentType,
+            contentType: dataAttributes?.contentType,
             requestAttributes,
             rateLimiter,
             paymentProcessor,
