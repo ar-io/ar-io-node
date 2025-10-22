@@ -259,11 +259,11 @@ docker-compose up -d
 # Set your test wallet private key
 export X402_TEST_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
 
-# Test with the x402-fetch script
-npm run x402:fetch -- YOUR_TX_ID
-
-# Or test in browser - visit http://localhost:3000/YOUR_TX_ID
+# Test in browser - visit http://localhost:3000/YOUR_TX_ID
 # After hitting rate limit, you'll see the paywall UI
+
+# Or test with curl (will show 402 response with payment requirements)
+curl -v http://localhost:3000/YOUR_TX_ID
 ```
 
 #### Mainnet Setup (Production)
@@ -1526,11 +1526,14 @@ services:
 # Start gateway
 docker-compose up -d
 
-# Test rate limiting
-for i in {1..200}; do curl http://localhost:3000/TX_ID; done
+# Test rate limiting - after ~100 requests, you'll get 402 responses
+for i in {1..200}; do curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/TX_ID; done
 
-# Test payment (requires X402_TEST_PRIVATE_KEY)
-npm run x402:fetch -- TX_ID
+# View the 402 payment response with requirements
+curl -v http://localhost:3000/TX_ID
+
+# Test payment in browser - visit http://localhost:3000/TX_ID
+# After hitting rate limit, you'll see the paywall UI where you can pay
 ```
 
 ### Example 2: Production Setup (Redis Limiter + Mainnet)
