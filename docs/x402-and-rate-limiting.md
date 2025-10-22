@@ -1033,7 +1033,7 @@ X_402_USDC_WALLET_ADDRESS=0xYOUR_TESTNET_WALLET
 X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
 ```
 
-**Mainnet (with Onramp integration):**
+**Mainnet:**
 
 ```bash
 # Rate limiter (required for x402)
@@ -1048,20 +1048,6 @@ X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
 X_402_CDP_CLIENT_KEY=your_public_client_key
 CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
 CDP_API_KEY_ID=your_api_key_id
-```
-
-**Mainnet (without Onramp):**
-
-```bash
-# Rate limiter (required for x402)
-ENABLE_RATE_LIMITER=true
-
-# X402 Payments
-ENABLE_X_402_USDC_DATA_EGRESS=true
-X_402_USDC_NETWORK=base
-X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
-X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
-# No CDP keys needed
 ```
 
 ### Security Considerations
