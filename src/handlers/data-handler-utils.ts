@@ -17,7 +17,7 @@ import {
   rateLimitRequestsTotal,
   rateLimitBytesBlockedTotal,
 } from '../metrics.js';
-import { ContiguousDataAttributes, RequestAttributes } from '../types.js';
+import { RequestAttributes } from '../types.js';
 import { RateLimiter } from '../limiter/types.js';
 import {
   PaymentProcessor,
@@ -31,9 +31,9 @@ export interface CheckPaymentAndRateLimitsParams {
   req: Request;
   res: Response;
   id: string;
-  dataAttributes: ContiguousDataAttributes | undefined;
+  contentSize: number;
+  contentType?: string;
   requestAttributes: RequestAttributes;
-  rangeHeader?: string;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor | undefined;
   parentSpan?: Span;
@@ -67,19 +67,19 @@ export interface AdjustRateLimitTokensParams {
 /**
  * Calculate the exact content size accounting for range requests
  */
-function calculateContentSize(
-  dataAttributes: ContiguousDataAttributes,
+export function calculateContentSize(
+  size: number,
   rangeHeader?: string,
 ): number {
   if (rangeHeader === undefined) {
-    return dataAttributes.size; // Full content
+    return size; // Full content
   }
 
-  const ranges = rangeParser(dataAttributes.size, rangeHeader);
+  const ranges = rangeParser(size, rangeHeader);
 
   // Malformed or unsatisfiable range - charge for full content
   if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
-    return dataAttributes.size;
+    return size;
   }
 
   // Calculate total bytes across all ranges
@@ -103,9 +103,9 @@ export async function checkPaymentAndRateLimits({
   req,
   res,
   id,
-  dataAttributes,
+  contentSize,
+  contentType,
   requestAttributes: _requestAttributes,
-  rangeHeader,
   rateLimiter,
   paymentProcessor,
   parentSpan,
@@ -115,8 +115,7 @@ export async function checkPaymentAndRateLimits({
     {
       attributes: {
         'data.id': id,
-        'data.size': dataAttributes?.size,
-        'data.has_range': rangeHeader !== undefined,
+        'content.size': contentSize,
       },
     },
     parentSpan,
@@ -157,17 +156,6 @@ export async function checkPaymentAndRateLimits({
     const domain = extractDomain(host);
     rateLimitRequestsTotal.inc({ domain });
 
-    // Skip checks if we don't have data attributes (can't calculate size)
-    if (dataAttributes === undefined) {
-      span.setAttribute('skip_reason', 'no_data_attributes');
-      log.debug('[DataHandler] No data attributes, skipping checks', { id });
-      return { allowed: true };
-    }
-
-    // Calculate exact content size (accounting for range requests)
-    const contentSize = calculateContentSize(dataAttributes, rangeHeader);
-    span.setAttribute('content_size', contentSize);
-
     let paymentVerified = false;
     let paymentSettled = false;
 
@@ -192,7 +180,7 @@ export async function checkPaymentAndRateLimits({
           protocol: req.protocol,
           host: host,
           originalUrl: req.originalUrl,
-          contentType: dataAttributes.contentType ?? 'application/octet-stream',
+          contentType: contentType ?? 'application/octet-stream',
         } as PaymentRequirementsContext);
 
         paymentSpan.setAttribute(
@@ -366,18 +354,13 @@ export async function checkPaymentAndRateLimits({
           rateLimitBytesBlockedTotal.inc({ domain }, contentSize);
 
           // If payment processor exists and payment not verified, return 402
-          if (
-            paymentProcessor !== undefined &&
-            !paymentVerified &&
-            dataAttributes !== undefined
-          ) {
+          if (paymentProcessor !== undefined && !paymentVerified) {
             const requirements = paymentProcessor.calculateRequirements({
               contentSize,
               protocol: req.protocol,
               host: host,
               originalUrl: req.originalUrl,
-              contentType:
-                dataAttributes.contentType ?? 'application/octet-stream',
+              contentType: contentType ?? 'application/octet-stream',
             } as PaymentRequirementsContext);
 
             paymentProcessor.sendPaymentRequiredResponse(
