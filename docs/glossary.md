@@ -115,13 +115,40 @@ that provide metadata about the resolution process, including the resolved
 [item ID](#item-id), TTL (Time To Live), process ID, and [undername](#undername)
 information.
 
+## Rate Limiter & x402 Payment Protocol
+
+**Facilitator** - A service that verifies payment signatures, tracks payment
+uniqueness to prevent replay attacks, settles payments on-chain, and returns
+settlement receipts. Facilitators enable trustless payment processing for the
+x402 protocol without requiring the gateway to manage blockchain transactions
+directly.
+
+**Rate Limiter** - A traffic control system that uses the token bucket algorithm
+to manage data egress and prevent resource abuse. Supports two-tier limiting
+(per-resource and per-IP), dual token pools (regular and paid), and multiple
+implementations (memory-based or Redis-based for distributed deployments).
+
 **Rate Limiter Token Types** - The rate limiter tracks two separate token pools:
-**paid tokens** (purchased through micropayments) and **regular tokens** (replenished
-over time). When consuming tokens, regular tokens are consumed first, then paid tokens.
-Paid tokens act as overflow capacity and are only used when regular tokens are exhausted.
-Regular tokens refill at a configured rate, while paid tokens only accumulate through
-payment and do not refill automatically. See CHANGELOG for details on the Token
-Consumption Priority change.
+**paid tokens** (purchased through micropayments) and **regular tokens**
+(replenished over time). When consuming tokens, regular tokens are consumed
+first, then paid tokens. Paid tokens act as overflow capacity and are only used
+when regular tokens are exhausted. Regular tokens refill at a configured rate,
+while paid tokens only accumulate through payment and do not refill
+automatically. See CHANGELOG for details on the Token Consumption Priority
+change.
+
+**Token Bucket Algorithm** - A rate limiting algorithm where each
+client/resource has a bucket with a maximum capacity of tokens. Tokens refill at
+a constant rate per second, and requests consume tokens based on data size (1
+token = 1 KiB). Requests are denied when insufficient tokens are available.
+Provides burst capacity while enforcing sustained rate limits.
+
+**x402 Protocol** - An open-source payment protocol built by Coinbase that
+leverages the HTTP 402 "Payment Required" status code to enable frictionless
+cryptocurrency payments for web APIs. The AR.IO Gateway uses x402 with USDC on
+the Base blockchain to monetize data egress and provide premium rate limit tiers
+for paying users. Requires the rate limiter to be enabled, as 402 responses are
+only sent when rate limits are exceeded.
 
 ## Databases
 

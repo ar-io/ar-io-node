@@ -8,7 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Configuration Validation**: Added startup validation that ensures
+  `ENABLE_RATE_LIMITER=true` when `ENABLE_X_402_USDC_DATA_EGRESS=true`. The
+  application will fail to start with a clear error message if x402 is enabled
+  without the rate limiter, since x402 payments require rate limiting to
+  function (402 responses are only sent when rate limits are exceeded)
+
 ### Changed
+
+- **x402 and Rate Limiter Documentation**: Improved and clarified
+  `docs/x402-and-rate-limiting.md` with concrete structural changes:
+  - Replaced docker-compose override examples with simpler `.env` file
+    configurations
+  - Added secrets volume mount to `docker-compose.yaml` for file-based secret
+    management
+- **Glossary**: Added new "Rate Limiter & x402 Payment Protocol" section
+  consolidating related terms:
+  - Facilitator - Payment verification and settlement service
+  - Rate Limiter - Traffic control system overview
+  - Rate Limiter Token Types - Paid vs regular token pools
+  - Token Bucket Algorithm - Rate limiting algorithm details
+  - x402 Protocol - HTTP 402 payment protocol definition
 
 ### Fixed
 
