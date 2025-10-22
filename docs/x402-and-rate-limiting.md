@@ -274,12 +274,10 @@ Use Base mainnet for production with real payments:
 
 - Ethereum wallet with Base mainnet access
 - Real USDC on Base network
-- **Optional**: Coinbase Developer Platform (CDP) account for Onramp integration
-  (browser paywall with easy USDC purchase)
+- Coinbase Developer Platform (CDP) account (required for mainnet with Coinbase
+  facilitators)
 
-**2. Optional - CDP API keys for Onramp:**
-
-If you want to integrate Coinbase Onramp:
+**2. CDP API keys (required for mainnet):**
 
 - Visit [Coinbase Developer Platform](https://portal.cdp.coinbase.com/)
 - Create an account and project
@@ -772,8 +770,9 @@ const clampedPrice = Math.min(Math.max(priceUSD, minPrice), maxPrice);
 
 #### CDP API Key Configuration (Onramp Integration)
 
-These keys are optional and only needed if integrating Coinbase Onramp for easy
-USDC purchases in the browser paywall.
+These keys are required for mainnet deployments when using Coinbase
+facilitators. They enable Coinbase Onramp integration for easy USDC purchases in
+the browser paywall. Optional for testnet only.
 
 **`X_402_CDP_CLIENT_KEY`** (string, **PUBLIC** - safe for client-side)
 
@@ -1217,7 +1216,7 @@ The facilitator provides several security guarantees:
 | **Purpose**                  | Development, testing              | Production monetization                        |
 | **USDC**                     | Free testnet USDC                 | Real USDC (costs money)                        |
 | **USDC Faucet**              | https://faucet.circle.com/        | N/A (purchase required)                        |
-| **CDP API Key (Onramp)**     | Optional                          | Optional (for browser paywall onramp)          |
+| **CDP API Key (Onramp)**     | Optional                          | Required (for Coinbase facilitators)           |
 | **Default Facilitator**      | https://x402.org/facilitator      | Must configure                                 |
 | **Alternative Facilitators** | facilitator.x402.rs               | facilitator.x402.rs, facilitator.payai.network |
 | **Config**                   | `X_402_USDC_NETWORK=base-sepolia` | `X_402_USDC_NETWORK=base`                      |
