@@ -46,6 +46,7 @@ services:
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
       - ${DATASETS_PATH:-./data/datasets}:/app/data/datasets
+      - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - LOG_LEVEL=${CORE_LOG_LEVEL:-info}

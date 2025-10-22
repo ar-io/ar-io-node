@@ -319,7 +319,7 @@ X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
 
 # Coinbase Onramp integration (required for mainnet)
 X_402_CDP_CLIENT_KEY=your_public_client_key
-CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
+CDP_API_KEY_SECRET_FILE=/app/secrets/cdp_secret_key
 CDP_API_KEY_ID=your_api_key_id
 
 # Integration settings
@@ -329,9 +329,13 @@ X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
 **4. Security best practices:**
 
 ```bash
-# Store CDP secret key with restricted permissions (if using Onramp)
-echo "YOUR_CDP_SECRET_KEY" > /run/secrets/cdp_secret_key
-chmod 600 /run/secrets/cdp_secret_key
+# Create secrets directory with restricted permissions
+mkdir -p ./secrets
+chmod 700 ./secrets
+
+# Store CDP secret key securely (if using Onramp)
+echo "YOUR_CDP_SECRET_KEY" > ./secrets/cdp_secret_key
+chmod 600 ./secrets/cdp_secret_key
 ```
 
 **5. Test carefully:**
@@ -493,6 +497,218 @@ setups.
 
 - Use Redis cluster mode
 
+#### Redis Persistence Configuration
+
+By default, Redis persistence is **disabled** in the Docker Compose
+configuration to optimize performance. This means **token bucket state
+(including paid tokens) is lost on restart**, similar to the memory-based rate
+limiter.
+
+If you need to preserve token bucket state across restarts (especially important
+when using x402 paid tokens), you must enable Redis persistence using the
+`EXTRA_REDIS_FLAGS` environment variable.
+
+##### Why Persistence Matters
+
+- **Paid tokens**: Users who have purchased capacity with x402 payments expect
+  their paid tokens to persist across gateway restarts
+- **Rate limit fairness**: Without persistence, all users get fresh buckets on
+  restart, potentially allowing burst traffic that exceeds intended limits
+- **User experience**: Paying users may be frustrated if their purchased
+  capacity disappears during maintenance windows
+
+##### Current Default Behavior
+
+The default configuration in `docker-compose.yaml` line 227 is:
+
+```yaml
+command:
+  redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy
+  allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
+```
+
+This sets `EXTRA_REDIS_FLAGS` to `--save "" --appendonly no`, which:
+
+- Disables RDB snapshots (`--save ""`)
+- Disables AOF persistence (`--appendonly no`)
+- Prioritizes performance over durability
+
+**Data volume**: Redis data is mounted at
+`${REDIS_DATA_PATH:-./data/redis}:/data`, but without persistence enabled, this
+directory remains empty.
+
+##### Redis Persistence Options
+
+Redis provides two persistence mechanisms that can be used independently or
+together:
+
+**1. RDB (Redis Database) - Snapshots**
+
+- Creates point-in-time snapshots of the dataset
+- Lower resource overhead (CPU and disk I/O)
+- Faster restarts (compact binary format)
+- **Trade-off**: Potential data loss between snapshots
+- **Best for**: Acceptable to lose recent changes on crash
+
+**2. AOF (Append-Only File) - Write Log**
+
+- Logs every write operation
+- More durable (minimal data loss)
+- Larger file sizes and higher I/O overhead
+- **Trade-off**: Slower performance, larger disk usage
+- **Best for**: Maximum data durability required
+
+**3. Hybrid (RDB + AOF) - Recommended**
+
+- Uses AOF for durability, RDB for fast restarts
+- Best of both approaches
+- **Best for**: Production environments with paid tokens
+
+##### Configuration Examples
+
+To enable persistence, set `EXTRA_REDIS_FLAGS` in your `.env` file:
+
+**No Persistence (Current Default):**
+
+```bash
+# Fastest performance, no token preservation across restarts
+EXTRA_REDIS_FLAGS=--save "" --appendonly no
+```
+
+**RDB Only - Periodic Snapshots:**
+
+```bash
+# Good balance: snapshot every 5 minutes if 10 keys changed,
+# or every 1 minute if 1000 keys changed
+EXTRA_REDIS_FLAGS=--save 300 10 --save 60 1000
+
+# More frequent snapshots (every minute if 1 key changed):
+EXTRA_REDIS_FLAGS=--save 60 1
+```
+
+**AOF Only - Maximum Durability:**
+
+```bash
+# Sync every second (good balance of safety and performance)
+EXTRA_REDIS_FLAGS=--appendonly yes --appendfsync everysec
+
+# Sync after every write (maximum durability, slower)
+EXTRA_REDIS_FLAGS=--appendonly yes --appendfsync always
+
+# Let OS decide when to sync (faster, less safe)
+EXTRA_REDIS_FLAGS=--appendonly yes --appendfsync no
+```
+
+**Hybrid - Recommended for Production:**
+
+```bash
+# Best of both: AOF for durability + RDB for fast restarts
+EXTRA_REDIS_FLAGS=--save 300 10 --appendonly yes --appendfsync everysec
+```
+
+##### RDB Save Rules Explained
+
+The RDB `--save` option takes two parameters: `seconds` and `changes`.
+
+Format: `--save <seconds> <changes>`
+
+- `--save 300 10`: Save if 10 or more keys changed in 300 seconds (5 minutes)
+- `--save 60 1000`: Save if 1000 or more keys changed in 60 seconds (1 minute)
+- Multiple rules can be specified (Redis saves if ANY rule matches)
+- `--save ""`: Disable all save rules
+
+**Common RDB configurations:**
+
+```bash
+# Conservative (less frequent saves):
+EXTRA_REDIS_FLAGS=--save 900 1 --save 300 10
+
+# Balanced (default Redis behavior):
+EXTRA_REDIS_FLAGS=--save 900 1 --save 300 10 --save 60 10000
+
+# Aggressive (more frequent saves):
+EXTRA_REDIS_FLAGS=--save 300 1 --save 60 10
+```
+
+##### AOF Fsync Policies
+
+The `--appendfsync` option controls when AOF data is written to disk:
+
+- `always`: Sync after every write (slowest, safest)
+- `everysec`: Sync every second (recommended balance)
+- `no`: Let OS decide when to sync (fastest, least safe)
+
+##### Data Volume and File Permissions
+
+The Redis data directory is mounted at:
+
+```bash
+${REDIS_DATA_PATH:-./data/redis}:/data
+```
+
+**Default location**: `./data/redis` in your project directory
+
+**With persistence enabled, you will see:**
+
+- RDB: `dump.rdb` file containing snapshot
+- AOF: `appendonly.aof` file containing write log
+
+**File permissions:**
+
+- Files are created by the Redis container user
+- Ensure the directory is writable by the container
+- Backup these files for disaster recovery
+
+##### Performance Considerations
+
+**Performance impact comparison:**
+
+| Configuration      | Performance | Durability     | Disk Usage | Restart Speed |
+| ------------------ | ----------- | -------------- | ---------- | ------------- |
+| No persistence     | Fastest     | None           | Minimal    | Fastest       |
+| RDB only           | Very Fast   | Snapshot-based | Low        | Fast          |
+| AOF (everysec)     | Fast        | ~1s data loss  | Medium     | Medium        |
+| AOF (always)       | Slower      | Maximum        | Medium     | Medium        |
+| Hybrid (RDB + AOF) | Fast        | Maximum        | Higher     | Fast          |
+
+**Recommendations:**
+
+- **Development/testing**: Use default (no persistence) for fastest performance
+- **Production without payments**: RDB only is usually sufficient
+- **Production with x402 payments**: Hybrid approach recommended to preserve
+  paid tokens
+
+##### Migration Path
+
+To enable persistence on an existing deployment:
+
+1. **Stop the gateway** (to ensure clean state):
+
+   ```bash
+   docker-compose down
+   ```
+
+2. **Update `.env` file** with desired `EXTRA_REDIS_FLAGS`:
+
+   ```bash
+   EXTRA_REDIS_FLAGS=--save 300 10 --appendonly yes --appendfsync everysec
+   ```
+
+3. **Restart the gateway**:
+
+   ```bash
+   docker-compose up -d
+   ```
+
+4. **Verify persistence files created**:
+   ```bash
+   ls -lh data/redis/
+   # Should see dump.rdb and/or appendonly.aof
+   ```
+
+**Note**: Existing token bucket state in memory will be lost during this
+migration. Consider this when planning the maintenance window.
+
 #### Allowlist Configuration
 
 **`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`** (comma-separated string, default:
@@ -534,7 +750,7 @@ setups.
 **Pros:**
 
 - Supports multi-node deployments (shared state)
-- Persistent across restarts
+- Persistent across restarts (when persistence is enabled)
 - Scales horizontally
 - Pre-configured in Docker Compose
 
@@ -543,10 +759,17 @@ setups.
 - Network latency (Redis calls)
 - Requires Redis infrastructure
 - Slightly more complex setup
+- Persistence disabled by default (requires configuration)
 
 **When to use:**
 
 - **Recommended for all production deployments**
+
+**Note:** By default, Redis persistence is **disabled** in the Docker Compose
+configuration to optimize performance. Token bucket state (including paid
+tokens) will be lost on restart. See
+[Redis Persistence Configuration](#redis-persistence-configuration) for how to
+enable persistence if needed.
 
 ### Architecture
 
@@ -713,7 +936,7 @@ X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
 ```bash
 X_402_USDC_NETWORK=base
 X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
-X_402_CDP_CLIENT_KEY_FILE=/run/secrets/cdp_client_key
+X_402_CDP_CLIENT_KEY=your_public_client_key
 ```
 
 **Setup with alternative facilitator:**
@@ -1060,7 +1283,7 @@ X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
 X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
 # Coinbase Onramp integration (required for mainnet)
 X_402_CDP_CLIENT_KEY=your_public_client_key
-CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
+CDP_API_KEY_SECRET_FILE=/app/secrets/cdp_secret_key
 CDP_API_KEY_ID=your_api_key_id
 ```
 
@@ -1093,8 +1316,10 @@ client-side use):
 
 - **Recommended**: File-based with restricted permissions
   ```bash
-  echo "YOUR_SECRET_KEY" > /run/secrets/cdp_secret_key
-  chmod 600 /run/secrets/cdp_secret_key
+  mkdir -p ./secrets
+  chmod 700 ./secrets
+  echo "YOUR_SECRET_KEY" > ./secrets/cdp_secret_key
+  chmod 600 ./secrets/cdp_secret_key
   ```
 - **Alternative**: Environment variable (less secure)
 - **Production**: Use secrets manager (AWS Secrets Manager, HashiCorp Vault)
@@ -1266,6 +1491,48 @@ easy USDC purchase), not for facilitator authentication.
 - Test Redis connection: `redis-cli -u $RATE_LIMITER_REDIS_ENDPOINT ping`
 - Check Redis logs: `docker-compose logs redis`
 
+#### Token Buckets Reset After Restart
+
+**Symptom**: Token bucket state (including paid tokens) is lost when gateway
+restarts. Users who purchased capacity with x402 payments must pay again.
+
+**Cause**: Redis persistence is disabled by default. The default configuration
+uses `EXTRA_REDIS_FLAGS=--save "" --appendonly no`, which disables both RDB and
+AOF persistence mechanisms.
+
+**Solutions:**
+
+- **Enable Redis persistence** to preserve token bucket state across restarts.
+  See [Redis Persistence Configuration](#redis-persistence-configuration) for
+  detailed instructions.
+
+- **Recommended for production with x402**: Use hybrid persistence:
+
+  ```bash
+  EXTRA_REDIS_FLAGS=--save 300 10 --appendonly yes --appendfsync everysec
+  ```
+
+- **Verify persistence is working**:
+
+  ```bash
+  # Check if persistence files exist
+  ls -lh data/redis/
+  # Should see dump.rdb (RDB) and/or appendonly.aof (AOF)
+
+  # Monitor Redis for background saves
+  docker-compose exec redis redis-cli INFO persistence
+  ```
+
+- **Important**: After enabling persistence, restart the gateway to apply
+  changes:
+  ```bash
+  docker-compose down
+  docker-compose up -d
+  ```
+
+**Note**: If you don't need to preserve paid tokens (e.g., for development or
+testing), you can continue using the default configuration with no persistence.
+
 ### x402 Payment Issues
 
 #### Paywall Never Appears / 402 Responses Not Sent
@@ -1357,8 +1624,8 @@ If your application starts successfully, the rate limiter is properly enabled.
 - Verify CDP keys are valid (check Coinbase Developer Platform)
 - Check secret key file exists and is readable:
   ```bash
-  ls -l /run/secrets/cdp_secret_key
-  cat /run/secrets/cdp_secret_key
+  ls -l ./secrets/cdp_secret_key
+  cat ./secrets/cdp_secret_key
   ```
 - Verify environment variables set correctly:
   - `X_402_CDP_CLIENT_KEY` (public client key)
@@ -1480,31 +1747,28 @@ docker-compose logs -f core | grep -i "rate limit\|x402\|payment"
 
 **Use case**: Local development and testing
 
-**docker-compose.override.yml:**
+**.env file:**
 
-```yaml
-services:
-  core:
-    environment:
-      # Rate limiter (memory-based, single node)
-      - ENABLE_RATE_LIMITER=true
-      - RATE_LIMITER_TYPE=memory
-      - RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
-      - RATE_LIMITER_IP_REFILL_PER_SEC=20
-      - RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
-      - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
+```bash
+# Rate limiter (memory-based, single node)
+ENABLE_RATE_LIMITER=true
+RATE_LIMITER_TYPE=memory
+RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
+RATE_LIMITER_IP_REFILL_PER_SEC=20
+RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
+RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
 
-      # x402 payments (testnet)
-      - ENABLE_X_402_USDC_DATA_EGRESS=true
-      - X_402_USDC_NETWORK=base-sepolia
-      - X_402_USDC_WALLET_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
-      - X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
-      - X_402_USDC_PER_BYTE_PRICE=0.0000000001
-      - X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
-      - X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
+# x402 payments (testnet)
+ENABLE_X_402_USDC_DATA_EGRESS=true
+X_402_USDC_NETWORK=base-sepolia
+X_402_USDC_WALLET_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
+X_402_USDC_FACILITATOR_URL=https://x402.org/facilitator
+X_402_USDC_PER_BYTE_PRICE=0.0000000001
+X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
+X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
 
-      # Integration
-      - X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
+# Integration
+X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
 ```
 
 **Testing:**
@@ -1527,55 +1791,52 @@ curl -v http://localhost:3000/TX_ID
 
 **Use case**: Multi-node production deployment with real payments
 
-**docker-compose.override.yml:**
+**.env file:**
 
-```yaml
-services:
-  core:
-    environment:
-      # Rate limiter (Redis-based, distributed)
-      - ENABLE_RATE_LIMITER=true
-      - RATE_LIMITER_TYPE=redis
-      - RATE_LIMITER_REDIS_ENDPOINT=redis://redis:6379
-      - RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
-      - RATE_LIMITER_IP_REFILL_PER_SEC=20
-      - RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
-      - RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
+```bash
+# Rate limiter (Redis-based, distributed)
+ENABLE_RATE_LIMITER=true
+RATE_LIMITER_TYPE=redis
+RATE_LIMITER_REDIS_ENDPOINT=redis://redis:6379
+RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
+RATE_LIMITER_IP_REFILL_PER_SEC=20
+RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET=1000000
+RATE_LIMITER_RESOURCE_REFILL_PER_SEC=100
 
-      # x402 payments (mainnet with Onramp integration)
-      - ENABLE_X_402_USDC_DATA_EGRESS=true
-      - X_402_USDC_NETWORK=base
-      - X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
-      - X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
-      - X_402_CDP_CLIENT_KEY=YOUR_PUBLIC_CLIENT_KEY
-      - CDP_API_KEY_SECRET_FILE=/run/secrets/cdp_secret_key
-      - CDP_API_KEY_ID=YOUR_API_KEY_ID
-      - X_402_USDC_PER_BYTE_PRICE=0.0000000001
-      - X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
-      - X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
+# x402 payments (mainnet with Onramp integration)
+ENABLE_X_402_USDC_DATA_EGRESS=true
+X_402_USDC_NETWORK=base
+X_402_USDC_WALLET_ADDRESS=0xYOUR_MAINNET_WALLET
+X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
+X_402_CDP_CLIENT_KEY=YOUR_PUBLIC_CLIENT_KEY
+CDP_API_KEY_SECRET_FILE=/app/secrets/cdp_secret_key
+CDP_API_KEY_ID=YOUR_API_KEY_ID
+X_402_USDC_PER_BYTE_PRICE=0.0000000001
+X_402_USDC_DATA_EGRESS_MIN_PRICE=0.001
+X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
 
-      # Integration
-      - X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
+# Integration
+X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
 
-      # Paywall customization
-      - X_402_APP_NAME=My AR.IO Gateway
-      - X_402_APP_LOGO=https://example.com/logo.png
+# Paywall customization
+X_402_APP_NAME=My AR.IO Gateway
+X_402_APP_LOGO=https://example.com/logo.png
 
-    volumes:
-      - /run/secrets/cdp_secret_key:/run/secrets/cdp_secret_key:ro
+# Redis persistence - preserve paid tokens across restarts
+# Hybrid approach: RDB snapshots + AOF for maximum durability
+EXTRA_REDIS_FLAGS=--save 300 10 --appendonly yes --appendfsync everysec
 ```
 
 **Security setup:**
 
 ```bash
 # Create secrets directory with restricted permissions
-sudo mkdir -p /run/secrets
-sudo chmod 700 /run/secrets
+mkdir -p ./secrets
+chmod 700 ./secrets
 
 # Store CDP secret key securely
-echo "YOUR_CDP_SECRET_KEY" | sudo tee /run/secrets/cdp_secret_key > /dev/null
-sudo chmod 600 /run/secrets/cdp_secret_key
-sudo chown root:root /run/secrets/cdp_secret_key
+echo "YOUR_CDP_SECRET_KEY" > ./secrets/cdp_secret_key
+chmod 600 ./secrets/cdp_secret_key
 ```
 
 ### Example 3: Client-Side Payment Integration
