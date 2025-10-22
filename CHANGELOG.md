@@ -54,6 +54,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Rate Limiter Token Types - Paid vs regular token pools
   - Token Bucket Algorithm - Rate limiting algorithm details
   - x402 Protocol - HTTP 402 payment protocol definition
+- **Data Handler Rate Limiting Code**: Deduplicated ~180 lines of rate limiting
+  code by extracting shared logic into `handleDataRateLimitingAndPayment()`
+  helper function. This eliminates duplication across raw data, manifest, and
+  bundled data endpoints, improving maintainability and testability:
+  - Added comprehensive unit tests for the new helper function
+  - Removed redundant `[DataHandler]` and `[ManifestHandler]` log prefixes
+    (context already captured by structured logging)
+  - Guaranteed consistent rate limiting behavior across all data endpoints
 
 ### Fixed
 

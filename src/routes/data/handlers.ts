@@ -110,6 +110,94 @@ const calculateResponseSize = (
   return totalSize;
 };
 
+/**
+ * Handle rate limiting and x402 payment checks for data requests.
+ * Returns false if request is blocked (stream destroyed, 402/429 sent),
+ * true if allowed to proceed.
+ */
+export async function handleDataRateLimitingAndPayment({
+  req,
+  res,
+  id,
+  data,
+  dataAttributes,
+  requestAttributes,
+  rateLimiter,
+  paymentProcessor,
+  parentSpan,
+  log,
+}: {
+  req: Request;
+  res: Response;
+  id: string;
+  data: ContiguousData;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  requestAttributes: RequestAttributes;
+  rateLimiter?: RateLimiter;
+  paymentProcessor?: PaymentProcessor;
+  parentSpan?: Span;
+  log: Logger;
+}): Promise<boolean> {
+  // Early return if neither enforcement mechanism is configured
+  if (rateLimiter === undefined && paymentProcessor === undefined) {
+    return true;
+  }
+
+  // Calculate content size accounting for range requests
+  // Prefer data.size (always available) over dataAttributes.size (only when indexed)
+  const size = data.size ?? dataAttributes?.size ?? 0;
+  const contentSize = calculateContentSize(size, req.headers.range);
+
+  const limitCheck = await checkPaymentAndRateLimits({
+    req,
+    res,
+    id,
+    contentSize,
+    contentType: dataAttributes?.contentType,
+    requestAttributes,
+    rateLimiter,
+    paymentProcessor,
+    parentSpan,
+  });
+
+  if (!limitCheck.allowed) {
+    data.stream.destroy();
+    return false; // Request blocked (402 or 429 response sent)
+  }
+
+  // Schedule token adjustment based on actual response size
+  if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
+    const dataSize = data.size; // Capture size for closure
+    // Adjust tokens after response is sent (run in background)
+    res.on('finish', () => {
+      // Check response status - don't charge for 304 or HEAD responses
+      let responseSize: number;
+      if (res.statusCode === 304 || req.method === REQUEST_METHOD_HEAD) {
+        // 304 Not Modified and HEAD requests send no body
+        // Note: adjustTokens will still consume minimum 1 token to prevent spam
+        responseSize = 0;
+      } else {
+        // Calculate actual response size from data.size and range header
+        responseSize = calculateResponseSize(dataSize, req.headers.range);
+      }
+
+      adjustRateLimitTokens({
+        req,
+        responseSize,
+        initialResult: limitCheck,
+        rateLimiter,
+      }).catch((error: any) => {
+        log.error('Error adjusting tokens', {
+          error: error.message,
+          stack: error.stack,
+        });
+      });
+    });
+  }
+
+  return true; // Request allowed to proceed
+}
+
 const setDigestStableVerifiedHeaders = ({
   req,
   res,
@@ -662,65 +750,21 @@ export const createRawDataHandler = ({
         span.addEvent('Data retrieval successful');
 
         // === PAYMENT AND RATE LIMIT CHECK ===
-        // Only perform checks if at least one enforcement mechanism is configured
-        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-          // Calculate content size accounting for range requests
-          // Prefer data.size (always available) over dataAttributes.size (only when indexed)
-          const size = data.size ?? dataAttributes?.size ?? 0;
-          const contentSize = calculateContentSize(size, req.headers.range);
+        const allowed = await handleDataRateLimitingAndPayment({
+          req,
+          res,
+          id,
+          data,
+          dataAttributes,
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          parentSpan: span,
+          log,
+        });
 
-          const limitCheck = await checkPaymentAndRateLimits({
-            req,
-            res,
-            id,
-            contentSize,
-            contentType: dataAttributes?.contentType,
-            requestAttributes,
-            rateLimiter,
-            paymentProcessor,
-            parentSpan: span,
-          });
-
-          if (!limitCheck.allowed) {
-            data.stream.destroy();
-            return;
-          }
-
-          // Schedule token adjustment based on actual response size
-          if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-            const dataSize = data.size; // Capture size for closure
-            // Adjust tokens after response is sent (run in background)
-            res.on('finish', () => {
-              // Check response status - don't charge for 304 or HEAD responses
-              let responseSize: number;
-              if (
-                res.statusCode === 304 ||
-                req.method === REQUEST_METHOD_HEAD
-              ) {
-                // 304 Not Modified and HEAD requests send no body
-                // Note: adjustTokens will still consume minimum 1 token to prevent spam
-                responseSize = 0;
-              } else {
-                // Calculate actual response size from data.size and range header
-                responseSize = calculateResponseSize(
-                  dataSize,
-                  req.headers.range,
-                );
-              }
-
-              adjustRateLimitTokens({
-                req,
-                responseSize,
-                initialResult: limitCheck,
-                rateLimiter,
-              }).catch((error: any) => {
-                log.error('[DataHandler] Error adjusting tokens', {
-                  error: error.message,
-                  stack: error.stack,
-                });
-              });
-            });
-          }
+        if (!allowed) {
+          return;
         }
 
         // Check if the request includes a Range header
@@ -874,59 +918,21 @@ const sendManifestResponse = async ({
     }
 
     // === PAYMENT AND RATE LIMIT CHECK ===
-    // Only perform checks if at least one enforcement mechanism is configured
-    if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-      // Calculate content size accounting for range requests
-      // Prefer data.size (always available) over dataAttributes.size (only when indexed)
-      const size = data.size ?? dataAttributes?.size ?? 0;
-      const contentSize = calculateContentSize(size, req.headers.range);
+    const allowed = await handleDataRateLimitingAndPayment({
+      req,
+      res,
+      id: resolvedId,
+      data,
+      dataAttributes,
+      requestAttributes,
+      rateLimiter,
+      paymentProcessor,
+      parentSpan,
+      log,
+    });
 
-      const limitCheck = await checkPaymentAndRateLimits({
-        req,
-        res,
-        id: resolvedId,
-        contentSize,
-        contentType: dataAttributes?.contentType,
-        requestAttributes,
-        rateLimiter,
-        paymentProcessor,
-        parentSpan,
-      });
-
-      if (!limitCheck.allowed) {
-        data.stream.destroy();
-        return true; // Response was sent (402 or 429)
-      }
-
-      // Schedule token adjustment based on actual response size
-      if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-        const dataSize = data.size; // Capture size for closure
-        // Adjust tokens after response is sent (run in background)
-        res.on('finish', () => {
-          // Check response status - don't charge for 304 or HEAD responses
-          let responseSize: number;
-          if (res.statusCode === 304 || req.method === REQUEST_METHOD_HEAD) {
-            // 304 Not Modified and HEAD requests send no body
-            // Note: adjustTokens will still consume minimum 1 token to prevent spam
-            responseSize = 0;
-          } else {
-            // Calculate actual response size from data.size and range header
-            responseSize = calculateResponseSize(dataSize, req.headers.range);
-          }
-
-          adjustRateLimitTokens({
-            req,
-            responseSize,
-            initialResult: limitCheck,
-            rateLimiter,
-          }).catch((error: any) => {
-            log.error('[ManifestHandler] Error adjusting tokens', {
-              error: error.message,
-              stack: error.stack,
-            });
-          });
-        });
-      }
+    if (!allowed) {
+      return true; // Response was sent (402 or 429)
     }
 
     // Set headers and stream data
@@ -1200,65 +1206,21 @@ export const createDataHandler = ({
         span.addEvent('Data retrieval successful');
 
         // === PAYMENT AND RATE LIMIT CHECK ===
-        // Only perform checks if at least one enforcement mechanism is configured
-        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-          // Calculate content size accounting for range requests
-          // Prefer data.size (always available) over dataAttributes.size (only when indexed)
-          const size = data.size ?? dataAttributes?.size ?? 0;
-          const contentSize = calculateContentSize(size, req.headers.range);
+        const allowed = await handleDataRateLimitingAndPayment({
+          req,
+          res,
+          id,
+          data,
+          dataAttributes,
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          parentSpan: span,
+          log,
+        });
 
-          const limitCheck = await checkPaymentAndRateLimits({
-            req,
-            res,
-            id,
-            contentSize,
-            contentType: dataAttributes?.contentType,
-            requestAttributes,
-            rateLimiter,
-            paymentProcessor,
-            parentSpan: span,
-          });
-
-          if (!limitCheck.allowed) {
-            data.stream.destroy();
-            return;
-          }
-
-          // Schedule token adjustment based on actual response size
-          if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-            const dataSize = data.size; // Capture size for closure
-            // Adjust tokens after response is sent (run in background)
-            res.on('finish', () => {
-              // Check response status - don't charge for 304 or HEAD responses
-              let responseSize: number;
-              if (
-                res.statusCode === 304 ||
-                req.method === REQUEST_METHOD_HEAD
-              ) {
-                // 304 Not Modified and HEAD requests send no body
-                // Note: adjustTokens will still consume minimum 1 token to prevent spam
-                responseSize = 0;
-              } else {
-                // Calculate actual response size from data.size and range header
-                responseSize = calculateResponseSize(
-                  dataSize,
-                  req.headers.range,
-                );
-              }
-
-              adjustRateLimitTokens({
-                req,
-                responseSize,
-                initialResult: limitCheck,
-                rateLimiter,
-              }).catch((error: any) => {
-                log.error('[DataHandler] Error adjusting tokens', {
-                  error: error.message,
-                  stack: error.stack,
-                });
-              });
-            });
-          }
+        if (!allowed) {
+          return;
         }
       } catch (error: any) {
         const dataDuration = Date.now() - dataStartTime;
