@@ -544,9 +544,6 @@ The rate limiter integrates at the HTTP handler level:
 Request → Rate Limit Check → Data Handler → Token Adjustment → Response
 ```
 
-See `src/routes/data/handlers.ts` and `src/handlers/data-handler-utils.ts` for
-implementation details.
-
 #### Metrics
 
 The rate limiter exposes Prometheus metrics at `/ar-io/__gateway_metrics`:
@@ -848,8 +845,6 @@ When both features enabled:
 4. Gateway adds paid tokens to IP bucket
 5. Paid tokens consumed first on subsequent requests
 
-See `src/routes/x402.ts:149-171` for redirect endpoint implementation.
-
 #### Browser Paywall Rendering
 
 For browser requests (`Accept: text/html`):
@@ -860,8 +855,6 @@ For browser requests (`Accept: text/html`):
 4. SDK submits payment to redirect endpoint
 5. Gateway verifies and settles payment
 6. Gateway redirects to original URL with topped-off bucket
-
-See `src/payments/x402-usdc-processor.ts:312-375` for paywall implementation.
 
 ## Integration Topics
 
@@ -900,7 +893,7 @@ Requests using paid tokens **bypass per-resource limits**:
 - Prevents payment from being blocked by popular resource limits
 - Still enforces fair IP-level limits
 
-Logic (see `src/limiter/redis-rate-limiter.ts:136-150`):
+Logic:
 
 ```javascript
 if (paidTokensConsumed === 0) {
@@ -1132,8 +1125,6 @@ The paywall redirect endpoint validates URLs to prevent XSS:
 - `data:` URLs
 - Scheme-relative URLs (`//example.com`)
 - Non-HTTP(S) schemes
-
-See `src/routes/x402.ts:219-240` for validation implementation.
 
 #### Payment Verification
 
