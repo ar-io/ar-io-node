@@ -126,7 +126,7 @@ export async function handleDataRateLimitingAndPayment({
     res,
     id,
     contentSize,
-    contentType: dataAttributes?.contentType,
+    contentType,
     requestAttributes,
     rateLimiter,
     paymentProcessor,
@@ -743,7 +743,9 @@ export const createRawDataHandler = ({
         } else {
           // Set headers and stream data
           setDataHeaders({ req, res, dataAttributes, data, id });
-          res.header('Content-Length', data.size.toString());
+          if (data.size > 0) {
+            res.header('Content-Length', data.size.toString());
+          }
 
           // Handle If-None-Match for both HEAD and GET requests
           if (handleIfNoneMatch(req, res)) {
@@ -923,7 +925,9 @@ const sendManifestResponse = async ({
           data,
           id: resolvedId,
         });
-        res.header('Content-Length', data.size.toString());
+        if (data.size > 0) {
+          res.header('Content-Length', data.size.toString());
+        }
 
         // Handle If-None-Match for both HEAD and GET requests
         if (handleIfNoneMatch(req, res)) {
@@ -1274,7 +1278,9 @@ export const createDataHandler = ({
           data,
           id,
         });
-        res.header('Content-Length', data.size.toString());
+        if (data.size > 0) {
+          res.header('Content-Length', data.size.toString());
+        }
 
         // Handle If-None-Match for both HEAD and GET requests
         if (handleIfNoneMatch(req, res)) {
