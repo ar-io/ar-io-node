@@ -224,7 +224,7 @@ export class GatewaysDataSource implements ContiguousDataSource {
               }
 
               const stream = response.data;
-              const contentLength = parseContentLength(response.headers) ?? NaN;
+              const contentLength = parseContentLength(response.headers) ?? 0;
 
               span.setAttributes({
                 'gateway.successful_url': gatewayUrl,

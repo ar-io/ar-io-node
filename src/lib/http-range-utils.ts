@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import { randomBytes } from 'node:crypto';
 import rangeParser from 'range-parser';
 
 /**
@@ -15,11 +16,8 @@ import rangeParser from 'range-parser';
  * @returns 50 character boundary string starting with dashes
  */
 export function generateBoundary(): string {
-  let boundary = '--------------------------';
-  for (let i = 0; i < 24; i++) {
-    boundary += Math.floor(Math.random() * 10).toString(16);
-  }
-  return boundary;
+  // 26 dashes + 24 hex chars = 50 chars total
+  return '--------------------------' + randomBytes(12).toString('hex');
 }
 
 /**
@@ -88,7 +86,7 @@ export function parseContentRange(
     return undefined;
   }
 
-  const match = contentRange.match(/bytes (\d+)-(\d+)(?:\/(\d+|\*))?/);
+  const match = contentRange.match(/^bytes\s+(\d+)-(\d+)(?:\/(\d+|\*))?$/);
   if (!match) {
     return undefined;
   }
@@ -97,7 +95,7 @@ export function parseContentRange(
   const end = parseInt(match[2], 10);
   const totalStr = match[3];
 
-  if (isNaN(start) || isNaN(end)) {
+  if (isNaN(start) || isNaN(end) || end < start) {
     return undefined;
   }
 
@@ -105,6 +103,10 @@ export function parseContentRange(
     totalStr !== undefined && totalStr !== '*'
       ? parseInt(totalStr, 10)
       : undefined;
+
+  if (total !== undefined && (isNaN(total) || total <= end)) {
+    return undefined;
+  }
 
   return {
     start,
