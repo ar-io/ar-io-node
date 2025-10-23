@@ -20,10 +20,7 @@ import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
 import { SpanStatusCode } from '@opentelemetry/api';
 import * as metrics from '../metrics.js';
-import {
-  buildRangeHeader,
-  parseContentRange,
-} from '../lib/http-range-utils.js';
+import { buildRangeHeader, parseContentRange } from '../lib/http-utils.js';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;

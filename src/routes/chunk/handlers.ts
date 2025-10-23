@@ -26,21 +26,7 @@ import {
   checkPaymentAndRateLimits,
   adjustRateLimitTokens,
 } from '../../handlers/data-handler-utils.js';
-import { parseContentLength } from '../../lib/http-range-utils.js';
-
-const handleIfNoneMatch = (req: Request, res: Response): boolean => {
-  const ifNoneMatch = req.get('if-none-match');
-  const etag = res.getHeader('etag');
-
-  if (ifNoneMatch !== undefined && etag !== undefined && ifNoneMatch === etag) {
-    res.status(304);
-    // Remove entity headers as per RFC 7232
-    res.removeHeader('content-length');
-    res.removeHeader('content-type');
-    return true;
-  }
-  return false;
-};
+import { handleIfNoneMatch, parseContentLength } from '../../lib/http-utils.js';
 
 export const createChunkOffsetHandler = ({
   chunkSource,
@@ -132,6 +118,11 @@ export const createChunkOffsetHandler = ({
       if (rateLimiter !== undefined || paymentProcessor !== undefined) {
         // For HEAD requests, use zero tokens since no body is sent
         // For GET requests, use fixed size assumption
+        // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
+        // responses for chunks before fetching, since we don't have the chunk hash
+        // until after retrieval. This means some GET requests with If-None-Match
+        // that would return 304 might be charged/denied upfront. Tokens are adjusted
+        // to zero in the finish handler if 304 is returned (see line 146).
         const contentSize =
           request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
 
