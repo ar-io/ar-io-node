@@ -150,6 +150,7 @@ export const createChunkOffsetHandler = ({
             let actualSize = 0;
             if (response.statusCode === 304 || request.method === 'HEAD') {
               // 304 Not Modified or HEAD request - no body sent
+              // Note: adjustTokens will still consume minimum 1 token to prevent spam
               actualSize = 0;
             } else if (response.statusCode === 200) {
               // GET request with body - calculate JSON response size
