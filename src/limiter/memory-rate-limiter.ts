@@ -352,6 +352,7 @@ export class MemoryRateLimiter implements RateLimiter {
     }
 
     // Calculate total tokens needed based on response size
+    // Minimum 1 token enforced to prevent spam (even for 304/HEAD with responseSize=0)
     const totalTokensNeeded = Math.max(
       1,
       Math.ceil(context.responseSize / 1024),
