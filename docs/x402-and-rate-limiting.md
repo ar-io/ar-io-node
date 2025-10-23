@@ -1528,34 +1528,22 @@ curl https://your-gateway.com/ar-io/info
 
 #### Use Cases
 
-**1. Client Configuration**
+**1. Pricing Display**
 
-Payment libraries can auto-configure from gateway response:
+Show accurate pricing to users before they hit rate limits:
 
 ```typescript
 const info = await fetch('https://gateway.com/ar-io/info').then((r) =>
   r.json(),
 );
 
-if (info.x402) {
-  // Configure payment client
-  const { network, walletAddress, facilitatorUrl } = info.x402;
-  setupPaymentClient({ network, walletAddress, facilitatorUrl });
-}
-```
-
-**2. Pricing Display**
-
-Show accurate pricing to users:
-
-```typescript
 if (info.x402?.dataEgress?.pricing) {
   const { perBytePrice, minPrice, exampleCosts } = info.x402.dataEgress.pricing;
   console.log(`1GB costs ${exampleCosts['1GB']} USDC`);
 }
 ```
 
-**3. Rate Limit Awareness**
+**2. Rate Limit Awareness**
 
 Clients can adapt behavior based on limits:
 
@@ -1567,7 +1555,7 @@ if (info.rateLimiter?.dataEgress?.buckets) {
 }
 ```
 
-**4. Gateway Capability Discovery**
+**3. Gateway Capability Discovery**
 
 Determine what features a gateway supports:
 
