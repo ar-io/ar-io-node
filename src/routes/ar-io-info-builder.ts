@@ -6,8 +6,8 @@
  */
 
 export interface ArIoInfoConfig {
-  wallet: string;
-  processId: string;
+  wallet: string | undefined;
+  processId: string | undefined;
   ans104UnbundleFilter: any;
   ans104IndexFilter: any;
   release: string;
@@ -21,7 +21,7 @@ export interface ArIoInfoConfig {
   x402?: {
     enabled: boolean;
     network: string;
-    walletAddress: string;
+    walletAddress: string | undefined;
     facilitatorUrl: string;
     perBytePrice: number;
     minPrice: number;
