@@ -41,8 +41,10 @@ export interface RedisRateLimiterConfig {
 export class RedisRateLimiter implements RateLimiter {
   private config: RedisRateLimiterConfig;
   private redisClient: RateLimiterRedisClient;
+  private log: ReturnType<typeof log.child>;
 
   constructor(config: RedisRateLimiterConfig) {
+    this.log = log.child({ class: 'RedisRateLimiter' });
     this.config = config;
     this.redisClient = config.redisClient ?? getRateLimiterRedisClient();
   }
@@ -118,7 +120,7 @@ export class RedisRateLimiter implements RateLimiter {
       );
 
       if (!ipResult.success) {
-        log.info('[RedisRateLimiter] IP limit exceeded', {
+        this.log.info('IP limit exceeded', {
           key: ipKey,
           tokens: ipResult.bucket.tokens,
           needed: predictedTokens,
@@ -161,7 +163,7 @@ export class RedisRateLimiter implements RateLimiter {
                 this.config.cacheTtlSeconds,
               );
             } catch (refundError) {
-              log.error('[RedisRateLimiter] Failed to refund IP tokens', {
+              this.log.error('Failed to refund IP tokens', {
                 error:
                   refundError instanceof Error
                     ? refundError.message
@@ -174,7 +176,7 @@ export class RedisRateLimiter implements RateLimiter {
             }
           }
 
-          log.info('[RedisRateLimiter] Resource limit exceeded', {
+          this.log.info('Resource limit exceeded', {
             key: resourceKey,
             tokens: resourceResult.bucket.tokens,
             needed: predictedTokens,
@@ -211,7 +213,7 @@ export class RedisRateLimiter implements RateLimiter {
         ipRegularTokensConsumed: ipResult.regularConsumed,
       };
     } catch (error) {
-      log.error('[RedisRateLimiter] Error checking rate limit', {
+      this.log.error('Error checking rate limit', {
         error: error instanceof Error ? error.message : String(error),
         resourceKey,
         ipKey,
@@ -252,7 +254,7 @@ export class RedisRateLimiter implements RateLimiter {
         ? totalTokensNeeded - context.initialResourceTokens
         : 0;
 
-    log.debug('[RedisRateLimiter] Adjusting tokens', {
+    this.log.debug('Adjusting tokens', {
       responseSize: context.responseSize,
       totalTokensNeeded,
       ipAdjustment: ipTokenAdjustment,
@@ -315,7 +317,7 @@ export class RedisRateLimiter implements RateLimiter {
           );
         }
 
-        log.debug('[RedisRateLimiter] Token adjustment completed', {
+        this.log.debug('Token adjustment completed', {
           bucket: 'ip',
           adjustment: ipTokenAdjustment,
           consumed: {
@@ -329,7 +331,7 @@ export class RedisRateLimiter implements RateLimiter {
           success: ipAdjustResult.success,
         });
       } catch (error) {
-        log.error('[RedisRateLimiter] IP token adjustment failed', {
+        this.log.error('IP token adjustment failed', {
           error: error instanceof Error ? error.message : String(error),
           ipKey,
         });
@@ -392,7 +394,7 @@ export class RedisRateLimiter implements RateLimiter {
           );
         }
 
-        log.debug('[RedisRateLimiter] Token adjustment completed', {
+        this.log.debug('Token adjustment completed', {
           bucket: 'resource',
           adjustment: resourceTokenAdjustment,
           consumed: {
@@ -406,7 +408,7 @@ export class RedisRateLimiter implements RateLimiter {
           success: resourceAdjustResult.success,
         });
       } catch (error) {
-        log.error('[RedisRateLimiter] Resource token adjustment failed', {
+        this.log.error('Resource token adjustment failed', {
           error: error instanceof Error ? error.message : String(error),
           resourceKey,
         });
@@ -445,7 +447,7 @@ export class RedisRateLimiter implements RateLimiter {
         tokensWithMultiplier,
       );
 
-      log.debug('[RedisRateLimiter] Topped off bucket with paid tokens', {
+      this.log.debug('Topped off bucket with paid tokens', {
         key: ipKey,
         tokensInput: tokens,
         capacityMultiplier: this.config.capacityMultiplier,
@@ -453,7 +455,7 @@ export class RedisRateLimiter implements RateLimiter {
         totalPaidTokens: result.bucket.paidTokens,
       });
     } catch (error) {
-      log.error('[RedisRateLimiter] Failed to top off paid tokens', {
+      this.log.error('Failed to top off paid tokens', {
         error: error instanceof Error ? error.message : String(error),
         ipKey,
       });

@@ -102,7 +102,7 @@ export async function checkPaymentAndRateLimits({
     // Check if ANY IP in the chain is allowlisted - if so, skip all checks
     if (rateLimiter?.isAllowlisted(clientIps)) {
       span.setAttribute('allowlisted', true);
-      log.debug('[DataHandler] Client is allowlisted, skipping checks', {
+      log.debug('Client is allowlisted, skipping checks', {
         id,
         clientIps,
       });
@@ -118,7 +118,7 @@ export async function checkPaymentAndRateLimits({
     ) {
       span.setAttribute('arns_allowlisted', true);
       span.setAttribute('arns_name', arnsName);
-      log.debug('[DataHandler] ArNS name is allowlisted, skipping checks', {
+      log.debug('ArNS name is allowlisted, skipping checks', {
         id,
         arnsName,
       });
@@ -168,7 +168,7 @@ export async function checkPaymentAndRateLimits({
         if (payment === undefined) {
           // No payment provided - continue to rate limiter
           paymentSpan.setAttribute('payment.provided', false);
-          log.debug('[DataHandler] No payment provided', { id });
+          log.debug('No payment provided', { id });
         } else {
           // Verify payment
           paymentSpan.setAttribute('payment.provided', true);
@@ -184,7 +184,7 @@ export async function checkPaymentAndRateLimits({
               'payment.invalid_reason',
               verifyResult.invalidReason ?? 'unknown',
             );
-            log.warn('[DataHandler] Payment verification failed', {
+            log.warn('Payment verification failed', {
               id,
               reason: verifyResult.invalidReason,
             });
@@ -219,7 +219,7 @@ export async function checkPaymentAndRateLimits({
               'payment.settlement_error',
               settlementResult.errorReason ?? 'unknown',
             );
-            log.error('[DataHandler] Payment settlement failed', {
+            log.error('Payment settlement failed', {
               id,
               error: settlementResult.errorReason,
             });
@@ -257,11 +257,11 @@ export async function checkPaymentAndRateLimits({
             );
           }
 
-          log.info('[DataHandler] Payment verified and settled', { id });
+          log.info('Payment verified and settled', { id });
         }
       } catch (error: any) {
         paymentSpan.recordException(error);
-        log.error('[DataHandler] Error during payment processing', {
+        log.error('Error during payment processing', {
           id,
           error: error.message,
           stack: error.stack,
@@ -321,7 +321,7 @@ export async function checkPaymentAndRateLimits({
             limitResult.limitType ?? 'unknown',
           );
 
-          log.info('[DataHandler] Rate limit exceeded', {
+          log.info('Rate limit exceeded', {
             id,
             limitType: limitResult.limitType,
           });
@@ -378,7 +378,7 @@ export async function checkPaymentAndRateLimits({
         };
       } catch (error: any) {
         rateLimitSpan.recordException(error);
-        log.error('[DataHandler] Error during rate limit check', {
+        log.error('Error during rate limit check', {
           id,
           error: error.message,
           stack: error.stack,
@@ -394,7 +394,7 @@ export async function checkPaymentAndRateLimits({
     return { allowed: true, paymentVerified, paymentSettled };
   } catch (error: any) {
     span.recordException(error);
-    log.error('[DataHandler] Error in checkPaymentAndRateLimits', {
+    log.error('Error in checkPaymentAndRateLimits', {
       id,
       error: error.message,
       stack: error.stack,
@@ -450,7 +450,7 @@ export async function adjustRateLimitTokens({
       domain,
     });
 
-    log.debug('[DataHandler] Adjusted rate limit tokens', {
+    log.debug('Adjusted rate limit tokens', {
       responseSize,
       initialIpTokens: initialResult.ipTokensConsumed,
       initialIpPaidTokens: initialResult.ipPaidTokensConsumed,
@@ -461,7 +461,7 @@ export async function adjustRateLimitTokens({
     });
   } catch (error: any) {
     span.recordException(error);
-    log.error('[DataHandler] Error adjusting tokens', {
+    log.error('Error adjusting tokens', {
       error: error.message,
       stack: error.stack,
     });

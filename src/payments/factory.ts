@@ -17,18 +17,16 @@ import { X402UsdcProcessor } from './x402-usdc-processor.js';
  */
 export function createPaymentProcessor(): PaymentProcessor | undefined {
   if (!config.ENABLE_X_402_USDC_DATA_EGRESS) {
-    log.info('[PaymentProcessor] x402 USDC payments disabled');
+    log.info('x402 USDC payments disabled');
     return undefined;
   }
 
   if (config.X_402_USDC_WALLET_ADDRESS === undefined) {
-    log.warn(
-      '[PaymentProcessor] x402 USDC enabled but no wallet address configured',
-    );
+    log.warn('x402 USDC enabled but no wallet address configured');
     return undefined;
   }
 
-  log.info('[PaymentProcessor] Creating x402 USDC payment processor', {
+  log.info('Creating x402 USDC payment processor', {
     network: config.X_402_USDC_NETWORK,
     facilitatorUrl: config.X_402_USDC_FACILITATOR_URL,
     walletAddress: config.X_402_USDC_WALLET_ADDRESS,
