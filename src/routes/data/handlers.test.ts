@@ -19,8 +19,19 @@ import {
   DataAttributesSource,
   DataBlockListValidator,
   ManifestPathResolver,
+  RequestAttributes,
 } from '../../types.js';
 import { createDataHandler, getRequestAttributes } from './handlers.js';
+import { MemoryRateLimiter } from '../../limiter/memory-rate-limiter.js';
+import type {
+  PaymentProcessor,
+  PaymentRequirementsContext,
+  PaymentPayload,
+  PaymentRequirements,
+  PaymentVerificationResult,
+  PaymentSettlementResult,
+} from '../../payments/types.js';
+import type { Request } from 'express';
 
 describe('Data routes', () => {
   describe('createDataHandler', () => {
@@ -1924,6 +1935,165 @@ st
           assert.equal(requestAttributes.arnsBasename, undefined);
           assert.equal(requestAttributes.arnsRecord, undefined);
         });
+      });
+    });
+
+    // Test stub for PaymentProcessor
+    class TestPaymentProcessor implements PaymentProcessor {
+      public shouldVerify = true;
+      public shouldSettle = true;
+
+      isBrowserRequest(_req: Request): boolean {
+        return false;
+      }
+
+      calculateRequirements(
+        context: PaymentRequirementsContext,
+      ): PaymentRequirements {
+        return {
+          amount: context.contentSize.toString(),
+          currency: 'AR',
+          address: 'test-address',
+          dataId: context.dataId,
+          timestamp: Date.now(),
+        };
+      }
+
+      async verifyPayment(
+        _payload: PaymentPayload,
+        _requirements: PaymentRequirements,
+      ): Promise<PaymentVerificationResult> {
+        return {
+          verified: this.shouldVerify,
+          message: this.shouldVerify ? 'Payment verified' : 'Payment failed',
+        };
+      }
+
+      async settlePayment(
+        _payload: PaymentPayload,
+        _requirements: PaymentRequirements,
+      ): Promise<PaymentSettlementResult> {
+        return {
+          settled: this.shouldSettle,
+          message: this.shouldSettle ? 'Payment settled' : 'Settlement failed',
+        };
+      }
+    }
+
+    describe('handleDataRateLimitingAndPayment', () => {
+      let rateLimiter: MemoryRateLimiter;
+      let paymentProcessor: TestPaymentProcessor;
+      let testApp: express.Express;
+      let testDataAttributesSource: DataAttributesSource;
+      let testDataSource: ContiguousDataSource;
+      let testDataBlockListValidator: DataBlockListValidator;
+      let testManifestPathResolver: ManifestPathResolver;
+
+      beforeEach(() => {
+        rateLimiter = new MemoryRateLimiter({
+          resourceCapacity: 1000,
+          resourceRefillRate: 10,
+          ipCapacity: 500,
+          ipRefillRate: 5,
+          limitsEnabled: true,
+          ipAllowlist: [],
+          capacityMultiplier: 10,
+        });
+        paymentProcessor = new TestPaymentProcessor();
+        testApp = express();
+
+        testDataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({
+              size: 10,
+              contentType: 'application/octet-stream',
+              isManifest: false,
+              stable: true,
+              verified: false,
+              signature: null,
+            }),
+        };
+
+        testDataSource = {
+          getData: (params?: any) => {
+            const fullData = Buffer.from('testing...');
+            let data = fullData;
+
+            if (params?.region) {
+              const { offset, size } = params.region;
+              data = fullData.slice(offset, offset + size);
+            }
+
+            return Promise.resolve({
+              stream: Readable.from(data),
+              size: 10,
+              verified: false,
+              cached: false,
+              trusted: true,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            });
+          },
+        };
+
+        testDataBlockListValidator = {
+          isIdBlocked: () => Promise.resolve(false),
+          isHashBlocked: () => Promise.resolve(false),
+        };
+
+        testManifestPathResolver = {
+          resolveFromIndex: () =>
+            Promise.resolve({
+              id: 'not-a-real-id',
+              resolvedId: 'not-a-real-id',
+              complete: false,
+            }),
+          resolveFromData: () =>
+            Promise.resolve({
+              id: 'not-a-real-id',
+              resolvedId: 'not-a-real-id',
+              complete: false,
+            }),
+        };
+      });
+
+      afterEach(() => {
+        mock.restoreAll();
+      });
+
+      it('should return true when neither rateLimiter nor paymentProcessor configured', async () => {
+        testApp.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource: testDataAttributesSource,
+            dataSource: testDataSource,
+            dataBlockListValidator: testDataBlockListValidator,
+            manifestPathResolver: testManifestPathResolver,
+            // No rateLimiter or paymentProcessor
+          }),
+        );
+
+        await request(testApp).get('/test-id').expect(200);
+      });
+
+      it('should work with rate limiter configured', async () => {
+        testApp.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource: testDataAttributesSource,
+            dataSource: testDataSource,
+            dataBlockListValidator: testDataBlockListValidator,
+            manifestPathResolver: testManifestPathResolver,
+            rateLimiter,
+          }),
+        );
+
+        await request(testApp).get('/test-id').expect(200);
       });
     });
   });
