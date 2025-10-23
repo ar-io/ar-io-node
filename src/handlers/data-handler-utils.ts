@@ -296,6 +296,13 @@ export async function checkPaymentAndRateLimits({
         // Cap at max price to ensure proportional bucket increase
         const contentLengthForTopOff = paymentVerified ? contentSize : 0;
 
+        log.debug('Reserving rate limit tokens', {
+          id,
+          contentSize,
+          predictedTokens,
+          paymentVerified,
+        });
+
         // Check limits
         const limitResult = await rateLimiter.checkLimit(
           req,
