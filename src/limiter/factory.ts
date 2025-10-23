@@ -19,7 +19,7 @@ import { RedisRateLimiter } from './redis-rate-limiter.js';
 export function createRateLimiter(): RateLimiter {
   const limiterType = config.RATE_LIMITER_TYPE;
 
-  log.info('[RateLimiter] Creating rate limiter', { type: limiterType });
+  log.info('Creating rate limiter', { type: limiterType });
 
   switch (limiterType) {
     case 'memory':
@@ -47,12 +47,9 @@ export function createRateLimiter(): RateLimiter {
       });
 
     default:
-      log.warn(
-        '[RateLimiter] Unknown rate limiter type, defaulting to memory',
-        {
-          type: limiterType,
-        },
-      );
+      log.warn('Unknown rate limiter type, defaulting to memory', {
+        type: limiterType,
+      });
       return new MemoryRateLimiter({
         resourceCapacity: config.RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET,
         resourceRefillRate: config.RATE_LIMITER_RESOURCE_REFILL_PER_SEC,
