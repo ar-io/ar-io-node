@@ -1431,6 +1431,165 @@ The facilitator provides several security guarantees:
 | `X_402_APP_LOGO`                       | URL        | undefined                      | Paywall logo URL                     |
 | `X_402_SESSION_TOKEN_ENDPOINT`         | URL        | undefined                      | Custom session token endpoint        |
 
+### Discovering Gateway Configuration via /ar-io/info
+
+The AR.IO Gateway exposes rate limiter and x402 configuration through the
+`/ar-io/info` endpoint, enabling programmatic discovery of gateway capabilities,
+pricing, and limits.
+
+#### Response Structure
+
+When features are enabled, the endpoint includes optional `rateLimiter` and
+`x402` objects:
+
+```bash
+curl https://your-gateway.com/ar-io/info
+```
+
+**Example Response** (both features enabled):
+
+```json
+{
+  "wallet": "...",
+  "processId": "...",
+  "ans104UnbundleFilter": {},
+  "ans104IndexFilter": {},
+  "supportedManifestVersions": ["0.1.0", "0.2.0"],
+  "release": "r123",
+  "rateLimiter": {
+    "enabled": true,
+    "dataEgress": {
+      "buckets": {
+        "resource": {
+          "capacity": 1000000,
+          "refillRate": 100,
+          "capacityBytes": 1024000000,
+          "refillRateBytesPerSec": 102400
+        },
+        "ip": {
+          "capacity": 100000,
+          "refillRate": 20,
+          "capacityBytes": 102400000,
+          "refillRateBytesPerSec": 20480
+        }
+      }
+    }
+  },
+  "x402": {
+    "enabled": true,
+    "network": "base-sepolia",
+    "walletAddress": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+    "facilitatorUrl": "https://x402.org/facilitator",
+    "dataEgress": {
+      "pricing": {
+        "perBytePrice": 0.0000000001,
+        "minPrice": 0.001,
+        "maxPrice": 1.00,
+        "currency": "USDC",
+        "exampleCosts": {
+          "1KB": 0.001,
+          "1MB": 0.0001024,
+          "1GB": 0.1048576
+        }
+      },
+      "rateLimiterCapacityMultiplier": 10
+    }
+  }
+}
+```
+
+#### Field Descriptions
+
+**rateLimiter** (optional, only present when `ENABLE_RATE_LIMITER=true`):
+
+- `enabled`: Always `true` when present
+- `dataEgress.buckets.resource`: Per-resource (transaction ID) rate limits
+  - `capacity`: Maximum tokens (1 token = 1 KiB)
+  - `refillRate`: Tokens added per second
+  - `capacityBytes`: Convenience field (capacity × 1024)
+  - `refillRateBytesPerSec`: Convenience field (refillRate × 1024)
+- `dataEgress.buckets.ip`: Per-IP address rate limits (same structure as
+  resource)
+
+**x402** (optional, only present when `ENABLE_X_402_USDC_DATA_EGRESS=true`):
+
+- `enabled`: Always `true` when present
+- `network`: Blockchain network (`base` or `base-sepolia`)
+- `walletAddress`: Gateway wallet address for receiving payments
+- `facilitatorUrl`: x402 facilitator service URL
+- `dataEgress.pricing`:
+  - `perBytePrice`: Price in USDC per byte
+  - `minPrice`: Minimum price in USDC per request
+  - `maxPrice`: Maximum price in USDC per request
+  - `currency`: Always `USDC`
+  - `exampleCosts`: Pre-calculated costs for common sizes (1KB, 1MB, 1GB)
+- `dataEgress.rateLimiterCapacityMultiplier`: Capacity multiplier for paid tier
+  (default 10x)
+
+#### Use Cases
+
+**1. Client Configuration**
+
+Payment libraries can auto-configure from gateway response:
+
+```typescript
+const info = await fetch('https://gateway.com/ar-io/info').then((r) =>
+  r.json(),
+);
+
+if (info.x402) {
+  // Configure payment client
+  const { network, walletAddress, facilitatorUrl } = info.x402;
+  setupPaymentClient({ network, walletAddress, facilitatorUrl });
+}
+```
+
+**2. Pricing Display**
+
+Show accurate pricing to users:
+
+```typescript
+if (info.x402?.dataEgress?.pricing) {
+  const { perBytePrice, minPrice, exampleCosts } = info.x402.dataEgress.pricing;
+  console.log(`1GB costs ${exampleCosts['1GB']} USDC`);
+}
+```
+
+**3. Rate Limit Awareness**
+
+Clients can adapt behavior based on limits:
+
+```typescript
+if (info.rateLimiter?.dataEgress?.buckets) {
+  const ipLimit = info.rateLimiter.dataEgress.buckets.ip;
+  console.log(`Free tier: ${ipLimit.capacityBytes} bytes capacity`);
+  console.log(`Refills at: ${ipLimit.refillRateBytesPerSec} bytes/sec`);
+}
+```
+
+**4. Gateway Capability Discovery**
+
+Determine what features a gateway supports:
+
+```typescript
+const supportsPayments = !!info.x402;
+const supportsRateLimiting = !!info.rateLimiter;
+const isPaidTierAvailable = supportsPayments && supportsRateLimiting;
+```
+
+#### What's NOT Exposed
+
+For security and operational reasons, the following are NOT included in the
+response:
+
+- Implementation type (memory vs Redis) - internal detail
+- Rate-limited endpoint list - internal detail
+- ArNS allowlist - internal configuration
+- IP/CIDR allowlist - security concern
+- Redis connection details - internal
+- CDP API keys - secrets
+- UI customization settings - not needed by API clients
+
 ### Network Comparison
 
 | Feature                      | Base Sepolia (Testnet)            | Base (Mainnet)                                 |
