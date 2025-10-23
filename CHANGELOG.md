@@ -13,6 +13,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   application will fail to start with a clear error message if x402 is enabled
   without the rate limiter, since x402 payments require rate limiting to
   function (402 responses are only sent when rate limits are exceeded)
+- **Gateway Info Endpoint**: The `/ar-io/info` endpoint now exposes rate limiter
+  and x402 payment configuration when these features are enabled. This allows
+  clients to programmatically discover gateway capabilities, pricing, and limits.
+  New optional response fields:
+  - `rateLimiter` - Per-resource and per-IP bucket capacities, refill rates, and
+    byte convenience fields (when `ENABLE_RATE_LIMITER=true`)
+  - `x402` - Payment network, wallet address, facilitator URL, per-byte pricing
+    with min/max bounds, example costs for common sizes (1KB/1MB/1GB), and
+    capacity multiplier for paid tier (when `ENABLE_X_402_USDC_DATA_EGRESS=true`)
 
 ### Changed
 
