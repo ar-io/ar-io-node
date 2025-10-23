@@ -48,10 +48,10 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.ok(result.rateLimiter);
+    assert.notStrictEqual(result.rateLimiter, undefined);
     assert.strictEqual(result.rateLimiter.enabled, true);
-    assert.ok(result.rateLimiter.dataEgress);
-    assert.ok(result.rateLimiter.dataEgress.buckets);
+    assert.notStrictEqual(result.rateLimiter.dataEgress, undefined);
+    assert.notStrictEqual(result.rateLimiter.dataEgress.buckets, undefined);
 
     const resourceBucket = result.rateLimiter.dataEgress.buckets.resource;
     assert.strictEqual(resourceBucket.capacity, 1000000);
@@ -87,7 +87,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.ok(result.x402);
+    assert.notStrictEqual(result.x402, undefined);
     assert.strictEqual(result.x402.enabled, true);
     assert.strictEqual(result.x402.network, 'base-sepolia');
     assert.strictEqual(
@@ -100,20 +100,21 @@ describe('buildArIoInfo', () => {
     );
 
     const pricing = result.x402.dataEgress.pricing;
-    assert.strictEqual(pricing.perBytePrice, 0.0000000001);
-    assert.strictEqual(pricing.minPrice, 0.001);
-    assert.strictEqual(pricing.maxPrice, 1.0);
+    assert.strictEqual(pricing.perBytePrice, '0.0000000001');
+    assert.strictEqual(pricing.minPrice, '0.001000');
+    assert.strictEqual(pricing.maxPrice, '1.000000');
     assert.strictEqual(pricing.currency, 'USDC');
 
-    assert.ok(pricing.exampleCosts);
     assert.strictEqual(pricing.exampleCosts['1KB'], 0.001); // min price applies
     assert.strictEqual(
       pricing.exampleCosts['1MB'],
-      Math.max(0.0000000001 * 1048576, 0.001),
+      Number(Math.max(0.0000000001 * 1048576, 0.001).toFixed(6)),
     );
     assert.strictEqual(
       pricing.exampleCosts['1GB'],
-      Math.min(Math.max(0.0000000001 * 1073741824, 0.001), 1.0),
+      Number(
+        Math.min(Math.max(0.0000000001 * 1073741824, 0.001), 1.0).toFixed(6),
+      ),
     );
 
     assert.strictEqual(
@@ -143,7 +144,7 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.ok(result.x402);
+    assert.notStrictEqual(result.x402, undefined);
     assert.strictEqual(result.x402.network, 'base');
     assert.strictEqual(result.rateLimiter, undefined);
   });
@@ -174,8 +175,8 @@ describe('buildArIoInfo', () => {
       },
     });
 
-    assert.ok(result.rateLimiter);
-    assert.ok(result.x402);
+    assert.notStrictEqual(result.rateLimiter, undefined);
+    assert.notStrictEqual(result.x402, undefined);
     assert.strictEqual(result.rateLimiter.enabled, true);
     assert.strictEqual(result.x402.enabled, true);
   });
@@ -230,17 +231,22 @@ describe('buildArIoInfo', () => {
     const maxPrice = 500.0;
 
     // 1KB cost should be max(perBytePrice * 1024, minPrice)
-    const expected1KB = Math.max(perBytePrice * 1024, minPrice);
+    const expected1KB = Number(
+      Math.max(perBytePrice * 1024, minPrice).toFixed(6),
+    );
     assert.strictEqual(costs['1KB'], expected1KB);
 
     // 1MB cost
-    const expected1MB = Math.max(perBytePrice * 1048576, minPrice);
+    const expected1MB = Number(
+      Math.max(perBytePrice * 1048576, minPrice).toFixed(6),
+    );
     assert.strictEqual(costs['1MB'], expected1MB);
 
     // 1GB cost should be min(max(perBytePrice * 1073741824, minPrice), maxPrice)
-    const expected1GB = Math.min(
-      Math.max(perBytePrice * 1073741824, minPrice),
-      maxPrice,
+    const expected1GB = Number(
+      Math.min(Math.max(perBytePrice * 1073741824, minPrice), maxPrice).toFixed(
+        6,
+      ),
     );
     assert.strictEqual(costs['1GB'], expected1GB);
   });

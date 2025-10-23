@@ -125,7 +125,41 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
   });
 });
 
-// ar.io network info
+/**
+ * Handler for the /ar-io/info endpoint.
+ *
+ * Returns gateway configuration information including rate limiter settings
+ * (when enabled) and x402 payment configuration (when enabled). This endpoint
+ * allows clients to discover gateway capabilities, limits, and pricing.
+ *
+ * @param _req - Express request object (unused)
+ * @param res - Express response object
+ *
+ * @example
+ * GET /ar-io/info
+ *
+ * Response (both features enabled):
+ * {
+ *   "wallet": "...",
+ *   "processId": "...",
+ *   "rateLimiter": {
+ *     "enabled": true,
+ *     "dataEgress": {
+ *       "buckets": {
+ *         "resource": { "capacity": 1000000, "refillRate": 100, ... },
+ *         "ip": { "capacity": 100000, "refillRate": 20, ... }
+ *       }
+ *     }
+ *   },
+ *   "x402": {
+ *     "enabled": true,
+ *     "network": "base-sepolia",
+ *     "dataEgress": {
+ *       "pricing": { "perBytePrice": 0.0000000001, ... }
+ *     }
+ *   }
+ * }
+ */
 export const arIoInfoHandler = (_req: Request, res: Response) => {
   const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,

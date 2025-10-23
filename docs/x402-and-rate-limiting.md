@@ -65,7 +65,7 @@ requests (402 responses) are only sent when rate limits are exceeded. The x402
 protocol is not a standalone feature - it works as an extension of the rate
 limiting system to allow users to purchase additional capacity.
 
-**Rate Limited Endpoints:**
+#### Rate Limited Endpoints
 
 The rate limiter and x402 payment system apply to data egress endpoints:
 
@@ -74,7 +74,9 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **ArNS resolved content**: All requests resolved through ArNS names
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
 
-**Not rate limited** (currently):
+#### Not Rate Limited
+
+Currently, the following endpoints are not rate limited:
 
 - GraphQL queries (`/graphql`)
 - Chunk endpoint (`/chunk/:offset`)
@@ -1482,14 +1484,14 @@ curl https://your-gateway.com/ar-io/info
     "facilitatorUrl": "https://x402.org/facilitator",
     "dataEgress": {
       "pricing": {
-        "perBytePrice": 0.0000000001,
-        "minPrice": 0.001,
-        "maxPrice": 1.00,
+        "perBytePrice": "0.0000000001",
+        "minPrice": "0.001000",
+        "maxPrice": "1.000000",
         "currency": "USDC",
         "exampleCosts": {
           "1KB": 0.001,
-          "1MB": 0.0001024,
-          "1GB": 0.1048576
+          "1MB": 0.000102,
+          "1GB": 0.107374
         }
       },
       "rateLimiterCapacityMultiplier": 10
@@ -1518,11 +1520,13 @@ curl https://your-gateway.com/ar-io/info
 - `walletAddress`: Gateway wallet address for receiving payments
 - `facilitatorUrl`: x402 facilitator service URL
 - `dataEgress.pricing`:
-  - `perBytePrice`: Price in USDC per byte
-  - `minPrice`: Minimum price in USDC per request
-  - `maxPrice`: Maximum price in USDC per request
+  - `perBytePrice`: Price in USDC per byte (string, formatted to avoid scientific
+    notation)
+  - `minPrice`: Minimum price in USDC per request (string, 6 decimal precision)
+  - `maxPrice`: Maximum price in USDC per request (string, 6 decimal precision)
   - `currency`: Always `USDC`
-  - `exampleCosts`: Pre-calculated costs for common sizes (1KB, 1MB, 1GB)
+  - `exampleCosts`: Pre-calculated costs for common sizes (1KB, 1MB, 1GB) as
+    numbers
 - `dataEgress.rateLimiterCapacityMultiplier`: Capacity multiplier for paid tier
   (default 10x)
 
