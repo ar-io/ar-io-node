@@ -540,6 +540,8 @@ paths:
         - ANS-104 filter configurations
         - Supported manifest versions
         - Gateway software release version
+        - Rate limiter configuration (if enabled)
+        - x402 payment protocol configuration (if enabled)
       responses:
         '200':
           description: Gateway information response
@@ -568,6 +570,166 @@ paths:
                   release:
                     type: string
                     description: Gateway software release version
+                  rateLimiter:
+                    type: object
+                    description: Rate limiter configuration (only present when rate limiting is enabled)
+                    properties:
+                      enabled:
+                        type: boolean
+                        description: Whether rate limiting is enabled
+                        example: true
+                      dataEgress:
+                        type: object
+                        description: Data egress rate limiting configuration
+                        properties:
+                          buckets:
+                            type: object
+                            description: Token bucket configurations for rate limiting
+                            properties:
+                              resource:
+                                type: object
+                                description: Per-resource (transaction ID) rate limits
+                                properties:
+                                  capacity:
+                                    type: number
+                                    description: Maximum tokens in bucket (1 token = 1 KiB)
+                                    example: 1000000
+                                  refillRate:
+                                    type: number
+                                    description: Tokens added per second
+                                    example: 100
+                                  capacityBytes:
+                                    type: number
+                                    description: Maximum bytes in bucket (capacity * 1024)
+                                    example: 1024000000
+                                  refillRateBytesPerSec:
+                                    type: number
+                                    description: Bytes added per second (refillRate * 1024)
+                                    example: 102400
+                                required:
+                                  - capacity
+                                  - refillRate
+                                  - capacityBytes
+                                  - refillRateBytesPerSec
+                              ip:
+                                type: object
+                                description: Per-IP address rate limits
+                                properties:
+                                  capacity:
+                                    type: number
+                                    description: Maximum tokens in bucket (1 token = 1 KiB)
+                                    example: 100000
+                                  refillRate:
+                                    type: number
+                                    description: Tokens added per second
+                                    example: 20
+                                  capacityBytes:
+                                    type: number
+                                    description: Maximum bytes in bucket (capacity * 1024)
+                                    example: 102400000
+                                  refillRateBytesPerSec:
+                                    type: number
+                                    description: Bytes added per second (refillRate * 1024)
+                                    example: 20480
+                                required:
+                                  - capacity
+                                  - refillRate
+                                  - capacityBytes
+                                  - refillRateBytesPerSec
+                            required:
+                              - resource
+                              - ip
+                        required:
+                          - buckets
+                    required:
+                      - enabled
+                      - dataEgress
+                  x402:
+                    type: object
+                    description: x402 payment protocol configuration (only present when x402 is enabled)
+                    properties:
+                      enabled:
+                        type: boolean
+                        description: Whether x402 payment protocol is enabled
+                        example: true
+                      network:
+                        type: string
+                        description: Blockchain network for payments
+                        enum: ['base', 'base-sepolia']
+                        example: 'base-sepolia'
+                      walletAddress:
+                        type: string
+                        description: Gateway wallet address for receiving payments
+                        example: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+                      facilitatorUrl:
+                        type: string
+                        format: uri
+                        description: x402 facilitator service URL
+                        example: 'https://x402.org/facilitator'
+                      dataEgress:
+                        type: object
+                        description: Data egress payment configuration
+                        properties:
+                          pricing:
+                            type: object
+                            description: Pricing information for data egress
+                            properties:
+                              perBytePrice:
+                                type: number
+                                description: Price in USDC per byte
+                                example: 0.0000000001
+                              minPrice:
+                                type: number
+                                description: Minimum price in USDC per request
+                                example: 0.001
+                              maxPrice:
+                                type: number
+                                description: Maximum price in USDC per request
+                                example: 1.00
+                              currency:
+                                type: string
+                                description: Payment currency
+                                enum: ['USDC']
+                                example: 'USDC'
+                              exampleCosts:
+                                type: object
+                                description: Example costs for common data sizes
+                                properties:
+                                  1KB:
+                                    type: number
+                                    description: Cost for 1 kilobyte in USDC
+                                    example: 0.001
+                                  1MB:
+                                    type: number
+                                    description: Cost for 1 megabyte in USDC
+                                    example: 0.0001024
+                                  1GB:
+                                    type: number
+                                    description: Cost for 1 gigabyte in USDC
+                                    example: 0.1048576
+                                required:
+                                  - 1KB
+                                  - 1MB
+                                  - 1GB
+                            required:
+                              - perBytePrice
+                              - minPrice
+                              - maxPrice
+                              - currency
+                              - exampleCosts
+                          rateLimiterCapacityMultiplier:
+                            type: number
+                            description: Capacity multiplier for paid tier (applied to rate limiter buckets)
+                            example: 10
+                        required:
+                          - pricing
+                          - rateLimiterCapacityMultiplier
+                    required:
+                      - enabled
+                      - network
+                      - walletAddress
+                      - facilitatorUrl
+                      - dataEgress
                 required:
                   - processId
                   - supportedManifestVersions
