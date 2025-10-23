@@ -114,12 +114,15 @@ export async function handleDataRateLimitingAndPayment({
   // Calculate content size accounting for range requests
   // Prefer data.size (always available) over dataAttributes.size (only when indexed)
   const size = data.size ?? dataAttributes?.size ?? 0;
-  const contentSize = calculateRangeResponseSize(
-    size,
-    req.headers.range,
-    contentType,
-    boundary,
-  );
+  const contentSize =
+    req.method === REQUEST_METHOD_HEAD
+      ? 0
+      : calculateRangeResponseSize(
+          size,
+          req.headers.range,
+          contentType,
+          boundary,
+        );
 
   const limitCheck = await checkPaymentAndRateLimits({
     req,
