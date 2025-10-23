@@ -1565,19 +1565,6 @@ const supportsRateLimiting = !!info.rateLimiter;
 const isPaidTierAvailable = supportsPayments && supportsRateLimiting;
 ```
 
-#### What's NOT Exposed
-
-For security and operational reasons, the following are NOT included in the
-response:
-
-- Implementation type (memory vs Redis) - internal detail
-- Rate-limited endpoint list - internal detail
-- ArNS allowlist - internal configuration
-- IP/CIDR allowlist - security concern
-- Redis connection details - internal
-- CDP API keys - secrets
-- UI customization settings - not needed by API clients
-
 ### Network Comparison
 
 | Feature                      | Base Sepolia (Testnet)            | Base (Mainnet)                                 |
