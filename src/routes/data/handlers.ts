@@ -37,7 +37,9 @@ import {
   buildMultipartResponseParts,
   generateBoundary,
   calculateRangeResponseSize,
-} from '../../lib/http-range-utils.js';
+  handleIfNoneMatch,
+  wouldReturn304,
+} from '../../lib/http-utils.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
@@ -46,22 +48,6 @@ const NOT_FOUND_MAX_AGE = 60; // 1 minute
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
-
-const handleIfNoneMatch = (req: Request, res: Response): boolean => {
-  const ifNoneMatch = req.get('if-none-match');
-  const etag = res.getHeader('etag');
-
-  if (ifNoneMatch !== undefined && etag !== undefined && ifNoneMatch === etag) {
-    res.status(304);
-    // Remove entity headers per RFC 7232 Section 4.1
-    res.removeHeader('Content-Length');
-    res.removeHeader('Content-Encoding');
-    res.removeHeader('Content-Range');
-    res.removeHeader('Content-Type');
-    return true;
-  }
-  return false;
-};
 
 /**
  * Handle rate limiting and x402 payment checks for data requests.
@@ -114,8 +100,13 @@ export async function handleDataRateLimitingAndPayment({
   // Calculate content size accounting for range requests
   // Prefer data.size (always available) over dataAttributes.size (only when indexed)
   const size = data.size ?? dataAttributes?.size ?? 0;
+
+  // Treat cache revalidation that will result in 304 as zero-cost
+  // (data.cached is set to true) OR this is a HEAD request (etag for match check available)
+  const willReturn304 = wouldReturn304(req, dataAttributes?.hash, data.cached);
+
   const contentSize =
-    req.method === REQUEST_METHOD_HEAD
+    req.method === REQUEST_METHOD_HEAD || willReturn304
       ? 0
       : calculateRangeResponseSize(
           size,

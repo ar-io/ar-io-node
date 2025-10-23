@@ -21,10 +21,7 @@ import * as metrics from '../metrics.js';
 import * as config from '../config.js';
 import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
-import {
-  buildRangeHeader,
-  parseContentLength,
-} from '../lib/http-range-utils.js';
+import { buildRangeHeader, parseContentLength } from '../lib/http-utils.js';
 
 export class GatewaysDataSource implements ContiguousDataSource {
   private log: winston.Logger;

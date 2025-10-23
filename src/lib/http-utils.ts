@@ -6,6 +6,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import rangeParser from 'range-parser';
+import { Request, Response } from 'express';
 
 /**
  * Generate a random multipart boundary string.
@@ -247,4 +248,76 @@ export function calculateRangeResponseSize(
   // Multiple ranges: calculate total including boundaries and headers
   const actualBoundary = boundary ?? generateBoundary();
   return calculateMultipartSize(ranges, dataSize, contentType, actualBoundary);
+}
+
+/**
+ * Check if a request would result in a 304 Not Modified response.
+ * Used for rate limiting/payment pre-checks to avoid charging for 304 responses.
+ *
+ * ETags are only set when:
+ * - Data is cached locally (verified hash), OR
+ * - Request is a HEAD request (hash from DB is authoritative)
+ *
+ * @param req - Express request object
+ * @param etag - ETag that will be set in response (hash from data attributes)
+ * @param cached - Whether data is cached locally
+ * @returns true if 304 would be returned, false otherwise
+ *
+ * @example
+ * wouldReturn304(req, 'abc123', true) // true if req has matching If-None-Match and data is cached
+ * wouldReturn304(headReq, 'abc123', false) // true if HEAD request with matching If-None-Match
+ * wouldReturn304(getReq, 'abc123', false) // false - not cached and not HEAD
+ * wouldReturn304(req, undefined, true) // false - no ETag available
+ */
+export function wouldReturn304(
+  req: Request,
+  etag: string | undefined,
+  cached: boolean,
+): boolean {
+  const ifNoneMatch = req.get('if-none-match');
+  const isHeadRequest = req.method === 'HEAD';
+
+  // ETag only set when data is cached OR it's a HEAD request
+  if (etag === undefined || (!cached && !isHeadRequest)) {
+    return false;
+  }
+
+  // Check if If-None-Match matches the ETag (with quotes)
+  if (ifNoneMatch !== undefined && ifNoneMatch === `"${etag}"`) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Handle If-None-Match conditional request.
+ * Sets 304 status and removes entity headers per RFC 7232 Section 4.1.
+ *
+ * @param req - Express request
+ * @param res - Express response
+ * @returns true if 304 was set, false otherwise
+ *
+ * @example
+ * // In handler after setting ETag header
+ * res.setHeader('ETag', '"abc123"');
+ * if (handleIfNoneMatch(req, res)) {
+ *   res.end();
+ *   return;
+ * }
+ */
+export function handleIfNoneMatch(req: Request, res: Response): boolean {
+  const ifNoneMatch = req.get('if-none-match');
+  const etag = res.getHeader('etag');
+
+  if (ifNoneMatch !== undefined && etag !== undefined && ifNoneMatch === etag) {
+    res.status(304);
+    // Remove entity headers per RFC 7232 Section 4.1
+    res.removeHeader('Content-Length');
+    res.removeHeader('Content-Encoding');
+    res.removeHeader('Content-Range');
+    res.removeHeader('Content-Type');
+    return true;
+  }
+  return false;
 }

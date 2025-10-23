@@ -5,18 +5,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import {
   buildMultipartResponseParts,
   buildRangeHeader,
   calculateMultipartSize,
   calculateRangeResponseSize,
   generateBoundary,
+  handleIfNoneMatch,
   parseContentLength,
   parseContentRange,
-} from './http-range-utils.js';
+  wouldReturn304,
+} from './http-utils.js';
 
-describe('http-range-utils', () => {
+describe('http-utils', () => {
   describe('generateBoundary', () => {
     it('should generate 50 character boundaries', () => {
       const boundary = generateBoundary();
@@ -485,6 +487,161 @@ describe('http-range-utils', () => {
 
       // Should be: 100 + 100 + 1000 = 1200 bytes data + multipart overhead
       assert.equal(size > 1200, true);
+    });
+  });
+
+  describe('wouldReturn304', () => {
+    it('should return true for cached data with matching ETag', () => {
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+        method: 'GET',
+      };
+      assert.equal(wouldReturn304(req, 'abc123', true), true);
+    });
+
+    it('should return true for HEAD request with matching ETag', () => {
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+        method: 'HEAD',
+      };
+      assert.equal(wouldReturn304(req, 'abc123', false), true);
+    });
+
+    it('should return false for non-cached GET with matching ETag', () => {
+      // ETag not set for non-cached GET requests
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+        method: 'GET',
+      };
+      assert.equal(wouldReturn304(req, 'abc123', false), false);
+    });
+
+    it('should return false when If-None-Match not provided', () => {
+      const req: any = {
+        get: mock.fn(() => undefined),
+        method: 'GET',
+      };
+      assert.equal(wouldReturn304(req, 'abc123', true), false);
+    });
+
+    it('should return false when ETag not available', () => {
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+        method: 'GET',
+      };
+      assert.equal(wouldReturn304(req, undefined, true), false);
+    });
+
+    it('should return false when ETags do not match', () => {
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+        method: 'GET',
+      };
+      assert.equal(wouldReturn304(req, 'def456', true), false);
+    });
+
+    it('should handle ETag format correctly (with quotes)', () => {
+      // If-None-Match comes with quotes, ETag value without
+      const req1: any = {
+        get: mock.fn(() => '"hash"'),
+        method: 'GET',
+      };
+      assert.equal(wouldReturn304(req1, 'hash', true), true);
+
+      // Mismatched formats should not match
+      const req2: any = {
+        get: mock.fn(() => 'hash'),
+        method: 'GET',
+      };
+      assert.equal(wouldReturn304(req2, 'hash', true), false);
+    });
+
+    it('should return true for both cached and HEAD', () => {
+      // Both conditions satisfied
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+        method: 'HEAD',
+      };
+      assert.equal(wouldReturn304(req, 'abc123', true), true);
+    });
+  });
+
+  describe('handleIfNoneMatch', () => {
+    it('should set 304 status when ETag matches', () => {
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+      };
+      const res: any = {
+        getHeader: mock.fn(() => '"abc123"'),
+        status: mock.fn(() => res),
+        removeHeader: mock.fn(),
+      };
+
+      const result = handleIfNoneMatch(req, res);
+
+      assert.equal(result, true);
+      assert.equal(res.status.mock.calls.length, 1);
+      assert.equal(res.status.mock.calls[0].arguments[0], 304);
+      assert.equal(res.removeHeader.mock.calls.length, 4);
+    });
+
+    it('should remove entity headers for 304', () => {
+      const req: any = {
+        get: mock.fn(() => '"test"'),
+      };
+      const res: any = {
+        getHeader: mock.fn(() => '"test"'),
+        status: mock.fn(() => res),
+        removeHeader: mock.fn(),
+      };
+
+      handleIfNoneMatch(req, res);
+
+      const removedHeaders = res.removeHeader.mock.calls.map(
+        (call: any) => call.arguments[0],
+      );
+      assert.deepEqual(removedHeaders, [
+        'Content-Length',
+        'Content-Encoding',
+        'Content-Range',
+        'Content-Type',
+      ]);
+    });
+
+    it('should return false when If-None-Match not provided', () => {
+      const req: any = {
+        get: mock.fn(() => undefined),
+      };
+      const res: any = {
+        getHeader: mock.fn(() => '"abc123"'),
+      };
+
+      const result = handleIfNoneMatch(req, res);
+      assert.equal(result, false);
+    });
+
+    it('should return false when ETag not set', () => {
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+      };
+      const res: any = {
+        getHeader: mock.fn(() => undefined),
+      };
+
+      const result = handleIfNoneMatch(req, res);
+      assert.equal(result, false);
+    });
+
+    it('should return false when ETags do not match', () => {
+      const req: any = {
+        get: mock.fn(() => '"abc123"'),
+      };
+      const res: any = {
+        getHeader: mock.fn(() => '"def456"'),
+      };
+
+      const result = handleIfNoneMatch(req, res);
+      assert.equal(result, false);
     });
   });
 });
