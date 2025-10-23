@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { calculateX402Price } from '../payments/x402-pricing.js';
+
 /**
  * ANS-104 bundle filter configuration.
  * Controls which bundles are processed based on allow/deny lists.
@@ -188,14 +190,26 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     } = config.x402;
 
     // Calculate example costs (rounded to 6 decimals to match USDC precision)
-    const cost1KB = Number(Math.max(perBytePrice * 1024, minPrice).toFixed(6));
+    const cost1KB = Number(
+      calculateX402Price(1024, {
+        perBytePrice,
+        minPrice,
+        maxPrice,
+      }).toFixed(6),
+    );
     const cost1MB = Number(
-      Math.max(perBytePrice * 1048576, minPrice).toFixed(6),
+      calculateX402Price(1048576, {
+        perBytePrice,
+        minPrice,
+        maxPrice,
+      }).toFixed(6),
     );
     const cost1GB = Number(
-      Math.min(Math.max(perBytePrice * 1073741824, minPrice), maxPrice).toFixed(
-        6,
-      ),
+      calculateX402Price(1073741824, {
+        perBytePrice,
+        minPrice,
+        maxPrice,
+      }).toFixed(6),
     );
 
     response.x402 = {

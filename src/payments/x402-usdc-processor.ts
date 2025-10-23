@@ -26,6 +26,7 @@ import {
   PaymentSettlementResult,
   PaymentRequirementsContext,
 } from './types.js';
+import { calculateX402Price } from './x402-pricing.js';
 
 /**
  * Configuration options for x402 USDC payment processor
@@ -68,14 +69,9 @@ export class X402UsdcProcessor implements PaymentProcessor {
    * Calculate x402 USDC per byte egress price based on content size
    */
   private calculatePrice(contentLength: number): string {
-    const priceInUSD = contentLength * this.config.perBytePrice;
-    const clampedPrice = Math.min(
-      Math.max(priceInUSD, this.config.minPrice),
-      this.config.maxPrice,
-    );
+    const price = calculateX402Price(contentLength, this.config);
     // Format to 3 decimal places for consistent, readable pricing
-    const formattedPrice = clampedPrice.toFixed(3);
-    return `$${formattedPrice}`;
+    return `$${price.toFixed(3)}`;
   }
 
   /**

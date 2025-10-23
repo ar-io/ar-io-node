@@ -8,6 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { buildArIoInfo } from './ar-io-info-builder.js';
+import { calculateX402Price } from '../payments/x402-pricing.js';
 
 describe('buildArIoInfo', () => {
   it('should return basic info when both features are disabled', () => {
@@ -108,12 +109,22 @@ describe('buildArIoInfo', () => {
     assert.strictEqual(pricing.exampleCosts['1KB'], 0.001); // min price applies
     assert.strictEqual(
       pricing.exampleCosts['1MB'],
-      Number(Math.max(0.0000000001 * 1048576, 0.001).toFixed(6)),
+      Number(
+        calculateX402Price(1048576, {
+          perBytePrice: 0.0000000001,
+          minPrice: 0.001,
+          maxPrice: 1.0,
+        }).toFixed(6),
+      ),
     );
     assert.strictEqual(
       pricing.exampleCosts['1GB'],
       Number(
-        Math.min(Math.max(0.0000000001 * 1073741824, 0.001), 1.0).toFixed(6),
+        calculateX402Price(1073741824, {
+          perBytePrice: 0.0000000001,
+          minPrice: 0.001,
+          maxPrice: 1.0,
+        }).toFixed(6),
       ),
     );
 
@@ -232,21 +243,25 @@ describe('buildArIoInfo', () => {
 
     // 1KB cost should be max(perBytePrice * 1024, minPrice)
     const expected1KB = Number(
-      Math.max(perBytePrice * 1024, minPrice).toFixed(6),
+      calculateX402Price(1024, { perBytePrice, minPrice, maxPrice }).toFixed(6),
     );
     assert.strictEqual(costs['1KB'], expected1KB);
 
     // 1MB cost
     const expected1MB = Number(
-      Math.max(perBytePrice * 1048576, minPrice).toFixed(6),
+      calculateX402Price(1048576, { perBytePrice, minPrice, maxPrice }).toFixed(
+        6,
+      ),
     );
     assert.strictEqual(costs['1MB'], expected1MB);
 
     // 1GB cost should be min(max(perBytePrice * 1073741824, minPrice), maxPrice)
     const expected1GB = Number(
-      Math.min(Math.max(perBytePrice * 1073741824, minPrice), maxPrice).toFixed(
-        6,
-      ),
+      calculateX402Price(1073741824, {
+        perBytePrice,
+        minPrice,
+        maxPrice,
+      }).toFixed(6),
     );
     assert.strictEqual(costs['1GB'], expected1GB);
   });
