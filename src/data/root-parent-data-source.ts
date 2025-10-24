@@ -125,6 +125,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
+    let originalItemOffset: number | undefined;
     let originalItemDataOffset: number | undefined;
     let currentAttributes: ContiguousDataAttributes | undefined =
       initialAttributes; // Reuse the initial attributes we already fetched
@@ -154,7 +155,7 @@ export class RootParentDataSource implements ContiguousDataSource {
         });
         return {
           rootTxId: currentId,
-          totalOffset,
+          totalOffset: totalOffset + (originalItemOffset ?? 0),
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
         };
@@ -164,6 +165,7 @@ export class RootParentDataSource implements ContiguousDataSource {
       const isTargetItem = originalItemSize === undefined;
       if (isTargetItem) {
         originalItemSize = attributes.size;
+        originalItemOffset = attributes.offset;
         originalItemDataOffset = attributes.dataOffset;
 
         // If dataOffset is missing, we can't use attributes-based traversal
@@ -184,7 +186,7 @@ export class RootParentDataSource implements ContiguousDataSource {
 
         return {
           rootTxId: currentId,
-          totalOffset,
+          totalOffset: totalOffset + (originalItemOffset ?? 0),
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
         };
