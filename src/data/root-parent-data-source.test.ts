@@ -16,6 +16,7 @@ import {
   ContiguousDataAttributesStore,
   DataItemRootIndex,
 } from '../types.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
@@ -26,9 +27,7 @@ describe('RootParentDataSource', () => {
   let rootParentDataSource: RootParentDataSource;
 
   beforeEach(() => {
-    log = winston.createLogger({
-      silent: true,
-    });
+    log = createTestLogger({ suite: 'RootParentDataSource' });
     dataSource = {
       getData: mock.fn(),
     };
@@ -227,6 +226,55 @@ describe('RootParentDataSource', () => {
         .arguments[0];
       assert.strictEqual(dataSourceCall.region.offset, 1400);
       assert.strictEqual(dataSourceCall.region.size, 100); // Truncated to fit
+    });
+
+    it('should truncate region starting at offset 0 when size exceeds data item', async () => {
+      const dataItemId = 'edge-case-item';
+      const rootTxId = 'root-tx-id';
+      const dataStream = Readable.from([Buffer.from('truncated at zero')]);
+
+      // Mock attributes to return null (fallback to legacy)
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
+      );
+
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500, // Data item payload is 500 bytes
+          contentType: 'text/plain',
+        }),
+      );
+
+      // Request region starting at 0 but larger than available data
+      const requestedRegion = { offset: 0, size: 600 }; // Exceeds 500 byte limit
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: false,
+        trusted: false,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        region: requestedRegion,
+      });
+
+      assert.strictEqual(result.size, 500);
+
+      // Verify truncation happened correctly for offset 0
+      const dataSourceCall = (dataSource.getData as any).mock.calls[0]
+        .arguments[0];
+      assert.strictEqual(dataSourceCall.region.offset, 1000); // dataOffset (no additional offset)
+      assert.strictEqual(dataSourceCall.region.size, 500); // Truncated from 600 to 500
     });
 
     it('should pass through to underlying source when not a data item', async () => {

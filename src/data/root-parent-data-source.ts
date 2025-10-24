@@ -325,7 +325,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           };
 
           // Ensure we don't exceed the data item bounds
-          if (region.offset && region.offset >= size) {
+          if (region.offset !== undefined && region.offset >= size) {
             const error = new Error(
               `Requested region offset ${region.offset} exceeds data item size ${size}`,
             );
@@ -333,7 +333,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             throw error;
           }
 
-          if (region.size && region.offset) {
+          if (region.size !== undefined && region.offset !== undefined) {
             const requestedEnd = region.offset + region.size;
             if (requestedEnd > size) {
               // Truncate to available size
@@ -717,7 +717,7 @@ export class RootParentDataSource implements ContiguousDataSource {
         };
 
         // Ensure we don't exceed the data item bounds
-        if (region.offset && region.offset >= offset.size) {
+        if (region.offset !== undefined && region.offset >= offset.size) {
           const error = new Error(
             `Requested region offset ${region.offset} exceeds data item size ${offset.size}`,
           );
@@ -725,7 +725,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           throw error;
         }
 
-        if (region.size && region.offset) {
+        if (region.size !== undefined && region.offset !== undefined) {
           const requestedEnd = region.offset + region.size;
           if (requestedEnd > offset.size) {
             // Truncate to available size
