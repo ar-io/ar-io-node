@@ -4,7 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 56] - 2025-10-27
+
+This is a recommended release due to fixes for nested bundle offset
+calculations.
+
+This release continues the x402 payment protocol expansion from Release 55,
+extending payment and rate limiting support to the chunk endpoint and adding
+comprehensive operator documentation. The `/ar-io/info` endpoint now exposes
+rate limiter and payment configuration for programmatic gateway discovery.
+This release also includes important fixes for nested bundle offset calculations
+that could affect data retrieval, making it a recommended upgrade for all
+operators.
 
 ### Added
 
@@ -15,8 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     waiting for chunk retrieval
   - Configurable via `CHUNK_GET_BASE64_SIZE_BYTES` environment variable
     (default: 368,640 bytes)
-  - HEAD requests consume zero tokens
-  - 304 Not Modified responses consume zero tokens
+  - HEAD requests consume one token (to prevent spam)
+  - 304 Not Modified responses consume one token (to prevent spam)
   - Compatible with all existing x402 and rate limiter configuration
 - **Configuration Validation**: Added startup validation that ensures
   `ENABLE_RATE_LIMITER=true` when `ENABLE_X_402_USDC_DATA_EGRESS=true`. The
@@ -32,21 +43,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `x402` - Payment network, wallet address, facilitator URL, per-byte pricing
     with min/max bounds, example costs for common sizes (1KB/1MB/1GB), and
     capacity multiplier for paid tier (when `ENABLE_X_402_USDC_DATA_EGRESS=true`)
+- **x402 and Rate Limiter Documentation**: Added comprehensive operator guide at
+  `docs/x402-and-rate-limiting.md` covering x402 payment protocol and rate
+  limiting configuration:
+  - Configuration via `.env` files with detailed examples
+  - Secrets management using volume mounts for Coinbase Develop Program
+    credentials
+  - Complete list of rate limited endpoints including `GET /chunk/:offset`
+  - Token consumption patterns and pricing models for all endpoints
+  - Integration with x402 facilitator services
+  - Testing and troubleshooting guidance
+- **Coinbase Developer Platform Environment Variables**: Added environment
+  variables for Coinbase Developer Platform (CDP) integration:
+  - `CDP_API_KEY_ID` - CDP API key identifier
+  - `CDP_API_KEY_SECRET` - CDP API secret key
+  - `CDP_API_KEY_SECRET_FILE` - Load CDP secret from file for improved security
 
 ### Changed
 
-- **Payment and Rate Limiting Utilities**: Refactored `checkPaymentAndRateLimits()`
-  to accept simple `contentSize` and `contentType` parameters instead of complex
-  `dataAttributes` objects, improving code reusability and testability. Exported
-  `calculateContentSize()` function for shared use across endpoints
-- **x402 and Rate Limiter Documentation**: Improved and clarified
-  `docs/x402-and-rate-limiting.md` with concrete structural changes:
-  - Replaced docker-compose override examples with simpler `.env` file
-    configurations
-  - Added secrets volume mount to `docker-compose.yaml` for file-based secret
-    management
-  - Updated rate limited endpoints list to include `GET /chunk/:offset`
-  - Added note explaining chunk endpoint fixed size pricing model
 - **Glossary**: Added new "Rate Limiter & x402 Payment Protocol" section
   consolidating related terms:
   - Facilitator - Payment verification and settlement service
@@ -54,14 +68,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Rate Limiter Token Types - Paid vs regular token pools
   - Token Bucket Algorithm - Rate limiting algorithm details
   - x402 Protocol - HTTP 402 payment protocol definition
-- **Data Handler Rate Limiting Code**: Deduplicated ~180 lines of rate limiting
-  code by extracting shared logic into `handleDataRateLimitingAndPayment()`
-  helper function. This eliminates duplication across raw data, manifest, and
-  bundled data endpoints, improving maintainability and testability:
-  - Added comprehensive unit tests for the new helper function
-  - Removed redundant `[DataHandler]` and `[ManifestHandler]` log prefixes
-    (context already captured by structured logging)
-  - Guaranteed consistent rate limiting behavior across all data endpoints
+- **CDP Environment Variables**: Refactored Coinbase Developer Platform API key
+  configuration:
+  - Removed `X_402_CDP_CLIENT_KEY_FILE` (client key is public, doesn't need
+    file-based loading)
+  - Split into separate `CDP_API_KEY_ID` and `CDP_API_KEY_SECRET` variables
+  - Added `CDP_API_KEY_SECRET_FILE` for secure file-based loading of sensitive
+    API secret
 
 ### Fixed
 
@@ -79,11 +92,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Aligning content size calculation with actual `Content-Length` header values
   - Ensuring consistent rate limiting across all data endpoints (raw data,
     manifest, and bundled data)
-  - `ENABLE_DATA_ITEM_ROOT_TX_SEARCH` (default: `true`) - Controls whether to
-    query external APIs (GraphQL/Turbo) to find root transactions when local
-    database attributes are incomplete
-  - `ENABLE_PASSTHROUGH_WITHOUT_OFFSETS` (default: `true`) - Controls whether
-    offset-aware data sources allow data retrieval without offset information
+- **Nested Bundle Data Item Offset Calculation (PE-8663)**: Fixed multiple
+  offset calculation issues affecting nested bundle data item retrieval:
+  - Corrected Turbo DynamoDB dataOffset to use absolute semantics (offset +
+    headerSize) instead of relative semantics, ensuring consistency with bundle
+    parsing and type documentation
+  - Fixed rootDataItemOffset calculation to include target item's offset, not
+    just parent dataOffset values
+  - Fixed region boundary validation to handle offset=0 correctly (was
+    incorrectly skipping validation due to truthy checks)
+  - Added backward compatibility fallback for data without dataOffset attributes
+- **304 Not Modified Pre-Charging**: Prevented 304 Not Modified responses from
+  being pre-charged with full content size before checking If-None-Match
+  headers. Now correctly predicts 304 responses and applies minimal token charge
+  without denying legitimate cached requests
 
 ## [Release 55] - 2025-10-20
 
