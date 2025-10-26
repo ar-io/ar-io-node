@@ -92,7 +92,7 @@ operators.
   - Aligning content size calculation with actual `Content-Length` header values
   - Ensuring consistent rate limiting across all data endpoints (raw data,
     manifest, and bundled data)
-- **Nested Bundle Data Item Offset Calculation (PE-8663)**: Fixed multiple
+- **Nested Bundle Data Item Offset Calculation**: Fixed multiple
   offset calculation issues affecting nested bundle data item retrieval:
   - Corrected Turbo DynamoDB dataOffset to use absolute semantics (offset +
     headerSize) instead of relative semantics, ensuring consistency with bundle
