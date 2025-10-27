@@ -184,9 +184,6 @@ section.
 - Sustainable business model
 - Generate revenue from content delivery
 
-**Note:** x402 payments require the rate limiter to be enabled. There is no
-"payments only" configuration.
-
 ## Getting Started
 
 ### Quick Start: Rate Limiter Only
@@ -244,9 +241,6 @@ curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit_tokens_cons
 ```
 
 ### Quick Start: Rate Limiting with x402 Payments
-
-**Important**: x402 requires the rate limiter to be enabled. Both features must
-be configured together.
 
 #### Testnet Setup (Development/Testing)
 
@@ -764,12 +758,6 @@ rate(rate_limit_tokens_consumed_total{bucket_type="resource",token_type="regular
 ```
 
 ## x402 Payment Protocol Deep Dive
-
-**⚠️ IMPORTANT**: x402 **requires** the rate limiter to be enabled
-(`ENABLE_RATE_LIMITER=true`). The payment protocol is not a standalone feature -
-it is an extension of the rate limiting system. 402 Payment Required responses
-are only sent when rate limits are exceeded. Without the rate limiter, x402
-payments will not function.
 
 ### Concepts
 
