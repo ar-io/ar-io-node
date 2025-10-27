@@ -50,8 +50,10 @@ export class MemoryRateLimiter implements RateLimiter {
   private buckets: Map<string, TokenBucket>;
   private config: MemoryRateLimiterConfig;
   private accessOrder: Map<string, number>; // For LRU eviction
+  private log: ReturnType<typeof log.child>;
 
   constructor(config: MemoryRateLimiterConfig) {
+    this.log = log.child({ class: 'MemoryRateLimiter' });
     this.config = config;
     this.buckets = new Map();
     this.accessOrder = new Map();
@@ -142,7 +144,7 @@ export class MemoryRateLimiter implements RateLimiter {
       if (oldestKey !== undefined) {
         this.buckets.delete(oldestKey);
         this.accessOrder.delete(oldestKey);
-        log.debug('[MemoryRateLimiter] Evicted bucket', { key: oldestKey });
+        this.log.debug('Evicted bucket', { key: oldestKey });
       }
     }
   }
@@ -196,7 +198,7 @@ export class MemoryRateLimiter implements RateLimiter {
   ): void {
     const tokensToAdd = Math.ceil(contentLength / 1024) * capacityMultiplier;
     bucket.paidTokens += tokensToAdd;
-    log.debug('[MemoryRateLimiter] Topped off bucket with paid tokens', {
+    this.log.debug('Topped off bucket with paid tokens', {
       key: bucket.key,
       paidTokensAdded: tokensToAdd,
       totalPaidTokens: bucket.paidTokens,
@@ -255,7 +257,7 @@ export class MemoryRateLimiter implements RateLimiter {
     const consumeResult = this.consumeTokens(ipBucket, predictedTokens);
 
     if (!consumeResult.success) {
-      log.info('[MemoryRateLimiter] IP limit exceeded', {
+      this.log.info('IP limit exceeded', {
         key: ipKey,
         regularTokens: ipBucket.tokens,
         paidTokens: ipBucket.paidTokens,
@@ -296,7 +298,7 @@ export class MemoryRateLimiter implements RateLimiter {
           );
         }
 
-        log.info('[MemoryRateLimiter] Resource limit exceeded', {
+        this.log.info('Resource limit exceeded', {
           key: resourceKey,
           regularTokens: resourceBucket.tokens,
           paidTokens: resourceBucket.paidTokens,
@@ -345,11 +347,12 @@ export class MemoryRateLimiter implements RateLimiter {
       | undefined;
 
     if (!ipBucket) {
-      log.warn('[MemoryRateLimiter] No IP bucket found for token adjustment');
+      this.log.warn('No IP bucket found for token adjustment');
       return;
     }
 
     // Calculate total tokens needed based on response size
+    // Minimum 1 token enforced to prevent spam (even for 304/HEAD with responseSize=0)
     const totalTokensNeeded = Math.max(
       1,
       Math.ceil(context.responseSize / 1024),
@@ -359,7 +362,7 @@ export class MemoryRateLimiter implements RateLimiter {
       ? totalTokensNeeded - context.initialResourceTokens
       : 0;
 
-    log.debug('[MemoryRateLimiter] Adjusting tokens', {
+    this.log.debug('Adjusting tokens', {
       responseSize: context.responseSize,
       totalTokensNeeded,
       ipAdjustment: ipTokenAdjustment,
@@ -453,7 +456,7 @@ export class MemoryRateLimiter implements RateLimiter {
       }
     }
 
-    log.debug('[MemoryRateLimiter] Tokens adjusted', {
+    this.log.debug('Tokens adjusted', {
       ipAfter: {
         regular: ipBucket.tokens,
         paid: ipBucket.paidTokens,
@@ -497,7 +500,7 @@ export class MemoryRateLimiter implements RateLimiter {
     const tokensWithMultiplier = tokens * this.config.capacityMultiplier;
     ipBucket.paidTokens += tokensWithMultiplier;
 
-    log.debug('[MemoryRateLimiter] Topped off bucket with paid tokens', {
+    this.log.debug('Topped off bucket with paid tokens', {
       key: ipKey,
       tokensInput: tokens,
       capacityMultiplier: this.config.capacityMultiplier,

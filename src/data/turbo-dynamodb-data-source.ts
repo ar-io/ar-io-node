@@ -272,7 +272,9 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           // Not awaiting to avoid blocking the response
           const attributes: Partial<ContiguousDataAttributes> = {
             size: offsetsInfo.rawContentLength - offsetsInfo.payloadDataStart,
-            dataOffset: offsetsInfo.payloadDataStart,
+            dataOffset:
+              offsetsInfo.rootParentInfo.startOffsetInRootTx +
+              offsetsInfo.payloadDataStart, // Absolute: item position + header size
             contentType: offsetsInfo.payloadContentType,
             rootTransactionId: offsetsInfo.rootParentInfo.rootParentId,
             parentId: offsetsInfo.rootParentInfo.rootParentId, // root IS the parent
@@ -336,7 +338,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         // Not awaiting to avoid blocking the response
         const attributes: Partial<ContiguousDataAttributes> = {
           size: payloadLength,
-          dataOffset: payloadDataStart,
+          dataOffset: startOffsetInParentPayload + payloadDataStart, // Absolute: item position + header size
           contentType: payloadContentType,
           parentId: offsetsInfo.parentInfo.parentDataItemId,
           offset: offsetsInfo.parentInfo.startOffsetInParentPayload,

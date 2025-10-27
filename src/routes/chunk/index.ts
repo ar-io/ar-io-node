@@ -11,7 +11,13 @@ import {
   createChunkPostHandler,
 } from './handlers.js';
 import log from '../../log.js';
-import { arweaveClient, chunkSource, txOffsetSource } from '../../system.js';
+import {
+  arweaveClient,
+  chunkSource,
+  rateLimiter,
+  paymentProcessor,
+  txOffsetSource,
+} from '../../system.js';
 
 // To add a GET route for /chunk/:offset where :offset is restricted to a positive integer,
 // we can use a regular expression in your route path to constrain :offset.
@@ -28,6 +34,8 @@ chunkRouter.get(
   createChunkOffsetHandler({
     chunkSource,
     txOffsetSource,
+    rateLimiter,
+    paymentProcessor,
     log: log.child({ class: 'ChunkGetOffsetHandler' }),
   }),
 );
@@ -37,6 +45,8 @@ chunkRouter.head(
   createChunkOffsetHandler({
     chunkSource,
     txOffsetSource,
+    rateLimiter,
+    paymentProcessor,
     log: log.child({ class: 'ChunkHeadOffsetHandler' }),
   }),
 );

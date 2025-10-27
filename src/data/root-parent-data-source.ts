@@ -125,6 +125,7 @@ export class RootParentDataSource implements ContiguousDataSource {
     const traversalPath: string[] = [];
     const visited = new Set<string>();
     let originalItemSize: number | undefined;
+    let originalItemOffset: number | undefined;
     let originalItemDataOffset: number | undefined;
     let currentAttributes: ContiguousDataAttributes | undefined =
       initialAttributes; // Reuse the initial attributes we already fetched
@@ -154,16 +155,26 @@ export class RootParentDataSource implements ContiguousDataSource {
         });
         return {
           rootTxId: currentId,
-          totalOffset,
+          totalOffset: totalOffset + (originalItemOffset ?? 0),
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
         };
       }
 
-      // Remember the original item size and data offset (the item we're looking for)
-      if (originalItemSize === undefined) {
+      // Remember the original item (the item we're looking for)
+      const isTargetItem = originalItemSize === undefined;
+      if (isTargetItem) {
         originalItemSize = attributes.size;
+        originalItemOffset = attributes.offset;
         originalItemDataOffset = attributes.dataOffset;
+
+        // If dataOffset is missing, we can't use attributes-based traversal
+        if (originalItemDataOffset === undefined) {
+          log.debug(
+            'dataOffset missing for target item, falling back to legacy traversal',
+          );
+          return null;
+        }
       }
 
       // If no parent, this is the root
@@ -175,17 +186,15 @@ export class RootParentDataSource implements ContiguousDataSource {
 
         return {
           rootTxId: currentId,
-          totalOffset,
+          totalOffset: totalOffset + (originalItemOffset ?? 0),
           rootDataOffset: totalOffset + (originalItemDataOffset ?? 0),
           size: originalItemSize!,
         };
       }
 
-      // Add this item's offset to the total
-      totalOffset += attributes.offset;
-
-      // Add dataOffset if present (for payload positioning)
-      if (attributes.dataOffset !== undefined) {
+      // For intermediate parents, accumulate dataOffset (which is absolute: offset + header size)
+      // For target item, we don't accumulate during traversal - it gets added at the end
+      if (!isTargetItem && attributes.dataOffset !== undefined) {
         totalOffset += attributes.dataOffset;
       }
 
@@ -316,7 +325,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           };
 
           // Ensure we don't exceed the data item bounds
-          if (region.offset && region.offset >= size) {
+          if (region.offset !== undefined && region.offset >= size) {
             const error = new Error(
               `Requested region offset ${region.offset} exceeds data item size ${size}`,
             );
@@ -324,7 +333,7 @@ export class RootParentDataSource implements ContiguousDataSource {
             throw error;
           }
 
-          if (region.size && region.offset) {
+          if (region.size !== undefined && region.offset !== undefined) {
             const requestedEnd = region.offset + region.size;
             if (requestedEnd > size) {
               // Truncate to available size
@@ -708,7 +717,7 @@ export class RootParentDataSource implements ContiguousDataSource {
         };
 
         // Ensure we don't exceed the data item bounds
-        if (region.offset && region.offset >= offset.size) {
+        if (region.offset !== undefined && region.offset >= offset.size) {
           const error = new Error(
             `Requested region offset ${region.offset} exceeds data item size ${offset.size}`,
           );
@@ -716,7 +725,7 @@ export class RootParentDataSource implements ContiguousDataSource {
           throw error;
         }
 
-        if (region.size && region.offset) {
+        if (region.size !== undefined && region.offset !== undefined) {
           const requestedEnd = region.offset + region.size;
           if (requestedEnd > offset.size) {
             // Truncate to available size

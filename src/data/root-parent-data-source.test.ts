@@ -16,6 +16,7 @@ import {
   ContiguousDataAttributesStore,
   DataItemRootIndex,
 } from '../types.js';
+import { createTestLogger } from '../../test/test-logger.js';
 
 describe('RootParentDataSource', () => {
   let log: winston.Logger;
@@ -26,9 +27,7 @@ describe('RootParentDataSource', () => {
   let rootParentDataSource: RootParentDataSource;
 
   beforeEach(() => {
-    log = winston.createLogger({
-      silent: true,
-    });
+    log = createTestLogger({ suite: 'RootParentDataSource' });
     dataSource = {
       getData: mock.fn(),
     };
@@ -227,6 +226,55 @@ describe('RootParentDataSource', () => {
         .arguments[0];
       assert.strictEqual(dataSourceCall.region.offset, 1400);
       assert.strictEqual(dataSourceCall.region.size, 100); // Truncated to fit
+    });
+
+    it('should truncate region starting at offset 0 when size exceeds data item', async () => {
+      const dataItemId = 'edge-case-item';
+      const rootTxId = 'root-tx-id';
+      const dataStream = Readable.from([Buffer.from('truncated at zero')]);
+
+      // Mock attributes to return null (fallback to legacy)
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({ rootTxId }),
+      );
+
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 900,
+          dataOffset: 1000,
+          itemSize: 600,
+          dataSize: 500, // Data item payload is 500 bytes
+          contentType: 'text/plain',
+        }),
+      );
+
+      // Request region starting at 0 but larger than available data
+      const requestedRegion = { offset: 0, size: 600 }; // Exceeds 500 byte limit
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: false,
+        trusted: false,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({
+        id: dataItemId,
+        region: requestedRegion,
+      });
+
+      assert.strictEqual(result.size, 500);
+
+      // Verify truncation happened correctly for offset 0
+      const dataSourceCall = (dataSource.getData as any).mock.calls[0]
+        .arguments[0];
+      assert.strictEqual(dataSourceCall.region.offset, 1000); // dataOffset (no additional offset)
+      assert.strictEqual(dataSourceCall.region.size, 500); // Truncated from 600 to 500
     });
 
     it('should pass through to underlying source when not a data item', async () => {
@@ -524,6 +572,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 500,
               offset: 100,
+              dataOffset: 150, // offset + header size (assume 50 byte header)
               parentId: parentId,
             };
           }
@@ -576,7 +625,7 @@ describe('RootParentDataSource', () => {
       // Verify data was fetched from parent with correct offset
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, parentId);
-      assert.strictEqual(dataCall.region.offset, 100); // child's offset in parent
+      assert.strictEqual(dataCall.region.offset, 150); // child's dataOffset (payload start)
       assert.strictEqual(dataCall.region.size, 500); // child's size
 
       // Should not use legacy methods
@@ -603,6 +652,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 200,
               offset: 50, // offset in child
+              dataOffset: 50, // payload start (absolute: 50 + 0, no header for contiguous data)
               parentId: childId,
             };
           }
@@ -611,7 +661,7 @@ describe('RootParentDataSource', () => {
               size: 800,
               offset: 300, // offset in parent
               parentId: parentId,
-              dataOffset: 20, // payload start
+              dataOffset: 320, // payload start (absolute: 300 + 20)
             };
           }
           if (id === parentId) {
@@ -637,7 +687,7 @@ describe('RootParentDataSource', () => {
 
       assert.strictEqual(result.size, 200);
 
-      // Verify total offset calculation: 50 (grandchild in child) + 300 (child in parent) + 20 (dataOffset) = 370
+      // Verify: child payload at 320 in parent, grandchild payload at 50 in child = 320 + 50 = 370
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, parentId);
       assert.strictEqual(dataCall.region.offset, 370);
@@ -754,6 +804,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 500,
               offset: 100,
+              dataOffset: 150, // offset + header size
               parentId: itemB,
             };
           }
@@ -761,6 +812,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 800,
               offset: 200,
+              dataOffset: 250, // offset + header size
               parentId: itemA, // Cycle!
             };
           }
@@ -920,6 +972,7 @@ describe('RootParentDataSource', () => {
             return {
               size: 500,
               offset: 100, // child offset in parent
+              dataOffset: 150, // payload start (offset + header size)
               parentId: parentId,
             };
           }
@@ -950,11 +1003,741 @@ describe('RootParentDataSource', () => {
 
       assert.strictEqual(result.size, 200);
 
-      // Should request data from parent with combined offset: 100 (child offset) + 50 (region offset) = 150
+      // Should request data from parent with combined offset: 150 (child dataOffset) + 50 (region offset) = 200
       const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
       assert.strictEqual(dataCall.id, parentId);
-      assert.strictEqual(dataCall.region.offset, 150);
+      assert.strictEqual(dataCall.region.offset, 200);
       assert.strictEqual(dataCall.region.size, 200);
+    });
+
+    it('should correctly handle dataOffset for target item (not double-count)', async () => {
+      const dataItemId = 'child-item';
+      const parentId = 'parent-item';
+      const dataStream = Readable.from([Buffer.from('test data')]);
+
+      // Mock attributes where TARGET item has a dataOffset
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 500, // payload size
+              offset: 100, // item offset in parent
+              dataOffset: 150, // payload position in parent (absolute: 100 + 50)
+              parentId: parentId,
+            };
+          }
+          if (id === parentId) {
+            return {
+              size: 2000,
+              offset: 0,
+              // root
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      const result = await rootParentDataSource.getData({ id: dataItemId });
+
+      assert.strictEqual(result.size, 500);
+
+      // Critical test: dataOffset should only be added ONCE (not during traversal AND at end)
+      // Correct: target's dataOffset is 150 (absolute), added once at end = 0 + 150 = 150
+      // Bug would double-count by adding during traversal too = 0 + 150 + 150 = 300
+      const dataCall = (dataSource.getData as any).mock.calls[0].arguments[0];
+      assert.strictEqual(dataCall.id, parentId);
+      assert.strictEqual(dataCall.region.offset, 150); // NOT 300!
+      assert.strictEqual(dataCall.region.size, 500);
+    });
+  });
+
+  describe('rootDataItemOffset storage verification', () => {
+    it('should store correct rootDataItemOffset for single-level nesting', async () => {
+      const dataItemId = 'child-item';
+      const rootId = 'root-tx';
+      const dataStream = Readable.from([Buffer.from('test data')]);
+
+      // Mock attributes: child has 50-byte header (offset=100, dataOffset=150)
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 500, // payload size
+              offset: 100, // item starts at byte 100 in root
+              dataOffset: 150, // payload starts at byte 150 in root (100 + 50 header)
+              parentId: rootId,
+              contentType: 'text/plain',
+            };
+          }
+          if (id === rootId) {
+            return {
+              size: 10000,
+              offset: 0,
+              // No parentId = root transaction
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      // Verify setDataAttributes was called to store root offsets
+      const setAttrCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      assert.ok(setAttrCalls.length > 0, 'setDataAttributes should be called');
+
+      // Find the call that stored root offsets
+      const rootOffsetCall = setAttrCalls.find(
+        (call: any) =>
+          call.arguments[0] === dataItemId &&
+          call.arguments[1].rootDataItemOffset !== undefined,
+      );
+      assert.ok(rootOffsetCall, 'Should store root offsets');
+
+      const storedAttrs = rootOffsetCall.arguments[1];
+      assert.strictEqual(
+        storedAttrs.rootTransactionId,
+        rootId,
+        'Should store root transaction ID',
+      );
+      assert.strictEqual(
+        storedAttrs.rootDataItemOffset,
+        100,
+        'rootDataItemOffset should point to item header start',
+      );
+      assert.strictEqual(
+        storedAttrs.rootDataOffset,
+        150,
+        'rootDataOffset should point to payload start',
+      );
+      assert.strictEqual(storedAttrs.size, 500, 'Should store payload size');
+
+      // Verify header size calculation
+      const headerSize =
+        storedAttrs.rootDataOffset - storedAttrs.rootDataItemOffset;
+      assert.strictEqual(
+        headerSize,
+        50,
+        'Header size should be 50 bytes (dataOffset - offset)',
+      );
+    });
+
+    it('should store correct rootDataItemOffset for two-level nesting', async () => {
+      const dataItemId = 'grandchild';
+      const parentId = 'parent';
+      const rootId = 'root-tx';
+      const dataStream = Readable.from([Buffer.from('nested data')]);
+
+      // Mock attributes for two-level nesting
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 500,
+              offset: 50, // item starts at byte 50 in parent's payload
+              dataOffset: 120, // payload starts at byte 120 in parent's payload (50 + 70 header)
+              parentId: parentId,
+              contentType: 'application/json',
+            };
+          }
+          if (id === parentId) {
+            return {
+              size: 2000,
+              offset: 1000, // parent starts at byte 1000 in root
+              dataOffset: 1100, // parent's payload starts at byte 1100 (1000 + 100 header)
+              parentId: rootId,
+            };
+          }
+          if (id === rootId) {
+            return {
+              size: 50000,
+              offset: 0,
+              // No parentId = root
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      // Verify stored offsets
+      const setAttrCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      const rootOffsetCall = setAttrCalls.find(
+        (call: any) =>
+          call.arguments[0] === dataItemId &&
+          call.arguments[1].rootDataItemOffset !== undefined,
+      );
+      assert.ok(rootOffsetCall, 'Should store root offsets');
+
+      const storedAttrs = rootOffsetCall.arguments[1];
+
+      // CRITICAL TEST: Verify our fix is working
+      // rootDataItemOffset = parent's dataOffset + child's offset
+      // = 1100 + 50 = 1150 (where child's header starts in root)
+      assert.strictEqual(
+        storedAttrs.rootDataItemOffset,
+        1150,
+        'rootDataItemOffset should be parent.dataOffset (1100) + child.offset (50)',
+      );
+
+      // rootDataOffset = parent's dataOffset + child's dataOffset
+      // = 1100 + 120 = 1220 (where child's payload starts in root)
+      assert.strictEqual(
+        storedAttrs.rootDataOffset,
+        1220,
+        'rootDataOffset should be parent.dataOffset (1100) + child.dataOffset (120)',
+      );
+
+      // Verify header size
+      const headerSize =
+        storedAttrs.rootDataOffset - storedAttrs.rootDataItemOffset;
+      assert.strictEqual(
+        headerSize,
+        70,
+        'Header size should be 70 bytes (child header)',
+      );
+    });
+
+    it('should store correct rootDataItemOffset for three-level nesting', async () => {
+      const dataItemId = 'level3';
+      const level2Id = 'level2';
+      const level1Id = 'level1';
+      const rootId = 'root-tx';
+      const dataStream = Readable.from([Buffer.from('deeply nested')]);
+
+      // Mock three-level nesting chain
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 300,
+              offset: 25, // in level2's payload
+              dataOffset: 75, // payload in level2's payload (25 + 50 header)
+              parentId: level2Id,
+            };
+          }
+          if (id === level2Id) {
+            return {
+              size: 600,
+              offset: 50, // in level1's payload
+              dataOffset: 150, // payload in level1's payload (50 + 100 header)
+              parentId: level1Id,
+            };
+          }
+          if (id === level1Id) {
+            return {
+              size: 1500,
+              offset: 100, // in root
+              dataOffset: 200, // payload in root (100 + 100 header)
+              parentId: rootId,
+            };
+          }
+          if (id === rootId) {
+            return {
+              size: 100000,
+              offset: 0,
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 300,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      const setAttrCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      const rootOffsetCall = setAttrCalls.find(
+        (call: any) =>
+          call.arguments[0] === dataItemId &&
+          call.arguments[1].rootDataItemOffset !== undefined,
+      );
+      assert.ok(rootOffsetCall, 'Should store root offsets');
+
+      const storedAttrs = rootOffsetCall.arguments[1];
+
+      // Calculation:
+      // level1.dataOffset (200) + level2.dataOffset (150) + level3.offset (25) = 375
+      assert.strictEqual(
+        storedAttrs.rootDataItemOffset,
+        375,
+        'rootDataItemOffset should accumulate: 200 + 150 + 25',
+      );
+
+      // level1.dataOffset (200) + level2.dataOffset (150) + level3.dataOffset (75) = 425
+      assert.strictEqual(
+        storedAttrs.rootDataOffset,
+        425,
+        'rootDataOffset should accumulate: 200 + 150 + 75',
+      );
+
+      // Verify header size
+      const headerSize =
+        storedAttrs.rootDataOffset - storedAttrs.rootDataItemOffset;
+      assert.strictEqual(
+        headerSize,
+        50,
+        'Header size should be 50 bytes (level3 header)',
+      );
+    });
+
+    it('should correctly calculate header size from stored offsets', async () => {
+      const testCases = [
+        {
+          itemId: 'item-small-header',
+          offset: 0,
+          dataOffset: 50,
+          expectedHeader: 50,
+        },
+        {
+          itemId: 'item-medium-header',
+          offset: 100,
+          dataOffset: 200,
+          expectedHeader: 100,
+        },
+        {
+          itemId: 'item-rsa-header',
+          offset: 500,
+          dataOffset: 1585,
+          expectedHeader: 1085,
+        }, // Typical RSA signature
+      ];
+
+      for (const testCase of testCases) {
+        // Reset mocks for each test case
+        mock.restoreAll();
+        dataSource = { getData: mock.fn() };
+        dataAttributesStore = {
+          getDataAttributes: mock.fn(),
+          setDataAttributes: mock.fn(),
+        };
+        rootParentDataSource = new RootParentDataSource({
+          log,
+          dataSource,
+          dataAttributesStore: dataAttributesStore,
+          dataItemRootTxIndex,
+          ans104OffsetSource,
+        });
+
+        const rootId = 'root-tx';
+        const dataStream = Readable.from([Buffer.from('data')]);
+
+        (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+          async (id: string) => {
+            if (id === testCase.itemId) {
+              return {
+                size: 1000,
+                offset: testCase.offset,
+                dataOffset: testCase.dataOffset,
+                parentId: rootId,
+              };
+            }
+            if (id === rootId) {
+              return { size: 10000, offset: 0 };
+            }
+            return null;
+          },
+        );
+
+        (dataSource.getData as any).mock.mockImplementation(async () => ({
+          stream: dataStream,
+          size: 1000,
+          verified: true,
+          trusted: true,
+          cached: false,
+        }));
+
+        await rootParentDataSource.getData({ id: testCase.itemId });
+
+        const setAttrCalls = (dataAttributesStore.setDataAttributes as any).mock
+          .calls;
+        const rootOffsetCall = setAttrCalls.find(
+          (call: any) =>
+            call.arguments[0] === testCase.itemId &&
+            call.arguments[1].rootDataItemOffset !== undefined,
+        );
+
+        assert.ok(
+          rootOffsetCall,
+          `Should store offsets for ${testCase.itemId}`,
+        );
+
+        const storedAttrs = rootOffsetCall.arguments[1];
+        const actualHeaderSize =
+          storedAttrs.rootDataOffset - storedAttrs.rootDataItemOffset;
+
+        assert.strictEqual(
+          actualHeaderSize,
+          testCase.expectedHeader,
+          `Header size for ${testCase.itemId} should be ${testCase.expectedHeader} bytes`,
+        );
+        assert.strictEqual(
+          storedAttrs.rootDataItemOffset,
+          testCase.offset,
+          `rootDataItemOffset should match item offset for ${testCase.itemId}`,
+        );
+        assert.strictEqual(
+          storedAttrs.rootDataOffset,
+          testCase.dataOffset,
+          `rootDataOffset should match item dataOffset for ${testCase.itemId}`,
+        );
+      }
+    });
+
+    it('should handle zero-offset items correctly', async () => {
+      const dataItemId = 'zero-offset-item';
+      const rootId = 'root-tx';
+      const dataStream = Readable.from([Buffer.from('data at offset 0')]);
+
+      // Item starts at offset 0 in root (first item in bundle)
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 800,
+              offset: 0, // Zero offset - first item in bundle
+              dataOffset: 75, // Payload starts at 75 (0 + 75 header)
+              parentId: rootId,
+            };
+          }
+          if (id === rootId) {
+            return {
+              size: 50000,
+              offset: 0,
+            };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 800,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      const setAttrCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      const rootOffsetCall = setAttrCalls.find(
+        (call: any) =>
+          call.arguments[0] === dataItemId &&
+          call.arguments[1].rootDataItemOffset !== undefined,
+      );
+      assert.ok(rootOffsetCall, 'Should store root offsets');
+
+      const storedAttrs = rootOffsetCall.arguments[1];
+
+      // Critical: zero offset should be stored, not skipped
+      assert.strictEqual(
+        storedAttrs.rootDataItemOffset,
+        0,
+        'rootDataItemOffset should be 0 (not undefined or skipped)',
+      );
+      assert.strictEqual(
+        storedAttrs.rootDataOffset,
+        75,
+        'rootDataOffset should be 75',
+      );
+      assert.strictEqual(
+        storedAttrs.rootDataOffset - storedAttrs.rootDataItemOffset,
+        75,
+        'Header size should be 75 bytes',
+      );
+    });
+
+    it('should match Turbo offset format from legacy bundle parsing', async () => {
+      const dataItemId = 'test-item';
+      const rootId = 'root-tx';
+      const dataStream = Readable.from([Buffer.from('test data')]);
+
+      // First, test legacy path (no attributes)
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async () => null,
+      );
+
+      (dataItemRootTxIndex.getRootTx as any).mock.mockImplementation(
+        async () => ({
+          rootTxId: rootId,
+          rootOffset: 5000, // itemOffset from Turbo/bundle parsing
+          rootDataOffset: 5150, // dataOffset from Turbo/bundle parsing
+          size: 600, // itemSize
+          dataSize: 500, // payload size
+        }),
+      );
+
+      (ans104OffsetSource.getDataItemOffset as any).mock.mockImplementation(
+        async () => ({
+          itemOffset: 5000,
+          dataOffset: 5150,
+          itemSize: 600,
+          dataSize: 500,
+        }),
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      // Get what was stored from legacy path
+      const legacySetCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      const legacyCall = legacySetCalls.find(
+        (call: any) =>
+          call.arguments[0] === dataItemId &&
+          call.arguments[1].rootDataItemOffset !== undefined,
+      );
+      assert.ok(legacyCall, 'Legacy path should store offsets');
+      const legacyAttrs = legacyCall.arguments[1];
+
+      // Now reset and test attributes path
+      mock.restoreAll();
+      dataSource = { getData: mock.fn() };
+      dataAttributesStore = {
+        getDataAttributes: mock.fn(),
+        setDataAttributes: mock.fn(),
+      };
+      dataItemRootTxIndex = { getRootTx: mock.fn() };
+      ans104OffsetSource = { getDataItemOffset: mock.fn() } as any;
+      rootParentDataSource = new RootParentDataSource({
+        log,
+        dataSource,
+        dataAttributesStore: dataAttributesStore,
+        dataItemRootTxIndex,
+        ans104OffsetSource,
+      });
+
+      // Mock attributes matching the legacy data
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            return {
+              size: 500,
+              offset: 5000, // Same as legacy itemOffset
+              dataOffset: 5150, // Same as legacy dataOffset
+              parentId: rootId,
+            };
+          }
+          if (id === rootId) {
+            return { size: 100000, offset: 0 };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: dataStream,
+        size: 500,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      await rootParentDataSource.getData({ id: dataItemId });
+
+      const attrSetCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      const attrCall = attrSetCalls.find(
+        (call: any) =>
+          call.arguments[0] === dataItemId &&
+          call.arguments[1].rootDataItemOffset !== undefined,
+      );
+      assert.ok(attrCall, 'Attributes path should store offsets');
+      const attrAttrs = attrCall.arguments[1];
+
+      // Both paths should produce identical stored values
+      assert.strictEqual(
+        attrAttrs.rootDataItemOffset,
+        legacyAttrs.rootDataItemOffset,
+        'rootDataItemOffset should match between paths',
+      );
+      assert.strictEqual(
+        attrAttrs.rootDataOffset,
+        legacyAttrs.rootDataOffset,
+        'rootDataOffset should match between paths',
+      );
+      assert.strictEqual(
+        attrAttrs.size,
+        legacyAttrs.size,
+        'size should match between paths',
+      );
+    });
+
+    it('should store offsets from attributes traversal for later retrieval', async () => {
+      const dataItemId = 'cached-item';
+      const parentId = 'parent';
+      const rootId = 'root-tx';
+      const dataStream = Readable.from([Buffer.from('cached data')]);
+
+      // Track whether offsets have been computed yet
+      let offsetsComputed = false;
+
+      (dataAttributesStore.getDataAttributes as any).mock.mockImplementation(
+        async (id: string) => {
+          if (id === dataItemId) {
+            // After first getData completes, return pre-computed offsets
+            if (offsetsComputed) {
+              return {
+                size: 400,
+                offset: 200,
+                dataOffset: 300,
+                parentId: parentId,
+                rootTransactionId: rootId,
+                rootDataItemOffset: 1200, // stored from first traversal
+                rootDataOffset: 1300, // stored from first traversal
+              };
+            } else {
+              // First time: no pre-computed offsets
+              return {
+                size: 400,
+                offset: 200,
+                dataOffset: 300,
+                parentId: parentId,
+              };
+            }
+          }
+          if (id === parentId) {
+            return {
+              size: 3000,
+              offset: 1000,
+              dataOffset: 1000,
+              parentId: rootId,
+            };
+          }
+          if (id === rootId) {
+            return { size: 50000, offset: 0 };
+          }
+          return null;
+        },
+      );
+
+      (dataSource.getData as any).mock.mockImplementation(async () => ({
+        stream: Readable.from([Buffer.from('data')]),
+        size: 400,
+        verified: true,
+        trusted: true,
+        cached: false,
+      }));
+
+      // First getData: should traverse parent chain
+      const firstGetAttrCallsBefore = (
+        dataAttributesStore.getDataAttributes as any
+      ).mock.calls.length;
+      await rootParentDataSource.getData({ id: dataItemId });
+      const firstGetAttrCallsAfter = (
+        dataAttributesStore.getDataAttributes as any
+      ).mock.calls.length;
+
+      const firstCallAttrCount =
+        firstGetAttrCallsAfter - firstGetAttrCallsBefore;
+      assert.ok(
+        firstCallAttrCount >= 3,
+        'First call should traverse parent chain',
+      );
+
+      // Verify offsets were stored
+      const setAttrCalls = (dataAttributesStore.setDataAttributes as any).mock
+        .calls;
+      const storedCall = setAttrCalls.find(
+        (call: any) =>
+          call.arguments[0] === dataItemId &&
+          call.arguments[1].rootDataItemOffset !== undefined,
+      );
+      assert.ok(storedCall, 'Should store offsets after first traversal');
+
+      const storedAttrs = storedCall.arguments[1];
+      assert.strictEqual(
+        storedAttrs.rootDataItemOffset,
+        1200,
+        'Should store correct rootDataItemOffset',
+      );
+      assert.strictEqual(
+        storedAttrs.rootDataOffset,
+        1300,
+        'Should store correct rootDataOffset',
+      );
+
+      // Mark offsets as computed for second call
+      offsetsComputed = true;
+
+      // Second getData: should use pre-computed offsets (no parent traversal)
+      const secondGetAttrCallsBefore = (
+        dataAttributesStore.getDataAttributes as any
+      ).mock.calls.length;
+      await rootParentDataSource.getData({ id: dataItemId });
+      const secondGetAttrCallsAfter = (
+        dataAttributesStore.getDataAttributes as any
+      ).mock.calls.length;
+
+      const secondCallAttrCount =
+        secondGetAttrCallsAfter - secondGetAttrCallsBefore;
+
+      // Should only call getDataAttributes for:
+      // 1. Initial content type lookup
+      // 2. Check for pre-computed offsets (finds them!)
+      // No parent traversal needed
+      assert.ok(
+        secondCallAttrCount <= 2,
+        `Second call should use pre-computed offsets without traversal (got ${secondCallAttrCount} calls)`,
+      );
+
+      // Verify data was fetched using stored offsets
+      const dataSourceCalls = (dataSource.getData as any).mock.calls;
+      const lastDataCall =
+        dataSourceCalls[dataSourceCalls.length - 1].arguments[0];
+      assert.strictEqual(
+        lastDataCall.id,
+        rootId,
+        'Should fetch from root using stored offsets',
+      );
+      assert.strictEqual(
+        lastDataCall.region.offset,
+        1300,
+        'Should use stored rootDataOffset',
+      );
     });
   });
 });

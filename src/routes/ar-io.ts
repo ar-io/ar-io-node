@@ -17,6 +17,7 @@ import { ParquetExporter } from '../workers/parquet-exporter.js';
 import { NormalizedDataItem, PartialJsonTransaction } from '../types.js';
 import { DATA_PATH_REGEX } from '../constants.js';
 import { isEmptyString } from '../lib/string.js';
+import { buildArIoInfo } from './ar-io-info-builder.js';
 
 export const arIoRouter = Router();
 export let parquetExporter: ParquetExporter | null = null;
@@ -124,16 +125,72 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
   });
 });
 
-// ar.io network info
+/**
+ * Handler for the /ar-io/info endpoint.
+ *
+ * Returns gateway configuration information including rate limiter settings
+ * (when enabled) and x402 payment configuration (when enabled). This endpoint
+ * allows clients to discover gateway capabilities, limits, and pricing.
+ *
+ * @param _req - Express request object (unused)
+ * @param res - Express response object
+ *
+ * @example
+ * GET /ar-io/info
+ *
+ * Response (both features enabled):
+ * {
+ *   "wallet": "...",
+ *   "processId": "...",
+ *   "rateLimiter": {
+ *     "enabled": true,
+ *     "dataEgress": {
+ *       "buckets": {
+ *         "resource": { "capacity": 1000000, "refillRate": 100, ... },
+ *         "ip": { "capacity": 100000, "refillRate": 20, ... }
+ *       }
+ *     }
+ *   },
+ *   "x402": {
+ *     "enabled": true,
+ *     "network": "base-sepolia",
+ *     "dataEgress": {
+ *       "pricing": { "perBytePrice": 0.0000000001, ... }
+ *     }
+ *   }
+ * }
+ */
 export const arIoInfoHandler = (_req: Request, res: Response) => {
-  res.status(200).send({
+  const response = buildArIoInfo({
     wallet: config.AR_IO_WALLET,
     processId: config.IO_PROCESS_ID,
     ans104UnbundleFilter: config.ANS104_UNBUNDLE_FILTER_PARSED,
     ans104IndexFilter: config.ANS104_INDEX_FILTER_PARSED,
-    supportedManifestVersions: ['0.1.0', '0.2.0'],
     release,
+    rateLimiter: config.ENABLE_RATE_LIMITER
+      ? {
+          enabled: true,
+          resourceCapacity: config.RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET,
+          resourceRefillRate: config.RATE_LIMITER_RESOURCE_REFILL_PER_SEC,
+          ipCapacity: config.RATE_LIMITER_IP_TOKENS_PER_BUCKET,
+          ipRefillRate: config.RATE_LIMITER_IP_REFILL_PER_SEC,
+        }
+      : undefined,
+    x402: config.ENABLE_X_402_USDC_DATA_EGRESS
+      ? {
+          enabled: true,
+          network: config.X_402_USDC_NETWORK,
+          walletAddress: config.X_402_USDC_WALLET_ADDRESS,
+          facilitatorUrl: config.X_402_USDC_FACILITATOR_URL,
+          perBytePrice: config.X_402_USDC_PER_BYTE_PRICE,
+          minPrice: config.X_402_USDC_DATA_EGRESS_MIN_PRICE,
+          maxPrice: config.X_402_USDC_DATA_EGRESS_MAX_PRICE,
+          capacityMultiplier: config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
+        }
+      : undefined,
   });
+
+  res.status(200).send(response);
 };
 arIoRouter.get('/ar-io/info', arIoInfoHandler);
 

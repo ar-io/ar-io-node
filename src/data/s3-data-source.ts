@@ -20,6 +20,7 @@ import { startChildSpan } from '../tracing.js';
 import { Span } from '@opentelemetry/api';
 import { SpanStatusCode } from '@opentelemetry/api';
 import * as metrics from '../metrics.js';
+import { buildRangeHeader, parseContentRange } from '../lib/http-utils.js';
 
 export class S3DataSource implements ContiguousDataSource {
   private log: winston.Logger;
@@ -151,7 +152,9 @@ export class S3DataSource implements ContiguousDataSource {
 
       // Handle non-zero-byte data
       const startOffset = +(payloadDataStart ?? 0) + +(region?.offset ?? 0);
-      const range = `bytes=${startOffset}-${region?.size !== undefined ? startOffset + region.size - 1 : ''}`;
+      const endOffset =
+        region?.size !== undefined ? startOffset + region.size - 1 : undefined;
+      const range = buildRangeHeader(startOffset, endOffset);
 
       span.setAttributes({
         's3.request.start_offset': startOffset,
@@ -204,7 +207,7 @@ export class S3DataSource implements ContiguousDataSource {
       const stream = response.Body as Readable;
 
       const finalSize =
-        contentSizeFromContentRange(response.ContentRange) ??
+        parseContentRange(response.ContentRange)?.size ??
         response.ContentLength;
 
       span.setAttributes({
@@ -252,21 +255,4 @@ export class S3DataSource implements ContiguousDataSource {
       span.end();
     }
   }
-}
-
-// Expected format: `bytes start-end/maxSize`
-function contentSizeFromContentRange(
-  contentRange: string | undefined,
-): number | undefined {
-  // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
-  if (!contentRange) return undefined;
-
-  const parts = contentRange.match(/bytes (\d+)-(\d+)/);
-  if (!parts) return undefined;
-
-  const start = parseInt(parts[1], 10);
-  const end = parseInt(parts[2], 10);
-  if (isNaN(start) || isNaN(end)) return undefined;
-
-  return end - start + 1;
 }

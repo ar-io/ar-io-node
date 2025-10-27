@@ -7,7 +7,6 @@
 
 import { Request, Response } from 'express';
 import { Span } from '@opentelemetry/api';
-import rangeParser from 'range-parser';
 import log from '../log.js';
 import * as config from '../config.js';
 import { startChildSpan } from '../tracing.js';
@@ -17,7 +16,7 @@ import {
   rateLimitRequestsTotal,
   rateLimitBytesBlockedTotal,
 } from '../metrics.js';
-import { ContiguousDataAttributes, RequestAttributes } from '../types.js';
+import { RequestAttributes } from '../types.js';
 import { RateLimiter } from '../limiter/types.js';
 import {
   PaymentProcessor,
@@ -31,9 +30,9 @@ export interface CheckPaymentAndRateLimitsParams {
   req: Request;
   res: Response;
   id: string;
-  dataAttributes: ContiguousDataAttributes | undefined;
+  contentSize: number;
+  contentType?: string;
   requestAttributes: RequestAttributes;
-  rangeHeader?: string;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor | undefined;
   parentSpan?: Span;
@@ -65,31 +64,6 @@ export interface AdjustRateLimitTokensParams {
 }
 
 /**
- * Calculate the exact content size accounting for range requests
- */
-function calculateContentSize(
-  dataAttributes: ContiguousDataAttributes,
-  rangeHeader?: string,
-): number {
-  if (rangeHeader === undefined) {
-    return dataAttributes.size; // Full content
-  }
-
-  const ranges = rangeParser(dataAttributes.size, rangeHeader);
-
-  // Malformed or unsatisfiable range - charge for full content
-  if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
-    return dataAttributes.size;
-  }
-
-  // Calculate total bytes across all ranges
-  return ranges.reduce(
-    (total, range) => total + (range.end - range.start + 1),
-    0,
-  );
-}
-
-/**
  * Main integration function - checks payment and rate limits before streaming data
  *
  * This function should be called AFTER:
@@ -103,9 +77,9 @@ export async function checkPaymentAndRateLimits({
   req,
   res,
   id,
-  dataAttributes,
+  contentSize,
+  contentType,
   requestAttributes: _requestAttributes,
-  rangeHeader,
   rateLimiter,
   paymentProcessor,
   parentSpan,
@@ -115,8 +89,7 @@ export async function checkPaymentAndRateLimits({
     {
       attributes: {
         'data.id': id,
-        'data.size': dataAttributes?.size,
-        'data.has_range': rangeHeader !== undefined,
+        'content.size': contentSize,
       },
     },
     parentSpan,
@@ -129,7 +102,7 @@ export async function checkPaymentAndRateLimits({
     // Check if ANY IP in the chain is allowlisted - if so, skip all checks
     if (rateLimiter?.isAllowlisted(clientIps)) {
       span.setAttribute('allowlisted', true);
-      log.debug('[DataHandler] Client is allowlisted, skipping checks', {
+      log.debug('Client is allowlisted, skipping checks', {
         id,
         clientIps,
       });
@@ -145,7 +118,7 @@ export async function checkPaymentAndRateLimits({
     ) {
       span.setAttribute('arns_allowlisted', true);
       span.setAttribute('arns_name', arnsName);
-      log.debug('[DataHandler] ArNS name is allowlisted, skipping checks', {
+      log.debug('ArNS name is allowlisted, skipping checks', {
         id,
         arnsName,
       });
@@ -156,17 +129,6 @@ export async function checkPaymentAndRateLimits({
     const host = req.headers.host ?? '';
     const domain = extractDomain(host);
     rateLimitRequestsTotal.inc({ domain });
-
-    // Skip checks if we don't have data attributes (can't calculate size)
-    if (dataAttributes === undefined) {
-      span.setAttribute('skip_reason', 'no_data_attributes');
-      log.debug('[DataHandler] No data attributes, skipping checks', { id });
-      return { allowed: true };
-    }
-
-    // Calculate exact content size (accounting for range requests)
-    const contentSize = calculateContentSize(dataAttributes, rangeHeader);
-    span.setAttribute('content_size', contentSize);
 
     let paymentVerified = false;
     let paymentSettled = false;
@@ -192,7 +154,7 @@ export async function checkPaymentAndRateLimits({
           protocol: req.protocol,
           host: host,
           originalUrl: req.originalUrl,
-          contentType: dataAttributes.contentType ?? 'application/octet-stream',
+          contentType: contentType ?? 'application/octet-stream',
         } as PaymentRequirementsContext);
 
         paymentSpan.setAttribute(
@@ -206,7 +168,7 @@ export async function checkPaymentAndRateLimits({
         if (payment === undefined) {
           // No payment provided - continue to rate limiter
           paymentSpan.setAttribute('payment.provided', false);
-          log.debug('[DataHandler] No payment provided', { id });
+          log.debug('No payment provided', { id });
         } else {
           // Verify payment
           paymentSpan.setAttribute('payment.provided', true);
@@ -222,7 +184,7 @@ export async function checkPaymentAndRateLimits({
               'payment.invalid_reason',
               verifyResult.invalidReason ?? 'unknown',
             );
-            log.warn('[DataHandler] Payment verification failed', {
+            log.warn('Payment verification failed', {
               id,
               reason: verifyResult.invalidReason,
             });
@@ -257,7 +219,7 @@ export async function checkPaymentAndRateLimits({
               'payment.settlement_error',
               settlementResult.errorReason ?? 'unknown',
             );
-            log.error('[DataHandler] Payment settlement failed', {
+            log.error('Payment settlement failed', {
               id,
               error: settlementResult.errorReason,
             });
@@ -295,11 +257,11 @@ export async function checkPaymentAndRateLimits({
             );
           }
 
-          log.info('[DataHandler] Payment verified and settled', { id });
+          log.info('Payment verified and settled', { id });
         }
       } catch (error: any) {
         paymentSpan.recordException(error);
-        log.error('[DataHandler] Error during payment processing', {
+        log.error('Error during payment processing', {
           id,
           error: error.message,
           stack: error.stack,
@@ -334,6 +296,13 @@ export async function checkPaymentAndRateLimits({
         // Cap at max price to ensure proportional bucket increase
         const contentLengthForTopOff = paymentVerified ? contentSize : 0;
 
+        log.debug('Reserving rate limit tokens', {
+          id,
+          contentSize,
+          predictedTokens,
+          paymentVerified,
+        });
+
         // Check limits
         const limitResult = await rateLimiter.checkLimit(
           req,
@@ -352,7 +321,7 @@ export async function checkPaymentAndRateLimits({
             limitResult.limitType ?? 'unknown',
           );
 
-          log.info('[DataHandler] Rate limit exceeded', {
+          log.info('Rate limit exceeded', {
             id,
             limitType: limitResult.limitType,
           });
@@ -366,18 +335,13 @@ export async function checkPaymentAndRateLimits({
           rateLimitBytesBlockedTotal.inc({ domain }, contentSize);
 
           // If payment processor exists and payment not verified, return 402
-          if (
-            paymentProcessor !== undefined &&
-            !paymentVerified &&
-            dataAttributes !== undefined
-          ) {
+          if (paymentProcessor !== undefined && !paymentVerified) {
             const requirements = paymentProcessor.calculateRequirements({
               contentSize,
               protocol: req.protocol,
               host: host,
               originalUrl: req.originalUrl,
-              contentType:
-                dataAttributes.contentType ?? 'application/octet-stream',
+              contentType: contentType ?? 'application/octet-stream',
             } as PaymentRequirementsContext);
 
             paymentProcessor.sendPaymentRequiredResponse(
@@ -414,7 +378,7 @@ export async function checkPaymentAndRateLimits({
         };
       } catch (error: any) {
         rateLimitSpan.recordException(error);
-        log.error('[DataHandler] Error during rate limit check', {
+        log.error('Error during rate limit check', {
           id,
           error: error.message,
           stack: error.stack,
@@ -430,7 +394,7 @@ export async function checkPaymentAndRateLimits({
     return { allowed: true, paymentVerified, paymentSettled };
   } catch (error: any) {
     span.recordException(error);
-    log.error('[DataHandler] Error in checkPaymentAndRateLimits', {
+    log.error('Error in checkPaymentAndRateLimits', {
       id,
       error: error.message,
       stack: error.stack,
@@ -486,7 +450,7 @@ export async function adjustRateLimitTokens({
       domain,
     });
 
-    log.debug('[DataHandler] Adjusted rate limit tokens', {
+    log.debug('Adjusted rate limit tokens', {
       responseSize,
       initialIpTokens: initialResult.ipTokensConsumed,
       initialIpPaidTokens: initialResult.ipPaidTokensConsumed,
@@ -497,7 +461,7 @@ export async function adjustRateLimitTokens({
     });
   } catch (error: any) {
     span.recordException(error);
-    log.error('[DataHandler] Error adjusting tokens', {
+    log.error('Error adjusting tokens', {
       error: error.message,
       stack: error.stack,
     });

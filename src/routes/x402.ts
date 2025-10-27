@@ -41,7 +41,7 @@ export function createX402Router({
         try {
           decodedUrl = Buffer.from(encoded, 'base64url').toString('utf-8');
         } catch (error) {
-          log.warn('[X402Redirect] Invalid base64url encoding', { encoded });
+          log.warn('Invalid base64url encoding', { encoded });
           res.status(400).send('Invalid encoded URL');
           return;
         }
@@ -50,7 +50,7 @@ export function createX402Router({
         try {
           validatedUrl = validateRedirectUrl(decodedUrl);
         } catch (error: any) {
-          log.warn('[X402Redirect] Invalid redirect URL', {
+          log.warn('Invalid redirect URL', {
             decodedUrl,
             error: error.message,
           });
@@ -58,16 +58,14 @@ export function createX402Router({
           return;
         }
 
-        log.debug('[X402Redirect] Processing redirect request', {
+        log.debug('Processing redirect request', {
           encoded,
           validatedUrl,
         });
 
         // If no payment processor or rate limiter, just redirect
         if (paymentProcessor === undefined || rateLimiter === undefined) {
-          log.warn(
-            '[X402Redirect] No payment processor or rate limiter configured',
-          );
+          log.warn('No payment processor or rate limiter configured');
           sendRedirectHtml(res, validatedUrl);
           return;
         }
@@ -76,7 +74,7 @@ export function createX402Router({
         const payment = paymentProcessor.extractPayment(req);
 
         if (payment === undefined) {
-          log.warn('[X402Redirect] No payment header found');
+          log.warn('No payment header found');
           sendRedirectHtml(res, validatedUrl);
           return;
         }
@@ -92,14 +90,12 @@ export function createX402Router({
             payment.payload.authorization.value.toString();
           contentSize =
             paymentProcessor.paymentToContentSize(actualPaymentAmount);
-          log.debug('[X402Redirect] Calculated content size from payment', {
+          log.debug('Calculated content size from payment', {
             actualPaymentAmount,
             contentSize,
           });
         } else {
-          log.warn(
-            '[X402Redirect] Unable to extract payment amount, using contentSize: 0',
-          );
+          log.warn('Unable to extract payment amount, using contentSize: 0');
         }
 
         // Create payment requirements based on actual payment amount
@@ -113,14 +109,14 @@ export function createX402Router({
           });
 
         // Verify payment
-        log.debug('[X402Redirect] Verifying payment');
+        log.debug('Verifying payment');
         const verifyResult = await paymentProcessor.verifyPayment(
           payment,
           requirements,
         );
 
         if (!verifyResult.isValid) {
-          log.warn('[X402Redirect] Payment verification failed', {
+          log.warn('Payment verification failed', {
             reason: verifyResult.invalidReason,
           });
           sendRedirectHtml(res, validatedUrl);
@@ -128,14 +124,14 @@ export function createX402Router({
         }
 
         // Settle payment
-        log.debug('[X402Redirect] Settling payment');
+        log.debug('Settling payment');
         const settlementResult = await paymentProcessor.settlePayment(
           payment,
           requirements,
         );
 
         if (!settlementResult.success) {
-          log.error('[X402Redirect] Payment settlement failed', {
+          log.error('Payment settlement failed', {
             error: settlementResult.errorReason,
           });
           sendRedirectHtml(res, validatedUrl);
@@ -157,7 +153,7 @@ export function createX402Router({
             const tokens =
               paymentProcessor.paymentToTokens(actualPaymentAmount);
 
-            log.debug('[X402Redirect] Topping off rate limiter', {
+            log.debug('Topping off rate limiter', {
               paymentAmount: actualPaymentAmount,
               tokens,
             });
@@ -165,7 +161,7 @@ export function createX402Router({
             // Top off rate limiter bucket
             await rateLimiter.topOffPaidTokens(req, tokens);
 
-            log.info('[X402Redirect] Payment settled and bucket topped off', {
+            log.info('Payment settled and bucket topped off', {
               tokens,
             });
           }
@@ -174,7 +170,7 @@ export function createX402Router({
         // Send redirect HTML
         sendRedirectHtml(res, validatedUrl);
       } catch (error: any) {
-        log.error('[X402Redirect] Error processing redirect', {
+        log.error('Error processing redirect', {
           error: error.message,
           stack: error.stack,
         });

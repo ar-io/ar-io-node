@@ -399,7 +399,11 @@ describe('MemoryRateLimiter', () => {
       // Should be able to consume 200 tokens
       const result = await customLimiter.checkLimit(req, res, 200);
       assert.strictEqual(result.allowed, true);
-      assert.strictEqual(result.ipPaidTokensConsumed, 200);
+      // Allow small tolerance for refilled regular tokens (timing precision)
+      assert.ok(
+        (result.ipPaidTokensConsumed ?? 0) > 199.9,
+        `Expected ipPaidTokensConsumed to be > 199.9, got ${result.ipPaidTokensConsumed}`,
+      );
     });
 
     it('should bypass resource limits when paid tokens added', async () => {

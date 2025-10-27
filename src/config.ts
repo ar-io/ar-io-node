@@ -389,6 +389,13 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
 
+// Assumed size for base64-encoded chunk GET responses (used for x402 payment and rate limiting)
+// Default: 368,640 bytes (360 KiB) = 256 KiB raw data * 1.4 base64url encoding overhead
+export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
+  'CHUNK_GET_BASE64_SIZE_BYTES',
+  '368640',
+);
+
 // Arweave network peer post success goal
 // setting to 0 means this behaviour is disabled.
 export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
@@ -1320,6 +1327,15 @@ if (CDP_API_KEY_SECRET_FILE !== undefined) {
   process.env.CDP_API_KEY_SECRET = readFileSync(CDP_API_KEY_SECRET_FILE)
     .toString()
     .trim();
+}
+
+// Validate X402 requires rate limiter
+if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {
+  throw new Error(
+    'ENABLE_X_402_USDC_DATA_EGRESS requires ENABLE_RATE_LIMITER to be enabled. ' +
+      'X402 payments are not a standalone feature - they work as an extension of the rate limiting system. ' +
+      'Set ENABLE_RATE_LIMITER=true to enable X402 payments.',
+  );
 }
 
 export const X_402_APP_NAME = env.varOrDefault(

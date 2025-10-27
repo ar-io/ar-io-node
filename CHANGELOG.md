@@ -4,6 +4,109 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 56] - 2025-10-27
+
+This is a recommended release due to fixes for nested bundle offset
+calculations.
+
+This release continues the x402 payment protocol expansion from Release 55,
+extending payment and rate limiting support to the chunk endpoint and adding
+comprehensive operator documentation. The `/ar-io/info` endpoint now exposes
+rate limiter and payment configuration for programmatic gateway discovery.
+This release also includes important fixes for nested bundle offset calculations
+that could affect data retrieval, making it a recommended upgrade for all
+operators.
+
+### Added
+
+- **Chunk Endpoint Payment and Rate Limiting**: Added x402 payment and rate
+  limiting support to `GET /chunk/:offset` endpoint for gateway monetization
+  and traffic control:
+  - Uses fixed size assumption (~360 KiB) for predictable pricing without
+    waiting for chunk retrieval
+  - Configurable via `CHUNK_GET_BASE64_SIZE_BYTES` environment variable
+    (default: 368,640 bytes)
+  - HEAD requests consume one token (to prevent spam)
+  - 304 Not Modified responses consume one token (to prevent spam)
+  - Compatible with all existing x402 and rate limiter configuration
+- **Configuration Validation**: Added startup validation that ensures
+  `ENABLE_RATE_LIMITER=true` when `ENABLE_X_402_USDC_DATA_EGRESS=true`. The
+  application will fail to start with a clear error message if x402 is enabled
+  without the rate limiter, since x402 payments require rate limiting to
+  function (402 responses are only sent when rate limits are exceeded)
+- **Gateway Info Endpoint**: The `/ar-io/info` endpoint now exposes rate limiter
+  and x402 payment configuration when these features are enabled. This allows
+  clients to programmatically discover gateway capabilities, pricing, and limits.
+  New optional response fields:
+  - `rateLimiter` - Per-resource and per-IP bucket capacities, refill rates, and
+    byte convenience fields (when `ENABLE_RATE_LIMITER=true`)
+  - `x402` - Payment network, wallet address, facilitator URL, per-byte pricing
+    with min/max bounds, example costs for common sizes (1KB/1MB/1GB), and
+    capacity multiplier for paid tier (when `ENABLE_X_402_USDC_DATA_EGRESS=true`)
+- **x402 and Rate Limiter Documentation**: Added comprehensive operator guide at
+  `docs/x402-and-rate-limiting.md` covering x402 payment protocol and rate
+  limiting configuration:
+  - Configuration via `.env` files with detailed examples
+  - Secrets management using volume mounts for Coinbase Develop Program
+    credentials
+  - Complete list of rate limited endpoints including `GET /chunk/:offset`
+  - Token consumption patterns and pricing models for all endpoints
+  - Integration with x402 facilitator services
+  - Testing and troubleshooting guidance
+- **Coinbase Developer Platform Environment Variables**: Added environment
+  variables for Coinbase Developer Platform (CDP) integration:
+  - `CDP_API_KEY_ID` - CDP API key identifier
+  - `CDP_API_KEY_SECRET` - CDP API secret key
+  - `CDP_API_KEY_SECRET_FILE` - Load CDP secret from file for improved security
+
+### Changed
+
+- **Glossary**: Added new "Rate Limiter & x402 Payment Protocol" section
+  consolidating related terms:
+  - Facilitator - Payment verification and settlement service
+  - Rate Limiter - Traffic control system overview
+  - Rate Limiter Token Types - Paid vs regular token pools
+  - Token Bucket Algorithm - Rate limiting algorithm details
+  - x402 Protocol - HTTP 402 payment protocol definition
+- **CDP Environment Variables**: Refactored Coinbase Developer Platform API key
+  configuration:
+  - Removed `X_402_CDP_CLIENT_KEY_FILE` (client key is public, doesn't need
+    file-based loading)
+  - Split into separate `CDP_API_KEY_ID` and `CDP_API_KEY_SECRET` variables
+  - Added `CDP_API_KEY_SECRET_FILE` for secure file-based loading of sensitive
+    API secret
+
+### Fixed
+
+- **Docker Compose Configuration**: Added `ENABLE_DATA_ITEM_ROOT_TX_SEARCH` and
+  `ENABLE_PASSTHROUGH_WITHOUT_OFFSETS` environment variables to
+  `docker-compose.yaml`, `.env.example`, and `docs/envs.md`. These options
+  control offset-aware data source behavior and were previously only defined in
+  `src/config.ts`, making them unavailable for Docker Compose users to configure
+  via `.env` files
+- **Data Handler Rate Limiting**: Fixed rate limiting for non-indexed data by:
+  - Removing `dataAttributes !== undefined` check that prevented rate limiting
+    before data indexing
+  - Using `data.size` (always available) as primary source for content size
+    calculation with fallback to `dataAttributes?.size`
+  - Aligning content size calculation with actual `Content-Length` header values
+  - Ensuring consistent rate limiting across all data endpoints (raw data,
+    manifest, and bundled data)
+- **Nested Bundle Data Item Offset Calculation**: Fixed multiple
+  offset calculation issues affecting nested bundle data item retrieval:
+  - Corrected Turbo DynamoDB dataOffset to use absolute semantics (offset +
+    headerSize) instead of relative semantics, ensuring consistency with bundle
+    parsing and type documentation
+  - Fixed rootDataItemOffset calculation to include target item's offset, not
+    just parent dataOffset values
+  - Fixed region boundary validation to handle offset=0 correctly (was
+    incorrectly skipping validation due to truthy checks)
+  - Added backward compatibility fallback for data without dataOffset attributes
+- **304 Not Modified Pre-Charging**: Prevented 304 Not Modified responses from
+  being pre-charged with full content size before checking If-None-Match
+  headers. Now correctly predicts 304 responses and applies minimal token charge
+  without denying legitimate cached requests
+
 ## [Release 55] - 2025-10-20
 
 This is an optional release focused on x402 payment protocol improvements.

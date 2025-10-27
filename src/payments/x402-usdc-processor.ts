@@ -26,6 +26,7 @@ import {
   PaymentSettlementResult,
   PaymentRequirementsContext,
 } from './types.js';
+import { calculateX402Price } from './x402-pricing.js';
 
 /**
  * Configuration options for x402 USDC payment processor
@@ -52,12 +53,14 @@ export interface X402UsdcProcessorConfig {
 export class X402UsdcProcessor implements PaymentProcessor {
   private config: X402UsdcProcessorConfig;
   private facilitator: ReturnType<typeof useFacilitator>;
+  private log: ReturnType<typeof log.child>;
 
   /**
    * Create a new X402 USDC payment processor
    * @param config Payment processor configuration
    */
   constructor(config: X402UsdcProcessorConfig) {
+    this.log = log.child({ class: 'X402UsdcProcessor' });
     this.config = config;
     this.facilitator = useFacilitator({
       url: config.facilitatorUrl,
@@ -68,14 +71,9 @@ export class X402UsdcProcessor implements PaymentProcessor {
    * Calculate x402 USDC per byte egress price based on content size
    */
   private calculatePrice(contentLength: number): string {
-    const priceInUSD = contentLength * this.config.perBytePrice;
-    const clampedPrice = Math.min(
-      Math.max(priceInUSD, this.config.minPrice),
-      this.config.maxPrice,
-    );
+    const price = calculateX402Price(contentLength, this.config);
     // Format to 3 decimal places for consistent, readable pricing
-    const formattedPrice = clampedPrice.toFixed(3);
-    return `$${formattedPrice}`;
+    return `$${price.toFixed(3)}`;
   }
 
   /**
@@ -96,7 +94,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
     // This matches the rate limiter's calculation: Math.ceil(contentLength / 1024)
     const tokens = Math.ceil(equivalentContentLength / 1024);
 
-    log.debug('[X402UsdcProcessor] Payment to tokens conversion', {
+    this.log.debug('Payment to tokens conversion', {
       paymentAmountAtomic,
       paymentAmountUsd,
       perBytePrice: this.config.perBytePrice,
@@ -121,7 +119,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
     // contentLength = priceInUSD / perBytePrice
     const equivalentContentLength = paymentAmountUsd / this.config.perBytePrice;
 
-    log.debug('[X402UsdcProcessor] Payment to content size conversion', {
+    this.log.debug('Payment to content size conversion', {
       paymentAmountAtomic,
       paymentAmountUsd,
       perBytePrice: this.config.perBytePrice,
@@ -188,7 +186,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
       paymentPayload.x402Version = this.config.version;
       return paymentPayload;
     } catch (error: any) {
-      log.error('[X402UsdcProcessor] Failed to decode payment header', {
+      this.log.error('Failed to decode payment header', {
         error: error.message,
       });
       return undefined;
@@ -224,7 +222,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
         requirements,
       );
 
-      log.debug('[X402UsdcProcessor] Payment verification response', {
+      this.log.debug('Payment verification response', {
         verifyResponse,
       });
 
@@ -242,7 +240,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
         payer: verifyResponse.payer,
       };
     } catch (error: any) {
-      log.error('[X402UsdcProcessor] Payment verification error', {
+      this.log.error('Payment verification error', {
         error: error.message,
       });
       return {
@@ -260,7 +258,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
     requirements: PaymentRequirements,
   ): Promise<PaymentSettlementResult> {
     try {
-      log.debug('[X402UsdcProcessor] Settling payment', {
+      this.log.debug('Settling payment', {
         paymentPayload,
         requirements,
       });
@@ -278,7 +276,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
 
       const settlementResultHeader = settleResponseHeader(settlementResult);
 
-      log.debug('[X402UsdcProcessor] Payment settlement result', {
+      this.log.debug('Payment settlement result', {
         settlementResult,
       });
 
@@ -295,7 +293,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
         responseHeader: settlementResultHeader,
       };
     } catch (error: any) {
-      log.error('[X402UsdcProcessor] Payment settlement error', {
+      this.log.error('Payment settlement error', {
         error: error.message,
         stack: error.stack,
       });

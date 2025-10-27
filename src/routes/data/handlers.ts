@@ -33,6 +33,13 @@ import {
   checkPaymentAndRateLimits,
   adjustRateLimitTokens,
 } from '../../handlers/data-handler-utils.js';
+import {
+  buildMultipartResponseParts,
+  generateBoundary,
+  calculateRangeResponseSize,
+  handleIfNoneMatch,
+  wouldReturn304,
+} from '../../lib/http-utils.js';
 
 const STABLE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 const UNSTABLE_MAX_AGE = 60 * 60 * 2; // 2 hours
@@ -42,72 +49,123 @@ const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
 const REQUEST_METHOD_HEAD = 'HEAD';
 
-const handleIfNoneMatch = (req: Request, res: Response): boolean => {
-  const ifNoneMatch = req.get('if-none-match');
-  const etag = res.getHeader('etag');
-
-  if (ifNoneMatch !== undefined && etag !== undefined && ifNoneMatch === etag) {
-    res.status(304);
-    // Remove entity headers per RFC 7232 Section 4.1
-    res.removeHeader('Content-Length');
-    res.removeHeader('Content-Encoding');
-    res.removeHeader('Content-Range');
-    res.removeHeader('Content-Type');
+/**
+ * Handle rate limiting and x402 payment checks for data requests.
+ * Returns false if request is blocked (stream destroyed, 402/429 sent),
+ * true if allowed to proceed.
+ */
+export async function handleDataRateLimitingAndPayment({
+  req,
+  res,
+  id,
+  data,
+  dataAttributes,
+  requestAttributes,
+  rateLimiter,
+  paymentProcessor,
+  parentSpan,
+  log,
+}: {
+  req: Request;
+  res: Response;
+  id: string;
+  data: ContiguousData;
+  dataAttributes: ContiguousDataAttributes | undefined;
+  requestAttributes: RequestAttributes;
+  rateLimiter?: RateLimiter;
+  paymentProcessor?: PaymentProcessor;
+  parentSpan?: Span;
+  log: Logger;
+}): Promise<boolean> {
+  // Early return if neither enforcement mechanism is configured
+  if (rateLimiter === undefined && paymentProcessor === undefined) {
     return true;
   }
-  return false;
-};
 
-/**
- * Calculate actual response size based on data size and optional range header
- * For range requests, includes multipart boundaries and headers
- */
-const calculateResponseSize = (
-  dataSize: number,
-  rangeHeader?: string,
-): number => {
-  if (rangeHeader === undefined) {
-    return dataSize; // Full content
+  // Determine actual content type that will be used in response
+  const contentType =
+    dataAttributes?.contentType ??
+    data.sourceContentType ??
+    'application/octet-stream';
+
+  // Generate boundary once for multipart requests (random but consistent within request)
+  const boundary =
+    req.headers.range !== undefined ? generateBoundary() : undefined;
+
+  // Store boundary in request for use in handleRangeRequest
+  if (boundary !== undefined) {
+    (req as any).multipartBoundary = boundary;
   }
 
-  const ranges = rangeParser(dataSize, rangeHeader);
+  // Calculate content size accounting for range requests
+  // Prefer data.size (always available) over dataAttributes.size (only when indexed)
+  const size = data.size ?? dataAttributes?.size ?? 0;
 
-  // Malformed or unsatisfiable range - would send full content or error
-  if (ranges === -1 || ranges === -2 || ranges.type !== 'bytes') {
-    return dataSize;
+  // Treat cache revalidation that will result in 304 as zero-cost
+  // (data.cached is set to true) OR this is a HEAD request (etag for match check available)
+  const willReturn304 = wouldReturn304(req, dataAttributes?.hash, data.cached);
+
+  const contentSize =
+    req.method === REQUEST_METHOD_HEAD || willReturn304
+      ? 0
+      : calculateRangeResponseSize(
+          size,
+          req.headers.range,
+          contentType,
+          boundary,
+        );
+
+  const limitCheck = await checkPaymentAndRateLimits({
+    req,
+    res,
+    id,
+    contentSize,
+    contentType,
+    requestAttributes,
+    rateLimiter,
+    paymentProcessor,
+    parentSpan,
+  });
+
+  if (!limitCheck.allowed) {
+    data.stream.destroy();
+    return false; // Request blocked (402 or 429 response sent)
   }
 
-  // Single range: just the range size
-  if (ranges.length === 1) {
-    return ranges[0].end - ranges[0].start + 1;
+  // Schedule token adjustment based on actual response size
+  if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
+    // Capture values for closure
+    const calculatedContentSize = contentSize;
+
+    // Adjust tokens after response is sent (run in background)
+    res.on('finish', () => {
+      // Check response status - don't charge for 304 or HEAD responses
+      let responseSize: number;
+      if (res.statusCode === 304 || req.method === REQUEST_METHOD_HEAD) {
+        // 304 Not Modified and HEAD requests send no body
+        // Note: adjustTokens will still consume minimum 1 token to prevent spam
+        responseSize = 0;
+      } else {
+        // Reuse the already-calculated content size (no recalculation needed)
+        responseSize = calculatedContentSize;
+      }
+
+      adjustRateLimitTokens({
+        req,
+        responseSize,
+        initialResult: limitCheck,
+        rateLimiter,
+      }).catch((error: any) => {
+        log.error('Error adjusting tokens', {
+          error: error.message,
+          stack: error.stack,
+        });
+      });
+    });
   }
 
-  // Multiple ranges: calculate total including boundaries and headers
-  // This matches the logic in handleRangeRequest
-  const boundary = '--------------------------' + '0'.repeat(24); // Approximate boundary size
-  const partBoundary = `--${boundary}\r\n`;
-  const finalBoundary = `--${boundary}--\r\n`;
-  const blankLine = '\r\n';
-
-  let totalSize = 0;
-
-  for (const range of ranges) {
-    totalSize += Buffer.byteLength(partBoundary);
-    totalSize += Buffer.byteLength(
-      `Content-Type: application/octet-stream\r\n`,
-    );
-    totalSize += Buffer.byteLength(
-      `Content-Range: bytes ${range.start}-${range.end}/${dataSize}\r\n`,
-    );
-    totalSize += Buffer.byteLength(blankLine);
-    totalSize += range.end - range.start + 1; // Actual data
-    totalSize += Buffer.byteLength(blankLine);
-  }
-
-  totalSize += Buffer.byteLength(finalBoundary);
-
-  return totalSize;
-};
+  return true; // Request allowed to proceed
+}
 
 const setDigestStableVerifiedHeaders = ({
   req,
@@ -359,8 +417,6 @@ const handleRangeRequest = async ({
 
     setDigestStableVerifiedHeaders({ req, res, dataAttributes, data });
 
-    // FIXME: calculate Content-Length appropriately
-
     if (isSingleRange) {
       const totalSize = data.size;
       const start = ranges[0].start;
@@ -395,18 +451,9 @@ const handleRangeRequest = async ({
 
       rangeData.stream.pipe(res);
     } else {
-      const generateBoundary = () => {
-        // This generates a 50 character boundary similar to those used by Firefox.
-        // They are optimized for boyer-moore parsing.
-        // https://github.com/rexxars/byte-range-stream/blob/98a8e06e46193afc45219b63bc2dc5d9c7f77459/src/index.js#L115-L124
-        let boundary = '--------------------------';
-        for (let i = 0; i < 24; i++) {
-          boundary += Math.floor(Math.random() * 10).toString(16);
-        }
+      // Get boundary from request (stored by data-handler-utils) or generate new one
+      const boundary = (req as any).multipartBoundary ?? generateBoundary();
 
-        return boundary;
-      };
-      const boundary = generateBoundary();
       res.status(206); // Partial Content
       res.setHeader(
         'Content-Type',
@@ -414,26 +461,13 @@ const handleRangeRequest = async ({
       );
       res.setHeader('Accept-Ranges', 'bytes');
 
-      // Pre-build all multipart response parts
-      const partBoundary = `--${boundary}\r\n`;
-      const finalBoundary = `--${boundary}--\r\n`;
-      const contentTypeHeader = `Content-Type: ${contentType}\r\n`;
-      const blankLine = '\r\n';
-
-      type ResponsePart = string | { type: 'data'; range: rangeParser.Range };
-      const responseParts: ResponsePart[] = [];
-
-      for (const range of ranges) {
-        responseParts.push(partBoundary);
-        responseParts.push(contentTypeHeader);
-        responseParts.push(
-          `Content-Range: bytes ${range.start}-${range.end}/${data.size}\r\n`,
-        );
-        responseParts.push(blankLine);
-        responseParts.push({ type: 'data', range });
-        responseParts.push(blankLine);
-      }
-      responseParts.push(finalBoundary);
+      // Build all multipart response parts using utility
+      const responseParts = buildMultipartResponseParts(
+        ranges,
+        data.size,
+        contentType,
+        boundary,
+      );
 
       // Calculate Content-Length from pre-built parts
       let totalLength = 0;
@@ -661,60 +695,21 @@ export const createRawDataHandler = ({
         span.addEvent('Data retrieval successful');
 
         // === PAYMENT AND RATE LIMIT CHECK ===
-        // Only perform checks if at least one enforcement mechanism is configured
-        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-          const limitCheck = await checkPaymentAndRateLimits({
-            req,
-            res,
-            id,
-            dataAttributes,
-            requestAttributes,
-            rangeHeader: req.headers.range,
-            rateLimiter,
-            paymentProcessor,
-            parentSpan: span,
-          });
+        const allowed = await handleDataRateLimitingAndPayment({
+          req,
+          res,
+          id,
+          data,
+          dataAttributes,
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          parentSpan: span,
+          log,
+        });
 
-          if (!limitCheck.allowed) {
-            data.stream.destroy();
-            return;
-          }
-
-          // Schedule token adjustment based on actual response size
-          if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-            const dataSize = data.size; // Capture size for closure
-            // Adjust tokens after response is sent (run in background)
-            res.on('finish', () => {
-              // Check response status - don't charge for 304 or HEAD responses
-              let responseSize: number;
-              if (
-                res.statusCode === 304 ||
-                req.method === REQUEST_METHOD_HEAD
-              ) {
-                // 304 Not Modified and HEAD requests send no body
-                // Note: adjustTokens will still consume minimum 1 token to prevent spam
-                responseSize = 0;
-              } else {
-                // Calculate actual response size from data.size and range header
-                responseSize = calculateResponseSize(
-                  dataSize,
-                  req.headers.range,
-                );
-              }
-
-              adjustRateLimitTokens({
-                req,
-                responseSize,
-                initialResult: limitCheck,
-                rateLimiter,
-              }).catch((error: any) => {
-                log.error('[DataHandler] Error adjusting tokens', {
-                  error: error.message,
-                  stack: error.stack,
-                });
-              });
-            });
-          }
+        if (!allowed) {
+          return;
         }
 
         // Check if the request includes a Range header
@@ -742,7 +737,9 @@ export const createRawDataHandler = ({
         } else {
           // Set headers and stream data
           setDataHeaders({ req, res, dataAttributes, data, id });
-          res.header('Content-Length', data.size.toString());
+          if (data.size > 0) {
+            res.header('Content-Length', data.size.toString());
+          }
 
           // Handle If-None-Match for both HEAD and GET requests
           if (handleIfNoneMatch(req, res)) {
@@ -868,54 +865,21 @@ const sendManifestResponse = async ({
     }
 
     // === PAYMENT AND RATE LIMIT CHECK ===
-    // Only perform checks if at least one enforcement mechanism is configured
-    if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-      const limitCheck = await checkPaymentAndRateLimits({
-        req,
-        res,
-        id: resolvedId,
-        dataAttributes,
-        requestAttributes,
-        rangeHeader: req.headers.range,
-        rateLimiter,
-        paymentProcessor,
-        parentSpan,
-      });
+    const allowed = await handleDataRateLimitingAndPayment({
+      req,
+      res,
+      id: resolvedId,
+      data,
+      dataAttributes,
+      requestAttributes,
+      rateLimiter,
+      paymentProcessor,
+      parentSpan,
+      log,
+    });
 
-      if (!limitCheck.allowed) {
-        data.stream.destroy();
-        return true; // Response was sent (402 or 429)
-      }
-
-      // Schedule token adjustment based on actual response size
-      if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-        const dataSize = data.size; // Capture size for closure
-        // Adjust tokens after response is sent (run in background)
-        res.on('finish', () => {
-          // Check response status - don't charge for 304 or HEAD responses
-          let responseSize: number;
-          if (res.statusCode === 304 || req.method === REQUEST_METHOD_HEAD) {
-            // 304 Not Modified and HEAD requests send no body
-            // Note: adjustTokens will still consume minimum 1 token to prevent spam
-            responseSize = 0;
-          } else {
-            // Calculate actual response size from data.size and range header
-            responseSize = calculateResponseSize(dataSize, req.headers.range);
-          }
-
-          adjustRateLimitTokens({
-            req,
-            responseSize,
-            initialResult: limitCheck,
-            rateLimiter,
-          }).catch((error: any) => {
-            log.error('[ManifestHandler] Error adjusting tokens', {
-              error: error.message,
-              stack: error.stack,
-            });
-          });
-        });
-      }
+    if (!allowed) {
+      return true; // Response was sent (402 or 429)
     }
 
     // Set headers and stream data
@@ -955,7 +919,9 @@ const sendManifestResponse = async ({
           data,
           id: resolvedId,
         });
-        res.header('Content-Length', data.size.toString());
+        if (data.size > 0) {
+          res.header('Content-Length', data.size.toString());
+        }
 
         // Handle If-None-Match for both HEAD and GET requests
         if (handleIfNoneMatch(req, res)) {
@@ -1189,60 +1155,21 @@ export const createDataHandler = ({
         span.addEvent('Data retrieval successful');
 
         // === PAYMENT AND RATE LIMIT CHECK ===
-        // Only perform checks if at least one enforcement mechanism is configured
-        if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-          const limitCheck = await checkPaymentAndRateLimits({
-            req,
-            res,
-            id,
-            dataAttributes,
-            requestAttributes,
-            rangeHeader: req.headers.range,
-            rateLimiter,
-            paymentProcessor,
-            parentSpan: span,
-          });
+        const allowed = await handleDataRateLimitingAndPayment({
+          req,
+          res,
+          id,
+          data,
+          dataAttributes,
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          parentSpan: span,
+          log,
+        });
 
-          if (!limitCheck.allowed) {
-            data.stream.destroy();
-            return;
-          }
-
-          // Schedule token adjustment based on actual response size
-          if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-            const dataSize = data.size; // Capture size for closure
-            // Adjust tokens after response is sent (run in background)
-            res.on('finish', () => {
-              // Check response status - don't charge for 304 or HEAD responses
-              let responseSize: number;
-              if (
-                res.statusCode === 304 ||
-                req.method === REQUEST_METHOD_HEAD
-              ) {
-                // 304 Not Modified and HEAD requests send no body
-                // Note: adjustTokens will still consume minimum 1 token to prevent spam
-                responseSize = 0;
-              } else {
-                // Calculate actual response size from data.size and range header
-                responseSize = calculateResponseSize(
-                  dataSize,
-                  req.headers.range,
-                );
-              }
-
-              adjustRateLimitTokens({
-                req,
-                responseSize,
-                initialResult: limitCheck,
-                rateLimiter,
-              }).catch((error: any) => {
-                log.error('[DataHandler] Error adjusting tokens', {
-                  error: error.message,
-                  stack: error.stack,
-                });
-              });
-            });
-          }
+        if (!allowed) {
+          return;
         }
       } catch (error: any) {
         const dataDuration = Date.now() - dataStartTime;
@@ -1345,7 +1272,9 @@ export const createDataHandler = ({
           data,
           id,
         });
-        res.header('Content-Length', data.size.toString());
+        if (data.size > 0) {
+          res.header('Content-Length', data.size.toString());
+        }
 
         // Handle If-None-Match for both HEAD and GET requests
         if (handleIfNoneMatch(req, res)) {
