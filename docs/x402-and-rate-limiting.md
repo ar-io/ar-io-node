@@ -294,14 +294,8 @@ docker-compose up -d
 **4. Test the payment flow:**
 
 ```bash
-# Set your test wallet private key
-export X402_TEST_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
-
 # Test in browser - visit http://localhost:3000/YOUR_TX_ID
 # After hitting rate limit, you'll see the paywall UI
-
-# Or test automated payment workflow with the included script
-yarn tsx scripts/x402/fetch-data.ts YOUR_TX_ID
 
 # Or test with curl (will show 402 response with payment requirements)
 curl -v http://localhost:3000/YOUR_TX_ID
@@ -1798,11 +1792,7 @@ for i in {1..200}; do curl -s -o /dev/null -w "%{http_code}\n" http://localhost:
 # View the 402 payment response with requirements
 curl -v http://localhost:3000/TX_ID
 
-# Test automated payment workflow with the included script
-export X402_TEST_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
-yarn tsx scripts/x402/fetch-data.ts TX_ID
-
-# Or test payment in browser - visit http://localhost:3000/TX_ID
+# Test payment in browser - visit http://localhost:3000/TX_ID
 # After hitting rate limit, you'll see the paywall UI where you can pay
 ```
 
