@@ -233,12 +233,19 @@ done
 Rate limit metrics are exposed at `/ar-io/__gateway_metrics`:
 
 ```bash
-# Through envoy (default port 3000)
-curl http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
+# View all rate limit metrics
+curl http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit
 
 # Or directly to core (port 4000)
-curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
+curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit
 ```
+
+Available metrics:
+
+- `rate_limit_exceeded_total` - Requests that exceeded rate limits
+- `rate_limit_requests_total` - Total requests processed by rate limiter
+- `rate_limit_bytes_blocked_total` - Bytes blocked by rate limiting
+- `rate_limit_tokens_consumed_total` - Tokens consumed (by bucket/token type)
 
 ### Quick Start: Rate Limiting with x402 Payments
 
@@ -739,6 +746,25 @@ Request → Rate Limit Check → Data Handler → Token Adjustment → Response
 
 The rate limiter exposes Prometheus metrics at `/ar-io/__gateway_metrics`:
 
+**`rate_limit_exceeded_total`** (counter)
+
+- Total requests that exceeded rate limits
+- Labels:
+  - `limit_type`: `ip` or `resource`
+  - `domain`: Request domain/host
+
+**`rate_limit_requests_total`** (counter)
+
+- Total requests processed by rate limiter
+- Labels:
+  - `domain`: Request domain/host
+
+**`rate_limit_bytes_blocked_total`** (counter)
+
+- Total bytes that would have been served if not rate limited
+- Labels:
+  - `domain`: Request domain/host
+
 **`rate_limit_tokens_consumed_total`** (counter)
 
 - Total tokens consumed
@@ -747,9 +773,18 @@ The rate limiter exposes Prometheus metrics at `/ar-io/__gateway_metrics`:
   - `token_type`: `paid` or `regular`
   - `domain`: Request domain/host
 
-Example PromQL query:
+Example PromQL queries:
 
 ```promql
+# Rate of requests exceeding limits by type
+rate(rate_limit_exceeded_total[5m])
+
+# Total requests processed by rate limiter
+rate(rate_limit_requests_total[5m])
+
+# Bytes blocked per second
+rate(rate_limit_bytes_blocked_total[5m])
+
 # Paid tokens consumed per IP
 rate(rate_limit_tokens_consumed_total{bucket_type="ip",token_type="paid"}[5m])
 
@@ -1696,10 +1731,22 @@ JSON instead:
 
 ### Monitoring and Debugging
 
-#### View Token Consumption Metrics
+#### View Rate Limit Metrics
 
 ```bash
-# Total tokens consumed by type
+# View all rate limit metrics
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit
+
+# Requests that exceeded rate limits
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_exceeded_total
+
+# Total requests processed by rate limiter
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_requests_total
+
+# Bytes blocked by rate limiting
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_bytes_blocked_total
+
+# Tokens consumed by type
 curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
 
 # Paid tokens consumed (IP bucket)
