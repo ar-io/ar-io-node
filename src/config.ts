@@ -524,6 +524,24 @@ export const CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY = +env.varOrDefault(
   '5',
 );
 
+// Response size threshold (in bytes) above which Cache-Control will use 'private' directive.
+// This helps CDNs respect rate limiting and x402 payment requirements for large responses.
+// Default: 104857600 (100 MB)
+export const CACHE_PRIVATE_SIZE_THRESHOLD = +env.varOrDefault(
+  'CACHE_PRIVATE_SIZE_THRESHOLD',
+  '104857600',
+);
+
+// Comma-separated list of content types that should have 'private' Cache-Control directive.
+// Supports wildcards (e.g., 'image/*' matches 'image/png', 'image/jpeg').
+// This helps CDNs respect rate limiting and x402 payment requirements for specific content types.
+// Default: '' (empty - no content types)
+export const CACHE_PRIVATE_CONTENT_TYPES = env
+  .varOrDefault('CACHE_PRIVATE_CONTENT_TYPES', '')
+  .split(',')
+  .map((type) => type.trim())
+  .filter((type) => type.length > 0);
+
 //
 // Indexing
 //
@@ -1335,6 +1353,18 @@ if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {
     'ENABLE_X_402_USDC_DATA_EGRESS requires ENABLE_RATE_LIMITER to be enabled. ' +
       'X402 payments are not a standalone feature - they work as an extension of the rate limiting system. ' +
       'Set ENABLE_RATE_LIMITER=true to enable X402 payments.',
+  );
+}
+
+// Warn if cache private options are configured without rate limiter
+if (
+  !ENABLE_RATE_LIMITER &&
+  (CACHE_PRIVATE_SIZE_THRESHOLD !== 104857600 ||
+    CACHE_PRIVATE_CONTENT_TYPES.length > 0)
+) {
+  logger.warn(
+    'CACHE_PRIVATE_SIZE_THRESHOLD or CACHE_PRIVATE_CONTENT_TYPES configured but rate limiting is disabled (ENABLE_RATE_LIMITER=false). ' +
+      'These options have no effect without rate limiting enabled.',
   );
 }
 
