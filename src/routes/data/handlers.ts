@@ -220,7 +220,7 @@ const setDigestStableVerifiedHeaders = ({
  * @param pattern - The pattern to match against (e.g., 'image/*' or 'application/json')
  * @returns true if the content type matches the pattern
  */
-const matchContentTypePattern = (
+export const matchContentTypePattern = (
   contentType: string,
   pattern: string,
 ): boolean => {
@@ -250,7 +250,7 @@ const matchContentTypePattern = (
  * @param size - The size of the response in bytes
  * @returns true if the response should be private
  */
-const shouldUsePrivateCacheControl = (
+export const shouldUsePrivateCacheControl = (
   contentType: string,
   size: number,
 ): boolean => {
