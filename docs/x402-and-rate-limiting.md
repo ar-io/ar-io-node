@@ -1280,6 +1280,160 @@ The facilitator provides several security guarantees:
 - Ensures payment amount matches requirements
 - Prevents underpayment
 
+### CDN Caching Considerations
+
+When deploying AR.IO gateways behind a CDN (like Cloudflare, Fastly, or AWS CloudFront), cache behavior can interfere with rate limiting and x402 payment enforcement. By default, gateways set `Cache-Control: public` headers, allowing CDNs to cache responses and serve them to multiple users without hitting your origin server.
+
+**The Problem:**
+
+- CDN caches bypass your gateway's rate limiter
+- Multiple users can access rate-limited content from CDN cache
+- x402 payment requirements are bypassed when CDN serves cached responses
+- First user pays, subsequent users get free access from CDN cache
+
+**The Solution:**
+
+Use `CACHE_PRIVATE_SIZE_THRESHOLD` and `CACHE_PRIVATE_CONTENT_TYPES` to automatically mark specific responses with `Cache-Control: private`, preventing CDN caching while still allowing browser caching.
+
+#### Size-Based Private Caching
+
+**`CACHE_PRIVATE_SIZE_THRESHOLD`** (number, default: `104857600` = 100 MB)
+
+Automatically sets `Cache-Control: private` for responses exceeding this size in bytes.
+
+**Example configurations:**
+
+```bash
+# Prevent CDN caching of responses over 50 MB
+CACHE_PRIVATE_SIZE_THRESHOLD=52428800
+
+# Prevent CDN caching of responses over 500 MB
+CACHE_PRIVATE_SIZE_THRESHOLD=524288000
+
+# Prevent CDN caching of all responses (set to 0)
+CACHE_PRIVATE_SIZE_THRESHOLD=0
+```
+
+**Use cases:**
+
+- **Large file protection:** Prevent CDN from serving large video/image files that should be rate limited
+- **Bandwidth control:** Ensure high-bandwidth content respects payment requirements
+- **Fair usage:** Prevent single payment from benefiting unlimited CDN-cached users
+
+#### Content-Type-Based Private Caching
+
+**`CACHE_PRIVATE_CONTENT_TYPES`** (string, default: `""`)
+
+Comma-separated list of content types that should use `Cache-Control: private`. Supports wildcard patterns.
+
+**Example configurations:**
+
+```bash
+# Prevent CDN caching of images
+CACHE_PRIVATE_CONTENT_TYPES="image/*"
+
+# Prevent CDN caching of video and audio
+CACHE_PRIVATE_CONTENT_TYPES="video/*,audio/*"
+
+# Prevent CDN caching of specific types
+CACHE_PRIVATE_CONTENT_TYPES="image/png,video/mp4,application/json"
+
+# Prevent CDN caching of all media
+CACHE_PRIVATE_CONTENT_TYPES="image/*,video/*,audio/*"
+```
+
+**Wildcard patterns:**
+
+- `*` matches any characters within a segment (not across `/`)
+- `image/*` matches `image/png`, `image/jpeg`, `image/webp`, etc.
+- `application/*` matches `application/json`, `application/pdf`, etc.
+
+**Use cases:**
+
+- **Media monetization:** Ensure video/image content respects x402 payments
+- **API protection:** Prevent CDN from caching dynamic API responses
+- **Selective caching:** Allow text/HTML caching but require payment for media
+
+#### Combined Strategy
+
+For maximum protection, combine both size and content-type based rules:
+
+```bash
+# Rate limiter (required)
+ENABLE_RATE_LIMITER=true
+
+# x402 payments
+ENABLE_X_402_USDC_DATA_EGRESS=true
+
+# CDN cache control - apply BOTH conditions:
+# - Responses over 10 MB become private
+CACHE_PRIVATE_SIZE_THRESHOLD=10485760
+# - All media types become private
+CACHE_PRIVATE_CONTENT_TYPES="image/*,video/*,audio/*"
+```
+
+**Logic:** Response uses `private` if **either** condition matches:
+
+- Size exceeds threshold, **OR**
+- Content-Type matches a pattern
+
+#### Behavior Details
+
+**Header transformation:**
+
+```
+# Before (default):
+Cache-Control: public, max-age=2592000, immutable
+
+# After (when conditions met):
+Cache-Control: private, max-age=2592000, immutable
+```
+
+**Other directives preserved:**
+
+- `max-age` values unchanged
+- `immutable` directive preserved for stable data
+- Only `public` → `private` transformation applied
+
+**Browser caching still works:**
+
+- `private` only prevents shared caches (CDNs)
+- Browser (private) caches still work normally
+- Users still get fast repeat access
+- Only prevents cross-user CDN caching
+
+#### Important Notes
+
+**Rate limiter dependency:**
+
+These settings only have effect when `ENABLE_RATE_LIMITER=true`. A warning is logged at startup if configured without rate limiting enabled.
+
+**No impact on non-CDN deployments:**
+
+- Browser caching behavior unchanged
+- Direct gateway access unaffected
+- Only changes shared cache (CDN) behavior
+
+**Performance considerations:**
+
+- CDN cache bypass increases origin traffic
+- Consider your infrastructure capacity
+- Monitor bandwidth and request rates
+- Adjust thresholds based on usage patterns
+
+**Testing:**
+
+```bash
+# Check Cache-Control header for large file
+curl -I http://gateway.example.com/large-file-id
+
+# Check Cache-Control header for image
+curl -I http://gateway.example.com/image-id
+
+# Verify payment required after cache
+curl -I http://gateway.example.com/paid-content-id
+```
+
 ## Reference
 
 ### Environment Variables Quick Reference
@@ -1299,6 +1453,8 @@ The facilitator provides several security guarantees:
 | `RATE_LIMITER_REDIS_ENDPOINT`             | string  | `redis://redis:6379`                    | Redis connection URL                     |
 | `RATE_LIMITER_REDIS_USE_TLS`              | boolean | `false`                                 | Enable TLS for Redis                     |
 | `RATE_LIMITER_REDIS_USE_CLUSTER`          | boolean | `false`                                 | Use Redis cluster mode                   |
+| `CACHE_PRIVATE_SIZE_THRESHOLD`            | number  | `104857600` (100 MB)                    | Size threshold for private Cache-Control |
+| `CACHE_PRIVATE_CONTENT_TYPES`             | string  | `""`                                    | Content types for private Cache-Control  |
 
 #### x402 Variables
 

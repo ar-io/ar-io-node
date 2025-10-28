@@ -208,6 +208,67 @@ const setDigestStableVerifiedHeaders = ({
   res.setHeader(headerNames.trusted, data.trusted ? 'true' : 'false');
 };
 
+/**
+ * Match content type against a pattern with wildcard support.
+ * Wildcards (*) match any characters within a segment (not across /).
+ *
+ * Examples:
+ * - 'image/*' matches 'image/png', 'image/jpeg', but not 'text/html'
+ * - 'application/json' matches only 'application/json'
+ *
+ * @param contentType - The content type to match (e.g., 'image/png')
+ * @param pattern - The pattern to match against (e.g., 'image/*' or 'application/json')
+ * @returns true if the content type matches the pattern
+ */
+const matchContentTypePattern = (
+  contentType: string,
+  pattern: string,
+): boolean => {
+  // Exact match
+  if (contentType === pattern) {
+    return true;
+  }
+
+  // Wildcard match
+  if (pattern.includes('*')) {
+    // Escape special regex characters except *
+    const regexPattern = pattern
+      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '[^/]*');
+    const regex = new RegExp(`^${regexPattern}$`);
+    return regex.test(contentType);
+  }
+
+  return false;
+};
+
+/**
+ * Determine if response should use 'private' Cache-Control directive
+ * based on size threshold or content type patterns.
+ *
+ * @param contentType - The content type of the response
+ * @param size - The size of the response in bytes
+ * @returns true if the response should be private
+ */
+const shouldUsePrivateCacheControl = (
+  contentType: string,
+  size: number,
+): boolean => {
+  // Check size threshold
+  if (size > config.CACHE_PRIVATE_SIZE_THRESHOLD) {
+    return true;
+  }
+
+  // Check content type patterns
+  for (const pattern of config.CACHE_PRIVATE_CONTENT_TYPES) {
+    if (matchContentTypePattern(contentType, pattern)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 const setDataHeaders = ({
   req,
   res,
@@ -229,17 +290,32 @@ const setDataHeaders = ({
   // Allow range requests
   res.header('Accept-Ranges', 'bytes');
 
+  // Determine content type for cache control decision
+  const contentType =
+    dataAttributes?.contentType ??
+    data.sourceContentType ??
+    DEFAULT_CONTENT_TYPE;
+
+  // Determine if response should use private cache control
+  const usePrivate = shouldUsePrivateCacheControl(contentType, data.size);
+
   // Only set Cache-Control header if it's not already set (e.g., for on ArNS
   // TTLs)
   if (!res.hasHeader('Cache-Control')) {
+    // Determine cache directive (public or private)
+    const cacheDirective = usePrivate ? 'private' : 'public';
+
     // Aggressively cache data before max fork depth
     if (dataAttributes?.stable) {
       res.header(
         'Cache-Control',
-        `public, max-age=${STABLE_MAX_AGE}, immutable`,
+        `${cacheDirective}, max-age=${STABLE_MAX_AGE}, immutable`,
       );
     } else {
-      res.header('Cache-Control', `public, max-age=${UNSTABLE_MAX_AGE}`);
+      res.header(
+        'Cache-Control',
+        `${cacheDirective}, max-age=${UNSTABLE_MAX_AGE}`,
+      );
     }
   }
 
@@ -252,11 +328,7 @@ const setDataHeaders = ({
   }
 
   // Use the content type from the L1 or data item index if available
-  res.contentType(
-    dataAttributes?.contentType ??
-      data.sourceContentType ??
-      DEFAULT_CONTENT_TYPE,
-  );
+  res.contentType(contentType);
 
   if (dataAttributes?.contentEncoding != null) {
     res.header('Content-Encoding', dataAttributes.contentEncoding);

@@ -2096,5 +2096,386 @@ st
         await request(testApp).get('/test-id').expect(200);
       });
     });
+
+    describe('Cache-Control private directive', () => {
+      let originalSizeThreshold: string | undefined;
+      let originalContentTypes: string | undefined;
+
+      beforeEach(() => {
+        // Save original env vars
+        originalSizeThreshold = process.env.CACHE_PRIVATE_SIZE_THRESHOLD;
+        originalContentTypes = process.env.CACHE_PRIVATE_CONTENT_TYPES;
+      });
+
+      afterEach(() => {
+        // Restore original env vars
+        if (originalSizeThreshold !== undefined) {
+          process.env.CACHE_PRIVATE_SIZE_THRESHOLD = originalSizeThreshold;
+        } else {
+          delete process.env.CACHE_PRIVATE_SIZE_THRESHOLD;
+        }
+
+        if (originalContentTypes !== undefined) {
+          process.env.CACHE_PRIVATE_CONTENT_TYPES = originalContentTypes;
+        } else {
+          delete process.env.CACHE_PRIVATE_CONTENT_TYPES;
+        }
+
+        mock.restoreAll();
+      });
+
+      it('should use public Cache-Control for small responses below size threshold', async () => {
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('small')),
+              size: 100, // 100 bytes - below default 100 MB threshold
+              verified: false,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('public'));
+            assert.ok(!res.headers['cache-control'].includes('private'));
+          });
+      });
+
+      it('should use private Cache-Control for large responses above size threshold', async () => {
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('large')),
+              size: 200000000, // 200 MB - above default 100 MB threshold
+              verified: false,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('private'));
+            assert.ok(!res.headers['cache-control'].includes('public'));
+          });
+      });
+
+      it('should use private Cache-Control for exact content type match', async () => {
+        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'application/json';
+        // Need to reload config after changing env var
+        delete require.cache[
+          require.resolve('../../config.js').replace(/\.js$/, '')
+        ];
+
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('{"test": true}')),
+              size: 100,
+              verified: false,
+              cached: false,
+              sourceContentType: 'application/json',
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('private'));
+            assert.ok(!res.headers['cache-control'].includes('public'));
+          });
+      });
+
+      it('should use private Cache-Control for wildcard content type match', async () => {
+        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'image/*';
+        // Need to reload config after changing env var
+        delete require.cache[
+          require.resolve('../../config.js').replace(/\.js$/, '')
+        ];
+
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('fake-image-data')),
+              size: 100,
+              verified: false,
+              cached: false,
+              sourceContentType: 'image/png',
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('private'));
+            assert.ok(!res.headers['cache-control'].includes('public'));
+          });
+      });
+
+      it('should use public Cache-Control when content type does not match', async () => {
+        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'image/*';
+        // Need to reload config after changing env var
+        delete require.cache[
+          require.resolve('../../config.js').replace(/\.js$/, '')
+        ];
+
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('text data')),
+              size: 100,
+              verified: false,
+              cached: false,
+              sourceContentType: 'text/plain',
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('public'));
+            assert.ok(!res.headers['cache-control'].includes('private'));
+          });
+      });
+
+      it('should preserve max-age and immutable directives with private for stable data', async () => {
+        dataIndex = {
+          getDataAttributes: () =>
+            Promise.resolve({
+              id: 'not-a-real-id',
+              dataRoot: 'not-a-real-data-root',
+              hash: 'not-a-real-hash',
+              dataOffset: 0,
+              size: 10,
+              stable: true,
+            }),
+          getDataItemAttributes: () => Promise.resolve(undefined),
+          getTransactionAttributes: () => Promise.resolve(undefined),
+          getDataParent: () => Promise.resolve(undefined),
+          saveDataContentAttributes: () => Promise.resolve(undefined),
+          getVerifiableDataIds: () => Promise.resolve([]),
+          getRootTxId: () => Promise.resolve(undefined),
+          saveVerificationStatus: () => Promise.resolve(undefined),
+        };
+
+        dataAttributesSource = {
+          getDataAttributes: () =>
+            Promise.resolve({
+              id: 'not-a-real-id',
+              dataRoot: 'not-a-real-data-root',
+              hash: 'not-a-real-hash',
+              dataOffset: 0,
+              size: 10,
+              stable: true,
+            }),
+        };
+
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('large')),
+              size: 200000000, // 200 MB - above default threshold
+              verified: false,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataIndex,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            const cacheControl = res.headers['cache-control'];
+            assert.ok(cacheControl.includes('private'));
+            assert.ok(cacheControl.includes('max-age=2592000'));
+            assert.ok(cacheControl.includes('immutable'));
+            assert.ok(!cacheControl.includes('public'));
+          });
+      });
+
+      it('should preserve max-age directive with private for unstable data', async () => {
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('large')),
+              size: 200000000, // 200 MB - above default threshold
+              verified: false,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            const cacheControl = res.headers['cache-control'];
+            assert.ok(cacheControl.includes('private'));
+            assert.ok(cacheControl.includes('max-age=7200'));
+            assert.ok(!cacheControl.includes('public'));
+          });
+      });
+
+      it('should use private when either size or content type condition is met', async () => {
+        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'video/*';
+        // Need to reload config after changing env var
+        delete require.cache[
+          require.resolve('../../config.js').replace(/\.js$/, '')
+        ];
+
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('small-video')),
+              size: 100, // Small size, but matches content type
+              verified: false,
+              cached: false,
+              sourceContentType: 'video/mp4',
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
+            }),
+        };
+
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('private'));
+            assert.ok(!res.headers['cache-control'].includes('public'));
+          });
+      });
+    });
   });
 });
