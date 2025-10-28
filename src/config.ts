@@ -536,10 +536,11 @@ export const CACHE_PRIVATE_SIZE_THRESHOLD = +env.varOrDefault(
 // Supports wildcards (e.g., 'image/*' matches 'image/png', 'image/jpeg').
 // This helps CDNs respect rate limiting and x402 payment requirements for specific content types.
 // Default: '' (empty - no content types)
+// Note: Patterns are normalized (lowercased) for case-insensitive matching
 export const CACHE_PRIVATE_CONTENT_TYPES = env
   .varOrDefault('CACHE_PRIVATE_CONTENT_TYPES', '')
   .split(',')
-  .map((type) => type.trim())
+  .map((type) => type.trim().toLowerCase())
   .filter((type) => type.length > 0);
 
 //
