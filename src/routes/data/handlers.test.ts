@@ -11,6 +11,7 @@ import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
 
 import { headerNames } from '../../constants.js';
+import * as config from '../../config.js';
 import log from '../../log.js';
 import { release } from '../../version.js';
 import {
@@ -2098,28 +2099,17 @@ st
     });
 
     describe('Cache-Control private directive', () => {
-      let originalSizeThreshold: string | undefined;
-      let originalContentTypes: string | undefined;
+      let originalContentTypes: string[];
 
       beforeEach(() => {
-        // Save original env vars
-        originalSizeThreshold = process.env.CACHE_PRIVATE_SIZE_THRESHOLD;
-        originalContentTypes = process.env.CACHE_PRIVATE_CONTENT_TYPES;
+        // Save original config array contents
+        originalContentTypes = [...config.CACHE_PRIVATE_CONTENT_TYPES];
       });
 
       afterEach(() => {
-        // Restore original env vars
-        if (originalSizeThreshold !== undefined) {
-          process.env.CACHE_PRIVATE_SIZE_THRESHOLD = originalSizeThreshold;
-        } else {
-          delete process.env.CACHE_PRIVATE_SIZE_THRESHOLD;
-        }
-
-        if (originalContentTypes !== undefined) {
-          process.env.CACHE_PRIVATE_CONTENT_TYPES = originalContentTypes;
-        } else {
-          delete process.env.CACHE_PRIVATE_CONTENT_TYPES;
-        }
+        // Restore original config array contents
+        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+        config.CACHE_PRIVATE_CONTENT_TYPES.push(...originalContentTypes);
 
         mock.restoreAll();
       });
@@ -2197,11 +2187,9 @@ st
       });
 
       it('should use private Cache-Control for exact content type match', async () => {
-        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'application/json';
-        // Need to reload config after changing env var
-        delete require.cache[
-          require.resolve('../../config.js').replace(/\.js$/, '')
-        ];
+        // Mutate config array to test content type matching (values must be normalized: lowercase)
+        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+        config.CACHE_PRIVATE_CONTENT_TYPES.push('application/json');
 
         dataSource = {
           getData: () =>
@@ -2240,11 +2228,9 @@ st
       });
 
       it('should use private Cache-Control for wildcard content type match', async () => {
-        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'image/*';
-        // Need to reload config after changing env var
-        delete require.cache[
-          require.resolve('../../config.js').replace(/\.js$/, '')
-        ];
+        // Mutate config array to test wildcard matching
+        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+        config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
 
         dataSource = {
           getData: () =>
@@ -2283,11 +2269,9 @@ st
       });
 
       it('should use public Cache-Control when content type does not match', async () => {
-        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'image/*';
-        // Need to reload config after changing env var
-        delete require.cache[
-          require.resolve('../../config.js').replace(/\.js$/, '')
-        ];
+        // Mutate config array to test non-matching content type
+        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+        config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
 
         dataSource = {
           getData: () =>
@@ -2435,11 +2419,9 @@ st
       });
 
       it('should use private when either size or content type condition is met', async () => {
-        process.env.CACHE_PRIVATE_CONTENT_TYPES = 'video/*';
-        // Need to reload config after changing env var
-        delete require.cache[
-          require.resolve('../../config.js').replace(/\.js$/, '')
-        ];
+        // Mutate config array to test content type matching with small size
+        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+        config.CACHE_PRIVATE_CONTENT_TYPES.push('video/*');
 
         dataSource = {
           getData: () =>
