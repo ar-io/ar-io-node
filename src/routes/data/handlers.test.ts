@@ -12,8 +12,10 @@ import { default as request } from 'supertest';
 
 import { headerNames } from '../../constants.js';
 import * as config from '../../config.js';
-import log from '../../log.js';
+import { createTestLogger } from '../../../test/test-logger.js';
 import { release } from '../../version.js';
+
+const log = createTestLogger({ suite: 'Data routes' });
 import {
   ContiguousDataIndex,
   ContiguousDataSource,

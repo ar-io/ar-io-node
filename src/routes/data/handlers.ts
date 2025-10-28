@@ -210,15 +210,23 @@ const setDigestStableVerifiedHeaders = ({
 
 /**
  * Match content type against a pattern with wildcard support.
- * Wildcards (*) match any characters within a segment (not across /).
  *
- * Examples:
- * - 'image/*' matches 'image/png', 'image/jpeg', but not 'text/html'
- * - 'application/json' matches only 'application/json'
+ * Wildcards (*) match any characters within a segment (not across /).
+ * This function is case-sensitive and expects normalized content types
+ * (lowercase, no parameters). For best results, normalize content types
+ * before calling this function.
+ *
+ * @example
+ * ```typescript
+ * matchContentTypePattern('image/png', 'image/*')  // returns true
+ * matchContentTypePattern('image/jpeg', 'image/*') // returns true
+ * matchContentTypePattern('text/html', 'image/*')  // returns false
+ * matchContentTypePattern('application/json', 'application/json') // returns true
+ * ```
  *
  * @param contentType - The content type to match (e.g., 'image/png')
- * @param pattern - The pattern to match against (e.g., 'image/*' or 'application/json')
- * @returns true if the content type matches the pattern
+ * @param pattern - The pattern to match against. Can include wildcards (e.g., 'image/*' or 'application/json')
+ * @returns true if the content type matches the pattern, false otherwise
  */
 export const matchContentTypePattern = (
   contentType: string,
@@ -246,9 +254,31 @@ export const matchContentTypePattern = (
  * Determine if response should use 'private' Cache-Control directive
  * based on size threshold or content type patterns.
  *
- * @param contentType - The content type of the response (may include parameters)
+ * This function prevents CDNs from caching large responses or specific
+ * content types that should not bypass rate limiting or x402 payment
+ * requirements. The 'private' directive instructs CDNs and shared caches
+ * not to store the response, while still allowing browser caching.
+ *
+ * The check is performed in two stages:
+ * 1. Size check: Returns true if size exceeds CACHE_PRIVATE_SIZE_THRESHOLD
+ * 2. Content type check: Normalizes the content type (removes parameters,
+ *    lowercases) and matches against CACHE_PRIVATE_CONTENT_TYPES patterns
+ *
+ * @example
+ * ```typescript
+ * // Large file exceeds threshold
+ * shouldUsePrivateCacheControl('image/png', 100_000_000) // returns true
+ *
+ * // Matching content type pattern (e.g., video/*)
+ * shouldUsePrivateCacheControl('video/mp4', 1000) // returns true if pattern configured
+ *
+ * // Small file with non-matching type
+ * shouldUsePrivateCacheControl('text/html', 1000) // returns false
+ * ```
+ *
+ * @param contentType - The content type of the response (may include parameters like 'image/png; charset=utf-8')
  * @param size - The size of the response in bytes
- * @returns true if the response should be private
+ * @returns true if the response should use 'private' Cache-Control directive, false otherwise
  */
 export const shouldUsePrivateCacheControl = (
   contentType: string,
