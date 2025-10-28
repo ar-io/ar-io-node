@@ -246,7 +246,7 @@ const matchContentTypePattern = (
  * Determine if response should use 'private' Cache-Control directive
  * based on size threshold or content type patterns.
  *
- * @param contentType - The content type of the response
+ * @param contentType - The content type of the response (may include parameters)
  * @param size - The size of the response in bytes
  * @returns true if the response should be private
  */
@@ -259,9 +259,21 @@ const shouldUsePrivateCacheControl = (
     return true;
   }
 
+  // Skip content type check if no patterns configured or contentType is undefined/empty
+  if (!contentType || config.CACHE_PRIVATE_CONTENT_TYPES.length === 0) {
+    return false;
+  }
+
+  // Normalize content type: strip parameters, trim, lowercase
+  // Example: "Image/PNG; charset=utf-8" -> "image/png"
+  const normalizedContentType = contentType
+    .split(';')[0] // Remove parameters like "; charset=utf-8"
+    .trim() // Remove whitespace
+    .toLowerCase(); // Normalize case
+
   // Check content type patterns
   for (const pattern of config.CACHE_PRIVATE_CONTENT_TYPES) {
-    if (matchContentTypePattern(contentType, pattern)) {
+    if (matchContentTypePattern(normalizedContentType, pattern)) {
       return true;
     }
   }
