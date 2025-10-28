@@ -2270,79 +2270,76 @@ st
         });
       });
 
-      describe('integration tests', () => {
-
-        it('should set public Cache-Control for small responses', async () => {
-          dataSource = {
-            getData: () =>
-              Promise.resolve({
-                stream: Readable.from(Buffer.from('small')),
-                size: 100, // 100 bytes - below threshold
-                verified: false,
-                cached: false,
-                requestAttributes: {
-                  origin: 'node-url',
-                  hops: 0,
-                  clientIps: [],
-                },
-              }),
-          };
-
-          app.get(
-            '/:id',
-            createDataHandler({
-              log,
-              dataAttributesSource,
-              dataSource,
-              dataBlockListValidator,
-              manifestPathResolver,
+      it('should set public Cache-Control header for small responses (integration)', async () => {
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('small')),
+              size: 100, // 100 bytes - below threshold
+              verified: false,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
             }),
-          );
+        };
 
-          return request(app)
-            .get('/not-a-real-id')
-            .expect(200)
-            .then((res: any) => {
-              assert.ok(res.headers['cache-control'].includes('public'));
-              assert.ok(!res.headers['cache-control'].includes('private'));
-            });
-        });
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
 
-        it('should set private Cache-Control for large responses', async () => {
-          dataSource = {
-            getData: () =>
-              Promise.resolve({
-                stream: Readable.from(Buffer.from('large')),
-                size: 200000000, // 200 MB - above threshold
-                verified: false,
-                cached: false,
-                requestAttributes: {
-                  origin: 'node-url',
-                  hops: 0,
-                  clientIps: [],
-                },
-              }),
-          };
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('public'));
+            assert.ok(!res.headers['cache-control'].includes('private'));
+          });
+      });
 
-          app.get(
-            '/:id',
-            createDataHandler({
-              log,
-              dataAttributesSource,
-              dataSource,
-              dataBlockListValidator,
-              manifestPathResolver,
+      it('should set private Cache-Control header for large responses (integration)', async () => {
+        dataSource = {
+          getData: () =>
+            Promise.resolve({
+              stream: Readable.from(Buffer.from('large')),
+              size: 200000000, // 200 MB - above threshold
+              verified: false,
+              cached: false,
+              requestAttributes: {
+                origin: 'node-url',
+                hops: 0,
+                clientIps: [],
+              },
             }),
-          );
+        };
 
-          return request(app)
-            .get('/not-a-real-id')
-            .expect(200)
-            .then((res: any) => {
-              assert.ok(res.headers['cache-control'].includes('private'));
-              assert.ok(!res.headers['cache-control'].includes('public'));
-            });
-        });
+        app.get(
+          '/:id',
+          createDataHandler({
+            log,
+            dataAttributesSource,
+            dataSource,
+            dataBlockListValidator,
+            manifestPathResolver,
+          }),
+        );
+
+        return request(app)
+          .get('/not-a-real-id')
+          .expect(200)
+          .then((res: any) => {
+            assert.ok(res.headers['cache-control'].includes('private'));
+            assert.ok(!res.headers['cache-control'].includes('public'));
+          });
       });
     });
   });
