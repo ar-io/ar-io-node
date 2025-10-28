@@ -22,7 +22,12 @@ import {
   ManifestPathResolver,
   RequestAttributes,
 } from '../../types.js';
-import { createDataHandler, getRequestAttributes } from './handlers.js';
+import {
+  createDataHandler,
+  getRequestAttributes,
+  matchContentTypePattern,
+  shouldUsePrivateCacheControl,
+} from './handlers.js';
 import { MemoryRateLimiter } from '../../limiter/memory-rate-limiter.js';
 import type {
   PaymentProcessor,
@@ -2099,560 +2104,245 @@ st
     });
 
     describe('Cache-Control private directive', () => {
-      let originalContentTypes: string[];
+      describe('matchContentTypePattern', () => {
+        it('should match exact content types', () => {
+          assert.strictEqual(
+            matchContentTypePattern('application/json', 'application/json'),
+            true,
+          );
+          assert.strictEqual(
+            matchContentTypePattern('image/png', 'image/png'),
+            true,
+          );
+        });
 
-      beforeEach(() => {
-        // Save original config array contents
-        originalContentTypes = [...config.CACHE_PRIVATE_CONTENT_TYPES];
+        it('should not match different content types', () => {
+          assert.strictEqual(
+            matchContentTypePattern('text/html', 'application/json'),
+            false,
+          );
+        });
+
+        it('should match wildcard patterns', () => {
+          assert.strictEqual(
+            matchContentTypePattern('image/png', 'image/*'),
+            true,
+          );
+          assert.strictEqual(
+            matchContentTypePattern('image/jpeg', 'image/*'),
+            true,
+          );
+          assert.strictEqual(
+            matchContentTypePattern('video/mp4', 'video/*'),
+            true,
+          );
+        });
+
+        it('should not match wildcard patterns across slashes', () => {
+          assert.strictEqual(
+            matchContentTypePattern('text/html', 'image/*'),
+            false,
+          );
+        });
       });
 
-      afterEach(() => {
-        // Restore original config array contents
-        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
-        config.CACHE_PRIVATE_CONTENT_TYPES.push(...originalContentTypes);
+      describe('shouldUsePrivateCacheControl', () => {
+        let originalContentTypes: string[];
 
-        mock.restoreAll();
+        beforeEach(() => {
+          // Save original config array contents
+          originalContentTypes = [...config.CACHE_PRIVATE_CONTENT_TYPES];
+        });
+
+        afterEach(() => {
+          // Restore original config array contents
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push(...originalContentTypes);
+        });
+
+        it('should return false for small responses below threshold', () => {
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('application/json', 100),
+            false,
+          );
+        });
+
+        it('should return true for large responses above threshold', () => {
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('application/json', 200000000),
+            true,
+          );
+        });
+
+        it('should return true for exact content type match', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('application/json');
+
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('application/json', 100),
+            true,
+          );
+        });
+
+        it('should return true for wildcard content type match', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
+
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('image/png', 100),
+            true,
+          );
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('image/jpeg', 100),
+            true,
+          );
+        });
+
+        it('should return false when content type does not match pattern', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
+
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('text/plain', 100),
+            false,
+          );
+        });
+
+        it('should normalize content type parameters', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match even with parameters
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('image/png; charset=utf-8', 100),
+            true,
+          );
+        });
+
+        it('should normalize content type case', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match even with different case
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('Image/PNG', 100),
+            true,
+          );
+        });
+
+        it('should normalize content type whitespace', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match even with whitespace
+          assert.strictEqual(
+            shouldUsePrivateCacheControl(' image/png ', 100),
+            true,
+          );
+        });
+
+        it('should handle combined normalization', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match with all normalization issues combined
+          assert.strictEqual(
+            shouldUsePrivateCacheControl(' Image/PNG; charset=UTF-8 ', 100),
+            true,
+          );
+        });
+
+        it('should return true when either size or content type condition is met', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('video/*');
+
+          // Small size but matching content type
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('video/mp4', 100),
+            true,
+          );
+
+          // Large size but non-matching content type
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('text/plain', 200000000),
+            true,
+          );
+        });
       });
 
-      it('should use public Cache-Control for small responses below size threshold', async () => {
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('small')),
-              size: 100, // 100 bytes - below default 100 MB threshold
-              verified: false,
-              cached: false,
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
+      describe('integration tests', () => {
+
+        it('should set public Cache-Control for small responses', async () => {
+          dataSource = {
+            getData: () =>
+              Promise.resolve({
+                stream: Readable.from(Buffer.from('small')),
+                size: 100, // 100 bytes - below threshold
+                verified: false,
+                cached: false,
+                requestAttributes: {
+                  origin: 'node-url',
+                  hops: 0,
+                  clientIps: [],
+                },
+              }),
+          };
+
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
             }),
-        };
+          );
 
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.ok(res.headers['cache-control'].includes('public'));
+              assert.ok(!res.headers['cache-control'].includes('private'));
+            });
+        });
 
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            assert.ok(res.headers['cache-control'].includes('public'));
-            assert.ok(!res.headers['cache-control'].includes('private'));
-          });
-      });
+        it('should set private Cache-Control for large responses', async () => {
+          dataSource = {
+            getData: () =>
+              Promise.resolve({
+                stream: Readable.from(Buffer.from('large')),
+                size: 200000000, // 200 MB - above threshold
+                verified: false,
+                cached: false,
+                requestAttributes: {
+                  origin: 'node-url',
+                  hops: 0,
+                  clientIps: [],
+                },
+              }),
+          };
 
-      it('should use private Cache-Control for large responses above size threshold', async () => {
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('large')),
-              size: 200000000, // 200 MB - above default 100 MB threshold
-              verified: false,
-              cached: false,
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
+          app.get(
+            '/:id',
+            createDataHandler({
+              log,
+              dataAttributesSource,
+              dataSource,
+              dataBlockListValidator,
+              manifestPathResolver,
             }),
-        };
+          );
 
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should use private Cache-Control for exact content type match', async () => {
-        // Mutate config array to test content type matching (values must be normalized: lowercase)
-        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
-        config.CACHE_PRIVATE_CONTENT_TYPES.push('application/json');
-
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('{"test": true}')),
-              size: 100,
-              verified: false,
-              cached: false,
-              sourceContentType: 'application/json',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should use private Cache-Control for wildcard content type match', async () => {
-        // Mutate config array to test wildcard matching
-        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
-        config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
-
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('fake-image-data')),
-              size: 100,
-              verified: false,
-              cached: false,
-              sourceContentType: 'image/png',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should use public Cache-Control when content type does not match', async () => {
-        // Mutate config array to test non-matching content type
-        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
-        config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
-
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('text data')),
-              size: 100,
-              verified: false,
-              cached: false,
-              sourceContentType: 'text/plain',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            assert.ok(res.headers['cache-control'].includes('public'));
-            assert.ok(!res.headers['cache-control'].includes('private'));
-          });
-      });
-
-      it('should preserve max-age and immutable directives with private for stable data', async () => {
-        dataIndex = {
-          getDataAttributes: () =>
-            Promise.resolve({
-              id: 'not-a-real-id',
-              dataRoot: 'not-a-real-data-root',
-              hash: 'not-a-real-hash',
-              dataOffset: 0,
-              size: 10,
-              stable: true,
-            }),
-          getDataItemAttributes: () => Promise.resolve(undefined),
-          getTransactionAttributes: () => Promise.resolve(undefined),
-          getDataParent: () => Promise.resolve(undefined),
-          saveDataContentAttributes: () => Promise.resolve(undefined),
-          getVerifiableDataIds: () => Promise.resolve([]),
-          getRootTxId: () => Promise.resolve(undefined),
-          saveVerificationStatus: () => Promise.resolve(undefined),
-        };
-
-        dataAttributesSource = {
-          getDataAttributes: () =>
-            Promise.resolve({
-              id: 'not-a-real-id',
-              dataRoot: 'not-a-real-data-root',
-              hash: 'not-a-real-hash',
-              dataOffset: 0,
-              size: 10,
-              stable: true,
-            }),
-        };
-
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('large')),
-              size: 200000000, // 200 MB - above default threshold
-              verified: false,
-              cached: false,
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataIndex,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            const cacheControl = res.headers['cache-control'];
-            assert.ok(cacheControl.includes('private'));
-            assert.ok(cacheControl.includes('max-age=2592000'));
-            assert.ok(cacheControl.includes('immutable'));
-            assert.ok(!cacheControl.includes('public'));
-          });
-      });
-
-      it('should preserve max-age directive with private for unstable data', async () => {
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('large')),
-              size: 200000000, // 200 MB - above default threshold
-              verified: false,
-              cached: false,
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            const cacheControl = res.headers['cache-control'];
-            assert.ok(cacheControl.includes('private'));
-            assert.ok(cacheControl.includes('max-age=7200'));
-            assert.ok(!cacheControl.includes('public'));
-          });
-      });
-
-      it('should use private when either size or content type condition is met', async () => {
-        // Mutate config array to test content type matching with small size
-        config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
-        config.CACHE_PRIVATE_CONTENT_TYPES.push('video/*');
-
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('small-video')),
-              size: 100, // Small size, but matches content type
-              verified: false,
-              cached: false,
-              sourceContentType: 'video/mp4',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should handle content type with parameters (strips ;charset)', async () => {
-        // Use large size to trigger private, but test that content type with parameters works
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('image-data')),
-              size: 200000000, // Large enough to trigger private
-              verified: false,
-              cached: false,
-              sourceContentType: 'image/png; charset=utf-8',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            // Should be private due to size, demonstrating parameter handling
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should handle mixed case content types', async () => {
-        // Use large size to trigger private, but test that mixed case works
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('image-data')),
-              size: 200000000, // Large enough to trigger private
-              verified: false,
-              cached: false,
-              sourceContentType: 'Image/PNG',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            // Should be private due to size, demonstrating case handling
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should handle content type with whitespace', async () => {
-        // Use large size to trigger private, but test that whitespace is handled
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('image-data')),
-              size: 200000000, // Large enough to trigger private
-              verified: false,
-              cached: false,
-              sourceContentType: ' image/png ',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            // Should be private due to size, demonstrating whitespace handling
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should handle combined parameters and mixed case', async () => {
-        // Use large size to trigger private, testing combined normalization
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('image-data')),
-              size: 200000000, // Large enough to trigger private
-              verified: false,
-              cached: false,
-              sourceContentType: ' Image/PNG; charset=UTF-8 ',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            // Should be private due to size, demonstrating full normalization
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
-      });
-
-      it('should handle complex content type with multiple parameters', async () => {
-        // Use large size to trigger private, testing parameter stripping
-        dataSource = {
-          getData: () =>
-            Promise.resolve({
-              stream: Readable.from(Buffer.from('{"test": true}')),
-              size: 200000000, // Large enough to trigger private
-              verified: false,
-              cached: false,
-              sourceContentType:
-                'application/json; charset=utf-8; boundary=something',
-              requestAttributes: {
-                origin: 'node-url',
-                hops: 0,
-                clientIps: [],
-              },
-            }),
-        };
-
-        app.get(
-          '/:id',
-          createDataHandler({
-            log,
-            dataAttributesSource,
-            dataSource,
-            dataBlockListValidator,
-            manifestPathResolver,
-          }),
-        );
-
-        return request(app)
-          .get('/not-a-real-id')
-          .expect(200)
-          .then((res: any) => {
-            // Should be private due to size, demonstrating multi-param handling
-            assert.ok(res.headers['cache-control'].includes('private'));
-            assert.ok(!res.headers['cache-control'].includes('public'));
-          });
+          return request(app)
+            .get('/not-a-real-id')
+            .expect(200)
+            .then((res: any) => {
+              assert.ok(res.headers['cache-control'].includes('private'));
+              assert.ok(!res.headers['cache-control'].includes('public'));
+            });
+        });
       });
     });
   });
