@@ -1366,6 +1366,42 @@ a proxy:
 setting. IP extraction is handled manually via the `extractAllClientIPs()`
 utility function for more explicit control and security.
 
+#### Protocol Configuration for Proxies
+
+When your gateway is behind a reverse proxy/CDN that terminates TLS (HTTPS), the
+gateway receives HTTP connections from the proxy but needs to generate HTTPS URLs
+in x402 payment responses. Set the `SANDBOX_PROTOCOL` environment variable to
+ensure correct protocol in resource URLs:
+
+```bash
+SANDBOX_PROTOCOL=https
+```
+
+**Why this is needed**:
+
+- Proxy terminates TLS and forwards HTTP to gateway
+- Gateway's `req.protocol` returns 'http' (the proxy-to-gateway connection)
+- x402 payment responses need to reference the client-facing HTTPS URL
+- `SANDBOX_PROTOCOL` overrides the detected protocol
+
+**Example x402 response without configuration**:
+
+```json
+{
+  "resource": "http://your-gateway.com/raw/TX_ID"  ❌ Wrong protocol
+}
+```
+
+**Example x402 response with `SANDBOX_PROTOCOL=https`**:
+
+```json
+{
+  "resource": "https://your-gateway.com/raw/TX_ID"  ✅ Correct protocol
+}
+```
+
+**Note**: This setting also affects ArNS sandbox redirect URLs.
+
 #### Troubleshooting Proxy IP Extraction
 
 **Symptom**: All clients share the same rate limit bucket behind a proxy

@@ -151,7 +151,7 @@ export async function checkPaymentAndRateLimits({
         // Calculate payment requirements based on actual content size
         const requirements = paymentProcessor.calculateRequirements({
           contentSize,
-          protocol: req.protocol,
+          protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
           host: host,
           originalUrl: req.originalUrl,
           contentType: contentType ?? 'application/octet-stream',
@@ -339,7 +339,7 @@ export async function checkPaymentAndRateLimits({
           if (paymentProcessor !== undefined && !paymentVerified) {
             const requirements = paymentProcessor.calculateRequirements({
               contentSize,
-              protocol: req.protocol,
+              protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
               host: host,
               originalUrl: req.originalUrl,
               contentType: contentType ?? 'application/octet-stream',
