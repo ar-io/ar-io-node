@@ -1302,8 +1302,8 @@ The rate limiter extracts client IP addresses in the following priority order:
    - Uses: `client` (203.0.113.42)
 2. **X-Real-IP header**: Uses this header when X-Forwarded-For is not present
    - Format: `X-Real-IP: 203.0.113.42`
-3. **Direct connection IP**: Falls back to `req.ip` when no proxy headers are
-   present
+3. **Direct connection IP**: Uses `socket.remoteAddress` when no proxy headers
+   are present, then falls back to `req.ip` if available
 
 **Important**: The same IP extraction logic is used for:
 
