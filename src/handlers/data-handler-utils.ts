@@ -29,7 +29,7 @@ import {
 export interface CheckPaymentAndRateLimitsParams {
   req: Request;
   res: Response;
-  id: string;
+  id?: string;
   contentSize: number;
   contentType?: string;
   requestAttributes: RequestAttributes;
@@ -88,7 +88,7 @@ export async function checkPaymentAndRateLimits({
     'checkPaymentAndRateLimits',
     {
       attributes: {
-        'data.id': id,
+        ...(id !== undefined && { 'data.id': id }),
         'content.size': contentSize,
       },
     },
@@ -140,7 +140,7 @@ export async function checkPaymentAndRateLimits({
         'verifyPayment',
         {
           attributes: {
-            'data.id': id,
+            ...(id !== undefined && { 'data.id': id }),
             'content.size': contentSize,
           },
         },
@@ -279,7 +279,7 @@ export async function checkPaymentAndRateLimits({
         'checkRateLimits',
         {
           attributes: {
-            'data.id': id,
+            ...(id !== undefined && { 'data.id': id }),
             'content.size': contentSize,
             'payment.verified': paymentVerified,
           },

@@ -62,6 +62,69 @@ export const createChunkOffsetHandler = ({
 
       span.setAttribute('chunk.absolute_offset', offset);
 
+      // Extract request attributes for hop tracking
+      const requestAttributes = getRequestAttributes(request, response);
+
+      // === PAYMENT AND RATE LIMIT CHECK ===
+      // Only perform checks if at least one enforcement mechanism is configured
+      if (rateLimiter !== undefined || paymentProcessor !== undefined) {
+        // For HEAD requests, use zero tokens since no body is sent
+        // For GET requests, use fixed size assumption
+        // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
+        // responses for chunks before fetching, since we don't have the chunk hash
+        // until after retrieval. This means some GET requests with If-None-Match
+        // that would return 304 might be charged/denied upfront. Tokens are adjusted
+        // to zero in the finish handler if 304 is returned (see line 146).
+        const contentSize =
+          request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
+
+        const limitCheck = await checkPaymentAndRateLimits({
+          req: request,
+          res: response,
+          // id is omitted - will be added to logs after txResult fetch
+          contentSize,
+          contentType: undefined, // Chunks don't have content type
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          parentSpan: span,
+        });
+
+        if (!limitCheck.allowed) {
+          // Payment required (402) or rate limit exceeded (429) response already sent
+          return;
+        }
+
+        // Schedule token adjustment based on actual response size
+        if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
+          response.on('finish', () => {
+            // Calculate actual response size based on status code
+            let actualSize = 0;
+            if (response.statusCode === 304 || request.method === 'HEAD') {
+              // 304 Not Modified or HEAD request - no body sent
+              // Note: adjustTokens will still consume minimum 1 token to prevent spam
+              actualSize = 0;
+            } else if (response.statusCode === 200) {
+              // GET request with body - calculate JSON response size
+              const headers = {
+                'content-length': response.getHeader('content-length'),
+              };
+              const contentLength = parseContentLength(headers);
+              if (contentLength !== undefined) {
+                actualSize = contentLength;
+              }
+            }
+
+            adjustRateLimitTokens({
+              req: request,
+              responseSize: actualSize,
+              initialResult: limitCheck,
+              rateLimiter,
+            });
+          });
+        }
+      }
+
       // Get transaction info using composite source (database with chain fallback)
       let txResult;
       try {
@@ -109,69 +172,6 @@ export const createChunkOffsetHandler = ({
         'chunk.weave_offset': finalWeaveOffset,
         'chunk.relative_offset': relativeOffset,
       });
-
-      // Extract request attributes for hop tracking
-      const requestAttributes = getRequestAttributes(request, response);
-
-      // === PAYMENT AND RATE LIMIT CHECK ===
-      // Only perform checks if at least one enforcement mechanism is configured
-      if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-        // For HEAD requests, use zero tokens since no body is sent
-        // For GET requests, use fixed size assumption
-        // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
-        // responses for chunks before fetching, since we don't have the chunk hash
-        // until after retrieval. This means some GET requests with If-None-Match
-        // that would return 304 might be charged/denied upfront. Tokens are adjusted
-        // to zero in the finish handler if 304 is returned (see line 146).
-        const contentSize =
-          request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
-
-        const limitCheck = await checkPaymentAndRateLimits({
-          req: request,
-          res: response,
-          id: finalId,
-          contentSize,
-          contentType: undefined, // Chunks don't have content type
-          requestAttributes,
-          rateLimiter,
-          paymentProcessor,
-          parentSpan: span,
-        });
-
-        if (!limitCheck.allowed) {
-          // Payment required (402) or rate limit exceeded (429) response already sent
-          return;
-        }
-
-        // Schedule token adjustment based on actual response size
-        if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-          response.on('finish', () => {
-            // Calculate actual response size based on status code
-            let actualSize = 0;
-            if (response.statusCode === 304 || request.method === 'HEAD') {
-              // 304 Not Modified or HEAD request - no body sent
-              // Note: adjustTokens will still consume minimum 1 token to prevent spam
-              actualSize = 0;
-            } else if (response.statusCode === 200) {
-              // GET request with body - calculate JSON response size
-              const headers = {
-                'content-length': response.getHeader('content-length'),
-              };
-              const contentLength = parseContentLength(headers);
-              if (contentLength !== undefined) {
-                actualSize = contentLength;
-              }
-            }
-
-            adjustRateLimitTokens({
-              req: request,
-              responseSize: actualSize,
-              initialResult: limitCheck,
-              rateLimiter,
-            });
-          });
-        }
-      }
 
       // composite-chunk-source returns chunk metadata and chunk data
       let chunk: Chunk | undefined = undefined;
