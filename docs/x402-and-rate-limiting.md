@@ -1338,9 +1338,8 @@ location / {
 
 **Cloudflare:**
 
-Cloudflare automatically adds standard proxy headers. No special configuration
-needed. The gateway will extract the real client IP from `CF-Connecting-IP` via
-the X-Forwarded-For chain.
+Cloudflare automatically adds X-Forwarded-For headers. No special configuration
+needed. The gateway extracts the real client IP from X-Forwarded-For.
 
 **AWS Application Load Balancer:**
 
