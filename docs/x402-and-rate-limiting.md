@@ -403,6 +403,10 @@ The system enforces limits at two levels:
 - Prevents any single client from overwhelming the gateway
 - Key format: `rl:ip:{IP_ADDRESS}`
 - Example: `rl:ip:192.168.1.100`
+- **Proxy/CDN Support**: IP address is extracted from proxy headers
+  (`X-Forwarded-For`, `X-Real-IP`) when present, ensuring correct client
+  identification behind proxies and CDNs (see
+  [Proxy and CDN Support](#proxy-and-cdn-support))
 
 **Request flow:**
 
@@ -1280,9 +1284,120 @@ The facilitator provides several security guarantees:
 - Ensures payment amount matches requirements
 - Prevents underpayment
 
+### Proxy and CDN Support
+
+When deploying AR.IO gateways behind proxies, load balancers, or CDNs (like
+nginx, Cloudflare, AWS CloudFront, or Fastly), the rate limiter automatically
+extracts the real client IP address from standard proxy headers. This ensures
+that rate limiting and x402 payments work correctly even when the gateway
+doesn't receive direct client connections.
+
+#### How IP Extraction Works
+
+The rate limiter extracts client IP addresses in the following priority order:
+
+1. **X-Forwarded-For header**: Extracts the first (leftmost) IP address from the
+   header chain
+   - Format: `X-Forwarded-For: client, proxy1, proxy2`
+   - Uses: `client` (203.0.113.42)
+2. **X-Real-IP header**: Uses this header when X-Forwarded-For is not present
+   - Format: `X-Real-IP: 203.0.113.42`
+3. **Direct connection IP**: Falls back to `req.ip` when no proxy headers are
+   present
+
+**Important**: The same IP extraction logic is used for:
+
+- **Rate limit bucket keys** (`rl:ip:{IP_ADDRESS}`)
+- **x402 payment crediting** (tokens added to correct client's bucket)
+- **IP allowlist checks** (exempting specific clients from limits)
+
+This consistency ensures that if a client is allowlisted, their rate limit
+bucket is also correctly identified, and any payments they make are properly
+credited.
+
+#### IPv6 Support
+
+The gateway automatically normalizes IPv4-mapped IPv6 addresses to their IPv4
+equivalents:
+
+- `::ffff:192.0.2.1` normalizes to `192.0.2.1`
+- Ensures consistent bucket identification regardless of address format
+
+#### Example Proxy Configurations
+
+**Nginx:**
+
+```nginx
+location / {
+    proxy_pass http://ar-io-gateway:3000;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header Host $host;
+}
+```
+
+**Cloudflare:**
+
+Cloudflare automatically adds standard proxy headers. No special configuration
+needed. The gateway will extract the real client IP from `CF-Connecting-IP` via
+the X-Forwarded-For chain.
+
+**AWS Application Load Balancer:**
+
+ALBs automatically add X-Forwarded-For headers. Ensure your target group is
+configured to preserve client IPs.
+
+#### Security Considerations
+
+**Header Trust**: The gateway trusts X-Forwarded-For and X-Real-IP headers by
+default. This is generally safe when:
+
+- Your gateway is behind a trusted proxy/CDN
+- The proxy strips existing headers from client requests
+- External clients cannot directly access your gateway
+
+**Direct Exposure**: If your gateway is directly exposed to the internet without
+a proxy:
+
+- Clients could forge X-Forwarded-For headers
+- Consider using firewall rules to only allow traffic from your proxy IPs
+- Or configure your proxy to strip untrusted headers
+
+**Express Trust Proxy**: The gateway does NOT use Express's `trust proxy`
+setting. IP extraction is handled manually via the `extractAllClientIPs()`
+utility function for more explicit control and security.
+
+#### Troubleshooting Proxy IP Extraction
+
+**Symptom**: All clients share the same rate limit bucket behind a proxy
+
+**Diagnosis**:
+
+```bash
+# Check if X-Forwarded-For is being sent
+curl -H "X-Forwarded-For: 203.0.113.42" https://your-gateway.com/tx_id
+
+# Monitor rate limiter logs
+docker-compose logs -f core | grep "IP limit"
+```
+
+**Solution**: Verify your proxy is setting X-Forwarded-For or X-Real-IP headers
+correctly.
+
+**Symptom**: x402 payments credit the wrong IP address
+
+**Cause**: Payment requests use the same IP extraction logic as rate limiting.
+If rate limiting works correctly, payments will too.
+
+**Solution**: Ensure proxy headers are configured correctly (see above).
+
 ### CDN Caching Considerations
 
-When deploying AR.IO gateways behind a CDN (like Cloudflare, Fastly, or AWS CloudFront), cache behavior can interfere with rate limiting and x402 payment enforcement. By default, gateways set `Cache-Control: public` headers, allowing CDNs to cache responses and serve them to multiple users without hitting your origin server.
+When deploying AR.IO gateways behind a CDN (like Cloudflare, Fastly, or AWS
+CloudFront), cache behavior can interfere with rate limiting and x402 payment
+enforcement. By default, gateways set `Cache-Control: public` headers, allowing
+CDNs to cache responses and serve them to multiple users without hitting your
+origin server.
 
 **The Problem:**
 
@@ -1293,13 +1408,16 @@ When deploying AR.IO gateways behind a CDN (like Cloudflare, Fastly, or AWS Clou
 
 **The Solution:**
 
-Use `CACHE_PRIVATE_SIZE_THRESHOLD` and `CACHE_PRIVATE_CONTENT_TYPES` to automatically mark specific responses with `Cache-Control: private`, preventing CDN caching while still allowing browser caching.
+Use `CACHE_PRIVATE_SIZE_THRESHOLD` and `CACHE_PRIVATE_CONTENT_TYPES` to
+automatically mark specific responses with `Cache-Control: private`, preventing
+CDN caching while still allowing browser caching.
 
 #### Size-Based Private Caching
 
 **`CACHE_PRIVATE_SIZE_THRESHOLD`** (number, default: `104857600` = 100 MB)
 
-Automatically sets `Cache-Control: private` for responses exceeding this size in bytes.
+Automatically sets `Cache-Control: private` for responses exceeding this size in
+bytes.
 
 **Example configurations:**
 
@@ -1316,15 +1434,19 @@ CACHE_PRIVATE_SIZE_THRESHOLD=0
 
 **Use cases:**
 
-- **Large file protection:** Prevent CDN from serving large video/image files that should be rate limited
-- **Bandwidth control:** Ensure high-bandwidth content respects payment requirements
-- **Fair usage:** Prevent single payment from benefiting unlimited CDN-cached users
+- **Large file protection:** Prevent CDN from serving large video/image files
+  that should be rate limited
+- **Bandwidth control:** Ensure high-bandwidth content respects payment
+  requirements
+- **Fair usage:** Prevent single payment from benefiting unlimited CDN-cached
+  users
 
 #### Content-Type-Based Private Caching
 
 **`CACHE_PRIVATE_CONTENT_TYPES`** (string, default: `""`)
 
-Comma-separated list of content types that should use `Cache-Control: private`. Supports wildcard patterns.
+Comma-separated list of content types that should use `Cache-Control: private`.
+Supports wildcard patterns.
 
 **Example configurations:**
 
@@ -1406,7 +1528,8 @@ Cache-Control: private, max-age=2592000, immutable
 
 **Rate limiter dependency:**
 
-These settings only have effect when `ENABLE_RATE_LIMITER=true`. A warning is logged at startup if configured without rate limiting enabled.
+These settings only have effect when `ENABLE_RATE_LIMITER=true`. A warning is
+logged at startup if configured without rate limiting enabled.
 
 **No impact on non-CDN deployments:**
 
