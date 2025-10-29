@@ -97,7 +97,7 @@ export async function checkPaymentAndRateLimits({
 
   try {
     // Extract all client IPs for allowlist checking
-    const { clientIps } = extractAllClientIPs(req);
+    const { clientIp, clientIps } = extractAllClientIPs(req);
 
     // Check if ANY IP in the chain is allowlisted - if so, skip all checks
     if (rateLimiter?.isAllowlisted(clientIps)) {
@@ -322,6 +322,7 @@ export async function checkPaymentAndRateLimits({
           );
 
           log.info('Rate limit exceeded', {
+            clientIp,
             id,
             limitType: limitResult.limitType,
           });

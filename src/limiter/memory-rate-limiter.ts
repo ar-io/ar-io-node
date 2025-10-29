@@ -262,6 +262,7 @@ export class MemoryRateLimiter implements RateLimiter {
 
     if (!consumeResult.success) {
       this.log.info('IP limit exceeded', {
+        clientIp: primaryClientIp,
         key: ipKey,
         regularTokens: ipBucket.tokens,
         paidTokens: ipBucket.paidTokens,
@@ -303,6 +304,7 @@ export class MemoryRateLimiter implements RateLimiter {
         }
 
         this.log.info('Resource limit exceeded', {
+          clientIp: primaryClientIp,
           key: resourceKey,
           regularTokens: resourceBucket.tokens,
           paidTokens: resourceBucket.paidTokens,

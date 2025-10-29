@@ -125,6 +125,7 @@ export class RedisRateLimiter implements RateLimiter {
 
       if (!ipResult.success) {
         this.log.info('IP limit exceeded', {
+          clientIp: primaryClientIp,
           key: ipKey,
           tokens: ipResult.bucket.tokens,
           needed: predictedTokens,
@@ -181,6 +182,7 @@ export class RedisRateLimiter implements RateLimiter {
           }
 
           this.log.info('Resource limit exceeded', {
+            clientIp: primaryClientIp,
             key: resourceKey,
             tokens: resourceResult.bucket.tokens,
             needed: predictedTokens,
