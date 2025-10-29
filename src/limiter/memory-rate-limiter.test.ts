@@ -9,6 +9,7 @@ import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { Request, Response } from 'express';
 import { MemoryRateLimiter } from './memory-rate-limiter.js';
+import { extractAllClientIPs } from '../lib/ip-utils.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'MemoryRateLimiter' });
@@ -622,6 +623,243 @@ describe('MemoryRateLimiter', () => {
       const result = await limiter.checkLimit(req2, res, 300);
       assert.strictEqual(result.allowed, false);
       assert.strictEqual(result.limitType, 'ip');
+    });
+  });
+
+  describe('Proxy IP extraction', () => {
+    it('should extract client IP from X-Forwarded-For header', async () => {
+      const req1 = createMockRequest({
+        ip: '10.0.0.1', // Proxy IP
+        headers: {
+          'x-forwarded-for': '203.0.113.42, 198.51.100.10',
+          host: 'test.example.com',
+        },
+      });
+      const req2 = createMockRequest({
+        ip: '10.0.0.1', // Same proxy IP
+        headers: {
+          'x-forwarded-for': '198.18.0.99, 198.51.100.10',
+          host: 'test.example.com',
+        },
+      });
+      const res = createMockResponse();
+
+      // First request from first client through proxy
+      await limiter.checkLimit(req1, res, 400);
+
+      // Second request from different client through same proxy
+      // Should have separate IP bucket (different X-Forwarded-For)
+      const result = await limiter.checkLimit(req2, res, 400);
+      assert.strictEqual(
+        result.allowed,
+        true,
+        'Different clients behind same proxy should have separate buckets',
+      );
+    });
+
+    it('should extract client IP from X-Real-IP header when X-Forwarded-For absent', async () => {
+      const req1 = createMockRequest({
+        ip: '10.0.0.1', // Proxy IP
+        headers: {
+          'x-real-ip': '203.0.113.42',
+          host: 'test.example.com',
+        },
+      });
+      const req2 = createMockRequest({
+        ip: '10.0.0.1', // Same proxy IP
+        headers: {
+          'x-real-ip': '198.18.0.99',
+          host: 'test.example.com',
+        },
+      });
+      const res = createMockResponse();
+
+      // First request from first client through proxy
+      await limiter.checkLimit(req1, res, 400);
+
+      // Second request from different client through same proxy
+      // Should have separate IP bucket (different X-Real-IP)
+      const result = await limiter.checkLimit(req2, res, 400);
+      assert.strictEqual(
+        result.allowed,
+        true,
+        'Different clients with X-Real-IP should have separate buckets',
+      );
+    });
+
+    it('should credit topOffPaidTokens to correct client IP behind proxy', async () => {
+      const req = createMockRequest({
+        ip: '10.0.0.1', // Proxy IP
+        headers: {
+          'x-forwarded-for': '203.0.113.42',
+          host: 'test.example.com',
+        },
+      });
+      const res = createMockResponse();
+
+      // Exhaust regular tokens
+      await limiter.checkLimit(req, res, 500);
+
+      // Top off with payment
+      await limiter.topOffPaidTokens(req, 100);
+
+      // Should be able to consume paid tokens
+      const result = await limiter.checkLimit(req, res, 500);
+      assert.strictEqual(result.allowed, true);
+      assert.ok(
+        (result.ipPaidTokensConsumed ?? 0) > 499,
+        'Payment should credit client IP from proxy headers',
+      );
+    });
+
+    it('should normalize IPv4-mapped IPv6 addresses', async () => {
+      const req1 = createMockRequest({
+        ip: '::ffff:127.0.0.1', // IPv4-mapped IPv6
+      });
+      const req2 = createMockRequest({
+        ip: '127.0.0.1', // Pure IPv4
+      });
+      const res = createMockResponse();
+
+      // First request consumes tokens
+      await limiter.checkLimit(req1, res, 400);
+
+      // Second request should share same bucket (normalized to same IP)
+      const result = await limiter.checkLimit(req2, res, 200);
+      assert.strictEqual(
+        result.allowed,
+        false,
+        'IPv4-mapped IPv6 should normalize to same bucket as IPv4',
+      );
+      assert.strictEqual(result.limitType, 'ip');
+    });
+
+    it('should use same IP extraction for bucket keys as allowlist checks', async () => {
+      const allowlistLimiter = new MemoryRateLimiter({
+        resourceCapacity: 1000,
+        resourceRefillRate: 10,
+        ipCapacity: 500,
+        ipRefillRate: 5,
+        limitsEnabled: true,
+        ipAllowlist: ['203.0.113.42'], // Allowlist the real client IP
+        capacityMultiplier: 10,
+        maxBuckets: 100,
+      });
+
+      const req = createMockRequest({
+        ip: '10.0.0.1', // Proxy IP
+        headers: {
+          'x-forwarded-for': '203.0.113.42, 198.51.100.10',
+          host: 'test.example.com',
+        },
+      });
+      const res = createMockResponse();
+
+      // Extract IPs for allowlist check (same as data-handler-utils.ts does)
+      const { clientIps } = extractAllClientIPs(req);
+
+      // Verify allowlist recognizes the client
+      assert.strictEqual(
+        allowlistLimiter.isAllowlisted(clientIps),
+        true,
+        'Allowlist should recognize client IP from proxy headers',
+      );
+
+      // Exhaust tokens to verify bucket key uses same IP
+      await allowlistLimiter.checkLimit(req, res, 500);
+
+      // Create another request with same proxy but different client IP
+      const req2 = createMockRequest({
+        ip: '10.0.0.1', // Same proxy IP
+        headers: {
+          'x-forwarded-for': '198.18.0.99, 198.51.100.10',
+          host: 'test.example.com',
+        },
+      });
+
+      // This should NOT be allowlisted and should have separate bucket
+      const { clientIps: clientIps2 } = extractAllClientIPs(req2);
+      assert.strictEqual(
+        allowlistLimiter.isAllowlisted(clientIps2),
+        false,
+        'Different client IP should not be allowlisted',
+      );
+
+      // Should have full tokens (different IP bucket)
+      const result = await allowlistLimiter.checkLimit(req2, res, 400);
+      assert.strictEqual(
+        result.allowed,
+        true,
+        'Different client IP should have separate bucket',
+      );
+    });
+
+    it('should handle requests without proxy headers using direct IP', async () => {
+      const req = createMockRequest({
+        ip: '203.0.113.42',
+        headers: {
+          host: 'test.example.com',
+          // No X-Forwarded-For or X-Real-IP
+        },
+      });
+      const res = createMockResponse();
+
+      // Should use req.ip when no proxy headers present
+      await limiter.checkLimit(req, res, 400);
+
+      // Second request with same IP should share bucket
+      const req2 = createMockRequest({
+        ip: '203.0.113.42',
+        headers: {
+          host: 'test.example.com',
+        },
+      });
+
+      const result = await limiter.checkLimit(req2, res, 200);
+      assert.strictEqual(
+        result.allowed,
+        false,
+        'Requests without proxy headers should share bucket with same IP',
+      );
+      assert.strictEqual(result.limitType, 'ip');
+    });
+
+    it('should credit payments to correct IP when multiple proxy hops', async () => {
+      const req1 = createMockRequest({
+        ip: '10.0.0.1', // CDN/proxy
+        headers: {
+          'x-forwarded-for': '203.0.113.42, 198.51.100.10, 192.0.2.5',
+          host: 'test.example.com',
+        },
+      });
+      const req2 = createMockRequest({
+        ip: '10.0.0.1', // Same CDN/proxy
+        headers: {
+          'x-forwarded-for': '198.18.0.99, 198.51.100.10, 192.0.2.5',
+          host: 'test.example.com',
+        },
+      });
+      const res = createMockResponse();
+
+      // Exhaust client 1 tokens
+      await limiter.checkLimit(req1, res, 500);
+
+      // Top off client 1 with payment
+      await limiter.topOffPaidTokens(req1, 100);
+
+      // Client 1 should be able to consume paid tokens
+      const result1 = await limiter.checkLimit(req1, res, 500);
+      assert.strictEqual(result1.allowed, true);
+
+      // Client 2 should still be limited (payment credited to client 1 only)
+      await limiter.checkLimit(req2, res, 500);
+      const result2 = await limiter.checkLimit(req2, res, 100);
+      assert.strictEqual(
+        result2.allowed,
+        false,
+        'Payment should only credit the specific client IP, not others behind same proxy',
+      );
+      assert.strictEqual(result2.limitType, 'ip');
     });
   });
 
