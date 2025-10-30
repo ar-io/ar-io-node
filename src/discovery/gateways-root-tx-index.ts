@@ -49,11 +49,11 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
   constructor({
     log,
     trustedGatewaysUrls,
-    requestTimeoutMs = config.TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS,
-    requestRetryCount = 3,
-    rateLimitBurstSize = 5,
-    rateLimitTokensPerInterval = 6,
-    rateLimitInterval = 'minute',
+    requestTimeoutMs = config.GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS,
+    requestRetryCount = config.GATEWAYS_ROOT_TX_REQUEST_RETRY_COUNT,
+    rateLimitBurstSize = config.GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
+    rateLimitTokensPerInterval = config.GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
+    rateLimitInterval = config.GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL,
     cache,
   }: {
     log: winston.Logger;
