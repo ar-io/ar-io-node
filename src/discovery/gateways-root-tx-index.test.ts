@@ -134,7 +134,8 @@ describe('GatewaysRootTxIndex', () => {
       assert.equal(result.rootOffset, 1000);
       assert.equal(result.rootDataOffset, 1500);
       assert.equal(result.contentType, 'text/plain');
-      assert.equal(result.size, 5000);
+      // size = (rootDataOffset - rootOffset) + dataSize = (1500 - 1000) + 5000 = 5500
+      assert.equal(result.size, 5500);
       assert.equal(result.dataSize, 5000);
       assert.equal(mockAxiosInstance.head.mock.calls.length, 1);
     });
@@ -307,8 +308,8 @@ describe('GatewaysRootTxIndex', () => {
       const gatewaysIndex = new GatewaysRootTxIndex({
         log,
         trustedGatewaysUrls: {
-          'https://gateway1.example.com': 1,
-          'https://gateway2.example.com': 1,
+          'https://gateway1.example.com': 1, // Higher priority (tried first)
+          'https://gateway2.example.com': 2, // Lower priority (tried second)
         },
         requestRetryCount: 0, // Disable retries for this test
         rateLimitBurstSize: 1000,
