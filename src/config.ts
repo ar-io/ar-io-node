@@ -221,9 +221,56 @@ export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// Gateways root TX lookup URLs (for HEAD request offset discovery)
+export const GATEWAYS_ROOT_TX_URLS = JSON.parse(
+  env.varOrDefault(
+    'GATEWAYS_ROOT_TX_URLS',
+    '{ "https://turbo-gateway.com": 1 }',
+  ),
+) as Record<string, number>;
+
+// Validate gateways root TX URLs and weights
+Object.entries(GATEWAYS_ROOT_TX_URLS).forEach(([url, weight]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in GATEWAYS_ROOT_TX_URLS: ${url}`);
+  }
+  if (typeof weight !== 'number' || weight <= 0) {
+    throw new Error(
+      `Invalid weight in GATEWAYS_ROOT_TX_URLS for ${url}: ${weight}`,
+    );
+  }
+});
+
+// Gateways root TX lookup request configuration
+export const GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS',
+  '10000',
+);
+export const GATEWAYS_ROOT_TX_REQUEST_RETRY_COUNT = +env.varOrDefault(
+  'GATEWAYS_ROOT_TX_REQUEST_RETRY_COUNT',
+  '3',
+);
+
+// Gateways root TX lookup rate limiting
+export const GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '5',
+);
+export const GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL =
+  +env.varOrDefault(
+    'GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+    '6', // 6 per minute = 1 per 10 seconds
+  );
+export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo,graphql')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql')
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);

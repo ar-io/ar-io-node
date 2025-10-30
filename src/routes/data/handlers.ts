@@ -808,6 +808,24 @@ export const createRawDataHandler = ({
         });
         span.addEvent('Data retrieval successful');
 
+        // Re-fetch attributes to ensure we have any offsets discovered during getData()
+        // This ensures offset headers are set on the first request, not just subsequent ones
+        span.addEvent('Re-fetching data attributes after getData');
+        try {
+          const updatedAttributes =
+            await dataAttributesSource.getDataAttributes(id);
+          if (updatedAttributes) {
+            dataAttributes = updatedAttributes;
+            span.addEvent('Updated data attributes with discovered offsets');
+          }
+        } catch (error: any) {
+          // If re-fetch fails, log but continue with original attributes
+          log.debug('Failed to re-fetch data attributes after getData:', {
+            dataId: id,
+            message: error.message,
+          });
+        }
+
         // === PAYMENT AND RATE LIMIT CHECK ===
         const allowed = await handleDataRateLimitingAndPayment({
           req,
@@ -1267,6 +1285,24 @@ export const createDataHandler = ({
           'cache.status': data.cached ? 'HIT' : 'MISS',
         });
         span.addEvent('Data retrieval successful');
+
+        // Re-fetch attributes to ensure we have any offsets discovered during getData()
+        // This ensures offset headers are set on the first request, not just subsequent ones
+        span.addEvent('Re-fetching data attributes after getData');
+        try {
+          const updatedAttributes =
+            await dataAttributesSource.getDataAttributes(id);
+          if (updatedAttributes) {
+            dataAttributes = updatedAttributes;
+            span.addEvent('Updated data attributes with discovered offsets');
+          }
+        } catch (error: any) {
+          // If re-fetch fails, log but continue with original attributes
+          log.debug('Failed to re-fetch data attributes after getData:', {
+            dataId: id,
+            message: error.message,
+          });
+        }
 
         // === PAYMENT AND RATE LIMIT CHECK ===
         const allowed = await handleDataRateLimitingAndPayment({
