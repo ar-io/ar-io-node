@@ -122,10 +122,10 @@ describe('GatewaysRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
       const result = await gatewaysIndex.getRootTx(dataItemId);
 
@@ -172,10 +172,10 @@ describe('GatewaysRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
       const result = await gatewaysIndex.getRootTx(dataItemId);
 
@@ -218,10 +218,10 @@ describe('GatewaysRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
       const result = await gatewaysIndex.getRootTx(dataItemId);
 
@@ -256,10 +256,10 @@ describe('GatewaysRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
       const result = await gatewaysIndex.getRootTx(nonExistentId);
 
@@ -317,10 +317,10 @@ describe('GatewaysRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
       const result = await gatewaysIndex.getRootTx(dataItemId);
 
@@ -386,10 +386,10 @@ describe('GatewaysRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
       const result = await gatewaysIndex.getRootTx(dataItemId);
 
@@ -443,10 +443,10 @@ describe('GatewaysRootTxIndex', () => {
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
       // First call - should hit API
       const result1 = await gatewaysIndex.getRootTx(dataItemId);
@@ -461,8 +461,7 @@ describe('GatewaysRootTxIndex', () => {
       assert.deepEqual(result1, result2);
     });
 
-    it('should skip rate limited gateway and try next', async () => {
-      const dataItemId = 'rate-limited-item';
+    it('should use per-gateway rate limiting', async () => {
       const gatewaysCalled: string[] = [];
 
       const mockAxiosInstance = {
@@ -472,7 +471,7 @@ describe('GatewaysRootTxIndex', () => {
             return Promise.resolve({
               status: 200,
               headers: {
-                'x-ar-io-root-transaction-id': 'root-tx',
+                'x-ar-io-root-transaction-id': 'root-tx-1',
                 'content-type': 'text/plain',
               },
             });
@@ -481,7 +480,7 @@ describe('GatewaysRootTxIndex', () => {
             return Promise.resolve({
               status: 200,
               headers: {
-                'x-ar-io-root-transaction-id': 'root-tx',
+                'x-ar-io-root-transaction-id': 'root-tx-2',
                 'content-type': 'text/plain',
               },
             });
@@ -497,36 +496,44 @@ describe('GatewaysRootTxIndex', () => {
 
       mock.method(axios, 'create', () => mockAxiosInstance);
 
-      // Create index with restrictive rate limit
+      // Create index with per-gateway rate limit of 1 token each
       const gatewaysIndex = new GatewaysRootTxIndex({
         log,
         trustedGatewaysUrls: {
           'https://gateway1.example.com': 1,
           'https://gateway2.example.com': 1,
         },
-        rateLimitBurstSize: 1, // Only 1 token available
-        rateLimitTokensPerInterval: 1,
+        rateLimitBurstSize: 1, // Only 1 token per gateway
+        rateLimitTokensPerInterval: 0, // No refills
         rateLimitInterval: 'second',
       });
 
-      // Prefill rate limiter
-      (gatewaysIndex as any)['limiter'].content = (gatewaysIndex as any)[
-        'limiter'
-      ].bucketSize;
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
 
-      // First request should succeed using first available gateway
-      const result1 = await gatewaysIndex.getRootTx(`${dataItemId}-1`);
-      assert(result1 !== undefined);
+      // Make 2 requests - each gateway should be able to serve 1 request
+      await gatewaysIndex.getRootTx('item-1');
+      await gatewaysIndex.getRootTx('item-2');
 
-      // Second request should be rate limited and return undefined
-      const result2 = await gatewaysIndex.getRootTx(`${dataItemId}-2`);
-      assert.equal(result2, undefined, 'Should be rate limited');
+      // Both gateways should have been called once each (per-gateway limiting)
+      // With global limiting, only 1 gateway would have been called
+      const gateway1Calls = gatewaysCalled.filter(
+        (g) => g === 'gateway1',
+      ).length;
+      const gateway2Calls = gatewaysCalled.filter(
+        (g) => g === 'gateway2',
+      ).length;
 
-      // Should have only called one gateway
       assert.equal(
-        gatewaysCalled.length,
-        1,
-        'Only one gateway should be called before rate limiting',
+        gateway1Calls + gateway2Calls,
+        2,
+        'Both requests should succeed with per-gateway limits',
+      );
+      assert(
+        gateway1Calls >= 1 || gateway2Calls >= 1,
+        'At least one gateway should be used',
       );
     });
   });
