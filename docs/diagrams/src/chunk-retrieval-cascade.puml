@@ -1,0 +1,29 @@
+@startuml
+skinparam dpi 300
+skinparam backgroundColor white
+
+title Chunk Retrieval Cascade
+
+left to right direction
+
+rectangle "Client Request" as CR
+
+rectangle "AR.IO Node" {
+  rectangle "1. Local Cache" as LC #90EE90
+  rectangle "2. AR.IO Peers" as AP #87CEEB
+  rectangle "3. Arweave Network" as AN #FFB6C1
+  rectangle "4. Legacy S3" as S3 #FFFFE0
+}
+
+CR --> LC: First
+LC --> AP: If miss
+AP --> AN: If fail
+AN --> S3: Last resort
+S3 ..> AN: Rebroadcast
+
+note bottom of LC: Fastest\n(in-memory & disk)
+note bottom of AP: Fast\n(frequently used)
+note bottom of AN: Slower\n(complete set)
+note bottom of S3: Backup\n(cloud storage)
+
+@enduml

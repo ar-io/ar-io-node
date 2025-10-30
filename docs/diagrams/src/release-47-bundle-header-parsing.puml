@@ -1,0 +1,39 @@
+@startuml
+skinparam dpi 200
+skinparam backgroundColor white
+
+title Release 47 Bundle Header Parsing
+
+actor Client
+participant "AR.IO Node" as Node
+database "Local Cache" as Cache
+participant "Root ID Source" as RootID
+participant "Bundle Parser" as Parser
+participant "Chunk Sources" as Chunks
+participant "Root Transaction" as Root
+
+Client -> Node: GET /tx/{id}/data
+Node -> Cache: Check local cache
+Cache --> Node: Cache miss
+
+Node -> RootID: Get root transaction ID
+RootID --> Node: Root transaction ID
+
+note right of RootID: Only stores root ID,\nnot pre-calculated offsets
+
+Node -> Root: Get root transaction header
+Root --> Node: Bundle header data
+
+Node -> Parser: Parse ANS-104 bundle headers
+Parser -> Parser: Calculate offset for data item
+Parser --> Node: Calculated offset
+
+Node -> Chunks: Fetch chunks for range\n(using calculated offset + range)
+Chunks --> Node: Chunk data
+
+Node -> Node: Assemble chunks into\ncontiguous data
+
+Node -> Cache: Store assembled data
+Node -> Client: Stream response
+
+@enduml

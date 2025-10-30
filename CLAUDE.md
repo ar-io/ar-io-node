@@ -5,6 +5,7 @@
 - Keep glossary definitions concise and focused on concepts rather than implementation details
 - Organize new terms into the appropriate existing sections
 - When modifying code, add or improve JSDoc comments where possible to enhance documentation
+- Chunk retrieval architecture diagrams are in `docs/diagrams/src/chunk-source-priority.puml` and `docs/diagrams/src/chunk-component-architecture.puml` - update these when making changes to chunk sources, caching behavior, or retrieval flow
 
 ### Rate Limiter and x402 Documentation
 

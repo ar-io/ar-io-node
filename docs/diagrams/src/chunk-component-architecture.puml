@@ -1,0 +1,35 @@
+@startuml
+skinparam dpi 400
+skinparam backgroundColor white
+skinparam componentStyle rectangle
+
+title Chunk Retrieval Component Architecture
+
+component "Browser" as B
+component "AR.IO Peer" as P
+
+package "AR.IO Node" {
+  component "Express Handler" as H
+  component "TX Offset Index" as TOI
+  component "Composite Source" as CS
+  database "Local Cache" as LC
+}
+
+cloud "External Sources" {
+  component "AR.IO Network" as ARIO
+  component "Arweave Network" as AR
+  component "S3" as S3
+}
+
+B --> H: HTTP Request
+P --> H: HTTP Request
+H --> TOI: Lookup offset
+H --> CS: Get chunk
+CS --> LC: Check cache
+CS ..> ARIO: Fetch
+CS ..> AR: Fetch
+CS ..> S3: Fetch
+
+note right of CS: Configurable parallelism\n(e.g., 1-3 concurrent)
+
+@enduml
