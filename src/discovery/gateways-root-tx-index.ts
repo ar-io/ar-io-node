@@ -181,23 +181,33 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
             const contentType = response.headers['content-type'];
             const contentLengthStr = response.headers['content-length'];
 
-            // If we have a root transaction ID, we found offset information
+            // Root transaction ID found - offsets can only be present if root ID exists
             if (rootTxId) {
+              const rootOffset = rootOffsetStr
+                ? parseInt(rootOffsetStr, 10)
+                : undefined;
+              const rootDataOffset = rootDataOffsetStr
+                ? parseInt(rootDataOffsetStr, 10)
+                : undefined;
+              // Content-Length is the size of the data, not the full data item with headers
+              const dataSize = contentLengthStr
+                ? parseInt(contentLengthStr, 10)
+                : undefined;
+              // Calculate total size if we have offsets: header size + data size
+              const size =
+                rootOffset !== undefined &&
+                rootDataOffset !== undefined &&
+                dataSize !== undefined
+                  ? rootDataOffset - rootOffset + dataSize
+                  : undefined;
+
               const result: CachedGatewayOffsets = {
                 rootTxId,
-                rootOffset: rootOffsetStr
-                  ? parseInt(rootOffsetStr, 10)
-                  : undefined,
-                rootDataOffset: rootDataOffsetStr
-                  ? parseInt(rootDataOffsetStr, 10)
-                  : undefined,
+                rootOffset,
+                rootDataOffset,
                 contentType,
-                size: contentLengthStr
-                  ? parseInt(contentLengthStr, 10)
-                  : undefined,
-                dataSize: contentLengthStr
-                  ? parseInt(contentLengthStr, 10)
-                  : undefined,
+                size,
+                dataSize,
               };
 
               // Cache the result
@@ -217,8 +227,8 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
               return result;
             }
 
-            // No offset headers found - item might not be nested or gateway doesn't support headers
-            log.debug('No offset headers in gateway response', {
+            // No root ID in gateway response - item might not be nested or gateway doesn't support headers
+            log.debug('No root ID in gateway response', {
               id,
               gateway: gatewayUrl,
               hasRootTxId: !!rootTxId,
