@@ -11,6 +11,7 @@ import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
+import { parseNonNegativeInt } from '../lib/http-utils.js';
 import * as config from '../config.js';
 
 export type CachedGatewayOffsets = {
@@ -190,16 +191,10 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
 
             // Root transaction ID found - offsets can only be present if root ID exists
             if (rootTxId) {
-              const rootOffset = rootOffsetStr
-                ? parseInt(rootOffsetStr, 10)
-                : undefined;
-              const rootDataOffset = rootDataOffsetStr
-                ? parseInt(rootDataOffsetStr, 10)
-                : undefined;
+              const rootOffset = parseNonNegativeInt(rootOffsetStr);
+              const rootDataOffset = parseNonNegativeInt(rootDataOffsetStr);
               // Content-Length is the size of the data, not the full data item with headers
-              const dataSize = contentLengthStr
-                ? parseInt(contentLengthStr, 10)
-                : undefined;
+              const dataSize = parseNonNegativeInt(contentLengthStr);
               // Calculate total size if we have offsets: header size + data size
               const size =
                 rootOffset !== undefined &&

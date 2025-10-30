@@ -187,6 +187,57 @@ describe('GatewaysRootTxIndex', () => {
       assert.equal(mockAxiosInstance.head.mock.calls.length, 1);
     });
 
+    it('should handle invalid numeric header values', async () => {
+      const dataItemId = 'test-data-item-123';
+      const rootTxId = 'root-tx-456';
+
+      const mockAxiosInstance = {
+        head: mock.fn(() =>
+          Promise.resolve({
+            status: 200,
+            headers: {
+              'x-ar-io-root-transaction-id': rootTxId,
+              'x-ar-io-root-data-item-offset': 'invalid', // Invalid offset
+              'x-ar-io-root-data-offset': '  ', // Whitespace only
+              'content-length': 'NaN', // Invalid length
+              'content-type': 'text/plain',
+            },
+          }),
+        ),
+        defaults: { raxConfig: {} },
+        interceptors: {
+          request: { use: mock.fn(), eject: mock.fn() },
+          response: { use: mock.fn(), eject: mock.fn() },
+        },
+      };
+
+      mock.method(axios, 'create', () => mockAxiosInstance);
+
+      const gatewaysIndex = new GatewaysRootTxIndex({
+        log,
+        trustedGatewaysUrls: { 'https://gateway.example.com': 1 },
+        rateLimitBurstSize: 1000,
+        rateLimitTokensPerInterval: 1000,
+        rateLimitInterval: 'second',
+      });
+
+      // Prefill rate limiters for all gateways
+      for (const [url, limiter] of (gatewaysIndex as any)['limiters']) {
+        limiter.content = limiter.bucketSize;
+      }
+
+      const result = await gatewaysIndex.getRootTx(dataItemId);
+
+      assert(result !== undefined);
+      assert.equal(result.rootTxId, rootTxId);
+      // All numeric fields should be undefined (not NaN) when headers are invalid
+      assert.equal(result.rootOffset, undefined);
+      assert.equal(result.rootDataOffset, undefined);
+      assert.equal(result.dataSize, undefined);
+      assert.equal(result.size, undefined);
+      assert.equal(result.contentType, 'text/plain');
+    });
+
     it('should return undefined when no offset headers present', async () => {
       const dataItemId = 'test-data-item-123';
 
