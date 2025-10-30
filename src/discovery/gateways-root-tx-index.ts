@@ -44,7 +44,7 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
   private trustedGateways: Map<number, string[]>;
   private readonly axiosInstance: AxiosInstance;
   private readonly cache?: LRUCache<string, CachedGatewayOffsets>;
-  private readonly limiter: TokenBucket;
+  private readonly limiters: Map<string, TokenBucket>;
 
   constructor({
     log,
@@ -68,15 +68,21 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     this.log = log.child({ class: this.constructor.name });
     this.cache = cache;
 
-    // Initialize rate limiter
-    this.limiter = new TokenBucket({
-      bucketSize: rateLimitBurstSize,
-      tokensPerInterval: rateLimitTokensPerInterval,
-      interval: rateLimitInterval,
-    });
-
     if (Object.keys(trustedGatewaysUrls).length === 0) {
       throw new Error('At least one gateway URL must be provided');
+    }
+
+    // Initialize per-gateway rate limiters
+    this.limiters = new Map();
+    for (const url of Object.keys(trustedGatewaysUrls)) {
+      this.limiters.set(
+        url,
+        new TokenBucket({
+          bucketSize: rateLimitBurstSize,
+          tokensPerInterval: rateLimitTokensPerInterval,
+          interval: rateLimitInterval,
+        }),
+      );
     }
 
     // lower number = higher priority
@@ -157,12 +163,13 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
 
         for (const gatewayUrl of shuffledGateways) {
           try {
-            // Apply rate limiting before making request
-            if (!this.limiter.tryRemoveTokens(1)) {
-              log.debug('Rate limit exceeded - skipping gateway', {
+            // Apply per-gateway rate limiting before making request
+            const limiter = this.limiters.get(gatewayUrl);
+            if (!limiter?.tryRemoveTokens(1)) {
+              log.debug('Rate limit exceeded for gateway - skipping', {
                 id,
                 gateway: gatewayUrl,
-                tokensAvailable: this.limiter.content,
+                tokensAvailable: limiter?.content ?? 0,
               });
               continue;
             }
