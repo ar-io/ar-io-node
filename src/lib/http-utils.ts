@@ -118,6 +118,31 @@ export function parseContentRange(
 }
 
 /**
+ * Safely parse a string value to a non-negative integer.
+ * Trims whitespace, validates the result is finite and non-negative.
+ *
+ * @param value - String value to parse (can be undefined)
+ * @returns Parsed non-negative integer, or undefined if invalid/missing
+ *
+ * @example
+ * parseNonNegativeInt('123') // 123
+ * parseNonNegativeInt('  456  ') // 456
+ * parseNonNegativeInt('abc') // undefined
+ * parseNonNegativeInt('') // undefined
+ * parseNonNegativeInt('-1') // undefined
+ * parseNonNegativeInt(undefined) // undefined
+ */
+export function parseNonNegativeInt(
+  value: string | undefined,
+): number | undefined {
+  if (value === undefined || value === '') return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  const parsed = parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/**
  * Response part for multipart byterange responses.
  * Either a string (boundary/header) or a data placeholder with range info.
  */

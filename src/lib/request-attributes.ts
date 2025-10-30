@@ -7,6 +7,7 @@
 
 import { headerNames } from '../constants.js';
 import { RequestAttributes } from '../types.js';
+import { parseNonNegativeInt } from './http-utils.js';
 
 export function validateHopCount(currentHops: number, maxHops: number): void {
   if (currentHops >= maxHops) {
@@ -79,14 +80,10 @@ export const parseRequestAttributesHeaders = ({
     {} as Record<string, string>,
   );
 
-  let hops;
-  if (headersLowercaseKeys[headerNames.hops.toLowerCase()] != null) {
-    hops = parseInt(headersLowercaseKeys[headerNames.hops.toLowerCase()], 10);
-  } else if (currentHops != null) {
-    hops = currentHops;
-  } else {
-    hops = 1;
-  }
+  const parsedHops = parseNonNegativeInt(
+    headersLowercaseKeys[headerNames.hops.toLowerCase()],
+  );
+  const hops = parsedHops ?? currentHops ?? 1;
 
   const arnsName = headersLowercaseKeys[headerNames.arnsName.toLowerCase()];
   const arnsBasename =
