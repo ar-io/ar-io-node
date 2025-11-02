@@ -12,6 +12,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+## [Release 57] - 2025-11-03
+
+This is a **recommended release**. This release focuses on improving gateway infrastructure with enhanced CDN compatibility and a new gateway-based offset discovery system. Key improvements include a new root transaction index using HEAD requests to AR.IO gateways, configurable Cache-Control headers for better CDN integration, and numerous bug fixes for proxy support. The release also includes extensive documentation improvements.
+
+### Added
+
+- **GatewaysRootTxIndex for Offset Discovery**: New root transaction index using HEAD requests to AR.IO gateways for discovering data item offsets
+  - Multi-gateway support with priority tiers and automatic fallback
+  - Per-gateway rate limiting with TokenBucket
+  - LRU caching for offset results
+  - Configuration via `GATEWAYS_ROOT_TX_URLS`, `GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS`, `GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE`, `GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL`, `GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL`, `GATEWAYS_ROOT_TX_CACHE_SIZE`
+- **Configurable Cache-Control Private Directive**: CDN compatibility via `CACHE_PRIVATE_SIZE_THRESHOLD` (default: 100 MB) and `CACHE_PRIVATE_CONTENT_TYPES` environment variables
+  - Adds `private` directive to Cache-Control headers for content exceeding size threshold or matching content types
+  - Ensures rate limiting and x402 payment requirements are enforced even when CDNs are deployed in front of ar-io-node
+- **Enhanced Rate Limiting Observability**: Client IP now logged separately in rate limit exceeded messages for better debugging and monitoring
+
+### Fixed
+
+- **Proxy Support Fixes**:
+  - Fixed x402 resource URLs to use `SANDBOX_PROTOCOL` when behind reverse proxies/CDNs
+  - Fixed inconsistent IP extraction between rate limiter bucket keys and allowlist checks
+- **Chunk Endpoint Performance**: Apply rate limits before expensive txResult lookup
+  - Reordered operations to check rate limits first, improving performance under high load
+- **Cache-Control Content Type Matching**: Normalize content types by stripping parameters (e.g., `text/html; charset=utf-8` → `text/html`)
+  - Ensures proper Cache-Control header matching for configured content types
+
+### Documentation
+
+- Comprehensive rate limiting documentation cleanup (~200-300 lines of duplication removed)
+- Documented all 4 rate limit metrics (request, IP, chunk, x402 token consumption)
+- Added automated payment workflow testing examples for x402
+- Removed private key export recommendations from x402 testing examples
+- Clarified complete IP extraction fallback order for proxy scenarios
+- Clarified Cloudflare header extraction behavior
+- Removed redundant mentions of x402 requiring rate limiter
+
 ## [Release 56] - 2025-10-27
 
 This is a recommended release due to fixes for nested bundle offset
