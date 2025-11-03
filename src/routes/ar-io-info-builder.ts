@@ -70,6 +70,9 @@ export interface X402Info {
     pricing: X402PricingInfo;
     rateLimiterCapacityMultiplier: number;
   };
+  chunkRequests?: {
+    fixedPriceUSDC: string;
+  };
 }
 
 /**
@@ -111,6 +114,7 @@ export interface ArIoInfoConfig {
     minPrice: number;
     maxPrice: number;
     capacityMultiplier: number;
+    chunkFixedPriceUSDC?: number;
   };
 }
 
@@ -187,6 +191,7 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
       minPrice,
       maxPrice,
       capacityMultiplier,
+      chunkFixedPriceUSDC,
     } = config.x402;
 
     // Calculate example costs (rounded to 6 decimals to match USDC precision)
@@ -233,6 +238,13 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
         rateLimiterCapacityMultiplier: capacityMultiplier,
       },
     };
+
+    // Add chunk fixed pricing if enabled (> 0)
+    if (chunkFixedPriceUSDC !== undefined && chunkFixedPriceUSDC > 0) {
+      response.x402.chunkRequests = {
+        fixedPriceUSDC: chunkFixedPriceUSDC.toFixed(6),
+      };
+    }
   }
 
   return response;

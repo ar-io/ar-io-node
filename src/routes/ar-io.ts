@@ -186,6 +186,7 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
           minPrice: config.X_402_USDC_DATA_EGRESS_MIN_PRICE,
           maxPrice: config.X_402_USDC_DATA_EGRESS_MAX_PRICE,
           capacityMultiplier: config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER,
+          chunkFixedPriceUSDC: config.CHUNK_PAYMENT_FIXED_PRICE_USDC,
         }
       : undefined,
   });

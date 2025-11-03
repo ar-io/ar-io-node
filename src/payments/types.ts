@@ -115,4 +115,35 @@ export interface PaymentProcessor {
    * @returns PaymentPayload or undefined if no payment header
    */
   extractPayment(req: Request): PaymentPayload | undefined;
+
+  /**
+   * Verify and settle a fixed-price payment (bypasses rate limiting)
+   * @param fixedPriceUSDC Fixed price in USDC for the request
+   * @param req Express request object
+   * @param res Express response object
+   * @param endpointType Type of endpoint (e.g., 'chunk', 'data', 'raw')
+   * @returns Promise resolving to { verified: boolean, settled: boolean, payer?: string }
+   */
+  verifyAndSettleFixedPricePayment(
+    fixedPriceUSDC: number,
+    req: Request,
+    res: Response,
+    endpointType: string,
+  ): Promise<{
+    verified: boolean;
+    settled: boolean;
+    payer?: string;
+  }>;
+
+  /**
+   * Send a 402 payment required response with fixed-price requirements
+   * @param fixedPriceUSDC Fixed price in USDC for the request
+   * @param req Express request object
+   * @param res Express response object
+   */
+  sendFixedPricePaymentRequiredResponse(
+    fixedPriceUSDC: number,
+    req: Request,
+    res: Response,
+  ): void;
 }

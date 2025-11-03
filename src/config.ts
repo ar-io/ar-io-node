@@ -432,11 +432,19 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
 
-// Assumed size for base64-encoded chunk GET responses (used for x402 payment and rate limiting)
+// Assumed size for base64-encoded chunk GET responses (used for rate limiting free tier)
 // Default: 368,640 bytes (360 KiB) = 256 KiB raw data * 1.4 base64url encoding overhead
 export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
   'CHUNK_GET_BASE64_SIZE_BYTES',
   '368640',
+);
+
+// Fixed price per chunk GET/HEAD request in USDC (bypasses rate limiting when paid)
+// Default: 0.001 USDC per request (~$1 per 1000 chunk requests)
+// Set to 0 to disable fixed-price payment bypass
+export const CHUNK_PAYMENT_FIXED_PRICE_USDC = +env.varOrDefault(
+  'CHUNK_PAYMENT_FIXED_PRICE_USDC',
+  '0.001',
 );
 
 // Arweave network peer post success goal

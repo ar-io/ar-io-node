@@ -20,6 +20,7 @@ import {
   getPaywallHtml,
 } from 'x402/shared';
 import log from '../log.js';
+import * as metrics from '../metrics.js';
 import {
   PaymentProcessor,
   PaymentVerificationResult,
@@ -380,6 +381,156 @@ export class X402UsdcProcessor implements PaymentProcessor {
       error: options?.error,
       message: options?.message,
       payer: options?.payer,
+    });
+  }
+
+  /**
+   * Verify and settle a fixed-price payment (bypasses rate limiting)
+   * This method is used for endpoints that charge a fixed price per request
+   * instead of using the token bucket model.
+   */
+  public async verifyAndSettleFixedPricePayment(
+    fixedPriceUSDC: number,
+    req: Request,
+    res: Response,
+    endpointType: string,
+  ): Promise<{
+    verified: boolean;
+    settled: boolean;
+    payer?: string;
+  }> {
+    const domain = req.hostname || 'unknown';
+
+    // Extract payment from request
+    const paymentPayload = this.extractPayment(req);
+    if (!paymentPayload) {
+      this.log.debug('No payment header found for fixed-price payment');
+      return { verified: false, settled: false };
+    }
+
+    // Create payment requirements for fixed price
+    const requirements = this.createFixedPriceRequirements(
+      fixedPriceUSDC,
+      req.protocol,
+      req.hostname,
+      req.originalUrl,
+    );
+
+    // Verify payment
+    const verifyResult = await this.verifyPayment(paymentPayload, requirements);
+    metrics.x402PaymentsVerifiedTotal.inc({
+      endpoint_type: endpointType,
+      success: String(verifyResult.isValid),
+      domain,
+    });
+
+    if (!verifyResult.isValid) {
+      this.log.warn('Fixed-price payment verification failed', {
+        reason: verifyResult.invalidReason,
+        payer: verifyResult.payer,
+        fixedPriceUSDC,
+        endpointType,
+      });
+      return { verified: false, settled: false, payer: verifyResult.payer };
+    }
+
+    // Settle payment
+    const settleResult = await this.settlePayment(paymentPayload, requirements);
+    metrics.x402PaymentsSettledTotal.inc({
+      endpoint_type: endpointType,
+      success: String(settleResult.success),
+      domain,
+    });
+
+    if (settleResult.responseHeader !== undefined) {
+      res.setHeader('x-settlement', settleResult.responseHeader);
+    }
+
+    if (!settleResult.success) {
+      this.log.warn('Fixed-price payment settlement failed', {
+        reason: settleResult.errorReason,
+        payer: verifyResult.payer,
+        fixedPriceUSDC,
+        endpointType,
+      });
+      return {
+        verified: true,
+        settled: false,
+        payer: verifyResult.payer,
+      };
+    }
+
+    // Track payment amount
+    metrics.x402PaymentAmountTotal.inc(
+      {
+        endpoint_type: endpointType,
+        domain,
+      },
+      fixedPriceUSDC,
+    );
+
+    this.log.info('Fixed-price payment verified and settled', {
+      payer: verifyResult.payer,
+      fixedPriceUSDC,
+      endpointType,
+    });
+
+    return {
+      verified: true,
+      settled: true,
+      payer: verifyResult.payer,
+    };
+  }
+
+  /**
+   * Create payment requirements for a fixed price (not size-based)
+   */
+  private createFixedPriceRequirements(
+    fixedPriceUSDC: number,
+    protocol: string,
+    host: string,
+    originalUrl: string,
+  ): PaymentRequirements {
+    const atomicAssetPrice = processPriceToAtomicAmount(
+      fixedPriceUSDC,
+      this.config.network,
+    );
+
+    if ('error' in atomicAssetPrice) {
+      throw new Error(`Invalid price format: ${fixedPriceUSDC}`);
+    }
+
+    return {
+      scheme: 'exact' as const,
+      description: `AR.IO Gateway chunk request (fixed price)`,
+      network: this.config.network,
+      maxAmountRequired: atomicAssetPrice.maxAmountRequired,
+      payTo: this.config.walletAddress,
+      asset: atomicAssetPrice.asset.address,
+      resource: `${protocol}://${host}${originalUrl}`,
+      mimeType: 'application/octet-stream',
+      maxTimeoutSeconds: 300, // 5 minutes
+      extra: (atomicAssetPrice.asset as ERC20TokenAmount['asset']).eip712,
+    };
+  }
+
+  /**
+   * Send a 402 payment required response with fixed-price requirements
+   */
+  public sendFixedPricePaymentRequiredResponse(
+    fixedPriceUSDC: number,
+    req: Request,
+    res: Response,
+  ): void {
+    const requirements = this.createFixedPriceRequirements(
+      fixedPriceUSDC,
+      req.protocol,
+      req.hostname,
+      req.originalUrl,
+    );
+
+    this.sendPaymentRequiredResponse(req, res, requirements, {
+      message: 'Payment required to access this resource',
     });
   }
 }

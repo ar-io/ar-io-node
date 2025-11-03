@@ -150,6 +150,21 @@ the Base blockchain to monetize data egress and provide premium rate limit tiers
 for paying users. Requires the rate limiter to be enabled, as 402 responses are
 only sent when rate limits are exceeded.
 
+**Fixed-Price Payment Model** - A payment model used for chunk GET/HEAD
+requests where each request costs a fixed USDC amount (configured via
+`CHUNK_PAYMENT_FIXED_PRICE_USDC`) regardless of actual response size. Paid
+requests bypass rate limiting entirely - they don't consume tokens from buckets
+nor add paid tokens. This provides unlimited chunk access with predictable
+per-request costs. Contrasts with the token bucket model used for data
+endpoints.
+
+**Token Bucket Payment Model** - A payment model used for data/transaction
+endpoints where payments add paid tokens to the user's rate limit bucket. Token
+amounts are calculated based on content size and per-byte pricing. Paid tokens
+provide overflow capacity beyond regular tokens and are consumed after regular
+tokens are exhausted. This model integrates payments with the rate limiting
+system rather than bypassing it.
+
 ## Databases
 
 **Bundles Database** - SQLite database storing ANS-104 bundle metadata,

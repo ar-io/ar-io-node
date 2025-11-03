@@ -9,6 +9,7 @@ import { Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
 import {
   CHUNK_GET_BASE64_SIZE_BYTES,
+  CHUNK_PAYMENT_FIXED_PRICE_USDC,
   CHUNK_POST_ABORT_TIMEOUT_MS,
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
   CHUNK_POST_MIN_SUCCESS_COUNT,
@@ -67,61 +68,166 @@ export const createChunkOffsetHandler = ({
 
       // === PAYMENT AND RATE LIMIT CHECK ===
       // Only perform checks if at least one enforcement mechanism is configured
+      let fixedPricePaymentSuccessful = false;
       if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-        // For HEAD requests, use zero tokens since no body is sent
-        // For GET requests, use fixed size assumption
-        // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
-        // responses for chunks before fetching, since we don't have the chunk hash
-        // until after retrieval. This means some GET requests with If-None-Match
-        // that would return 304 might be charged/denied upfront. Tokens are adjusted
-        // to zero in the finish handler if 304 is returned (see line 146).
-        const contentSize =
-          request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
+        // Check for fixed-price payment model (if enabled)
+        if (
+          CHUNK_PAYMENT_FIXED_PRICE_USDC > 0 &&
+          paymentProcessor !== undefined
+        ) {
+          // Fixed-price model: payments bypass rate limiting entirely
+          const paymentResult =
+            await paymentProcessor.verifyAndSettleFixedPricePayment(
+              CHUNK_PAYMENT_FIXED_PRICE_USDC,
+              request,
+              response,
+              'chunk',
+            );
 
-        const limitCheck = await checkPaymentAndRateLimits({
-          req: request,
-          res: response,
-          // id is omitted - will be added to logs after txResult fetch
-          contentSize,
-          contentType: undefined, // Chunks don't have content type
-          requestAttributes,
-          rateLimiter,
-          paymentProcessor,
-          parentSpan: span,
-        });
+          if (paymentResult.verified && paymentResult.settled) {
+            // Fixed-price payment successful - bypass rate limiting entirely
+            fixedPricePaymentSuccessful = true;
+            span.setAttribute('payment.fixed_price', true);
+            span.setAttribute('payment.verified', true);
+            span.setAttribute('payment.settled', true);
+            if (paymentResult.payer !== undefined) {
+              span.setAttribute('payment.payer', paymentResult.payer);
+            }
+            // Skip rate limiting and continue to serve chunk
+          } else if (
+            paymentResult.verified ||
+            paymentResult.payer !== undefined
+          ) {
+            // Payment verification or settlement failed - return 402
+            // Note: verifyAndSettleFixedPricePayment already set x-settlement header if applicable
+            span.setAttribute('payment.fixed_price', true);
+            span.setAttribute('payment.verified', paymentResult.verified);
+            span.setAttribute('payment.settled', false);
+            span.setAttribute('http.status_code', 402);
+            response.status(402).json({
+              error: paymentResult.verified
+                ? 'payment_settlement_failed'
+                : 'payment_verification_failed',
+              message: 'Payment required to access this resource',
+            });
+            return;
+          } else {
+            // No payment header - check rate limits for free tier
+            if (rateLimiter !== undefined) {
+              const contentSize =
+                request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
+              const predictedTokens = Math.ceil(contentSize / 1024);
 
-        if (!limitCheck.allowed) {
-          // Payment required (402) or rate limit exceeded (429) response already sent
-          return;
-        }
+              const limitCheck = await rateLimiter.checkLimit(
+                request,
+                response,
+                predictedTokens,
+                false, // no payment provided
+              );
 
-        // Schedule token adjustment based on actual response size
-        if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
-          response.on('finish', () => {
-            // Calculate actual response size based on status code
-            let actualSize = 0;
-            if (response.statusCode === 304 || request.method === 'HEAD') {
-              // 304 Not Modified or HEAD request - no body sent
-              // Note: adjustTokens will still consume minimum 1 token to prevent spam
-              actualSize = 0;
-            } else if (response.statusCode === 200) {
-              // GET request with body - calculate JSON response size
-              const headers = {
-                'content-length': response.getHeader('content-length'),
-              };
-              const contentLength = parseContentLength(headers);
-              if (contentLength !== undefined) {
-                actualSize = contentLength;
+              if (!limitCheck.allowed) {
+                // Rate limited - send fixed-price 402 response
+                span.setAttribute('http.status_code', 402);
+                paymentProcessor.sendFixedPricePaymentRequiredResponse(
+                  CHUNK_PAYMENT_FIXED_PRICE_USDC,
+                  request,
+                  response,
+                );
+                return;
+              }
+
+              // Schedule token adjustment based on actual response size
+              if (limitCheck.ipTokensConsumed !== undefined) {
+                response.on('finish', () => {
+                  // Calculate actual response size based on status code
+                  let actualSize = 0;
+                  if (
+                    response.statusCode === 304 ||
+                    request.method === 'HEAD'
+                  ) {
+                    // 304 Not Modified or HEAD request - no body sent
+                    actualSize = 0;
+                  } else if (response.statusCode === 200) {
+                    // GET request with body - calculate JSON response size
+                    const headers = {
+                      'content-length': response.getHeader('content-length'),
+                    };
+                    const contentLength = parseContentLength(headers);
+                    if (contentLength !== undefined) {
+                      actualSize = contentLength;
+                    }
+                  }
+
+                  adjustRateLimitTokens({
+                    req: request,
+                    responseSize: actualSize,
+                    initialResult: limitCheck,
+                    rateLimiter,
+                  });
+                });
               }
             }
+          }
+        } else {
+          // Fixed-price disabled - use normal size-based payment flow
+          // Only perform normal rate limiting if fixed-price payment was not successful
+          if (!fixedPricePaymentSuccessful) {
+            // For HEAD requests, use zero tokens since no body is sent
+            // For GET requests, use fixed size assumption
+            // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
+            // responses for chunks before fetching, since we don't have the chunk hash
+            // until after retrieval. This means some GET requests with If-None-Match
+            // that would return 304 might be charged/denied upfront. Tokens are adjusted
+            // to zero in the finish handler if 304 is returned (see line 146).
+            const contentSize =
+              request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
 
-            adjustRateLimitTokens({
+            const limitCheck = await checkPaymentAndRateLimits({
               req: request,
-              responseSize: actualSize,
-              initialResult: limitCheck,
+              res: response,
+              // id is omitted - will be added to logs after txResult fetch
+              contentSize,
+              contentType: undefined, // Chunks don't have content type
+              requestAttributes,
               rateLimiter,
+              paymentProcessor,
+              parentSpan: span,
             });
-          });
+
+            if (!limitCheck.allowed) {
+              // Payment required (402) or rate limit exceeded (429) response already sent
+              return;
+            }
+
+            // Schedule token adjustment based on actual response size
+            if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
+              response.on('finish', () => {
+                // Calculate actual response size based on status code
+                let actualSize = 0;
+                if (response.statusCode === 304 || request.method === 'HEAD') {
+                  // 304 Not Modified or HEAD request - no body sent
+                  // Note: adjustTokens will still consume minimum 1 token to prevent spam
+                  actualSize = 0;
+                } else if (response.statusCode === 200) {
+                  // GET request with body - calculate JSON response size
+                  const headers = {
+                    'content-length': response.getHeader('content-length'),
+                  };
+                  const contentLength = parseContentLength(headers);
+                  if (contentLength !== undefined) {
+                    actualSize = contentLength;
+                  }
+                }
+
+                adjustRateLimitTokens({
+                  req: request,
+                  responseSize: actualSize,
+                  initialResult: limitCheck,
+                  rateLimiter,
+                });
+              });
+            }
+          }
         }
       }
 

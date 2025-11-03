@@ -567,3 +567,22 @@ export const rateLimitTokensConsumedTotal = new promClient.Counter({
   help: 'Total tokens consumed by rate limiter with breakdown by bucket and token type',
   labelNames: ['bucket_type', 'token_type', 'domain'],
 });
+
+// x402 payment metrics
+export const x402PaymentsVerifiedTotal = new promClient.Counter({
+  name: 'x402_payments_verified_total',
+  help: 'Total number of x402 payments verified',
+  labelNames: ['endpoint_type', 'success', 'domain'],
+});
+
+export const x402PaymentsSettledTotal = new promClient.Counter({
+  name: 'x402_payments_settled_total',
+  help: 'Total number of x402 payments settled',
+  labelNames: ['endpoint_type', 'success', 'domain'],
+});
+
+export const x402PaymentAmountTotal = new promClient.Counter({
+  name: 'x402_payment_amount_usd_total',
+  help: 'Total payment amount in USD across all x402 payments',
+  labelNames: ['endpoint_type', 'domain'],
+});

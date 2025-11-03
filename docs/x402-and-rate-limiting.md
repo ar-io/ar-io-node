@@ -84,16 +84,30 @@ Currently, the following endpoints are not rate limited:
 - Chunk POST requests (`POST /chunk`)
 - Administrative endpoints (`/ar-io/*`)
 
-**Note on Chunk Pricing:** Chunk GET requests use a fixed size assumption for
-predictable pricing (~360 KiB per request by default, configurable via
-`CHUNK_GET_BASE64_SIZE_BYTES`). This allows payment requirements to be
-calculated immediately without waiting for chunk retrieval, unlike data
-endpoints which calculate pricing based on actual content size.
+**Note on Chunk Pricing:** Chunk requests support two payment models:
+
+1. **Fixed-price payment (new)**: When `CHUNK_PAYMENT_FIXED_PRICE_USDC` is set
+   (default 0.001 USDC), chunk GET/HEAD requests can pay a fixed price per
+   request to **bypass rate limiting entirely**. This provides unlimited chunk
+   access with predictable per-request costs.
+
+2. **Size-based free tier**: Unpaid chunk requests use the rate limiter with a
+   fixed size assumption (~360 KiB per request by default, configurable via
+   `CHUNK_GET_BASE64_SIZE_BYTES`) for token bucket calculations.
+
+The fixed-price model is simpler and more predictable for high-frequency chunk
+access patterns, while the free tier continues to use token bucket rate
+limiting.
 
 ### How They Work Together
 
 To use x402 payments, you must enable both features (`ENABLE_RATE_LIMITER=true`
-and `ENABLE_X_402_USDC_DATA_EGRESS=true`). Here's how they integrate:
+and `ENABLE_X_402_USDC_DATA_EGRESS=true`). The gateway supports two payment
+models:
+
+#### Token Bucket Model (Data Endpoints)
+
+For data/transaction endpoints (`/:txid`, `/raw/:txid`, etc.):
 
 1. **Free tier**: Users consume regular tokens from their rate limit buckets
 2. **Rate limit exceeded**: When limits are exceeded, gateway sends 402 Payment
@@ -105,6 +119,20 @@ and `ENABLE_X_402_USDC_DATA_EGRESS=true`). Here's how they integrate:
    (paid tokens act as overflow capacity)
 6. **Resource bypass**: Paid requests bypass per-resource limits (only IP limits
    apply)
+
+#### Fixed-Price Model (Chunk Endpoints)
+
+For chunk GET/HEAD requests (`/chunk/:offset`):
+
+1. **Fixed-price bypass**: If `CHUNK_PAYMENT_FIXED_PRICE_USDC` > 0 and payment
+   header present, requests bypass rate limiting entirely with fixed cost per
+   request
+2. **No token accounting**: Paid chunk requests don't consume or add tokens to
+   buckets
+3. **Free tier fallback**: Unpaid chunk requests use normal rate limiting with
+   fixed size assumption
+4. **Predictable costs**: Every paid chunk request costs exactly
+   `CHUNK_PAYMENT_FIXED_PRICE_USDC` regardless of actual chunk size
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
