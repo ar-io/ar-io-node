@@ -55,13 +55,26 @@ processors:
           sampling_percentage: ${env:OTEL_TAIL_SAMPLING_SUCCESS_RATE}
 
 exporters:
-  # Export to final telemetry destination (Honeycomb, Grafana Cloud, etc.)
-  # For Honeycomb: set OTEL_COLLECTOR_HONEYCOMB_API_KEY
-  # For other backends: modify headers section as needed
+  # Export to final telemetry destination
+  # Configure ONE of the following API keys based on your backend:
+  # - OTEL_COLLECTOR_HONEYCOMB_API_KEY (Honeycomb)
+  # - OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY (Grafana Cloud Tempo)
+  # - OTEL_COLLECTOR_DATADOG_API_KEY (Datadog)
+  # - OTEL_COLLECTOR_NEW_RELIC_API_KEY (New Relic)
+  # - OTEL_COLLECTOR_ELASTIC_API_KEY (Elastic APM)
   otlphttp:
     endpoint: ${env:OTEL_COLLECTOR_DESTINATION_ENDPOINT}
     headers:
+      # Honeycomb authentication
       x-honeycomb-team: ${env:OTEL_COLLECTOR_HONEYCOMB_API_KEY}
+      # Grafana Cloud Tempo authentication (also needs instance ID in endpoint)
+      Authorization: Basic ${env:OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY}
+      # Datadog authentication
+      DD-API-KEY: ${env:OTEL_COLLECTOR_DATADOG_API_KEY}
+      # New Relic authentication
+      api-key: ${env:OTEL_COLLECTOR_NEW_RELIC_API_KEY}
+      # Elastic APM authentication
+      # Authorization: Bearer ${env:OTEL_COLLECTOR_ELASTIC_API_KEY}
     compression: gzip
     timeout: 30s
 
