@@ -270,7 +270,6 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
             log,
             trustedGatewaysUrls: config.GATEWAYS_ROOT_TX_URLS,
             requestTimeoutMs: config.GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS,
-            requestRetryCount: config.GATEWAYS_ROOT_TX_REQUEST_RETRY_COUNT,
             rateLimitBurstSize: config.GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
             rateLimitTokensPerInterval:
               config.GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,

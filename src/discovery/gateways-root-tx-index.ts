@@ -5,7 +5,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { default as axios, AxiosInstance } from 'axios';
-import * as rax from 'retry-axios';
 import winston from 'winston';
 import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
@@ -36,7 +35,6 @@ export type CachedGatewayOffsets = {
  * The class supports:
  * - Multiple gateway URLs with priority tiers
  * - Rate limiting per gateway
- * - Automatic retries with exponential backoff
  * - LRU caching of results
  * - Graceful fallback between gateways
  */
@@ -51,7 +49,6 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     log,
     trustedGatewaysUrls,
     requestTimeoutMs = config.GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS,
-    requestRetryCount = config.GATEWAYS_ROOT_TX_REQUEST_RETRY_COUNT,
     rateLimitBurstSize = config.GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
     rateLimitTokensPerInterval = config.GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
     rateLimitInterval = config.GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL,
@@ -60,7 +57,6 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
     log: winston.Logger;
     trustedGatewaysUrls: Record<string, number>;
     requestTimeoutMs?: number;
-    requestRetryCount?: number;
     rateLimitBurstSize?: number;
     rateLimitTokensPerInterval?: number;
     rateLimitInterval?: 'second' | 'minute' | 'hour' | 'day';
@@ -95,38 +91,13 @@ export class GatewaysRootTxIndex implements DataItemRootIndex {
       this.trustedGateways.get(priority)?.push(url);
     }
 
-    // Initialize axios instance with retry configuration
+    // Initialize axios instance
     this.axiosInstance = axios.create({
       timeout: requestTimeoutMs,
       headers: {
         'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
       },
     });
-
-    // Configure retry-axios for 429 handling with exponential backoff
-    this.axiosInstance.defaults.raxConfig = {
-      retry: requestRetryCount,
-      instance: this.axiosInstance,
-      statusCodesToRetry: [
-        [100, 199],
-        [429, 429],
-        [500, 599],
-      ],
-      onRetryAttempt: (error: any) => {
-        const cfg = rax.getConfig(error);
-        const attempt = cfg?.currentRetryAttempt ?? 1;
-        const status = error?.response?.status;
-
-        log.debug('Retrying gateway HEAD request', {
-          attempt,
-          status,
-          maxRetries: requestRetryCount,
-          url: error?.config?.url,
-        });
-      },
-    };
-
-    rax.attach(this.axiosInstance);
   }
 
   async getRootTx(id: string): Promise<

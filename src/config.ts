@@ -248,10 +248,6 @@ export const GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
   'GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS',
   '10000',
 );
-export const GATEWAYS_ROOT_TX_REQUEST_RETRY_COUNT = +env.varOrDefault(
-  'GATEWAYS_ROOT_TX_REQUEST_RETRY_COUNT',
-  '3',
-);
 
 // Gateways root TX lookup rate limiting
 export const GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(

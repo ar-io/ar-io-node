@@ -52,7 +52,6 @@ describe('GatewaysRootTxIndex', () => {
         log,
         trustedGatewaysUrls: { 'https://gateway.example.com': 1 },
         requestTimeoutMs: 5000,
-        requestRetryCount: 5,
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
       });
@@ -362,7 +361,6 @@ describe('GatewaysRootTxIndex', () => {
           'https://gateway1.example.com': 1, // Higher priority (tried first)
           'https://gateway2.example.com': 2, // Lower priority (tried second)
         },
-        requestRetryCount: 0, // Disable retries for this test
         rateLimitBurstSize: 1000,
         rateLimitTokensPerInterval: 1000,
         rateLimitInterval: 'second',
