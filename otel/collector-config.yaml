@@ -55,16 +55,13 @@ processors:
           sampling_percentage: ${env:OTEL_TAIL_SAMPLING_SUCCESS_RATE}
 
 exporters:
-  # Export to final telemetry destination (e.g., Honeycomb, Grafana Cloud, etc.)
-  # Using otlphttp exporter for compatibility with standard OTEL env vars
+  # Export to final telemetry destination (Honeycomb, Grafana Cloud, etc.)
+  # For Honeycomb: set OTEL_COLLECTOR_HONEYCOMB_API_KEY
+  # For other backends: modify headers section as needed
   otlphttp:
     endpoint: ${env:OTEL_COLLECTOR_DESTINATION_ENDPOINT}
-    # Headers are set via OTEL_EXPORTER_OTLP_HEADERS environment variable
-    # which the collector reads automatically in format: "key1=value1,key2=value2"
-    # Example: "x-honeycomb-team=abc123,x-custom-header=value"
-    #
-    # For file-based headers, use OTEL_EXPORTER_OTLP_HEADERS_FILE which the
-    # collector also reads automatically
+    headers:
+      x-honeycomb-team: ${env:OTEL_COLLECTOR_HONEYCOMB_API_KEY}
     compression: gzip
     timeout: 30s
 
