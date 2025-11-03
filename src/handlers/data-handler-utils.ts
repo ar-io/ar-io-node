@@ -29,7 +29,7 @@ import {
 export interface CheckPaymentAndRateLimitsParams {
   req: Request;
   res: Response;
-  id: string;
+  id?: string;
   contentSize: number;
   contentType?: string;
   requestAttributes: RequestAttributes;
@@ -88,7 +88,7 @@ export async function checkPaymentAndRateLimits({
     'checkPaymentAndRateLimits',
     {
       attributes: {
-        'data.id': id,
+        ...(id !== undefined && { 'data.id': id }),
         'content.size': contentSize,
       },
     },
@@ -97,7 +97,7 @@ export async function checkPaymentAndRateLimits({
 
   try {
     // Extract all client IPs for allowlist checking
-    const { clientIps } = extractAllClientIPs(req);
+    const { clientIp, clientIps } = extractAllClientIPs(req);
 
     // Check if ANY IP in the chain is allowlisted - if so, skip all checks
     if (rateLimiter?.isAllowlisted(clientIps)) {
@@ -140,7 +140,7 @@ export async function checkPaymentAndRateLimits({
         'verifyPayment',
         {
           attributes: {
-            'data.id': id,
+            ...(id !== undefined && { 'data.id': id }),
             'content.size': contentSize,
           },
         },
@@ -151,7 +151,7 @@ export async function checkPaymentAndRateLimits({
         // Calculate payment requirements based on actual content size
         const requirements = paymentProcessor.calculateRequirements({
           contentSize,
-          protocol: req.protocol,
+          protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
           host: host,
           originalUrl: req.originalUrl,
           contentType: contentType ?? 'application/octet-stream',
@@ -279,7 +279,7 @@ export async function checkPaymentAndRateLimits({
         'checkRateLimits',
         {
           attributes: {
-            'data.id': id,
+            ...(id !== undefined && { 'data.id': id }),
             'content.size': contentSize,
             'payment.verified': paymentVerified,
           },
@@ -322,6 +322,7 @@ export async function checkPaymentAndRateLimits({
           );
 
           log.info('Rate limit exceeded', {
+            clientIp,
             id,
             limitType: limitResult.limitType,
           });
@@ -338,7 +339,7 @@ export async function checkPaymentAndRateLimits({
           if (paymentProcessor !== undefined && !paymentVerified) {
             const requirements = paymentProcessor.calculateRequirements({
               contentSize,
-              protocol: req.protocol,
+              protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
               host: host,
               originalUrl: req.originalUrl,
               contentType: contentType ?? 'application/octet-stream',

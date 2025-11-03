@@ -11,8 +11,11 @@ import { Readable } from 'node:stream';
 import { default as request } from 'supertest';
 
 import { headerNames } from '../../constants.js';
-import log from '../../log.js';
+import * as config from '../../config.js';
+import { createTestLogger } from '../../../test/test-logger.js';
 import { release } from '../../version.js';
+
+const log = createTestLogger({ suite: 'Data routes' });
 import {
   ContiguousDataIndex,
   ContiguousDataSource,
@@ -21,7 +24,12 @@ import {
   ManifestPathResolver,
   RequestAttributes,
 } from '../../types.js';
-import { createDataHandler, getRequestAttributes } from './handlers.js';
+import {
+  createDataHandler,
+  getRequestAttributes,
+  matchContentTypePattern,
+  shouldUsePrivateCacheControl,
+} from './handlers.js';
 import { MemoryRateLimiter } from '../../limiter/memory-rate-limiter.js';
 import type {
   PaymentProcessor,
@@ -2094,6 +2102,174 @@ st
         );
 
         await request(testApp).get('/test-id').expect(200);
+      });
+    });
+
+    describe('Cache-Control private directive', () => {
+      describe('matchContentTypePattern', () => {
+        it('should match exact content types', () => {
+          assert.strictEqual(
+            matchContentTypePattern('application/json', 'application/json'),
+            true,
+          );
+          assert.strictEqual(
+            matchContentTypePattern('image/png', 'image/png'),
+            true,
+          );
+        });
+
+        it('should not match different content types', () => {
+          assert.strictEqual(
+            matchContentTypePattern('text/html', 'application/json'),
+            false,
+          );
+        });
+
+        it('should match wildcard patterns', () => {
+          assert.strictEqual(
+            matchContentTypePattern('image/png', 'image/*'),
+            true,
+          );
+          assert.strictEqual(
+            matchContentTypePattern('image/jpeg', 'image/*'),
+            true,
+          );
+          assert.strictEqual(
+            matchContentTypePattern('video/mp4', 'video/*'),
+            true,
+          );
+        });
+
+        it('should not match wildcard patterns across slashes', () => {
+          assert.strictEqual(
+            matchContentTypePattern('text/html', 'image/*'),
+            false,
+          );
+        });
+      });
+
+      describe('shouldUsePrivateCacheControl', () => {
+        let originalContentTypes: string[];
+
+        beforeEach(() => {
+          // Save original config array contents
+          originalContentTypes = [...config.CACHE_PRIVATE_CONTENT_TYPES];
+        });
+
+        afterEach(() => {
+          // Restore original config array contents
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push(...originalContentTypes);
+        });
+
+        it('should return false for small responses below threshold', () => {
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('application/json', 100),
+            false,
+          );
+        });
+
+        it('should return true for large responses above threshold', () => {
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('application/json', 200000000),
+            true,
+          );
+        });
+
+        it('should return true for exact content type match', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('application/json');
+
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('application/json', 100),
+            true,
+          );
+        });
+
+        it('should return true for wildcard content type match', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
+
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('image/png', 100),
+            true,
+          );
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('image/jpeg', 100),
+            true,
+          );
+        });
+
+        it('should return false when content type does not match pattern', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/*');
+
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('text/plain', 100),
+            false,
+          );
+        });
+
+        it('should normalize content type parameters', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match even with parameters
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('image/png; charset=utf-8', 100),
+            true,
+          );
+        });
+
+        it('should normalize content type case', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match even with different case
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('Image/PNG', 100),
+            true,
+          );
+        });
+
+        it('should normalize content type whitespace', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match even with whitespace
+          assert.strictEqual(
+            shouldUsePrivateCacheControl(' image/png ', 100),
+            true,
+          );
+        });
+
+        it('should handle combined normalization', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('image/png');
+
+          // Should match with all normalization issues combined
+          assert.strictEqual(
+            shouldUsePrivateCacheControl(' Image/PNG; charset=UTF-8 ', 100),
+            true,
+          );
+        });
+
+        it('should return true when either size or content type condition is met', () => {
+          config.CACHE_PRIVATE_CONTENT_TYPES.length = 0;
+          config.CACHE_PRIVATE_CONTENT_TYPES.push('video/*');
+
+          // Small size but matching content type
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('video/mp4', 100),
+            true,
+          );
+
+          // Large size but non-matching content type
+          assert.strictEqual(
+            shouldUsePrivateCacheControl('text/plain', 200000000),
+            true,
+          );
+        });
       });
     });
   });

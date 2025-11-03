@@ -40,6 +40,8 @@ import {
 } from './init/header-stores.js';
 import {
   CompositeRootTxIndex,
+  GatewaysRootTxIndex,
+  CachedGatewayOffsets,
   GraphQLRootTxIndex,
   TurboRootTxIndex,
   CachedTurboOffsets,
@@ -238,6 +240,12 @@ const turboOffsetsCache = new LRUCache<string, CachedTurboOffsets>({
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
 
+// Create separate cache for gateway offsets
+const gatewayOffsetsCache = new LRUCache<string, CachedGatewayOffsets>({
+  max: config.ROOT_TX_CACHE_MAX_SIZE,
+  ttl: config.ROOT_TX_CACHE_TTL_MS,
+});
+
 // Build indexes based on configuration
 const rootTxIndexes: DataItemRootIndex[] = [];
 
@@ -253,6 +261,25 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
           cache: turboOffsetsCache,
         }),
       );
+      break;
+
+    case 'gateways':
+      if (Object.keys(config.GATEWAYS_ROOT_TX_URLS).length > 0) {
+        rootTxIndexes.push(
+          new GatewaysRootTxIndex({
+            log,
+            trustedGatewaysUrls: config.GATEWAYS_ROOT_TX_URLS,
+            requestTimeoutMs: config.GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS,
+            rateLimitBurstSize: config.GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
+            rateLimitTokensPerInterval:
+              config.GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
+            rateLimitInterval: config.GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL,
+            cache: gatewayOffsetsCache,
+          }),
+        );
+      } else {
+        log.warn('Gateways source configured but no gateways defined');
+      }
       break;
 
     case 'graphql':

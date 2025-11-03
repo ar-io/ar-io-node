@@ -73,7 +73,8 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **Raw data requests**: `/raw/:txid`
 - **ArNS resolved content**: All requests resolved through ArNS names
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
-- **Chunk requests**: `GET /chunk/:offset` (uses fixed size pricing - see note below)
+- **Chunk requests**: `GET /chunk/:offset` (uses fixed size pricing - see note
+  below)
 
 #### Not Rate Limited
 
@@ -83,7 +84,11 @@ Currently, the following endpoints are not rate limited:
 - Chunk POST requests (`POST /chunk`)
 - Administrative endpoints (`/ar-io/*`)
 
-**Note on Chunk Pricing:** Chunk GET requests use a fixed size assumption for predictable pricing (~360 KiB per request by default, configurable via `CHUNK_GET_BASE64_SIZE_BYTES`). This allows payment requirements to be calculated immediately without waiting for chunk retrieval, unlike data endpoints which calculate pricing based on actual content size.
+**Note on Chunk Pricing:** Chunk GET requests use a fixed size assumption for
+predictable pricing (~360 KiB per request by default, configurable via
+`CHUNK_GET_BASE64_SIZE_BYTES`). This allows payment requirements to be
+calculated immediately without waiting for chunk retrieval, unlike data
+endpoints which calculate pricing based on actual content size.
 
 ### How They Work Together
 
@@ -155,15 +160,11 @@ and `ENABLE_X_402_USDC_DATA_EGRESS=true`). Here's how they integrate:
 
 ### Network Options
 
-The x402 integration supports two Base blockchain networks:
-
-| Feature                 | Base Sepolia (Testnet)            | Base (Mainnet)                    |
-| ----------------------- | --------------------------------- | --------------------------------- |
-| **USDC**                | Free testnet USDC (faucet)        | Real USDC (costs $$$)             |
-| **CDP API Key**         | Not required                      | Required for official facilitator |
-| **Default Facilitator** | https://x402.org/facilitator      | Must configure                    |
-| **Use Case**            | Development, testing              | Production monetization           |
-| **Configuration**       | `X_402_USDC_NETWORK=base-sepolia` | `X_402_USDC_NETWORK=base`         |
+The x402 integration supports two Base blockchain networks: **Base Sepolia**
+(testnet with free USDC for development) and **Base** (mainnet with real USDC
+for production). For detailed comparison of features, faucets, and
+configuration, see [Network Comparison](#network-comparison) in the Reference
+section.
 
 ### Use Cases
 
@@ -182,9 +183,6 @@ The x402 integration supports two Base blockchain networks:
 - Flexible traffic management
 - Sustainable business model
 - Generate revenue from content delivery
-
-**Note:** x402 payments require the rate limiter to be enabled. There is no
-"payments only" configuration.
 
 ## Getting Started
 
@@ -235,17 +233,21 @@ done
 Rate limit metrics are exposed at `/ar-io/__gateway_metrics`:
 
 ```bash
-# Through envoy (default port 3000)
-curl http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
+# View all rate limit metrics
+curl http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit
 
 # Or directly to core (port 4000)
-curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
+curl http://localhost:4000/ar-io/__gateway_metrics | grep rate_limit
 ```
 
-### Quick Start: Rate Limiting with x402 Payments
+Available metrics:
 
-**Important**: x402 requires the rate limiter to be enabled. Both features must
-be configured together.
+- `rate_limit_exceeded_total` - Requests that exceeded rate limits
+- `rate_limit_requests_total` - Total requests processed by rate limiter
+- `rate_limit_bytes_blocked_total` - Bytes blocked by rate limiting
+- `rate_limit_tokens_consumed_total` - Tokens consumed (by bucket/token type)
+
+### Quick Start: Rate Limiting with x402 Payments
 
 #### Testnet Setup (Development/Testing)
 
@@ -261,6 +263,9 @@ Use Base Sepolia testnet for development and testing:
 **2. Add to `.env` file:**
 
 ```bash
+# Minimal testnet configuration - just the essentials to get started
+# For production-ready configuration, see Examples section
+
 # Rate Limiter (required for x402)
 ENABLE_RATE_LIMITER=true
 RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000       # ~98 MiB per IP
@@ -290,9 +295,6 @@ docker-compose up -d
 **4. Test the payment flow:**
 
 ```bash
-# Set your test wallet private key
-export X402_TEST_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
-
 # Test in browser - visit http://localhost:3000/YOUR_TX_ID
 # After hitting rate limit, you'll see the paywall UI
 
@@ -321,6 +323,10 @@ Use Base mainnet for production with real payments:
 **3. Add to `.env` file:**
 
 ```bash
+# Minimal mainnet configuration - essential settings only
+# For production-ready configuration with Redis persistence and paywall customization,
+# see Examples section
+
 # Rate Limiter (required for x402)
 ENABLE_RATE_LIMITER=true
 RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
@@ -397,6 +403,10 @@ The system enforces limits at two levels:
 - Prevents any single client from overwhelming the gateway
 - Key format: `rl:ip:{IP_ADDRESS}`
 - Example: `rl:ip:192.168.1.100`
+- **Proxy/CDN Support**: IP address is extracted from proxy headers
+  (`X-Forwarded-For`, `X-Real-IP`) when present, ensuring correct client
+  identification behind proxies and CDNs (see
+  [Proxy and CDN Support](#proxy-and-cdn-support))
 
 **Request flow:**
 
@@ -454,68 +464,18 @@ This allows streaming while ensuring accurate token accounting.
 
 ### Configuration Reference
 
-#### Core Settings
+For a complete list of all rate limiter environment variables with defaults and
+descriptions, see [Rate Limiter Variables](#rate-limiter-variables) in the
+Reference section.
 
-**`ENABLE_RATE_LIMITER`** (boolean, default: `false`)
+Key configuration areas:
 
-- Master switch for rate limiting
-- When `false`, limits are tracked but not enforced (monitoring only)
-- When `true`, requests are denied (429) when limits exceeded
-
-**`RATE_LIMITER_TYPE`** (string, default: `redis`)
-
-- Implementation to use: `memory` or `redis`
-- `memory`: In-memory buckets (for development and testing only)
-- `redis`: Redis-based buckets (recommended for all production deployments)
-- Defaults to `redis` in `docker-compose.yaml` (reads from `.env` with fallback)
-
-#### Bucket Capacity Configuration
-
-**`RATE_LIMITER_IP_TOKENS_PER_BUCKET`** (number, default: `100000`)
-
-- Maximum tokens in IP bucket
-- 1 token = 1 KiB
-- Default: ~98 MiB per IP
-- Adjust based on expected user traffic patterns
-
-**`RATE_LIMITER_RESOURCE_TOKENS_PER_BUCKET`** (number, default: `1000000`)
-
-- Maximum tokens in resource bucket
-- Default: ~976 MiB per resource
-- Adjust based on content sizes
-
-#### Refill Rate Configuration
-
-**`RATE_LIMITER_IP_REFILL_PER_SEC`** (number, default: `20`)
-
-- Tokens added per second to IP bucket
-- Default: ~20 KiB/s sustained throughput per IP
-- Lower values = more restrictive
-
-**`RATE_LIMITER_RESOURCE_REFILL_PER_SEC`** (number, default: `100`)
-
-- Tokens added per second to resource bucket
-- Default: ~100 KiB/s sustained throughput per resource
-- Higher values = more permissive
-
-#### Redis Configuration
-
-These settings have sensible defaults in `docker-compose.yaml` and rarely need
-changes for standard deployments. Override in `.env` file only for custom Redis
-setups.
-
-**`RATE_LIMITER_REDIS_ENDPOINT`** (string, default: `redis://redis:6379`)
-
-- Redis connection URL
-- Only used when `RATE_LIMITER_TYPE=redis`
-
-**`RATE_LIMITER_REDIS_USE_TLS`** (boolean, default: `false`)
-
-- Enable TLS for Redis connection
-
-**`RATE_LIMITER_REDIS_USE_CLUSTER`** (boolean, default: `false`)
-
-- Use Redis cluster mode
+- **Core settings**: Enable/disable enforcement, choose implementation type
+  (memory vs Redis)
+- **Bucket capacity**: Maximum tokens for IP and resource buckets
+- **Refill rates**: How quickly tokens replenish over time
+- **Redis connection**: Endpoint, TLS, and cluster configuration
+- **Allowlists**: Exempt specific IPs/CIDRs or ArNS names from limiting
 
 #### Redis Persistence Configuration
 
@@ -729,21 +689,6 @@ To enable persistence on an existing deployment:
 **Note**: Existing token bucket state in memory will be lost during this
 migration. Consider this when planning the maintenance window.
 
-#### Allowlist Configuration
-
-**`RATE_LIMITER_IPS_AND_CIDRS_ALLOWLIST`** (comma-separated string, default:
-`""`)
-
-- IPs and CIDR ranges to exempt from rate limiting
-- Example: `192.168.1.0/24,10.0.0.1,172.16.0.0/16`
-- Allowlisted IPs skip all rate limit checks
-
-**`RATE_LIMITER_ARNS_ALLOWLIST`** (comma-separated string, default: `""`)
-
-- ArNS names to exempt from rate limiting and payment verification
-- Example: `my-free-app,public-docs,community-resources`
-- Useful for providing free access to specific content
-
 ### Implementation Comparison
 
 #### Memory Rate Limiter
@@ -805,6 +750,25 @@ Request → Rate Limit Check → Data Handler → Token Adjustment → Response
 
 The rate limiter exposes Prometheus metrics at `/ar-io/__gateway_metrics`:
 
+**`rate_limit_exceeded_total`** (counter)
+
+- Total requests that exceeded rate limits
+- Labels:
+  - `limit_type`: `ip` or `resource`
+  - `domain`: Request domain/host
+
+**`rate_limit_requests_total`** (counter)
+
+- Total requests processed by rate limiter
+- Labels:
+  - `domain`: Request domain/host
+
+**`rate_limit_bytes_blocked_total`** (counter)
+
+- Total bytes that would have been served if not rate limited
+- Labels:
+  - `domain`: Request domain/host
+
 **`rate_limit_tokens_consumed_total`** (counter)
 
 - Total tokens consumed
@@ -813,9 +777,18 @@ The rate limiter exposes Prometheus metrics at `/ar-io/__gateway_metrics`:
   - `token_type`: `paid` or `regular`
   - `domain`: Request domain/host
 
-Example PromQL query:
+Example PromQL queries:
 
 ```promql
+# Rate of requests exceeding limits by type
+rate(rate_limit_exceeded_total[5m])
+
+# Total requests processed by rate limiter
+rate(rate_limit_requests_total[5m])
+
+# Bytes blocked per second
+rate(rate_limit_bytes_blocked_total[5m])
+
 # Paid tokens consumed per IP
 rate(rate_limit_tokens_consumed_total{bucket_type="ip",token_type="paid"}[5m])
 
@@ -824,12 +797,6 @@ rate(rate_limit_tokens_consumed_total{bucket_type="resource",token_type="regular
 ```
 
 ## x402 Payment Protocol Deep Dive
-
-**⚠️ IMPORTANT**: x402 **requires** the rate limiter to be enabled
-(`ENABLE_RATE_LIMITER=true`). The payment protocol is not a standalone feature -
-it is an extension of the rate limiting system. 402 Payment Required responses
-are only sent when rate limits are exceeded. Without the rate limiter, x402
-payments will not function.
 
 ### Concepts
 
@@ -907,13 +874,9 @@ The **facilitator** is a service that:
 - Settles payments on-chain
 - Returns settlement receipts
 
-**Available facilitators:**
-
-| Facilitator       | URL                               | Networks           | Auth Required | Notes                    |
-| ----------------- | --------------------------------- | ------------------ | ------------- | ------------------------ |
-| Coinbase Official | https://x402.org/facilitator      | base-sepolia       | No            | Default for testnet      |
-| x402.rs           | https://facilitator.x402.rs       | base, base-sepolia | No            | No authentication needed |
-| payai.network     | https://facilitator.payai.network | base, base-sepolia | Varies        | Check facilitator docs   |
+For a list of available facilitators with URLs, supported networks, and
+authentication requirements, see
+[Facilitator Comparison](#facilitator-comparison) in the Reference section.
 
 **Note**: CDP keys (`X_402_CDP_CLIENT_KEY`, `CDP_API_KEY_SECRET`, etc.) are for
 **Coinbase Onramp integration** (browser paywall with easy USDC purchase), not
@@ -969,122 +932,48 @@ X_402_USDC_FACILITATOR_URL=https://facilitator.x402.rs
 
 ### Configuration Reference
 
-#### Core Settings
+For a complete list of all x402 environment variables with defaults and
+descriptions, see [x402 Variables](#x402-variables) in the Reference section.
 
-**`ENABLE_X_402_USDC_DATA_EGRESS`** (boolean, default: `false`)
+Key configuration areas:
 
-- Master switch for x402 payments
-- When `false`, payment headers ignored
-- When `true`, payments accepted and verified
+- **Core settings**: Enable/disable payments, network selection, wallet address,
+  facilitator URL
+- **Pricing**: Per-byte price, min/max price limits
+- **CDP API keys**: Required for Coinbase Onramp integration on mainnet (browser
+  paywall)
+- **Settlement**: Timeout configuration
+- **Paywall customization**: App name, logo, session token endpoint
 
-**`X_402_USDC_NETWORK`** (string, default: `base-sepolia`)
+#### Price Calculation
 
-- Blockchain network to use
-- Options: `base` (mainnet) or `base-sepolia` (testnet)
-- Must match your wallet and USDC holdings
-
-**`X_402_USDC_WALLET_ADDRESS`** (hex string, required if enabled)
-
-- Ethereum wallet address to receive payments
-- Format: `0x...` (42 characters)
-- Must be a valid Ethereum address
-
-**`X_402_USDC_FACILITATOR_URL`** (URL, default: `https://x402.org/facilitator`)
-
-- Facilitator endpoint for verification and settlement
-- Must include protocol (`https://`)
-
-#### Pricing Configuration
-
-**`X_402_USDC_PER_BYTE_PRICE`** (number, default: `0.0000000001`)
-
-- Price in USDC per byte of data egress
-- Default: $0.10 per GB
-- Examples:
-  - $0.10/GB = `0.0000000001`
-  - $0.50/GB = `0.0000000005`
-  - $1.00/GB = `0.000000001`
-
-**`X_402_USDC_DATA_EGRESS_MIN_PRICE`** (number, default: `0.001`)
-
-- Minimum price in USDC per request
-- Used when content length unknown
-- Prevents free access to small files
-
-**`X_402_USDC_DATA_EGRESS_MAX_PRICE`** (number, default: `1.00`)
-
-- Maximum price in USDC per request
-- Caps cost for very large files
-- Protects users from unexpected charges
-
-**Price calculation:**
+Prices are calculated using this formula:
 
 ```javascript
 const priceUSD = contentLength * perBytePrice;
 const clampedPrice = Math.min(Math.max(priceUSD, minPrice), maxPrice);
 ```
 
-#### CDP API Key Configuration (Onramp Integration)
+Examples for common pricing:
 
-These keys are required for mainnet deployments when using Coinbase
-facilitators. They enable Coinbase Onramp integration for easy USDC purchases in
-the browser paywall. Optional for testnet only.
+- $0.10/GB: `X_402_USDC_PER_BYTE_PRICE=0.0000000001`
+- $0.50/GB: `X_402_USDC_PER_BYTE_PRICE=0.0000000005`
+- $1.00/GB: `X_402_USDC_PER_BYTE_PRICE=0.000000001`
 
-**`X_402_CDP_CLIENT_KEY`** (string, **PUBLIC** - safe for client-side)
+#### CDP API Key Security
 
-- Coinbase Developer Platform public client API key
-- Used in browser paywall for Onramp widget
-- Safe to expose in client-side code
+**IMPORTANT**: The CDP secret keys (`CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`,
+`CDP_API_KEY_SECRET_FILE`) are **SENSITIVE SECRETS** required for Coinbase
+Onramp integration. The public client key (`X_402_CDP_CLIENT_KEY`) is safe for
+client-side use.
 
-**`CDP_API_KEY_ID`** (string, **SENSITIVE SECRET**)
+Security requirements:
 
-- Coinbase Developer Platform secret API key ID
-- Used server-side for Onramp session token generation
+- Store secrets in secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.)
+- Use file-based config with restricted permissions (`chmod 600`)
 - **Never commit to git or expose in logs**
-
-**`CDP_API_KEY_SECRET`** (string, **SENSITIVE SECRET**)
-
-- Coinbase Developer Platform secret API key secret
-- Used server-side for Onramp session token generation
-- **Never commit to git or expose in logs**
-
-**`CDP_API_KEY_SECRET_FILE`** (file path, **SENSITIVE SECRET**)
-
-- Path to file containing CDP API secret
-- **Takes precedence over `CDP_API_KEY_SECRET` if set**
-- Recommended approach for production
-- **Restrict file permissions**: `chmod 600`
-
-**Security requirements for secret keys:**
-
-- Store in secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.)
-- Use file-based config with restricted permissions
-- Never expose in logs or error messages
 - Apply principle of least privilege
-
-#### Settlement Configuration
-
-**`X_402_USDC_SETTLE_TIMEOUT_MS`** (number, default: `5000`)
-
-- Timeout in milliseconds for settlement operations
-- Prevents indefinite hanging on facilitator issues
-- Adjust based on facilitator performance
-
-#### Paywall Customization
-
-**`X_402_APP_NAME`** (string, default: `"AR.IO Gateway"`)
-
-- Application name displayed in browser paywall UI
-
-**`X_402_APP_LOGO`** (URL, optional)
-
-- URL to application logo for paywall UI
-- Recommended: square image, 200x200px or larger
-
-**`X_402_SESSION_TOKEN_ENDPOINT`** (URL, optional)
-
-- Custom session token endpoint for payment authentication
-- Advanced use cases only
+- Rotate regularly
 
 ### Architecture
 
@@ -1395,6 +1284,314 @@ The facilitator provides several security guarantees:
 - Ensures payment amount matches requirements
 - Prevents underpayment
 
+### Proxy and CDN Support
+
+When deploying AR.IO gateways behind proxies, load balancers, or CDNs (like
+nginx, Cloudflare, AWS CloudFront, or Fastly), the rate limiter automatically
+extracts the real client IP address from standard proxy headers. This ensures
+that rate limiting and x402 payments work correctly even when the gateway
+doesn't receive direct client connections.
+
+#### How IP Extraction Works
+
+The rate limiter extracts client IP addresses in the following priority order:
+
+1. **X-Forwarded-For header**: Extracts the first (leftmost) IP address from the
+   header chain
+   - Format: `X-Forwarded-For: client, proxy1, proxy2`
+   - Uses: `client` (203.0.113.42)
+2. **X-Real-IP header**: Uses this header when X-Forwarded-For is not present
+   - Format: `X-Real-IP: 203.0.113.42`
+3. **Direct connection IP**: Uses `socket.remoteAddress` when no proxy headers
+   are present, then falls back to `req.ip` if available
+
+**Important**: The same IP extraction logic is used for:
+
+- **Rate limit bucket keys** (`rl:ip:{IP_ADDRESS}`)
+- **x402 payment crediting** (tokens added to correct client's bucket)
+- **IP allowlist checks** (exempting specific clients from limits)
+
+This consistency ensures that if a client is allowlisted, their rate limit
+bucket is also correctly identified, and any payments they make are properly
+credited.
+
+#### IPv6 Support
+
+The gateway automatically normalizes IPv4-mapped IPv6 addresses to their IPv4
+equivalents:
+
+- `::ffff:192.0.2.1` normalizes to `192.0.2.1`
+- Ensures consistent bucket identification regardless of address format
+
+#### Example Proxy Configurations
+
+**Nginx:**
+
+```nginx
+location / {
+    proxy_pass http://ar-io-gateway:3000;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header Host $host;
+}
+```
+
+**Cloudflare:**
+
+Cloudflare automatically adds X-Forwarded-For headers. No special configuration
+needed. The gateway extracts the real client IP from X-Forwarded-For.
+
+**AWS Application Load Balancer:**
+
+ALBs automatically add X-Forwarded-For headers. Ensure your target group is
+configured to preserve client IPs.
+
+#### Security Considerations
+
+**Header Trust**: The gateway trusts X-Forwarded-For and X-Real-IP headers by
+default. This is generally safe when:
+
+- Your gateway is behind a trusted proxy/CDN
+- The proxy strips existing headers from client requests
+- External clients cannot directly access your gateway
+
+**Direct Exposure**: If your gateway is directly exposed to the internet without
+a proxy:
+
+- Clients could forge X-Forwarded-For headers
+- Consider using firewall rules to only allow traffic from your proxy IPs
+- Or configure your proxy to strip untrusted headers
+
+**Express Trust Proxy**: The gateway does NOT use Express's `trust proxy`
+setting. IP extraction is handled manually via the `extractAllClientIPs()`
+utility function for more explicit control and security.
+
+#### Protocol Configuration for Proxies
+
+When your gateway is behind a reverse proxy/CDN that terminates TLS (HTTPS), the
+gateway receives HTTP connections from the proxy but needs to generate HTTPS URLs
+in x402 payment responses. Set the `SANDBOX_PROTOCOL` environment variable to
+ensure correct protocol in resource URLs:
+
+```bash
+SANDBOX_PROTOCOL=https
+```
+
+**Why this is needed**:
+
+- Proxy terminates TLS and forwards HTTP to gateway
+- Gateway's `req.protocol` returns 'http' (the proxy-to-gateway connection)
+- x402 payment responses need to reference the client-facing HTTPS URL
+- `SANDBOX_PROTOCOL` overrides the detected protocol
+
+**Example x402 response without configuration**:
+
+```json
+{
+  "resource": "http://your-gateway.com/raw/TX_ID"  ❌ Wrong protocol
+}
+```
+
+**Example x402 response with `SANDBOX_PROTOCOL=https`**:
+
+```json
+{
+  "resource": "https://your-gateway.com/raw/TX_ID"  ✅ Correct protocol
+}
+```
+
+**Note**: This setting also affects ArNS sandbox redirect URLs.
+
+#### Troubleshooting Proxy IP Extraction
+
+**Symptom**: All clients share the same rate limit bucket behind a proxy
+
+**Diagnosis**:
+
+```bash
+# Check if X-Forwarded-For is being sent
+curl -H "X-Forwarded-For: 203.0.113.42" https://your-gateway.com/tx_id
+
+# Monitor rate limiter logs
+docker-compose logs -f core | grep "IP limit"
+```
+
+**Solution**: Verify your proxy is setting X-Forwarded-For or X-Real-IP headers
+correctly.
+
+**Symptom**: x402 payments credit the wrong IP address
+
+**Cause**: Payment requests use the same IP extraction logic as rate limiting.
+If rate limiting works correctly, payments will too.
+
+**Solution**: Ensure proxy headers are configured correctly (see above).
+
+### CDN Caching Considerations
+
+When deploying AR.IO gateways behind a CDN (like Cloudflare, Fastly, or AWS
+CloudFront), cache behavior can interfere with rate limiting and x402 payment
+enforcement. By default, gateways set `Cache-Control: public` headers, allowing
+CDNs to cache responses and serve them to multiple users without hitting your
+origin server.
+
+**The Problem:**
+
+- CDN caches bypass your gateway's rate limiter
+- Multiple users can access rate-limited content from CDN cache
+- x402 payment requirements are bypassed when CDN serves cached responses
+- First user pays, subsequent users get free access from CDN cache
+
+**The Solution:**
+
+Use `CACHE_PRIVATE_SIZE_THRESHOLD` and `CACHE_PRIVATE_CONTENT_TYPES` to
+automatically mark specific responses with `Cache-Control: private`, preventing
+CDN caching while still allowing browser caching.
+
+#### Size-Based Private Caching
+
+**`CACHE_PRIVATE_SIZE_THRESHOLD`** (number, default: `104857600` = 100 MB)
+
+Automatically sets `Cache-Control: private` for responses exceeding this size in
+bytes.
+
+**Example configurations:**
+
+```bash
+# Prevent CDN caching of responses over 50 MB
+CACHE_PRIVATE_SIZE_THRESHOLD=52428800
+
+# Prevent CDN caching of responses over 500 MB
+CACHE_PRIVATE_SIZE_THRESHOLD=524288000
+
+# Prevent CDN caching of all responses (set to 0)
+CACHE_PRIVATE_SIZE_THRESHOLD=0
+```
+
+**Use cases:**
+
+- **Large file protection:** Prevent CDN from serving large video/image files
+  that should be rate limited
+- **Bandwidth control:** Ensure high-bandwidth content respects payment
+  requirements
+- **Fair usage:** Prevent single payment from benefiting unlimited CDN-cached
+  users
+
+#### Content-Type-Based Private Caching
+
+**`CACHE_PRIVATE_CONTENT_TYPES`** (string, default: `""`)
+
+Comma-separated list of content types that should use `Cache-Control: private`.
+Supports wildcard patterns.
+
+**Example configurations:**
+
+```bash
+# Prevent CDN caching of images
+CACHE_PRIVATE_CONTENT_TYPES="image/*"
+
+# Prevent CDN caching of video and audio
+CACHE_PRIVATE_CONTENT_TYPES="video/*,audio/*"
+
+# Prevent CDN caching of specific types
+CACHE_PRIVATE_CONTENT_TYPES="image/png,video/mp4,application/json"
+
+# Prevent CDN caching of all media
+CACHE_PRIVATE_CONTENT_TYPES="image/*,video/*,audio/*"
+```
+
+**Wildcard patterns:**
+
+- `*` matches any characters within a segment (not across `/`)
+- `image/*` matches `image/png`, `image/jpeg`, `image/webp`, etc.
+- `application/*` matches `application/json`, `application/pdf`, etc.
+
+**Use cases:**
+
+- **Media monetization:** Ensure video/image content respects x402 payments
+- **API protection:** Prevent CDN from caching dynamic API responses
+- **Selective caching:** Allow text/HTML caching but require payment for media
+
+#### Combined Strategy
+
+For maximum protection, combine both size and content-type based rules:
+
+```bash
+# Rate limiter (required)
+ENABLE_RATE_LIMITER=true
+
+# x402 payments
+ENABLE_X_402_USDC_DATA_EGRESS=true
+
+# CDN cache control - apply BOTH conditions:
+# - Responses over 10 MB become private
+CACHE_PRIVATE_SIZE_THRESHOLD=10485760
+# - All media types become private
+CACHE_PRIVATE_CONTENT_TYPES="image/*,video/*,audio/*"
+```
+
+**Logic:** Response uses `private` if **either** condition matches:
+
+- Size exceeds threshold, **OR**
+- Content-Type matches a pattern
+
+#### Behavior Details
+
+**Header transformation:**
+
+```
+# Before (default):
+Cache-Control: public, max-age=2592000, immutable
+
+# After (when conditions met):
+Cache-Control: private, max-age=2592000, immutable
+```
+
+**Other directives preserved:**
+
+- `max-age` values unchanged
+- `immutable` directive preserved for stable data
+- Only `public` → `private` transformation applied
+
+**Browser caching still works:**
+
+- `private` only prevents shared caches (CDNs)
+- Browser (private) caches still work normally
+- Users still get fast repeat access
+- Only prevents cross-user CDN caching
+
+#### Important Notes
+
+**Rate limiter dependency:**
+
+These settings only have effect when `ENABLE_RATE_LIMITER=true`. A warning is
+logged at startup if configured without rate limiting enabled.
+
+**No impact on non-CDN deployments:**
+
+- Browser caching behavior unchanged
+- Direct gateway access unaffected
+- Only changes shared cache (CDN) behavior
+
+**Performance considerations:**
+
+- CDN cache bypass increases origin traffic
+- Consider your infrastructure capacity
+- Monitor bandwidth and request rates
+- Adjust thresholds based on usage patterns
+
+**Testing:**
+
+```bash
+# Check Cache-Control header for large file
+curl -I http://gateway.example.com/large-file-id
+
+# Check Cache-Control header for image
+curl -I http://gateway.example.com/image-id
+
+# Verify payment required after cache
+curl -I http://gateway.example.com/paid-content-id
+```
+
 ## Reference
 
 ### Environment Variables Quick Reference
@@ -1414,6 +1611,8 @@ The facilitator provides several security guarantees:
 | `RATE_LIMITER_REDIS_ENDPOINT`             | string  | `redis://redis:6379`                    | Redis connection URL                     |
 | `RATE_LIMITER_REDIS_USE_TLS`              | boolean | `false`                                 | Enable TLS for Redis                     |
 | `RATE_LIMITER_REDIS_USE_CLUSTER`          | boolean | `false`                                 | Use Redis cluster mode                   |
+| `CACHE_PRIVATE_SIZE_THRESHOLD`            | number  | `104857600` (100 MB)                    | Size threshold for private Cache-Control |
+| `CACHE_PRIVATE_CONTENT_TYPES`             | string  | `""`                                    | Content types for private Cache-Control  |
 
 #### x402 Variables
 
@@ -1523,8 +1722,8 @@ curl https://your-gateway.com/ar-io/info
 - `walletAddress`: Gateway wallet address for receiving payments
 - `facilitatorUrl`: x402 facilitator service URL
 - `dataEgress.pricing`:
-  - `perBytePrice`: Price in USDC per byte (string, formatted to avoid scientific
-    notation)
+  - `perBytePrice`: Price in USDC per byte (string, formatted to avoid
+    scientific notation)
   - `minPrice`: Minimum price in USDC per request (string, 6 decimal precision)
   - `maxPrice`: Maximum price in USDC per request (string, 6 decimal precision)
   - `currency`: Always `USDC`
@@ -1652,42 +1851,27 @@ easy USDC purchase), not for facilitator authentication.
 **Symptom**: Token bucket state (including paid tokens) is lost when gateway
 restarts. Users who purchased capacity with x402 payments must pay again.
 
-**Cause**: Redis persistence is disabled by default. The default configuration
-uses `EXTRA_REDIS_FLAGS=--save "" --appendonly no`, which disables both RDB and
-AOF persistence mechanisms.
+**Cause**: Redis persistence is disabled by default to optimize performance.
 
-**Solutions:**
+**Solution**: Enable Redis persistence to preserve token bucket state across
+restarts. See
+[Redis Persistence Configuration](#redis-persistence-configuration) for detailed
+instructions on:
 
-- **Enable Redis persistence** to preserve token bucket state across restarts.
-  See [Redis Persistence Configuration](#redis-persistence-configuration) for
-  detailed instructions.
+- Why persistence matters for paid tokens
+- Persistence options (RDB, AOF, Hybrid)
+- Configuration examples
+- Migration steps
 
-- **Recommended for production with x402**: Use hybrid persistence:
+**Quick fix for production**:
 
-  ```bash
-  EXTRA_REDIS_FLAGS=--save 300 10 --appendonly yes --appendfsync everysec
-  ```
+```bash
+# Add to .env file
+EXTRA_REDIS_FLAGS=--save 300 10 --appendonly yes --appendfsync everysec
 
-- **Verify persistence is working**:
-
-  ```bash
-  # Check if persistence files exist
-  ls -lh data/redis/
-  # Should see dump.rdb (RDB) and/or appendonly.aof (AOF)
-
-  # Monitor Redis for background saves
-  docker-compose exec redis redis-cli INFO persistence
-  ```
-
-- **Important**: After enabling persistence, restart the gateway to apply
-  changes:
-  ```bash
-  docker-compose down
-  docker-compose up -d
-  ```
-
-**Note**: If you don't need to preserve paid tokens (e.g., for development or
-testing), you can continue using the default configuration with no persistence.
+# Restart gateway
+docker-compose down && docker-compose up -d
+```
 
 ### x402 Payment Issues
 
@@ -1861,10 +2045,22 @@ JSON instead:
 
 ### Monitoring and Debugging
 
-#### View Token Consumption Metrics
+#### View Rate Limit Metrics
 
 ```bash
-# Total tokens consumed by type
+# View all rate limit metrics
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit
+
+# Requests that exceeded rate limits
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_exceeded_total
+
+# Total requests processed by rate limiter
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_requests_total
+
+# Bytes blocked by rate limiting
+curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_bytes_blocked_total
+
+# Tokens consumed by type
 curl -s http://localhost:3000/ar-io/__gateway_metrics | grep rate_limit_tokens_consumed_total
 
 # Paid tokens consumed (IP bucket)
@@ -1903,10 +2099,16 @@ docker-compose logs -f core | grep -i "rate limit\|x402\|payment"
 
 **Use case**: Local development and testing
 
+**What's different from Quick Start**:
+
+- Explicitly sets `RATE_LIMITER_TYPE=memory` for single-node development
+- Complete working example you can copy and run immediately
+
 **.env file:**
 
 ```bash
 # Rate limiter (memory-based, single node)
+# Unlike Quick Start, explicitly sets TYPE=memory for development
 ENABLE_RATE_LIMITER=true
 RATE_LIMITER_TYPE=memory
 RATE_LIMITER_IP_TOKENS_PER_BUCKET=100000
@@ -1947,10 +2149,18 @@ curl -v http://localhost:3000/TX_ID
 
 **Use case**: Multi-node production deployment with real payments
 
+**What's different from Quick Start**:
+
+- Explicitly configures Redis endpoint (useful for external Redis)
+- Adds Redis persistence to preserve paid tokens across restarts
+- Includes paywall customization (app name and logo)
+- Production-ready configuration with all recommended settings
+
 **.env file:**
 
 ```bash
 # Rate limiter (Redis-based, distributed)
+# Explicitly configures Redis for production multi-node deployments
 ENABLE_RATE_LIMITER=true
 RATE_LIMITER_TYPE=redis
 RATE_LIMITER_REDIS_ENDPOINT=redis://redis:6379
@@ -1974,11 +2184,11 @@ X_402_USDC_DATA_EGRESS_MAX_PRICE=1.00
 # Integration
 X_402_RATE_LIMIT_CAPACITY_MULTIPLIER=10
 
-# Paywall customization
+# Paywall customization (not in Quick Start)
 X_402_APP_NAME=My AR.IO Gateway
 X_402_APP_LOGO=https://example.com/logo.png
 
-# Redis persistence - preserve paid tokens across restarts
+# Redis persistence - preserve paid tokens across restarts (CRITICAL for production)
 # Hybrid approach: RDB snapshots + AOF for maximum durability
 EXTRA_REDIS_FLAGS=--save 300 10 --appendonly yes --appendfsync everysec
 ```

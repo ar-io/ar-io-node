@@ -10,7 +10,7 @@ import {
   getRateLimiterRedisClient,
   RateLimiterRedisClient,
 } from '../lib/rate-limiter-redis.js';
-import { isAnyIpAllowlisted } from '../lib/ip-utils.js';
+import { extractAllClientIPs, isAnyIpAllowlisted } from '../lib/ip-utils.js';
 import log from '../log.js';
 import {
   RateLimiter,
@@ -83,6 +83,9 @@ export class RedisRateLimiter implements RateLimiter {
 
   /**
    * Check rate limit and consume predicted tokens
+   *
+   * Extracts client IP from proxy headers (X-Forwarded-For, X-Real-IP) when present,
+   * ensuring rate limiting and payment crediting work correctly behind proxies/CDNs.
    */
   public async checkLimit(
     req: Request,
@@ -94,7 +97,8 @@ export class RedisRateLimiter implements RateLimiter {
     const method = req.method;
     const canonicalPath = this.getCanonicalPath(req);
     const host = (req.headers.host ?? '').slice(0, 256);
-    const primaryClientIp = req.ip ?? '0.0.0.0';
+    const { clientIp } = extractAllClientIPs(req);
+    const primaryClientIp = clientIp ?? '0.0.0.0';
 
     const { resourceKey, ipKey } = this.buildBucketKeys(
       method,
@@ -121,6 +125,7 @@ export class RedisRateLimiter implements RateLimiter {
 
       if (!ipResult.success) {
         this.log.info('IP limit exceeded', {
+          clientIp: primaryClientIp,
           key: ipKey,
           tokens: ipResult.bucket.tokens,
           needed: predictedTokens,
@@ -177,6 +182,7 @@ export class RedisRateLimiter implements RateLimiter {
           }
 
           this.log.info('Resource limit exceeded', {
+            clientIp: primaryClientIp,
             key: resourceKey,
             tokens: resourceResult.bucket.tokens,
             needed: predictedTokens,
@@ -419,12 +425,16 @@ export class RedisRateLimiter implements RateLimiter {
 
   /**
    * Top off bucket with paid tokens directly (for payment-based top-off)
+   *
+   * Extracts client IP from proxy headers (X-Forwarded-For, X-Real-IP) when present,
+   * ensuring x402 payments credit the correct client IP behind proxies/CDNs.
    */
   public async topOffPaidTokens(req: Request, tokens: number): Promise<void> {
     const method = req.method;
     const canonicalPath = this.getCanonicalPath(req);
     const host = (req.headers.host ?? '').slice(0, 256);
-    const primaryClientIp = req.ip ?? '0.0.0.0';
+    const { clientIp } = extractAllClientIPs(req);
+    const primaryClientIp = clientIp ?? '0.0.0.0';
 
     const { ipKey } = this.buildBucketKeys(
       method,

@@ -5,5 +5,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 export * from './graphql-root-tx-index.js';
+export * from './gateways-root-tx-index.js';
 export * from './composite-root-tx-index.js';
 export * from './turbo-root-tx-index.js';

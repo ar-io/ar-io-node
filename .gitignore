@@ -14,6 +14,10 @@
 /.env.bundler
 .env.bak*
 
+# Docker Compose overrides
+docker-compose.override.yaml
+docker-compose.override.yml
+
 # Build/Runtime directories
 /coverage
 /dist

@@ -221,9 +221,52 @@ export const GRAPHQL_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
   'minute',
 ) as 'second' | 'minute' | 'hour' | 'day';
 
+// Gateways root TX lookup URLs (for HEAD request offset discovery)
+export const GATEWAYS_ROOT_TX_URLS = JSON.parse(
+  env.varOrDefault(
+    'GATEWAYS_ROOT_TX_URLS',
+    '{ "https://turbo-gateway.com": 1 }',
+  ),
+) as Record<string, number>;
+
+// Validate gateways root TX URLs and weights
+Object.entries(GATEWAYS_ROOT_TX_URLS).forEach(([url, weight]) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in GATEWAYS_ROOT_TX_URLS: ${url}`);
+  }
+  if (typeof weight !== 'number' || weight <= 0) {
+    throw new Error(
+      `Invalid weight in GATEWAYS_ROOT_TX_URLS for ${url}: ${weight}`,
+    );
+  }
+});
+
+// Gateways root TX lookup request configuration
+export const GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS',
+  '10000',
+);
+
+// Gateways root TX lookup rate limiting
+export const GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE = +env.varOrDefault(
+  'GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE',
+  '5',
+);
+export const GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL =
+  +env.varOrDefault(
+    'GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL',
+    '6', // 6 per minute = 1 per 10 seconds
+  );
+export const GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
 // Root TX index lookup order configuration
 export const ROOT_TX_LOOKUP_ORDER = env
-  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,turbo,graphql')
+  .varOrDefault('ROOT_TX_LOOKUP_ORDER', 'db,gateways,graphql')
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
@@ -523,6 +566,25 @@ export const CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY = +env.varOrDefault(
   'CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY',
   '5',
 );
+
+// Response size threshold (in bytes) above which Cache-Control will use 'private' directive.
+// This helps CDNs respect rate limiting and x402 payment requirements for large responses.
+// Default: 104857600 (100 MB)
+export const CACHE_PRIVATE_SIZE_THRESHOLD = +env.varOrDefault(
+  'CACHE_PRIVATE_SIZE_THRESHOLD',
+  '104857600',
+);
+
+// Comma-separated list of content types that should have 'private' Cache-Control directive.
+// Supports wildcards (e.g., 'image/*' matches 'image/png', 'image/jpeg').
+// This helps CDNs respect rate limiting and x402 payment requirements for specific content types.
+// Default: '' (empty - no content types)
+// Note: Patterns are normalized (lowercased) for case-insensitive matching
+export const CACHE_PRIVATE_CONTENT_TYPES = env
+  .varOrDefault('CACHE_PRIVATE_CONTENT_TYPES', '')
+  .split(',')
+  .map((type) => type.trim().toLowerCase())
+  .filter((type) => type.length > 0);
 
 //
 // Indexing
@@ -1335,6 +1397,18 @@ if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {
     'ENABLE_X_402_USDC_DATA_EGRESS requires ENABLE_RATE_LIMITER to be enabled. ' +
       'X402 payments are not a standalone feature - they work as an extension of the rate limiting system. ' +
       'Set ENABLE_RATE_LIMITER=true to enable X402 payments.',
+  );
+}
+
+// Warn if cache private options are configured without rate limiter
+if (
+  !ENABLE_RATE_LIMITER &&
+  (CACHE_PRIVATE_SIZE_THRESHOLD !== 104857600 ||
+    CACHE_PRIVATE_CONTENT_TYPES.length > 0)
+) {
+  logger.warn(
+    'CACHE_PRIVATE_SIZE_THRESHOLD or CACHE_PRIVATE_CONTENT_TYPES configured but rate limiting is disabled (ENABLE_RATE_LIMITER=false). ' +
+      'These options have no effect without rate limiting enabled.',
   );
 }
 

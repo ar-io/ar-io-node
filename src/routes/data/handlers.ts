@@ -208,6 +208,109 @@ const setDigestStableVerifiedHeaders = ({
   res.setHeader(headerNames.trusted, data.trusted ? 'true' : 'false');
 };
 
+/**
+ * Match content type against a pattern with wildcard support.
+ *
+ * Wildcards (*) match any characters within a segment (not across /).
+ * This function is case-sensitive and expects normalized content types
+ * (lowercase, no parameters). For best results, normalize content types
+ * before calling this function.
+ *
+ * @example
+ * ```typescript
+ * matchContentTypePattern('image/png', 'image/*')  // returns true
+ * matchContentTypePattern('image/jpeg', 'image/*') // returns true
+ * matchContentTypePattern('text/html', 'image/*')  // returns false
+ * matchContentTypePattern('application/json', 'application/json') // returns true
+ * ```
+ *
+ * @param contentType - The content type to match (e.g., 'image/png')
+ * @param pattern - The pattern to match against. Can include wildcards (e.g., 'image/*' or 'application/json')
+ * @returns true if the content type matches the pattern, false otherwise
+ */
+export const matchContentTypePattern = (
+  contentType: string,
+  pattern: string,
+): boolean => {
+  // Exact match
+  if (contentType === pattern) {
+    return true;
+  }
+
+  // Wildcard match
+  if (pattern.includes('*')) {
+    // Escape special regex characters except *
+    const regexPattern = pattern
+      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '[^/]*');
+    const regex = new RegExp(`^${regexPattern}$`);
+    return regex.test(contentType);
+  }
+
+  return false;
+};
+
+/**
+ * Determine if response should use 'private' Cache-Control directive
+ * based on size threshold or content type patterns.
+ *
+ * This function prevents CDNs from caching large responses or specific
+ * content types that should not bypass rate limiting or x402 payment
+ * requirements. The 'private' directive instructs CDNs and shared caches
+ * not to store the response, while still allowing browser caching.
+ *
+ * The check is performed in two stages:
+ * 1. Size check: Returns true if size exceeds CACHE_PRIVATE_SIZE_THRESHOLD
+ * 2. Content type check: Normalizes the content type (removes parameters,
+ *    lowercases) and matches against CACHE_PRIVATE_CONTENT_TYPES patterns
+ *
+ * @example
+ * ```typescript
+ * // Large file exceeds threshold
+ * shouldUsePrivateCacheControl('image/png', 100_000_000) // returns true
+ *
+ * // Matching content type pattern (e.g., video/*)
+ * shouldUsePrivateCacheControl('video/mp4', 1000) // returns true if pattern configured
+ *
+ * // Small file with non-matching type
+ * shouldUsePrivateCacheControl('text/html', 1000) // returns false
+ * ```
+ *
+ * @param contentType - The content type of the response (may include parameters like 'image/png; charset=utf-8')
+ * @param size - The size of the response in bytes
+ * @returns true if the response should use 'private' Cache-Control directive, false otherwise
+ */
+export const shouldUsePrivateCacheControl = (
+  contentType: string,
+  size: number,
+): boolean => {
+  // Check size threshold
+  if (size > config.CACHE_PRIVATE_SIZE_THRESHOLD) {
+    return true;
+  }
+
+  // Skip content type check if no patterns configured or contentType is undefined/empty
+  if (!contentType || config.CACHE_PRIVATE_CONTENT_TYPES.length === 0) {
+    return false;
+  }
+
+  // Normalize content type: strip parameters, trim, lowercase
+  // Example: "Image/PNG; charset=utf-8" -> "image/png"
+  const normalizedContentType = contentType
+    .split(';')[0] // Remove parameters like "; charset=utf-8"
+    .trim() // Remove whitespace
+    .toLowerCase(); // Normalize case
+
+  // Check content type patterns
+  for (const pattern of config.CACHE_PRIVATE_CONTENT_TYPES) {
+    if (matchContentTypePattern(normalizedContentType, pattern)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 const setDataHeaders = ({
   req,
   res,
@@ -229,17 +332,32 @@ const setDataHeaders = ({
   // Allow range requests
   res.header('Accept-Ranges', 'bytes');
 
+  // Determine content type for cache control decision
+  const contentType =
+    dataAttributes?.contentType ??
+    data.sourceContentType ??
+    DEFAULT_CONTENT_TYPE;
+
+  // Determine if response should use private cache control
+  const usePrivate = shouldUsePrivateCacheControl(contentType, data.size);
+
   // Only set Cache-Control header if it's not already set (e.g., for on ArNS
   // TTLs)
   if (!res.hasHeader('Cache-Control')) {
+    // Determine cache directive (public or private)
+    const cacheDirective = usePrivate ? 'private' : 'public';
+
     // Aggressively cache data before max fork depth
     if (dataAttributes?.stable) {
       res.header(
         'Cache-Control',
-        `public, max-age=${STABLE_MAX_AGE}, immutable`,
+        `${cacheDirective}, max-age=${STABLE_MAX_AGE}, immutable`,
       );
     } else {
-      res.header('Cache-Control', `public, max-age=${UNSTABLE_MAX_AGE}`);
+      res.header(
+        'Cache-Control',
+        `${cacheDirective}, max-age=${UNSTABLE_MAX_AGE}`,
+      );
     }
   }
 
@@ -252,11 +370,7 @@ const setDataHeaders = ({
   }
 
   // Use the content type from the L1 or data item index if available
-  res.contentType(
-    dataAttributes?.contentType ??
-      data.sourceContentType ??
-      DEFAULT_CONTENT_TYPE,
-  );
+  res.contentType(contentType);
 
   if (dataAttributes?.contentEncoding != null) {
     res.header('Content-Encoding', dataAttributes.contentEncoding);
@@ -693,6 +807,24 @@ export const createRawDataHandler = ({
           'cache.status': data.cached ? 'HIT' : 'MISS',
         });
         span.addEvent('Data retrieval successful');
+
+        // Re-fetch attributes to ensure we have any offsets discovered during getData()
+        // This ensures offset headers are set on the first request, not just subsequent ones
+        span.addEvent('Re-fetching data attributes after getData');
+        try {
+          const updatedAttributes =
+            await dataAttributesSource.getDataAttributes(id);
+          if (updatedAttributes) {
+            dataAttributes = updatedAttributes;
+            span.addEvent('Updated data attributes with discovered offsets');
+          }
+        } catch (error: any) {
+          // If re-fetch fails, log but continue with original attributes
+          log.debug('Failed to re-fetch data attributes after getData:', {
+            dataId: id,
+            message: error.message,
+          });
+        }
 
         // === PAYMENT AND RATE LIMIT CHECK ===
         const allowed = await handleDataRateLimitingAndPayment({
@@ -1153,6 +1285,24 @@ export const createDataHandler = ({
           'cache.status': data.cached ? 'HIT' : 'MISS',
         });
         span.addEvent('Data retrieval successful');
+
+        // Re-fetch attributes to ensure we have any offsets discovered during getData()
+        // This ensures offset headers are set on the first request, not just subsequent ones
+        span.addEvent('Re-fetching data attributes after getData');
+        try {
+          const updatedAttributes =
+            await dataAttributesSource.getDataAttributes(id);
+          if (updatedAttributes) {
+            dataAttributes = updatedAttributes;
+            span.addEvent('Updated data attributes with discovered offsets');
+          }
+        } catch (error: any) {
+          // If re-fetch fails, log but continue with original attributes
+          log.debug('Failed to re-fetch data attributes after getData:', {
+            dataId: id,
+            message: error.message,
+          });
+        }
 
         // === PAYMENT AND RATE LIMIT CHECK ===
         const allowed = await handleDataRateLimitingAndPayment({

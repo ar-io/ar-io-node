@@ -103,7 +103,7 @@ export function createX402Router({
           paymentProcessor.calculateRequirements({
             contentSize,
             contentType: 'application/octet-stream',
-            protocol: req.protocol,
+            protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
             host: req.headers.host ?? '',
             originalUrl: validatedUrl,
           });

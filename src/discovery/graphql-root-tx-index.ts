@@ -11,6 +11,7 @@ import { LRUCache } from 'lru-cache';
 import { TokenBucket } from 'limiter';
 import { DataItemRootIndex } from '../types.js';
 import { shuffleArray } from '../lib/random.js';
+import { parseNonNegativeInt } from '../lib/http-utils.js';
 import * as config from '../config.js';
 import { MAX_BUNDLE_NESTING_DEPTH } from '../arweave/constants.js';
 
@@ -190,10 +191,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
         return {
           rootTxId: currentId,
           contentType: originalMetadata?.contentType,
-          dataSize:
-            originalMetadata?.size != null
-              ? parseInt(originalMetadata.size, 10)
-              : undefined,
+          dataSize: parseNonNegativeInt(originalMetadata?.size),
         };
       }
 
@@ -228,10 +226,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
       ? {
           rootTxId: currentId,
           contentType: originalMetadata?.contentType,
-          dataSize:
-            originalMetadata?.size != null
-              ? parseInt(originalMetadata.size, 10)
-              : undefined,
+          dataSize: parseNonNegativeInt(originalMetadata?.size),
         }
       : undefined;
   }

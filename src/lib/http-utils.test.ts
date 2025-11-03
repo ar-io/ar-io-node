@@ -15,6 +15,7 @@ import {
   handleIfNoneMatch,
   parseContentLength,
   parseContentRange,
+  parseNonNegativeInt,
   wouldReturn304,
 } from './http-utils.js';
 
@@ -642,6 +643,59 @@ describe('http-utils', () => {
 
       const result = handleIfNoneMatch(req, res);
       assert.equal(result, false);
+    });
+  });
+
+  describe('parseNonNegativeInt', () => {
+    it('should parse valid positive integers', () => {
+      assert.equal(parseNonNegativeInt('123'), 123);
+      assert.equal(parseNonNegativeInt('0'), 0);
+      assert.equal(parseNonNegativeInt('999999'), 999999);
+    });
+
+    it('should handle whitespace', () => {
+      assert.equal(parseNonNegativeInt('  123  '), 123);
+      assert.equal(parseNonNegativeInt('\t456\n'), 456);
+      assert.equal(parseNonNegativeInt('  0  '), 0);
+    });
+
+    it('should return undefined for invalid values', () => {
+      assert.equal(parseNonNegativeInt('abc'), undefined);
+      assert.equal(parseNonNegativeInt('NaN'), undefined);
+      assert.equal(parseNonNegativeInt(''), undefined);
+      assert.equal(parseNonNegativeInt('  '), undefined);
+      assert.equal(parseNonNegativeInt('\t\n'), undefined);
+    });
+
+    it('should return undefined for negative numbers', () => {
+      assert.equal(parseNonNegativeInt('-1'), undefined);
+      assert.equal(parseNonNegativeInt('-999'), undefined);
+      assert.equal(parseNonNegativeInt('  -10  '), undefined);
+    });
+
+    it('should return undefined for undefined/null', () => {
+      assert.equal(parseNonNegativeInt(undefined), undefined);
+    });
+
+    it('should truncate decimals (parseInt behavior)', () => {
+      assert.equal(parseNonNegativeInt('123.456'), 123);
+      assert.equal(parseNonNegativeInt('0.999'), 0);
+      assert.equal(parseNonNegativeInt('12.34abc'), 12);
+    });
+
+    it('should handle large numbers', () => {
+      assert.equal(parseNonNegativeInt('2147483647'), 2147483647);
+      assert.equal(parseNonNegativeInt('9999999999'), 9999999999);
+    });
+
+    it('should return undefined for infinity', () => {
+      assert.equal(parseNonNegativeInt('Infinity'), undefined);
+      assert.equal(parseNonNegativeInt('-Infinity'), undefined);
+    });
+
+    it('should handle leading zeros', () => {
+      assert.equal(parseNonNegativeInt('00123'), 123);
+      assert.equal(parseNonNegativeInt('0000'), 0);
     });
   });
 });
