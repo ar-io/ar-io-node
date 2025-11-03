@@ -327,14 +327,28 @@ This approach ensures you never miss critical failures while dramatically reduci
 
 To use OTEL Collector with tail sampling in docker-compose:
 
-1. Set your telemetry destination and Honeycomb API key:
+1. Set your telemetry destination and API key (configure ONE based on your backend):
    ```bash
-   # In .env or environment
+   # Honeycomb
    OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://api.honeycomb.io
-   OTEL_COLLECTOR_HONEYCOMB_API_KEY=your-api-key-here
-   ```
+   OTEL_COLLECTOR_HONEYCOMB_API_KEY=your-honeycomb-api-key
 
-   For other telemetry backends (Grafana Cloud, Datadog, etc.), modify the `headers` section in `otel/collector-config.yaml`.
+   # OR Grafana Cloud Tempo
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://otlp-gateway-prod-us-central-0.grafana.net/otlp
+   OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY=your-base64-encoded-key
+
+   # OR Datadog
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://trace.agent.datadoghq.com
+   OTEL_COLLECTOR_DATADOG_API_KEY=your-datadog-api-key
+
+   # OR New Relic
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://otlp.nr-data.net
+   OTEL_COLLECTOR_NEW_RELIC_API_KEY=your-new-relic-license-key
+
+   # OR Elastic APM
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://your-deployment.apm.region.cloud.es.io
+   OTEL_COLLECTOR_ELASTIC_API_KEY=your-elastic-secret-token
+   ```
 
 2. Optionally adjust sampling parameters:
    ```bash
