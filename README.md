@@ -315,13 +315,15 @@ The ar-io-node uses [OpenTelemetry] for distributed tracing, providing deep visi
 
 **How Tail Sampling Works:**
 
-Unlike traditional head-based sampling (which decides whether to keep a trace at the start), tail sampling waits until the entire trace completes before making a decision. This enables three intelligent sampling policies:
+Unlike traditional head-based sampling (which decides whether to keep a trace at the start), tail sampling waits until the entire trace completes before making a decision. This enables five intelligent sampling policies:
 
 1. **100% Error Capture**: All traces with errors (5xx responses, exceptions) are captured
 2. **100% Slow Request Capture**: All requests exceeding 2 seconds (configurable) are captured
-3. **Probabilistic Baseline**: 1% (configurable) of successful, fast requests for baseline metrics
+3. **100% Payment Capture**: All traces with verified x402 payments are captured for billing and compliance
+4. **100% Paid Token Capture**: All traces that consumed paid rate limit tokens are captured
+5. **Probabilistic Baseline**: 1% (configurable) of successful, fast, unpaid requests for baseline metrics
 
-This approach ensures you never miss critical failures while dramatically reducing storage and analysis costs.
+This approach ensures you never miss critical failures, paid traffic, or compliance-relevant requests while dramatically reducing storage and analysis costs for free-tier traffic.
 
 **Configuration:**
 
