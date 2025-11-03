@@ -198,7 +198,8 @@ services:
       - OTEL_TRACING_SAMPLING_RATE_DENOMINATOR=${OTEL_TRACING_SAMPLING_RATE_DENOMINATOR:-}
       - OTEL_EXPORTER_OTLP_HEADERS_FILE=${OTEL_EXPORTER_OTLP_HEADERS_FILE:-}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # Point to OTEL Collector for tail sampling. Override to bypass collector.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       # x402 USDC Egress
       - ENABLE_X_402_USDC_DATA_EGRESS=${ENABLE_X_402_USDC_DATA_EGRESS:-}
       - X_402_USDC_NETWORK=${X_402_USDC_NETWORK:-}
@@ -220,6 +221,7 @@ services:
       - ar-io-network
     depends_on:
       - redis
+      - otel-collector
     labels:
       autoheal: ${RUN_AUTOHEAL:-false}
 
@@ -231,6 +233,28 @@ services:
       - "6379" # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
+    networks:
+      - ar-io-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_IMAGE_TAG:-0.119.0}
+    restart: unless-stopped
+    ports:
+      - "4317" # gRPC OTLP receiver (don't expose externally by default)
+      - "4318" # HTTP OTLP receiver (don't expose externally by default)
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otel/config.yaml:ro
+      - ${OTEL_COLLECTOR_DESTINATION_HEADERS_FILE:-/dev/null}:${OTEL_COLLECTOR_DESTINATION_HEADERS_FILE:-/dev/null}:ro
+    environment:
+      # Destination endpoint for sampled traces
+      - OTEL_COLLECTOR_DESTINATION_ENDPOINT=${OTEL_COLLECTOR_DESTINATION_ENDPOINT:-}
+      # Map custom headers variables to standard OTEL variables for collector
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_COLLECTOR_DESTINATION_HEADERS:-}
+      - OTEL_EXPORTER_OTLP_HEADERS_FILE=${OTEL_COLLECTOR_DESTINATION_HEADERS_FILE:-}
+      # Tail sampling configuration
+      - OTEL_TAIL_SAMPLING_SUCCESS_RATE=${OTEL_TAIL_SAMPLING_SUCCESS_RATE:-1}
+      - OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS=${OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS:-2000}
+    command: ["--config=/etc/otel/config.yaml"]
     networks:
       - ar-io-network
 

@@ -106,6 +106,11 @@ export async function checkPaymentAndRateLimits({
     // Extract all client IPs for allowlist checking
     const { clientIp, clientIps } = extractAllClientIPs(req);
 
+    // Add client IP attributes to span for visibility in tail sampling
+    // Especially valuable for debugging rate limits, payment issues, and abuse patterns
+    span.setAttribute('client.ip', clientIp);
+    span.setAttribute('client.ips', clientIps.join(','));
+
     // Check if ANY IP in the chain is allowlisted - if so, skip all checks
     if (rateLimiter?.isAllowlisted(clientIps)) {
       span.setAttribute('allowlisted', true);
@@ -149,6 +154,8 @@ export async function checkPaymentAndRateLimits({
           attributes: {
             ...(id !== undefined && { 'data.id': id }),
             'content.size': contentSize,
+            'client.ip': clientIp,
+            'client.ips': clientIps.join(','),
           },
         },
         span,
@@ -445,6 +452,11 @@ export async function adjustRateLimitTokens({
   });
 
   try {
+    // Extract client IPs for span visibility
+    const { clientIp, clientIps } = extractAllClientIPs(req);
+    span.setAttribute('client.ip', clientIp);
+    span.setAttribute('client.ips', clientIps.join(','));
+
     // Extract domain for metrics
     const host = req.headers.host ?? '';
     const domain = extractDomain(host);
