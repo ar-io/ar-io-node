@@ -19,7 +19,7 @@ This is a **recommended release**. This release focuses on improving gateway inf
 ### Added
 
 - **GatewaysRootTxIndex for Offset Discovery**: New root transaction index using HEAD requests to AR.IO gateways for discovering data item offsets
-  - Multi-gateway support with priority tiers and automatic fallback
+  - Multi-gateway support with priority tiers and automatic fallback (single attempt per gateway to prevent thundering herd)
   - Per-gateway rate limiting with TokenBucket
   - LRU caching for offset results
   - Configuration via `GATEWAYS_ROOT_TX_URLS`, `GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS`, `GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE`, `GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL`, `GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL`, `GATEWAYS_ROOT_TX_CACHE_SIZE`
