@@ -288,6 +288,11 @@ export async function checkPaymentAndRateLimits({
       }
     }
 
+    // Add payment status to main span for tail sampling
+    // This allows the collector to sample 100% of paid traffic
+    span.setAttribute('payment.verified', paymentVerified);
+    span.setAttribute('payment.settled', paymentSettled);
+
     // === RATE LIMITING ===
     if (rateLimiter !== undefined && config.ENABLE_RATE_LIMITER) {
       span.addEvent('Checking rate limits');
@@ -379,6 +384,23 @@ export async function checkPaymentAndRateLimits({
           }
 
           return { allowed: false };
+        }
+
+        // Add paid token usage to span for tail sampling
+        // This allows tracking of all requests that used paid tokens
+        const hasPaidTokens =
+          (limitResult.ipPaidTokensConsumed ?? 0) > 0 ||
+          (limitResult.resourcePaidTokensConsumed ?? 0) > 0;
+        span.setAttribute('tokens.paid_used', hasPaidTokens);
+        if (hasPaidTokens) {
+          span.setAttribute(
+            'tokens.ip_paid',
+            limitResult.ipPaidTokensConsumed ?? 0,
+          );
+          span.setAttribute(
+            'tokens.resource_paid',
+            limitResult.resourcePaidTokensConsumed ?? 0,
+          );
         }
 
         // Rate limit check passed

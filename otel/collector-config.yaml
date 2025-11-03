@@ -46,9 +46,25 @@ processors:
         latency:
           threshold_ms: ${env:OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS}
 
-      # Policy 3: Probabilistic sampling of successful, fast traces
+      # Policy 3: Always keep traces with verified payments (100% sampling)
+      # Captures all paid traffic for billing, compliance, and audit purposes
+      - name: payment-verified-policy
+        type: boolean_attribute
+        boolean_attribute:
+          key: payment.verified
+          value: true
+
+      # Policy 4: Always keep traces that used paid tokens (100% sampling)
+      # Captures all requests that consumed paid rate limit tokens
+      - name: paid-tokens-policy
+        type: boolean_attribute
+        boolean_attribute:
+          key: tokens.paid_used
+          value: true
+
+      # Policy 5: Probabilistic sampling of successful, fast, unpaid traces
       # Default: 1% (configurable via OTEL_TAIL_SAMPLING_SUCCESS_RATE)
-      # This provides baseline visibility into normal operations
+      # This provides baseline visibility into normal free-tier operations
       - name: baseline-success-policy
         type: probabilistic
         probabilistic:
