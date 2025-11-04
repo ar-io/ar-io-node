@@ -8,10 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Transaction ID Header for Chunk Endpoint**: Added `X-Arweave-Chunk-Tx-Id` header to `/chunk/<offset>/data` responses containing the Arweave transaction ID for the chunk
-- **Transaction Offset Headers for Chunk Endpoint**: Added `X-Arweave-Chunk-Tx-Start-Offset` and `X-Arweave-Chunk-Tx-End-Offset` headers to `/chunk/<offset>/data` responses exposing the transaction's absolute position in the weave
+- **Transaction ID and Start Offset Headers for Chunk Endpoint**: Added `X-Arweave-Chunk-Tx-Id` and `X-Arweave-Chunk-Tx-Start-Offset` headers to `/chunk/<offset>/data` responses. End offsets are not provided - users can calculate them from start offset + size (e.g., `txEndOffset = txStartOffset + txDataSize`). This approach eliminates inclusive/exclusive end offset confusion
 
 ### Changed
+
+- **Removed End Offset Headers from Chunk Endpoint**: Removed `X-Arweave-Chunk-End-Offset`, `X-Arweave-Chunk-Relative-End-Offset`, and `X-Arweave-Chunk-Tx-End-Offset` headers. Users should calculate end offsets from start offsets and sizes instead. This eliminates confusion around inclusive vs. exclusive end offset conventions
 
 ### Fixed
 
