@@ -590,12 +590,15 @@ export const createChunkOffsetDataHandler = ({
         absoluteEndOffset.toString(),
       );
       response.setHeader(
-        headerNames.chunkTxStartOffset,
+        headerNames.chunkRelativeStartOffset,
         startOffset.toString(),
       );
-      response.setHeader(headerNames.chunkTxEndOffset, endOffset.toString());
+      response.setHeader(
+        headerNames.chunkRelativeEndOffset,
+        endOffset.toString(),
+      );
       response.setHeader(headerNames.chunkReadOffset, readOffset.toString());
-      response.setHeader(headerNames.chunkDataSize, finalDataSize.toString());
+      response.setHeader(headerNames.chunkTxDataSize, finalDataSize.toString());
 
       // Set tx_path header if available
       if (chunk.tx_path !== undefined) {
