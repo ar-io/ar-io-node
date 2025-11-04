@@ -1699,6 +1699,14 @@ paths:
               description: The Arweave transaction ID containing this chunk
               schema:
                 type: string
+            X-Arweave-Chunk-Tx-Start-Offset:
+              description: Absolute start offset of the transaction in the weave (inclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-End-Offset:
+              description: Absolute end offset of the transaction in the weave (inclusive, 0-based)
+              schema:
+                type: integer
             X-Cache:
               description: Cache status (HIT or MISS)
               schema:
@@ -1814,6 +1822,14 @@ paths:
               description: The Arweave transaction ID containing this chunk
               schema:
                 type: string
+            X-Arweave-Chunk-Tx-Start-Offset:
+              description: Absolute start offset of the transaction in the weave (inclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-End-Offset:
+              description: Absolute end offset of the transaction in the weave (inclusive, 0-based)
+              schema:
+                type: integer
             X-Cache:
               description: Cache status (HIT or MISS)
               schema:
