@@ -492,6 +492,7 @@ export interface ChunkMetadata {
   data_path: Buffer;
   offset: number;
   hash: Buffer;
+  tx_path?: Buffer;
 }
 
 export interface Chunk extends ChunkMetadata, ChunkData {

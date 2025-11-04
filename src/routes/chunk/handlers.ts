@@ -249,6 +249,20 @@ export const createChunkOffsetHandler = ({
         return;
       }
 
+      let txPath: string | undefined = undefined;
+      if (chunk.tx_path !== undefined) {
+        try {
+          txPath = toB64Url(chunk.tx_path);
+        } catch (error: any) {
+          span.setAttribute('http.status_code', 500);
+          span.setAttribute('chunk.retrieval.error', 'txpath_encoding_failed');
+          span.recordException(error);
+          log.error('Error getting tx path from chunk', { error });
+          response.status(500).send('Error converting tx path to base64url');
+          return;
+        }
+      }
+
       // Add source tracking headers
       if (chunk.source !== undefined && chunk.source !== '') {
         response.setHeader(headerNames.chunkSourceType, chunk.source);
@@ -281,6 +295,9 @@ export const createChunkOffsetHandler = ({
         chunk: chunkBase64Url,
         ...(dataPath !== undefined && {
           data_path: dataPath,
+        }),
+        ...(txPath !== undefined && {
+          tx_path: txPath,
         }),
         // as of today, ar-io-node doesn't pack chunks
         packing: 'unpacked',

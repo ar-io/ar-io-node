@@ -73,6 +73,52 @@ describe('Chunk routes', () => {
       });
   });
 
+  it('should return 200 with tx_path when available', async () => {
+    const chunkSource: any = {
+      getChunkByAny: async () => ({
+        chunk: Buffer.from('chunk data'),
+        data_path: Buffer.from('12345abc'),
+        tx_path: Buffer.from('txpath123'),
+        source: 'arweave-network',
+      }),
+    };
+
+    const txOffsetSource: any = {
+      getTxByOffset: () => ({
+        data_root: 'abc1234',
+        data_size: 100,
+        offset: 0,
+        id: 'foobarbaz',
+      }),
+    };
+
+    app.get(
+      CHUNK_OFFSET_PATH,
+      createChunkOffsetHandler({
+        chunkSource,
+        txOffsetSource,
+        log,
+      }),
+    );
+
+    await request(app)
+      .get('/chunk/274995392586018')
+      .expect(200)
+      .then((res: any) => {
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(
+          res.header['content-type'],
+          'application/json; charset=utf-8',
+        );
+        assert.deepEqual(res.body, {
+          chunk: 'Y2h1bmsgZGF0YQ', // base64 of "chunk data"
+          data_path: 'MTIzNDVhYmM',
+          tx_path: 'dHhwYXRoMTIz', // base64 of "txpath123"
+          packing: 'unpacked',
+        });
+      });
+  });
+
   it('should return 404 for an invalid (non-numeric) offset', async () => {
     app.get(
       CHUNK_OFFSET_PATH,

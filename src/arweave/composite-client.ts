@@ -1274,6 +1274,11 @@ export class ArweaveCompositeClient
       metadata.chunk_size = chunk.chunk_size;
     }
 
+    // Include tx_path if it's available
+    if (chunk.tx_path !== undefined) {
+      metadata.tx_path = chunk.tx_path;
+    }
+
     return metadata;
   }
 
