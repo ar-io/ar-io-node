@@ -73,8 +73,9 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **Raw data requests**: `/raw/:txid`
 - **ArNS resolved content**: All requests resolved through ArNS names
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
-- **Chunk requests**: `GET /chunk/:offset` (uses fixed size pricing - see note
-  below)
+- **Chunk requests**:
+  - `GET /chunk/:offset` (base64url-encoded JSON, uses fixed size pricing - see note below)
+  - `GET /chunk/:offset/data` (raw binary, uses fixed size pricing - see note below)
 
 #### Not Rate Limited
 
@@ -85,10 +86,15 @@ Currently, the following endpoints are not rate limited:
 - Administrative endpoints (`/ar-io/*`)
 
 **Note on Chunk Pricing:** Chunk GET requests use a fixed size assumption for
-predictable pricing (~360 KiB per request by default, configurable via
-`CHUNK_GET_BASE64_SIZE_BYTES`). This allows payment requirements to be
-calculated immediately without waiting for chunk retrieval, unlike data
-endpoints which calculate pricing based on actual content size.
+predictable pricing. This allows payment requirements to be calculated
+immediately without waiting for chunk retrieval, unlike data endpoints which
+calculate pricing based on actual content size.
+
+- `/chunk/:offset` (base64url-encoded): ~360 KiB per request by default
+  (configurable via `CHUNK_GET_BASE64_SIZE_BYTES`)
+- `/chunk/:offset/data` (raw binary): 256 KiB per request (hardcoded as
+  `MAX_CHUNK_SIZE`), providing ~40% bandwidth savings and lower per-chunk fees
+  compared to the base64url endpoint
 
 ### How They Work Together
 

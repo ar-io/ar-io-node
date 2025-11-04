@@ -271,7 +271,8 @@ AR.IO Node uses multiple offset types to efficiently locate and retrieve data.
 
 **Absolute Offset** - The global byte position within the entire Arweave
 [weave](#weave). Used to retrieve chunks from Arweave nodes using the
-`/chunk/{offset}` endpoint.
+`/chunk/{offset}` endpoint (base64url-encoded JSON) or `/chunk/{offset}/data`
+endpoint (raw binary with metadata in headers).
 
 **Transaction Offset** - The end position (last byte) of a
 [transaction](#transaction) in the [weave](#weave). Combined with transaction

@@ -8,6 +8,7 @@ import { Router, json } from 'express';
 
 import {
   createChunkOffsetHandler,
+  createChunkOffsetDataHandler,
   createChunkPostHandler,
 } from './handlers.js';
 import log from '../../log.js';
@@ -48,6 +49,28 @@ chunkRouter.head(
     rateLimiter,
     paymentProcessor,
     log: log.child({ class: 'ChunkHeadOffsetHandler' }),
+  }),
+);
+
+chunkRouter.get(
+  '/chunk/:offset(\\d+)/data',
+  createChunkOffsetDataHandler({
+    chunkSource,
+    txOffsetSource,
+    rateLimiter,
+    paymentProcessor,
+    log: log.child({ class: 'ChunkGetOffsetDataHandler' }),
+  }),
+);
+
+chunkRouter.head(
+  '/chunk/:offset(\\d+)/data',
+  createChunkOffsetDataHandler({
+    chunkSource,
+    txOffsetSource,
+    rateLimiter,
+    paymentProcessor,
+    log: log.child({ class: 'ChunkHeadOffsetDataHandler' }),
   }),
 );
 

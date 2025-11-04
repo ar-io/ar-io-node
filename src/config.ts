@@ -439,6 +439,9 @@ export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
   '368640',
 );
 
+// Maximum raw chunk size (256 KiB) - used for raw binary chunk endpoint rate limiting
+export const MAX_CHUNK_SIZE = 256 * 1024;
+
 // Arweave network peer post success goal
 // setting to 0 means this behaviour is disabled.
 export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
