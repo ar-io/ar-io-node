@@ -1668,11 +1668,11 @@ paths:
               description: Absolute end offset in weave (exclusive, 0-based)
               schema:
                 type: integer
-            X-Arweave-Chunk-Tx-Start-Offset:
+            X-Arweave-Chunk-Relative-Start-Offset:
               description: Relative start offset within transaction (inclusive, 0-based)
               schema:
                 type: integer
-            X-Arweave-Chunk-Tx-End-Offset:
+            X-Arweave-Chunk-Relative-End-Offset:
               description: Relative end offset within transaction (exclusive, 0-based)
               schema:
                 type: integer
@@ -1683,7 +1683,7 @@ paths:
                 This header indicates where to start reading to get data at the requested offset.
               schema:
                 type: integer
-            X-Arweave-Chunk-Data-Size:
+            X-Arweave-Chunk-Tx-Data-Size:
               description: Total transaction data size in bytes
               schema:
                 type: integer
@@ -1779,11 +1779,11 @@ paths:
               description: Absolute end offset in weave (exclusive, 0-based)
               schema:
                 type: integer
-            X-Arweave-Chunk-Tx-Start-Offset:
+            X-Arweave-Chunk-Relative-Start-Offset:
               description: Relative start offset within transaction (inclusive, 0-based)
               schema:
                 type: integer
-            X-Arweave-Chunk-Tx-End-Offset:
+            X-Arweave-Chunk-Relative-End-Offset:
               description: Relative end offset within transaction (exclusive, 0-based)
               schema:
                 type: integer
@@ -1794,7 +1794,7 @@ paths:
                 This header indicates where to start reading to get data at the requested offset.
               schema:
                 type: integer
-            X-Arweave-Chunk-Data-Size:
+            X-Arweave-Chunk-Tx-Data-Size:
               description: Total transaction data size in bytes
               schema:
                 type: integer
