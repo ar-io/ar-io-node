@@ -287,6 +287,9 @@ export class ArIOChunkSource
               chunkResponse.data_path,
               'base64url',
             );
+            const txPathBuffer = chunkResponse.tx_path
+              ? Buffer.from(chunkResponse.tx_path, 'base64url')
+              : undefined;
 
             // Calculate hash for validation
             const crypto = await import('node:crypto');
@@ -326,7 +329,7 @@ export class ArIOChunkSource
               data_root: Buffer.from(params.dataRoot, 'base64url'),
               data_size: params.txSize,
               offset: params.relativeOffset,
-              tx_path: undefined, // Not provided by /chunk endpoint
+              tx_path: txPathBuffer,
               source: 'ar-io-network',
               sourceHost,
             };
