@@ -12,8 +12,10 @@ import {
   CHUNK_POST_ABORT_TIMEOUT_MS,
   CHUNK_POST_RESPONSE_TIMEOUT_MS,
   CHUNK_POST_MIN_SUCCESS_COUNT,
+  MAX_CHUNK_SIZE,
 } from '../../config.js';
 import { headerNames } from '../../constants.js';
+import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
 import { Chunk, ChunkByAnySource, TxOffsetSource } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
@@ -27,6 +29,7 @@ import {
   adjustRateLimitTokens,
 } from '../../handlers/data-handler-utils.js';
 import { handleIfNoneMatch, parseContentLength } from '../../lib/http-utils.js';
+import { parseDataPath } from '../../lib/merkle-path-parser.js';
 
 export const createChunkOffsetHandler = ({
   chunkSource,
@@ -317,6 +320,330 @@ export const createChunkOffsetHandler = ({
       span.recordException(error);
       span.setAttribute('http.status_code', 500);
       log.error('Unexpected error in chunk offset handler', {
+        message: error?.message,
+        stack: error?.stack,
+      });
+      response.status(500).send('Internal server error');
+    } finally {
+      span.end();
+    }
+  });
+};
+
+export const createChunkOffsetDataHandler = ({
+  chunkSource,
+  txOffsetSource,
+  rateLimiter,
+  paymentProcessor,
+  log,
+}: {
+  chunkSource: ChunkByAnySource;
+  txOffsetSource: TxOffsetSource;
+  rateLimiter?: RateLimiter;
+  paymentProcessor?: PaymentProcessor;
+  log: Logger;
+}) => {
+  return asyncHandler(async (request: Request, response: Response) => {
+    const span = tracer.startSpan('ChunkOffsetDataHandler.handle', {
+      attributes: {
+        'http.method': request.method,
+        'http.target': request.originalUrl,
+        'chunk.offset': request.params.offset,
+      },
+    });
+
+    try {
+      const offset = Number.parseInt(request.params.offset);
+
+      if (Number.isNaN(offset) || offset < 0) {
+        span.setAttribute('http.status_code', 400);
+        span.setAttribute('chunk.retrieval.error', 'invalid_offset');
+        response.status(400).send('Invalid offset');
+        return;
+      }
+
+      span.setAttribute('chunk.absolute_offset', offset);
+
+      // Extract request attributes for hop tracking
+      const requestAttributes = getRequestAttributes(request, response);
+
+      // === PAYMENT AND RATE LIMIT CHECK ===
+      // Only perform checks if at least one enforcement mechanism is configured
+      if (rateLimiter !== undefined || paymentProcessor !== undefined) {
+        // For HEAD requests, use zero tokens since no body is sent
+        // For GET requests, use raw chunk size (not base64 encoded)
+        // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
+        // responses for chunks before fetching, since we don't have the chunk hash
+        // until after retrieval. This means some GET requests with If-None-Match
+        // that would return 304 might be charged/denied upfront. Tokens are adjusted
+        // to zero in the finish handler if 304 is returned.
+        const contentSize = request.method === 'HEAD' ? 0 : MAX_CHUNK_SIZE;
+
+        const limitCheck = await checkPaymentAndRateLimits({
+          req: request,
+          res: response,
+          // id is omitted - will be added to logs after txResult fetch
+          contentSize,
+          contentType: undefined, // Chunks don't have content type
+          requestAttributes,
+          rateLimiter,
+          paymentProcessor,
+          parentSpan: span,
+        });
+
+        if (!limitCheck.allowed) {
+          // Payment required (402) or rate limit exceeded (429) response already sent
+          return;
+        }
+
+        // Schedule token adjustment based on actual response size
+        if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
+          response.on('finish', () => {
+            // Calculate actual response size based on status code
+            let actualSize = 0;
+            if (response.statusCode === 304 || request.method === 'HEAD') {
+              // 304 Not Modified or HEAD request - no body sent
+              // Note: adjustTokens will still consume minimum 1 token to prevent spam
+              actualSize = 0;
+            } else if (response.statusCode === 200) {
+              // GET request with body - use actual chunk size from headers
+              const headers = {
+                'content-length': response.getHeader('content-length'),
+              };
+              const contentLength = parseContentLength(headers);
+              if (contentLength !== undefined) {
+                actualSize = contentLength;
+              }
+            }
+
+            adjustRateLimitTokens({
+              req: request,
+              responseSize: actualSize,
+              initialResult: limitCheck,
+              rateLimiter,
+            });
+          });
+        }
+      }
+
+      // Get transaction info using composite source (database with chain fallback)
+      let txResult;
+      try {
+        txResult = await txOffsetSource.getTxByOffset(offset);
+      } catch (error: any) {
+        log.debug('Transaction offset lookup failed', {
+          offset,
+          error: error.message,
+        });
+        span.setAttribute('http.status_code', 404);
+        span.setAttribute('chunk.retrieval.error', 'offset_lookup_failed');
+        response.sendStatus(404);
+        return;
+      }
+
+      const { data_root, id, data_size, offset: weaveOffset } = txResult;
+
+      // Check if result is valid
+      if (
+        data_root === undefined ||
+        weaveOffset === undefined ||
+        id === undefined ||
+        data_size === undefined
+      ) {
+        span.setAttribute('http.status_code', 404);
+        span.setAttribute('chunk.retrieval.error', 'tx_not_found');
+        span.addEvent('Transaction not found');
+        response.sendStatus(404);
+        return;
+      }
+
+      const finalDataRoot = data_root;
+      const finalId = id;
+      const finalDataSize = data_size;
+      const finalWeaveOffset = weaveOffset;
+
+      // Calculate the relative offset, needed for chunk data source
+      const contiguousDataStartDelimiter = finalWeaveOffset - finalDataSize + 1;
+      const relativeOffset = offset - contiguousDataStartDelimiter;
+
+      span.setAttributes({
+        'chunk.tx_id': finalId,
+        'chunk.data_root': finalDataRoot,
+        'chunk.data_size': finalDataSize,
+        'chunk.weave_offset': finalWeaveOffset,
+        'chunk.relative_offset': relativeOffset,
+      });
+
+      // composite-chunk-source returns chunk metadata and chunk data
+      let chunk: Chunk | undefined = undefined;
+
+      // actually fetch the chunk data
+      span.addEvent('Starting chunk retrieval');
+      const chunkRetrievalStart = Date.now();
+
+      try {
+        chunk = await chunkSource.getChunkByAny({
+          txSize: finalDataSize,
+          absoluteOffset: offset,
+          dataRoot: finalDataRoot,
+          relativeOffset,
+          requestAttributes,
+        });
+      } catch (error: any) {
+        const retrievalDuration = Date.now() - chunkRetrievalStart;
+        span.setAttributes({
+          'http.status_code': 404,
+          'chunk.retrieval.error': 'fetch_failed',
+          'chunk.retrieval.duration_ms': retrievalDuration,
+        });
+        span.recordException(error);
+        response.sendStatus(404);
+        return;
+      }
+
+      const retrievalDuration = Date.now() - chunkRetrievalStart;
+      span.setAttribute('chunk.retrieval.duration_ms', retrievalDuration);
+
+      if (chunk === undefined) {
+        span.setAttribute('http.status_code', 404);
+        span.setAttribute('chunk.retrieval.error', 'chunk_undefined');
+        response.sendStatus(404);
+        return;
+      }
+
+      span.addEvent('Chunk retrieval successful');
+
+      // Track chunk source information
+      if (chunk.source !== undefined) {
+        span.setAttribute('chunk.source', chunk.source);
+      }
+      if (chunk.sourceHost !== undefined) {
+        span.setAttribute('chunk.source_host', chunk.sourceHost);
+      }
+
+      // Parse merkle path to extract chunk boundaries
+      let parsed;
+      try {
+        parsed = await parseDataPath({
+          dataRoot: Buffer.from(finalDataRoot, 'base64url'),
+          dataSize: finalDataSize,
+          dataPath: chunk.data_path,
+          offset: relativeOffset,
+        });
+      } catch (error: any) {
+        span.setAttribute('http.status_code', 500);
+        span.setAttribute('chunk.retrieval.error', 'merkle_path_parse_failed');
+        span.recordException(error);
+        log.error('Error parsing merkle path', { error });
+        response.status(500).send('Error parsing merkle path');
+        return;
+      }
+
+      const { startOffset, endOffset, chunkSize } = parsed.boundaries;
+
+      // Calculate absolute offsets in the weave
+      const absoluteStartOffset = contiguousDataStartDelimiter + startOffset;
+      const absoluteEndOffset = contiguousDataStartDelimiter + endOffset;
+
+      // Calculate read offset within the returned chunk
+      const readOffset = relativeOffset - startOffset;
+
+      span.setAttributes({
+        'chunk.start_offset': absoluteStartOffset,
+        'chunk.end_offset': absoluteEndOffset,
+        'chunk.tx_start_offset': startOffset,
+        'chunk.tx_end_offset': endOffset,
+        'chunk.read_offset': readOffset,
+        'chunk.size': chunkSize,
+      });
+
+      // Set content type for raw binary data
+      response.setHeader('Content-Type', 'application/octet-stream');
+      response.setHeader('Content-Length', chunk.chunk.length.toString());
+
+      // Set chunk metadata headers
+      response.setHeader(headerNames.chunkDataPath, toB64Url(chunk.data_path));
+      response.setHeader(headerNames.chunkDataRoot, toB64Url(chunk.data_root));
+      response.setHeader(
+        headerNames.chunkStartOffset,
+        absoluteStartOffset.toString(),
+      );
+      response.setHeader(
+        headerNames.chunkEndOffset,
+        absoluteEndOffset.toString(),
+      );
+      response.setHeader(
+        headerNames.chunkTxStartOffset,
+        startOffset.toString(),
+      );
+      response.setHeader(headerNames.chunkTxEndOffset, endOffset.toString());
+      response.setHeader(headerNames.chunkReadOffset, readOffset.toString());
+      response.setHeader(headerNames.chunkDataSize, finalDataSize.toString());
+      response.setHeader(headerNames.chunkSize, chunkSize.toString());
+
+      // Set tx_path header if available
+      if (chunk.tx_path !== undefined) {
+        response.setHeader(headerNames.chunkTxPath, toB64Url(chunk.tx_path));
+      } else {
+        response.setHeader(headerNames.chunkTxPath, '');
+      }
+
+      // Add source tracking headers
+      if (chunk.source !== undefined && chunk.source !== '') {
+        response.setHeader(headerNames.chunkSourceType, chunk.source);
+      }
+      if (chunk.sourceHost !== undefined && chunk.sourceHost !== '') {
+        response.setHeader(headerNames.chunkHost, chunk.sourceHost);
+      }
+
+      // Set cache status header
+      const cacheStatus = chunk.source === 'cache' ? 'HIT' : 'MISS';
+      response.setHeader(headerNames.cache, cacheStatus);
+      span.setAttribute('chunk.cache_status', cacheStatus);
+
+      // Add ETag and Content-Digest headers when hash is available
+      // Only add when data is cached OR it's a HEAD request (to prevent incorrect hashes on streamed data)
+      if (
+        chunk.hash !== undefined &&
+        (chunk.source === 'cache' || request.method === 'HEAD')
+      ) {
+        const hashString = toB64Url(chunk.hash);
+        response.setHeader('ETag', `"${hashString}"`);
+        response.setHeader(
+          headerNames.contentDigest,
+          formatContentDigest(hashString),
+        );
+        span.setAttribute('chunk.hash', hashString);
+      }
+
+      // Handle conditional requests (If-None-Match)
+      if (handleIfNoneMatch(request, response)) {
+        span.setAttribute('http.status_code', 304);
+        span.addEvent('Conditional request - not modified');
+        response.end();
+        return;
+      }
+
+      span.setAttributes({
+        'http.status_code': 200,
+        'chunk.raw_size': chunk.chunk.length,
+      });
+
+      // Handle HEAD request - return headers only, no body
+      if (request.method === 'HEAD') {
+        span.addEvent('HEAD request - headers only');
+        response.status(200).end();
+        return;
+      }
+
+      span.addEvent('Chunk response successful');
+
+      // Send the raw binary chunk data
+      response.status(200).send(chunk.chunk);
+    } catch (error: any) {
+      span.recordException(error);
+      span.setAttribute('http.status_code', 500);
+      log.error('Unexpected error in chunk offset data handler', {
         message: error?.message,
         stack: error?.stack,
       });

@@ -1617,6 +1617,227 @@ paths:
         '404':
           description: Chunk not found
 
+  '/chunk/{offset}/data':
+    get:
+      tags: [Chunks]
+      summary: Get chunk as raw binary data with metadata in headers.
+      description: |-
+        Fetches chunk data as raw binary (application/octet-stream) with metadata in response headers.
+        This endpoint provides ~40% bandwidth savings compared to the base64url-encoded JSON endpoint.
+        Chunk boundaries are determined by Arweave's merkle tree structure (256 KiB blocks).
+        Use the X-Arweave-Chunk-Read-Offset header to determine where to start reading within the returned chunk.
+      parameters:
+        - name: offset
+          in: path
+          required: true
+          description: Absolute offset in the weave (0-based byte position)
+          schema:
+            type: integer
+        - name: If-None-Match
+          in: header
+          required: false
+          description: ETag value for conditional request. Returns 304 if chunk hash matches.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw binary chunk data with metadata in headers
+          headers:
+            Content-Type:
+              description: Media type of the response
+              schema:
+                type: string
+                example: application/octet-stream
+            Content-Length:
+              description: Size of the raw chunk in bytes
+              schema:
+                type: integer
+            X-Arweave-Chunk-Data-Path:
+              description: Base64url-encoded merkle proof path
+              schema:
+                type: string
+            X-Arweave-Chunk-Data-Root:
+              description: Base64url-encoded merkle tree root hash
+              schema:
+                type: string
+            X-Arweave-Chunk-Start-Offset:
+              description: Absolute start offset in weave (inclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-End-Offset:
+              description: Absolute end offset in weave (exclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Start-Offset:
+              description: Relative start offset within transaction (inclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-End-Offset:
+              description: Relative end offset within transaction (exclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Read-Offset:
+              description: |-
+                0-based position to start reading within returned chunk.
+                When requesting an arbitrary offset, the full chunk containing that offset is returned.
+                This header indicates where to start reading to get data at the requested offset.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Data-Size:
+              description: Total transaction data size in bytes
+              schema:
+                type: integer
+            X-Arweave-Chunk-Size:
+              description: This chunk size in bytes (endOffset - startOffset)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Path:
+              description: Base64url-encoded transaction-level merkle path (empty if not available)
+              schema:
+                type: string
+            X-Cache:
+              description: Cache status (HIT or MISS)
+              schema:
+                type: string
+                enum: [HIT, MISS]
+            X-AR-IO-Chunk-Source-Type:
+              description: Source type of the chunk data
+              schema:
+                type: string
+                example: cache
+            X-AR-IO-Chunk-Source-Host:
+              description: Host that provided the chunk
+              schema:
+                type: string
+            ETag:
+              description: Strong ETag based on chunk hash (when available from cached chunks)
+              schema:
+                type: string
+            Content-Digest:
+              description: RFC 9530 format SHA-256 hash of chunk data (when cached or HEAD request)
+              schema:
+                type: string
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '304':
+          description: Not Modified - chunk hash matches If-None-Match header
+        '400':
+          description: Invalid offset parameter
+        '404':
+          description: Chunk not found
+        '500':
+          description: Internal server error (e.g., merkle path parsing failed)
+    head:
+      tags: [Chunks]
+      summary: Get chunk metadata without body.
+      description: |-
+        Returns the same headers as GET but without the response body.
+        Useful for checking chunk existence and getting metadata including chunk boundaries and read offset.
+      parameters:
+        - name: offset
+          in: path
+          required: true
+          description: Absolute offset in the weave (0-based byte position)
+          schema:
+            type: integer
+        - name: If-None-Match
+          in: header
+          required: false
+          description: ETag value for conditional request. Returns 304 if chunk hash matches.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Chunk metadata in headers only
+          headers:
+            Content-Type:
+              description: Media type of the response (if body were returned)
+              schema:
+                type: string
+                example: application/octet-stream
+            Content-Length:
+              description: Size of the raw chunk in bytes
+              schema:
+                type: integer
+            X-Arweave-Chunk-Data-Path:
+              description: Base64url-encoded merkle proof path
+              schema:
+                type: string
+            X-Arweave-Chunk-Data-Root:
+              description: Base64url-encoded merkle tree root hash
+              schema:
+                type: string
+            X-Arweave-Chunk-Start-Offset:
+              description: Absolute start offset in weave (inclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-End-Offset:
+              description: Absolute end offset in weave (exclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Start-Offset:
+              description: Relative start offset within transaction (inclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-End-Offset:
+              description: Relative end offset within transaction (exclusive, 0-based)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Read-Offset:
+              description: |-
+                0-based position to start reading within returned chunk.
+                When requesting an arbitrary offset, the full chunk containing that offset is returned.
+                This header indicates where to start reading to get data at the requested offset.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Data-Size:
+              description: Total transaction data size in bytes
+              schema:
+                type: integer
+            X-Arweave-Chunk-Size:
+              description: This chunk size in bytes (endOffset - startOffset)
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Path:
+              description: Base64url-encoded transaction-level merkle path (empty if not available)
+              schema:
+                type: string
+            X-Cache:
+              description: Cache status (HIT or MISS)
+              schema:
+                type: string
+                enum: [HIT, MISS]
+            X-AR-IO-Chunk-Source-Type:
+              description: Source type of the chunk data
+              schema:
+                type: string
+                example: cache
+            X-AR-IO-Chunk-Source-Host:
+              description: Host that provided the chunk
+              schema:
+                type: string
+            ETag:
+              description: Strong ETag based on chunk hash (when available from cached chunks)
+              schema:
+                type: string
+            Content-Digest:
+              description: RFC 9530 format SHA-256 hash of chunk data (when cached or HEAD request)
+              schema:
+                type: string
+                example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
+        '304':
+          description: Not Modified - chunk hash matches If-None-Match header
+        '400':
+          description: Invalid offset parameter
+        '404':
+          description: Chunk not found
+        '500':
+          description: Internal server error (e.g., merkle path parsing failed)
+
   # Index
   '/graphql':
     post:
