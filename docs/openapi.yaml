@@ -1661,19 +1661,13 @@ paths:
               schema:
                 type: string
             X-Arweave-Chunk-Start-Offset:
-              description: Absolute start offset in weave (inclusive, 0-based)
-              schema:
-                type: integer
-            X-Arweave-Chunk-End-Offset:
-              description: Absolute end offset in weave (exclusive, 0-based)
+              description: |-
+                Absolute start offset in weave (inclusive, 0-based).
+                To calculate end offset: startOffset + (X-Arweave-Chunk-Size).
               schema:
                 type: integer
             X-Arweave-Chunk-Relative-Start-Offset:
               description: Relative start offset within transaction (inclusive, 0-based)
-              schema:
-                type: integer
-            X-Arweave-Chunk-Relative-End-Offset:
-              description: Relative end offset within transaction (exclusive, 0-based)
               schema:
                 type: integer
             X-Arweave-Chunk-Read-Offset:
@@ -1700,11 +1694,9 @@ paths:
               schema:
                 type: string
             X-Arweave-Chunk-Tx-Start-Offset:
-              description: Absolute start offset of the transaction in the weave (inclusive, 0-based)
-              schema:
-                type: integer
-            X-Arweave-Chunk-Tx-End-Offset:
-              description: Absolute end offset of the transaction in the weave (inclusive, 0-based)
+              description: |-
+                Absolute start offset of the transaction in the weave (inclusive, 0-based).
+                To calculate transaction end offset: txStartOffset + (X-Arweave-Chunk-Tx-Data-Size).
               schema:
                 type: integer
             X-Cache:
@@ -1784,19 +1776,13 @@ paths:
               schema:
                 type: string
             X-Arweave-Chunk-Start-Offset:
-              description: Absolute start offset in weave (inclusive, 0-based)
-              schema:
-                type: integer
-            X-Arweave-Chunk-End-Offset:
-              description: Absolute end offset in weave (exclusive, 0-based)
+              description: |-
+                Absolute start offset in weave (inclusive, 0-based).
+                To calculate end offset: startOffset + (X-Arweave-Chunk-Size).
               schema:
                 type: integer
             X-Arweave-Chunk-Relative-Start-Offset:
               description: Relative start offset within transaction (inclusive, 0-based)
-              schema:
-                type: integer
-            X-Arweave-Chunk-Relative-End-Offset:
-              description: Relative end offset within transaction (exclusive, 0-based)
               schema:
                 type: integer
             X-Arweave-Chunk-Read-Offset:
@@ -1823,11 +1809,9 @@ paths:
               schema:
                 type: string
             X-Arweave-Chunk-Tx-Start-Offset:
-              description: Absolute start offset of the transaction in the weave (inclusive, 0-based)
-              schema:
-                type: integer
-            X-Arweave-Chunk-Tx-End-Offset:
-              description: Absolute end offset of the transaction in the weave (inclusive, 0-based)
+              description: |-
+                Absolute start offset of the transaction in the weave (inclusive, 0-based).
+                To calculate transaction end offset: txStartOffset + (X-Arweave-Chunk-Tx-Data-Size).
               schema:
                 type: integer
             X-Cache:
