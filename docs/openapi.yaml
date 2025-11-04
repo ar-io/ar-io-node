@@ -1695,6 +1695,10 @@ paths:
               description: Base64url-encoded transaction-level merkle path (empty if not available)
               schema:
                 type: string
+            X-Arweave-Chunk-Tx-Id:
+              description: The Arweave transaction ID containing this chunk
+              schema:
+                type: string
             X-Cache:
               description: Cache status (HIT or MISS)
               schema:
@@ -1804,6 +1808,10 @@ paths:
                 type: integer
             X-Arweave-Chunk-Tx-Path:
               description: Base64url-encoded transaction-level merkle path (empty if not available)
+              schema:
+                type: string
+            X-Arweave-Chunk-Tx-Id:
+              description: The Arweave transaction ID containing this chunk
               schema:
                 type: string
             X-Cache:
