@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Transaction ID Header for Chunk Endpoint**: Added `X-Arweave-Chunk-Tx-Id` header to `/chunk/<offset>/data` responses containing the Arweave transaction ID for the chunk
+
 ### Changed
 
 ### Fixed
