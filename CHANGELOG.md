@@ -20,8 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Removed End Offset Headers from Chunk Endpoint**: Removed `X-Arweave-Chunk-End-Offset`, `X-Arweave-Chunk-Relative-End-Offset`, and `X-Arweave-Chunk-Tx-End-Offset` headers. Users should calculate end offsets from start offsets and sizes instead. This eliminates confusion around inclusive vs. exclusive end offset conventions
-- **Transaction-Level Merkle Path Support**: The `/chunk/<offset>` endpoint now includes `tx_path` in responses when available, providing transaction-level merkle proofs
+- **Transaction-Level Merkle Path Support**: The `/chunk/<offset>` endpoint now includes `tx_path` in JSON responses when available (both GET and HEAD requests), providing transaction-level merkle proofs
 
 ### Documentation
 
