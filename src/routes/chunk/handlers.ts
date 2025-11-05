@@ -381,8 +381,9 @@ export const createChunkOffsetHandler = ({
  * - `ETag`: Base64url chunk hash (only for cached data or HEAD requests)
  * - `Content-Digest`: RFC 9530 format SHA-256 hash (only for cached data or HEAD requests)
  *
- * End offsets can be calculated as: `start_offset + chunk_size - 1` (inclusive) or
- * `start_offset + chunk_size` (exclusive).
+ * End offsets can be calculated from Content-Length:
+ * - Exclusive: `start_offset + Content-Length`
+ * - Inclusive: `start_offset + Content-Length - 1`
  *
  * Supports conditional requests via `If-None-Match` header, returning 304 Not Modified when
  * the ETag matches.
