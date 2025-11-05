@@ -556,20 +556,17 @@ export const createChunkOffsetDataHandler = ({
         return;
       }
 
-      const { startOffset, endOffset, chunkSize } = parsed.boundaries;
+      const { startOffset, chunkSize } = parsed.boundaries;
 
       // Calculate absolute offsets in the weave
       const absoluteStartOffset = contiguousDataStartDelimiter + startOffset;
-      const absoluteEndOffset = contiguousDataStartDelimiter + endOffset;
 
       // Calculate read offset within the returned chunk
       const readOffset = relativeOffset - startOffset;
 
       span.setAttributes({
         'chunk.start_offset': absoluteStartOffset,
-        'chunk.end_offset': absoluteEndOffset,
         'chunk.tx_start_offset': startOffset,
-        'chunk.tx_end_offset': endOffset,
         'chunk.read_offset': readOffset,
         'chunk.size': chunkSize,
       });
