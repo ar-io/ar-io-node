@@ -437,7 +437,50 @@ async function parseRebasingPrefix(
 }
 
 /**
- * Parse a data_path to extract chunk boundaries with full Arweave validation
+ * Parses an Arweave merkle path (data_path) to extract chunk boundaries and validate the proof.
+ *
+ * The merkle path encodes the position and size of a chunk within a transaction using a series
+ * of merkle tree nodes. This function traverses the path, validates the cryptographic proof,
+ * and returns the chunk's boundaries (start offset, end offset, and size).
+ *
+ * @param params - Parsing parameters
+ * @param params.dataRoot - The merkle tree root hash for the transaction
+ * @param params.dataSize - Total size of the transaction data in bytes
+ * @param params.dataPath - The merkle proof path (data_path) to parse
+ * @param params.offset - The absolute offset being requested (used for validation ruleset selection)
+ * @param params.ruleset - Optional validation ruleset (defaults to ruleset based on offset)
+ *
+ * @returns Parsed data path containing chunk boundaries, normalized proof, and validation status
+ *
+ * @remarks
+ * The returned `ParsedDataPath` contains:
+ * - `boundaries.startOffset` - Inclusive start byte position within the transaction (0-based)
+ * - `boundaries.endOffset` - Exclusive end byte position within the transaction
+ * - `boundaries.chunkSize` - Size of the chunk in bytes (endOffset - startOffset)
+ * - `boundaries.isRebased` - Whether the path contains rebasing prefixes
+ * - `boundaries.rebaseDepth` - Number of rebasing levels in the path
+ * - `proof` - Normalized merkle proof with rebasing processed
+ * - `validated` - Whether the proof was cryptographically validated
+ * - `chunkData` - SHA-256 hash of the actual chunk data
+ *
+ * These boundaries are used to populate the chunk data endpoint headers:
+ * - `X-Arweave-Chunk-Relative-Start-Offset` uses `startOffset`
+ * - Chunk size can be calculated as `endOffset - startOffset`
+ *
+ * Validation rulesets ensure Arweave consensus rules are enforced based on the weave offset.
+ *
+ * @example
+ * ```typescript
+ * const parsed = await parseDataPath({
+ *   dataRoot: Buffer.from(txDataRoot),
+ *   dataSize: 262144,
+ *   dataPath: Buffer.from(merklePathData),
+ *   offset: 1000000
+ * });
+ *
+ * console.log(`Chunk: bytes ${parsed.boundaries.startOffset}-${parsed.boundaries.endOffset}`);
+ * console.log(`Size: ${parsed.boundaries.chunkSize} bytes`);
+ * ```
  */
 export async function parseDataPath(params: {
   dataRoot: Buffer;

@@ -8,11 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Transaction ID and Start Offset Headers for Chunk Endpoint**: Added `X-Arweave-Chunk-Tx-Id` and `X-Arweave-Chunk-Tx-Start-Offset` headers to `/chunk/<offset>/data` responses. End offsets are not provided - users can calculate them from start offset + size (e.g., `txEndOffset = txStartOffset + txDataSize`). This approach eliminates inclusive/exclusive end offset confusion
+- **Raw Binary Chunk Data Endpoint**: New `/chunk/<offset>/data` endpoint returns raw binary chunk data (`application/octet-stream`) with metadata in response headers instead of base64url-encoded JSON
+  - Provides ~40% bandwidth savings compared to the base64url-encoded `/chunk/<offset>` endpoint
+  - Supports both GET and HEAD requests
+  - Returns comprehensive metadata in headers including merkle proofs, offsets, transaction info, and cache status
+  - Includes `X-Arweave-Chunk-Read-Offset` header to indicate where to start reading within the returned chunk
+  - Includes `X-Arweave-Chunk-Tx-Id` and `X-Arweave-Chunk-Tx-Start-Offset` headers for transaction tracking
+  - Supports ETag-based conditional requests (304 Not Modified)
+  - Supports Content-Digest header (RFC 9530) for data integrity verification
+  - Rate limited at 256 KiB (raw chunk size) vs. 360 KiB for base64url endpoint, resulting in lower per-chunk fees
 
 ### Changed
 
 - **Removed End Offset Headers from Chunk Endpoint**: Removed `X-Arweave-Chunk-End-Offset`, `X-Arweave-Chunk-Relative-End-Offset`, and `X-Arweave-Chunk-Tx-End-Offset` headers. Users should calculate end offsets from start offsets and sizes instead. This eliminates confusion around inclusive vs. exclusive end offset conventions
+- **Transaction-Level Merkle Path Support**: The `/chunk/<offset>` endpoint now includes `tx_path` in responses when available, providing transaction-level merkle proofs
+
+### Documentation
+
+- Updated OpenAPI specification with comprehensive documentation for new `/chunk/<offset>/data` endpoint (GET and HEAD methods)
+- Updated rate limiting documentation to include both chunk endpoint pricing models
+- Updated glossary to reference both chunk endpoint formats
 
 ### Fixed
 
