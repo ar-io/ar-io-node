@@ -472,4 +472,127 @@ export class RedisRateLimiter implements RateLimiter {
       });
     }
   }
+
+  /**
+   * Get IP bucket state without modifying it
+   */
+  public async getIpBucketState(ip: string): Promise<{
+    ip: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const ipKey = `rl:ip:${ip}`;
+
+    try {
+      const bucket = await this.redisClient.getBucketState(ipKey);
+      if (!bucket) {
+        return null;
+      }
+
+      return {
+        ip,
+        tokens: bucket.tokens,
+        paidTokens: bucket.paidTokens,
+        capacity: bucket.capacity,
+        refillRate: bucket.refillRate,
+        lastRefill: bucket.lastRefill,
+      };
+    } catch (error) {
+      this.log.error('Failed to get IP bucket state', {
+        error: error instanceof Error ? error.message : String(error),
+        ipKey,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get resource bucket state without modifying it
+   */
+  public async getResourceBucketState(
+    method: string,
+    host: string,
+    path: string,
+  ): Promise<{
+    method: string;
+    host: string;
+    path: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const resourceTag = `rl:${method}:${host}:${path}`;
+    const resourceKey = `{${resourceTag}}:resource`;
+
+    try {
+      const bucket = await this.redisClient.getBucketState(resourceKey);
+      if (!bucket) {
+        return null;
+      }
+
+      return {
+        method,
+        host,
+        path,
+        tokens: bucket.tokens,
+        paidTokens: bucket.paidTokens,
+        capacity: bucket.capacity,
+        refillRate: bucket.refillRate,
+        lastRefill: bucket.lastRefill,
+      };
+    } catch (error) {
+      this.log.error('Failed to get resource bucket state', {
+        error: error instanceof Error ? error.message : String(error),
+        resourceKey,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Top off resource bucket with paid tokens
+   */
+  public async topOffPaidTokensForResource(
+    method: string,
+    host: string,
+    path: string,
+    tokens: number,
+  ): Promise<void> {
+    const resourceTag = `rl:${method}:${host}:${path}`;
+    const resourceKey = `{${resourceTag}}:resource`;
+    const now = Date.now();
+
+    try {
+      // Apply capacity multiplier to match IP bucket behavior
+      const tokensWithMultiplier = tokens * this.config.capacityMultiplier;
+
+      const result = await this.redisClient.addPaidTokens(
+        resourceKey,
+        this.config.resourceCapacity,
+        this.config.resourceRefillRate,
+        now,
+        this.config.cacheTtlSeconds,
+        tokensWithMultiplier,
+      );
+
+      this.log.debug('Topped off resource bucket with paid tokens', {
+        key: resourceKey,
+        tokensInput: tokens,
+        capacityMultiplier: this.config.capacityMultiplier,
+        paidTokensAdded: tokensWithMultiplier,
+        totalPaidTokens: result.bucket.paidTokens,
+      });
+    } catch (error) {
+      this.log.error('Failed to top off paid tokens for resource', {
+        error: error instanceof Error ? error.message : String(error),
+        resourceKey,
+      });
+      throw error;
+    }
+  }
 }

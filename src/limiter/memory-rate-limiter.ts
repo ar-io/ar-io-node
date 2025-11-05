@@ -518,4 +518,121 @@ export class MemoryRateLimiter implements RateLimiter {
       totalPaidTokens: ipBucket.paidTokens,
     });
   }
+
+  /**
+   * Get IP bucket state without modifying it
+   */
+  public async getIpBucketState(ip: string): Promise<{
+    ip: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const ipKey = `rl:ip:${ip}`;
+    const bucket = this.buckets.get(ipKey);
+
+    if (!bucket) {
+      return null;
+    }
+
+    // Calculate refilled tokens without modifying bucket
+    const now = Date.now();
+    const elapsedSeconds = (now - bucket.lastRefill) / 1000;
+    const tokensToAdd = elapsedSeconds * bucket.refillRate;
+    const currentTokens = Math.min(
+      bucket.capacity,
+      bucket.tokens + tokensToAdd,
+    );
+
+    return {
+      ip,
+      tokens: currentTokens,
+      paidTokens: bucket.paidTokens,
+      capacity: bucket.capacity,
+      refillRate: bucket.refillRate,
+      lastRefill: bucket.lastRefill,
+    };
+  }
+
+  /**
+   * Get resource bucket state without modifying it
+   */
+  public async getResourceBucketState(
+    method: string,
+    host: string,
+    path: string,
+  ): Promise<{
+    method: string;
+    host: string;
+    path: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const resourceTag = `rl:${method}:${host}:${path}`;
+    const resourceKey = `{${resourceTag}}:resource`;
+    const bucket = this.buckets.get(resourceKey);
+
+    if (!bucket) {
+      return null;
+    }
+
+    // Calculate refilled tokens without modifying bucket
+    const now = Date.now();
+    const elapsedSeconds = (now - bucket.lastRefill) / 1000;
+    const tokensToAdd = elapsedSeconds * bucket.refillRate;
+    const currentTokens = Math.min(
+      bucket.capacity,
+      bucket.tokens + tokensToAdd,
+    );
+
+    return {
+      method,
+      host,
+      path,
+      tokens: currentTokens,
+      paidTokens: bucket.paidTokens,
+      capacity: bucket.capacity,
+      refillRate: bucket.refillRate,
+      lastRefill: bucket.lastRefill,
+    };
+  }
+
+  /**
+   * Top off resource bucket with paid tokens
+   */
+  public async topOffPaidTokensForResource(
+    method: string,
+    host: string,
+    path: string,
+    tokens: number,
+  ): Promise<void> {
+    const resourceTag = `rl:${method}:${host}:${path}`;
+    const resourceKey = `{${resourceTag}}:resource`;
+    const now = Date.now();
+
+    // Get or create resource bucket
+    const resourceBucket = this.getOrCreateBucket(
+      resourceKey,
+      this.config.resourceCapacity,
+      this.config.resourceRefillRate,
+      now,
+    );
+
+    // Apply capacity multiplier to match IP bucket behavior
+    const tokensWithMultiplier = tokens * this.config.capacityMultiplier;
+    resourceBucket.paidTokens += tokensWithMultiplier;
+
+    this.log.debug('Topped off resource bucket with paid tokens', {
+      key: resourceKey,
+      tokensInput: tokens,
+      capacityMultiplier: this.config.capacityMultiplier,
+      paidTokensAdded: tokensWithMultiplier,
+      totalPaidTokens: resourceBucket.paidTokens,
+    });
+  }
 }
