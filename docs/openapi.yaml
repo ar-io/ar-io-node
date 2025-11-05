@@ -65,6 +65,9 @@ tags:
   - name: Admin
     description: |
       Access several password protected features and functions specific to your AR.IO Gateway.
+  - name: Rate Limiting
+    description: |
+      Query and manage rate limit bucket balances. Supports both public balance queries and top-ups via x402 payments or admin authentication.
 components:
   securitySchemes:
     bearerAuth:
@@ -2489,6 +2492,523 @@ paths:
                 example: 'Invalid indexedAtThreshold - must be a positive integer'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  # Rate Limiting
+  '/ar-io/rate-limit/ip/{ip}':
+    get:
+      tags: [Rate Limiting]
+      summary: Query IP bucket balance
+      description: |
+        Get the current rate limit token balance for an IP address. Returns both regular
+        (refilling) and paid tokens. Buckets are created on first request and refill over time.
+
+        **Token System:**
+        - 1 token = 1 KiB (1,024 bytes)
+        - Regular tokens: Automatically refill based on configured rate (e.g., 20 KB/s)
+        - Paid tokens: Acquired via x402 payments, never refill, consumed after regular tokens
+      operationId: getRateLimitIpBalance
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+            format: ipv4 or ipv6
+          description: IP address (IPv4, IPv6, or IPv4-mapped IPv6 format)
+          example: '192.168.1.100'
+      responses:
+        '200':
+          description: Successfully retrieved IP bucket balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ip:
+                    type: string
+                    description: IP address
+                    example: '192.168.1.100'
+                  tokens:
+                    type: number
+                    description: Regular tokens (refilling)
+                    example: 95000
+                  paidTokens:
+                    type: number
+                    description: Paid tokens (non-refilling)
+                    example: 50000
+                  capacity:
+                    type: number
+                    description: Maximum regular token capacity
+                    example: 100000
+                  refillRate:
+                    type: number
+                    description: Refill rate in tokens per second
+                    example: 20
+                  lastRefill:
+                    type: number
+                    format: int64
+                    description: Last refill timestamp (Unix milliseconds)
+                    example: 1735689600000
+                required:
+                  - ip
+                  - tokens
+                  - paidTokens
+                  - capacity
+                  - refillRate
+                  - lastRefill
+        '400':
+          description: Invalid IP address format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Invalid IP address format'
+        '404':
+          description: Bucket not found (created on first request)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Bucket not found'
+                  message:
+                    type: string
+                    example: 'No rate limit bucket exists for this IP. Buckets are created on first request.'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Rate Limiting]
+      summary: Top up IP bucket
+      description: |
+        Add paid tokens to an IP bucket via x402 payment or admin authentication.
+
+        **Authentication Modes:**
+
+        1. **x402 Payment (Public):**
+           - Provide X-Payment header with payment data
+           - Tokens calculated from payment amount
+           - 10x capacity multiplier applied
+           - Example: $0.10 payment → ~976 KB equivalent → ~976,000 tokens
+
+        2. **Admin (Private/Testing):**
+           - Provide Authorization: Bearer header with admin API key
+           - Specify exact token count and type in request body
+           - No multiplier applied (raw token count)
+           - Only supports paid tokens currently
+      operationId: topUpRateLimitIpBucket
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+            format: ipv4 or ipv6
+          description: IP address
+          example: '192.168.1.100'
+        - name: X-Payment
+          in: header
+          required: false
+          schema:
+            type: string
+            format: base64
+          description: |
+            Base64-encoded x402 payment data (for x402 payment mode).
+            Mutually exclusive with Authorization header.
+      security:
+        - {}
+        - bearerAuth: []
+      requestBody:
+        description: |
+          Required for admin authentication mode. Omit for x402 payment mode.
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tokens:
+                  type: number
+                  minimum: 1
+                  description: Number of tokens to add (admin mode only)
+                  example: 50000
+                tokenType:
+                  type: string
+                  enum: [paid]
+                  description: Type of tokens (admin mode only, currently only "paid" supported)
+                  example: 'paid'
+              required:
+                - tokens
+                - tokenType
+      responses:
+        '200':
+          description: Successfully topped up IP bucket
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ip:
+                    type: string
+                    example: '192.168.1.100'
+                  tokens:
+                    type: number
+                    example: 95000
+                  paidTokens:
+                    type: number
+                    example: 150000
+                  capacity:
+                    type: number
+                    example: 100000
+                  refillRate:
+                    type: number
+                    example: 20
+                  lastRefill:
+                    type: number
+                    format: int64
+                    example: 1735689600000
+                  topUp:
+                    type: object
+                    description: Information about the top-up operation
+                    properties:
+                      tokensAdded:
+                        type: number
+                        description: Number of tokens added
+                        example: 100000
+                      paymentAmount:
+                        type: string
+                        description: Payment amount in USDC atomic units (x402 mode only)
+                        example: '1000000'
+                      multiplierApplied:
+                        type: number
+                        description: Capacity multiplier applied (10 for x402, 1 for admin)
+                        example: 10
+                      tokenType:
+                        type: string
+                        description: Type of tokens added (admin mode only)
+                        example: 'paid'
+                    required:
+                      - tokensAdded
+                      - multiplierApplied
+        '400':
+          description: Invalid IP format or invalid request body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Invalid tokens value'
+                  message:
+                    type: string
+                    example: 'tokens must be a positive number'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Unauthorized'
+                  message:
+                    type: string
+                    example: 'Provide X-Payment header for x402 payment or Authorization: Bearer header for admin access'
+        '402':
+          description: Payment verification or settlement failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Payment failed'
+                  message:
+                    type: string
+                    example: 'Payment verification failed: insufficient amount'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  '/ar-io/rate-limit/resource':
+    get:
+      tags: [Rate Limiting]
+      summary: Query resource bucket balance
+      description: |
+        Get the current rate limit token balance for a specific resource (method + host + path combination).
+        Useful for monitoring resource-specific usage.
+
+        **Smart Defaults:**
+        - `method`: Defaults to "GET" (most common)
+        - `host`: Defaults to current request's Host header
+        - `path`: Required parameter
+      operationId: getRateLimitResourceBalance
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Request path
+          example: '/TX_ID'
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+            default: GET
+          description: HTTP method
+          example: 'GET'
+        - name: host
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Host header (defaults to current request host)
+          example: 'gateway.example.com'
+      responses:
+        '200':
+          description: Successfully retrieved resource bucket balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  method:
+                    type: string
+                    example: 'GET'
+                  host:
+                    type: string
+                    example: 'gateway.example.com'
+                  path:
+                    type: string
+                    example: '/TX_ID'
+                  tokens:
+                    type: number
+                    description: Regular tokens (refilling)
+                    example: 980000
+                  paidTokens:
+                    type: number
+                    description: Paid tokens (non-refilling)
+                    example: 100000
+                  capacity:
+                    type: number
+                    description: Maximum regular token capacity
+                    example: 1000000
+                  refillRate:
+                    type: number
+                    description: Refill rate in tokens per second
+                    example: 100
+                  lastRefill:
+                    type: number
+                    format: int64
+                    description: Last refill timestamp (Unix milliseconds)
+                    example: 1735689600000
+                required:
+                  - method
+                  - host
+                  - path
+                  - tokens
+                  - paidTokens
+                  - capacity
+                  - refillRate
+                  - lastRefill
+        '400':
+          description: Missing path parameter or invalid method
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Missing required parameter: path'
+                  validMethods:
+                    type: array
+                    items:
+                      type: string
+                    example: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+        '404':
+          description: Bucket not found (created on first request)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Bucket not found'
+                  message:
+                    type: string
+                    example: 'No rate limit bucket exists for this resource. Buckets are created on first request.'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Rate Limiting]
+      summary: Top up resource bucket
+      description: |
+        Add paid tokens to a resource bucket via x402 payment or admin authentication.
+        Uses same authentication modes as IP bucket top-up.
+
+        **Resource Identification:**
+        - Combination of method + host + path uniquely identifies a resource bucket
+        - Smart defaults: method=GET, host=current request host
+      operationId: topUpRateLimitResourceBucket
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Request path
+          example: '/TX_ID'
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+            default: GET
+          description: HTTP method
+          example: 'GET'
+        - name: host
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Host header (defaults to current request host)
+          example: 'gateway.example.com'
+        - name: X-Payment
+          in: header
+          required: false
+          schema:
+            type: string
+            format: base64
+          description: Base64-encoded x402 payment data (for x402 payment mode)
+      security:
+        - {}
+        - bearerAuth: []
+      requestBody:
+        description: Required for admin authentication mode. Omit for x402 payment mode.
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tokens:
+                  type: number
+                  minimum: 1
+                  description: Number of tokens to add (admin mode only)
+                  example: 50000
+                tokenType:
+                  type: string
+                  enum: [paid]
+                  description: Type of tokens (admin mode only)
+                  example: 'paid'
+              required:
+                - tokens
+                - tokenType
+      responses:
+        '200':
+          description: Successfully topped up resource bucket
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  method:
+                    type: string
+                    example: 'GET'
+                  host:
+                    type: string
+                    example: 'gateway.example.com'
+                  path:
+                    type: string
+                    example: '/TX_ID'
+                  tokens:
+                    type: number
+                    example: 980000
+                  paidTokens:
+                    type: number
+                    example: 150000
+                  capacity:
+                    type: number
+                    example: 1000000
+                  refillRate:
+                    type: number
+                    example: 100
+                  lastRefill:
+                    type: number
+                    format: int64
+                    example: 1735689600000
+                  topUp:
+                    type: object
+                    properties:
+                      tokensAdded:
+                        type: number
+                        example: 100000
+                      paymentAmount:
+                        type: string
+                        example: '1000000'
+                      multiplierApplied:
+                        type: number
+                        example: 10
+                      tokenType:
+                        type: string
+                        example: 'paid'
+                    required:
+                      - tokensAdded
+                      - multiplierApplied
+        '400':
+          description: Missing parameters or invalid request body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Missing required parameter: path'
+                  validMethods:
+                    type: array
+                    items:
+                      type: string
+                    example: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Unauthorized'
+                  message:
+                    type: string
+                    example: 'Provide X-Payment header for x402 payment or Authorization: Bearer header for admin access'
+        '402':
+          description: Payment verification or settlement failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Payment failed'
+                  message:
+                    type: string
+                    example: 'Payment settlement failed: timeout'
         '500':
           $ref: '#/components/responses/ServerError'
 
