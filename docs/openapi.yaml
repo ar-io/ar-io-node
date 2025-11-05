@@ -540,6 +540,7 @@ paths:
         - ANS-104 filter configurations
         - Supported manifest versions
         - Gateway software release version
+        - Bundler service URLs for data upload service discovery
         - Rate limiter configuration (if enabled)
         - x402 payment protocol configuration (if enabled)
       responses:
@@ -570,6 +571,19 @@ paths:
                   release:
                     type: string
                     description: Gateway software release version
+                  bundlers:
+                    type: array
+                    description: List of bundler service URLs for data upload service discovery
+                    items:
+                      type: object
+                      properties:
+                        url:
+                          type: string
+                          format: uri
+                          description: Bundler service URL
+                          example: 'https://turbo.ardrive.io/'
+                      required:
+                        - url
                   rateLimiter:
                     type: object
                     description: Rate limiter configuration (only present when rate limiting is enabled)
@@ -734,6 +748,7 @@ paths:
                   - processId
                   - supportedManifestVersions
                   - release
+                  - bundlers
   '/ar-io/peers':
     get:
       tags: [Gateway]
