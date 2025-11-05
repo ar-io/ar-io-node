@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - **Transaction-Level Merkle Path Support**: The `/chunk/<offset>` endpoint now includes `tx_path` in JSON responses when available (both GET and HEAD requests), providing transaction-level merkle proofs
+- **Observer**: Updated to fcd0f36 - Doubled offset observation sample rate to 2% for improved network robustness (PE-8707)
 
 ### Documentation
 
