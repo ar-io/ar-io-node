@@ -355,7 +355,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
         urlToEncode = req.url || '';
       }
       const encodedUrl = Buffer.from(urlToEncode).toString('base64url');
-      const paywallUrl = `/ar-io/x402/redirect/${encodedUrl}`;
+      const paywallUrl = `/ar-io/x402/browser-paywall-redirect/${encodedUrl}`;
 
       const html = getPaywallHtml({
         amount: displayAmount,
