@@ -99,19 +99,11 @@ export function createX402Router({
     }
   });
 
-  // New primary endpoint (browser paywall redirect)
+  // Browser paywall redirect endpoint
   x402Router.get(
     '/ar-io/x402/browser-paywall-redirect/:encoded',
     redirectHandler,
   );
-
-  // Deprecated alias for backward compatibility
-  x402Router.get('/ar-io/x402/redirect/:encoded', (req, res, next) => {
-    log.warn(
-      'Using deprecated /ar-io/x402/redirect endpoint, use /ar-io/x402/browser-paywall-redirect instead',
-    );
-    redirectHandler(req, res, next);
-  });
 
   // Register payment middleware after redirect endpoint to avoid intercepting it
   if (config.X_402_USDC_WALLET_ADDRESS !== undefined) {
