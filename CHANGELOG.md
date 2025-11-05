@@ -17,6 +17,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Supports ETag-based conditional requests (304 Not Modified)
   - Supports Content-Digest header (RFC 9530) for data integrity verification
   - Rate limited at 256 KiB (raw chunk size) vs. 360 KiB for base64url endpoint, resulting in lower per-chunk fees
+- **Bundler Service Discovery**: The `/ar-io/info` endpoint now includes a `bundlers` field for client service discovery (PE-8709)
+  - Configurable via `BUNDLER_URLS` environment variable (comma-separated URLs)
+  - Defaults to `https://turbo.ardrive.io/`
+  - URLs are validated on startup with descriptive error messages
+  - Returns array of objects with `url` property
+  - Enables clients to discover available bundler services for data uploads
 
 ### Changed
 
