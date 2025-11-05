@@ -241,7 +241,8 @@ export function createRateLimitRouter({
           // For admin, we add tokens directly without multiplier
           // This is done by calling the top-off method with the tokens / multiplier
           // since the method applies the multiplier
-          const capacityMultiplier = 10; // Default from config
+          const capacityMultiplier =
+            config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
           const tokensToAdd =
             tokenType === 'paid' ? tokens / capacityMultiplier : tokens;
 
@@ -430,7 +431,8 @@ export function createRateLimitRouter({
           // For admin, we add tokens directly without multiplier
           // This is done by calling the top-off method with the tokens / multiplier
           // since the method applies the multiplier
-          const capacityMultiplier = 10; // Default from config
+          const capacityMultiplier =
+            config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
           const tokensToAdd =
             tokenType === 'paid' ? tokens / capacityMultiplier : tokens;
 
