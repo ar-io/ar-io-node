@@ -347,6 +347,46 @@ export const createChunkOffsetHandler = ({
   });
 };
 
+/**
+ * Creates a handler for the raw binary chunk data endpoint (GET/HEAD /chunk/:offset/data).
+ *
+ * This endpoint serves chunk data in raw binary format (application/octet-stream) instead of
+ * base64url-encoded JSON, providing approximately 40% bandwidth savings. All chunk metadata
+ * is provided via HTTP headers instead of a JSON response body.
+ *
+ * Rate limiting uses MAX_CHUNK_SIZE (256 KiB) instead of CHUNK_GET_BASE64_SIZE_BYTES (360 KiB)
+ * used by the base64 endpoint, reflecting the smaller response size.
+ *
+ * @param chunkSource - Source for retrieving chunk data
+ * @param txOffsetSource - Source for looking up transaction offset information
+ * @param rateLimiter - Optional rate limiter for request throttling
+ * @param paymentProcessor - Optional payment processor for x402 protocol
+ * @param log - Logger instance for request logging
+ *
+ * @returns Express route handler
+ *
+ * @remarks
+ * Response headers:
+ * - `Content-Type`: Always `application/octet-stream`
+ * - `Content-Length`: Size of the returned chunk in bytes
+ * - `X-Arweave-Chunk-Data-Path`: Base64url-encoded merkle proof path for the chunk
+ * - `X-Arweave-Chunk-Data-Root`: Base64url-encoded merkle tree root hash
+ * - `X-Arweave-Chunk-Start-Offset`: Absolute start offset in the weave (inclusive, 0-based)
+ * - `X-Arweave-Chunk-Relative-Start-Offset`: Relative start offset within the transaction
+ * - `X-Arweave-Chunk-Read-Offset`: Position to start reading within the returned chunk
+ * - `X-Arweave-Chunk-Tx-Data-Size`: Total transaction data size in bytes
+ * - `X-Arweave-Chunk-Tx-Id`: Transaction ID containing this chunk
+ * - `X-Arweave-Chunk-Tx-Start-Offset`: Absolute start offset of the transaction in the weave
+ * - `X-Arweave-Chunk-Tx-Path`: Base64url-encoded transaction-level merkle path (if available)
+ * - `ETag`: Base64url chunk hash (only for cached data or HEAD requests)
+ * - `Content-Digest`: RFC 9530 format SHA-256 hash (only for cached data or HEAD requests)
+ *
+ * End offsets can be calculated as: `start_offset + chunk_size - 1` (inclusive) or
+ * `start_offset + chunk_size` (exclusive).
+ *
+ * Supports conditional requests via `If-None-Match` header, returning 304 Not Modified when
+ * the ETag matches.
+ */
 export const createChunkOffsetDataHandler = ({
   chunkSource,
   txOffsetSource,
