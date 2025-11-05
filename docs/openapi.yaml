@@ -1663,7 +1663,7 @@ paths:
             X-Arweave-Chunk-Start-Offset:
               description: |-
                 Absolute start offset in weave (inclusive, 0-based).
-                To calculate end offset: startOffset + (X-Arweave-Chunk-Size).
+                To calculate end offset: startOffset + Content-Length.
               schema:
                 type: integer
             X-Arweave-Chunk-Relative-Start-Offset:
@@ -1679,10 +1679,6 @@ paths:
                 type: integer
             X-Arweave-Chunk-Tx-Data-Size:
               description: Total transaction data size in bytes
-              schema:
-                type: integer
-            X-Arweave-Chunk-Size:
-              description: This chunk size in bytes (endOffset - startOffset)
               schema:
                 type: integer
             X-Arweave-Chunk-Tx-Path:
@@ -1778,7 +1774,7 @@ paths:
             X-Arweave-Chunk-Start-Offset:
               description: |-
                 Absolute start offset in weave (inclusive, 0-based).
-                To calculate end offset: startOffset + (X-Arweave-Chunk-Size).
+                To calculate end offset: startOffset + Content-Length.
               schema:
                 type: integer
             X-Arweave-Chunk-Relative-Start-Offset:
@@ -1794,10 +1790,6 @@ paths:
                 type: integer
             X-Arweave-Chunk-Tx-Data-Size:
               description: Total transaction data size in bytes
-              schema:
-                type: integer
-            X-Arweave-Chunk-Size:
-              description: This chunk size in bytes (endOffset - startOffset)
               schema:
                 type: integer
             X-Arweave-Chunk-Tx-Path:

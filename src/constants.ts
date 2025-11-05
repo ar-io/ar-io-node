@@ -43,7 +43,6 @@ export const headerNames = {
   chunkRelativeStartOffset: 'X-Arweave-Chunk-Relative-Start-Offset',
   chunkReadOffset: 'X-Arweave-Chunk-Read-Offset',
   chunkTxDataSize: 'X-Arweave-Chunk-Tx-Data-Size',
-  chunkSize: 'X-Arweave-Chunk-Size',
   chunkTxPath: 'X-Arweave-Chunk-Tx-Path',
   chunkTxId: 'X-Arweave-Chunk-Tx-Id',
   chunkTxStartOffset: 'X-Arweave-Chunk-Tx-Start-Offset',
