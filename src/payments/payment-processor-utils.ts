@@ -59,6 +59,20 @@ export async function processPaymentAndTopUp(
       };
     }
 
+    // Validate target before processing payment
+    if (target.type === 'resource') {
+      if (
+        target.method === undefined ||
+        target.host === undefined ||
+        target.path === undefined
+      ) {
+        return {
+          success: false,
+          error: 'Resource top-up requires method, host, and path',
+        };
+      }
+    }
+
     // Calculate equivalent content size from payment amount
     let contentSize = contentSizeOverride ?? 0;
     if (
@@ -148,20 +162,11 @@ export async function processPaymentAndTopUp(
           tokensAdded = tokens * multiplierApplied;
         } else if (target.type === 'resource') {
           // For resource bucket, use new method with explicit params
-          if (
-            target.method === undefined ||
-            target.host === undefined ||
-            target.path === undefined
-          ) {
-            return {
-              success: false,
-              error: 'Resource top-up requires method, host, and path',
-            };
-          }
+          // Note: target validation already done at function entry
           await rateLimiter.topOffPaidTokensForResource(
-            target.method,
-            target.host,
-            target.path,
+            target.method!,
+            target.host!,
+            target.path!,
             tokens,
           );
           multiplierApplied = config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
