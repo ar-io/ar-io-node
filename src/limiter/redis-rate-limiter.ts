@@ -18,6 +18,12 @@ import {
   TokenAdjustmentContext,
 } from './types.js';
 import { rateLimitTokensConsumedTotal } from '../metrics.js';
+import {
+  getCanonicalPathFromRequest,
+  buildBucketKeys,
+  normalizeHost,
+  normalizePath,
+} from './utils.js';
 
 /**
  * Configuration options for Redis rate limiter
@@ -50,30 +56,6 @@ export class RedisRateLimiter implements RateLimiter {
   }
 
   /**
-   * Get canonical path from request
-   */
-  private getCanonicalPath(req: Request): string {
-    const full = `${req.baseUrl || ''}${req.path || ''}`;
-    const normalized = full === '' ? '/' : full.replace(/\/{2,}/g, '/');
-    return normalized.slice(0, 256);
-  }
-
-  /**
-   * Build bucket keys for resource and IP
-   */
-  private buildBucketKeys(
-    method: string,
-    path: string,
-    ip: string,
-    host: string,
-  ): { resourceKey: string; ipKey: string } {
-    return {
-      resourceKey: `rl:resource:${host}:${method}:${path}`,
-      ipKey: `rl:ip:${ip}`,
-    };
-  }
-
-  /**
    * Check IP allowlist
    */
   public isAllowlisted(clientIps: string[]): boolean {
@@ -94,12 +76,12 @@ export class RedisRateLimiter implements RateLimiter {
     contentLengthForTopOff = 0,
   ): Promise<RateLimitCheckResult> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { resourceKey, ipKey } = this.buildBucketKeys(
+    const { resourceKey, ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -430,12 +412,12 @@ export class RedisRateLimiter implements RateLimiter {
    */
   public async topOffPaidTokens(req: Request, tokens: number): Promise<void> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { ipKey } = this.buildBucketKeys(
+    const { ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -525,7 +507,9 @@ export class RedisRateLimiter implements RateLimiter {
     refillRate: number;
     lastRefill: number;
   } | null> {
-    const resourceKey = `rl:resource:${host}:${method}:${path}`;
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
 
     try {
       const bucket = await this.redisClient.getBucketState(resourceKey);
@@ -535,8 +519,8 @@ export class RedisRateLimiter implements RateLimiter {
 
       return {
         method,
-        host,
-        path,
+        host: normalizedHost,
+        path: normalizedPath,
         tokens: bucket.tokens,
         paidTokens: bucket.paidTokens,
         capacity: bucket.capacity,
@@ -561,7 +545,9 @@ export class RedisRateLimiter implements RateLimiter {
     path: string,
     tokens: number,
   ): Promise<void> {
-    const resourceKey = `rl:resource:${host}:${method}:${path}`;
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
     const now = Date.now();
 
     try {

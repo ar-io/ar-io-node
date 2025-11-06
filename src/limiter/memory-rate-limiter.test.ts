@@ -912,4 +912,173 @@ describe('MemoryRateLimiter', () => {
       assert.strictEqual(result.allowed, true);
     });
   });
+
+  describe('Resource key normalization consistency', () => {
+    it('should find bucket created by checkLimit using getResourceBucketState with repeated slashes', async () => {
+      // Create a request with repeated slashes in the path
+      const req = createMockRequest({
+        baseUrl: '',
+        path: '//api///users',
+        headers: { host: 'example.com' },
+      });
+      const res = createMockResponse();
+
+      // checkLimit should normalize the path and create a bucket
+      await limiter.checkLimit(req, res, 100);
+
+      // getResourceBucketState should find the bucket using raw path (which gets normalized internally)
+      const state = await limiter.getResourceBucketState(
+        'GET',
+        'example.com',
+        '//api///users',
+      );
+
+      assert.notStrictEqual(state, null);
+      assert.strictEqual(state?.method, 'GET');
+      assert.strictEqual(state?.host, 'example.com');
+      assert.strictEqual(state?.path, '/api/users'); // Should be normalized in response
+    });
+
+    it('should find bucket created by checkLimit using getResourceBucketState with long host', async () => {
+      const longHost = 'subdomain.' + 'a'.repeat(300) + '.example.com';
+      const req = createMockRequest({
+        path: '/api/users',
+        headers: { host: longHost },
+      });
+      const res = createMockResponse();
+
+      // checkLimit should trim the host
+      await limiter.checkLimit(req, res, 100);
+
+      // getResourceBucketState should find the bucket using raw host (which gets trimmed internally)
+      const state = await limiter.getResourceBucketState(
+        'GET',
+        longHost,
+        '/api/users',
+      );
+
+      assert.notStrictEqual(state, null);
+      assert.strictEqual(state?.host.length, 256); // Should be trimmed in response
+    });
+
+    it('should top-off the correct bucket created by checkLimit with repeated slashes', async () => {
+      const req = createMockRequest({
+        baseUrl: '',
+        path: '//api///data',
+        headers: { host: 'example.com' },
+      });
+      const res = createMockResponse();
+
+      // Create bucket and consume tokens
+      await limiter.checkLimit(req, res, 500);
+
+      // Get initial state
+      const stateBefore = await limiter.getResourceBucketState(
+        'GET',
+        'example.com',
+        '//api///data',
+      );
+
+      assert.notStrictEqual(stateBefore, null);
+      const paidTokensBefore = stateBefore!.paidTokens;
+
+      // Top off the bucket using raw path (which gets normalized internally)
+      await limiter.topOffPaidTokensForResource(
+        'GET',
+        'example.com',
+        '//api///data',
+        100,
+      );
+
+      // Verify the bucket was topped off
+      const stateAfter = await limiter.getResourceBucketState(
+        'GET',
+        'example.com',
+        '//api///data',
+      );
+
+      assert.notStrictEqual(stateAfter, null);
+      assert.strictEqual(
+        stateAfter!.paidTokens,
+        paidTokensBefore + 100 * limiter['config'].capacityMultiplier,
+      );
+    });
+
+    it('should top-off the correct bucket created by checkLimit with long path', async () => {
+      const longPath = '/' + 'p'.repeat(300);
+      const req = createMockRequest({
+        baseUrl: '',
+        path: longPath,
+        headers: { host: 'example.com' },
+      });
+      const res = createMockResponse();
+
+      // Create bucket
+      await limiter.checkLimit(req, res, 100);
+
+      // Get initial state
+      const stateBefore = await limiter.getResourceBucketState(
+        'GET',
+        'example.com',
+        longPath,
+      );
+
+      assert.notStrictEqual(stateBefore, null);
+      assert.strictEqual(stateBefore!.path.length, 256); // Should be trimmed
+
+      // Top off should work with the same long path
+      await limiter.topOffPaidTokensForResource(
+        'GET',
+        'example.com',
+        longPath,
+        50,
+      );
+
+      // Verify top-off worked
+      const stateAfter = await limiter.getResourceBucketState(
+        'GET',
+        'example.com',
+        longPath,
+      );
+
+      assert.notStrictEqual(stateAfter, null);
+      assert.ok(stateAfter!.paidTokens > 0);
+    });
+
+    it('should return null for non-existent bucket with normalized path', async () => {
+      // Query for a bucket that doesn't exist
+      const state = await limiter.getResourceBucketState(
+        'GET',
+        'example.com',
+        '//api///notfound',
+      );
+
+      assert.strictEqual(state, null);
+    });
+
+    it('should handle combined normalization (slashes + trimming)', async () => {
+      const longPath = '//' + 'x'.repeat(300) + '//';
+      const req = createMockRequest({
+        baseUrl: '',
+        path: longPath,
+        headers: { host: 'example.com' },
+      });
+      const res = createMockResponse();
+
+      // Create bucket with complex path
+      await limiter.checkLimit(req, res, 100);
+
+      // Should find it with the same complex path
+      const state = await limiter.getResourceBucketState(
+        'GET',
+        'example.com',
+        longPath,
+      );
+
+      assert.notStrictEqual(state, null);
+      assert.strictEqual(state!.path.length, 256); // Should be trimmed
+      assert.strictEqual(state!.path[0], '/'); // Should start with single slash
+      assert.strictEqual(state!.path[1], 'x'); // No doubled slash after normalization
+    });
+  });
 });
