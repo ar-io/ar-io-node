@@ -106,6 +106,11 @@ export interface PaymentProcessor {
       message?: string;
       payer?: string;
       price?: string;
+      /**
+       * Browser payment flow strategy (internal implementation detail, not sent to clients)
+       * See PaymentRequirementsContext.browserPaymentFlow documentation for details
+       */
+      browserPaymentFlow?: 'redirect' | 'direct';
     },
   ): void;
 

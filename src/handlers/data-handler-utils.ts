@@ -36,6 +36,11 @@ export interface CheckPaymentAndRateLimitsParams {
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor | undefined;
   parentSpan?: Span;
+  /**
+   * Browser payment flow strategy for HTML paywall
+   * See PaymentRequirementsContext.browserPaymentFlow for details
+   */
+  browserPaymentFlow?: 'redirect' | 'direct';
 }
 
 /**
@@ -83,6 +88,7 @@ export async function checkPaymentAndRateLimits({
   rateLimiter,
   paymentProcessor,
   parentSpan,
+  browserPaymentFlow,
 }: CheckPaymentAndRateLimitsParams): Promise<CheckPaymentAndRateLimitsResult> {
   const span = startChildSpan(
     'checkPaymentAndRateLimits',
@@ -197,6 +203,7 @@ export async function checkPaymentAndRateLimits({
                 error: 'payment_verification_failed',
                 message: verifyResult.invalidReason ?? 'Invalid payment',
                 payer: verifyResult.payer,
+                browserPaymentFlow,
               },
             );
 
@@ -239,6 +246,7 @@ export async function checkPaymentAndRateLimits({
               {
                 error: 'payment_settlement_failed',
                 message: settlementResult.errorReason ?? 'Settlement failed',
+                browserPaymentFlow,
               },
             );
 
@@ -351,6 +359,7 @@ export async function checkPaymentAndRateLimits({
               requirements,
               {
                 message: 'Payment required to access this resource',
+                browserPaymentFlow,
               },
             );
           } else {

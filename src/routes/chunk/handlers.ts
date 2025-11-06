@@ -91,6 +91,9 @@ export const createChunkOffsetHandler = ({
           rateLimiter,
           paymentProcessor,
           parentSpan: span,
+          // Use direct payment flow for browser requests (payment to original URL)
+          // This reduces latency for small chunk requests by avoiding redirect overhead
+          browserPaymentFlow: 'direct',
         });
 
         if (!limitCheck.allowed) {
@@ -447,6 +450,9 @@ export const createChunkOffsetDataHandler = ({
           rateLimiter,
           paymentProcessor,
           parentSpan: span,
+          // Use direct payment flow for browser requests (payment to original URL)
+          // This reduces latency for small chunk requests by avoiding redirect overhead
+          browserPaymentFlow: 'direct',
         });
 
         if (!limitCheck.allowed) {
