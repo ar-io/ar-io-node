@@ -30,7 +30,7 @@ describe('buildArIoInfo', () => {
       '0.2.0',
     ]);
     assert.strictEqual(result.release, 'r123');
-    assert.deepStrictEqual(result.bundlers, [
+    assert.deepStrictEqual(result.services.bundlers, [
       { url: 'https://turbo.ardrive.io/' },
     ]);
     assert.strictEqual(result.rateLimiter, undefined);
@@ -385,10 +385,10 @@ describe('buildArIoInfo', () => {
       bundlerUrls: ['https://turbo.ardrive.io/'],
     });
 
-    assert.notStrictEqual(result.bundlers, undefined);
-    assert.strictEqual(Array.isArray(result.bundlers), true);
-    assert.strictEqual(result.bundlers.length, 1);
-    assert.deepStrictEqual(result.bundlers, [
+    assert.notStrictEqual(result.services.bundlers, undefined);
+    assert.strictEqual(Array.isArray(result.services.bundlers), true);
+    assert.strictEqual(result.services.bundlers.length, 1);
+    assert.deepStrictEqual(result.services.bundlers, [
       { url: 'https://turbo.ardrive.io/' },
     ]);
   });
@@ -403,8 +403,8 @@ describe('buildArIoInfo', () => {
       bundlerUrls: ['https://custom-bundler.example.com/'],
     });
 
-    assert.strictEqual(result.bundlers.length, 1);
-    assert.deepStrictEqual(result.bundlers, [
+    assert.strictEqual(result.services.bundlers.length, 1);
+    assert.deepStrictEqual(result.services.bundlers, [
       { url: 'https://custom-bundler.example.com/' },
     ]);
   });
@@ -423,8 +423,8 @@ describe('buildArIoInfo', () => {
       ],
     });
 
-    assert.strictEqual(result.bundlers.length, 3);
-    assert.deepStrictEqual(result.bundlers, [
+    assert.strictEqual(result.services.bundlers.length, 3);
+    assert.deepStrictEqual(result.services.bundlers, [
       { url: 'https://turbo.ardrive.io/' },
       { url: 'https://bundler1.example.com/' },
       { url: 'https://bundler2.example.com/' },
@@ -441,10 +441,10 @@ describe('buildArIoInfo', () => {
       bundlerUrls: [],
     });
 
-    assert.notStrictEqual(result.bundlers, undefined);
-    assert.strictEqual(Array.isArray(result.bundlers), true);
-    assert.strictEqual(result.bundlers.length, 0);
-    assert.deepStrictEqual(result.bundlers, []);
+    assert.notStrictEqual(result.services.bundlers, undefined);
+    assert.strictEqual(Array.isArray(result.services.bundlers), true);
+    assert.strictEqual(result.services.bundlers.length, 0);
+    assert.deepStrictEqual(result.services.bundlers, []);
   });
 
   it('should format bundlers as array of objects with url property', () => {
@@ -457,8 +457,8 @@ describe('buildArIoInfo', () => {
       bundlerUrls: ['https://turbo.ardrive.io/'],
     });
 
-    assert.strictEqual(Array.isArray(result.bundlers), true);
-    result.bundlers.forEach((bundler) => {
+    assert.strictEqual(Array.isArray(result.services.bundlers), true);
+    result.services.bundlers.forEach((bundler) => {
       assert.strictEqual(typeof bundler, 'object');
       assert.strictEqual(typeof bundler.url, 'string');
       assert.strictEqual(Object.keys(bundler).length, 1);

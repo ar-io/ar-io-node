@@ -574,19 +574,25 @@ paths:
                   release:
                     type: string
                     description: Gateway software release version
-                  bundlers:
-                    type: array
-                    description: List of bundler service URLs for data upload service discovery
-                    items:
-                      type: object
-                      properties:
-                        url:
-                          type: string
-                          format: uri
-                          description: Bundler service URL
-                          example: 'https://turbo.ardrive.io/'
-                      required:
-                        - url
+                  services:
+                    type: object
+                    description: Service discovery information
+                    properties:
+                      bundlers:
+                        type: array
+                        description: List of bundler service URLs for data upload service discovery
+                        items:
+                          type: object
+                          properties:
+                            url:
+                              type: string
+                              format: uri
+                              description: Bundler service URL
+                              example: 'https://turbo.ardrive.io/'
+                          required:
+                            - url
+                    required:
+                      - bundlers
                   rateLimiter:
                     type: object
                     description: Rate limiter configuration (only present when rate limiting is enabled)

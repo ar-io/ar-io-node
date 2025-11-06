@@ -25,6 +25,13 @@ export interface BundlerInfo {
 }
 
 /**
+ * Services configuration exposed in the info endpoint.
+ */
+export interface ServicesInfo {
+  bundlers: BundlerInfo[];
+}
+
+/**
  * Rate limiter bucket configuration exposed in the info endpoint.
  */
 export interface RateLimiterBucketInfo {
@@ -89,7 +96,7 @@ export interface ArIoInfoResponse {
   ans104IndexFilter: BundleFilter;
   supportedManifestVersions: string[];
   release: string;
-  bundlers: BundlerInfo[];
+  services: ServicesInfo;
   rateLimiter?: RateLimiterInfo;
   x402?: X402Info;
 }
@@ -160,7 +167,9 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     ans104IndexFilter: config.ans104IndexFilter,
     supportedManifestVersions: ['0.1.0', '0.2.0'],
     release: config.release,
-    bundlers: config.bundlerUrls.map((url) => ({ url })),
+    services: {
+      bundlers: config.bundlerUrls.map((url) => ({ url })),
+    },
   };
 
   // Add rate limiter info if enabled
