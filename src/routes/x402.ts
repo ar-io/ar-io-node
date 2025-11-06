@@ -86,9 +86,14 @@ export function createX402Router({
         log.warn('Payment processing failed', {
           error: result.error,
         });
+        sendPaymentErrorHtml(
+          res,
+          result.error ?? 'Payment processing failed. Please try again.',
+        );
+        return;
       }
 
-      // Send redirect HTML
+      // Send redirect HTML (only on success)
       sendRedirectHtml(res, validatedUrl);
     } catch (error: any) {
       log.error('Error processing redirect', {
@@ -195,6 +200,64 @@ function sendRedirectHtml(res: Response, targetUrl: string): void {
 
   res.setHeader('Content-Type', 'text/html');
   res.status(200).send(html);
+}
+
+/**
+ * Send HTML error page for payment failures
+ * SECURITY: errorMessage must be HTML-escaped to prevent XSS attacks
+ */
+function sendPaymentErrorHtml(res: Response, errorMessage: string): void {
+  const escapedError = escapeHtml(errorMessage);
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Payment Failed</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 { color: #d32f2f; }
+    .error {
+      background: #fee;
+      border: 1px solid #fcc;
+      padding: 15px;
+      border-radius: 5px;
+      margin: 20px 0;
+    }
+    .retry-btn {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 10px 20px;
+      background: #007bff;
+      color: white;
+      text-decoration: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .retry-btn:hover {
+      background: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <h1>Payment Failed</h1>
+  <div class="error">
+    <p><strong>Error:</strong> ${escapedError}</p>
+  </div>
+  <a href="javascript:window.location.reload()" class="retry-btn">Try Again</a>
+  <p style="margin-top: 30px; color: #666; font-size: 0.9em;">
+    If this problem persists, please contact support.
+  </p>
+</body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html');
+  res.status(402).send(html);
 }
 
 // For backwards compatibility, export a router with no dependencies

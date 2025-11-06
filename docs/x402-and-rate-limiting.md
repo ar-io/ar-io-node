@@ -1909,7 +1909,7 @@ curl -X POST \
 ```bash
 curl -X POST \
   https://your-gateway.com/ar-io/rate-limit/ip/192.168.1.100 \
-  -H "Authorization: Bearer your-admin-key" \
+  -H "Authorization: Bearer <ADMIN_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"tokens": 50000, "tokenType": "paid"}'
 ```
@@ -1962,7 +1962,7 @@ curl -X POST \
 ```bash
 curl -X POST \
   "https://your-gateway.com/ar-io/rate-limit/resource?path=/TX_ID" \
-  -H "Authorization: Bearer your-admin-key" \
+  -H "Authorization: Bearer <ADMIN_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"tokens": 50000, "tokenType": "paid"}'
 ```
