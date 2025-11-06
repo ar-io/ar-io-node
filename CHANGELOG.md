@@ -79,6 +79,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Rate Limiter Bucket Keys**: Standardized bucket key format across Redis and
   Memory rate limiter implementations - extracted shared utility functions to
   `src/limiter/utils.ts` for consistent key generation
+- **Browser Paywall for Chunk Requests**: Optimized payment flow for chunk
+  endpoints (`/chunk/*`) in browser paywall mode to use direct URL payment
+  instead of redirect endpoint
+  - **Browser only**: This optimization only affects requests detected as browser
+    requests (Accept includes text/html AND User-Agent includes Mozilla)
+  - **API flows unchanged**: Programmatic API payments continue to work the same
+    way for all endpoints
+  - Reduces latency by eliminating redirect round-trip for small chunk requests
+  - Paywall sends payment directly to original chunk URL with x-payment header
+  - Payment verification, settlement, and token granting happen inline before
+    serving content
+  - Other browser endpoints (transactions, manifests) continue using redirect
+    endpoint for larger content
+  - Both approaches use the same payment verification and settlement process
 
 ### Documentation
 
@@ -87,6 +101,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Updated rate limiting documentation to include both chunk endpoint pricing
   models
 - Updated glossary to reference both chunk endpoint formats
+- Updated x402 and rate limiting documentation to explain chunk-specific direct
+  payment flow and general redirect flow for browser paywall requests
 
 ### Fixed
 

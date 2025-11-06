@@ -341,8 +341,9 @@ export class X402UsdcProcessor implements PaymentProcessor {
         displayAmount = atomicAmount / 1_000_000; // USDC has 6 decimals
       }
 
-      // Encode original URL to base64url for redirect endpoint
-      // Defensive check: ensure originalUrl is a defined string before encoding
+      // For chunk requests, use original URL directly (no redirect needed for small content)
+      // For other requests, use redirect endpoint to handle payment processing
+      // Defensive check: ensure originalUrl is a defined string
       let urlToEncode = req.originalUrl;
       if (typeof urlToEncode !== 'string') {
         log.warn(
@@ -354,13 +355,17 @@ export class X402UsdcProcessor implements PaymentProcessor {
         );
         urlToEncode = req.url || '';
       }
-      const encodedUrl = Buffer.from(urlToEncode).toString('base64url');
-      const paywallUrl = `/ar-io/x402/browser-paywall-redirect/${encodedUrl}`;
+
+      // Check if this is a chunk request
+      const isChunkRequest = urlToEncode.startsWith('/chunk/');
+      const currentUrl = isChunkRequest
+        ? urlToEncode // Use original URL for chunks
+        : `/ar-io/x402/browser-paywall-redirect/${Buffer.from(urlToEncode).toString('base64url')}`; // Use redirect for other content
 
       const html = getPaywallHtml({
         amount: displayAmount,
         paymentRequirements: toJsonSafe([requirements]) as any,
-        currentUrl: paywallUrl,
+        currentUrl: currentUrl,
         testnet: this.config.network === 'base-sepolia',
         cdpClientKey: this.config.cdpClientKey,
         appName: this.config.appName,

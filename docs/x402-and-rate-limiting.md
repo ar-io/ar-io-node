@@ -96,6 +96,11 @@ calculate pricing based on actual content size.
   `MAX_CHUNK_SIZE`), providing ~40% bandwidth savings and lower per-chunk fees
   compared to the base64url endpoint
 
+**Note on Chunk Browser Payments:** For browser paywall requests, chunks use a
+direct payment flow (payment sent to original URL) rather than the redirect
+endpoint used by larger content. This reduces latency for small chunk requests
+while maintaining the same payment verification and settlement process
+
 ### How They Work Together
 
 To use x402 payments, you must enable both features (`ENABLE_RATE_LIMITER=true`
@@ -862,7 +867,8 @@ The complete payment flow involves several steps:
 - Returns HTML paywall UI (Coinbase SDK)
 - User connects wallet in browser
 - Payment auto-generated and submitted
-- Redirect mechanism to avoid blob URL issues
+- For chunk requests: direct payment to original URL
+- For other content: redirect endpoint processes payment, then redirects to content
 
 **API Payment Mode:**
 
@@ -870,6 +876,7 @@ The complete payment flow involves several steps:
 - Returns JSON 402 response with requirements
 - Client uses `x402-fetch` or similar library
 - Payment header sent in subsequent request
+- Same flow for all endpoints (chunks, transactions, manifests, etc.)
 
 #### Facilitator Role
 
@@ -1007,9 +1014,13 @@ For browser requests (Accept includes `text/html` AND User-Agent includes
 1. Gateway returns HTML with Coinbase SDK
 2. SDK prompts user to connect wallet
 3. User approves payment (EIP-712 signature)
-4. SDK submits payment to redirect endpoint
-5. Gateway verifies and settles payment
-6. Gateway redirects to original URL with topped-off bucket
+4. SDK submits payment with x-payment header:
+   - **Chunk requests** (`/chunk/*`): Sent directly to original URL
+   - **Other content**: Sent to redirect endpoint (`/ar-io/x402/browser-paywall-redirect/{encoded}`)
+5. Gateway verifies and settles payment, adds paid tokens to IP bucket
+6. Content delivery:
+   - **Chunk requests**: Served immediately (single request)
+   - **Other content**: HTML redirect sent to original URL
 
 ## Integration Topics
 
