@@ -67,9 +67,8 @@ export class RedisRateLimiter implements RateLimiter {
     ip: string,
     host: string,
   ): { resourceKey: string; ipKey: string } {
-    const resourceTag = `rl:${method}:${host}:${path}`;
     return {
-      resourceKey: `{${resourceTag}}:resource`,
+      resourceKey: `rl:resource:${host}:${method}:${path}`,
       ipKey: `rl:ip:${ip}`,
     };
   }
@@ -526,8 +525,7 @@ export class RedisRateLimiter implements RateLimiter {
     refillRate: number;
     lastRefill: number;
   } | null> {
-    const resourceTag = `rl:${method}:${host}:${path}`;
-    const resourceKey = `{${resourceTag}}:resource`;
+    const resourceKey = `rl:resource:${host}:${method}:${path}`;
 
     try {
       const bucket = await this.redisClient.getBucketState(resourceKey);
@@ -563,8 +561,7 @@ export class RedisRateLimiter implements RateLimiter {
     path: string,
     tokens: number,
   ): Promise<void> {
-    const resourceTag = `rl:${method}:${host}:${path}`;
-    const resourceKey = `{${resourceTag}}:resource`;
+    const resourceKey = `rl:resource:${host}:${method}:${path}`;
     const now = Date.now();
 
     try {

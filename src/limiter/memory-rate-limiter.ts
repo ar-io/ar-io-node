@@ -77,9 +77,8 @@ export class MemoryRateLimiter implements RateLimiter {
     ip: string,
     host: string,
   ): { resourceKey: string; ipKey: string } {
-    const resourceTag = `rl:${method}:${host}:${path}`;
     return {
-      resourceKey: `${resourceTag}:resource`,
+      resourceKey: `rl:resource:${host}:${method}:${path}`,
       ipKey: `rl:ip:${ip}`,
     };
   }
@@ -573,8 +572,7 @@ export class MemoryRateLimiter implements RateLimiter {
     refillRate: number;
     lastRefill: number;
   } | null> {
-    const resourceTag = `rl:${method}:${host}:${path}`;
-    const resourceKey = `{${resourceTag}}:resource`;
+    const resourceKey = `rl:resource:${host}:${method}:${path}`;
     const bucket = this.buckets.get(resourceKey);
 
     if (!bucket) {
@@ -611,8 +609,7 @@ export class MemoryRateLimiter implements RateLimiter {
     path: string,
     tokens: number,
   ): Promise<void> {
-    const resourceTag = `rl:${method}:${host}:${path}`;
-    const resourceKey = `{${resourceTag}}:resource`;
+    const resourceKey = `rl:resource:${host}:${method}:${path}`;
     const now = Date.now();
 
     // Get or create resource bucket
