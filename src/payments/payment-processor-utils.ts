@@ -135,7 +135,7 @@ export async function processPaymentAndTopUp(
         if (target.type === 'ip') {
           // For IP bucket, use existing method with request
           await rateLimiter.topOffPaidTokens(req, tokens);
-          multiplierApplied = 10; // Default capacity multiplier
+          multiplierApplied = config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
           tokensAdded = tokens * multiplierApplied;
         } else if (target.type === 'resource') {
           // For resource bucket, use new method with explicit params
@@ -155,7 +155,7 @@ export async function processPaymentAndTopUp(
             target.path,
             tokens,
           );
-          multiplierApplied = 10; // Default capacity multiplier
+          multiplierApplied = config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
           tokensAdded = tokens * multiplierApplied;
         }
 
