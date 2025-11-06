@@ -37,8 +37,9 @@ export interface CheckPaymentAndRateLimitsParams {
   paymentProcessor?: PaymentProcessor | undefined;
   parentSpan?: Span;
   /**
-   * Browser payment flow strategy for HTML paywall
-   * See PaymentRequirementsContext.browserPaymentFlow for details
+   * Internal hint for the paywall renderer that controls how the browser should
+   * handle the HTML paywall: 'redirect' to send the user to a hosted paywall URL,
+   * or 'direct' to render the paywall inline
    */
   browserPaymentFlow?: 'redirect' | 'direct';
 }

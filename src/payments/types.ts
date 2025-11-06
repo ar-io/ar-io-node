@@ -107,8 +107,9 @@ export interface PaymentProcessor {
       payer?: string;
       price?: string;
       /**
-       * Browser payment flow strategy (internal implementation detail, not sent to clients)
-       * See PaymentRequirementsContext.browserPaymentFlow documentation for details
+       * Browser payment flow strategy: 'redirect' to send the user to a hosted
+       * paywall URL, or 'direct' to render the paywall inline
+       * (internal implementation detail, not sent to clients)
        */
       browserPaymentFlow?: 'redirect' | 'direct';
     },
