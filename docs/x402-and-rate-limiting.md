@@ -400,8 +400,8 @@ The system enforces limits at two levels:
 
 - Applies to each unique resource (e.g., specific transaction ID)
 - Prevents any single resource from monopolizing bandwidth
-- Key format: `rl:{METHOD}:{HOST}:{PATH}:resource`
-- Example: `rl:GET:example.com:/tx123:resource`
+- Key format: `rl:resource:{HOST}:{METHOD}:{PATH}`
+- Example: `rl:resource:example.com:GET:/tx123`
 
 **2. Per-IP Limits:**
 
