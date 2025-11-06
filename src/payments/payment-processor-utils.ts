@@ -75,13 +75,22 @@ export async function processPaymentAndTopUp(
       });
     }
 
+    // Validate host header is present
+    const host = req.headers.host;
+    if (host === undefined || host === '') {
+      return {
+        success: false,
+        error: 'Missing Host header - required for payment processing',
+      };
+    }
+
     // Create payment requirements based on actual payment amount
     const requirements: PaymentRequirements =
       paymentProcessor.calculateRequirements({
         contentSize,
         contentType: 'application/octet-stream',
         protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
-        host: req.headers.host ?? '',
+        host: host,
         originalUrl: req.originalUrl,
       });
 
