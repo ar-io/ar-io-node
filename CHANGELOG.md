@@ -8,65 +8,159 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Raw Binary Chunk Data Endpoint**: New `/chunk/<offset>/data` endpoint returns raw binary chunk data (`application/octet-stream`) with metadata in response headers instead of base64url-encoded JSON
-  - Provides ~40% bandwidth savings compared to the base64url-encoded `/chunk/<offset>` endpoint
+- **Raw Binary Chunk Data Endpoint**: New `/chunk/<offset>/data` endpoint
+  returns raw binary chunk data (`application/octet-stream`) with metadata in
+  response headers instead of base64url-encoded JSON
+  - Provides ~40% bandwidth savings compared to the base64url-encoded
+    `/chunk/<offset>` endpoint
   - Supports both GET and HEAD requests
-  - Returns comprehensive metadata in headers including merkle proofs, offsets, transaction info, and cache status
-  - Includes `X-Arweave-Chunk-Read-Offset` header to indicate where to start reading within the returned chunk
-  - Includes `X-Arweave-Chunk-Tx-Id` and `X-Arweave-Chunk-Tx-Start-Offset` headers for transaction tracking
+  - Returns comprehensive metadata in custom headers:
+    - `X-Arweave-Chunk-Data-Path` - Base64url-encoded merkle proof path for
+      chunk verification
+    - `X-Arweave-Chunk-Data-Root` - Merkle tree root hash
+    - `X-Arweave-Chunk-Start-Offset` - Absolute start offset of chunk in the
+      weave
+    - `X-Arweave-Chunk-Relative-Start-Offset` - Chunk offset relative to its
+      transaction's data
+    - `X-Arweave-Chunk-Read-Offset` - Number of bytes to skip from the start
+      of the returned chunk to reach the requested offset
+    - `X-Arweave-Chunk-Tx-Data-Size` - Total data size of the transaction
+      containing this chunk
+    - `X-Arweave-Chunk-Tx-Id` - Transaction ID containing this chunk
+    - `X-Arweave-Chunk-Tx-Start-Offset` - Absolute start offset of the
+      transaction in the weave
+    - `X-Arweave-Chunk-Tx-Path` - Transaction-level merkle path (when available)
+    - `X-Arweave-Chunk-Source` - Data source identifier (e.g., `arweave`,
+      `trusted-gateway`)
+    - `X-Arweave-Chunk-Source-Version` - Version identifier of the data source
   - Supports ETag-based conditional requests (304 Not Modified)
-  - Supports Content-Digest header (RFC 9530) for data integrity verification
-  - Rate limited at 256 KiB (raw chunk size) vs. 360 KiB for base64url endpoint, resulting in lower per-chunk fees
-- **Bundler Service Discovery**: The `/ar-io/info` endpoint now includes a `bundlers` field for client service discovery (PE-8709)
+  - Supports `Content-Digest` header (RFC 9530) for data integrity verification
+  - Rate limited at 256 KiB (raw chunk size) vs. 360 KiB for base64url
+    endpoint, resulting in lower per-chunk fees
+- **Bundler Service Discovery**: The `/ar-io/info` endpoint now includes a
+  `bundlers` field for client service discovery
   - Configurable via `BUNDLER_URLS` environment variable (comma-separated URLs)
   - Defaults to `https://turbo.ardrive.io/`
   - URLs are validated on startup with descriptive error messages
   - Returns array of objects with `url` property
   - Enables clients to discover available bundler services for data uploads
+- **Rate Limit Balance Management API**: New REST API endpoints for querying
+  and managing rate limit bucket balances
+  - `GET /ar-io/rate-limit/ip/:ip` - Query IP-based rate limit bucket balance
+  - `POST /ar-io/rate-limit/ip/:ip` - Top up IP-based bucket via x402 payment
+    or admin API key
+  - `GET /ar-io/rate-limit/resource` - Query resource-based bucket balance with
+    optional query parameters (`method`, `resource`, `host`)
+  - `POST /ar-io/rate-limit/resource` - Top up resource-based bucket via x402
+    payment or admin API key
+  - Dual authentication: x402 payment protocol (public) or admin API key
+    (private/testing via `ADMIN_API_KEY` environment variable)
+  - 10x capacity multiplier applied to x402 payments compared to raw admin
+    top-ups
+  - Smart defaults for resource endpoints (method defaults to GET, host
+    defaults to current request host)
+  - Enables programmatic balance queries and top-ups for testing and automated
+    payment workflows
 
 ### Changed
 
-- **Transaction-Level Merkle Path Support**: The `/chunk/<offset>` endpoint now includes `tx_path` in JSON responses when available (both GET and HEAD requests), providing transaction-level merkle proofs
-- **Observer**: Updated to fcd0f36 - Doubled offset observation sample rate to 2% for improved network robustness (PE-8707)
+- **Transaction-Level Merkle Path Support**: The `/chunk/<offset>` endpoint now
+  includes `tx_path` in JSON responses when available (both GET and HEAD
+  requests), providing transaction-level merkle proofs
+- **Observer**: Updated to fcd0f36 - Doubled offset observation sample rate to
+  2% for improved network robustness
+- **AR.IO Info Endpoint Structure**: The `bundlers` field in `/ar-io/info`
+  endpoint response is now nested under `services.bundlers` instead of being a
+  top-level field for improved API organization and future extensibility
+- **Rate Limiter Bucket Keys**: Standardized bucket key format across Redis and
+  Memory rate limiter implementations - extracted shared utility functions to
+  `src/limiter/utils.ts` for consistent key generation
 
 ### Documentation
 
-- Updated OpenAPI specification with comprehensive documentation for new `/chunk/<offset>/data` endpoint (GET and HEAD methods)
-- Updated rate limiting documentation to include both chunk endpoint pricing models
+- Updated OpenAPI specification with comprehensive documentation for new
+  `/chunk/<offset>/data` endpoint (GET and HEAD methods)
+- Updated rate limiting documentation to include both chunk endpoint pricing
+  models
 - Updated glossary to reference both chunk endpoint formats
 
 ### Fixed
 
+- **Payment Processor and x402 Validation**: Multiple improvements to payment
+  validation and error handling
+  - Prevent infinite redirect loop on payment failure - browser paywall now
+    shows user-friendly error page instead of redirecting
+  - Validate payment type before settlement to prevent charging users without
+    granting rate limit tokens
+  - Prevent silent success when payment settlement cannot grant tokens - now
+    returns error instead of charging without providing service
+  - Validate resource target format before settling payment to prevent invalid
+    payment processing
+  - Validate Host header presence and format before processing payments to
+    prevent malformed payment requests
+  - Use configured capacity multiplier instead of hardcoded value in payment
+    processor for consistent multiplier application
+  - Update paywall redirect URL to use new canonical path for consistency with
+    updated route structure
+- **Rate Limiter Configuration**: Fixed configuration handling for consistent behavior
+  - Ensure consistent resource key normalization across Redis and Memory rate
+    limiter implementations to prevent cache misses
+  - Use configurable capacity multiplier in rate limit routes instead of
+    hardcoded values for consistency with payment processor
+
 ## [Release 57] - 2025-11-03
 
-This is a **recommended release**. This release focuses on improving gateway infrastructure with enhanced CDN compatibility and a new gateway-based offset discovery system. Key improvements include a new root transaction index using HEAD requests to AR.IO gateways, configurable Cache-Control headers for better CDN integration, and numerous bug fixes for proxy support. The release also includes extensive documentation improvements.
+This is a **recommended release**. This release focuses on improving gateway
+infrastructure with enhanced CDN compatibility and a new gateway-based offset
+discovery system. Key improvements include a new root transaction index using
+HEAD requests to AR.IO gateways, configurable Cache-Control headers for better
+CDN integration, and numerous bug fixes for proxy support. The release also
+includes extensive documentation improvements.
 
 ### Added
 
-- **GatewaysRootTxIndex for Offset Discovery**: New root transaction index using HEAD requests to AR.IO gateways for discovering data item offsets
-  - Multi-gateway support with priority tiers and automatic fallback (single attempt per gateway to prevent thundering herd)
+- **GatewaysRootTxIndex for Offset Discovery**: New root transaction index
+  using HEAD requests to AR.IO gateways for discovering data item offsets
+  - Multi-gateway support with priority tiers and automatic fallback (single
+    attempt per gateway to prevent thundering herd)
   - Per-gateway rate limiting with TokenBucket
   - LRU caching for offset results
-  - Configuration via `GATEWAYS_ROOT_TX_URLS`, `GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS`, `GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE`, `GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL`, `GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL`, `GATEWAYS_ROOT_TX_CACHE_SIZE`
-- **Configurable Cache-Control Private Directive**: CDN compatibility via `CACHE_PRIVATE_SIZE_THRESHOLD` (default: 100 MB) and `CACHE_PRIVATE_CONTENT_TYPES` environment variables
-  - Adds `private` directive to Cache-Control headers for content exceeding size threshold or matching content types
-  - Ensures rate limiting and x402 payment requirements are enforced even when CDNs are deployed in front of ar-io-node
-- **Enhanced Rate Limiting Observability**: Client IP now logged separately in rate limit exceeded messages for better debugging and monitoring
+  - Configuration via `GATEWAYS_ROOT_TX_URLS`,
+    `GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS`,
+    `GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE`,
+    `GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL`,
+    `GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL`, `GATEWAYS_ROOT_TX_CACHE_SIZE`
+- **Configurable Cache-Control Private Directive**: CDN compatibility via
+  `CACHE_PRIVATE_SIZE_THRESHOLD` (default: 100 MB) and
+  `CACHE_PRIVATE_CONTENT_TYPES` environment variables
+  - Adds `private` directive to Cache-Control headers for content exceeding
+    size threshold or matching content types
+  - Ensures rate limiting and x402 payment requirements are enforced even when
+    CDNs are deployed in front of ar-io-node
+- **Enhanced Rate Limiting Observability**: Client IP now logged separately in
+  rate limit exceeded messages for better debugging and monitoring
 
 ### Fixed
 
 - **Proxy Support Fixes**:
-  - Fixed x402 resource URLs to use `SANDBOX_PROTOCOL` when behind reverse proxies/CDNs
-  - Fixed inconsistent IP extraction between rate limiter bucket keys and allowlist checks
-- **Chunk Endpoint Performance**: Apply rate limits before expensive txResult lookup
-  - Reordered operations to check rate limits first, improving performance under high load
-- **Cache-Control Content Type Matching**: Normalize content types by stripping parameters (e.g., `text/html; charset=utf-8` → `text/html`)
+  - Fixed x402 resource URLs to use `SANDBOX_PROTOCOL` when behind reverse
+    proxies/CDNs
+  - Fixed inconsistent IP extraction between rate limiter bucket keys and
+    allowlist checks
+- **Chunk Endpoint Performance**: Apply rate limits before expensive txResult
+  lookup
+  - Reordered operations to check rate limits first, improving performance
+    under high load
+- **Cache-Control Content Type Matching**: Normalize content types by stripping
+  parameters (e.g., `text/html; charset=utf-8` → `text/html`)
   - Ensures proper Cache-Control header matching for configured content types
 
 ### Documentation
 
-- Comprehensive rate limiting documentation cleanup (~200-300 lines of duplication removed)
-- Documented all 4 rate limit metrics (request, IP, chunk, x402 token consumption)
+- Comprehensive rate limiting documentation cleanup (~200-300 lines of
+  duplication removed)
+- Documented all 4 rate limit metrics (request, IP, chunk, x402 token
+  consumption)
 - Added automated payment workflow testing examples for x402
 - Removed private key export recommendations from x402 testing examples
 - Clarified complete IP extraction fallback order for proxy scenarios
