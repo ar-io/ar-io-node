@@ -30,6 +30,21 @@ export interface PaymentTopUpResult {
 }
 
 /**
+ * Type guard to check if a payment payload is an EVM payload with authorization
+ */
+function isEvmPayload(
+  payload: unknown,
+): payload is { authorization: { value: string } } {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'authorization' in payload &&
+    typeof (payload as any).authorization === 'object' &&
+    'value' in (payload as any).authorization
+  );
+}
+
+/**
  * Process x402 payment, verify, settle, and top up rate limiter bucket
  *
  * @param rateLimiter Rate limiter instance
@@ -137,50 +152,85 @@ export async function processPaymentAndTopUp(
     }
 
     // Convert payment amount to tokens and top up bucket
-    let tokensAdded = 0;
-    let paymentAmount = '0';
-    let multiplierApplied = 1;
+    // Payment has been settled successfully, now we must grant access tokens
 
-    if (paymentProcessor instanceof X402UsdcProcessor) {
-      // Use the actual payment amount from the payment payload
-      // Only EVM payments have authorization field
-      if ('authorization' in payment.payload) {
-        paymentAmount = payment.payload.authorization.value.toString();
-        const tokens = paymentProcessor.paymentToTokens(paymentAmount);
-
-        log.debug('Topping off rate limiter', {
-          paymentAmount,
-          tokens,
-          target,
-        });
-
-        // Top off appropriate bucket based on target type
-        if (target.type === 'ip') {
-          // For IP bucket, use existing method with request
-          await rateLimiter.topOffPaidTokens(req, tokens);
-          multiplierApplied = config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
-          tokensAdded = tokens * multiplierApplied;
-        } else if (target.type === 'resource') {
-          // For resource bucket, use new method with explicit params
-          // Note: target validation already done at function entry
-          await rateLimiter.topOffPaidTokensForResource(
-            target.method!,
-            target.host!,
-            target.path!,
-            tokens,
-          );
-          multiplierApplied = config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
-          tokensAdded = tokens * multiplierApplied;
-        }
-
-        log.info('Payment settled and bucket topped off', {
-          target,
-          tokens,
-          tokensAdded,
-          multiplierApplied,
-        });
-      }
+    // Validate processor type
+    if (!(paymentProcessor instanceof X402UsdcProcessor)) {
+      log.error('Unsupported payment processor type', {
+        processorType: paymentProcessor.constructor.name,
+        network: payment.network,
+        scheme: payment.scheme,
+      });
+      return {
+        success: false,
+        error: `Unsupported payment processor type: ${paymentProcessor.constructor.name}`,
+      };
     }
+
+    // Validate payload type - must be EVM payload with authorization
+    if (!isEvmPayload(payment.payload)) {
+      log.error('Unsupported payment payload type', {
+        processorType: paymentProcessor.constructor.name,
+        network: payment.network,
+        scheme: payment.scheme,
+        hasAuthorization: 'authorization' in payment.payload,
+        hasTransaction: 'transaction' in payment.payload,
+      });
+      return {
+        success: false,
+        error:
+          'Unsupported payment payload type. Only EVM payments with authorization are currently supported.',
+      };
+    }
+
+    // Extract payment amount from EVM authorization
+    const paymentAmount = payment.payload.authorization.value.toString();
+    const tokens = paymentProcessor.paymentToTokens(paymentAmount);
+
+    log.debug('Topping off rate limiter', {
+      processorType: paymentProcessor.constructor.name,
+      paymentAmount,
+      tokens,
+      target,
+      network: payment.network,
+      scheme: payment.scheme,
+    });
+
+    // Top off appropriate bucket based on target type
+    const multiplierApplied = config.X_402_RATE_LIMIT_CAPACITY_MULTIPLIER;
+    let tokensAdded: number;
+
+    if (target.type === 'ip') {
+      // For IP bucket, use existing method with request
+      await rateLimiter.topOffPaidTokens(req, tokens);
+      tokensAdded = tokens * multiplierApplied;
+    } else if (target.type === 'resource') {
+      // For resource bucket, use new method with explicit params
+      // Note: target validation already done at function entry
+      await rateLimiter.topOffPaidTokensForResource(
+        target.method!,
+        target.host!,
+        target.path!,
+        tokens,
+      );
+      tokensAdded = tokens * multiplierApplied;
+    } else {
+      log.error('Invalid target type', { target });
+      return {
+        success: false,
+        error: `Invalid target type: ${target.type}`,
+      };
+    }
+
+    log.info('Payment settled and bucket topped off', {
+      processorType: paymentProcessor.constructor.name,
+      network: payment.network,
+      scheme: payment.scheme,
+      target,
+      tokens,
+      tokensAdded,
+      multiplierApplied,
+    });
 
     return {
       success: true,
