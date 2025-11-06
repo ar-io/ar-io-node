@@ -64,6 +64,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Chunk Request Routing**: Removed Envoy proxy route for GET `/chunk/`
+  requests - all chunk endpoints now route directly to the AR.IO gateway
+  application instead of being proxied to trusted Arweave nodes. This enables
+  rate limiting, x402 payment processing, and local caching for chunk requests
 - **Transaction-Level Merkle Path Support**: The `/chunk/<offset>` endpoint now
   includes `tx_path` in JSON responses when available (both GET and HEAD
   requests), providing transaction-level merkle proofs
