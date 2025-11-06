@@ -14,6 +14,12 @@ import {
   TokenAdjustmentContext,
 } from './types.js';
 import { rateLimitTokensConsumedTotal } from '../metrics.js';
+import {
+  getCanonicalPathFromRequest,
+  buildBucketKeys,
+  normalizeHost,
+  normalizePath,
+} from './utils.js';
 
 /**
  * Token bucket stored in memory
@@ -57,30 +63,6 @@ export class MemoryRateLimiter implements RateLimiter {
     this.config = config;
     this.buckets = new Map();
     this.accessOrder = new Map();
-  }
-
-  /**
-   * Get canonical path from request
-   */
-  private getCanonicalPath(req: Request): string {
-    const full = `${req.baseUrl || ''}${req.path || ''}`;
-    const normalized = full === '' ? '/' : full.replace(/\/{2,}/g, '/');
-    return normalized.slice(0, 256);
-  }
-
-  /**
-   * Build bucket keys for resource and IP
-   */
-  private buildBucketKeys(
-    method: string,
-    path: string,
-    ip: string,
-    host: string,
-  ): { resourceKey: string; ipKey: string } {
-    return {
-      resourceKey: `rl:resource:${host}:${method}:${path}`,
-      ipKey: `rl:ip:${ip}`,
-    };
   }
 
   /**
@@ -225,12 +207,12 @@ export class MemoryRateLimiter implements RateLimiter {
     contentLengthForTopOff = 0,
   ): Promise<RateLimitCheckResult> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { resourceKey, ipKey } = this.buildBucketKeys(
+    const { resourceKey, ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -483,12 +465,12 @@ export class MemoryRateLimiter implements RateLimiter {
    */
   public async topOffPaidTokens(req: Request, tokens: number): Promise<void> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { ipKey } = this.buildBucketKeys(
+    const { ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -572,7 +554,9 @@ export class MemoryRateLimiter implements RateLimiter {
     refillRate: number;
     lastRefill: number;
   } | null> {
-    const resourceKey = `rl:resource:${host}:${method}:${path}`;
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
     const bucket = this.buckets.get(resourceKey);
 
     if (!bucket) {
@@ -590,8 +574,8 @@ export class MemoryRateLimiter implements RateLimiter {
 
     return {
       method,
-      host,
-      path,
+      host: normalizedHost,
+      path: normalizedPath,
       tokens: currentTokens,
       paidTokens: bucket.paidTokens,
       capacity: bucket.capacity,
@@ -609,7 +593,9 @@ export class MemoryRateLimiter implements RateLimiter {
     path: string,
     tokens: number,
   ): Promise<void> {
-    const resourceKey = `rl:resource:${host}:${method}:${path}`;
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
     const now = Date.now();
 
     // Get or create resource bucket
