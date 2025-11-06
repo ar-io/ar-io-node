@@ -137,24 +137,7 @@ export async function processPaymentAndTopUp(
       };
     }
 
-    // Settle payment
-    log.debug('Settling payment');
-    const settlementResult = await paymentProcessor.settlePayment(
-      payment,
-      requirements,
-    );
-
-    if (!settlementResult.success) {
-      return {
-        success: false,
-        error: `Payment settlement failed: ${settlementResult.errorReason}`,
-      };
-    }
-
-    // Convert payment amount to tokens and top up bucket
-    // Payment has been settled successfully, now we must grant access tokens
-
-    // Validate processor type
+    // Validate processor type before settling payment
     if (!(paymentProcessor instanceof X402UsdcProcessor)) {
       log.error('Unsupported payment processor type', {
         processorType: paymentProcessor.constructor.name,
@@ -167,7 +150,7 @@ export async function processPaymentAndTopUp(
       };
     }
 
-    // Validate payload type - must be EVM payload with authorization
+    // Validate payload type before settling payment - must be EVM payload with authorization
     if (!isEvmPayload(payment.payload)) {
       log.error('Unsupported payment payload type', {
         processorType: paymentProcessor.constructor.name,
@@ -182,6 +165,23 @@ export async function processPaymentAndTopUp(
           'Unsupported payment payload type. Only EVM payments with authorization are currently supported.',
       };
     }
+
+    // Settle payment - only called after validations pass
+    log.debug('Settling payment');
+    const settlementResult = await paymentProcessor.settlePayment(
+      payment,
+      requirements,
+    );
+
+    if (!settlementResult.success) {
+      return {
+        success: false,
+        error: `Payment settlement failed: ${settlementResult.errorReason}`,
+      };
+    }
+
+    // Convert payment amount to tokens and top up bucket
+    // Payment has been settled successfully and validations passed, now grant access tokens
 
     // Extract payment amount from EVM authorization
     const paymentAmount = payment.payload.authorization.value.toString();
