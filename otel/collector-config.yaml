@@ -31,36 +31,72 @@ processors:
     expected_new_traces_per_sec: 100
 
     policies:
-      # Policy 1: Always keep traces with errors (100% sampling)
+      # Policy 1: Sample traces with errors at configurable rate
+      # Default: 100% (configurable via OTEL_TAIL_SAMPLING_ERROR_RATE)
       # Catches HTTP 5xx responses and application errors
       - name: error-policy
-        type: status_code
-        status_code:
-          status_codes:
-            - ERROR
+        type: and
+        and:
+          and_sub_policy:
+            - name: error-condition
+              type: status_code
+              status_code:
+                status_codes:
+                  - ERROR
+            - name: error-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_ERROR_RATE}
 
-      # Policy 2: Always keep slow traces (100% sampling)
+      # Policy 2: Sample slow traces at configurable rate
       # Default threshold: 2000ms (configurable via OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS)
+      # Default rate: 100% (configurable via OTEL_TAIL_SAMPLING_SLOW_RATE)
       - name: latency-policy
-        type: latency
-        latency:
-          threshold_ms: ${env:OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS}
+        type: and
+        and:
+          and_sub_policy:
+            - name: latency-condition
+              type: latency
+              latency:
+                threshold_ms: ${env:OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS}
+            - name: latency-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_SLOW_RATE}
 
-      # Policy 3: Always keep traces with verified payments (100% sampling)
-      # Captures all paid traffic for billing, compliance, and audit purposes
+      # Policy 3: Sample traces with verified payments at configurable rate
+      # Default: 100% (configurable via OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE)
+      # Captures paid traffic for billing, compliance, and audit purposes
       - name: payment-verified-policy
-        type: boolean_attribute
-        boolean_attribute:
-          key: payment.verified
-          value: true
+        type: and
+        and:
+          and_sub_policy:
+            - name: payment-verified-condition
+              type: boolean_attribute
+              boolean_attribute:
+                key: payment.verified
+                value: true
+            - name: payment-verified-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE}
 
-      # Policy 4: Always keep traces that used paid tokens (100% sampling)
-      # Captures all requests that consumed paid rate limit tokens
+      # Policy 4: Sample traces that used paid tokens at configurable rate
+      # Default: 100% (configurable via OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE)
+      # Captures requests that consumed paid rate limit tokens
       - name: paid-tokens-policy
-        type: boolean_attribute
-        boolean_attribute:
-          key: tokens.paid_used
-          value: true
+        type: and
+        and:
+          and_sub_policy:
+            - name: paid-tokens-condition
+              type: boolean_attribute
+              boolean_attribute:
+                key: tokens.paid_used
+                value: true
+            - name: paid-tokens-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE}
 
       # Policy 5: Probabilistic sampling of successful, fast, unpaid traces
       # Default: 1% (configurable via OTEL_TAIL_SAMPLING_SUCCESS_RATE)
