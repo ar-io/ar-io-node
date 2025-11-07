@@ -133,6 +133,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Updated OpenAPI specification with comprehensive documentation for new
   `/chunk/<offset>/data` endpoint (GET and HEAD methods)
+- Improved OpenAPI specification with complete header documentation for
+  transaction data and chunk endpoints, including ANS-104 bundle navigation
+  headers, data verification headers, and detailed examples with offset
+  calculations
 - Updated rate limiting documentation to include both chunk endpoint pricing
   models
 - Updated glossary to reference both chunk endpoint formats
