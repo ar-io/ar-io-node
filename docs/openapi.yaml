@@ -1957,7 +1957,7 @@ paths:
         - name: offset
           in: path
           required: true
-          description: Weave offset (0-based byte position in the Arweave weave)
+          description: Weave offset (0-based byte position in the weave)
           schema:
             type: integer
         - name: If-None-Match
@@ -2113,7 +2113,7 @@ paths:
         - name: offset
           in: path
           required: true
-          description: Weave offset (0-based byte position in the Arweave weave)
+          description: Weave offset (0-based byte position in the weave)
           schema:
             type: integer
         - name: If-None-Match
