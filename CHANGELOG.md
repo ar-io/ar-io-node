@@ -68,6 +68,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     defaults to current request host)
   - Enables programmatic balance queries and top-ups for testing and automated
     payment workflows
+- **OpenTelemetry Collector with Tail-Based Sampling**: New OTEL Collector
+  sidecar in docker-compose deployments implements intelligent tail-based
+  sampling to reduce telemetry costs by 80-95% while maintaining complete
+  visibility into errors, performance issues, and paid traffic
+  - Five intelligent sampling policies make decisions after traces complete:
+    - 100% of traces with errors (5xx responses, exceptions)
+    - 100% of slow requests exceeding configurable threshold (default: 2 seconds)
+    - 100% of x402 verified payment requests for billing and compliance
+    - 100% of paid rate limit token usage for revenue tracking
+    - 1% (configurable) of successful, fast, unpaid requests for baseline metrics
+  - Traces flow through architecture: ar-io-node → otel-collector → telemetry backend
+  - Support for multiple telemetry backends via environment variables:
+    - Honeycomb (`OTEL_COLLECTOR_HONEYCOMB_API_KEY`)
+    - Grafana Cloud Tempo (`OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY`)
+    - Datadog (`OTEL_COLLECTOR_DATADOG_API_KEY`)
+    - New Relic (`OTEL_COLLECTOR_NEW_RELIC_API_KEY`)
+    - Elastic APM (`OTEL_COLLECTOR_ELASTIC_API_KEY`)
+  - Configurable sampling rates for each policy via environment variables:
+    - `OTEL_TAIL_SAMPLING_SUCCESS_RATE` - Baseline success sampling (default: 1%)
+    - `OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS` - Slow request threshold (default: 2000ms)
+    - `OTEL_TAIL_SAMPLING_ERROR_RATE` - Error sampling rate (default: 100%)
+    - `OTEL_TAIL_SAMPLING_SLOW_RATE` - Slow request sampling rate (default: 100%)
+    - `OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE` - Paid traffic sampling (default: 100%)
+    - `OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE` - Paid token sampling (default: 100%)
+  - Automatically deployed in docker-compose with configurable destination endpoint
+    (`OTEL_COLLECTOR_DESTINATION_ENDPOINT`)
+  - Enhanced span attributes for paid traffic tracking including client IP,
+    payment verification status, and token consumption
 
 ### Changed
 
