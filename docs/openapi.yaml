@@ -68,6 +68,8 @@ tags:
   - name: Rate Limiting
     description: |
       Query and manage rate limit bucket balances. Supports both public balance queries and top-ups via x402 payments or admin authentication.
+
+      **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are experimental features subject to change. API endpoints, parameters, behavior, and configuration options (environment variables) may evolve in future releases as these systems continue to be developed. See [docs/x402-and-rate-limiting.md](https://github.com/ar-io/ar-io-node/blob/develop/docs/x402-and-rate-limiting.md) for comprehensive documentation.
 components:
   securitySchemes:
     bearerAuth:

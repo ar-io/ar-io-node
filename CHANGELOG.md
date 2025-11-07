@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+> **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are
+> experimental features subject to change. API endpoints, parameters, behavior,
+> and configuration options (environment variables) may evolve in future
+> releases as these systems continue to be developed. See
+> [docs/x402-and-rate-limiting.md](docs/x402-and-rate-limiting.md) for
+> comprehensive documentation.
+
 ### Added
 
 - **Raw Binary Chunk Data Endpoint**: New `/chunk/<offset>/data` endpoint
@@ -137,6 +144,13 @@ HEAD requests to AR.IO gateways, configurable Cache-Control headers for better
 CDN integration, and numerous bug fixes for proxy support. The release also
 includes extensive documentation improvements.
 
+> **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are
+> experimental features subject to change. API endpoints, parameters, behavior,
+> and configuration options (environment variables) may evolve in future
+> releases as these systems continue to be developed. See
+> [docs/x402-and-rate-limiting.md](docs/x402-and-rate-limiting.md) for
+> comprehensive documentation.
+
 ### Added
 
 - **GatewaysRootTxIndex for Offset Discovery**: New root transaction index
@@ -199,6 +213,13 @@ rate limiter and payment configuration for programmatic gateway discovery.
 This release also includes important fixes for nested bundle offset calculations
 that could affect data retrieval, making it a recommended upgrade for all
 operators.
+
+> **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are
+> experimental features subject to change. API endpoints, parameters, behavior,
+> and configuration options (environment variables) may evolve in future
+> releases as these systems continue to be developed. See
+> [docs/x402-and-rate-limiting.md](docs/x402-and-rate-limiting.md) for
+> comprehensive documentation.
 
 ### Added
 
@@ -301,6 +322,13 @@ paywall now uses redirect mode to properly handle content-type metadata, and
 rate limiting has been extended to work correctly across all content delivery
 paths including manifests, ArNS names, and range requests.
 
+> **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are
+> experimental features subject to change. API endpoints, parameters, behavior,
+> and configuration options (environment variables) may evolve in future
+> releases as these systems continue to be developed. See
+> [docs/x402-and-rate-limiting.md](docs/x402-and-rate-limiting.md) for
+> comprehensive documentation.
+
 ### Added
 
 - **Token Consumption Metrics**: New `rate_limit_tokens_consumed_total`
@@ -356,6 +384,13 @@ This is a **recommended release** due to the improvements to chunk observation
 and retrieval. The release enhances peer selection for chunk operations,
 introduces experimental X402 payment protocol support, and enables offset
 observation enforcement by default to strengthen network reliability.
+
+> **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are
+> experimental features subject to change. API endpoints, parameters, behavior,
+> and configuration options (environment variables) may evolve in future
+> releases as these systems continue to be developed. See
+> [docs/x402-and-rate-limiting.md](docs/x402-and-rate-limiting.md) for
+> comprehensive documentation.
 
 ### Added
 
@@ -534,6 +569,13 @@ improves observer stability under load through reduced sample rates, optimized
 timeouts, and better concurrency management. Additionally, it introduces a complete
 rate limiting solution with token bucket algorithm and IP allowlist support for
 enhanced DDoS protection.
+
+> **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are
+> experimental features subject to change. API endpoints, parameters, behavior,
+> and configuration options (environment variables) may evolve in future
+> releases as these systems continue to be developed. See
+> [docs/x402-and-rate-limiting.md](docs/x402-and-rate-limiting.md) for
+> comprehensive documentation.
 
 ### Added
 
