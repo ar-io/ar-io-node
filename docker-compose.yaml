@@ -244,7 +244,6 @@ services:
       - '4318' # HTTP OTLP receiver (don't expose externally by default)
     volumes:
       - ./otel/collector-config.yaml:/etc/otel/config.yaml:ro
-      #- ${OTEL_COLLECTOR_DESTINATION_HEADERS_FILE:-/dev/null}:${OTEL_COLLECTOR_DESTINATION_HEADERS_FILE:-/dev/null}:ro
     environment:
       # Destination endpoint for sampled traces
       - OTEL_COLLECTOR_DESTINATION_ENDPOINT=${OTEL_COLLECTOR_DESTINATION_ENDPOINT:-}
