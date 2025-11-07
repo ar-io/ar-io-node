@@ -878,6 +878,11 @@ paths:
       description: |
         Get the content of a specified transaction or data item. Supports manifest path resolution,
         range requests, and returns various informational headers about data verification and caching status.
+
+        For ANS-104 data items, offset headers are returned to help navigate bundle hierarchies:
+        - Root offset headers (X-AR-IO-Root-Data-Item-Offset, X-AR-IO-Root-Data-Offset) provide byte offsets from the start of the root L1 transaction
+        - Parent offset headers provide byte offsets from the start of the immediate parent bundle's payload
+        - Offset relationships: rootDataItemOffset = rootParentOffset + offset, rootDataOffset = rootParentOffset + dataOffset
       parameters:
         - name: txId
           in: path
@@ -940,6 +945,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '206':
           description: Partial content for range requests
           headers:
@@ -989,6 +1046,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '301':
           description: Redirect for manifest paths without trailing slash
         '404':
@@ -1067,7 +1176,13 @@ paths:
     get:
       tags: [Data]
       summary: Get raw transaction data
-      description: Get the raw content of a specified transaction without manifest resolution
+      description: |
+        Get the raw content of a specified transaction without manifest resolution.
+
+        For ANS-104 data items, offset headers are returned to help navigate bundle hierarchies:
+        - Root offset headers (X-AR-IO-Root-Data-Item-Offset, X-AR-IO-Root-Data-Offset) provide byte offsets from the start of the root L1 transaction
+        - Parent offset headers provide byte offsets from the start of the immediate parent bundle's payload
+        - Offset relationships: rootDataItemOffset = rootParentOffset + offset, rootDataOffset = rootParentOffset + dataOffset
       parameters:
         - name: txId
           in: path
@@ -1130,6 +1245,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '206':
           description: Partial content for range requests
           headers:
@@ -1179,6 +1346,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '404':
           description: Data not found or blocked
         '416':
@@ -1249,6 +1468,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '404':
           description: Data not found or blocked
         '416':
@@ -1562,16 +1833,20 @@ paths:
               schema:
                 type: string
                 example: 'sha-256=:YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE=:'
-            X-AR-IO-Cache-Status:
+            Content-Length:
+              description: Size of the response body in bytes
+              schema:
+                type: integer
+            X-Cache:
               description: Cache status (HIT or MISS)
               schema:
                 type: string
                 enum: [HIT, MISS]
-            X-AR-IO-Source:
-              description: Source of the chunk data
+            X-AR-IO-Chunk-Source-Type:
+              description: Source type of the chunk data
               schema:
                 type: string
-            X-AR-IO-Host:
+            X-AR-IO-Chunk-Host:
               description: Host that provided the chunk
               schema:
                 type: string
@@ -1606,10 +1881,6 @@ paths:
           description: |-
             200 response with headers only
           headers:
-            Content-Length:
-              description: Size of the response body (if it were returned)
-              schema:
-                type: integer
             Content-Type:
               description: Media type of the response
               schema:
@@ -1623,16 +1894,20 @@ paths:
               schema:
                 type: string
                 example: 'sha-256=:YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE=:'
-            X-AR-IO-Cache-Status:
+            Content-Length:
+              description: Size of the response body in bytes
+              schema:
+                type: integer
+            X-Cache:
               description: Cache status (HIT or MISS)
               schema:
                 type: string
                 enum: [HIT, MISS]
-            X-AR-IO-Source:
-              description: Source of the chunk data
+            X-AR-IO-Chunk-Source-Type:
+              description: Source type of the chunk data
               schema:
                 type: string
-            X-AR-IO-Host:
+            X-AR-IO-Chunk-Host:
               description: Host that provided the chunk
               schema:
                 type: string
