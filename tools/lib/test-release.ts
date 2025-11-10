@@ -171,7 +171,7 @@ class ReleaseTester {
 
     try {
       // Clean start
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
 
       // Start default profile
       console.log('  Starting containers...');
@@ -221,7 +221,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -230,7 +230,7 @@ class ReleaseTester {
 
     try {
       // Clean start
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
 
       // Start clickhouse profile
       console.log('  Starting containers with clickhouse profile...');
@@ -267,7 +267,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose --profile clickhouse down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -276,7 +276,7 @@ class ReleaseTester {
 
     try {
       // Clean start
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
 
       // Start litestream profile
       console.log('  Starting containers with litestream profile...');
@@ -321,7 +321,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose --profile litestream down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -330,7 +330,7 @@ class ReleaseTester {
 
     try {
       // Clean start
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
 
       // Start otel profile
       console.log('  Starting containers with otel profile...');
@@ -375,7 +375,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose --profile otel down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -384,7 +384,7 @@ class ReleaseTester {
 
     try {
       // Start base containers first
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
       await this.executeCommand('docker compose up -d');
 
       // Wait a bit for base containers
@@ -436,7 +436,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down > /dev/null 2>&1');
+      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -461,7 +461,7 @@ class ReleaseTester {
   private async cleanup(): Promise<void> {
     console.log('🧹 Cleaning up containers...');
     try {
-      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down > /dev/null 2>&1');
+      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
       console.log('✅ Cleanup completed');
     } catch (error) {
       console.log('⚠️  Cleanup had some issues (containers may still be running)');
