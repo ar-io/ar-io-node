@@ -4,7 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 58] - 2025-11-10
+
+This is a **recommended release** due to significant improvements in data
+retrieval efficiency and payment system reliability. This release introduces a
+new raw binary chunk data endpoint providing ~40% bandwidth savings,
+comprehensive rate limit balance management APIs, and intelligent OpenTelemetry
+tail-based sampling for cost-effective observability. The release also includes
+critical payment validation fixes and enhanced bundler service discovery for
+improved client integration.
 
 > **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are
 > experimental features subject to change. API endpoints, parameters, behavior,
