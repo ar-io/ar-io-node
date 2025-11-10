@@ -20,14 +20,16 @@
    containers start and produce logs:
    - `docker compose up -d` (default profile)
      - Core containers (envoy, core, redis, observer) must stay running
-   - `docker compose down && docker compose --profile clickhouse up -d`
+   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose --profile clickhouse up -d`
      - Adds clickhouse and clickhouse-auto-import containers
-   - `docker compose down && docker compose --profile litestream up -d`
+   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose --profile litestream up -d`
      - Litestream may exit if S3 not configured (expected behavior)
-   - `docker compose up -d && docker compose -f docker-compose.yaml -f docker-compose.ao.yaml up -d`
+   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose --profile otel up -d`
+     - OTEL collector may exit if endpoint not configured (expected behavior)
+   - `docker compose --profile clickhouse --profile litestream --profile otel down && docker compose up -d && docker compose -f docker-compose.yaml -f docker-compose.ao.yaml up -d`
      - AO CU may restart if not configured (expected behavior)
    - Verify core containers stay running: `docker ps | grep -E "envoy|core|redis|observer"`
-   - After testing, stop all: `docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down`
+   - After testing, stop all: `docker compose -f docker-compose.yaml -f docker-compose.ao.yaml --profile clickhouse --profile litestream --profile otel down`
 12. Tag the release in git: `git tag r47` (replace with appropriate release number)
 13. Push the tag: `git push origin r47`
 14. Create GitHub release using the tag:
