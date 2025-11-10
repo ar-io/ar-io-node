@@ -198,8 +198,8 @@ services:
       - OTEL_TRACING_SAMPLING_RATE_DENOMINATOR=${OTEL_TRACING_SAMPLING_RATE_DENOMINATOR:-}
       - OTEL_EXPORTER_OTLP_HEADERS_FILE=${OTEL_EXPORTER_OTLP_HEADERS_FILE:-}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
-      # Point to OTEL Collector for tail sampling. Override to bypass collector.
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      # Set to http://otel-collector:4318 when using --profile otel, or to external endpoint to bypass collector
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       # x402 USDC Egress
       - ENABLE_X_402_USDC_DATA_EGRESS=${ENABLE_X_402_USDC_DATA_EGRESS:-}
       - X_402_USDC_NETWORK=${X_402_USDC_NETWORK:-}
@@ -221,7 +221,6 @@ services:
       - ar-io-network
     depends_on:
       - redis
-      - otel-collector
     labels:
       autoheal: ${RUN_AUTOHEAL:-false}
 
@@ -238,6 +237,8 @@ services:
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_IMAGE_TAG:-0.119.0}
+    profiles:
+      - otel
     restart: unless-stopped
     ports:
       - '4317' # gRPC OTLP receiver (don't expose externally by default)

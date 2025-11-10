@@ -76,10 +76,11 @@ improved client integration.
     defaults to current request host)
   - Enables programmatic balance queries and top-ups for testing and automated
     payment workflows
-- **OpenTelemetry Collector with Tail-Based Sampling**: New OTEL Collector
-  sidecar in docker-compose deployments implements intelligent tail-based
-  sampling to reduce telemetry costs by 80-95% while maintaining complete
-  visibility into errors, performance issues, and paid traffic
+- **OpenTelemetry Collector with Tail-Based Sampling** ⚠️ **EXPERIMENTAL**: New
+  OTEL Collector sidecar in docker-compose deployments implements intelligent
+  tail-based sampling to reduce telemetry costs by 80-95% while maintaining
+  complete visibility into errors, performance issues, and paid traffic. This
+  feature is experimental and subject to change in future releases
   - Five intelligent sampling policies make decisions after traces complete:
     - 100% of traces with errors (5xx responses, exceptions)
     - 100% of slow requests exceeding configurable threshold (default: 2 seconds)
@@ -100,8 +101,10 @@ improved client integration.
     - `OTEL_TAIL_SAMPLING_SLOW_RATE` - Slow request sampling rate (default: 100%)
     - `OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE` - Paid traffic sampling (default: 100%)
     - `OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE` - Paid token sampling (default: 100%)
-  - Automatically deployed in docker-compose with configurable destination endpoint
-    (`OTEL_COLLECTOR_DESTINATION_ENDPOINT`)
+  - Optional deployment via docker-compose profile (`docker compose --profile otel up`)
+  - Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` when using the
+    profile, or configure it to send traces directly to an external backend to
+    bypass the local collector
   - Enhanced span attributes for paid traffic tracking including client IP,
     payment verification status, and token consumption
 
