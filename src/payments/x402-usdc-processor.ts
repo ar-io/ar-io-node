@@ -316,6 +316,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
       message?: string;
       payer?: string;
       price?: string;
+      browserPaymentFlow?: 'redirect' | 'direct';
     },
   ): void {
     // Check if this is a browser request and return HTML paywall
@@ -341,8 +342,7 @@ export class X402UsdcProcessor implements PaymentProcessor {
         displayAmount = atomicAmount / 1_000_000; // USDC has 6 decimals
       }
 
-      // Encode original URL to base64url for redirect endpoint
-      // Defensive check: ensure originalUrl is a defined string before encoding
+      // Defensive check: ensure originalUrl is a defined string
       let urlToEncode = req.originalUrl;
       if (typeof urlToEncode !== 'string') {
         log.warn(
@@ -354,13 +354,24 @@ export class X402UsdcProcessor implements PaymentProcessor {
         );
         urlToEncode = req.url || '';
       }
-      const encodedUrl = Buffer.from(urlToEncode).toString('base64url');
-      const paywallUrl = `/ar-io/x402/redirect/${encodedUrl}`;
+
+      // Determine payment flow strategy from options
+      // This controls where the browser payment is submitted:
+      // - 'direct': Payment submitted to original URL, content served inline (single request)
+      //   Best for small content where redirect overhead is significant (e.g., chunks)
+      // - 'redirect': Payment submitted to redirect endpoint, then redirects to original URL
+      //   Best for larger content where redirect overhead is negligible (e.g., transactions, manifests)
+      // - undefined/default: Use 'redirect' for backwards compatibility
+      const browserPaymentFlow = options?.browserPaymentFlow ?? 'redirect';
+      const currentUrl =
+        browserPaymentFlow === 'direct'
+          ? urlToEncode // Use original URL for direct flow
+          : `/ar-io/x402/browser-paywall-redirect/${Buffer.from(urlToEncode).toString('base64url')}`; // Use redirect endpoint
 
       const html = getPaywallHtml({
         amount: displayAmount,
         paymentRequirements: toJsonSafe([requirements]) as any,
-        currentUrl: paywallUrl,
+        currentUrl: currentUrl,
         testnet: this.config.network === 'base-sepolia',
         cdpClientKey: this.config.cdpClientKey,
         appName: this.config.appName,

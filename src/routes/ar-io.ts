@@ -128,9 +128,10 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
 /**
  * Handler for the /ar-io/info endpoint.
  *
- * Returns gateway configuration information including rate limiter settings
- * (when enabled) and x402 payment configuration (when enabled). This endpoint
- * allows clients to discover gateway capabilities, limits, and pricing.
+ * Returns gateway configuration information including bundler service URLs,
+ * rate limiter settings (when enabled), and x402 payment configuration
+ * (when enabled). This endpoint allows clients to discover gateway capabilities,
+ * bundler services, limits, and pricing.
  *
  * @param _req - Express request object (unused)
  * @param res - Express response object
@@ -142,6 +143,9 @@ arIoRouter.get('/ar-io/healthcheck', async (_req, res) => {
  * {
  *   "wallet": "...",
  *   "processId": "...",
+ *   "bundlers": [
+ *     { "url": "https://turbo.ardrive.io/" }
+ *   ],
  *   "rateLimiter": {
  *     "enabled": true,
  *     "dataEgress": {
@@ -167,6 +171,7 @@ export const arIoInfoHandler = (_req: Request, res: Response) => {
     ans104UnbundleFilter: config.ANS104_UNBUNDLE_FILTER_PARSED,
     ans104IndexFilter: config.ANS104_INDEX_FILTER_PARSED,
     release,
+    bundlerUrls: config.BUNDLER_URLS,
     rateLimiter: config.ENABLE_RATE_LIMITER
       ? {
           enabled: true,

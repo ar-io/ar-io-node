@@ -30,6 +30,11 @@ describe('ArIO', function () {
     assert.ok(res.data.processId);
     assert.ok(res.data.supportedManifestVersions);
     assert.ok(res.data.release);
+    assert.ok(res.data.services.bundlers);
+    assert.ok(Array.isArray(res.data.services.bundlers));
+    assert.ok(res.data.services.bundlers.length > 0);
+    assert.ok(res.data.services.bundlers[0].url);
+    assert.strictEqual(typeof res.data.services.bundlers[0].url, 'string');
   });
 
   it('should return a list of peers', async function () {

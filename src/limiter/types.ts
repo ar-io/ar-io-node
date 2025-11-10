@@ -94,4 +94,55 @@ export interface RateLimiter {
    * @returns Promise<void>
    */
   topOffPaidTokens(req: Request, tokens: number): Promise<void>;
+
+  /**
+   * Get IP bucket state
+   * @param ip IP address
+   * @returns Promise with bucket state or null if bucket doesn't exist
+   */
+  getIpBucketState(ip: string): Promise<{
+    ip: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null>;
+
+  /**
+   * Get resource bucket state
+   * @param method HTTP method
+   * @param host Host header
+   * @param path Request path
+   * @returns Promise with bucket state or null if bucket doesn't exist
+   */
+  getResourceBucketState(
+    method: string,
+    host: string,
+    path: string,
+  ): Promise<{
+    method: string;
+    host: string;
+    path: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null>;
+
+  /**
+   * Top off resource bucket with paid tokens
+   * @param method HTTP method
+   * @param host Host header
+   * @param path Request path
+   * @param tokens Number of tokens to add to paid bucket
+   * @returns Promise<void>
+   */
+  topOffPaidTokensForResource(
+    method: string,
+    host: string,
+    path: string,
+    tokens: number,
+  ): Promise<void>;
 }

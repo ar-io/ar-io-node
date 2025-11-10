@@ -65,6 +65,11 @@ tags:
   - name: Admin
     description: |
       Access several password protected features and functions specific to your AR.IO Gateway.
+  - name: Rate Limiting
+    description: |
+      Query and manage rate limit bucket balances. Supports both public balance queries and top-ups via x402 payments or admin authentication.
+
+      **⚠️ EXPERIMENTAL FEATURES**: The rate limiter and x402 payment protocol are experimental features subject to change. API endpoints, parameters, behavior, and configuration options (environment variables) may evolve in future releases as these systems continue to be developed. See [docs/x402-and-rate-limiting.md](https://github.com/ar-io/ar-io-node/blob/develop/docs/x402-and-rate-limiting.md) for comprehensive documentation.
 components:
   securitySchemes:
     bearerAuth:
@@ -540,6 +545,7 @@ paths:
         - ANS-104 filter configurations
         - Supported manifest versions
         - Gateway software release version
+        - Bundler service URLs for data upload service discovery
         - Rate limiter configuration (if enabled)
         - x402 payment protocol configuration (if enabled)
       responses:
@@ -570,6 +576,25 @@ paths:
                   release:
                     type: string
                     description: Gateway software release version
+                  services:
+                    type: object
+                    description: Service discovery information
+                    properties:
+                      bundlers:
+                        type: array
+                        description: List of bundler service URLs for data upload service discovery
+                        items:
+                          type: object
+                          properties:
+                            url:
+                              type: string
+                              format: uri
+                              description: Bundler service URL
+                              example: 'https://turbo.ardrive.io/'
+                          required:
+                            - url
+                    required:
+                      - bundlers
                   rateLimiter:
                     type: object
                     description: Rate limiter configuration (only present when rate limiting is enabled)
@@ -734,6 +759,7 @@ paths:
                   - processId
                   - supportedManifestVersions
                   - release
+                  - bundlers
   '/ar-io/peers':
     get:
       tags: [Gateway]
@@ -852,6 +878,11 @@ paths:
       description: |
         Get the content of a specified transaction or data item. Supports manifest path resolution,
         range requests, and returns various informational headers about data verification and caching status.
+
+        For ANS-104 data items, offset headers are returned to help navigate bundle hierarchies:
+        - Root offset headers (X-AR-IO-Root-Data-Item-Offset, X-AR-IO-Root-Data-Offset) provide byte offsets from the start of the root L1 transaction
+        - Parent offset headers provide byte offsets from the start of the immediate parent bundle's payload
+        - Offset relationships: rootDataItemOffset = rootParentOffset + offset, rootDataOffset = rootParentOffset + dataOffset
       parameters:
         - name: txId
           in: path
@@ -914,6 +945,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '206':
           description: Partial content for range requests
           headers:
@@ -963,6 +1046,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '301':
           description: Redirect for manifest paths without trailing slash
         '404':
@@ -1041,7 +1176,13 @@ paths:
     get:
       tags: [Data]
       summary: Get raw transaction data
-      description: Get the raw content of a specified transaction without manifest resolution
+      description: |
+        Get the raw content of a specified transaction without manifest resolution.
+
+        For ANS-104 data items, offset headers are returned to help navigate bundle hierarchies:
+        - Root offset headers (X-AR-IO-Root-Data-Item-Offset, X-AR-IO-Root-Data-Offset) provide byte offsets from the start of the root L1 transaction
+        - Parent offset headers provide byte offsets from the start of the immediate parent bundle's payload
+        - Offset relationships: rootDataItemOffset = rootParentOffset + offset, rootDataOffset = rootParentOffset + dataOffset
       parameters:
         - name: txId
           in: path
@@ -1104,6 +1245,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '206':
           description: Partial content for range requests
           headers:
@@ -1153,6 +1346,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '404':
           description: Data not found or blocked
         '416':
@@ -1223,6 +1468,58 @@ paths:
               schema:
                 type: integer
                 example: 1
+            X-AR-IO-Stable:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data is before max fork depth (stable on chain)
+              example: 'true'
+            X-AR-IO-Trusted:
+              schema:
+                type: string
+                enum: ['true', 'false']
+              description: Whether data source is trusted
+              example: 'true'
+            X-AR-IO-Data-Id:
+              schema:
+                type: string
+              description: The data ID being served (may differ from txId for manifests)
+              example: 'YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE'
+            Content-Encoding:
+              schema:
+                type: string
+              description: Content encoding when present (e.g., gzip, br)
+              example: 'gzip'
+            X-AR-IO-Root-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2048
+            X-AR-IO-Root-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the root L1 transaction data (ANS-104 bundles only)
+              example: 2176
+            X-AR-IO-Data-Item-Root-Parent-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the immediate parent bundle's payload from the start of the root transaction (ANS-104 bundles only)
+              example: 1536
+            X-AR-IO-Data-Item-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data item header from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 512
+            X-AR-IO-Data-Item-Data-Offset:
+              schema:
+                type: integer
+              description: Byte offset of the data payload from the start of the immediate parent bundle's payload (ANS-104 bundles only)
+              example: 640
+            X-AR-IO-Data-Item-Size:
+              schema:
+                type: integer
+              description: Total size of data item including headers and payload in bytes (ANS-104 bundles only)
+              example: 2092
         '404':
           description: Data not found or blocked
         '416':
@@ -1536,16 +1833,23 @@ paths:
               schema:
                 type: string
                 example: 'sha-256=:YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE=:'
-            X-AR-IO-Cache-Status:
-              description: Cache status (HIT or MISS)
+            Content-Length:
+              description: Size of the response body in bytes
+              schema:
+                type: integer
+            X-Cache:
+              description: |-
+                Cache status indicating whether chunk was served from local cache (HIT) or retrieved from external source (MISS).
+                Always present.
               schema:
                 type: string
                 enum: [HIT, MISS]
-            X-AR-IO-Source:
-              description: Source of the chunk data
+              example: HIT
+            X-AR-IO-Chunk-Source-Type:
+              description: Source type of the chunk data
               schema:
                 type: string
-            X-AR-IO-Host:
+            X-AR-IO-Chunk-Host:
               description: Host that provided the chunk
               schema:
                 type: string
@@ -1580,10 +1884,6 @@ paths:
           description: |-
             200 response with headers only
           headers:
-            Content-Length:
-              description: Size of the response body (if it were returned)
-              schema:
-                type: integer
             Content-Type:
               description: Media type of the response
               schema:
@@ -1597,16 +1897,23 @@ paths:
               schema:
                 type: string
                 example: 'sha-256=:YjNkZjM1YThhNjIxOGY2MTZlNTQ3YzFmZGE2YzE4ZjE=:'
-            X-AR-IO-Cache-Status:
-              description: Cache status (HIT or MISS)
+            Content-Length:
+              description: Size of the response body in bytes
+              schema:
+                type: integer
+            X-Cache:
+              description: |-
+                Cache status indicating whether chunk was served from local cache (HIT) or retrieved from external source (MISS).
+                Always present.
               schema:
                 type: string
                 enum: [HIT, MISS]
-            X-AR-IO-Source:
-              description: Source of the chunk data
+              example: HIT
+            X-AR-IO-Chunk-Source-Type:
+              description: Source type of the chunk data
               schema:
                 type: string
-            X-AR-IO-Host:
+            X-AR-IO-Chunk-Host:
               description: Host that provided the chunk
               schema:
                 type: string
@@ -1616,6 +1923,331 @@ paths:
           description: Invalid offset parameter
         '404':
           description: Chunk not found
+
+  '/chunk/{offset}/data':
+    get:
+      tags: [Chunks]
+      summary: Get chunk as raw binary data with metadata in headers.
+      description: |-
+        Fetches chunk data as raw binary (application/octet-stream) with metadata in response headers.
+        This endpoint provides ~40% bandwidth savings compared to the base64url-encoded JSON endpoint.
+
+        Chunk boundaries and merkle tree structure:
+        - Chunks are determined by Arweave's merkle tree structure (maximum 256 KiB per chunk)
+        - When you request data at an arbitrary offset, the full chunk containing that offset is returned
+        - Use X-Arweave-Chunk-Read-Offset to determine where to start reading within the returned chunk
+        - Merkle proof headers (X-Arweave-Chunk-Data-Path, X-Arweave-Chunk-Data-Root) provide cryptographic verification
+
+        Offset relationships:
+        - X-Arweave-Chunk-Start-Offset: Weave position where this chunk begins
+        - X-Arweave-Chunk-Tx-Start-Offset: Weave position where the containing transaction begins
+        - X-Arweave-Chunk-Relative-Start-Offset: Chunk position within its transaction (Chunk-Start-Offset - Tx-Start-Offset)
+        - X-Arweave-Chunk-Read-Offset: Byte offset within the returned chunk where your requested data starts
+
+        Example: Requesting a specific byte
+        - Request: GET /chunk/50100/data (you want byte 50100 of the weave)
+        - Response might have:
+          - X-Arweave-Chunk-Start-Offset: 50000 (chunk starts at weave byte 50000)
+          - X-Arweave-Chunk-Tx-Start-Offset: 49500 (transaction starts at weave byte 49500)
+          - X-Arweave-Chunk-Relative-Start-Offset: 500 (chunk is 500 bytes into the transaction)
+          - X-Arweave-Chunk-Read-Offset: 100 (start reading at byte 100 of the chunk body)
+          - Content-Length: 262144 (256 KiB chunk returned)
+        - To get your data: read from byte 100 to end of the response body
+      parameters:
+        - name: offset
+          in: path
+          required: true
+          description: Weave offset (0-based byte position in the weave)
+          schema:
+            type: integer
+        - name: If-None-Match
+          in: header
+          required: false
+          description: ETag value for conditional request. Returns 304 if chunk hash matches.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw binary chunk data with metadata in headers
+          headers:
+            Content-Type:
+              description: |-
+                Media type of the response.
+                Always application/octet-stream for this endpoint.
+                Always present.
+              schema:
+                type: string
+                example: application/octet-stream
+            Content-Length:
+              description: |-
+                Size of the chunk data in bytes (maximum 256 KiB).
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Data-Path:
+              description: |-
+                Base64url-encoded merkle proof path for this chunk.
+                Provides cryptographic proof of the chunk's position in the merkle tree.
+                Uses base64url encoding (URL-safe), not standard base64.
+                Always present.
+              schema:
+                type: string
+            X-Arweave-Chunk-Data-Root:
+              description: |-
+                Base64url-encoded merkle tree root hash.
+                Root of the merkle tree used to verify chunk integrity.
+                Uses base64url encoding (URL-safe), not standard base64.
+                Always present.
+              schema:
+                type: string
+            X-Arweave-Chunk-Start-Offset:
+              description: |-
+                Start offset of this chunk in the weave (inclusive, 0-based byte position).
+                This is the weave-relative position where this chunk begins.
+                To calculate chunk end offset: startOffset + Content-Length.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Relative-Start-Offset:
+              description: |-
+                Byte offset where this chunk starts within its containing transaction (inclusive, 0-based).
+                Calculated as: X-Arweave-Chunk-Start-Offset - X-Arweave-Chunk-Tx-Start-Offset.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Read-Offset:
+              description: |-
+                Byte offset within the returned chunk body where your requested data starts (0-based).
+                Since full chunks are always returned (determined by merkle tree boundaries),
+                this tells you where to start reading within the response body to get the data at your requested offset.
+                Example: if you request offset 50100 and the chunk starts at 50000, this will be 100.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Data-Size:
+              description: |-
+                Total size of the containing transaction's data in bytes.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Path:
+              description: |-
+                Base64url-encoded transaction-level merkle path.
+                Always present but may be empty string if transaction path is not available.
+                Uses base64url encoding (URL-safe), not standard base64.
+              schema:
+                type: string
+            X-Arweave-Chunk-Tx-Id:
+              description: |-
+                The Arweave transaction ID (base64url) containing this chunk.
+                Always present.
+              schema:
+                type: string
+            X-Arweave-Chunk-Tx-Start-Offset:
+              description: |-
+                Start offset of the containing transaction in the weave (inclusive, 0-based byte position).
+                This is the weave-relative position where the transaction begins.
+                To calculate transaction end offset: txStartOffset + X-Arweave-Chunk-Tx-Data-Size.
+                Always present.
+              schema:
+                type: integer
+            X-Cache:
+              description: |-
+                Cache status indicating whether chunk was served from local cache (HIT) or retrieved from external source (MISS).
+                Always present.
+              schema:
+                type: string
+                enum: [HIT, MISS]
+              example: HIT
+            X-AR-IO-Chunk-Source-Type:
+              description: |-
+                Source type of the chunk data (e.g., 'cache', 'origin', 'peer').
+                Present when source information is available.
+              schema:
+                type: string
+              example: cache
+            X-AR-IO-Chunk-Host:
+              description: |-
+                Hostname or identifier of the source that provided this chunk.
+                Present when source host information is available.
+              schema:
+                type: string
+              example: gateway.example.com
+            ETag:
+              description: |-
+                Strong ETag based on SHA-256 hash of chunk data (base64url-encoded).
+                Present only for cached chunks or HEAD requests to ensure hash accuracy.
+                Use with If-None-Match header for conditional requests.
+              schema:
+                type: string
+              example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              description: |-
+                RFC 9530 compliant digest header with SHA-256 hash of chunk data.
+                Present only for cached chunks or HEAD requests to ensure hash accuracy.
+                Format: sha-256=:<base64-encoded-hash>: (uses standard base64, not base64url).
+              schema:
+                type: string
+              example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '304':
+          description: Not Modified - chunk hash matches If-None-Match header
+        '400':
+          description: Invalid offset parameter
+        '404':
+          description: Chunk not found
+        '500':
+          description: Internal server error (e.g., merkle path parsing failed)
+    head:
+      tags: [Chunks]
+      summary: Get chunk metadata without body.
+      description: |-
+        Returns the same headers as GET but without the response body.
+        Useful for checking chunk existence, getting metadata (boundaries, offsets, merkle proofs),
+        and obtaining hashes (ETag, Content-Digest) without downloading the full chunk.
+      parameters:
+        - name: offset
+          in: path
+          required: true
+          description: Weave offset (0-based byte position in the weave)
+          schema:
+            type: integer
+        - name: If-None-Match
+          in: header
+          required: false
+          description: ETag value for conditional request. Returns 304 if chunk hash matches.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Chunk metadata in headers only
+          headers:
+            Content-Type:
+              description: Media type of the response (if body were returned)
+              schema:
+                type: string
+                example: application/octet-stream
+            Content-Length:
+              description: Size of the raw chunk in bytes
+              schema:
+                type: integer
+            X-Arweave-Chunk-Data-Path:
+              description: |-
+                Base64url-encoded merkle proof path for this chunk.
+                Provides cryptographic proof of the chunk's position in the merkle tree.
+                Uses base64url encoding (URL-safe), not standard base64.
+                Always present.
+              schema:
+                type: string
+            X-Arweave-Chunk-Data-Root:
+              description: |-
+                Base64url-encoded merkle tree root hash.
+                Root of the merkle tree used to verify chunk integrity.
+                Uses base64url encoding (URL-safe), not standard base64.
+                Always present.
+              schema:
+                type: string
+            X-Arweave-Chunk-Start-Offset:
+              description: |-
+                Start offset of this chunk in the weave (inclusive, 0-based byte position).
+                This is the weave-relative position where this chunk begins.
+                To calculate chunk end offset: startOffset + Content-Length.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Relative-Start-Offset:
+              description: |-
+                Byte offset where this chunk starts within its containing transaction (inclusive, 0-based).
+                Calculated as: X-Arweave-Chunk-Start-Offset - X-Arweave-Chunk-Tx-Start-Offset.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Read-Offset:
+              description: |-
+                Byte offset within the returned chunk body where your requested data starts (0-based).
+                Since full chunks are always returned (determined by merkle tree boundaries),
+                this tells you where to start reading within the response body to get the data at your requested offset.
+                Example: if you request offset 50100 and the chunk starts at 50000, this will be 100.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Data-Size:
+              description: |-
+                Total size of the containing transaction's data in bytes.
+                Always present.
+              schema:
+                type: integer
+            X-Arweave-Chunk-Tx-Path:
+              description: |-
+                Base64url-encoded transaction-level merkle path.
+                Always present but may be empty string if transaction path is not available.
+                Uses base64url encoding (URL-safe), not standard base64.
+              schema:
+                type: string
+            X-Arweave-Chunk-Tx-Id:
+              description: |-
+                The Arweave transaction ID (base64url) containing this chunk.
+                Always present.
+              schema:
+                type: string
+            X-Arweave-Chunk-Tx-Start-Offset:
+              description: |-
+                Start offset of the containing transaction in the weave (inclusive, 0-based byte position).
+                This is the weave-relative position where the transaction begins.
+                To calculate transaction end offset: txStartOffset + X-Arweave-Chunk-Tx-Data-Size.
+                Always present.
+              schema:
+                type: integer
+            X-Cache:
+              description: |-
+                Cache status indicating whether chunk was served from local cache (HIT) or retrieved from external source (MISS).
+                Always present.
+              schema:
+                type: string
+                enum: [HIT, MISS]
+              example: HIT
+            X-AR-IO-Chunk-Source-Type:
+              description: |-
+                Source type of the chunk data (e.g., 'cache', 'origin', 'peer').
+                Present when source information is available.
+              schema:
+                type: string
+              example: cache
+            X-AR-IO-Chunk-Host:
+              description: |-
+                Hostname or identifier of the source that provided this chunk.
+                Present when source host information is available.
+              schema:
+                type: string
+              example: gateway.example.com
+            ETag:
+              description: |-
+                Strong ETag based on SHA-256 hash of chunk data (base64url-encoded).
+                Present only for cached chunks or HEAD requests to ensure hash accuracy.
+                Use with If-None-Match header for conditional requests.
+              schema:
+                type: string
+              example: '4ROTs2lTPAKbr8Y41WrjHu-2q-7S-m-yTuO7fAUzZI4'
+            Content-Digest:
+              description: |-
+                RFC 9530 compliant digest header with SHA-256 hash of chunk data.
+                Present only for cached chunks or HEAD requests to ensure hash accuracy.
+                Format: sha-256=:<base64-encoded-hash>: (uses standard base64, not base64url).
+              schema:
+                type: string
+              example: 'sha-256=:4ROTs2lTPAKbr8Y41WrjHu+2q+7S+m+yTuO7fAUzZI4=:'
+        '304':
+          description: Not Modified - chunk hash matches If-None-Match header
+        '400':
+          description: Invalid offset parameter
+        '404':
+          description: Chunk not found
+        '500':
+          description: Internal server error (e.g., merkle path parsing failed)
 
   # Index
   '/graphql':
@@ -2253,6 +2885,523 @@ paths:
                 example: 'Invalid indexedAtThreshold - must be a positive integer'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  # Rate Limiting
+  '/ar-io/rate-limit/ip/{ip}':
+    get:
+      tags: [Rate Limiting]
+      summary: Query IP bucket balance
+      description: |
+        Get the current rate limit token balance for an IP address. Returns both regular
+        (refilling) and paid tokens. Buckets are created on first request and refill over time.
+
+        **Token System:**
+        - 1 token = 1 KiB (1,024 bytes)
+        - Regular tokens: Automatically refill based on configured rate (e.g., 20 KB/s)
+        - Paid tokens: Acquired via x402 payments, never refill, consumed after regular tokens
+      operationId: getRateLimitIpBalance
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+            format: ipv4 or ipv6
+          description: IP address (IPv4, IPv6, or IPv4-mapped IPv6 format)
+          example: '192.168.1.100'
+      responses:
+        '200':
+          description: Successfully retrieved IP bucket balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ip:
+                    type: string
+                    description: IP address
+                    example: '192.168.1.100'
+                  tokens:
+                    type: number
+                    description: Regular tokens (refilling)
+                    example: 95000
+                  paidTokens:
+                    type: number
+                    description: Paid tokens (non-refilling)
+                    example: 50000
+                  capacity:
+                    type: number
+                    description: Maximum regular token capacity
+                    example: 100000
+                  refillRate:
+                    type: number
+                    description: Refill rate in tokens per second
+                    example: 20
+                  lastRefill:
+                    type: number
+                    format: int64
+                    description: Last refill timestamp (Unix milliseconds)
+                    example: 1735689600000
+                required:
+                  - ip
+                  - tokens
+                  - paidTokens
+                  - capacity
+                  - refillRate
+                  - lastRefill
+        '400':
+          description: Invalid IP address format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Invalid IP address format'
+        '404':
+          description: Bucket not found (created on first request)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Bucket not found'
+                  message:
+                    type: string
+                    example: 'No rate limit bucket exists for this IP. Buckets are created on first request.'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Rate Limiting]
+      summary: Top up IP bucket
+      description: |
+        Add paid tokens to an IP bucket via x402 payment or admin authentication.
+
+        **Authentication Modes:**
+
+        1. **x402 Payment (Public):**
+           - Provide X-Payment header with payment data
+           - Tokens calculated from payment amount
+           - 10x capacity multiplier applied
+           - Example: $0.10 payment → ~976 KB equivalent → ~976,000 tokens
+
+        2. **Admin (Private/Testing):**
+           - Provide Authorization: Bearer header with admin API key
+           - Specify exact token count and type in request body
+           - No multiplier applied (raw token count)
+           - Only supports paid tokens currently
+      operationId: topUpRateLimitIpBucket
+      parameters:
+        - name: ip
+          in: path
+          required: true
+          schema:
+            type: string
+            format: ipv4 or ipv6
+          description: IP address
+          example: '192.168.1.100'
+        - name: X-Payment
+          in: header
+          required: false
+          schema:
+            type: string
+            format: base64
+          description: |
+            Base64-encoded x402 payment data (for x402 payment mode).
+            Mutually exclusive with Authorization header.
+      security:
+        - {}
+        - bearerAuth: []
+      requestBody:
+        description: |
+          Required for admin authentication mode. Omit for x402 payment mode.
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tokens:
+                  type: number
+                  minimum: 1
+                  description: Number of tokens to add (admin mode only)
+                  example: 50000
+                tokenType:
+                  type: string
+                  enum: [paid]
+                  description: Type of tokens (admin mode only, currently only "paid" supported)
+                  example: 'paid'
+              required:
+                - tokens
+                - tokenType
+      responses:
+        '200':
+          description: Successfully topped up IP bucket
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ip:
+                    type: string
+                    example: '192.168.1.100'
+                  tokens:
+                    type: number
+                    example: 95000
+                  paidTokens:
+                    type: number
+                    example: 150000
+                  capacity:
+                    type: number
+                    example: 100000
+                  refillRate:
+                    type: number
+                    example: 20
+                  lastRefill:
+                    type: number
+                    format: int64
+                    example: 1735689600000
+                  topUp:
+                    type: object
+                    description: Information about the top-up operation
+                    properties:
+                      tokensAdded:
+                        type: number
+                        description: Number of tokens added
+                        example: 100000
+                      paymentAmount:
+                        type: string
+                        description: Payment amount in USDC atomic units (x402 mode only)
+                        example: '1000000'
+                      multiplierApplied:
+                        type: number
+                        description: Capacity multiplier applied (10 for x402, 1 for admin)
+                        example: 10
+                      tokenType:
+                        type: string
+                        description: Type of tokens added (admin mode only)
+                        example: 'paid'
+                    required:
+                      - tokensAdded
+                      - multiplierApplied
+        '400':
+          description: Invalid IP format or invalid request body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Invalid tokens value'
+                  message:
+                    type: string
+                    example: 'tokens must be a positive number'
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Unauthorized'
+                  message:
+                    type: string
+                    example: 'Provide X-Payment header for x402 payment or Authorization: Bearer header for admin access'
+        '402':
+          description: Payment verification or settlement failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Payment failed'
+                  message:
+                    type: string
+                    example: 'Payment verification failed: insufficient amount'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  '/ar-io/rate-limit/resource':
+    get:
+      tags: [Rate Limiting]
+      summary: Query resource bucket balance
+      description: |
+        Get the current rate limit token balance for a specific resource (method + host + path combination).
+        Useful for monitoring resource-specific usage.
+
+        **Smart Defaults:**
+        - `method`: Defaults to "GET" (most common)
+        - `host`: Defaults to current request's Host header
+        - `path`: Required parameter
+      operationId: getRateLimitResourceBalance
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Request path
+          example: '/TX_ID'
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+            default: GET
+          description: HTTP method
+          example: 'GET'
+        - name: host
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Host header (defaults to current request host)
+          example: 'gateway.example.com'
+      responses:
+        '200':
+          description: Successfully retrieved resource bucket balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  method:
+                    type: string
+                    example: 'GET'
+                  host:
+                    type: string
+                    example: 'gateway.example.com'
+                  path:
+                    type: string
+                    example: '/TX_ID'
+                  tokens:
+                    type: number
+                    description: Regular tokens (refilling)
+                    example: 980000
+                  paidTokens:
+                    type: number
+                    description: Paid tokens (non-refilling)
+                    example: 100000
+                  capacity:
+                    type: number
+                    description: Maximum regular token capacity
+                    example: 1000000
+                  refillRate:
+                    type: number
+                    description: Refill rate in tokens per second
+                    example: 100
+                  lastRefill:
+                    type: number
+                    format: int64
+                    description: Last refill timestamp (Unix milliseconds)
+                    example: 1735689600000
+                required:
+                  - method
+                  - host
+                  - path
+                  - tokens
+                  - paidTokens
+                  - capacity
+                  - refillRate
+                  - lastRefill
+        '400':
+          description: Missing path parameter or invalid method
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Missing required parameter: path'
+                  validMethods:
+                    type: array
+                    items:
+                      type: string
+                    example: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+        '404':
+          description: Bucket not found (created on first request)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Bucket not found'
+                  message:
+                    type: string
+                    example: 'No rate limit bucket exists for this resource. Buckets are created on first request.'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Rate Limiting]
+      summary: Top up resource bucket
+      description: |
+        Add paid tokens to a resource bucket via x402 payment or admin authentication.
+        Uses same authentication modes as IP bucket top-up.
+
+        **Resource Identification:**
+        - Combination of method + host + path uniquely identifies a resource bucket
+        - Smart defaults: method=GET, host=current request host
+      operationId: topUpRateLimitResourceBucket
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Request path
+          example: '/TX_ID'
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+            default: GET
+          description: HTTP method
+          example: 'GET'
+        - name: host
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Host header (defaults to current request host)
+          example: 'gateway.example.com'
+        - name: X-Payment
+          in: header
+          required: false
+          schema:
+            type: string
+            format: base64
+          description: Base64-encoded x402 payment data (for x402 payment mode)
+      security:
+        - {}
+        - bearerAuth: []
+      requestBody:
+        description: Required for admin authentication mode. Omit for x402 payment mode.
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tokens:
+                  type: number
+                  minimum: 1
+                  description: Number of tokens to add (admin mode only)
+                  example: 50000
+                tokenType:
+                  type: string
+                  enum: [paid]
+                  description: Type of tokens (admin mode only)
+                  example: 'paid'
+              required:
+                - tokens
+                - tokenType
+      responses:
+        '200':
+          description: Successfully topped up resource bucket
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  method:
+                    type: string
+                    example: 'GET'
+                  host:
+                    type: string
+                    example: 'gateway.example.com'
+                  path:
+                    type: string
+                    example: '/TX_ID'
+                  tokens:
+                    type: number
+                    example: 980000
+                  paidTokens:
+                    type: number
+                    example: 150000
+                  capacity:
+                    type: number
+                    example: 1000000
+                  refillRate:
+                    type: number
+                    example: 100
+                  lastRefill:
+                    type: number
+                    format: int64
+                    example: 1735689600000
+                  topUp:
+                    type: object
+                    properties:
+                      tokensAdded:
+                        type: number
+                        example: 100000
+                      paymentAmount:
+                        type: string
+                        example: '1000000'
+                      multiplierApplied:
+                        type: number
+                        example: 10
+                      tokenType:
+                        type: string
+                        example: 'paid'
+                    required:
+                      - tokensAdded
+                      - multiplierApplied
+        '400':
+          description: Missing parameters or invalid request body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Missing required parameter: path'
+                  validMethods:
+                    type: array
+                    items:
+                      type: string
+                    example: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+        '401':
+          description: Missing or invalid authentication
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Unauthorized'
+                  message:
+                    type: string
+                    example: 'Provide X-Payment header for x402 payment or Authorization: Bearer header for admin access'
+        '402':
+          description: Payment verification or settlement failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: 'Payment failed'
+                  message:
+                    type: string
+                    example: 'Payment settlement failed: timeout'
         '500':
           $ref: '#/components/responses/ServerError'
 

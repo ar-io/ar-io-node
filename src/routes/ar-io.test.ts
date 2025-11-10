@@ -18,6 +18,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: { allow: [] },
       ans104IndexFilter: { allow: [] },
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
     });
 
     assert.strictEqual(result.wallet, 'test-wallet');
@@ -29,6 +30,9 @@ describe('buildArIoInfo', () => {
       '0.2.0',
     ]);
     assert.strictEqual(result.release, 'r123');
+    assert.deepStrictEqual(result.services.bundlers, [
+      { url: 'https://turbo.ardrive.io/' },
+    ]);
     assert.strictEqual(result.rateLimiter, undefined);
     assert.strictEqual(result.x402, undefined);
   });
@@ -40,6 +44,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       rateLimiter: {
         enabled: true,
         resourceCapacity: 1000000,
@@ -76,6 +81,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       x402: {
         enabled: true,
         network: 'base-sepolia',
@@ -143,6 +149,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       x402: {
         enabled: true,
         network: 'base',
@@ -167,6 +174,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       rateLimiter: {
         enabled: true,
         resourceCapacity: 1000000,
@@ -199,6 +207,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       rateLimiter: {
         enabled: true,
         resourceCapacity: 500,
@@ -224,6 +233,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       x402: {
         enabled: true,
         network: 'base',
@@ -273,6 +283,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       x402: {
         enabled: true,
         network: 'base',
@@ -300,6 +311,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       x402: {
         enabled: true,
         network: 'base',
@@ -326,6 +338,7 @@ describe('buildArIoInfo', () => {
       ans104UnbundleFilter: {},
       ans104IndexFilter: {},
       release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
       rateLimiter: {
         enabled: true,
         resourceCapacity: 1000000,
@@ -360,5 +373,96 @@ describe('buildArIoInfo', () => {
       undefined,
     );
     assert.strictEqual(result.x402.ui, undefined);
+  });
+
+  it('should include default bundler URL', () => {
+    const result = buildArIoInfo({
+      wallet: 'test-wallet',
+      processId: 'test-process',
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
+    });
+
+    assert.notStrictEqual(result.services.bundlers, undefined);
+    assert.strictEqual(Array.isArray(result.services.bundlers), true);
+    assert.strictEqual(result.services.bundlers.length, 1);
+    assert.deepStrictEqual(result.services.bundlers, [
+      { url: 'https://turbo.ardrive.io/' },
+    ]);
+  });
+
+  it('should include custom single bundler URL', () => {
+    const result = buildArIoInfo({
+      wallet: 'test-wallet',
+      processId: 'test-process',
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: ['https://custom-bundler.example.com/'],
+    });
+
+    assert.strictEqual(result.services.bundlers.length, 1);
+    assert.deepStrictEqual(result.services.bundlers, [
+      { url: 'https://custom-bundler.example.com/' },
+    ]);
+  });
+
+  it('should include multiple bundler URLs', () => {
+    const result = buildArIoInfo({
+      wallet: 'test-wallet',
+      processId: 'test-process',
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: [
+        'https://turbo.ardrive.io/',
+        'https://bundler1.example.com/',
+        'https://bundler2.example.com/',
+      ],
+    });
+
+    assert.strictEqual(result.services.bundlers.length, 3);
+    assert.deepStrictEqual(result.services.bundlers, [
+      { url: 'https://turbo.ardrive.io/' },
+      { url: 'https://bundler1.example.com/' },
+      { url: 'https://bundler2.example.com/' },
+    ]);
+  });
+
+  it('should always include bundlers field even with empty array', () => {
+    const result = buildArIoInfo({
+      wallet: 'test-wallet',
+      processId: 'test-process',
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: [],
+    });
+
+    assert.notStrictEqual(result.services.bundlers, undefined);
+    assert.strictEqual(Array.isArray(result.services.bundlers), true);
+    assert.strictEqual(result.services.bundlers.length, 0);
+    assert.deepStrictEqual(result.services.bundlers, []);
+  });
+
+  it('should format bundlers as array of objects with url property', () => {
+    const result = buildArIoInfo({
+      wallet: 'test-wallet',
+      processId: 'test-process',
+      ans104UnbundleFilter: {},
+      ans104IndexFilter: {},
+      release: 'r123',
+      bundlerUrls: ['https://turbo.ardrive.io/'],
+    });
+
+    assert.strictEqual(Array.isArray(result.services.bundlers), true);
+    result.services.bundlers.forEach((bundler) => {
+      assert.strictEqual(typeof bundler, 'object');
+      assert.strictEqual(typeof bundler.url, 'string');
+      assert.strictEqual(Object.keys(bundler).length, 1);
+      assert.strictEqual(Object.keys(bundler)[0], 'url');
+    });
   });
 });

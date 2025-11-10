@@ -5,6 +5,25 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+/**
+ * HTTP header names used throughout the gateway.
+ *
+ * @remarks
+ * Header naming conventions:
+ * - `X-AR-IO-*` - AR.IO gateway-specific headers for internal tracking and metadata
+ * - `X-Arweave-Chunk-*` - Arweave chunk metadata headers for the raw binary chunk endpoint
+ * - `X-ArNS-*` - ArNS (Arweave Name System) resolution metadata
+ * - `X-Cache` - Standard cache status header
+ * - `Content-Digest` - RFC 9530 standard header for content integrity
+ *
+ * Chunk endpoint headers (`X-Arweave-Chunk-*`):
+ * - Used by `/chunk/:offset/data` endpoint to provide chunk metadata
+ * - All chunk metadata is in headers instead of JSON body for the raw binary endpoint
+ * - Headers follow Arweave's chunk structure and merkle tree concepts
+ * - Source tracking headers (`X-AR-IO-Chunk-*`) identify where chunk data originated
+ *
+ * @see {@link https://www.rfc-editor.org/rfc/rfc9530.html | RFC 9530 - Content-Digest}
+ */
 export const headerNames = {
   hops: 'X-AR-IO-Hops',
   origin: 'X-AR-IO-Origin',
@@ -18,6 +37,15 @@ export const headerNames = {
   cache: 'X-Cache',
   chunkSourceType: 'X-AR-IO-Chunk-Source-Type',
   chunkHost: 'X-AR-IO-Chunk-Host',
+  chunkDataPath: 'X-Arweave-Chunk-Data-Path',
+  chunkDataRoot: 'X-Arweave-Chunk-Data-Root',
+  chunkStartOffset: 'X-Arweave-Chunk-Start-Offset',
+  chunkRelativeStartOffset: 'X-Arweave-Chunk-Relative-Start-Offset',
+  chunkReadOffset: 'X-Arweave-Chunk-Read-Offset',
+  chunkTxDataSize: 'X-Arweave-Chunk-Tx-Data-Size',
+  chunkTxPath: 'X-Arweave-Chunk-Tx-Path',
+  chunkTxId: 'X-Arweave-Chunk-Tx-Id',
+  chunkTxStartOffset: 'X-Arweave-Chunk-Tx-Start-Offset',
   rootTransactionId: 'X-AR-IO-Root-Transaction-Id',
   dataItemDataOffset: 'X-AR-IO-Data-Item-Data-Offset',
   dataItemRootParentOffset: 'X-AR-IO-Data-Item-Root-Parent-Offset',

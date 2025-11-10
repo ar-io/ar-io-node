@@ -439,6 +439,9 @@ export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
   '368640',
 );
 
+// Maximum raw chunk size (256 KiB) - used for raw binary chunk endpoint rate limiting
+export const MAX_CHUNK_SIZE = 256 * 1024;
+
 // Arweave network peer post success goal
 // setting to 0 means this behaviour is disabled.
 export const ARWEAVE_PEER_CHUNK_POST_MIN_SUCCESS_COUNT = +env.varOrDefault(
@@ -1420,3 +1423,22 @@ export const X_402_APP_LOGO = env.varOrUndefined('X_402_APP_LOGO');
 export const X_402_SESSION_TOKEN_ENDPOINT = env.varOrUndefined(
   'X_402_SESSION_TOKEN_ENDPOINT',
 );
+
+// Default bundler URLs
+const DEFAULT_BUNDLER_URLS = ['https://turbo.ardrive.io/'];
+
+// Bundler service URLs (comma-separated URLs)
+const BUNDLER_URLS_STRING = env.varOrUndefined('BUNDLER_URLS');
+export const BUNDLER_URLS =
+  BUNDLER_URLS_STRING !== undefined
+    ? BUNDLER_URLS_STRING.split(',').map((url) => url.trim())
+    : DEFAULT_BUNDLER_URLS;
+
+// Validate bundler URLs
+BUNDLER_URLS.forEach((url) => {
+  try {
+    new URL(url);
+  } catch (error) {
+    throw new Error(`Invalid URL in BUNDLER_URLS: ${url}`);
+  }
+});

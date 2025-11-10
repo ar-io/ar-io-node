@@ -45,6 +45,7 @@ class ReleaseTester {
         await this.testDefaultProfile();
         await this.testClickhouseProfile();
         await this.testLitestreamProfile();
+        await this.testOtelProfile();
         await this.testAOProfile();
       }
 
@@ -154,11 +155,14 @@ class ReleaseTester {
       case 'litestream':
         await this.testLitestreamProfile();
         break;
+      case 'otel':
+        await this.testOtelProfile();
+        break;
       case 'ao':
         await this.testAOProfile();
         break;
       default:
-        throw new Error(`Unknown profile: ${profile}. Use: default, clickhouse, litestream, ao`);
+        throw new Error(`Unknown profile: ${profile}. Use: default, clickhouse, litestream, otel, ao`);
     }
   }
 
@@ -167,7 +171,7 @@ class ReleaseTester {
 
     try {
       // Clean start
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
 
       // Start default profile
       console.log('  Starting containers...');
@@ -217,7 +221,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -226,7 +230,7 @@ class ReleaseTester {
 
     try {
       // Clean start
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
 
       // Start clickhouse profile
       console.log('  Starting containers with clickhouse profile...');
@@ -263,7 +267,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose --profile clickhouse down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -272,7 +276,7 @@ class ReleaseTester {
 
     try {
       // Clean start
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
 
       // Start litestream profile
       console.log('  Starting containers with litestream profile...');
@@ -317,7 +321,61 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose --profile litestream down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
+    }
+  }
+
+  private async testOtelProfile(): Promise<void> {
+    console.log('🔧 Testing otel profile...');
+
+    try {
+      // Clean start
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
+
+      // Start otel profile
+      console.log('  Starting containers with otel profile...');
+      await this.executeCommand('docker compose --profile otel up -d');
+
+      // Wait for containers to stabilize
+      await this.waitWithProgress(30, 'Waiting for otel containers to stabilize');
+
+      // Check core containers are running
+      const runningContainers = await this.getRunningContainers();
+      const coreContainers = ['envoy', 'core', 'redis', 'observer'];
+      const coreRunning = coreContainers.filter(name =>
+        runningContainers.some(container => container.includes(name))
+      );
+
+      if (coreRunning.length === coreContainers.length) {
+        // Check if otel-collector container exists (may have exited due to missing config)
+        const allContainers = await this.getAllContainers();
+        const otelCollectorExists = allContainers.some(container => container.includes('otel-collector'));
+
+        if (otelCollectorExists) {
+          this.testResults.push({
+            name: 'OTEL Profile',
+            success: true,
+            message: 'Core containers running, OTEL collector container created (may have exited due to missing endpoint config)',
+            containers: [...coreRunning, 'otel-collector']
+          });
+          console.log('  ✅ Core containers running, OTEL collector container created');
+        } else {
+          throw new Error('OTEL collector container was not created');
+        }
+      } else {
+        throw new Error(`Missing core containers: ${coreContainers.filter(name => !coreRunning.includes(name)).join(', ')}`);
+      }
+
+    } catch (error) {
+      this.testResults.push({
+        name: 'OTEL Profile',
+        success: false,
+        message: `Failed: ${error}`
+      });
+      console.log(`  ❌ Failed: ${error}`);
+    } finally {
+      // Clean up after test
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -326,7 +384,7 @@ class ReleaseTester {
 
     try {
       // Start base containers first
-      await this.executeCommand('docker compose down > /dev/null 2>&1');
+      await this.executeCommand('docker compose --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
       await this.executeCommand('docker compose up -d');
 
       // Wait a bit for base containers
@@ -378,7 +436,7 @@ class ReleaseTester {
       console.log(`  ❌ Failed: ${error}`);
     } finally {
       // Clean up after test
-      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down > /dev/null 2>&1');
+      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
     }
   }
 
@@ -403,7 +461,7 @@ class ReleaseTester {
   private async cleanup(): Promise<void> {
     console.log('🧹 Cleaning up containers...');
     try {
-      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml down > /dev/null 2>&1');
+      await this.executeCommand('docker compose -f docker-compose.yaml -f docker-compose.ao.yaml --profile clickhouse --profile litestream --profile otel down > /dev/null 2>&1');
       console.log('✅ Cleanup completed');
     } catch (error) {
       console.log('⚠️  Cleanup had some issues (containers may still be running)');
@@ -463,7 +521,7 @@ function printUsage(): void {
   console.log('');
   console.log('Options:');
   console.log('  --no-cleanup         Keep containers running after tests');
-  console.log('  --profile <name>     Test specific profile only (default, clickhouse, litestream, ao)');
+  console.log('  --profile <name>     Test specific profile only (default, clickhouse, litestream, otel, ao)');
   console.log('  --help, -h           Show this help message');
   console.log('');
   console.log('Examples:');

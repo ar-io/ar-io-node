@@ -36,6 +36,12 @@ export interface CheckPaymentAndRateLimitsParams {
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor | undefined;
   parentSpan?: Span;
+  /**
+   * Internal hint for the paywall renderer that controls how the browser should
+   * handle the HTML paywall: 'redirect' to send the user to a hosted paywall URL,
+   * or 'direct' to render the paywall inline
+   */
+  browserPaymentFlow?: 'redirect' | 'direct';
 }
 
 /**
@@ -83,6 +89,7 @@ export async function checkPaymentAndRateLimits({
   rateLimiter,
   paymentProcessor,
   parentSpan,
+  browserPaymentFlow,
 }: CheckPaymentAndRateLimitsParams): Promise<CheckPaymentAndRateLimitsResult> {
   const span = startChildSpan(
     'checkPaymentAndRateLimits',
@@ -98,6 +105,11 @@ export async function checkPaymentAndRateLimits({
   try {
     // Extract all client IPs for allowlist checking
     const { clientIp, clientIps } = extractAllClientIPs(req);
+
+    // Add client IP attributes to span for visibility in tail sampling
+    // Especially valuable for debugging rate limits, payment issues, and abuse patterns
+    span.setAttribute('client.ip', clientIp ?? 'unknown');
+    span.setAttribute('client.ips', clientIps.join(','));
 
     // Check if ANY IP in the chain is allowlisted - if so, skip all checks
     if (rateLimiter?.isAllowlisted(clientIps)) {
@@ -142,6 +154,8 @@ export async function checkPaymentAndRateLimits({
           attributes: {
             ...(id !== undefined && { 'data.id': id }),
             'content.size': contentSize,
+            'client.ip': clientIp ?? 'unknown',
+            'client.ips': clientIps.join(','),
           },
         },
         span,
@@ -197,6 +211,7 @@ export async function checkPaymentAndRateLimits({
                 error: 'payment_verification_failed',
                 message: verifyResult.invalidReason ?? 'Invalid payment',
                 payer: verifyResult.payer,
+                browserPaymentFlow,
               },
             );
 
@@ -239,6 +254,7 @@ export async function checkPaymentAndRateLimits({
               {
                 error: 'payment_settlement_failed',
                 message: settlementResult.errorReason ?? 'Settlement failed',
+                browserPaymentFlow,
               },
             );
 
@@ -271,6 +287,11 @@ export async function checkPaymentAndRateLimits({
         paymentSpan.end();
       }
     }
+
+    // Add payment status to main span for tail sampling
+    // This allows the collector to sample 100% of paid traffic
+    span.setAttribute('payment.verified', paymentVerified);
+    span.setAttribute('payment.settled', paymentSettled);
 
     // === RATE LIMITING ===
     if (rateLimiter !== undefined && config.ENABLE_RATE_LIMITER) {
@@ -351,6 +372,7 @@ export async function checkPaymentAndRateLimits({
               requirements,
               {
                 message: 'Payment required to access this resource',
+                browserPaymentFlow,
               },
             );
           } else {
@@ -362,6 +384,23 @@ export async function checkPaymentAndRateLimits({
           }
 
           return { allowed: false };
+        }
+
+        // Add paid token usage to span for tail sampling
+        // This allows tracking of all requests that used paid tokens
+        const hasPaidTokens =
+          (limitResult.ipPaidTokensConsumed ?? 0) > 0 ||
+          (limitResult.resourcePaidTokensConsumed ?? 0) > 0;
+        span.setAttribute('tokens.paid_used', hasPaidTokens);
+        if (hasPaidTokens) {
+          span.setAttribute(
+            'tokens.ip_paid',
+            limitResult.ipPaidTokensConsumed ?? 0,
+          );
+          span.setAttribute(
+            'tokens.resource_paid',
+            limitResult.resourcePaidTokensConsumed ?? 0,
+          );
         }
 
         // Rate limit check passed
@@ -435,6 +474,11 @@ export async function adjustRateLimitTokens({
   });
 
   try {
+    // Extract client IPs for span visibility
+    const { clientIp, clientIps } = extractAllClientIPs(req);
+    span.setAttribute('client.ip', clientIp ?? 'unknown');
+    span.setAttribute('client.ips', clientIps.join(','));
+
     // Extract domain for metrics
     const host = req.headers.host ?? '';
     const domain = extractDomain(host);

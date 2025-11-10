@@ -9,8 +9,12 @@ import { strict as assert } from 'node:assert';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import express from 'express';
 import { default as request } from 'supertest';
-import { createChunkOffsetHandler } from './handlers.js';
+import {
+  createChunkOffsetHandler,
+  createChunkOffsetDataHandler,
+} from './handlers.js';
 import log from '../../log.js';
+import * as merklePathParser from '../../lib/merkle-path-parser.js';
 
 const CHUNK_OFFSET_PATH = '/chunk/:offset(\\d+)';
 
@@ -64,6 +68,52 @@ describe('Chunk routes', () => {
         assert.deepEqual(res.body, {
           chunk: 'Y2h1bmsgZGF0YQ', // base64 of "chunk data"
           data_path: 'MTIzNDVhYmM',
+          packing: 'unpacked',
+        });
+      });
+  });
+
+  it('should return 200 with tx_path when available', async () => {
+    const chunkSource: any = {
+      getChunkByAny: async () => ({
+        chunk: Buffer.from('chunk data'),
+        data_path: Buffer.from('12345abc'),
+        tx_path: Buffer.from('txpath123'),
+        source: 'arweave-network',
+      }),
+    };
+
+    const txOffsetSource: any = {
+      getTxByOffset: () => ({
+        data_root: 'abc1234',
+        data_size: 100,
+        offset: 0,
+        id: 'foobarbaz',
+      }),
+    };
+
+    app.get(
+      CHUNK_OFFSET_PATH,
+      createChunkOffsetHandler({
+        chunkSource,
+        txOffsetSource,
+        log,
+      }),
+    );
+
+    await request(app)
+      .get('/chunk/274995392586018')
+      .expect(200)
+      .then((res: any) => {
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(
+          res.header['content-type'],
+          'application/json; charset=utf-8',
+        );
+        assert.deepEqual(res.body, {
+          chunk: 'Y2h1bmsgZGF0YQ', // base64 of "chunk data"
+          data_path: 'MTIzNDVhYmM',
+          tx_path: 'dHhwYXRoMTIz', // base64 of "txpath123"
           packing: 'unpacked',
         });
       });
@@ -717,5 +767,113 @@ describe('Chunk routes', () => {
           assert.strictEqual(res.header['x-cache'], 'MISS');
         });
     });
+  });
+
+  describe('Raw binary data endpoint (/chunk/:offset/data)', () => {
+    const CHUNK_DATA_PATH = '/chunk/:offset(\\d+)/data';
+
+    // Note: These are basic unit tests focusing on error handling.
+    // Comprehensive integration tests with real chunk data and merkle path
+    // validation should be added separately as the parseDataPath function
+    // requires cryptographically valid test data.
+
+    it('should return 400 for invalid (non-numeric) offset', async () => {
+      app.get(
+        CHUNK_DATA_PATH,
+        createChunkOffsetDataHandler({
+          chunkSource: {} as any,
+          txOffsetSource: {} as any,
+          log,
+        }),
+      );
+
+      await request(app).get('/chunk/invalid-offset/data').expect(404); // Express routing returns 404 for non-matching pattern
+    });
+
+    it('should return 404 if transaction not found', async () => {
+      const txOffsetSource: any = {
+        getTxByOffset: () => ({
+          data_root: undefined,
+          data_size: 100,
+          offset: 0,
+          id: 'test-tx-id',
+        }),
+      };
+
+      app.get(
+        CHUNK_DATA_PATH,
+        createChunkOffsetDataHandler({
+          chunkSource: {} as any,
+          txOffsetSource,
+          log,
+        }),
+      );
+
+      await request(app).get('/chunk/1234/data').expect(404);
+    });
+
+    it('should return 404 if chunk source throws error', async () => {
+      const chunkSource: any = {
+        getChunkByAny: async () => {
+          throw new Error('Chunk not found');
+        },
+      };
+
+      const txOffsetSource: any = {
+        getTxByOffset: () => ({
+          data_root: 'abc1234',
+          data_size: 262144,
+          offset: 524288,
+          id: 'test-tx-id',
+        }),
+      };
+
+      app.get(
+        CHUNK_DATA_PATH,
+        createChunkOffsetDataHandler({
+          chunkSource,
+          txOffsetSource,
+          log,
+        }),
+      );
+
+      await request(app).get('/chunk/524288/data').expect(404);
+    });
+
+    it('should return 404 if chunk source returns undefined', async () => {
+      const chunkSource: any = {
+        getChunkByAny: async () => undefined,
+      };
+
+      const txOffsetSource: any = {
+        getTxByOffset: () => ({
+          data_root: 'abc1234',
+          data_size: 262144,
+          offset: 524288,
+          id: 'test-tx-id',
+        }),
+      };
+
+      app.get(
+        CHUNK_DATA_PATH,
+        createChunkOffsetDataHandler({
+          chunkSource,
+          txOffsetSource,
+          log,
+        }),
+      );
+
+      await request(app).get('/chunk/524288/data').expect(404);
+    });
+
+    // TODO: Add comprehensive integration tests with real chunk data to test:
+    // - Successful GET requests with all headers (including Content-Digest)
+    // - HEAD requests with Content-Digest header
+    // - ETag support and conditional requests (304)
+    // - Cache status headers
+    // - Merkle path parsing and offset calculations
+    // - Binary data integrity
+    // - Content-Digest RFC 9530 format validation (sha-256=:base64:)
+    // - Content-Digest only present when cached or HEAD request
   });
 });

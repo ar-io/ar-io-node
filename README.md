@@ -309,6 +309,89 @@ fit your needs by editing the `dashboard.json` file. Refer to the [Grafana
 documentation] to learn more about how to create and modify Grafana dashboards
 using JSON model files.
 
+#### OpenTelemetry and Distributed Tracing
+
+The ar-io-node uses [OpenTelemetry] for distributed tracing, providing deep visibility into request flows and performance bottlenecks. When deployed with docker-compose, traces are automatically routed through an **OTEL Collector sidecar** that implements intelligent **tail-based sampling** to reduce telemetry costs by 80-95% while maintaining complete visibility into errors and performance issues.
+
+**How Tail Sampling Works:**
+
+Unlike traditional head-based sampling (which decides whether to keep a trace at the start), tail sampling waits until the entire trace completes before making a decision. This enables five intelligent sampling policies:
+
+1. **100% Error Capture**: All traces with errors (5xx responses, exceptions) are captured
+2. **100% Slow Request Capture**: All requests exceeding 2 seconds (configurable) are captured
+3. **100% Payment Capture**: All traces with verified x402 payments are captured for billing and compliance
+4. **100% Paid Token Capture**: All traces that consumed paid rate limit tokens are captured
+5. **Probabilistic Baseline**: 1% (configurable) of successful, fast, unpaid requests for baseline metrics
+
+This approach ensures you never miss critical failures, paid traffic, or compliance-relevant requests while dramatically reducing storage and analysis costs for free-tier traffic.
+
+**Configuration:**
+
+To use OTEL Collector with tail sampling in docker-compose:
+
+1. Set your telemetry destination and API key (configure ONE based on your backend):
+   ```bash
+   # Honeycomb
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://api.honeycomb.io
+   OTEL_COLLECTOR_HONEYCOMB_API_KEY=your-honeycomb-api-key
+
+   # OR Grafana Cloud Tempo
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://otlp-gateway-prod-us-central-0.grafana.net/otlp
+   OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY=your-base64-encoded-key
+
+   # OR Datadog
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://trace.agent.datadoghq.com
+   OTEL_COLLECTOR_DATADOG_API_KEY=your-datadog-api-key
+
+   # OR New Relic
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://otlp.nr-data.net
+   OTEL_COLLECTOR_NEW_RELIC_API_KEY=your-new-relic-license-key
+
+   # OR Elastic APM
+   OTEL_COLLECTOR_DESTINATION_ENDPOINT=https://your-deployment.apm.region.cloud.es.io
+   OTEL_COLLECTOR_ELASTIC_API_KEY=your-elastic-secret-token
+   ```
+
+2. Optionally adjust sampling parameters:
+   ```bash
+   # Sample 5% of successful requests instead of 1%
+   OTEL_TAIL_SAMPLING_SUCCESS_RATE=5
+
+   # Capture requests slower than 1 second instead of 2
+   OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS=1000
+   ```
+
+3. Start the stack:
+   ```bash
+   docker compose up -d
+   ```
+
+The collector runs automatically as part of the docker-compose stack. Traces flow through: `ar-io-node` → `otel-collector` → `your telemetry backend`.
+
+**Non-Docker Deployments:**
+
+For non-docker deployments, you can send traces directly to your telemetry backend by setting:
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://api.honeycomb.io
+OTEL_EXPORTER_OTLP_HEADERS=x-honeycomb-team=your-api-key
+```
+
+Note: Direct export bypasses tail sampling and uses head-based sampling via `OTEL_TRACING_SAMPLING_RATE_DENOMINATOR`.
+
+**Supported Telemetry Backends:**
+
+The OTEL Collector works with any OTLP-compatible backend:
+- Honeycomb
+- Grafana Cloud (Tempo)
+- Datadog
+- New Relic
+- Elastic APM
+- Self-hosted: Jaeger, Zipkin, Tempo
+
+For complete configuration options, see the [environment variables documentation](docs/envs.md).
+
+[OpenTelemetry]: https://opentelemetry.io/
+
 ### Log Filtering
 
 The AR.IO Node supports filtering Winston logs with the `LOG_FILTER`

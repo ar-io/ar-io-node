@@ -20,6 +20,7 @@ import { openApiRouter } from './routes/openapi.js';
 import { datasetsRouter } from './routes/datasets.js';
 import * as system from './system.js';
 import { createX402Router } from './routes/x402.js';
+import { createRateLimitRouter } from './routes/rate-limit.js';
 
 // Initialize DNS resolution for preferred chunk GET nodes (non-fatal on failure)
 try {
@@ -75,6 +76,15 @@ app.use(
     paymentProcessor: system.paymentProcessor,
   }),
 );
+if (system.rateLimiter !== undefined) {
+  app.use(
+    createRateLimitRouter({
+      log,
+      rateLimiter: system.rateLimiter,
+      paymentProcessor: system.paymentProcessor,
+    }),
+  );
+}
 app.use(arnsRouter);
 app.use(openApiRouter);
 app.use(arIoRouter);

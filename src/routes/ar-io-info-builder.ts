@@ -18,6 +18,20 @@ export interface BundleFilter {
 }
 
 /**
+ * Bundler service information exposed in the info endpoint.
+ */
+export interface BundlerInfo {
+  url: string;
+}
+
+/**
+ * Services configuration exposed in the info endpoint.
+ */
+export interface ServicesInfo {
+  bundlers: BundlerInfo[];
+}
+
+/**
  * Rate limiter bucket configuration exposed in the info endpoint.
  */
 export interface RateLimiterBucketInfo {
@@ -82,6 +96,7 @@ export interface ArIoInfoResponse {
   ans104IndexFilter: BundleFilter;
   supportedManifestVersions: string[];
   release: string;
+  services: ServicesInfo;
   rateLimiter?: RateLimiterInfo;
   x402?: X402Info;
 }
@@ -95,6 +110,7 @@ export interface ArIoInfoConfig {
   ans104UnbundleFilter: BundleFilter;
   ans104IndexFilter: BundleFilter;
   release: string;
+  bundlerUrls: string[];
   rateLimiter?: {
     enabled: boolean;
     resourceCapacity: number;
@@ -118,7 +134,8 @@ export interface ArIoInfoConfig {
  * Builds the AR.IO info endpoint response object.
  *
  * This pure function constructs the response for the /ar-io/info endpoint,
- * including optional rate limiter and x402 payment configuration when enabled.
+ * including bundler service URLs and optional rate limiter and x402 payment
+ * configuration when enabled.
  *
  * @param config - Configuration object containing gateway settings
  * @returns Complete AR.IO info response object
@@ -131,6 +148,7 @@ export interface ArIoInfoConfig {
  *   ans104UnbundleFilter: {},
  *   ans104IndexFilter: {},
  *   release: 'r123',
+ *   bundlerUrls: ['https://turbo.ardrive.io/'],
  *   rateLimiter: {
  *     enabled: true,
  *     resourceCapacity: 1000000,
@@ -149,6 +167,9 @@ export function buildArIoInfo(config: ArIoInfoConfig): ArIoInfoResponse {
     ans104IndexFilter: config.ans104IndexFilter,
     supportedManifestVersions: ['0.1.0', '0.2.0'],
     release: config.release,
+    services: {
+      bundlers: config.bundlerUrls.map((url) => ({ url })),
+    },
   };
 
   // Add rate limiter info if enabled

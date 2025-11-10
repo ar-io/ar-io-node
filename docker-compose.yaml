@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-159d6467108122a3413c5ab45150d334dc9fb78f}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-f7c5fd8f3ad894e7a9e12162941a252b129c04b1}
     build:
       context: envoy/
     restart: unless-stopped
@@ -30,7 +30,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-08025d13a5bd1cb244d297a0cf48a5fa89ca8255}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-2ea9703941aedc28cc15ee8e753764fecfce3a7a}
     build:
       context: .
     restart: unless-stopped
@@ -140,7 +140,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-57}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-58}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS=${CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
@@ -198,6 +198,7 @@ services:
       - OTEL_TRACING_SAMPLING_RATE_DENOMINATOR=${OTEL_TRACING_SAMPLING_RATE_DENOMINATOR:-}
       - OTEL_EXPORTER_OTLP_HEADERS_FILE=${OTEL_EXPORTER_OTLP_HEADERS_FILE:-}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS:-}
+      # Set to http://otel-collector:4318 when using --profile otel, or to external endpoint to bypass collector
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       # x402 USDC Egress
       - ENABLE_X_402_USDC_DATA_EGRESS=${ENABLE_X_402_USDC_DATA_EGRESS:-}
@@ -228,9 +229,39 @@ services:
     command: redis-server --maxmemory ${REDIS_MAX_MEMORY:-256mb} --maxmemory-policy allkeys-lru ${EXTRA_REDIS_FLAGS:---save "" --appendonly no}
     restart: unless-stopped
     ports:
-      - "6379" # don't expose redis externally by default
+      - '6379' # don't expose redis externally by default
     volumes:
       - ${REDIS_DATA_PATH:-./data/redis}:/data
+    networks:
+      - ar-io-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_IMAGE_TAG:-0.119.0}
+    profiles:
+      - otel
+    restart: unless-stopped
+    ports:
+      - '4317' # gRPC OTLP receiver (don't expose externally by default)
+      - '4318' # HTTP OTLP receiver (don't expose externally by default)
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otel/config.yaml:ro
+    environment:
+      # Destination endpoint for sampled traces
+      - OTEL_COLLECTOR_DESTINATION_ENDPOINT=${OTEL_COLLECTOR_DESTINATION_ENDPOINT:-}
+      # Backend API keys (configure ONE based on your telemetry backend)
+      - OTEL_COLLECTOR_HONEYCOMB_API_KEY=${OTEL_COLLECTOR_HONEYCOMB_API_KEY:-}
+      - OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY=${OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY:-}
+      - OTEL_COLLECTOR_DATADOG_API_KEY=${OTEL_COLLECTOR_DATADOG_API_KEY:-}
+      - OTEL_COLLECTOR_NEW_RELIC_API_KEY=${OTEL_COLLECTOR_NEW_RELIC_API_KEY:-}
+      - OTEL_COLLECTOR_ELASTIC_API_KEY=${OTEL_COLLECTOR_ELASTIC_API_KEY:-}
+      # Tail sampling configuration
+      - OTEL_TAIL_SAMPLING_SUCCESS_RATE=${OTEL_TAIL_SAMPLING_SUCCESS_RATE:-1}
+      - OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS=${OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS:-2000}
+      - OTEL_TAIL_SAMPLING_ERROR_RATE=${OTEL_TAIL_SAMPLING_ERROR_RATE:-100}
+      - OTEL_TAIL_SAMPLING_SLOW_RATE=${OTEL_TAIL_SAMPLING_SLOW_RATE:-100}
+      - OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE=${OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE:-100}
+      - OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE=${OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE:-100}
+    command: ['--config=/etc/otel/config.yaml']
     networks:
       - ar-io-network
 
@@ -290,7 +321,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-7384807c660228579b312474090c47ea9b7727ec}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-fcd0f3642d5755c4b6adfdd4fb298d127dbb0f68}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -309,7 +340,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-57}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-58}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
       - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}

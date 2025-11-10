@@ -8,11 +8,10 @@ import { Router, Request, Response } from 'express';
 import { default as asyncHandler } from 'express-async-handler';
 import { Logger } from 'winston';
 import { paymentMiddleware } from 'x402-express';
-import { PaymentRequirements } from 'x402/types';
 import * as config from '../config.js';
 import { RateLimiter } from '../limiter/types.js';
 import { PaymentProcessor } from '../payments/types.js';
-import { X402UsdcProcessor } from '../payments/x402-usdc-processor.js';
+import { processPaymentAndTopUp } from '../payments/payment-processor-utils.js';
 
 export interface X402RouterConfig {
   log: Logger;
@@ -28,155 +27,87 @@ export function createX402Router({
   const x402Router = Router();
 
   // Register redirect endpoint BEFORE payment middleware to avoid double-processing
-  // Redirect endpoint for payment settlement
-  x402Router.get(
-    '/ar-io/x402/redirect/:encoded',
-    asyncHandler(async (req: Request, res: Response) => {
+
+  // Shared handler for redirect endpoints
+  const redirectHandler = asyncHandler(async (req: Request, res: Response) => {
+    try {
+      // Decode the original URL from base64url
+      const encoded = req.params.encoded;
+      let decodedUrl: string;
+      let validatedUrl: string;
+
       try {
-        // Decode the original URL from base64url
-        const encoded = req.params.encoded;
-        let decodedUrl: string;
-        let validatedUrl: string;
-
-        try {
-          decodedUrl = Buffer.from(encoded, 'base64url').toString('utf-8');
-        } catch (error) {
-          log.warn('Invalid base64url encoding', { encoded });
-          res.status(400).send('Invalid encoded URL');
-          return;
-        }
-
-        // Validate and normalize the URL
-        try {
-          validatedUrl = validateRedirectUrl(decodedUrl);
-        } catch (error: any) {
-          log.warn('Invalid redirect URL', {
-            decodedUrl,
-            error: error.message,
-          });
-          res.status(400).send('Invalid redirect URL');
-          return;
-        }
-
-        log.debug('Processing redirect request', {
-          encoded,
-          validatedUrl,
-        });
-
-        // If no payment processor or rate limiter, just redirect
-        if (paymentProcessor === undefined || rateLimiter === undefined) {
-          log.warn('No payment processor or rate limiter configured');
-          sendRedirectHtml(res, validatedUrl);
-          return;
-        }
-
-        // Extract payment from headers
-        const payment = paymentProcessor.extractPayment(req);
-
-        if (payment === undefined) {
-          log.warn('No payment header found');
-          sendRedirectHtml(res, validatedUrl);
-          return;
-        }
-
-        // Calculate equivalent content size from payment amount
-        // This ensures verification/settlement use requirements matching what user paid
-        let contentSize = 0;
-        if (
-          paymentProcessor instanceof X402UsdcProcessor &&
-          'authorization' in payment.payload
-        ) {
-          const actualPaymentAmount =
-            payment.payload.authorization.value.toString();
-          contentSize =
-            paymentProcessor.paymentToContentSize(actualPaymentAmount);
-          log.debug('Calculated content size from payment', {
-            actualPaymentAmount,
-            contentSize,
-          });
-        } else {
-          log.warn('Unable to extract payment amount, using contentSize: 0');
-        }
-
-        // Create payment requirements based on actual payment amount
-        const requirements: PaymentRequirements =
-          paymentProcessor.calculateRequirements({
-            contentSize,
-            contentType: 'application/octet-stream',
-            protocol: config.SANDBOX_PROTOCOL ?? req.protocol,
-            host: req.headers.host ?? '',
-            originalUrl: validatedUrl,
-          });
-
-        // Verify payment
-        log.debug('Verifying payment');
-        const verifyResult = await paymentProcessor.verifyPayment(
-          payment,
-          requirements,
-        );
-
-        if (!verifyResult.isValid) {
-          log.warn('Payment verification failed', {
-            reason: verifyResult.invalidReason,
-          });
-          sendRedirectHtml(res, validatedUrl);
-          return;
-        }
-
-        // Settle payment
-        log.debug('Settling payment');
-        const settlementResult = await paymentProcessor.settlePayment(
-          payment,
-          requirements,
-        );
-
-        if (!settlementResult.success) {
-          log.error('Payment settlement failed', {
-            error: settlementResult.errorReason,
-          });
-          sendRedirectHtml(res, validatedUrl);
-          return;
-        }
-
-        // Set settlement response header if available
-        if (settlementResult.responseHeader !== undefined) {
-          res.setHeader('X-Payment-Response', settlementResult.responseHeader);
-        }
-
-        // Convert payment amount to tokens
-        if (paymentProcessor instanceof X402UsdcProcessor) {
-          // Use the actual payment amount from the payment payload, not requirements
-          // Only EVM payments have authorization field
-          if ('authorization' in payment.payload) {
-            const actualPaymentAmount =
-              payment.payload.authorization.value.toString();
-            const tokens =
-              paymentProcessor.paymentToTokens(actualPaymentAmount);
-
-            log.debug('Topping off rate limiter', {
-              paymentAmount: actualPaymentAmount,
-              tokens,
-            });
-
-            // Top off rate limiter bucket
-            await rateLimiter.topOffPaidTokens(req, tokens);
-
-            log.info('Payment settled and bucket topped off', {
-              tokens,
-            });
-          }
-        }
-
-        // Send redirect HTML
-        sendRedirectHtml(res, validatedUrl);
-      } catch (error: any) {
-        log.error('Error processing redirect', {
-          error: error.message,
-          stack: error.stack,
-        });
-        res.status(500).send('Internal server error');
+        decodedUrl = Buffer.from(encoded, 'base64url').toString('utf-8');
+      } catch (error) {
+        log.warn('Invalid base64url encoding', { encoded });
+        res.status(400).send('Invalid encoded URL');
+        return;
       }
-    }),
+
+      // Validate and normalize the URL
+      try {
+        validatedUrl = validateRedirectUrl(decodedUrl);
+      } catch (error: any) {
+        log.warn('Invalid redirect URL', {
+          decodedUrl,
+          error: error.message,
+        });
+        res.status(400).send('Invalid redirect URL');
+        return;
+      }
+
+      log.debug('Processing redirect request', {
+        encoded,
+        validatedUrl,
+      });
+
+      // If no payment processor or rate limiter, just redirect
+      if (paymentProcessor === undefined || rateLimiter === undefined) {
+        log.warn('No payment processor or rate limiter configured');
+        sendRedirectHtml(res, validatedUrl);
+        return;
+      }
+
+      // Process payment and top up IP bucket using shared utility
+      const result = await processPaymentAndTopUp(
+        rateLimiter,
+        paymentProcessor,
+        req,
+        log,
+        { type: 'ip' },
+      );
+
+      // Set settlement response header if available
+      if (result.responseHeader !== undefined) {
+        res.setHeader('X-Payment-Response', result.responseHeader);
+      }
+
+      if (!result.success) {
+        log.warn('Payment processing failed', {
+          error: result.error,
+        });
+        sendPaymentErrorHtml(
+          res,
+          result.error ?? 'Payment processing failed. Please try again.',
+        );
+        return;
+      }
+
+      // Send redirect HTML (only on success)
+      sendRedirectHtml(res, validatedUrl);
+    } catch (error: any) {
+      log.error('Error processing redirect', {
+        error: error.message,
+        stack: error.stack,
+      });
+      res.status(500).send('Internal server error');
+    }
+  });
+
+  // Browser paywall redirect endpoint
+  x402Router.get(
+    '/ar-io/x402/browser-paywall-redirect/:encoded',
+    redirectHandler,
   );
 
   // Register payment middleware after redirect endpoint to avoid intercepting it
@@ -269,6 +200,64 @@ function sendRedirectHtml(res: Response, targetUrl: string): void {
 
   res.setHeader('Content-Type', 'text/html');
   res.status(200).send(html);
+}
+
+/**
+ * Send HTML error page for payment failures
+ * SECURITY: errorMessage must be HTML-escaped to prevent XSS attacks
+ */
+function sendPaymentErrorHtml(res: Response, errorMessage: string): void {
+  const escapedError = escapeHtml(errorMessage);
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Payment Failed</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 { color: #d32f2f; }
+    .error {
+      background: #fee;
+      border: 1px solid #fcc;
+      padding: 15px;
+      border-radius: 5px;
+      margin: 20px 0;
+    }
+    .retry-btn {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 10px 20px;
+      background: #007bff;
+      color: white;
+      text-decoration: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .retry-btn:hover {
+      background: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <h1>Payment Failed</h1>
+  <div class="error">
+    <p><strong>Error:</strong> ${escapedError}</p>
+  </div>
+  <a href="javascript:window.location.reload()" class="retry-btn">Try Again</a>
+  <p style="margin-top: 30px; color: #666; font-size: 0.9em;">
+    If this problem persists, please contact support.
+  </p>
+</body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html');
+  res.status(402).send(html);
 }
 
 // For backwards compatibility, export a router with no dependencies

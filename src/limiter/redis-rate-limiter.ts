@@ -18,6 +18,12 @@ import {
   TokenAdjustmentContext,
 } from './types.js';
 import { rateLimitTokensConsumedTotal } from '../metrics.js';
+import {
+  getCanonicalPathFromRequest,
+  buildBucketKeys,
+  normalizeHost,
+  normalizePath,
+} from './utils.js';
 
 /**
  * Configuration options for Redis rate limiter
@@ -50,31 +56,6 @@ export class RedisRateLimiter implements RateLimiter {
   }
 
   /**
-   * Get canonical path from request
-   */
-  private getCanonicalPath(req: Request): string {
-    const full = `${req.baseUrl || ''}${req.path || ''}`;
-    const normalized = full === '' ? '/' : full.replace(/\/{2,}/g, '/');
-    return normalized.slice(0, 256);
-  }
-
-  /**
-   * Build bucket keys for resource and IP
-   */
-  private buildBucketKeys(
-    method: string,
-    path: string,
-    ip: string,
-    host: string,
-  ): { resourceKey: string; ipKey: string } {
-    const resourceTag = `rl:${method}:${host}:${path}`;
-    return {
-      resourceKey: `{${resourceTag}}:resource`,
-      ipKey: `rl:ip:${ip}`,
-    };
-  }
-
-  /**
    * Check IP allowlist
    */
   public isAllowlisted(clientIps: string[]): boolean {
@@ -95,12 +76,12 @@ export class RedisRateLimiter implements RateLimiter {
     contentLengthForTopOff = 0,
   ): Promise<RateLimitCheckResult> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { resourceKey, ipKey } = this.buildBucketKeys(
+    const { resourceKey, ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -431,12 +412,12 @@ export class RedisRateLimiter implements RateLimiter {
    */
   public async topOffPaidTokens(req: Request, tokens: number): Promise<void> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { ipKey } = this.buildBucketKeys(
+    const { ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -470,6 +451,131 @@ export class RedisRateLimiter implements RateLimiter {
         error: error instanceof Error ? error.message : String(error),
         ipKey,
       });
+    }
+  }
+
+  /**
+   * Get IP bucket state without modifying it
+   */
+  public async getIpBucketState(ip: string): Promise<{
+    ip: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const ipKey = `rl:ip:${ip}`;
+
+    try {
+      const bucket = await this.redisClient.getBucketState(ipKey);
+      if (!bucket) {
+        return null;
+      }
+
+      return {
+        ip,
+        tokens: bucket.tokens,
+        paidTokens: bucket.paidTokens,
+        capacity: bucket.capacity,
+        refillRate: bucket.refillRate,
+        lastRefill: bucket.lastRefill,
+      };
+    } catch (error) {
+      this.log.error('Failed to get IP bucket state', {
+        error: error instanceof Error ? error.message : String(error),
+        ipKey,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get resource bucket state without modifying it
+   */
+  public async getResourceBucketState(
+    method: string,
+    host: string,
+    path: string,
+  ): Promise<{
+    method: string;
+    host: string;
+    path: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
+
+    try {
+      const bucket = await this.redisClient.getBucketState(resourceKey);
+      if (!bucket) {
+        return null;
+      }
+
+      return {
+        method,
+        host: normalizedHost,
+        path: normalizedPath,
+        tokens: bucket.tokens,
+        paidTokens: bucket.paidTokens,
+        capacity: bucket.capacity,
+        refillRate: bucket.refillRate,
+        lastRefill: bucket.lastRefill,
+      };
+    } catch (error) {
+      this.log.error('Failed to get resource bucket state', {
+        error: error instanceof Error ? error.message : String(error),
+        resourceKey,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Top off resource bucket with paid tokens
+   */
+  public async topOffPaidTokensForResource(
+    method: string,
+    host: string,
+    path: string,
+    tokens: number,
+  ): Promise<void> {
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
+    const now = Date.now();
+
+    try {
+      // Apply capacity multiplier to match IP bucket behavior
+      const tokensWithMultiplier = tokens * this.config.capacityMultiplier;
+
+      const result = await this.redisClient.addPaidTokens(
+        resourceKey,
+        this.config.resourceCapacity,
+        this.config.resourceRefillRate,
+        now,
+        this.config.cacheTtlSeconds,
+        tokensWithMultiplier,
+      );
+
+      this.log.debug('Topped off resource bucket with paid tokens', {
+        key: resourceKey,
+        tokensInput: tokens,
+        capacityMultiplier: this.config.capacityMultiplier,
+        paidTokensAdded: tokensWithMultiplier,
+        totalPaidTokens: result.bucket.paidTokens,
+      });
+    } catch (error) {
+      this.log.error('Failed to top off paid tokens for resource', {
+        error: error instanceof Error ? error.message : String(error),
+        resourceKey,
+      });
+      throw error;
     }
   }
 }

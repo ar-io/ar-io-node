@@ -65,6 +65,7 @@ export interface RateLimiterRedisClient {
     ttlSeconds: number,
     paidTokensToAdd: number,
   ): Promise<AddPaidTokensResult>;
+  getBucketState(key: string): Promise<TokenBucket | null>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -196,6 +197,27 @@ export function getRateLimiterRedisClient(): RateLimiterRedisClient {
           paidTokensToAdd,
         );
         return JSON.parse(result);
+      },
+      getBucketState: async (key: string): Promise<TokenBucket | null> => {
+        const result = await client.hgetall(key);
+        if (
+          result === null ||
+          result === undefined ||
+          Object.keys(result).length === 0
+        ) {
+          return null;
+        }
+        return {
+          key,
+          tokens: parseFloat(result.tokens) || 0,
+          paidTokens: parseFloat(result.paidTokens) || 0,
+          lastRefill: parseInt(result.lastRefill, 10) || 0,
+          capacity: parseFloat(result.capacity) || 0,
+          refillRate: parseFloat(result.refillRate) || 0,
+          contentLength: result.contentLength
+            ? parseInt(result.contentLength, 10)
+            : undefined,
+        };
       },
     };
   }

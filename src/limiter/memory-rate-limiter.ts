@@ -14,6 +14,12 @@ import {
   TokenAdjustmentContext,
 } from './types.js';
 import { rateLimitTokensConsumedTotal } from '../metrics.js';
+import {
+  getCanonicalPathFromRequest,
+  buildBucketKeys,
+  normalizeHost,
+  normalizePath,
+} from './utils.js';
 
 /**
  * Token bucket stored in memory
@@ -57,31 +63,6 @@ export class MemoryRateLimiter implements RateLimiter {
     this.config = config;
     this.buckets = new Map();
     this.accessOrder = new Map();
-  }
-
-  /**
-   * Get canonical path from request
-   */
-  private getCanonicalPath(req: Request): string {
-    const full = `${req.baseUrl || ''}${req.path || ''}`;
-    const normalized = full === '' ? '/' : full.replace(/\/{2,}/g, '/');
-    return normalized.slice(0, 256);
-  }
-
-  /**
-   * Build bucket keys for resource and IP
-   */
-  private buildBucketKeys(
-    method: string,
-    path: string,
-    ip: string,
-    host: string,
-  ): { resourceKey: string; ipKey: string } {
-    const resourceTag = `rl:${method}:${host}:${path}`;
-    return {
-      resourceKey: `${resourceTag}:resource`,
-      ipKey: `rl:ip:${ip}`,
-    };
   }
 
   /**
@@ -226,12 +207,12 @@ export class MemoryRateLimiter implements RateLimiter {
     contentLengthForTopOff = 0,
   ): Promise<RateLimitCheckResult> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { resourceKey, ipKey } = this.buildBucketKeys(
+    const { resourceKey, ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -484,12 +465,12 @@ export class MemoryRateLimiter implements RateLimiter {
    */
   public async topOffPaidTokens(req: Request, tokens: number): Promise<void> {
     const method = req.method;
-    const canonicalPath = this.getCanonicalPath(req);
-    const host = (req.headers.host ?? '').slice(0, 256);
+    const canonicalPath = getCanonicalPathFromRequest(req);
+    const host = normalizeHost(req.headers.host ?? '');
     const { clientIp } = extractAllClientIPs(req);
     const primaryClientIp = clientIp ?? '0.0.0.0';
 
-    const { ipKey } = this.buildBucketKeys(
+    const { ipKey } = buildBucketKeys(
       method,
       canonicalPath,
       primaryClientIp,
@@ -516,6 +497,125 @@ export class MemoryRateLimiter implements RateLimiter {
       capacityMultiplier: this.config.capacityMultiplier,
       paidTokensAdded: tokensWithMultiplier,
       totalPaidTokens: ipBucket.paidTokens,
+    });
+  }
+
+  /**
+   * Get IP bucket state without modifying it
+   */
+  public async getIpBucketState(ip: string): Promise<{
+    ip: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const ipKey = `rl:ip:${ip}`;
+    const bucket = this.buckets.get(ipKey);
+
+    if (!bucket) {
+      return null;
+    }
+
+    // Calculate refilled tokens without modifying bucket
+    const now = Date.now();
+    const elapsedSeconds = (now - bucket.lastRefill) / 1000;
+    const tokensToAdd = elapsedSeconds * bucket.refillRate;
+    const currentTokens = Math.min(
+      bucket.capacity,
+      bucket.tokens + tokensToAdd,
+    );
+
+    return {
+      ip,
+      tokens: currentTokens,
+      paidTokens: bucket.paidTokens,
+      capacity: bucket.capacity,
+      refillRate: bucket.refillRate,
+      lastRefill: bucket.lastRefill,
+    };
+  }
+
+  /**
+   * Get resource bucket state without modifying it
+   */
+  public async getResourceBucketState(
+    method: string,
+    host: string,
+    path: string,
+  ): Promise<{
+    method: string;
+    host: string;
+    path: string;
+    tokens: number;
+    paidTokens: number;
+    capacity: number;
+    refillRate: number;
+    lastRefill: number;
+  } | null> {
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
+    const bucket = this.buckets.get(resourceKey);
+
+    if (!bucket) {
+      return null;
+    }
+
+    // Calculate refilled tokens without modifying bucket
+    const now = Date.now();
+    const elapsedSeconds = (now - bucket.lastRefill) / 1000;
+    const tokensToAdd = elapsedSeconds * bucket.refillRate;
+    const currentTokens = Math.min(
+      bucket.capacity,
+      bucket.tokens + tokensToAdd,
+    );
+
+    return {
+      method,
+      host: normalizedHost,
+      path: normalizedPath,
+      tokens: currentTokens,
+      paidTokens: bucket.paidTokens,
+      capacity: bucket.capacity,
+      refillRate: bucket.refillRate,
+      lastRefill: bucket.lastRefill,
+    };
+  }
+
+  /**
+   * Top off resource bucket with paid tokens
+   */
+  public async topOffPaidTokensForResource(
+    method: string,
+    host: string,
+    path: string,
+    tokens: number,
+  ): Promise<void> {
+    const normalizedHost = normalizeHost(host);
+    const normalizedPath = normalizePath(path);
+    const resourceKey = `rl:resource:${normalizedHost}:${method}:${normalizedPath}`;
+    const now = Date.now();
+
+    // Get or create resource bucket
+    const resourceBucket = this.getOrCreateBucket(
+      resourceKey,
+      this.config.resourceCapacity,
+      this.config.resourceRefillRate,
+      now,
+    );
+
+    // Apply capacity multiplier to match IP bucket behavior
+    const tokensWithMultiplier = tokens * this.config.capacityMultiplier;
+    resourceBucket.paidTokens += tokensWithMultiplier;
+
+    this.log.debug('Topped off resource bucket with paid tokens', {
+      key: resourceKey,
+      tokensInput: tokens,
+      capacityMultiplier: this.config.capacityMultiplier,
+      paidTokensAdded: tokensWithMultiplier,
+      totalPaidTokens: resourceBucket.paidTokens,
     });
   }
 }

@@ -73,8 +73,9 @@ The rate limiter and x402 payment system apply to data egress endpoints:
 - **Raw data requests**: `/raw/:txid`
 - **ArNS resolved content**: All requests resolved through ArNS names
 - **Farcaster frames**: `/local/farcaster/frame/:txid`
-- **Chunk requests**: `GET /chunk/:offset` (uses fixed size pricing - see note
-  below)
+- **Chunk requests**:
+  - `GET /chunk/:offset` (base64url-encoded JSON, uses fixed size pricing - see note below)
+  - `GET /chunk/:offset/data` (raw binary, uses fixed size pricing - see note below)
 
 #### Not Rate Limited
 
@@ -85,10 +86,20 @@ Currently, the following endpoints are not rate limited:
 - Administrative endpoints (`/ar-io/*`)
 
 **Note on Chunk Pricing:** Chunk GET requests use a fixed size assumption for
-predictable pricing (~360 KiB per request by default, configurable via
-`CHUNK_GET_BASE64_SIZE_BYTES`). This allows payment requirements to be
-calculated immediately without waiting for chunk retrieval, unlike data
-endpoints which calculate pricing based on actual content size.
+predictable pricing. This allows payment requirements to be calculated
+immediately without waiting for chunk retrieval, unlike data endpoints which
+calculate pricing based on actual content size.
+
+- `/chunk/:offset` (base64url-encoded): ~360 KiB per request by default
+  (configurable via `CHUNK_GET_BASE64_SIZE_BYTES`)
+- `/chunk/:offset/data` (raw binary): 256 KiB per request (hardcoded as
+  `MAX_CHUNK_SIZE`), providing ~40% bandwidth savings and lower per-chunk fees
+  compared to the base64url endpoint
+
+**Note on Chunk Browser Payments:** For browser paywall requests, chunks use a
+direct payment flow (payment sent to original URL) rather than the redirect
+endpoint used by larger content. This reduces latency for small chunk requests
+while maintaining the same payment verification and settlement process
 
 ### How They Work Together
 
@@ -394,8 +405,8 @@ The system enforces limits at two levels:
 
 - Applies to each unique resource (e.g., specific transaction ID)
 - Prevents any single resource from monopolizing bandwidth
-- Key format: `rl:{METHOD}:{HOST}:{PATH}:resource`
-- Example: `rl:GET:example.com:/tx123:resource`
+- Key format: `rl:resource:{HOST}:{METHOD}:{PATH}`
+- Example: `rl:resource:example.com:GET:/tx123`
 
 **2. Per-IP Limits:**
 
@@ -856,7 +867,8 @@ The complete payment flow involves several steps:
 - Returns HTML paywall UI (Coinbase SDK)
 - User connects wallet in browser
 - Payment auto-generated and submitted
-- Redirect mechanism to avoid blob URL issues
+- For chunk requests: direct payment to original URL
+- For other content: redirect endpoint processes payment, then redirects to content
 
 **API Payment Mode:**
 
@@ -864,6 +876,7 @@ The complete payment flow involves several steps:
 - Returns JSON 402 response with requirements
 - Client uses `x402-fetch` or similar library
 - Payment header sent in subsequent request
+- Same flow for all endpoints (chunks, transactions, manifests, etc.)
 
 #### Facilitator Role
 
@@ -1001,9 +1014,13 @@ For browser requests (Accept includes `text/html` AND User-Agent includes
 1. Gateway returns HTML with Coinbase SDK
 2. SDK prompts user to connect wallet
 3. User approves payment (EIP-712 signature)
-4. SDK submits payment to redirect endpoint
-5. Gateway verifies and settles payment
-6. Gateway redirects to original URL with topped-off bucket
+4. SDK submits payment with x-payment header:
+   - **Chunk requests** (`/chunk/*`): Sent directly to original URL
+   - **Other content**: Sent to redirect endpoint (`/ar-io/x402/browser-paywall-redirect/{encoded}`)
+5. Gateway verifies and settles payment, adds paid tokens to IP bucket
+6. Content delivery:
+   - **Chunk requests**: Served immediately (single request)
+   - **Other content**: HTML redirect sent to original URL
 
 ## Integration Topics
 
@@ -1795,6 +1812,224 @@ const isPaidTierAvailable = supportsPayments && supportsRateLimiting;
 
 **Note**: CDP keys are for Coinbase Onramp integration (browser paywall with
 easy USDC purchase), not for facilitator authentication.
+
+### Balance Management API
+
+The AR.IO Gateway provides REST API endpoints for querying and managing rate limit bucket balances. These endpoints allow users to programmatically check their current token levels and top up balances using x402 payments or admin credentials.
+
+#### Available Endpoints
+
+| Endpoint | Method | Purpose | Authentication |
+|----------|---------|---------|----------------|
+| `/ar-io/rate-limit/ip/:ip` | GET | Query IP bucket balance | None (public) |
+| `/ar-io/rate-limit/ip/:ip` | POST | Top up IP bucket | x402 payment OR admin |
+| `/ar-io/rate-limit/resource` | GET | Query resource bucket balance | None (public) |
+| `/ar-io/rate-limit/resource` | POST | Top up resource bucket | x402 payment OR admin |
+
+#### Query IP Bucket Balance
+
+Get the current token balance for an IP address.
+
+**Endpoint**: `GET /ar-io/rate-limit/ip/:ip`
+
+**Example**:
+```bash
+curl https://your-gateway.com/ar-io/rate-limit/ip/192.168.1.100
+```
+
+**Success Response** (200):
+```json
+{
+  "ip": "192.168.1.100",
+  "tokens": 95000,
+  "paidTokens": 50000,
+  "capacity": 100000,
+  "refillRate": 20,
+  "lastRefill": 1735689600000
+}
+```
+
+**Error Responses**:
+- `400 Bad Request` - Invalid IP format
+- `404 Not Found` - Bucket doesn't exist (created on first request)
+
+#### Query Resource Bucket Balance
+
+Get the current token balance for a specific resource (method + host + path combination).
+
+**Endpoint**: `GET /ar-io/rate-limit/resource`
+
+**Query Parameters**:
+- `path` (required): Request path
+- `method` (optional): HTTP method (default: `GET`)
+- `host` (optional): Host header (default: current request host)
+
+**Example**:
+```bash
+# Simple case (defaults to GET method, current host)
+curl "https://your-gateway.com/ar-io/rate-limit/resource?path=/TX_ID"
+
+# With explicit method and host
+curl "https://your-gateway.com/ar-io/rate-limit/resource?path=/chunk/123&method=POST&host=other-gateway.com"
+```
+
+**Success Response** (200):
+```json
+{
+  "method": "GET",
+  "host": "your-gateway.com",
+  "path": "/TX_ID",
+  "tokens": 980000,
+  "paidTokens": 100000,
+  "capacity": 1000000,
+  "refillRate": 100,
+  "lastRefill": 1735689600000
+}
+```
+
+**Error Responses**:
+- `400 Bad Request` - Missing path parameter or invalid method
+- `404 Not Found` - Bucket doesn't exist (created on first request)
+
+#### Top Up IP Bucket
+
+Add paid tokens to an IP bucket via x402 payment or admin credentials.
+
+**Endpoint**: `POST /ar-io/rate-limit/ip/:ip`
+
+**Authentication**: Two modes supported:
+
+1. **x402 Payment** (public):
+   - Header: `X-Payment: <base64-encoded-payment>`
+   - Tokens calculated from payment amount
+   - 10x capacity multiplier applied
+
+2. **Admin** (private):
+   - Header: `Authorization: Bearer <ADMIN_API_KEY>`
+   - Body: `{ "tokens": 50000, "tokenType": "paid" }`
+   - No multiplier (raw token count)
+
+**Example (x402 payment)**:
+```bash
+curl -X POST \
+  https://your-gateway.com/ar-io/rate-limit/ip/192.168.1.100 \
+  -H "X-Payment: <base64-encoded-payment-data>"
+```
+
+**Example (admin)**:
+```bash
+curl -X POST \
+  https://your-gateway.com/ar-io/rate-limit/ip/192.168.1.100 \
+  -H "Authorization: Bearer <ADMIN_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"tokens": 50000, "tokenType": "paid"}'
+```
+
+**Success Response** (200):
+```json
+{
+  "ip": "192.168.1.100",
+  "tokens": 95000,
+  "paidTokens": 150000,
+  "capacity": 100000,
+  "refillRate": 20,
+  "lastRefill": 1735689600000,
+  "topUp": {
+    "tokensAdded": 100000,
+    "paymentAmount": "1000000",
+    "multiplierApplied": 10
+  }
+}
+```
+
+**Error Responses**:
+- `400 Bad Request` - Invalid IP format or invalid request body
+- `401 Unauthorized` - Missing or invalid authentication
+- `402 Payment Required` - Payment verification/settlement failed
+
+**Note**: Admin top-ups currently only support paid tokens. Regular token top-up would require extending the rate limiter interface.
+
+#### Top Up Resource Bucket
+
+Add paid tokens to a resource bucket via x402 payment or admin credentials.
+
+**Endpoint**: `POST /ar-io/rate-limit/resource`
+
+**Query Parameters**:
+- `path` (required): Request path
+- `method` (optional): HTTP method (default: `GET`)
+- `host` (optional): Host header (default: current request host)
+
+**Authentication**: Same as IP bucket (x402 payment OR admin)
+
+**Example (x402 payment)**:
+```bash
+curl -X POST \
+  "https://your-gateway.com/ar-io/rate-limit/resource?path=/TX_ID" \
+  -H "X-Payment: <base64-encoded-payment-data>"
+```
+
+**Example (admin)**:
+```bash
+curl -X POST \
+  "https://your-gateway.com/ar-io/rate-limit/resource?path=/TX_ID" \
+  -H "Authorization: Bearer <ADMIN_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"tokens": 50000, "tokenType": "paid"}'
+```
+
+**Success Response** (200):
+```json
+{
+  "method": "GET",
+  "host": "your-gateway.com",
+  "path": "/TX_ID",
+  "tokens": 980000,
+  "paidTokens": 150000,
+  "capacity": 1000000,
+  "refillRate": 100,
+  "lastRefill": 1735689600000,
+  "topUp": {
+    "tokensAdded": 100000,
+    "paymentAmount": "1000000",
+    "multiplierApplied": 10
+  }
+}
+```
+
+**Error Responses**:
+- `400 Bad Request` - Missing parameters or invalid request body
+- `401 Unauthorized` - Missing or invalid authentication
+- `402 Payment Required` - Payment verification/settlement failed
+
+#### Use Cases
+
+**Monitoring**: Query bucket balances to track usage and avoid hitting limits
+```bash
+# Check current IP balance before making large requests
+BALANCE=$(curl -s "https://gateway.com/ar-io/rate-limit/ip/$(curl -s ifconfig.me)" | jq .tokens)
+if [ "$BALANCE" -lt 10000 ]; then
+  echo "Low balance, consider topping up"
+fi
+```
+
+**Programmatic Top-Ups**: Pre-purchase capacity for bulk operations
+```bash
+# Top up IP bucket before batch processing
+curl -X POST \
+  "https://gateway.com/ar-io/rate-limit/ip/$(curl -s ifconfig.me)" \
+  -H "X-Payment: $PAYMENT_TOKEN"
+```
+
+**Testing**: Admin can manually add tokens for testing without payments
+```bash
+# Add test tokens for development
+curl -X POST \
+  https://localhost:4000/ar-io/rate-limit/ip/127.0.0.1 \
+  -H "Authorization: Bearer ${ADMIN_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"tokens": 1000000, "tokenType": "paid"}'
+```
 
 ## Troubleshooting
 

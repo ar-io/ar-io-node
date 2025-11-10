@@ -1,0 +1,144 @@
+# OpenTelemetry Collector Configuration
+# This collector implements tail-based sampling to reduce telemetry costs
+# while maintaining complete visibility into errors and performance issues.
+
+receivers:
+  # OTLP receivers for traces from ar-io-node
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Batch processor to improve network efficiency
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Tail sampling - makes sampling decisions after traces complete
+  # This allows us to see the full trace before deciding to keep/drop it
+  tail_sampling:
+    # Wait 10 seconds after trace starts before making decision
+    # This ensures the entire trace has been collected
+    decision_wait: 10s
+
+    # Number of traces to keep in memory during decision period
+    num_traces: 100000
+
+    # Expected new traces per second (helps with memory management)
+    expected_new_traces_per_sec: 100
+
+    policies:
+      # Policy 1: Sample traces with errors at configurable rate
+      # Default: 100% (configurable via OTEL_TAIL_SAMPLING_ERROR_RATE)
+      # Catches HTTP 5xx responses and application errors
+      - name: error-policy
+        type: and
+        and:
+          and_sub_policy:
+            - name: error-condition
+              type: status_code
+              status_code:
+                status_codes:
+                  - ERROR
+            - name: error-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_ERROR_RATE}
+
+      # Policy 2: Sample slow traces at configurable rate
+      # Default threshold: 2000ms (configurable via OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS)
+      # Default rate: 100% (configurable via OTEL_TAIL_SAMPLING_SLOW_RATE)
+      - name: latency-policy
+        type: and
+        and:
+          and_sub_policy:
+            - name: latency-condition
+              type: latency
+              latency:
+                threshold_ms: ${env:OTEL_TAIL_SAMPLING_SLOW_THRESHOLD_MS}
+            - name: latency-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_SLOW_RATE}
+
+      # Policy 3: Sample traces with verified payments at configurable rate
+      # Default: 100% (configurable via OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE)
+      # Captures paid traffic for billing, compliance, and audit purposes
+      - name: payment-verified-policy
+        type: and
+        and:
+          and_sub_policy:
+            - name: payment-verified-condition
+              type: boolean_attribute
+              boolean_attribute:
+                key: payment.verified
+                value: true
+            - name: payment-verified-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_PAID_TRAFFIC_RATE}
+
+      # Policy 4: Sample traces that used paid tokens at configurable rate
+      # Default: 100% (configurable via OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE)
+      # Captures requests that consumed paid rate limit tokens
+      - name: paid-tokens-policy
+        type: and
+        and:
+          and_sub_policy:
+            - name: paid-tokens-condition
+              type: boolean_attribute
+              boolean_attribute:
+                key: tokens.paid_used
+                value: true
+            - name: paid-tokens-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE}
+
+      # Policy 5: Probabilistic sampling of successful, fast, unpaid traces
+      # Default: 1% (configurable via OTEL_TAIL_SAMPLING_SUCCESS_RATE)
+      # This provides baseline visibility into normal free-tier operations
+      - name: baseline-success-policy
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${env:OTEL_TAIL_SAMPLING_SUCCESS_RATE}
+
+exporters:
+  # Export to final telemetry destination
+  # Configure ONE of the following API keys based on your backend:
+  # - OTEL_COLLECTOR_HONEYCOMB_API_KEY (Honeycomb)
+  # - OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY (Grafana Cloud Tempo)
+  # - OTEL_COLLECTOR_DATADOG_API_KEY (Datadog)
+  # - OTEL_COLLECTOR_NEW_RELIC_API_KEY (New Relic)
+  # - OTEL_COLLECTOR_ELASTIC_API_KEY (Elastic APM)
+  otlphttp:
+    endpoint: ${env:OTEL_COLLECTOR_DESTINATION_ENDPOINT}
+    headers:
+      # Honeycomb authentication
+      x-honeycomb-team: ${env:OTEL_COLLECTOR_HONEYCOMB_API_KEY}
+      # Grafana Cloud Tempo authentication (also needs instance ID in endpoint)
+      Authorization: Basic ${env:OTEL_COLLECTOR_GRAFANA_CLOUD_API_KEY}
+      # Datadog authentication
+      DD-API-KEY: ${env:OTEL_COLLECTOR_DATADOG_API_KEY}
+      # New Relic authentication
+      api-key: ${env:OTEL_COLLECTOR_NEW_RELIC_API_KEY}
+      # Elastic APM authentication
+      # Authorization: Bearer ${env:OTEL_COLLECTOR_ELASTIC_API_KEY}
+    compression: gzip
+    timeout: 30s
+
+  # Debug exporter for troubleshooting (disabled in production)
+  # Uncomment to see sampled traces in collector logs
+  # debug:
+  #   verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling, batch]
+      exporters: [otlphttp]
+      # Add debug exporter for troubleshooting: exporters: [otlphttp, debug]

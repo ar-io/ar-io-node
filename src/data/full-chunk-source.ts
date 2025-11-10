@@ -89,7 +89,7 @@ export class FullChunkSource
       const result = {
         ...metadata,
         ...data,
-        tx_path: undefined,
+        tx_path: metadata.tx_path ?? undefined,
       };
 
       span.addEvent('Full chunk assembly complete');
