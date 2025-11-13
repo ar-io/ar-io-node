@@ -12,12 +12,24 @@ import * as config from '../config.js';
 import { RateLimiter } from '../limiter/types.js';
 import { PaymentProcessor } from '../payments/types.js';
 import { processPaymentAndTopUp } from '../payments/payment-processor-utils.js';
+import { createFacilitatorConfig } from '@coinbase/x402';
 
 export interface X402RouterConfig {
   log: Logger;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
 }
+
+const facilitatorConfig =
+  config.X_402_CDP_CLIENT_KEY !== undefined &&
+  config.X_402_CDP_CLIENT_SECRET !== undefined
+    ? createFacilitatorConfig(
+        config.X_402_CDP_CLIENT_KEY,
+        config.X_402_CDP_CLIENT_SECRET,
+      )
+    : {
+        url: config.X_402_USDC_FACILITATOR_URL as `${string}://${string}`,
+      };
 
 export function createX402Router({
   log,
@@ -121,9 +133,7 @@ export function createX402Router({
             network: config.X_402_USDC_NETWORK,
           },
         },
-        {
-          url: config.X_402_USDC_FACILITATOR_URL,
-        },
+        facilitatorConfig,
       ),
     );
   }

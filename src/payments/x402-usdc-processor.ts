@@ -7,6 +7,7 @@
 
 import { Request, Response } from 'express';
 import { useFacilitator } from 'x402/verify';
+import { createFacilitatorConfig } from '@coinbase/x402';
 import {
   ERC20TokenAmount,
   PaymentPayload,
@@ -45,6 +46,8 @@ export interface X402UsdcProcessorConfig {
   appName?: string;
   appLogo?: string;
   sessionTokenEndpoint?: string;
+  // CDP API secret for coinbase facilitator access
+  cdpClientSecret?: string;
 }
 
 /**
@@ -62,9 +65,23 @@ export class X402UsdcProcessor implements PaymentProcessor {
   constructor(config: X402UsdcProcessorConfig) {
     this.log = log.child({ class: 'X402UsdcProcessor' });
     this.config = config;
-    this.facilitator = useFacilitator({
-      url: config.facilitatorUrl,
-    });
+
+    if (
+      this.config.cdpClientKey !== undefined &&
+      this.config.cdpClientSecret !== undefined
+    ) {
+      // use CDP-enabled facilitator configuration if API credentials are provided
+      const facilitatorConfig = createFacilitatorConfig(
+        this.config.cdpClientKey,
+        this.config.cdpClientSecret,
+      );
+      this.facilitator = useFacilitator(facilitatorConfig);
+    } else {
+      // use basic facilitator configuration
+      this.facilitator = useFacilitator({
+        url: config.facilitatorUrl,
+      });
+    }
   }
 
   /**

@@ -1071,6 +1071,24 @@
     viem "^2.21.26"
     zod "^3.24.4"
 
+"@coinbase/cdp-sdk@^1.29.0":
+  version "1.38.5"
+  resolved "https://registry.yarnpkg.com/@coinbase/cdp-sdk/-/cdp-sdk-1.38.5.tgz#03f5cac45de3190113a2609877ee657ebfa7fcef"
+  integrity sha512-j8mvx1wMox/q2SjB7C09HtdRXVOpGpfkP7nG4+OjdowPj8pmQ03rigzycd86L8mawl6TUPXdm41YSQVmtc8SzQ==
+  dependencies:
+    "@solana-program/system" "^0.8.0"
+    "@solana-program/token" "^0.6.0"
+    "@solana/kit" "^3.0.3"
+    "@solana/web3.js" "^1.98.1"
+    abitype "1.0.6"
+    axios "^1.12.2"
+    axios-retry "^4.5.0"
+    jose "^6.0.8"
+    md5 "^2.3.0"
+    uncrypto "^0.1.3"
+    viem "^2.21.26"
+    zod "^3.24.4"
+
 "@coinbase/wallet-sdk@4.3.6":
   version "4.3.6"
   resolved "https://registry.yarnpkg.com/@coinbase/wallet-sdk/-/wallet-sdk-4.3.6.tgz#bf9935fea404ecaa4aa5f00ea508fa01c007b3a8"
@@ -1084,6 +1102,16 @@
     preact "10.24.2"
     viem "^2.27.2"
     zustand "5.0.3"
+
+"@coinbase/x402@^0.7.1":
+  version "0.7.1"
+  resolved "https://registry.yarnpkg.com/@coinbase/x402/-/x402-0.7.1.tgz#d0f20fb4b5b941a350601bdbfb7f8702e8654db2"
+  integrity sha512-wgrX2QdbDmcebmylinomGKHZ4y54jMCc75ymedEq+ceG2blF76MrZLxadKyk/1fC7Z+8YbWIKF4EilrgXeJGFA==
+  dependencies:
+    "@coinbase/cdp-sdk" "^1.29.0"
+    viem "^2.21.26"
+    x402 "^0.7.1"
+    zod "^3.24.2"
 
 "@colors/colors@1.5.0":
   version "1.5.0"
@@ -4869,6 +4897,14 @@
     "@solana/rpc-types" "3.0.3"
     "@solana/transaction-messages" "3.0.3"
 
+"@solana/wallet-standard-features@^1.3.0":
+  version "1.3.0"
+  resolved "https://registry.yarnpkg.com/@solana/wallet-standard-features/-/wallet-standard-features-1.3.0.tgz#c489eca9d0c78f97084b4af6ca8ad8c1ca197de5"
+  integrity sha512-ZhpZtD+4VArf6RPitsVExvgkF+nGghd1rzPjd97GmBximpnt1rsUxMOEyoIEuH3XBxPyNB6Us7ha7RHWQR+abg==
+  dependencies:
+    "@wallet-standard/base" "^1.1.0"
+    "@wallet-standard/features" "^1.1.0"
+
 "@solana/web3.js@^1.98.1":
   version "1.98.4"
   resolved "https://registry.yarnpkg.com/@solana/web3.js/-/web3.js-1.98.4.tgz#df51d78be9d865181ec5138b4e699d48e6895bbe"
@@ -5704,6 +5740,25 @@
     eventemitter3 "5.0.1"
     mipd "0.0.7"
     zustand "5.0.0"
+
+"@wallet-standard/app@^1.1.0":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@wallet-standard/app/-/app-1.1.0.tgz#2ca32e4675536224ebe55a00ad533b7923d7380a"
+  integrity sha512-3CijvrO9utx598kjr45hTbbeeykQrQfKmSnxeWOgU25TOEpvcipD/bYDQWIqUv1Oc6KK4YStokSMu/FBNecGUQ==
+  dependencies:
+    "@wallet-standard/base" "^1.1.0"
+
+"@wallet-standard/base@^1.1.0":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@wallet-standard/base/-/base-1.1.0.tgz#214093c0597a1e724ee6dbacd84191dfec62bb33"
+  integrity sha512-DJDQhjKmSNVLKWItoKThJS+CsJQjR9AOBOirBVT1F9YpRyC9oYHE+ZnSf8y8bxUphtKqdQMPVQ2mHohYdRvDVQ==
+
+"@wallet-standard/features@^1.1.0":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@wallet-standard/features/-/features-1.1.0.tgz#f256d7b18940c8d134f66164330db358a8f5200e"
+  integrity sha512-hiEivWNztx73s+7iLxsuD1sOJ28xtRix58W7Xnz4XzzA/pF0+aicnWgjOdA10doVDEDZdUuZCIIqG96SFNlDUg==
+  dependencies:
+    "@wallet-standard/base" "^1.1.0"
 
 "@walletconnect/core@2.21.0":
   version "2.21.0"
@@ -13397,21 +13452,6 @@ x402-fetch@^0.6.0:
     x402 "^0.6.6"
     zod "^3.24.2"
 
-x402@0.6.5:
-  version "0.6.5"
-  resolved "https://registry.yarnpkg.com/x402/-/x402-0.6.5.tgz#8085d9f5e841ee90c9e740e2f7f3544878944ed6"
-  integrity sha512-Pk+JZiCwuXSzwuhY6Dsz5mu/O9T6QnZD7VPVcgI3gixe4F/rwv4h09bUygB9kckRpq+XYYx3Hqv4nTk8uBCzvQ==
-  dependencies:
-    "@scure/base" "^1.2.6"
-    "@solana-program/compute-budget" "^0.8.0"
-    "@solana-program/token" "^0.5.1"
-    "@solana-program/token-2022" "^0.4.2"
-    "@solana/kit" "^2.1.1"
-    "@solana/transaction-confirmation" "^2.1.1"
-    viem "^2.21.26"
-    wagmi "^2.15.6"
-    zod "^3.24.2"
-
 x402@^0.6.5, x402@^0.6.6:
   version "0.6.6"
   resolved "https://registry.yarnpkg.com/x402/-/x402-0.6.6.tgz#678646126f6b68a90781705b9f339146c6e3ea9f"
@@ -13423,6 +13463,25 @@ x402@^0.6.5, x402@^0.6.6:
     "@solana-program/token-2022" "^0.4.2"
     "@solana/kit" "^2.1.1"
     "@solana/transaction-confirmation" "^2.1.1"
+    viem "^2.21.26"
+    wagmi "^2.15.6"
+    zod "^3.24.2"
+
+x402@^0.7.1:
+  version "0.7.1"
+  resolved "https://registry.yarnpkg.com/x402/-/x402-0.7.1.tgz#69d74d003c344ab797ab69767cfcc1a95d20f474"
+  integrity sha512-J+C0FgFHIc3gkJzCw6sqerwwzs0r3I8010WsSvMDFtNlaCicHY92kvoT7LcJI2PaftRhCVzdIuaSU9xoMFrzPQ==
+  dependencies:
+    "@scure/base" "^1.2.6"
+    "@solana-program/compute-budget" "^0.8.0"
+    "@solana-program/token" "^0.5.1"
+    "@solana-program/token-2022" "^0.4.2"
+    "@solana/kit" "^2.1.1"
+    "@solana/transaction-confirmation" "^2.1.1"
+    "@solana/wallet-standard-features" "^1.3.0"
+    "@wallet-standard/app" "^1.1.0"
+    "@wallet-standard/base" "^1.1.0"
+    "@wallet-standard/features" "^1.1.0"
     viem "^2.21.26"
     wagmi "^2.15.6"
     zod "^3.24.2"
