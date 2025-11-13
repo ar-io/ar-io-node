@@ -218,6 +218,7 @@ services:
       - CDP_API_KEY_ID=${CDP_API_KEY_ID:-}
       - CDP_API_KEY_SECRET=${CDP_API_KEY_SECRET:-}
       - CDP_API_KEY_SECRET_FILE=${CDP_API_KEY_SECRET_FILE:-}
+      - ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
     networks:
       - ar-io-network
     depends_on:
