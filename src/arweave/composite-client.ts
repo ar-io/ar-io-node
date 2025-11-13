@@ -346,6 +346,25 @@ export class ArweaveCompositeClient
     try {
       this.failureSimulator.maybeFail();
 
+      // Dry-run mode: Skip actual HTTP POST for testing without burning AR tokens
+      if (config.ARWEAVE_POST_DRY_RUN) {
+        this.log.debug('Dry-run mode: Skipping chunk POST to peer', {
+          peer: task.peer,
+          dataRoot: task.chunk.data_root,
+          dataSize: task.chunk.data_size,
+        });
+
+        metrics.arweaveChunkPostCounter.inc({
+          endpoint: task.peer,
+          status: 'success',
+        });
+
+        return {
+          success: true,
+          statusCode: 200,
+        };
+      }
+
       const response = await axios({
         method: 'POST',
         url: `${task.peer}/chunk`,
