@@ -891,9 +891,11 @@ For a list of available facilitators with URLs, supported networks, and
 authentication requirements, see
 [Facilitator Comparison](#facilitator-comparison) in the Reference section.
 
-**Note**: CDP keys (`X_402_CDP_CLIENT_KEY`, `CDP_API_KEY_SECRET`, etc.) are for
-**Coinbase Onramp integration** (browser paywall with easy USDC purchase), not
-for facilitator authentication.
+**Important**: When CDP API keys are provided (`CDP_API_KEY_ID` and 
+`CDP_API_KEY_SECRET`), the gateway automatically uses the Coinbase facilitator 
+instead of the configured `X_402_USDC_FACILITATOR_URL`. This provides enhanced 
+functionality for Coinbase Onramp integration but overrides your facilitator 
+URL setting.
 
 ### Network Selection
 

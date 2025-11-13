@@ -42,9 +42,10 @@ export function createPaymentProcessor(): PaymentProcessor | undefined {
       config.X_402_USDC_FACILITATOR_URL as `${string}://${string}`,
     settleTimeoutMs: config.X_402_USDC_SETTLE_TIMEOUT_MS,
     version: 1, // x402 protocol version
-    cdpClientKey: config.X_402_CDP_CLIENT_KEY,
     appName: config.X_402_APP_NAME,
     appLogo: config.X_402_APP_LOGO,
     sessionTokenEndpoint: config.X_402_SESSION_TOKEN_ENDPOINT,
+    cdpClientKey: config.X_402_CDP_CLIENT_KEY,
+    cdpClientSecret: config.X_402_CDP_CLIENT_SECRET,
   });
 }

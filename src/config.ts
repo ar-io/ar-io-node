@@ -1394,6 +1394,8 @@ if (CDP_API_KEY_SECRET_FILE !== undefined) {
     .trim();
 }
 
+export const X_402_CDP_CLIENT_SECRET = env.varOrUndefined('CDP_API_KEY_SECRET');
+
 // Validate X402 requires rate limiter
 if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {
   throw new Error(
