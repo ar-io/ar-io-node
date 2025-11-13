@@ -432,6 +432,13 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
 
+// Arweave POST dry-run mode (skip actual posting to chain for testing)
+// When enabled, skips posting both transaction headers and chunks to the Arweave network
+export const ARWEAVE_POST_DRY_RUN = env.varOrDefault(
+  'ARWEAVE_POST_DRY_RUN',
+  'false',
+).toLowerCase() === 'true';
+
 // Assumed size for base64-encoded chunk GET responses (used for x402 payment and rate limiting)
 // Default: 368,640 bytes (360 KiB) = 256 KiB raw data * 1.4 base64url encoding overhead
 export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(

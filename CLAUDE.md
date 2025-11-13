@@ -1,3 +1,99 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+AR.IO Node is a gateway for accessing and indexing Arweave blockchain data. It acts as a "Permaweb CDN" providing fast, verified access to Arweave data through intelligent caching, ANS-104 bundle unbundling, and multi-source data retrieval.
+
+## Common Commands
+
+### Development
+- Install dependencies: `yarn install`
+- Start development server: `yarn start`
+- Watch mode with auto-restart: `yarn watch`
+- Build for production: `yarn build`
+- Run production build: `yarn start:prod`
+
+### Testing
+- Run all tests: `yarn test`
+- Run individual test file: `yarn test:file src/path/to/test.ts`
+- Run individual test with coverage: `yarn test:file:coverage src/path/to/test.ts`
+- Run tests with coverage: `yarn test:coverage`
+- Run e2e tests: `yarn test:e2e`
+
+### Linting and Code Quality
+- Check for lint issues: `yarn lint:check`
+- Fix lint issues: `yarn lint:fix`
+- Check for code duplication: `yarn duplicate:check`
+- Check for circular dependencies: `yarn deps:check`
+- Generate dependency graph: `yarn deps:graph`
+
+## Architecture
+
+### High-Level Structure
+
+The codebase follows a layered architecture:
+
+1. **Routes Layer** (`src/routes/`) - Express.js HTTP endpoints for data, chunks, GraphQL, ArNS, etc.
+2. **System Layer** (`src/system.ts`) - Central initialization of all services, workers, databases, and data sources
+3. **Workers Layer** (`src/workers/`) - Background processes for data import, unbundling, verification, and repair
+4. **Data Layer** (`src/data/`) - Composite data sources implementing fallback chains for data retrieval
+5. **Database Layer** (`src/database/`) - SQLite databases (core, data, bundles, moderation) with worker-based queuing
+6. **Store Layer** (`src/store/`) - KV stores (LMDB, Redis, filesystem) for caching headers and data
+
+### Key Architectural Patterns
+
+#### Composite Pattern for Data Sources
+Data retrieval uses composite sources that try multiple backends in order:
+- `CompositeChunkDataSource` - tries local cache, S3, AR.IO peers, trusted gateways, Arweave nodes
+- `CompositeTxOffsetSource` - tries database, ANS-104 offsets, chain offsets
+- Components implement common interfaces (`ChunkDataSource`, `ContiguousDataSource`, etc.)
+
+#### Read-Through Caching
+- `ReadThroughDataCache` wraps upstream sources and caches results to filesystem
+- Configurable retrieval order via `ON_DEMAND_RETRIEVAL_ORDER` and `BACKGROUND_RETRIEVAL_ORDER`
+- Cache locations: `data/contiguous/`, `data/lmdb/`, `data/headers/`
+
+#### Worker-Based Database Access
+- Main process queues database operations via message passing
+- Worker thread (`StandaloneSqlite`) executes queries to avoid blocking
+- Pattern: queue method in main class → worker handler → worker implementation
+
+#### Filter System
+Filters control which transactions/bundles are unbundled and indexed:
+- Declarative JSON syntax supporting tags, attributes, logical operators (and/or/not)
+- Implemented as composable filter classes (`MatchAll`, `MatchAny`, `MatchTags`, etc.)
+- Environment variables: `ANS104_UNBUNDLE_FILTER`, `ANS104_INDEX_FILTER`, `WEBHOOK_INDEX_FILTER`
+- Same filter system used for webhooks and log filtering
+
+#### Dependency Injection via system.ts
+`src/system.ts` is the central initialization point that wires all dependencies:
+- Creates all data sources, databases, workers, resolvers, clients
+- Manages lifecycle (startup/shutdown) via cleanup handlers
+- Workers and routes receive dependencies as constructor parameters
+
+### Data Flow
+
+#### Reading Data (GET requests)
+1. Request arrives at route handler (e.g., `/raw/:id`)
+2. ArNS resolution if needed (via `CompositeArNSResolver`)
+3. Lookup transaction/data item metadata in databases
+4. Retrieve data via `ContiguousDataSource` (tries cache → S3 → peers → gateways)
+5. Return with trust headers indicating verification status
+
+#### Writing Data (Chunk uploads)
+1. POST to `/chunk` endpoint validates chunk format
+2. Broadcasts chunk to configured Arweave nodes and peers
+3. Gateway acts as relay only - doesn't create transactions
+
+#### Background Indexing
+1. `BlockImporter` polls for new blocks from trusted Arweave node
+2. `TransactionImporter` processes transactions from blocks
+3. `Ans104Unbundler` downloads bundles matching `ANS104_UNBUNDLE_FILTER`
+4. `Ans104DataIndexer` indexes data items matching `ANS104_INDEX_FILTER`
+5. `DataVerificationWorker` verifies data integrity using Merkle roots
+
 ## Documentation
 
 - The project includes a comprehensive glossary at `docs/glossary.md`
@@ -89,6 +185,23 @@ When adding a new database method:
 - Run e2e tests: `yarn test:e2e`
 - Mock functions in tests use: `mock.fn()` and reset with `mock.restoreAll()` in afterEach
 - Database schemas in tests come from `test/*.sql` files
+
+### Dry-Run Mode for Upload Testing
+
+The gateway supports a dry-run mode for testing transaction and chunk uploads without posting to the Arweave network:
+
+```bash
+# Enable dry-run mode
+ARWEAVE_POST_DRY_RUN=true yarn start
+```
+
+**Important**: When dry-run mode is enabled:
+- Connect directly to **port 4000** (the Node.js app) to use dry-run mode
+- Port 3000 (Envoy) will still proxy `/tx` requests to arweave.net
+- Both `POST /tx` (transaction headers) and `POST /chunk` requests are simulated
+- Returns 200 OK success responses to clients as if transactions were posted
+- Perfect for testing apps like ArDrive and large uploads without burning AR tokens
+- All validation and processing still occurs, only the final network broadcast is skipped
 
 ### Test Logging
 
