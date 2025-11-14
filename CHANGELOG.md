@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- BUNDLER_URLS environment variable was missing from docker-compose.yaml
+
 ## [Release 58] - 2025-11-10
 
 This is a **recommended release** due to significant improvements in data
