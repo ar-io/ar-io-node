@@ -9,6 +9,12 @@ services:
       - ${HB_CACHE:-./data/hyperbeam/cache-mainnet}:/opt/_build/genesis_wasm/rel/hb/cache-mainnet
     networks:
       - ar-io-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/~cron@1.0/every?interval=30-seconds&cron-path=qNvAoz0TgcH7DMg8BCVn8jF32QH5L6T29VjHxhHqqGE~process@1.0/now"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   ar-io-network:
