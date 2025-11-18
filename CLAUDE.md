@@ -16,6 +16,16 @@
   - If changing configuration options: update configuration reference tables
 - When adding rate limiter or x402 related terms, add them to the "Rate Limiter & x402 Payment Protocol" section in the glossary
 
+## Scratch Directory
+
+- The `/scratch` directory is for work-in-progress files that should not be committed to git
+- Use it for:
+  - Draft design documents and analysis notes
+  - Work-in-progress ticket descriptions and issue summaries
+  - Investigation notes and debugging artifacts
+  - Temporary markdown files during development
+- All files are automatically ignored by git; the directory is tracked via `.gitkeep`
+
 ## Processes
 
 - Process documentation is located in `docs/processes/`
