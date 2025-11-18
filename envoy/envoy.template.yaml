@@ -23,6 +23,22 @@ static_resources:
                       domains:
                         -  #@ "*." + data.values.ARNS_ROOT_HOST
                       routes:
+                        - match:
+                            prefix: '/tx'
+                            headers:
+                              - name: ':method'
+                                exact_match: 'POST'
+                          route:
+                            cluster: ario_gateways
+                            timeout: 0s
+                        - match:
+                            prefix: '/chunk'
+                            headers:
+                              - name: ':method'
+                                exact_match: 'POST'
+                          route:
+                            cluster: ario_gateways
+                            timeout: 0s
                         - match: { prefix: '/' }
                           route:
                             cluster: ario_gateways
@@ -132,6 +148,22 @@ static_resources:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
+                        - match:
+                            prefix: '/tx'
+                            headers:
+                              - name: ':method'
+                                exact_match: 'POST'
+                          route:
+                            cluster: ario_gateways
+                            timeout: 0s
+                        - match:
+                            prefix: '/chunk'
+                            headers:
+                              - name: ':method'
+                                exact_match: 'POST'
+                          route:
+                            cluster: ario_gateways
+                            timeout: 0s
                         - match: { prefix: '/tx/' }
                           route:
                             cluster: trusted_arweave_nodes

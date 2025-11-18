@@ -196,8 +196,9 @@ ARWEAVE_POST_DRY_RUN=true yarn start
 ```
 
 **Important**: When dry-run mode is enabled:
-- Connect directly to **port 4000** (the Node.js app) to use dry-run mode
-- Port 3000 (Envoy) will still proxy `/tx` requests to arweave.net
+- Works on both **port 3000** (Envoy) and **port 4000** (direct to Node.js app)
+- Envoy routes `POST /tx` and `POST /chunk` to the core service for dry-run processing
+- `GET /tx` requests are still proxied by Envoy to arweave.net for retrieving transaction data
 - Both `POST /tx` (transaction headers) and `POST /chunk` requests are simulated
 - Returns 200 OK success responses to clients as if transactions were posted
 - Perfect for testing apps like ArDrive and large uploads without burning AR tokens
