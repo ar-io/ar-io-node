@@ -49,7 +49,9 @@ export const createArnsMiddleware = ({
         req.path.match(/^\/chunk\//) ||
         req.path.match(/^\/api-docs(?:\/|$)/) ||
         req.path === '/openapi.json' ||
-        req.path === '/graphql'
+        req.path === '/graphql' ||
+        // Allow POST /tx and POST /chunk for transaction/chunk submission
+        (req.method === 'POST' && (req.path === '/tx' || req.path === '/chunk'))
       ) {
         next();
         return;

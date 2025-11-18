@@ -6,6 +6,7 @@
  */
 
 import { Router, Request, Response, json } from 'express';
+import axios from 'axios';
 import { arIoInfoHandler } from './ar-io.js';
 import * as config from '../config.js';
 import log from '../log.js';
@@ -15,8 +16,8 @@ export const rootRouter = Router();
 rootRouter.get('/', arIoInfoHandler);
 
 // Transaction header POST handler (dry-run mode support)
-// Note: When using Envoy (port 3000), /tx requests are proxied directly to arweave.net
-// To use dry-run mode for transaction headers, connect directly to port 4000 (bypassing Envoy)
+// POST /tx requests are routed here by Envoy (port 3000) to support dry-run mode
+// GET /tx requests are still proxied by Envoy to arweave.net for retrieving transaction data
 rootRouter.post('/tx', json({ limit: '10mb' }), async (req: Request, res: Response) => {
   try {
     if (config.ARWEAVE_POST_DRY_RUN) {
@@ -30,16 +31,26 @@ rootRouter.post('/tx', json({ limit: '10mb' }), async (req: Request, res: Respon
       return;
     }
 
-    // In non-dry-run mode, return error since we're not a transaction submission endpoint
-    // Users should use Envoy (port 3000) which proxies to arweave.net
-    log.warn('Transaction POST received on port 4000 in non-dry-run mode', {
+    // In non-dry-run mode, proxy POST /tx to the trusted Arweave node
+    log.info('Proxying transaction POST to trusted node', {
       txId: req.body?.id,
+      trustedNodeUrl: config.TRUSTED_NODE_URL,
     });
-    res.status(503).send('Transaction submission not supported on this port. Use port 3000 (Envoy) or set ARWEAVE_POST_DRY_RUN=true for testing.');
+
+    const response = await axios.post(`${config.TRUSTED_NODE_URL}/tx`, req.body, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      validateStatus: () => true, // Accept any status code
+      timeout: 30000,
+    });
+
+    // Forward the response from the trusted node
+    res.status(response.status).send(response.data);
   } catch (error: any) {
     log.error('Error handling transaction POST', {
       error: error.message,
     });
-    res.status(500).send('Internal server error');
+    res.status(500).send('Failed to submit transaction');
   }
 });
