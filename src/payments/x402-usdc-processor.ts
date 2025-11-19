@@ -7,7 +7,6 @@
 
 import { Request, Response } from 'express';
 import { useFacilitator } from 'x402/verify';
-import { createFacilitatorConfig } from '@coinbase/x402';
 import {
   ERC20TokenAmount,
   PaymentPayload,
@@ -15,6 +14,7 @@ import {
   settleResponseHeader,
 } from 'x402/types';
 import { decodePayment } from 'x402/schemes';
+import { createFacilitatorConfigFromCredentials } from './facilitator-utils.js';
 import {
   processPriceToAtomicAmount,
   toJsonSafe,
@@ -66,22 +66,12 @@ export class X402UsdcProcessor implements PaymentProcessor {
     this.log = log.child({ class: 'X402UsdcProcessor' });
     this.config = config;
 
-    if (
-      this.config.cdpClientKey !== undefined &&
-      this.config.cdpClientSecret !== undefined
-    ) {
-      // use CDP-enabled facilitator configuration if API credentials are provided
-      const facilitatorConfig = createFacilitatorConfig(
-        this.config.cdpClientKey,
-        this.config.cdpClientSecret,
-      );
-      this.facilitator = useFacilitator(facilitatorConfig);
-    } else {
-      // use basic facilitator configuration
-      this.facilitator = useFacilitator({
-        url: config.facilitatorUrl,
-      });
-    }
+    const facilitatorConfig = createFacilitatorConfigFromCredentials(
+      this.config.cdpClientKey,
+      this.config.cdpClientSecret,
+      config.facilitatorUrl,
+    );
+    this.facilitator = useFacilitator(facilitatorConfig);
   }
 
   /**
