@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Dry-Run Mode for Upload Testing**: New `ARWEAVE_POST_DRY_RUN` environment
+  variable enables testing transaction and chunk uploads without posting to the
+  Arweave network
+  - When enabled, both `POST /tx` and `POST /chunk` requests are simulated with
+    200 OK responses
+  - Works on both port 3000 (Envoy) and port 4000 (direct to Node.js app)
+  - Envoy routing is conditional: routes to core for dry-run, to Arweave nodes
+    when disabled
+  - Perfect for testing apps like ArDrive and large uploads without burning AR
+    tokens
+  - Chunks are fully validated including merkle proof verification before
+    returning success
+  - Only the final network broadcast is skipped
+
 ### Changed
 
 - When CDP API keys are provided (`CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`), the gateway now automatically uses the Coinbase facilitator with enhanced Onramp integration, overriding the `X_402_USDC_FACILITATOR_URL` setting
