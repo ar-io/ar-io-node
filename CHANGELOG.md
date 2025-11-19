@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     when disabled
   - Perfect for testing apps like ArDrive and large uploads without burning AR
     tokens
+  - Transactions are fully validated including signature verification before
+    returning success
   - Chunks are fully validated including merkle proof verification before
     returning success
   - Only the final network broadcast is skipped

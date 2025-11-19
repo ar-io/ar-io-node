@@ -45,6 +45,8 @@ ARWEAVE_POST_DRY_RUN=true yarn start
 - Returns 200 OK success responses to clients as if transactions were posted
 - Perfect for testing apps like ArDrive and large uploads without burning AR
   tokens
+- Transactions are fully validated including signature verification before
+  returning success
 - Chunks are fully validated including merkle proof verification before
   returning success
 - Only the final network broadcast is skipped
