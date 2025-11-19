@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Observer**: Updated to 2515e6a - Fixed incorrect wallet failure reporting
+  for shared FQDN gateways
+  - When multiple wallets share the same FQDN, now correctly identifies which
+    specific wallets failed ownership verification
+  - Reports non-matching wallets as failed even when gateway passes overall
+  - Ensures save-observations contract interactions accurately reflect actual
+    ownership failures
 - BUNDLER_URLS environment variable was missing from docker-compose.yaml
 - x402 payment processor now correctly uses Coinbase CDP facilitator when CDP credentials are configured
 
