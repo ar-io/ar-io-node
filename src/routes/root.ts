@@ -40,6 +40,19 @@ rootRouter.post(
             ? `${req.body.owner.substring(0, 10)}...`
             : undefined;
 
+        // Skip validation if configured
+        if (config.ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION) {
+          log.info(
+            'Dry-run mode: Skipping transaction POST (validation disabled)',
+            {
+              txId: req.body?.id,
+              owner,
+            },
+          );
+          res.status(200).send('OK');
+          return;
+        }
+
         // Validate required fields exist
         if (
           !req.body?.id ||

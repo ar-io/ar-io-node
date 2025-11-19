@@ -350,6 +350,27 @@ export class ArweaveCompositeClient
       // This allows testing uploads without burning AR tokens while still
       // verifying that chunks are properly formatted and have valid merkle proofs
       if (config.ARWEAVE_POST_DRY_RUN) {
+        // Skip validation if configured
+        if (config.ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION) {
+          this.log.debug(
+            'Dry-run mode: Skipping chunk POST (validation disabled)',
+            {
+              peer: task.peer,
+              dataRoot: task.chunk.data_root,
+            },
+          );
+
+          metrics.arweaveChunkPostCounter.inc({
+            endpoint: task.peer,
+            status: 'success',
+          });
+
+          return {
+            success: true,
+            statusCode: 200,
+          };
+        }
+
         // Validate required fields exist
         if (
           !task.chunk.chunk ||
