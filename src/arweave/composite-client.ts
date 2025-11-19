@@ -346,13 +346,92 @@ export class ArweaveCompositeClient
     try {
       this.failureSimulator.maybeFail();
 
-      // Dry-run mode: Skip actual HTTP POST for testing without burning AR tokens
+      // Dry-run mode: Validate chunk and skip actual HTTP POST
+      // This allows testing uploads without burning AR tokens while still
+      // verifying that chunks are properly formatted and have valid merkle proofs
       if (config.ARWEAVE_POST_DRY_RUN) {
-        this.log.debug('Dry-run mode: Skipping chunk POST to peer', {
-          peer: task.peer,
-          dataRoot: task.chunk.data_root,
-          dataSize: task.chunk.data_size,
-        });
+        // Validate required fields exist
+        if (
+          !task.chunk.chunk ||
+          !task.chunk.data_path ||
+          !task.chunk.data_root ||
+          !task.chunk.data_size ||
+          !task.chunk.offset
+        ) {
+          this.log.warn(
+            'Dry-run mode: Invalid chunk - missing required fields',
+            {
+              peer: task.peer,
+              hasChunk: !!task.chunk.chunk,
+              hasDataPath: !!task.chunk.data_path,
+              hasDataRoot: !!task.chunk.data_root,
+              hasDataSize: !!task.chunk.data_size,
+              hasOffset: !!task.chunk.offset,
+            },
+          );
+
+          metrics.arweaveChunkPostCounter.inc({
+            endpoint: task.peer,
+            status: 'fail',
+          });
+
+          return {
+            success: false,
+            statusCode: 400,
+          };
+        }
+
+        // Validate merkle proof
+        try {
+          const chunkBuffer = fromB64Url(task.chunk.chunk);
+          const dataPathBuffer = fromB64Url(task.chunk.data_path);
+          const dataRootBuffer = fromB64Url(task.chunk.data_root);
+          const dataSize = parseInt(task.chunk.data_size, 10);
+          const offset = parseInt(task.chunk.offset, 10);
+
+          // Create a Chunk object for validation
+          const chunkForValidation: Chunk = {
+            chunk: chunkBuffer,
+            data_path: dataPathBuffer,
+            data_root: dataRootBuffer,
+            data_size: dataSize,
+            offset: offset,
+            hash: Buffer.alloc(0), // Not needed for validation
+          };
+
+          await validateChunk(
+            dataSize,
+            chunkForValidation,
+            dataRootBuffer,
+            offset,
+          );
+
+          this.log.debug(
+            'Dry-run mode: Chunk validated successfully, skipping POST',
+            {
+              peer: task.peer,
+              dataRoot: task.chunk.data_root,
+              dataSize: task.chunk.data_size,
+              offset: task.chunk.offset,
+            },
+          );
+        } catch (error: any) {
+          this.log.warn('Dry-run mode: Chunk validation failed', {
+            peer: task.peer,
+            dataRoot: task.chunk.data_root,
+            error: error.message,
+          });
+
+          metrics.arweaveChunkPostCounter.inc({
+            endpoint: task.peer,
+            status: 'fail',
+          });
+
+          return {
+            success: false,
+            statusCode: 400,
+          };
+        }
 
         metrics.arweaveChunkPostCounter.inc({
           endpoint: task.peer,

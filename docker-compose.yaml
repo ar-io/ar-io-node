@@ -23,6 +23,7 @@ services:
       - TVAL_DATASETS_HOST=${DATASETS_PROXY_HOST:-core}
       - TVAL_DATASETS_PORT=${DATASETS_PROXY_PORT:-4000}
       - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
+      - TVAL_ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
     networks:
       - ar-io-network
     depends_on:

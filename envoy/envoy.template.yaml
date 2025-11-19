@@ -23,6 +23,10 @@ static_resources:
                       domains:
                         -  #@ "*." + data.values.ARNS_ROOT_HOST
                       routes:
+                        #! Dry-run mode: Route POST /tx and /chunk to core service for simulated responses.
+                        #! When disabled, these routes are not added and POST requests fall through to
+                        #! trusted_arweave_nodes for real Arweave network submission.
+                        #@ if data.values.ARWEAVE_POST_DRY_RUN == "true":
                         - match:
                             prefix: '/tx'
                             headers:
@@ -39,6 +43,7 @@ static_resources:
                           route:
                             cluster: ario_gateways
                             timeout: 0s
+                        #@ end
                         - match: { prefix: '/' }
                           route:
                             cluster: ario_gateways
@@ -148,6 +153,10 @@ static_resources:
                               max_internal_redirects: 10
                               allow_cross_scheme_redirect: true
                               redirect_response_codes: [301, 302, 303]
+                        #! Dry-run mode: Route POST /tx and /chunk to core service for simulated responses.
+                        #! When disabled, these routes are not added and POST requests fall through to
+                        #! trusted_arweave_nodes for real Arweave network submission.
+                        #@ if data.values.ARWEAVE_POST_DRY_RUN == "true":
                         - match:
                             prefix: '/tx'
                             headers:
@@ -164,6 +173,7 @@ static_resources:
                           route:
                             cluster: ario_gateways
                             timeout: 0s
+                        #@ end
                         - match: { prefix: '/tx/' }
                           route:
                             cluster: trusted_arweave_nodes
