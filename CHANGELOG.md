@@ -10,9 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- When CDP API keys are provided (`CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`), the gateway now automatically uses the Coinbase facilitator with enhanced Onramp integration, overriding the `X_402_USDC_FACILITATOR_URL` setting
+
 ### Fixed
 
 - BUNDLER_URLS environment variable was missing from docker-compose.yaml
+- x402 payment processor now correctly uses Coinbase CDP facilitator when CDP credentials are configured
 
 ## [Release 58] - 2025-11-10
 
