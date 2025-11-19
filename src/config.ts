@@ -437,6 +437,12 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
 export const ARWEAVE_POST_DRY_RUN =
   env.varOrDefault('ARWEAVE_POST_DRY_RUN', 'false').toLowerCase() === 'true';
 
+// Skip validation in dry-run mode (for faster testing without signature/merkle verification)
+export const ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION =
+  env
+    .varOrDefault('ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION', 'false')
+    .toLowerCase() === 'true';
+
 // Assumed size for base64-encoded chunk GET responses (used for x402 payment and rate limiting)
 // Default: 368,640 bytes (360 KiB) = 256 KiB raw data * 1.4 base64url encoding overhead
 export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
