@@ -7,9 +7,12 @@
 
 import { Router, Request, Response, json } from 'express';
 import axios from 'axios';
+import { default as Arweave } from 'arweave';
 import { arIoInfoHandler } from './ar-io.js';
 import * as config from '../config.js';
 import log from '../log.js';
+
+const arweave = Arweave.init({});
 
 export const rootRouter = Router();
 
@@ -37,10 +40,59 @@ rootRouter.post(
             ? `${req.body.owner.substring(0, 10)}...`
             : undefined;
 
-        log.info('Dry-run mode: Skipping transaction header POST', {
-          txId: req.body?.id,
-          owner,
-        });
+        // Validate required fields exist
+        if (
+          !req.body?.id ||
+          !req.body?.owner ||
+          !req.body?.signature ||
+          !req.body?.last_tx
+        ) {
+          log.warn(
+            'Dry-run mode: Invalid transaction - missing required fields',
+            {
+              txId: req.body?.id,
+              hasOwner: !!req.body?.owner,
+              hasSignature: !!req.body?.signature,
+              hasLastTx: !!req.body?.last_tx,
+            },
+          );
+          res.status(400).send('Invalid transaction');
+          return;
+        }
+
+        // Verify transaction signature
+        try {
+          const tx = arweave.transactions.fromRaw(req.body);
+          const isValid = await arweave.transactions.verify(tx);
+
+          if (!isValid) {
+            log.warn(
+              'Dry-run mode: Transaction signature verification failed',
+              {
+                txId: req.body.id,
+                owner,
+              },
+            );
+            res.status(400).send('Invalid signature');
+            return;
+          }
+
+          log.info(
+            'Dry-run mode: Transaction validated successfully, skipping POST',
+            {
+              txId: req.body.id,
+              owner,
+            },
+          );
+        } catch (error: any) {
+          log.warn('Dry-run mode: Transaction validation failed', {
+            txId: req.body?.id,
+            owner,
+            error: error.message,
+          });
+          res.status(400).send('Invalid transaction');
+          return;
+        }
 
         // Return success response as if tx was posted
         res.status(200).send('OK');
