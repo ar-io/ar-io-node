@@ -30,6 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **ArNS Manifest Path Encoding**: Fixed manifest paths with URL-encoded
+  characters (e.g., spaces as `%20`) failing when accessed via ArNS subdomain
+  - Direct TX ID access worked because Express auto-decodes `req.params`
+  - ArNS subdomain access failed because `req.path` is not auto-decoded
+  - Now decodes manifest paths in the ArNS middleware for consistent behavior
 - **TurboDynamoDB Data Source**: Fixed nested bundle data items having incorrect
   `rootDataItemOffset` values when retrieved from Turbo's DynamoDB
   - The raw data path was overwriting correct absolute offsets cached from the
