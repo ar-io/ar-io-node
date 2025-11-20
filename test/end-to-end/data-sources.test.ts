@@ -22,7 +22,12 @@ import awsLite, { AwsLiteClient } from '@aws-lite/client';
 import awsLiteS3 from '@aws-lite/s3';
 import axios from 'axios';
 import Sqlite, { Database } from 'better-sqlite3';
-import { cleanDb, getBundleStatus, waitForBundleToBeIndexed } from './utils.js';
+import {
+  cleanDb,
+  getBundleStatus,
+  getCoreContainer,
+  waitForBundleToBeIndexed,
+} from './utils.js';
 import { createHash } from 'node:crypto';
 
 const projectRootPath = process.cwd();
@@ -105,9 +110,7 @@ describe('DataSources', () => {
         ),
       });
 
-      containerBuilder = await GenericContainer.fromDockerfile(
-        projectRootPath,
-      ).build('core', { deleteOnExit: false });
+      containerBuilder = await getCoreContainer();
 
       core = await containerBuilder
         .withEnvironment({

@@ -24,6 +24,7 @@ import { JWKInterface } from 'arweave/node/lib/wallet.js';
 import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
+const USE_PREBUILT_IMAGE = process.env.USE_PREBUILT_IMAGE === 'true';
 
 const cleanDb = () =>
   rimraf(`${projectRootPath}/data/sqlite/*.db*`, { glob: true });
@@ -45,25 +46,32 @@ const composeUp = async ({
 }: Environment = {}) => {
   await cleanDb();
 
-  return new DockerComposeEnvironment(projectRootPath, 'docker-compose.yaml')
-    .withEnvironment({
-      START_HEIGHT,
-      STOP_HEIGHT,
-      ANS104_UNBUNDLE_FILTER,
-      ANS104_INDEX_FILTER,
-      ADMIN_API_KEY,
-      BUNDLER_ARWEAVE_WALLET,
-      BUNDLER_ARWEAVE_ADDRESS,
-      AWS_S3_CONTIGUOUS_DATA_BUCKET,
-      AWS_S3_CONTIGUOUS_DATA_PREFIX,
-      AWS_ACCESS_KEY_ID,
-      AWS_SECRET_ACCESS_KEY,
-      AWS_REGION,
-      AWS_ENDPOINT,
-      TESTCONTAINERS_HOST_OVERRIDE: 'localhost',
-      ...ENVIRONMENT,
-    })
-    .withBuild()
+  let compose = new DockerComposeEnvironment(
+    projectRootPath,
+    'docker-compose.yaml',
+  ).withEnvironment({
+    START_HEIGHT,
+    STOP_HEIGHT,
+    ANS104_UNBUNDLE_FILTER,
+    ANS104_INDEX_FILTER,
+    ADMIN_API_KEY,
+    BUNDLER_ARWEAVE_WALLET,
+    BUNDLER_ARWEAVE_ADDRESS,
+    AWS_S3_CONTIGUOUS_DATA_BUCKET,
+    AWS_S3_CONTIGUOUS_DATA_PREFIX,
+    AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY,
+    AWS_REGION,
+    AWS_ENDPOINT,
+    TESTCONTAINERS_HOST_OVERRIDE: 'localhost',
+    ...ENVIRONMENT,
+  });
+
+  if (!USE_PREBUILT_IMAGE) {
+    compose = compose.withBuild();
+  }
+
+  return compose
     .withProfiles('bundler')
     .withPullPolicy(PullPolicy.alwaysPull())
     .withWaitStrategy('localstack-1', Wait.forLogMessage('turbo-optical-key'))

@@ -20,6 +20,7 @@ import axios from 'axios';
 import {
   cleanDb,
   composeUp,
+  getCoreContainer,
   queueBundle,
   waitForBundleToBeIndexed,
   waitForDataItemToBeIndexed,
@@ -673,9 +674,7 @@ describe('X-AR-IO headers', function () {
       });
       fakeGateway.listen(4001);
 
-      containerBuilder = await GenericContainer.fromDockerfile(
-        projectRootPath,
-      ).build('core', { deleteOnExit: false });
+      containerBuilder = await getCoreContainer();
 
       await TestContainers.exposeHostPorts(4001);
     });
