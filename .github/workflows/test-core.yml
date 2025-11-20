@@ -26,7 +26,12 @@ jobs:
       - run: yarn build
       - run: yarn lint:check
       - run: yarn test:ci
-      - run: yarn test:e2e
+      - name: Build core Docker image
         if: matrix.os == 'ubuntu-latest'
+        run: docker build -t core .
+      - name: Run E2E tests
+        if: matrix.os == 'ubuntu-latest'
+        run: yarn test:e2e
         env:
           TEST_SKIP_TAGS: flaky
+          USE_PREBUILT_IMAGE: 'true'
