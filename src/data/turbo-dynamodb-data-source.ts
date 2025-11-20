@@ -431,9 +431,7 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         this.dataAttributesStore
           .setDataAttributes(id, {
             size: dataItem.buffer.length - dataItem.info.payloadDataStart,
-            dataOffset: dataItem.info.payloadDataStart,
             contentType: dataItem.info.payloadContentType,
-            offset: 0, // Required field for raw data items
           })
           .catch((error) => {
             this.log.warn('Failed to cache attributes from DynamoDB raw data', {
