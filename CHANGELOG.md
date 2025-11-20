@@ -35,6 +35,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - The raw data path was overwriting correct absolute offsets cached from the
     `rootParentInfo` path with incorrect values (offset: 0, dataOffset: payloadDataStart)
   - Now preserves the correct offsets by only caching size and contentType from raw data
+- **Database Root TX Offset Lookup**: Fixed `getRootTxFromData` returning incorrect
+  offset for nested bundle data items
+  - Was returning `root_parent_offset` (parent bundle offset) instead of
+    `root_data_item_offset` (absolute data item offset)
+  - Added fallback calculations for `rootDataItemOffset` and `rootDataOffset` when
+    pre-computed values are NULL
 - **Observer**: Updated to 2515e6a - Fixed incorrect wallet failure reporting
   for shared FQDN gateways
   - When multiple wallets share the same FQDN, now correctly identifies which
