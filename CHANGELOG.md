@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **TurboDynamoDB Data Source**: Fixed nested bundle data items having incorrect
+  `rootDataItemOffset` values when retrieved from Turbo's DynamoDB
+  - The raw data path was overwriting correct absolute offsets cached from the
+    `rootParentInfo` path with incorrect values (offset: 0, dataOffset: payloadDataStart)
+  - Now preserves the correct offsets by only caching size and contentType from raw data
 - **Observer**: Updated to 2515e6a - Fixed incorrect wallet failure reporting
   for shared FQDN gateways
   - When multiple wallets share the same FQDN, now correctly identifies which
