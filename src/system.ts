@@ -350,16 +350,32 @@ export let legacyPsql: PostgreSQL | undefined = undefined;
 if (config.CHUNK_METADATA_RETRIEVAL_ORDER.includes('legacy-psql')) {
   if (config.LEGACY_PSQL_CONNECTION_STRING !== undefined) {
     legacyPsql = postgres(config.LEGACY_PSQL_CONNECTION_STRING, {
+      // Connection pool settings
+      max: config.LEGACY_PSQL_MAX_CONNECTIONS,
+      idle_timeout: config.LEGACY_PSQL_IDLE_TIMEOUT_SECONDS,
+      connect_timeout: config.LEGACY_PSQL_CONNECT_TIMEOUT_SECONDS,
+      max_lifetime: config.LEGACY_PSQL_MAX_LIFETIME_SECONDS,
+
+      // SSL configuration
       ...(config.LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED && {
         ssl: {
           rejectUnauthorized: false,
         },
       }),
+
+      // Password from file
       ...(config.LEGACY_PSQL_PASSWORD_FILE !== undefined && {
         password: fs
           .readFileSync(config.LEGACY_PSQL_PASSWORD_FILE!, 'utf8')
           .trim(),
       }),
+
+      // Server-level timeouts (sent to PostgreSQL)
+      connection: {
+        statement_timeout: config.LEGACY_PSQL_STATEMENT_TIMEOUT_MS,
+        idle_in_transaction_session_timeout:
+          config.LEGACY_PSQL_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+      },
     });
   } else {
     // by throwing here we can make assumptions about legacyPsql being defined
@@ -1200,6 +1216,19 @@ export const shutdown = async (exitCode = 0) => {
     arweavePeerManager.stopDnsResolution();
     arweavePeerManager.stopAutoRefresh();
     arweavePeerManager.stopBucketRefresh();
+
+    // Close Postgres connections
+    if (legacyPsql !== undefined) {
+      try {
+        await legacyPsql.end({ timeout: 5 });
+        log.debug('Postgres connections closed');
+      } catch (error: any) {
+        log.error('Error closing Postgres connections', {
+          error: error.message,
+        });
+      }
+    }
+
     await db.stop();
 
     log.info('Shutdown complete');

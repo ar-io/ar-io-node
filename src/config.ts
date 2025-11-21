@@ -821,6 +821,38 @@ export const LEGACY_PSQL_PASSWORD_FILE = env.varOrUndefined(
 export const LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED =
   env.varOrDefault('LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED', 'true') === 'true';
 
+// Connection pool settings
+export const LEGACY_PSQL_MAX_CONNECTIONS = +env.varOrDefault(
+  'LEGACY_PSQL_MAX_CONNECTIONS',
+  '10',
+);
+
+export const LEGACY_PSQL_IDLE_TIMEOUT_SECONDS = +env.varOrDefault(
+  'LEGACY_PSQL_IDLE_TIMEOUT_SECONDS',
+  '30',
+);
+
+export const LEGACY_PSQL_CONNECT_TIMEOUT_SECONDS = +env.varOrDefault(
+  'LEGACY_PSQL_CONNECT_TIMEOUT_SECONDS',
+  '10',
+);
+
+export const LEGACY_PSQL_MAX_LIFETIME_SECONDS = +env.varOrDefault(
+  'LEGACY_PSQL_MAX_LIFETIME_SECONDS',
+  '1800', // 30 minutes
+);
+
+// Server-level timeout settings (sent to PostgreSQL)
+export const LEGACY_PSQL_STATEMENT_TIMEOUT_MS = +env.varOrDefault(
+  'LEGACY_PSQL_STATEMENT_TIMEOUT_MS',
+  '5000', // 5 seconds - prevents queries from running forever
+);
+
+export const LEGACY_PSQL_IDLE_IN_TRANSACTION_TIMEOUT_MS = +env.varOrDefault(
+  'LEGACY_PSQL_IDLE_IN_TRANSACTION_TIMEOUT_MS',
+  '10000', // 10 seconds - cleans up stuck transactions
+);
+
 //
 // File system cleanup
 //

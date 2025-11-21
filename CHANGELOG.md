@@ -30,6 +30,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **PostgreSQL Connection Timeouts**: Added timeout configuration for the legacy
+  PostgreSQL chunk metadata source to prevent system hangs
+  - Server-side `statement_timeout` (default: 5s) prevents queries from running
+    forever
+  - `idle_in_transaction_session_timeout` (default: 10s) cleans up stuck
+    transactions
+  - Connection pool settings: `max`, `idle_timeout`, `connect_timeout`,
+    `max_lifetime`
+  - All settings configurable via environment variables
+    (`LEGACY_PSQL_STATEMENT_TIMEOUT_MS`, etc.)
+  - Graceful Postgres connection cleanup on shutdown
+  - Prevents the chunk serving system from becoming completely unresponsive when
+    Postgres is slow or unreachable
+
 - **Security Dependency Updates**: Fixed 6 security vulnerabilities identified by
   `yarn audit`
   - Added `tar@7.5.2` resolution to fix moderate severity race condition in
