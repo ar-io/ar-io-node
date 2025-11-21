@@ -356,8 +356,9 @@ if (config.CHUNK_METADATA_RETRIEVAL_ORDER.includes('legacy-psql')) {
       connect_timeout: config.LEGACY_PSQL_CONNECT_TIMEOUT_SECONDS,
       max_lifetime: config.LEGACY_PSQL_MAX_LIFETIME_SECONDS,
 
-      // SSL configuration
-      ...(config.LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED && {
+      // SSL configuration - when REJECT_UNAUTHORIZED is false, disable cert validation
+      // (common workaround for cloud providers with self-signed certs)
+      ...(!config.LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED && {
         ssl: {
           rejectUnauthorized: false,
         },

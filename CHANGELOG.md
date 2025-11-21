@@ -30,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **PostgreSQL SSL Configuration**: Fixed inverted SSL flag logic where
+  `LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED=true` (default) was incorrectly disabling
+  certificate validation instead of enabling it
+  - Now correctly applies strict SSL validation by default
+  - Set to `false` to disable certificate validation for cloud providers with
+    self-signed certificates
+
 - **PostgreSQL Connection Timeouts**: Added timeout configuration for the legacy
   PostgreSQL chunk metadata source to prevent system hangs
   - Server-side `statement_timeout` (default: 5s) prevents queries from running
