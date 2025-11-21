@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Historical DHA Chunk Nodes Monitoring Tool**: New operator utility for
+  monitoring response times and availability of Arweave data endpoints
+  (`tools/monitor-historical-dha-chunk-nodes`)
+  - Monitors data-N (1-17) and tip-N (1-5) endpoints with configurable ranges
+  - Continuous monitoring mode with real-time table output and statistics
+  - JSON export with detailed results and metadata
+  - Note: This is a special-purpose tool included for reference and potential
+    usefulness to operators debugging data retrieval issues
+
 - **Dry-Run Mode for Upload Testing**: New `ARWEAVE_POST_DRY_RUN` environment
   variable enables testing transaction and chunk uploads without posting to the
   Arweave network
@@ -26,7 +35,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- When CDP API keys are provided (`CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`), the gateway now automatically uses the Coinbase facilitator with enhanced Onramp integration, overriding the `X_402_USDC_FACILITATOR_URL` setting
+- When CDP API keys are provided (`CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`),
+  the gateway now automatically uses the Coinbase facilitator with enhanced
+  Onramp integration, overriding the `X_402_USDC_FACILITATOR_URL` setting
 
 ### Fixed
 
@@ -85,7 +96,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Ensures save-observations contract interactions accurately reflect actual
     ownership failures
 - BUNDLER_URLS environment variable was missing from docker-compose.yaml
-- x402 payment processor now correctly uses Coinbase CDP facilitator when CDP credentials are configured
+- x402 payment processor now correctly uses Coinbase CDP facilitator when CDP
+  credentials are configured
 
 ## [Release 58] - 2025-11-10
 
