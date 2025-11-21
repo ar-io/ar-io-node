@@ -79,16 +79,17 @@
     "secp256k1": "5.0.1",
     "elliptic": "6.6.1",
     "ws": "7.5.10",
-    "semver": "7.6.3"
+    "semver": "7.6.3",
+    "tar": "7.5.2"
   },
   "devDependencies": {
     "@aws-lite/s3-types": "^0.2.6",
-    "@cucumber/cucumber": "^11.2.0",
+    "@cucumber/cucumber": "^12.2.0",
     "@eslint/eslintrc": "^3.3.1",
     "@eslint/js": "^9.36.0",
     "@smithy/types": "^3.7.2",
     "@swc/core": "^1.10.12",
-    "@testcontainers/localstack": "^10.17.2",
+    "@testcontainers/localstack": "^11.8.1",
     "@trivago/prettier-plugin-sort-imports": "^4.3.0",
     "@types/better-sqlite3": "7.6.3",
     "@types/express": "^4.17.21",
@@ -122,14 +123,14 @@
     "nodemon": "^2.0.22",
     "npm-check-updates": "^18.1.1",
     "prettier": "^3.6.2",
-    "rimraf": "^5.0.10",
+    "rimraf": "^6.1.2",
     "simple-git": "^3.28.0",
     "source-map-support": "^0.5.21",
     "supertest": "^6.3.4",
-    "testcontainers": "^10.17.2",
+    "testcontainers": "^11.8.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3",
-    "viem": "^2.37.6",
+    "viem": "^2.39.3",
     "x402-fetch": "^0.6.0"
   },
   "scripts": {

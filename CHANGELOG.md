@@ -30,6 +30,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Security Dependency Updates**: Fixed 6 security vulnerabilities identified by
+  `yarn audit`
+  - Added `tar@7.5.2` resolution to fix moderate severity race condition in
+    duckdb-async dependency chain
+  - Upgraded `@cucumber/cucumber`, `@testcontainers/localstack`, `testcontainers`,
+    and `rimraf` to fix high severity glob CLI command injection vulnerabilities
+  - Upgraded `viem` to ^2.39.3
+  - All existing resolutions (secp256k1, elliptic, ws, semver) remain required for
+    vulnerabilities in `@dha-team/arbundles` transitive dependencies
+
 - **ArNS Manifest Path Encoding**: Fixed manifest paths with URL-encoded
   characters (e.g., spaces as `%20`) failing when accessed via ArNS subdomain
   - Direct TX ID access worked because Express auto-decodes `req.params`
