@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [Release 59] - 2025-11-24
 
 This is a **recommended release** due to important fixes for nested bundle data
