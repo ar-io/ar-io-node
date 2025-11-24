@@ -58,6 +58,7 @@ import {
   ChunkDataByAnySourceParams,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
+import { BlockOffsetMapping } from './block-offset-mapping.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const DEFAULT_REQUEST_RETRY_COUNT = 5;
@@ -134,6 +135,10 @@ export class ArweaveCompositeClient
     max: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE,
     ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS,
   });
+
+  // Static offset-to-block mapping for optimizing binary search
+  private blockOffsetMapping?: BlockOffsetMapping;
+
   // New peer-based chunk POST system
   private peerChunkQueues: Map<string, PeerChunkQueue> = new Map();
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
@@ -174,6 +179,7 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
     cacheCheckPeriodSeconds = 10,
+    blockOffsetMapping,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -191,11 +197,13 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
     cacheCheckPeriodSeconds?: number;
+    blockOffsetMapping?: BlockOffsetMapping;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.peerManager = peerManager;
+    this.blockOffsetMapping = blockOffsetMapping;
 
     // Initialize memoized sorting function for chunk POST peers
     this.getSortedChunkPostPeers = memoize(
@@ -1801,13 +1809,36 @@ export class ArweaveCompositeClient
       const currentHeight = await this.getHeight();
       let left = 0;
       let right = currentHeight;
+
+      // Use offset mapping to narrow search bounds if available
+      const bounds = this.blockOffsetMapping?.getSearchBounds(
+        targetOffset,
+        currentHeight,
+      );
+      if (bounds) {
+        left = bounds.lowHeight;
+        // Use min to handle case where mapping is slightly outdated
+        right = Math.min(bounds.highHeight, currentHeight);
+
+        this.log.debug('Using offset mapping to narrow block search', {
+          targetOffset,
+          originalRange: `0-${currentHeight}`,
+          narrowedRange: `${left}-${right}`,
+          reductionPercent: (
+            (1 - (right - left) / currentHeight) *
+            100
+          ).toFixed(1),
+        });
+      }
+
       let result: any | null = null;
       let iteration = 0;
 
       this.log.debug('Starting binary search for blocks', {
         targetOffset,
         heightRange: `${left}-${right}`,
-        totalBlocks: currentHeight + 1,
+        totalBlocks: right - left + 1,
+        usingMapping: !!bounds,
       });
 
       while (left <= right) {
