@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Block Search Optimization**: Ship static offset-to-block mapping to optimize
+  binary search when looking up transactions by offset
+  - Reduces block search iterations from ~21 to ~15 (~29% reduction)
+  - Most significant impact during cold starts when block caches are empty
+  - Each saved iteration means one fewer network call to fetch a block
+  - Includes generation tool (`tools/generate-offset-mapping`) for updating
+    mapping before releases
+
 ### Changed
 
 ### Fixed
