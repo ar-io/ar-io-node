@@ -11,6 +11,7 @@ import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import postgres from 'postgres';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
+import { BlockOffsetMapping } from './arweave/block-offset-mapping.js';
 import { ArweavePeerManager } from './peers/arweave-peer-manager.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
@@ -174,6 +175,13 @@ export const arweavePeerManager = new ArweavePeerManager({
   dnsResolver,
 });
 
+// Create block offset mapping for optimizing binary search
+const blockOffsetMapping = new BlockOffsetMapping({
+  log,
+  filePath: new URL('./data/offset-block-mapping.json', import.meta.url)
+    .pathname,
+});
+
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
@@ -191,6 +199,7 @@ export const arweaveClient = new ArweaveCompositeClient({
   failureSimulator: new UniformFailureSimulator({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
+  blockOffsetMapping,
 });
 metrics.registerQueueLengthGauge('arweaveClientRequests', {
   length: () => arweaveClient.queueDepth(),

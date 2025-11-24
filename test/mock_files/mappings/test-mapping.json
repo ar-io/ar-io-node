@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "generatedAt": "2025-01-15T00:00:00Z",
+  "currentHeight": 1800000,
+  "currentWeaveSize": 374000000000000,
+  "intervalBytes": 5497558138880,
+  "intervals": [
+    { "offset": 0, "blockHeight": 0 },
+    { "offset": 5497558138880, "blockHeight": 642449 },
+    { "offset": 10995116277760, "blockHeight": 731523 },
+    { "offset": 16492674416640, "blockHeight": 779014 },
+    { "offset": 21990232555520, "blockHeight": 807172 }
+  ]
+}

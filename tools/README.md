@@ -88,6 +88,41 @@ Response Times:
 - Gather empirical data on chunk availability
 - Validate gateway configuration and performance
 
+### `generate-offset-mapping`
+Generates a static offset-to-block mapping file that maps Arweave weave byte offsets to approximate block heights. This mapping is used to optimize binary search when looking up transactions by offset, reducing the search space from the entire blockchain to a much smaller range.
+
+**Usage:**
+```bash
+./tools/generate-offset-mapping
+
+# With custom gateway
+./tools/generate-offset-mapping --gateway https://arweave.net
+
+# With custom output path
+./tools/generate-offset-mapping --output ./custom-mapping.json
+```
+
+**Options:**
+- `--gateway <url>` - Gateway URL to fetch block data (default: https://arweave.net)
+- `--output <path>` - Output file path (default: src/data/offset-block-mapping.json)
+- `--help` - Show help message
+
+**Output:**
+Generates a JSON file containing:
+- Version and generation timestamp
+- Current chain height and weave size
+- Intervals at 5TB increments mapping offset to block height
+
+**Performance Impact:**
+- Reduces binary search iterations from ~21 to ~15 (approximately 29% reduction)
+- Most significant improvement during cold starts when block caches are empty
+- Each iteration saved is one fewer network call to fetch a block
+
+**Use Cases:**
+- Update the offset mapping before each release
+- Generate fresh mapping if the included one becomes outdated
+- Create custom mappings for testing purposes
+
 ### `arweave-partitions-to-heights`
 Converts Arweave storage partition files to height ranges for data analysis and partitioning operations. This tool helps translate between Arweave's partition-based storage system and height-based queries.
 
