@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 59] - 2025-11-24
 
+This is a **recommended release** due to important fixes for nested bundle data
+item offset handling that could cause incorrect data retrieval. The release
+fixes offset calculations in both the TurboDynamoDB data source and database
+root TX lookups, ensuring correct data is served for deeply nested bundle
+items. It also includes fixes for ArNS manifest path encoding and Observer
+wallet failure reporting for shared FQDN gateways. New features include a
+dry-run mode for testing transaction uploads without posting to the network,
+and a monitoring tool for historical DHA chunk nodes.
+
 ### Added
 
 - **Historical DHA Chunk Nodes Monitoring Tool**: New operator utility for
