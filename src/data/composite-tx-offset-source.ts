@@ -6,7 +6,7 @@
  */
 import winston from 'winston';
 
-import { TxOffsetSource, TxOffsetResult } from '../types.js';
+import { TxOffsetSource, TxOffsetResult, TxPathContext } from '../types.js';
 
 /**
  * A composite transaction offset source that tries multiple sources with fallback support.
@@ -41,13 +41,19 @@ export class CompositeTxOffsetSource implements TxOffsetSource {
     this.fallbackConcurrencyLimit = fallbackConcurrencyLimit;
   }
 
-  async getTxByOffset(offset: number): Promise<TxOffsetResult> {
+  async getTxByOffset(
+    offset: number,
+    txPathContext?: TxPathContext,
+  ): Promise<TxOffsetResult> {
     const log = this.log.child({ method: 'getTxByOffset', offset });
 
     try {
       // Try primary source first
       log.debug('Attempting primary source');
-      const primaryResult = await this.primarySource.getTxByOffset(offset);
+      const primaryResult = await this.primarySource.getTxByOffset(
+        offset,
+        txPathContext,
+      );
 
       // Check if primary result is valid
       if (this.isValidResult(primaryResult)) {
@@ -80,8 +86,10 @@ export class CompositeTxOffsetSource implements TxOffsetSource {
 
         this.activeFallbackCount++;
         try {
-          const fallbackResult =
-            await this.fallbackSource.getTxByOffset(offset);
+          const fallbackResult = await this.fallbackSource.getTxByOffset(
+            offset,
+            txPathContext,
+          );
 
           if (this.isValidResult(fallbackResult)) {
             log.debug('Fallback source returned valid result');

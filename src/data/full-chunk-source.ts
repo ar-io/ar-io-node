@@ -11,10 +11,27 @@ import {
   ChunkByAnySource,
   ChunkDataByAnySource,
   ChunkDataByAnySourceParams,
+  ChunkWithValidationParams,
   Chunk,
   ChunkData,
   ChunkMetadata,
 } from '../types.js';
+
+/**
+ * Type guard to check if params are ChunkWithValidationParams
+ */
+function isValidationParams(
+  params: ChunkDataByAnySourceParams,
+): params is ChunkWithValidationParams {
+  return (
+    'txSize' in params &&
+    'dataRoot' in params &&
+    'relativeOffset' in params &&
+    params.txSize !== undefined &&
+    params.dataRoot !== undefined &&
+    params.relativeOffset !== undefined
+  );
+}
 
 export class FullChunkSource
   implements ChunkByAnySource, ChunkMetadataByAnySource, ChunkDataByAnySource
@@ -31,6 +48,13 @@ export class FullChunkSource
   }
 
   async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+    // This source only supports validation params (txSize, dataRoot, relativeOffset)
+    if (!isValidationParams(params)) {
+      throw new Error(
+        'FullChunkSource requires validation params (txSize, dataRoot, relativeOffset)',
+      );
+    }
+
     const span = tracer.startSpan('FullChunkSource.getChunkByAny', {
       attributes: {
         'chunk.data_root': params.dataRoot,
@@ -60,7 +84,7 @@ export class FullChunkSource
         chunk_size: metadata.chunk_size,
       });
 
-      const chunkDataParams: ChunkDataByAnySourceParams = {
+      const chunkDataParams: ChunkWithValidationParams = {
         txSize: params.txSize,
         absoluteOffset: params.absoluteOffset,
         dataRoot: params.dataRoot,

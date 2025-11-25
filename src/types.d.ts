@@ -223,8 +223,29 @@ export interface TxOffsetResult {
   data_size: number | undefined;
 }
 
+/**
+ * Context for tx_path-based validation (optional fast path).
+ * When provided to getTxByOffset, enables validation of tx_path against
+ * the block's tx_root to derive transaction info without binary search.
+ */
+export interface TxPathContext {
+  /** The tx_path Merkle proof from the chunk response */
+  txPath: Buffer;
+  /** The block's transaction Merkle root */
+  txRoot: Buffer;
+  /** Array of transaction IDs in the block (unsorted) */
+  blockTxs: string[];
+  /** Current block's weave_size (absolute end offset) */
+  blockWeaveSize: number;
+  /** Previous block's weave_size (absolute start offset) */
+  prevBlockWeaveSize: number;
+}
+
 export interface TxOffsetSource {
-  getTxByOffset(offset: number): Promise<TxOffsetResult>;
+  getTxByOffset(
+    offset: number,
+    txPathContext?: TxPathContext,
+  ): Promise<TxOffsetResult>;
 }
 
 export interface BundleRecord {
@@ -497,15 +518,51 @@ export interface ChunkMetadata {
 
 export interface Chunk extends ChunkMetadata, ChunkData {
   tx_path?: Buffer;
+  /**
+   * Optional TX metadata populated when chunk is fetched via offset source path.
+   * These fields allow handlers to skip separate getTxByOffset calls.
+   */
+  txId?: string;
+  txDataRoot?: string; // Base64url encoded
+  txWeaveOffset?: number; // Absolute weave offset of TX end
 }
 
-export interface ChunkDataByAnySourceParams {
+/**
+ * Chunk params with all validation parameters provided directly.
+ * Use this variant when TX info is already known (e.g., from database).
+ */
+export interface ChunkWithValidationParams {
   txSize: number;
   absoluteOffset: number;
   dataRoot: string;
   relativeOffset: number;
+  txOffsetSource?: never;
   requestAttributes?: RequestAttributes;
 }
+
+/**
+ * Chunk params with offset source for deriving validation parameters.
+ * Use this variant to skip separate getTxByOffset call and derive
+ * TX info from tx_path validation instead.
+ */
+export interface ChunkWithOffsetSource {
+  absoluteOffset: number;
+  txOffsetSource: TxOffsetSource;
+  txSize?: never;
+  dataRoot?: never;
+  relativeOffset?: never;
+  requestAttributes?: RequestAttributes;
+}
+
+/**
+ * Discriminated union for chunk retrieval parameters.
+ *
+ * Either provide all validation params directly (ChunkWithValidationParams)
+ * or provide an offset source to derive params (ChunkWithOffsetSource).
+ */
+export type ChunkDataByAnySourceParams =
+  | ChunkWithValidationParams
+  | ChunkWithOffsetSource;
 
 export interface ChunkByAnySource {
   getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk>;

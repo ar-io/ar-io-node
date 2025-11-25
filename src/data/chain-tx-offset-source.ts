@@ -6,8 +6,10 @@
  */
 import winston from 'winston';
 
-import { TxOffsetSource, TxOffsetResult } from '../types.js';
+import { TxOffsetSource, TxOffsetResult, TxPathContext } from '../types.js';
 import { ArweaveCompositeClient } from '../arweave/composite-client.js';
+import { parseTxPath, sortTxIdsByBinary } from '../lib/tx-path-parser.js';
+import { fromB64Url, toB64Url } from '../lib/encoding.js';
 
 /**
  * Chain-backed transaction offset source.
@@ -28,9 +30,79 @@ export class ChainTxOffsetSource implements TxOffsetSource {
     this.arweaveClient = arweaveClient;
   }
 
-  async getTxByOffset(offset: number): Promise<TxOffsetResult> {
+  async getTxByOffset(
+    offset: number,
+    txPathContext?: TxPathContext,
+  ): Promise<TxOffsetResult> {
     const log = this.log.child({ method: 'getTxByOffset', offset });
 
+    // Fast path: If txPathContext provided, validate tx_path and derive TX info
+    if (txPathContext) {
+      log.debug('Attempting tx_path fast path');
+
+      try {
+        const parsed = await parseTxPath({
+          txRoot: txPathContext.txRoot,
+          txPath: txPathContext.txPath,
+          targetOffset: offset,
+          blockWeaveSize: txPathContext.blockWeaveSize,
+          prevBlockWeaveSize: txPathContext.prevBlockWeaveSize,
+          txCount: txPathContext.blockTxs.length,
+        });
+
+        if (parsed) {
+          // Sort block TXs by binary ID and look up TX ID by index
+          const sortedTxIds = sortTxIdsByBinary(txPathContext.blockTxs);
+          const txId = sortedTxIds[parsed.txIndex];
+
+          if (txId) {
+            // Fetch TX to validate dataRoot matches and get data_size
+            const tx = await this.arweaveClient.getTx({ txId });
+
+            if (tx?.data_root && tx?.data_size) {
+              // Validate dataRoot matches (catches format-1/format-2 mixed blocks)
+              const fetchedDataRoot = fromB64Url(tx.data_root);
+              if (fetchedDataRoot.equals(parsed.dataRoot)) {
+                log.debug('tx_path fast path successful', {
+                  txId,
+                  txIndex: parsed.txIndex,
+                  txOffset: parsed.txEndOffset,
+                });
+
+                return {
+                  data_root: tx.data_root,
+                  id: txId,
+                  offset: parsed.txEndOffset,
+                  data_size: parseInt(tx.data_size),
+                };
+              } else {
+                log.warn('tx_path fast path failed: dataRoot mismatch', {
+                  txId,
+                  expectedDataRoot: toB64Url(parsed.dataRoot),
+                  actualDataRoot: tx.data_root,
+                });
+              }
+            } else {
+              log.debug('tx_path fast path failed: invalid TX data', { txId });
+            }
+          } else {
+            log.debug('tx_path fast path failed: TX index out of bounds', {
+              txIndex: parsed.txIndex,
+              txCount: txPathContext.blockTxs.length,
+            });
+          }
+        } else {
+          log.debug('tx_path fast path failed: tx_path validation failed');
+        }
+      } catch (error: any) {
+        log.debug('tx_path fast path error', { error: error.message });
+      }
+
+      // Fall through to chain lookup if fast path failed
+      log.debug('Falling back to chain lookup after tx_path fast path failure');
+    }
+
+    // Standard path: Binary search through chain
     try {
       log.debug('Attempting chain lookup');
 

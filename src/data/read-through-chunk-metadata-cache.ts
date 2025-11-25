@@ -11,7 +11,24 @@ import {
   ChunkMetadata,
   ChunkMetadataByAnySource,
   ChunkMetadataStore,
+  ChunkWithValidationParams,
 } from '../types.js';
+
+/**
+ * Type guard to check if params are ChunkWithValidationParams
+ */
+function isValidationParams(
+  params: ChunkDataByAnySourceParams,
+): params is ChunkWithValidationParams {
+  return (
+    'txSize' in params &&
+    'dataRoot' in params &&
+    'relativeOffset' in params &&
+    params.txSize !== undefined &&
+    params.dataRoot !== undefined &&
+    params.relativeOffset !== undefined
+  );
+}
 
 export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
   private log: winston.Logger;
@@ -32,12 +49,18 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
     this.chunkMetadataStore = chunkMetadataStore;
   }
 
-  async getChunkMetadataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkMetadata> {
+  async getChunkMetadataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkMetadata> {
+    // This source only supports validation params (txSize, dataRoot, relativeOffset)
+    if (!isValidationParams(params)) {
+      throw new Error(
+        'ReadThroughChunkMetadataCache requires validation params (txSize, dataRoot, relativeOffset)',
+      );
+    }
+
+    const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
+
     const chunkMetadataPromise = this.chunkMetadataStore
       .get(dataRoot, relativeOffset)
       .then(async (cachedChunkMetadata) => {

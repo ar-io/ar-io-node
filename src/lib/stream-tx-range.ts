@@ -6,7 +6,7 @@
  */
 
 import winston from 'winston';
-import { Chunk, ChunkDataByAnySourceParams } from '../types.js';
+import { Chunk, ChunkWithValidationParams } from '../types.js';
 import { parseDataPath } from './merkle-path-parser.js';
 
 export interface StreamRangeDataParams {
@@ -16,7 +16,7 @@ export interface StreamRangeDataParams {
   dataRoot: string;
   rangeStart: number;
   rangeEnd: number;
-  getChunkByAny: (params: ChunkDataByAnySourceParams) => Promise<Chunk>;
+  getChunkByAny: (params: ChunkWithValidationParams) => Promise<Chunk>;
   log: winston.Logger;
 }
 

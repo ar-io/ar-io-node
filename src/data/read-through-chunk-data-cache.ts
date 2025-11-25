@@ -12,7 +12,24 @@ import {
   ChunkDataByAnySource,
   ChunkDataByAnySourceParams,
   ChunkDataStore,
+  ChunkWithValidationParams,
 } from '../types.js';
+
+/**
+ * Type guard to check if params are ChunkWithValidationParams
+ */
+function isValidationParams(
+  params: ChunkDataByAnySourceParams,
+): params is ChunkWithValidationParams {
+  return (
+    'txSize' in params &&
+    'dataRoot' in params &&
+    'relativeOffset' in params &&
+    params.txSize !== undefined &&
+    params.dataRoot !== undefined &&
+    params.relativeOffset !== undefined
+  );
+}
 
 export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
   private log: winston.Logger;
@@ -33,12 +50,18 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
     this.chunkStore = chunkDataStore;
   }
 
-  async getChunkDataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
+  async getChunkDataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkData> {
+    // This source only supports validation params (txSize, dataRoot, relativeOffset)
+    if (!isValidationParams(params)) {
+      throw new Error(
+        'ReadThroughChunkDataCache requires validation params (txSize, dataRoot, relativeOffset)',
+      );
+    }
+
+    const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
+
     const span = tracer.startSpan(
       'ReadThroughChunkDataCache.getChunkDataByAny',
       {
