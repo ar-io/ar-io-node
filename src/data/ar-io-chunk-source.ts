@@ -26,7 +26,24 @@ import {
   ChunkMetadata,
   ChunkMetadataByAnySource,
   Chunk,
+  ChunkWithValidationParams,
 } from '../types.js';
+
+/**
+ * Type guard to check if params are ChunkWithValidationParams
+ */
+function isValidationParams(
+  params: ChunkDataByAnySourceParams,
+): params is ChunkWithValidationParams {
+  return (
+    'txSize' in params &&
+    'dataRoot' in params &&
+    'relativeOffset' in params &&
+    params.txSize !== undefined &&
+    params.dataRoot !== undefined &&
+    params.relativeOffset !== undefined
+  );
+}
 
 // Local constants (no configuration needed)
 const CHUNK_CACHE_CAPACITY = 100;
@@ -86,7 +103,7 @@ export class ArIOChunkSource
     this.peerManager.reportFailure(CHUNK_CATEGORY, peer);
   }
 
-  private getCacheKey(params: ChunkDataByAnySourceParams): string {
+  private getCacheKey(params: ChunkWithValidationParams): string {
     // Include all parameters needed for cache reconstruction
     return `${params.dataRoot}:${params.absoluteOffset}:${params.txSize}:${params.relativeOffset}`;
   }
@@ -97,6 +114,13 @@ export class ArIOChunkSource
   }
 
   async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+    // This source only supports validation params (txSize, dataRoot, relativeOffset)
+    if (!isValidationParams(params)) {
+      throw new Error(
+        'ArIOChunkSource requires validation params (txSize, dataRoot, relativeOffset)',
+      );
+    }
+
     const span = tracer.startSpan('ArIOChunkSource.getChunkByAny', {
       attributes: {
         'chunk.data_root': params.dataRoot,
@@ -142,7 +166,7 @@ export class ArIOChunkSource
   }
 
   private async fetchChunkFromArIOPeer(
-    params: ChunkDataByAnySourceParams,
+    params: ChunkWithValidationParams,
     retryCount = 5,
     peerSelectionCount = 3,
   ): Promise<Chunk> {

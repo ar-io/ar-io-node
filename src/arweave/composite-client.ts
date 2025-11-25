@@ -56,6 +56,9 @@ import {
   PartialJsonTransactionStore,
   Region,
   ChunkDataByAnySourceParams,
+  ChunkWithValidationParams,
+  TxOffsetSource,
+  TxPathContext,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 import { BlockOffsetMapping } from './block-offset-mapping.js';
@@ -71,6 +74,22 @@ const CHUNK_CACHE_CAPACITY = 1000;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
+
+/**
+ * Type guard to check if params are ChunkWithValidationParams
+ */
+function isValidationParams(
+  params: ChunkDataByAnySourceParams,
+): params is ChunkWithValidationParams {
+  return (
+    'txSize' in params &&
+    'dataRoot' in params &&
+    'relativeOffset' in params &&
+    params.txSize !== undefined &&
+    params.dataRoot !== undefined &&
+    params.relativeOffset !== undefined
+  );
+}
 
 // Peer queue management types
 interface ChunkPostTask {
@@ -254,12 +273,24 @@ export class ArweaveCompositeClient
         const params: ChunkDataByAnySourceParams = JSON.parse(cacheKey);
 
         try {
-          const chunk = await this.peerGetChunk({
-            absoluteOffset: params.absoluteOffset,
-            txSize: params.txSize,
-            dataRoot: params.dataRoot,
-            relativeOffset: params.relativeOffset,
-          });
+          let chunk: Chunk;
+
+          if (isValidationParams(params)) {
+            // We have all validation params - use direct peer fetch
+            chunk = await this.peerGetChunk({
+              absoluteOffset: params.absoluteOffset,
+              txSize: params.txSize,
+              dataRoot: params.dataRoot,
+              relativeOffset: params.relativeOffset,
+            });
+          } else {
+            // We have offset source - need to derive TX info
+            // Note: txOffsetSource is not serializable, so this path requires
+            // the caller to pass the txOffsetSource directly via getChunkByAny
+            throw new Error(
+              'ChunkWithOffsetSource params cannot be used with cache',
+            );
+          }
 
           metrics.getChunkTotal.inc({
             status: 'success',
@@ -1309,39 +1340,313 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getChunkByAny({
-    txSize,
+  /**
+   * Fetch a chunk using the tx_path fast path.
+   *
+   * This method derives TX info from the chunk's tx_path using the provided
+   * txOffsetSource, avoiding the expensive transaction binary search.
+   *
+   * Flow:
+   * 1. Binary search to find the block containing the offset
+   * 2. Get previous block for boundary calculation
+   * 3. Fetch chunk from peer (without validation)
+   * 4. Build txPathContext from chunk's tx_path and block info
+   * 5. Call txOffsetSource.getTxByOffset with context (uses fast path)
+   * 6. Validate chunk with derived TX info
+   */
+  async peerGetChunkWithOffsetSource({
     absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<Chunk> {
-    const span = tracer.startSpan('ArweaveCompositeClient.getChunkByAny', {
-      attributes: {
-        'chunk.data_root': dataRoot,
-        'chunk.absolute_offset': absoluteOffset,
-        'chunk.relative_offset': relativeOffset,
-        'chunk.tx_size': txSize,
+    txOffsetSource,
+    peerSelectionCount = 10,
+    retryCount = 50,
+  }: {
+    absoluteOffset: number;
+    txOffsetSource: TxOffsetSource;
+    peerSelectionCount?: number;
+    retryCount?: number;
+  }): Promise<Chunk> {
+    const span = tracer.startSpan(
+      'ArweaveCompositeClient.peerGetChunkWithOffsetSource',
+      {
+        attributes: {
+          'chunk.absolute_offset': absoluteOffset,
+          'chunk.retry_count': retryCount,
+          'chunk.peer_selection_count': peerSelectionCount,
+        },
       },
-    });
+    );
 
     try {
-      this.failureSimulator.maybeFail();
+      // Step 1: Find the block containing this offset
+      span.addEvent('Finding containing block');
+      const containingBlock = await this.binarySearchBlocks(absoluteOffset);
+      if (!containingBlock) {
+        throw new Error(`No block found containing offset ${absoluteOffset}`);
+      }
 
-      const cacheKey = JSON.stringify({
-        absoluteOffset,
-        txSize,
-        dataRoot,
-        relativeOffset,
-      });
-
-      const result = await this.chunkPromiseCache.get(cacheKey);
+      const blockHeight = containingBlock.height;
+      const blockWeaveSize = parseInt(containingBlock.weave_size);
+      const blockTxs: string[] = containingBlock.txs || [];
+      const txRoot = containingBlock.tx_root
+        ? fromB64Url(containingBlock.tx_root)
+        : undefined;
 
       span.setAttributes({
-        'chunk.source': result.source ?? 'unknown',
-        'chunk.source_host': result.sourceHost ?? 'unknown',
+        'chunk.block_height': blockHeight,
+        'chunk.block_weave_size': blockWeaveSize,
+        'chunk.block_tx_count': blockTxs.length,
+        'chunk.has_tx_root': !!txRoot,
       });
 
-      return result;
+      // Step 2: Get previous block for prevBlockWeaveSize
+      let prevBlockWeaveSize = 0;
+      if (blockHeight > 0) {
+        const prevBlock = await this.getBlockByHeight(blockHeight - 1);
+        if (prevBlock !== undefined) {
+          prevBlockWeaveSize = parseInt(prevBlock.weave_size);
+        }
+      }
+
+      span.setAttribute('chunk.prev_block_weave_size', prevBlockWeaveSize);
+
+      // Step 3: Fetch chunk from peer (similar to peerGetChunk but without validation)
+      // Try bucket-specific peers first, then general peers as fallback
+      const bucketPeers = this.peerManager.selectBucketPeersForOffset(
+        absoluteOffset,
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      const allGeneralPeers = this.peerManager.selectPeers(
+        'getChunk',
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      const bucketPeerSet = new Set(bucketPeers);
+      const generalPeers = allGeneralPeers.filter(
+        (peer) => !bucketPeerSet.has(peer),
+      );
+
+      const orderedPeers = [...bucketPeers, ...generalPeers];
+
+      if (orderedPeers.length === 0) {
+        throw new Error('No peers available for chunk retrieval');
+      }
+
+      span.setAttributes({
+        'chunk.available_peers': orderedPeers.length,
+        'chunk.bucket_peers': bucketPeers.length,
+        'chunk.general_peers': generalPeers.length,
+      });
+
+      const maxAttempts = Math.min(orderedPeers.length, retryCount);
+
+      for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
+        const isBucketPeer = peerIndex < bucketPeers.length;
+        const peer = orderedPeers[peerIndex];
+        const peerHost = new URL(peer).hostname;
+
+        span.addEvent('Trying peer', {
+          peer_host: peerHost,
+          peer_index: peerIndex + 1,
+          peer_type: isBucketPeer ? 'bucket' : 'general',
+        });
+
+        const startTime = Date.now();
+
+        try {
+          // Fetch chunk from peer
+          const response = await axios({
+            method: 'GET',
+            url: `${peer}/chunk/${absoluteOffset}`,
+            timeout: 500,
+          });
+
+          const responseTime = Date.now() - startTime;
+          const jsonChunk = response.data;
+
+          // Sanity check
+          sanityCheckChunk(jsonChunk);
+
+          // Parse chunk response
+          const txPath = fromB64Url(jsonChunk.tx_path);
+          const dataPathBuffer = fromB64Url(jsonChunk.data_path);
+          const hash = dataPathBuffer.slice(-64, -32);
+          const chunkBuffer = fromB64Url(jsonChunk.chunk);
+
+          // Step 4: Build txPathContext if we have tx_root
+          let txSize: number;
+          let dataRoot: string;
+          let relativeOffset: number;
+          let txId: string;
+          let txWeaveOffset: number;
+
+          if (txRoot && blockTxs.length > 0) {
+            // Build context for fast path
+            const txPathContext: TxPathContext = {
+              txPath,
+              txRoot,
+              blockTxs,
+              blockWeaveSize,
+              prevBlockWeaveSize,
+            };
+
+            // Step 5: Call txOffsetSource with context (uses fast path)
+            span.addEvent('Calling txOffsetSource with context');
+            const txOffsetResult = await txOffsetSource.getTxByOffset(
+              absoluteOffset,
+              txPathContext,
+            );
+
+            if (
+              txOffsetResult.data_root !== undefined &&
+              txOffsetResult.id !== undefined &&
+              txOffsetResult.offset !== undefined &&
+              txOffsetResult.data_size !== undefined
+            ) {
+              // Fast path succeeded
+              span.addEvent('TX offset fast path succeeded', {
+                tx_id: txOffsetResult.id,
+              });
+
+              txId = txOffsetResult.id;
+              dataRoot = txOffsetResult.data_root;
+              txSize = txOffsetResult.data_size;
+              txWeaveOffset = txOffsetResult.offset;
+              const txStartOffset = txWeaveOffset - txSize;
+              relativeOffset = absoluteOffset - txStartOffset;
+            } else {
+              // Fast path failed, fall back to binary search
+              span.addEvent('TX offset fast path failed, using binary search');
+              const fallbackResult = await this.findTxByOffset(absoluteOffset);
+              if (!fallbackResult) {
+                throw new Error(
+                  `Could not find transaction for offset ${absoluteOffset}`,
+                );
+              }
+
+              const tx = await this.getTx({ txId: fallbackResult.txId });
+              if (!tx?.data_root || !tx?.data_size) {
+                throw new Error(
+                  `Invalid transaction data for ${fallbackResult.txId}`,
+                );
+              }
+
+              txId = fallbackResult.txId;
+              dataRoot = tx.data_root;
+              txSize = parseInt(tx.data_size);
+              txWeaveOffset = fallbackResult.txEndOffset;
+              relativeOffset = absoluteOffset - fallbackResult.txStartOffset;
+            }
+          } else {
+            // No tx_root available, fall back to binary search
+            span.addEvent('No tx_root, using binary search fallback');
+            const fallbackResult = await this.findTxByOffset(absoluteOffset);
+            if (!fallbackResult) {
+              throw new Error(
+                `Could not find transaction for offset ${absoluteOffset}`,
+              );
+            }
+
+            const tx = await this.getTx({ txId: fallbackResult.txId });
+            if (!tx?.data_root || !tx?.data_size) {
+              throw new Error(
+                `Invalid transaction data for ${fallbackResult.txId}`,
+              );
+            }
+
+            txId = fallbackResult.txId;
+            dataRoot = tx.data_root;
+            txSize = parseInt(tx.data_size);
+            txWeaveOffset = fallbackResult.txEndOffset;
+            relativeOffset = absoluteOffset - fallbackResult.txStartOffset;
+          }
+
+          // Step 6: Build and validate chunk
+          const dataRootBuffer = txPath.slice(-64, -32);
+          const sourceHost = new URL(peer).hostname;
+
+          const chunk: Chunk = {
+            tx_path: txPath,
+            data_root: dataRootBuffer,
+            data_size: txSize,
+            data_path: dataPathBuffer,
+            offset: relativeOffset,
+            hash,
+            chunk: chunkBuffer,
+            source: 'arweave-network',
+            sourceHost,
+            // Include TX metadata for handlers
+            txId,
+            txDataRoot: dataRoot,
+            txWeaveOffset,
+          };
+
+          await validateChunk(
+            txSize,
+            chunk,
+            fromB64Url(dataRoot),
+            relativeOffset,
+          );
+
+          span.setAttributes({
+            'chunk.successful_peer': peerHost,
+            'chunk.final_peer_index': peerIndex + 1,
+            'chunk.response_time_ms': responseTime,
+            'chunk.size': chunk.chunk.length,
+            'chunk.tx_size': txSize,
+            'chunk.data_root': dataRoot,
+            'chunk.tx_id': txId,
+            'chunk.tx_weave_offset': txWeaveOffset,
+          });
+
+          this.handlePeerSuccess(
+            peer,
+            'peerGetChunk',
+            this.peerManager.isPreferredChunkGetPeer(peer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
+          );
+
+          return chunk;
+        } catch (error: any) {
+          const responseTime = Date.now() - startTime;
+
+          this.log.debug('Chunk request with offset source failed', {
+            peer,
+            peerHost,
+            absoluteOffset,
+            peerIndex: peerIndex + 1,
+            totalPeers: orderedPeers.length,
+            responseTime,
+            error: error.message,
+          });
+
+          span.addEvent('Peer request failed', {
+            peer_host: peerHost,
+            error: error.message,
+            peer_index: peerIndex + 1,
+          });
+
+          this.handlePeerFailure(
+            peer,
+            'peerGetChunk',
+            this.peerManager.isPreferredChunkGetPeer(peer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
+          );
+        }
+      }
+
+      // All peers failed
+      const error = new Error(
+        `Failed to fetch chunk from ${maxAttempts} peers (${orderedPeers.length} available)`,
+      );
+      span.recordException(error);
+      throw error;
     } catch (error: any) {
       span.recordException(error);
       throw error;
@@ -1350,18 +1655,81 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getChunkDataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
-    const { hash, chunk, source, sourceHost } = await this.getChunkByAny({
-      txSize,
-      absoluteOffset,
-      dataRoot,
-      relativeOffset,
+  async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+    const span = tracer.startSpan('ArweaveCompositeClient.getChunkByAny', {
+      attributes: {
+        'chunk.absolute_offset': params.absoluteOffset,
+        'chunk.has_validation_params': isValidationParams(params),
+      },
     });
+
+    try {
+      this.failureSimulator.maybeFail();
+
+      let result: Chunk;
+
+      if (isValidationParams(params)) {
+        // We have all validation params - use cached path
+        const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
+
+        span.setAttributes({
+          'chunk.data_root': dataRoot,
+          'chunk.relative_offset': relativeOffset,
+          'chunk.tx_size': txSize,
+        });
+
+        const cacheKey = JSON.stringify({
+          absoluteOffset,
+          txSize,
+          dataRoot,
+          relativeOffset,
+        });
+
+        result = await this.chunkPromiseCache.get(cacheKey);
+      } else {
+        // We have offset source - use fast path (not cached since txOffsetSource is not serializable)
+        const { absoluteOffset, txOffsetSource } = params;
+
+        span.addEvent('Using offset source path');
+
+        result = await this.peerGetChunkWithOffsetSource({
+          absoluteOffset,
+          txOffsetSource,
+        });
+
+        metrics.getChunkTotal.inc({
+          status: 'success',
+          method: 'getChunkByAny',
+          class: this.constructor.name,
+        });
+      }
+
+      span.setAttributes({
+        'chunk.source': result.source ?? 'unknown',
+        'chunk.source_host': result.sourceHost ?? 'unknown',
+      });
+
+      return result;
+    } catch (error: any) {
+      if (!isValidationParams(params)) {
+        metrics.getChunkTotal.inc({
+          status: 'error',
+          method: 'getChunkByAny',
+          class: this.constructor.name,
+        });
+      }
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
+  }
+
+  async getChunkDataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkData> {
+    const { hash, chunk, source, sourceHost } =
+      await this.getChunkByAny(params);
     return {
       hash,
       chunk,
@@ -1370,22 +1738,14 @@ export class ArweaveCompositeClient
     };
   }
 
-  async getChunkMetadataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkMetadata> {
+  async getChunkMetadataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkMetadata> {
     this.failureSimulator.maybeFail();
 
     // Fetch the full chunk using the existing getChunkByAny method
     // This leverages the existing chunk caching
-    const chunk = await this.getChunkByAny({
-      txSize,
-      absoluteOffset,
-      dataRoot,
-      relativeOffset,
-    });
+    const chunk = await this.getChunkByAny(params);
 
     // Extract and return only the metadata portion
     const metadata: ChunkMetadata = {
