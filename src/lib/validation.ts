@@ -72,7 +72,7 @@ export function sanityCheckChunk(chunk: JsonChunk) {
 
 export async function validateChunk(
   txSize: number,
-  chunk: Chunk,
+  chunk: Pick<Chunk, 'chunk' | 'data_path'>,
   dataRoot: Buffer,
   relativeOffset: number,
 ) {

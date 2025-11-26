@@ -146,10 +146,12 @@ export interface OwnerStore extends B64UrlStore {
 export interface ChunkDataStore {
   has(dataRoot: string, relativeOffset: number): Promise<boolean>;
   get(dataRoot: string, relativeOffset: number): Promise<ChunkData | undefined>;
+  getByAbsoluteOffset(absoluteOffset: number): Promise<ChunkData | undefined>;
   set(
     dataRoot: string,
     relativeOffset: number,
     chunkData: ChunkData,
+    absoluteOffset?: number,
   ): Promise<void>;
 }
 
@@ -159,7 +161,10 @@ export interface ChunkMetadataStore {
     dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkMetadata | undefined>;
-  set(chunkMetadata: ChunkMetadata): Promise<void>;
+  getByAbsoluteOffset(
+    absoluteOffset: number,
+  ): Promise<ChunkMetadata | undefined>;
+  set(chunkMetadata: ChunkMetadata, absoluteOffset?: number): Promise<void>;
 }
 
 type Region = {
@@ -525,6 +530,31 @@ export interface Chunk extends ChunkMetadata, ChunkData {
   txId?: string;
   txDataRoot?: string; // Base64url encoded
   txWeaveOffset?: number; // Absolute weave offset of TX end
+}
+
+/**
+ * Unvalidated chunk returned from network sources before tx_path/data_path validation.
+ * Used by the handler-level validation flow to fetch chunks without validating them
+ * at the source level.
+ */
+export interface UnvalidatedChunk {
+  chunk: Buffer;
+  hash: Buffer;
+  data_path: Buffer;
+  tx_path?: Buffer; // May be undefined if source doesn't have it
+  source?: string;
+  sourceHost?: string;
+}
+
+/**
+ * Source that can fetch unvalidated chunks by absolute offset.
+ * Validation is deferred to the handler level.
+ */
+export interface UnvalidatedChunkSource {
+  getUnvalidatedChunk(
+    absoluteOffset: number,
+    requestAttributes?: RequestAttributes,
+  ): Promise<UnvalidatedChunk>;
 }
 
 /**

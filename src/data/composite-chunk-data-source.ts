@@ -12,24 +12,33 @@ import {
   ChunkData,
   ChunkDataByAnySource,
   ChunkDataByAnySourceParams,
+  RequestAttributes,
+  UnvalidatedChunk,
+  UnvalidatedChunkSource,
 } from '../types.js';
 
-export class CompositeChunkDataSource implements ChunkDataByAnySource {
+export class CompositeChunkDataSource
+  implements ChunkDataByAnySource, UnvalidatedChunkSource
+{
   private log: winston.Logger;
   private sources: ChunkDataByAnySource[];
+  private unvalidatedSources: UnvalidatedChunkSource[];
   private parallelism: number;
 
   constructor({
     log,
     sources,
+    unvalidatedSources = [],
     parallelism = 1,
   }: {
     log: winston.Logger;
     sources: ChunkDataByAnySource[];
+    unvalidatedSources?: UnvalidatedChunkSource[];
     parallelism?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.sources = sources;
+    this.unvalidatedSources = unvalidatedSources;
     this.parallelism = Math.max(1, Math.min(parallelism, sources.length));
   }
 
@@ -171,6 +180,163 @@ export class CompositeChunkDataSource implements ChunkDataByAnySource {
       });
 
       const errorMessage = `Failed to fetch chunk data from any source. Errors: ${errors
+        .map((e) => e.message)
+        .join('; ')}`;
+
+      const error = new Error(errorMessage);
+      span.recordException(error);
+      throw error;
+    } catch (error: any) {
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
+  }
+
+  async getUnvalidatedChunk(
+    absoluteOffset: number,
+    requestAttributes?: RequestAttributes,
+  ): Promise<UnvalidatedChunk> {
+    const span = tracer.startSpan(
+      'CompositeChunkDataSource.getUnvalidatedChunk',
+      {
+        attributes: {
+          'chunk.absolute_offset': absoluteOffset,
+          'chunk.sources_count': this.unvalidatedSources.length,
+          'chunk.parallelism': this.parallelism,
+        },
+      },
+    );
+
+    try {
+      if (this.unvalidatedSources.length === 0) {
+        const error = new Error('No unvalidated chunk sources configured');
+        span.recordException(error);
+        throw error;
+      }
+
+      span.addEvent('Starting unvalidated source attempts', {
+        sources: this.unvalidatedSources.map(
+          (source) => source.constructor.name,
+        ),
+      });
+
+      const errors: Error[] = [];
+      const limit = pLimit(this.parallelism);
+      let successResult: UnvalidatedChunk | undefined;
+      let successfulSource: string | undefined;
+
+      // Create all promises at once, controlled by pLimit
+      const promises = this.unvalidatedSources.map((source, index) =>
+        limit(async () => {
+          // Check if we already have a success before starting
+          if (successResult) {
+            span.addEvent('Skipping source due to early success', {
+              source: source.constructor.name,
+              source_index: index,
+            });
+            return null;
+          }
+
+          const sourceStartTime = Date.now();
+          span.addEvent('Trying unvalidated source', {
+            source: source.constructor.name,
+            source_index: index,
+          });
+
+          try {
+            const result = await source.getUnvalidatedChunk(
+              absoluteOffset,
+              requestAttributes,
+            );
+            const sourceDuration = Date.now() - sourceStartTime;
+
+            // Check again after async operation
+            if (successResult !== undefined) {
+              span.addEvent('Source succeeded but result already available', {
+                source: source.constructor.name,
+                source_index: index,
+                duration_ms: sourceDuration,
+              });
+              return null;
+            }
+
+            span.addEvent('Unvalidated source succeeded', {
+              source: source.constructor.name,
+              source_index: index,
+              chunk_source: result.source,
+              chunk_host: result.sourceHost,
+              has_tx_path: result.tx_path !== undefined,
+              duration_ms: sourceDuration,
+            });
+
+            this.log.debug(
+              'Successfully fetched unvalidated chunk from source',
+              {
+                source: source.constructor.name,
+                chunkSource: result.source,
+                chunkHost: result.sourceHost,
+                absoluteOffset,
+              },
+            );
+
+            // Store success result
+            successResult = result;
+            successfulSource = source.constructor.name;
+            return result;
+          } catch (error: any) {
+            const sourceDuration = Date.now() - sourceStartTime;
+
+            // Check again if we got a success while this was running
+            if (successResult) {
+              span.addEvent('Source failed but result already available', {
+                source: source.constructor.name,
+                source_index: index,
+                duration_ms: sourceDuration,
+              });
+              return null;
+            }
+
+            span.addEvent('Unvalidated source failed', {
+              source: source.constructor.name,
+              source_index: index,
+              error: error.message,
+              duration_ms: sourceDuration,
+            });
+
+            this.log.debug('Failed to fetch unvalidated chunk from source', {
+              source: source.constructor.name,
+              error: error.message,
+              absoluteOffset,
+            });
+            errors.push(error);
+            return null;
+          }
+        }),
+      );
+
+      // Wait for all promises to complete
+      await Promise.all(promises);
+
+      // Return success if we got one
+      if (successResult) {
+        span.setAttributes({
+          'chunk.successful_source': successfulSource ?? 'unknown',
+          'chunk.final_source': successResult.source ?? 'unknown',
+          'chunk.final_source_host': successResult.sourceHost ?? 'unknown',
+        });
+        span.addEvent('Composite unvalidated source retrieval successful');
+        return successResult;
+      }
+
+      // All sources failed
+      span.setAttributes({
+        'chunk.failed_sources_count': errors.length,
+        'chunk.total_errors': errors.length,
+      });
+
+      const errorMessage = `Failed to fetch unvalidated chunk from any source. Errors: ${errors
         .map((e) => e.message)
         .join('; ')}`;
 

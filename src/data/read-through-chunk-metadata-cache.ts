@@ -82,7 +82,8 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
             relativeOffset,
           });
 
-        await this.chunkMetadataStore.set(chunkMetadata);
+        // Cache with absoluteOffset for symlink index
+        await this.chunkMetadataStore.set(chunkMetadata, absoluteOffset);
 
         return chunkMetadata;
       });

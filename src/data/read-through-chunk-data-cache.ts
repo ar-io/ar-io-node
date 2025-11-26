@@ -139,9 +139,14 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
         chunk_source: chunkData.source,
       });
 
-      // Cache the result
+      // Cache the result (with absoluteOffset for symlink index)
       const cacheStoreStart = Date.now();
-      await this.chunkStore.set(dataRoot, relativeOffset, chunkData);
+      await this.chunkStore.set(
+        dataRoot,
+        relativeOffset,
+        chunkData,
+        absoluteOffset,
+      );
       const cacheStoreDuration = Date.now() - cacheStoreStart;
 
       span.setAttributes({

@@ -993,6 +993,16 @@ export const CHUNK_DATA_CACHE_CLEANUP_THRESHOLD = +env.varOrDefault(
   `${60 * 60 * 4}`, // 4 hours by default
 );
 
+// Whether or not to cleanup dead symlinks in chunk data cache
+export const ENABLE_CHUNK_SYMLINK_CLEANUP =
+  env.varOrDefault('ENABLE_CHUNK_SYMLINK_CLEANUP', 'true') === 'true';
+
+// The interval in seconds to run dead symlink cleanup (default: 24 hours)
+export const CHUNK_SYMLINK_CLEANUP_INTERVAL = +env.varOrDefault(
+  'CHUNK_SYMLINK_CLEANUP_INTERVAL',
+  `${60 * 60 * 24}`, // 24 hours by default
+);
+
 //
 // Contiguous data caching
 //

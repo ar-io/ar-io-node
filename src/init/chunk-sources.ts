@@ -17,7 +17,13 @@ import { ReadThroughChunkDataCache } from '../data/read-through-chunk-data-cache
 import { ReadThroughChunkMetadataCache } from '../data/read-through-chunk-metadata-cache.js';
 import { FsChunkDataStore } from '../store/fs-chunk-data-store.js';
 import { FsChunkMetadataStore } from '../store/fs-chunk-metadata-store.js';
-import { ChunkDataByAnySource, ChunkMetadataByAnySource } from '../types.js';
+import {
+  ChunkDataByAnySource,
+  ChunkDataStore,
+  ChunkMetadataByAnySource,
+  ChunkMetadataStore,
+  UnvalidatedChunkSource,
+} from '../types.js';
 import { ArIOChunkSource } from '../data/ar-io-chunk-source.js';
 
 function getChunkDataSource({
@@ -220,4 +226,158 @@ export function createChunkMetadataSource({
     chunkMetadataSource: compositeChunkMetadataSource,
     chunkMetadataStore: txChunkMetaDataStore,
   });
+}
+
+/**
+ * Result of createChunkSourcesWithStores containing all chunk-related components.
+ */
+export interface ChunkSourcesWithStores {
+  /** Chunk data source with read-through cache */
+  chunkDataSource: ChunkDataByAnySource;
+  /** Chunk metadata source with read-through cache */
+  chunkMetadataSource: ChunkMetadataByAnySource;
+  /** Underlying chunk data store for direct access */
+  chunkDataStore: ChunkDataStore;
+  /** Underlying chunk metadata store for direct access */
+  chunkMetadataStore: ChunkMetadataStore;
+  /** Source for fetching unvalidated chunks (for tx_path validation flow) */
+  unvalidatedChunkSource: UnvalidatedChunkSource;
+}
+
+/**
+ * Creates all chunk-related components including stores and unvalidated chunk source.
+ * This is the preferred function for initializing chunk infrastructure as it provides
+ * all components needed for the tx_path validation fast path.
+ *
+ * @returns Object containing all chunk sources and stores
+ */
+export function createChunkSourcesWithStores({
+  log,
+  arweaveClient,
+  awsS3Client,
+  arIOChunkSource,
+  legacyPsql,
+  chunkDataRetrievalOrder,
+  chunkMetadataRetrievalOrder,
+  chunkDataSourceParallelism,
+  chunkMetadataSourceParallelism,
+}: {
+  log: winston.Logger;
+  arweaveClient: ArweaveCompositeClient;
+  awsS3Client?: AwsLiteS3;
+  arIOChunkSource?: ArIOChunkSource;
+  legacyPsql?: any;
+  chunkDataRetrievalOrder: string[];
+  chunkMetadataRetrievalOrder: string[];
+  chunkDataSourceParallelism: number;
+  chunkMetadataSourceParallelism: number;
+}): ChunkSourcesWithStores {
+  // Create chunk data sources
+  const chunkDataSources: ChunkDataByAnySource[] = [];
+  const unvalidatedSources: UnvalidatedChunkSource[] = [];
+
+  for (const sourceName of chunkDataRetrievalOrder) {
+    const dataSource = getChunkDataSource({
+      sourceName,
+      arweaveClient,
+      awsS3Client,
+      arIOChunkSource,
+      log,
+    });
+    if (dataSource !== undefined) {
+      chunkDataSources.push(dataSource);
+
+      // Collect sources that implement UnvalidatedChunkSource
+      // These are sources that can provide chunks without validation
+      if (sourceName === 'ar-io-network' && arIOChunkSource) {
+        unvalidatedSources.push(arIOChunkSource);
+      } else if (sourceName === 'arweave-network') {
+        unvalidatedSources.push(arweaveClient);
+      }
+    } else {
+      throw new Error(`Chunk data source ${sourceName} not found!`);
+    }
+  }
+
+  if (chunkDataSources.length === 0) {
+    throw new Error('No chunk data sources configured');
+  }
+
+  log.info('Configured chunk data sources', {
+    sources: chunkDataRetrievalOrder,
+    parallelism: chunkDataSourceParallelism,
+    unvalidatedSourceCount: unvalidatedSources.length,
+  });
+
+  // Create stores
+  const chunkDataStore = new FsChunkDataStore({ log, baseDir: 'data/chunks' });
+  const chunkMetadataStore = new FsChunkMetadataStore({
+    log,
+    baseDir: 'data/chunks/metadata',
+  });
+
+  // Create composite data source with unvalidated sources
+  const compositeChunkDataSource = new CompositeChunkDataSource({
+    log,
+    sources: chunkDataSources,
+    unvalidatedSources,
+    parallelism: chunkDataSourceParallelism,
+  });
+
+  // Wrap with read-through cache
+  const chunkDataSource = new ReadThroughChunkDataCache({
+    log,
+    chunkSource: compositeChunkDataSource,
+    chunkDataStore,
+  });
+
+  // Create chunk metadata sources
+  const chunkMetadataSources: ChunkMetadataByAnySource[] = [];
+
+  for (const sourceName of chunkMetadataRetrievalOrder) {
+    const metadataSource = getChunkMetadataSource({
+      sourceName,
+      arweaveClient,
+      legacyPsql,
+      arIOChunkSource,
+      log,
+    });
+    if (metadataSource !== undefined) {
+      chunkMetadataSources.push(metadataSource);
+    } else {
+      throw new Error(`Chunk metadata source ${sourceName} not found!`);
+    }
+  }
+
+  if (chunkMetadataSources.length === 0) {
+    throw new Error('No chunk metadata sources configured');
+  }
+
+  log.info('Configured chunk metadata sources', {
+    sources: chunkMetadataRetrievalOrder,
+    parallelism: chunkMetadataSourceParallelism,
+  });
+
+  // Create composite metadata source
+  const compositeChunkMetadataSource = new CompositeChunkMetadataSource({
+    log,
+    sources: chunkMetadataSources,
+    parallelism: chunkMetadataSourceParallelism,
+  });
+
+  // Wrap with read-through cache
+  const chunkMetadataSource = new ReadThroughChunkMetadataCache({
+    log,
+    chunkMetadataSource: compositeChunkMetadataSource,
+    chunkMetadataStore,
+  });
+
+  return {
+    chunkDataSource,
+    chunkMetadataSource,
+    chunkDataStore,
+    chunkMetadataStore,
+    // Use the composite source for unvalidated chunks as it handles source fallback
+    unvalidatedChunkSource: compositeChunkDataSource,
+  };
 }
