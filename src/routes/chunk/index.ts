@@ -14,10 +14,9 @@ import {
 import log from '../../log.js';
 import {
   arweaveClient,
-  chunkSource,
+  chunkRetrievalService,
   rateLimiter,
   paymentProcessor,
-  txOffsetSource,
 } from '../../system.js';
 
 // To add a GET route for /chunk/:offset where :offset is restricted to a positive integer,
@@ -33,8 +32,7 @@ chunkRouter.use(json({ limit: MAX_CHUNK_SIZE }));
 chunkRouter.get(
   CHUNK_OFFSET_PATH,
   createChunkOffsetHandler({
-    chunkSource,
-    txOffsetSource,
+    chunkRetrievalService,
     rateLimiter,
     paymentProcessor,
     log: log.child({ class: 'ChunkGetOffsetHandler' }),
@@ -44,8 +42,7 @@ chunkRouter.get(
 chunkRouter.head(
   CHUNK_OFFSET_PATH,
   createChunkOffsetHandler({
-    chunkSource,
-    txOffsetSource,
+    chunkRetrievalService,
     rateLimiter,
     paymentProcessor,
     log: log.child({ class: 'ChunkHeadOffsetHandler' }),
@@ -55,8 +52,7 @@ chunkRouter.head(
 chunkRouter.get(
   '/chunk/:offset(\\d+)/data',
   createChunkOffsetDataHandler({
-    chunkSource,
-    txOffsetSource,
+    chunkRetrievalService,
     rateLimiter,
     paymentProcessor,
     log: log.child({ class: 'ChunkGetOffsetDataHandler' }),
@@ -66,8 +62,7 @@ chunkRouter.get(
 chunkRouter.head(
   '/chunk/:offset(\\d+)/data',
   createChunkOffsetDataHandler({
-    chunkSource,
-    txOffsetSource,
+    chunkRetrievalService,
     rateLimiter,
     paymentProcessor,
     log: log.child({ class: 'ChunkHeadOffsetDataHandler' }),
