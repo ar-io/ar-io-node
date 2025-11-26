@@ -9,6 +9,8 @@ import crypto from 'node:crypto';
 
 import {
   Chunk,
+  ChunkDataByAnySourceParams,
+  ChunkWithValidationParams,
   JsonChunk,
   PartialJsonBlock,
   PartialJsonTransaction,
@@ -23,6 +25,22 @@ export const isValidTxId = (id: string): boolean => {
 };
 
 export const isValidDataId = isValidTxId;
+
+/**
+ * Type guard to check if params are ChunkWithValidationParams
+ */
+export function isValidationParams(
+  params: ChunkDataByAnySourceParams,
+): params is ChunkWithValidationParams {
+  return (
+    'txSize' in params &&
+    'dataRoot' in params &&
+    'relativeOffset' in params &&
+    params.txSize !== undefined &&
+    params.dataRoot !== undefined &&
+    params.relativeOffset !== undefined
+  );
+}
 
 export function sanityCheckBlock(block: PartialJsonBlock) {
   if (!block.indep_hash) {

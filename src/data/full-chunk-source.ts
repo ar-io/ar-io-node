@@ -6,6 +6,7 @@
  */
 
 import { tracer } from '../tracing.js';
+import { isValidationParams } from '../lib/validation.js';
 import {
   ChunkMetadataByAnySource,
   ChunkByAnySource,
@@ -16,22 +17,6 @@ import {
   ChunkData,
   ChunkMetadata,
 } from '../types.js';
-
-/**
- * Type guard to check if params are ChunkWithValidationParams
- */
-function isValidationParams(
-  params: ChunkDataByAnySourceParams,
-): params is ChunkWithValidationParams {
-  return (
-    'txSize' in params &&
-    'dataRoot' in params &&
-    'relativeOffset' in params &&
-    params.txSize !== undefined &&
-    params.dataRoot !== undefined &&
-    params.relativeOffset !== undefined
-  );
-}
 
 export class FullChunkSource
   implements ChunkByAnySource, ChunkMetadataByAnySource, ChunkDataByAnySource
