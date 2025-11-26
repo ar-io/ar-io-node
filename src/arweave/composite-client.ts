@@ -1517,7 +1517,7 @@ export class ArweaveCompositeClient
               dataRoot = txOffsetResult.data_root;
               txSize = txOffsetResult.data_size;
               txWeaveOffset = txOffsetResult.offset;
-              const txStartOffset = txWeaveOffset - txSize;
+              const txStartOffset = txWeaveOffset - txSize + 1;
               relativeOffset = absoluteOffset - txStartOffset;
             } else {
               // Fast path failed, fall back to binary search
