@@ -16,15 +16,14 @@ import {
   ChunkDataStore,
   ChunkMetadata,
   ChunkMetadataStore,
-  TxOffsetSource,
-  UnvalidatedChunk,
-  UnvalidatedChunkSource,
+  TxBoundary,
+  TxBoundarySource,
 } from '../types.js';
 import {
   ChunkNotFoundError,
   ChunkRetrievalService,
   hasTxId,
-  usedFastPath,
+  usedCachePath,
 } from './chunk-retrieval-service.js';
 
 // Test constants
@@ -81,28 +80,19 @@ const createMockChunkMetadataStore = (): ChunkMetadataStore => ({
   getByAbsoluteOffset: mock.fn(async () => undefined),
 });
 
-const createMockTxOffsetSource = (): TxOffsetSource => ({
-  getTxByOffset: mock.fn(async () => ({
-    data_root: B64_DATA_ROOT,
-    id: TX_ID,
-    data_size: TX_SIZE,
-    offset: WEAVE_OFFSET,
-  })),
+const createMockTxBoundarySource = (): TxBoundarySource => ({
+  getTxBoundary: mock.fn(
+    async (): Promise<TxBoundary | null> => ({
+      dataRoot: B64_DATA_ROOT,
+      id: TX_ID,
+      dataSize: TX_SIZE,
+      weaveOffset: WEAVE_OFFSET,
+    }),
+  ),
 });
 
 const createMockChunkSource = (): ChunkByAnySource => ({
   getChunkByAny: mock.fn(async () => mockChunk),
-});
-
-const createMockUnvalidatedChunkSource = (): UnvalidatedChunkSource => ({
-  getUnvalidatedChunk: mock.fn(async () => ({
-    chunk: mockChunkData,
-    data_path: mockDataPath,
-    tx_path: mockTxPath,
-    hash: mockHash,
-    source: 'peer',
-    sourceHost: 'test-peer.example.com',
-  })),
 });
 
 before(() => {
@@ -115,7 +105,7 @@ describe('ChunkRetrievalService', () => {
   });
 
   describe('Type guards', () => {
-    it('hasTxId returns true only for fallback results', () => {
+    it('hasTxId returns true only for boundary_fetch results with txId', () => {
       const cacheHitResult = {
         type: 'cache_hit' as const,
         chunk: mockChunk,
@@ -126,10 +116,20 @@ describe('ChunkRetrievalService', () => {
         contiguousDataStartDelimiter: CONTIGUOUS_START,
       };
 
-      const fallbackResult = {
-        type: 'fallback' as const,
+      const boundaryFetchWithTxId = {
+        type: 'boundary_fetch' as const,
         chunk: mockChunk,
         txId: TX_ID,
+        dataRoot: B64_DATA_ROOT,
+        dataSize: TX_SIZE,
+        weaveOffset: WEAVE_OFFSET,
+        relativeOffset: RELATIVE_OFFSET,
+        contiguousDataStartDelimiter: CONTIGUOUS_START,
+      };
+
+      const boundaryFetchWithoutTxId = {
+        type: 'boundary_fetch' as const,
+        chunk: mockChunk,
         dataRoot: B64_DATA_ROOT,
         dataSize: TX_SIZE,
         weaveOffset: WEAVE_OFFSET,
@@ -138,10 +138,11 @@ describe('ChunkRetrievalService', () => {
       };
 
       assert.equal(hasTxId(cacheHitResult), false);
-      assert.equal(hasTxId(fallbackResult), true);
+      assert.equal(hasTxId(boundaryFetchWithTxId), true);
+      assert.equal(hasTxId(boundaryFetchWithoutTxId), false);
     });
 
-    it('usedFastPath returns true for cache_hit and tx_path_validated', () => {
+    it('usedCachePath returns true only for cache_hit', () => {
       const cacheHitResult = {
         type: 'cache_hit' as const,
         chunk: mockChunk,
@@ -152,18 +153,8 @@ describe('ChunkRetrievalService', () => {
         contiguousDataStartDelimiter: CONTIGUOUS_START,
       };
 
-      const txPathResult = {
-        type: 'tx_path_validated' as const,
-        chunk: mockChunk,
-        dataRoot: B64_DATA_ROOT,
-        dataSize: TX_SIZE,
-        weaveOffset: WEAVE_OFFSET,
-        relativeOffset: RELATIVE_OFFSET,
-        contiguousDataStartDelimiter: CONTIGUOUS_START,
-      };
-
-      const fallbackResult = {
-        type: 'fallback' as const,
+      const boundaryFetchResult = {
+        type: 'boundary_fetch' as const,
         chunk: mockChunk,
         txId: TX_ID,
         dataRoot: B64_DATA_ROOT,
@@ -173,9 +164,8 @@ describe('ChunkRetrievalService', () => {
         contiguousDataStartDelimiter: CONTIGUOUS_START,
       };
 
-      assert.equal(usedFastPath(cacheHitResult), true);
-      assert.equal(usedFastPath(txPathResult), true);
-      assert.equal(usedFastPath(fallbackResult), false);
+      assert.equal(usedCachePath(cacheHitResult), true);
+      assert.equal(usedCachePath(boundaryFetchResult), false);
     });
   });
 
@@ -183,7 +173,7 @@ describe('ChunkRetrievalService', () => {
     it('should return CacheHitResult when chunk is in cache', async () => {
       const chunkDataStore = createMockChunkDataStore();
       const chunkMetadataStore = createMockChunkMetadataStore();
-      const txOffsetSource = createMockTxOffsetSource();
+      const txBoundarySource = createMockTxBoundarySource();
       const chunkSource = createMockChunkSource();
 
       // Mock cache hit
@@ -197,7 +187,7 @@ describe('ChunkRetrievalService', () => {
       const service = new ChunkRetrievalService({
         log,
         chunkSource,
-        txOffsetSource,
+        txBoundarySource,
         chunkDataStore,
         chunkMetadataStore,
       });
@@ -205,7 +195,7 @@ describe('ChunkRetrievalService', () => {
       const result = await service.retrieveChunk(ABSOLUTE_OFFSET);
 
       assert.equal(result.type, 'cache_hit');
-      assert.equal(usedFastPath(result), true);
+      assert.equal(usedCachePath(result), true);
       assert.equal(hasTxId(result), false);
       assert.equal(result.dataRoot, B64_DATA_ROOT);
       assert.equal(result.dataSize, TX_SIZE);
@@ -221,17 +211,17 @@ describe('ChunkRetrievalService', () => {
         1,
       );
 
-      // Verify fallback was NOT called
-      assert.equal((txOffsetSource.getTxByOffset as any).mock.callCount(), 0);
+      // Verify boundary source was NOT called
+      assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 0);
       assert.equal((chunkSource.getChunkByAny as any).mock.callCount(), 0);
     });
   });
 
-  describe('retrieveChunk - fallback path', () => {
-    it('should return FallbackResult when cache misses and no tx_path validation available', async () => {
+  describe('retrieveChunk - boundary fetch path', () => {
+    it('should return BoundaryFetchResult when cache misses', async () => {
       const chunkDataStore = createMockChunkDataStore();
       const chunkMetadataStore = createMockChunkMetadataStore();
-      const txOffsetSource = createMockTxOffsetSource();
+      const txBoundarySource = createMockTxBoundarySource();
       const chunkSource = createMockChunkSource();
 
       // Mock cache miss (default behavior - returns undefined)
@@ -239,16 +229,15 @@ describe('ChunkRetrievalService', () => {
       const service = new ChunkRetrievalService({
         log,
         chunkSource,
-        txOffsetSource,
+        txBoundarySource,
         chunkDataStore,
         chunkMetadataStore,
-        // No unvalidatedChunkSource or arweaveClient - skips tx_path validation
       });
 
       const result = await service.retrieveChunk(ABSOLUTE_OFFSET);
 
-      assert.equal(result.type, 'fallback');
-      assert.equal(usedFastPath(result), false);
+      assert.equal(result.type, 'boundary_fetch');
+      assert.equal(usedCachePath(result), false);
       assert.equal(hasTxId(result), true);
       if (hasTxId(result)) {
         assert.equal(result.txId, TX_ID);
@@ -256,85 +245,54 @@ describe('ChunkRetrievalService', () => {
       assert.equal(result.dataRoot, B64_DATA_ROOT);
       assert.equal(result.dataSize, TX_SIZE);
 
-      // Verify fallback was called
-      assert.equal((txOffsetSource.getTxByOffset as any).mock.callCount(), 1);
+      // Verify boundary source was called
+      assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 1);
       assert.equal((chunkSource.getChunkByAny as any).mock.callCount(), 1);
     });
 
-    it('should return FallbackResult when fast path dependencies are not provided', async () => {
-      const txOffsetSource = createMockTxOffsetSource();
+    it('should return BoundaryFetchResult when cache stores not provided', async () => {
+      const txBoundarySource = createMockTxBoundarySource();
       const chunkSource = createMockChunkSource();
 
       const service = new ChunkRetrievalService({
         log,
         chunkSource,
-        txOffsetSource,
-        // No chunkDataStore or chunkMetadataStore - skips fast path entirely
+        txBoundarySource,
+        // No chunkDataStore or chunkMetadataStore - skips cache path entirely
       });
 
       const result = await service.retrieveChunk(ABSOLUTE_OFFSET);
 
-      assert.equal(result.type, 'fallback');
+      assert.equal(result.type, 'boundary_fetch');
       assert.equal(hasTxId(result), true);
     });
 
-    it('should throw ChunkNotFoundError when txOffsetSource fails', async () => {
-      const txOffsetSource = createMockTxOffsetSource();
+    it('should throw ChunkNotFoundError when txBoundarySource returns null', async () => {
+      const txBoundarySource = createMockTxBoundarySource();
       const chunkSource = createMockChunkSource();
 
-      (txOffsetSource.getTxByOffset as any).mock.mockImplementation(
-        async () => {
-          throw new Error('Database error');
-        },
+      (txBoundarySource.getTxBoundary as any).mock.mockImplementation(
+        async () => null,
       );
 
       const service = new ChunkRetrievalService({
         log,
         chunkSource,
-        txOffsetSource,
+        txBoundarySource,
       });
 
       await assert.rejects(
         () => service.retrieveChunk(ABSOLUTE_OFFSET),
         (error: any) => {
           assert(error instanceof ChunkNotFoundError);
-          assert.equal(error.errorType, 'offset_lookup_failed');
-          return true;
-        },
-      );
-    });
-
-    it('should throw ChunkNotFoundError when TX info is incomplete', async () => {
-      const txOffsetSource = createMockTxOffsetSource();
-      const chunkSource = createMockChunkSource();
-
-      (txOffsetSource.getTxByOffset as any).mock.mockImplementation(
-        async () => ({
-          data_root: undefined,
-          id: TX_ID,
-          data_size: TX_SIZE,
-          offset: WEAVE_OFFSET,
-        }),
-      );
-
-      const service = new ChunkRetrievalService({
-        log,
-        chunkSource,
-        txOffsetSource,
-      });
-
-      await assert.rejects(
-        () => service.retrieveChunk(ABSOLUTE_OFFSET),
-        (error: any) => {
-          assert(error instanceof ChunkNotFoundError);
-          assert.equal(error.errorType, 'tx_not_found');
+          assert.equal(error.errorType, 'boundary_not_found');
           return true;
         },
       );
     });
 
     it('should throw ChunkNotFoundError when chunk fetch fails', async () => {
-      const txOffsetSource = createMockTxOffsetSource();
+      const txBoundarySource = createMockTxBoundarySource();
       const chunkSource = createMockChunkSource();
 
       (chunkSource.getChunkByAny as any).mock.mockImplementation(async () => {
@@ -344,7 +302,7 @@ describe('ChunkRetrievalService', () => {
       const service = new ChunkRetrievalService({
         log,
         chunkSource,
-        txOffsetSource,
+        txBoundarySource,
       });
 
       await assert.rejects(
@@ -358,11 +316,11 @@ describe('ChunkRetrievalService', () => {
     });
   });
 
-  describe('retrieveChunk - cache miss with fallback', () => {
-    it('should fall through to fallback when both cache stores miss', async () => {
+  describe('retrieveChunk - cache miss with boundary fetch', () => {
+    it('should fall through to boundary fetch when only one cache store has data', async () => {
       const chunkDataStore = createMockChunkDataStore();
       const chunkMetadataStore = createMockChunkMetadataStore();
-      const txOffsetSource = createMockTxOffsetSource();
+      const txBoundarySource = createMockTxBoundarySource();
       const chunkSource = createMockChunkSource();
 
       // Cache miss - only one store returns data
@@ -374,28 +332,28 @@ describe('ChunkRetrievalService', () => {
       const service = new ChunkRetrievalService({
         log,
         chunkSource,
-        txOffsetSource,
+        txBoundarySource,
         chunkDataStore,
         chunkMetadataStore,
       });
 
       const result = await service.retrieveChunk(ABSOLUTE_OFFSET);
 
-      // Should fall through to fallback since metadata is missing
-      assert.equal(result.type, 'fallback');
-      assert.equal((txOffsetSource.getTxByOffset as any).mock.callCount(), 1);
+      // Should fall through to boundary fetch since metadata is missing
+      assert.equal(result.type, 'boundary_fetch');
+      assert.equal((txBoundarySource.getTxBoundary as any).mock.callCount(), 1);
     });
   });
 
   describe('Discriminated union type narrowing', () => {
-    it('should allow type-safe access to txId only on FallbackResult', async () => {
-      const txOffsetSource = createMockTxOffsetSource();
+    it('should allow type-safe access to txId only on BoundaryFetchResult with txId', async () => {
+      const txBoundarySource = createMockTxBoundarySource();
       const chunkSource = createMockChunkSource();
 
       const service = new ChunkRetrievalService({
         log,
         chunkSource,
-        txOffsetSource,
+        txBoundarySource,
       });
 
       const result = await service.retrieveChunk(ABSOLUTE_OFFSET);
@@ -406,22 +364,49 @@ describe('ChunkRetrievalService', () => {
           // TypeScript knows txId doesn't exist here
           assert.equal(result.type, 'cache_hit');
           break;
-        case 'tx_path_validated':
-          // TypeScript knows txId doesn't exist here
-          assert.equal(result.type, 'tx_path_validated');
-          break;
-        case 'fallback':
-          // TypeScript knows txId exists and is string
-          assert.equal(typeof result.txId, 'string');
-          assert.equal(result.txId, TX_ID);
+        case 'boundary_fetch':
+          // TypeScript knows txId may exist
+          if (result.txId !== undefined) {
+            assert.equal(typeof result.txId, 'string');
+            assert.equal(result.txId, TX_ID);
+          }
           break;
       }
 
-      // Type narrowing via type guard
+      // Type narrowing via hasTxId guard
       if (hasTxId(result)) {
-        // TypeScript knows result is FallbackResult
         assert.equal(result.txId, TX_ID);
       }
+    });
+  });
+
+  describe('BoundaryFetchResult without txId', () => {
+    it('should return BoundaryFetchResult without txId when boundary has no id', async () => {
+      const txBoundarySource = createMockTxBoundarySource();
+      const chunkSource = createMockChunkSource();
+
+      // Boundary without txId (e.g., from tx_path validation)
+      (txBoundarySource.getTxBoundary as any).mock.mockImplementation(
+        async (): Promise<TxBoundary> => ({
+          dataRoot: B64_DATA_ROOT,
+          id: undefined,
+          dataSize: TX_SIZE,
+          weaveOffset: WEAVE_OFFSET,
+        }),
+      );
+
+      const service = new ChunkRetrievalService({
+        log,
+        chunkSource,
+        txBoundarySource,
+      });
+
+      const result = await service.retrieveChunk(ABSOLUTE_OFFSET);
+
+      assert.equal(result.type, 'boundary_fetch');
+      assert.equal(hasTxId(result), false);
+      assert.equal(result.dataRoot, B64_DATA_ROOT);
+      assert.equal(result.dataSize, TX_SIZE);
     });
   });
 });

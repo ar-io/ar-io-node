@@ -251,6 +251,31 @@ export interface TxOffsetSource {
   ): Promise<TxOffsetResult>;
 }
 
+/**
+ * Transaction boundary information for a given offset.
+ * Contains the essential data needed to locate and validate a chunk
+ * within a transaction.
+ */
+export interface TxBoundary {
+  /** Transaction ID - may be undefined for tx_path validated results */
+  id?: string;
+  /** Transaction data root (Merkle root of data chunks) */
+  dataRoot: string;
+  /** Total size of transaction data in bytes */
+  dataSize: number;
+  /** Absolute weave offset (end offset of transaction) */
+  weaveOffset: number;
+}
+
+/**
+ * Source for looking up transaction boundaries by absolute offset.
+ * Implementations may use different strategies: database lookup, tx_path
+ * validation, or chain binary search.
+ */
+export interface TxBoundarySource {
+  getTxBoundary(absoluteOffset: bigint): Promise<TxBoundary | null>;
+}
+
 export interface BundleRecord {
   id: string;
   rootTransactionId?: string;
@@ -556,41 +581,21 @@ export interface UnvalidatedChunkSource {
 }
 
 /**
- * Chunk params with all validation parameters provided directly.
- * Use this variant when TX info is already known (e.g., from database).
+ * Parameters for chunk retrieval with validation info.
+ * TX info must be known (e.g., from database or TxBoundarySource).
  */
 export interface ChunkWithValidationParams {
   txSize: number;
   absoluteOffset: number;
   dataRoot: string;
   relativeOffset: number;
-  txOffsetSource?: never;
   requestAttributes?: RequestAttributes;
 }
 
 /**
- * Chunk params with offset source for deriving validation parameters.
- * Use this variant to skip separate getTxByOffset call and derive
- * TX info from tx_path validation instead.
+ * Chunk retrieval parameters - requires validation params.
  */
-export interface ChunkWithOffsetSource {
-  absoluteOffset: number;
-  txOffsetSource: TxOffsetSource;
-  txSize?: never;
-  dataRoot?: never;
-  relativeOffset?: never;
-  requestAttributes?: RequestAttributes;
-}
-
-/**
- * Discriminated union for chunk retrieval parameters.
- *
- * Either provide all validation params directly (ChunkWithValidationParams)
- * or provide an offset source to derive params (ChunkWithOffsetSource).
- */
-export type ChunkDataByAnySourceParams =
-  | ChunkWithValidationParams
-  | ChunkWithOffsetSource;
+export type ChunkDataByAnySourceParams = ChunkWithValidationParams;
 
 export interface ChunkByAnySource {
   getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk>;
