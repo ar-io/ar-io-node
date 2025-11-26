@@ -17,16 +17,19 @@ const LEAF_SIZE = HASH_SIZE + NOTE_SIZE; // 64 bytes
 
 /**
  * Result of parsing a tx_path Merkle proof.
+ *
+ * Note: Offset fields use bigint to avoid precision loss for large weave offsets
+ * that may exceed Number.MAX_SAFE_INTEGER (~9 petabytes).
  */
 export interface ParsedTxPath {
   /** Transaction's data_root extracted from the leaf node */
   dataRoot: Buffer;
   /** Transaction end offset in weave (from leaf) */
-  txEndOffset: number;
+  txEndOffset: bigint;
   /** Transaction start offset (calculated from path traversal) */
-  txStartOffset: number;
+  txStartOffset: bigint;
   /** Transaction size (txEndOffset - txStartOffset) */
-  txSize: number;
+  txSize: bigint;
   /** Position in sorted TX list (for TX ID lookup) */
   txIndex: number;
   /** Whether the path was cryptographically validated against tx_root */
@@ -40,20 +43,54 @@ interface TxPathValidationContext {
   txCount: number;
   leftIndex: number;
   rightIndex: number;
-  leftBound: number; // Absolute weave offset (start of block data)
-  rightBound: number; // Absolute weave offset (end of block data)
+  leftBound: bigint; // Absolute weave offset (start of block data)
+  rightBound: bigint; // Absolute weave offset (end of block data)
 }
 
 /**
- * Convert buffer to integer (big-endian).
- * Same implementation as merkle-path-parser.ts.
+ * Convert buffer to BigInt (big-endian).
+ * Uses BigInt to avoid precision loss for large offsets (> Number.MAX_SAFE_INTEGER).
  */
-function bufferToInt(buffer: Buffer): number {
-  let value = 0;
+function bufferToBigInt(buffer: Buffer): bigint {
+  let value = BigInt(0);
   for (let i = 0; i < buffer.length; i++) {
-    value = value * 256 + buffer[i];
+    value = value * BigInt(256) + BigInt(buffer[i]);
   }
   return value;
+}
+
+/**
+ * BigInt-aware minimum function.
+ */
+function bigIntMin(a: bigint, b: bigint): bigint {
+  return a < b ? a : b;
+}
+
+/**
+ * BigInt-aware maximum function.
+ */
+function bigIntMax(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
+}
+
+/**
+ * Safely convert BigInt to number, throwing if value exceeds safe integer range.
+ *
+ * @param value - The bigint value to convert
+ * @param fieldName - Name of the field (for error messages)
+ * @returns The value as a number
+ * @throws Error if value exceeds Number.MAX_SAFE_INTEGER or Number.MIN_SAFE_INTEGER
+ */
+export function safeBigIntToNumber(value: bigint, fieldName: string): number {
+  if (
+    value > BigInt(Number.MAX_SAFE_INTEGER) ||
+    value < BigInt(Number.MIN_SAFE_INTEGER)
+  ) {
+    throw new Error(
+      `${fieldName} exceeds safe integer range: ${value.toString()}`,
+    );
+  }
+  return Number(value);
 }
 
 /**
@@ -93,14 +130,14 @@ function buffersEqual(a: Buffer, b: Buffer): boolean {
  */
 async function walkTxMerklePath(params: {
   rootHash: Buffer;
-  targetOffset: number;
+  targetOffset: bigint;
   path: Buffer;
   context: TxPathValidationContext;
 }): Promise<ParsedTxPath | null> {
   const { rootHash, targetOffset, path, context } = params;
 
   // Validate inputs
-  if (context.rightBound <= 0) {
+  if (context.rightBound <= BigInt(0)) {
     return null;
   }
 
@@ -133,7 +170,7 @@ async function walkTxMerklePath(params: {
     pathOffset += BRANCH_SIZE;
 
     // Calculate branch hash and validate
-    const branchOffset = bufferToInt(offsetBuffer);
+    const branchOffset = bufferToBigInt(offsetBuffer);
     const calculatedHash = await hash([
       await hash(leftHash),
       await hash(rightHash),
@@ -148,16 +185,16 @@ async function walkTxMerklePath(params: {
     // Calculate midpoint index for TX selection
     const midIndex = Math.floor((leftIndex + rightIndex) / 2);
 
-    // Determine which side contains our target
+    // Determine which side contains our target (BigInt comparison)
     if (targetOffset < branchOffset) {
       // Target is in left subtree
       currentHash = leftHash;
-      currentRightBound = Math.min(currentRightBound, branchOffset);
+      currentRightBound = bigIntMin(currentRightBound, branchOffset);
       rightIndex = midIndex;
     } else {
       // Target is in right subtree
       currentHash = rightHash;
-      currentLeftBound = Math.max(currentLeftBound, branchOffset);
+      currentLeftBound = bigIntMax(currentLeftBound, branchOffset);
       leftIndex = midIndex + 1;
     }
   }
@@ -173,7 +210,7 @@ async function walkTxMerklePath(params: {
     pathOffset + HASH_SIZE,
     pathOffset + LEAF_SIZE,
   );
-  const leafOffset = bufferToInt(leafOffsetBuffer);
+  const leafOffset = bufferToBigInt(leafOffsetBuffer);
 
   // Validate leaf hash
   const expectedLeafHash = await hash([
@@ -214,9 +251,9 @@ async function walkTxMerklePath(params: {
  * @param params - Parsing parameters
  * @param params.txRoot - The block's transaction Merkle root
  * @param params.txPath - The Merkle proof path to parse
- * @param params.targetOffset - The absolute weave offset being requested
- * @param params.blockWeaveSize - Current block's weave_size
- * @param params.prevBlockWeaveSize - Previous block's weave_size (block start)
+ * @param params.targetOffset - The absolute weave offset being requested (bigint for precision)
+ * @param params.blockWeaveSize - Current block's weave_size (bigint for precision)
+ * @param params.prevBlockWeaveSize - Previous block's weave_size (bigint for precision)
  * @param params.txCount - Number of transactions in the block
  *
  * @returns Parsed tx_path with boundaries and TX index, or null on validation failure
@@ -224,9 +261,9 @@ async function walkTxMerklePath(params: {
  * @remarks
  * The returned `ParsedTxPath` contains:
  * - `dataRoot` - Transaction's data merkle root (32 bytes)
- * - `txEndOffset` - Absolute weave offset where transaction data ends
- * - `txStartOffset` - Absolute weave offset where transaction data starts
- * - `txSize` - Size of transaction data in bytes
+ * - `txEndOffset` - Absolute weave offset where transaction data ends (bigint)
+ * - `txStartOffset` - Absolute weave offset where transaction data starts (bigint)
+ * - `txSize` - Size of transaction data in bytes (bigint)
  * - `txIndex` - Index in sorted (by binary ID) transaction list
  * - `validated` - Whether the proof was cryptographically verified
  *
@@ -241,9 +278,9 @@ async function walkTxMerklePath(params: {
  * const parsed = await parseTxPath({
  *   txRoot: block.tx_root,
  *   txPath: chunk.tx_path,
- *   targetOffset: absoluteOffset,
- *   blockWeaveSize: parseInt(block.weave_size),
- *   prevBlockWeaveSize: parseInt(prevBlock.weave_size),
+ *   targetOffset: BigInt(absoluteOffset),
+ *   blockWeaveSize: BigInt(block.weave_size),
+ *   prevBlockWeaveSize: BigInt(prevBlock.weave_size),
  *   txCount: block.txs.length,
  * });
  *
@@ -257,9 +294,9 @@ async function walkTxMerklePath(params: {
 export async function parseTxPath(params: {
   txRoot: Buffer;
   txPath: Buffer;
-  targetOffset: number;
-  blockWeaveSize: number;
-  prevBlockWeaveSize: number;
+  targetOffset: bigint;
+  blockWeaveSize: bigint;
+  prevBlockWeaveSize: bigint;
   txCount: number;
 }): Promise<ParsedTxPath | null> {
   const {
@@ -358,12 +395,12 @@ export function extractDataRootFromTxPath(txPath: Buffer): Buffer {
  * Extract the tx_end_offset from a tx_path leaf node.
  *
  * @param txPath - The tx_path buffer
- * @returns The tx_end_offset as a number
+ * @returns The tx_end_offset as a bigint (for precision with large offsets)
  * @throws Error if txPath is too short
  */
-export function extractTxEndOffsetFromTxPath(txPath: Buffer): number {
+export function extractTxEndOffsetFromTxPath(txPath: Buffer): bigint {
   if (txPath.length < LEAF_SIZE) {
     throw new Error('tx_path too short to contain leaf node');
   }
-  return bufferToInt(txPath.slice(txPath.length - NOTE_SIZE));
+  return bufferToBigInt(txPath.slice(txPath.length - NOTE_SIZE));
 }

@@ -10,19 +10,20 @@ import { describe, it } from 'node:test';
 import crypto from 'node:crypto';
 import {
   parseTxPath,
+  safeBigIntToNumber,
   sortTxIdsByBinary,
   extractDataRootFromTxPath,
   extractTxEndOffsetFromTxPath,
 } from './tx-path-parser.js';
 import { toB64Url } from './encoding.js';
 
-// Helper to convert integer to 32-byte buffer (big-endian)
-function intToBuffer(value: number): Buffer {
+// Helper to convert bigint to 32-byte buffer (big-endian)
+function bigIntToBuffer(value: bigint): Buffer {
   const buffer = Buffer.alloc(32);
   let remaining = value;
-  for (let i = 31; i >= 0 && remaining > 0; i--) {
-    buffer[i] = remaining & 0xff;
-    remaining = remaining >>> 8;
+  for (let i = 31; i >= 0 && remaining > BigInt(0); i--) {
+    buffer[i] = Number(remaining & BigInt(0xff));
+    remaining = remaining >> BigInt(8);
   }
   return buffer;
 }
@@ -43,9 +44,9 @@ async function hash(data: Buffer | Buffer[]): Promise<Buffer> {
 // Create a valid TX leaf node (dataRoot + txEndOffset)
 async function createTxLeafNode(
   dataRoot: Buffer,
-  txEndOffset: number,
+  txEndOffset: bigint,
 ): Promise<{ hash: Buffer; path: Buffer }> {
-  const offsetBuffer = intToBuffer(txEndOffset);
+  const offsetBuffer = bigIntToBuffer(txEndOffset);
   const leafHash = await hash([await hash(dataRoot), await hash(offsetBuffer)]);
   return {
     hash: leafHash,
@@ -57,9 +58,9 @@ async function createTxLeafNode(
 async function createTxBranchNode(
   leftHash: Buffer,
   rightHash: Buffer,
-  boundary: number,
+  boundary: bigint,
 ): Promise<{ hash: Buffer; path: Buffer }> {
-  const boundaryBuffer = intToBuffer(boundary);
+  const boundaryBuffer = bigIntToBuffer(boundary);
   const branchHash = await hash([
     await hash(leftHash),
     await hash(rightHash),
@@ -75,8 +76,8 @@ describe('tx-path-parser', () => {
   describe('parseTxPath', () => {
     it('should parse a single-TX block path (leaf only)', async () => {
       const dataRoot = crypto.randomBytes(32);
-      const prevBlockWeaveSize = 1000000;
-      const blockWeaveSize = 1100000;
+      const prevBlockWeaveSize = BigInt(1000000);
+      const blockWeaveSize = BigInt(1100000);
       const txEndOffset = blockWeaveSize;
 
       const leaf = await createTxLeafNode(dataRoot, txEndOffset);
@@ -84,7 +85,7 @@ describe('tx-path-parser', () => {
       const result = await parseTxPath({
         txRoot: leaf.hash,
         txPath: leaf.path,
-        targetOffset: 1050000, // Within the TX range
+        targetOffset: BigInt(1050000), // Within the TX range
         blockWeaveSize,
         prevBlockWeaveSize,
         txCount: 1,
@@ -103,9 +104,9 @@ describe('tx-path-parser', () => {
       // Create two transactions
       const dataRoot1 = crypto.randomBytes(32);
       const dataRoot2 = crypto.randomBytes(32);
-      const prevBlockWeaveSize = 1000000;
-      const tx1EndOffset = 1050000; // TX 1 ends here
-      const tx2EndOffset = 1100000; // TX 2 ends here
+      const prevBlockWeaveSize = BigInt(1000000);
+      const tx1EndOffset = BigInt(1050000); // TX 1 ends here
+      const tx2EndOffset = BigInt(1100000); // TX 2 ends here
       const blockWeaveSize = tx2EndOffset;
 
       // Build the tree: branch -> [leaf1, leaf2]
@@ -122,7 +123,7 @@ describe('tx-path-parser', () => {
       const result1 = await parseTxPath({
         txRoot: branch.hash,
         txPath: path1,
-        targetOffset: 1025000, // Within TX 1
+        targetOffset: BigInt(1025000), // Within TX 1
         blockWeaveSize,
         prevBlockWeaveSize,
         txCount: 2,
@@ -138,9 +139,9 @@ describe('tx-path-parser', () => {
     it('should track index correctly in two-TX block (right subtree)', async () => {
       const dataRoot1 = crypto.randomBytes(32);
       const dataRoot2 = crypto.randomBytes(32);
-      const prevBlockWeaveSize = 1000000;
-      const tx1EndOffset = 1050000;
-      const tx2EndOffset = 1100000;
+      const prevBlockWeaveSize = BigInt(1000000);
+      const tx1EndOffset = BigInt(1050000);
+      const tx2EndOffset = BigInt(1100000);
       const blockWeaveSize = tx2EndOffset;
 
       const leaf1 = await createTxLeafNode(dataRoot1, tx1EndOffset);
@@ -156,7 +157,7 @@ describe('tx-path-parser', () => {
       const result2 = await parseTxPath({
         txRoot: branch.hash,
         txPath: path2,
-        targetOffset: 1075000, // Within TX 2
+        targetOffset: BigInt(1075000), // Within TX 2
         blockWeaveSize,
         prevBlockWeaveSize,
         txCount: 2,
@@ -177,8 +178,13 @@ describe('tx-path-parser', () => {
         crypto.randomBytes(32),
         crypto.randomBytes(32),
       ];
-      const prevBlockWeaveSize = 1000000;
-      const offsets = [1025000, 1050000, 1075000, 1100000];
+      const prevBlockWeaveSize = BigInt(1000000);
+      const offsets = [
+        BigInt(1025000),
+        BigInt(1050000),
+        BigInt(1075000),
+        BigInt(1100000),
+      ];
       const blockWeaveSize = offsets[3];
 
       // Create leaves
@@ -210,7 +216,7 @@ describe('tx-path-parser', () => {
       const result0 = await parseTxPath({
         txRoot: root.hash,
         txPath: path0,
-        targetOffset: 1010000, // Within TX 0
+        targetOffset: BigInt(1010000), // Within TX 0
         blockWeaveSize,
         prevBlockWeaveSize,
         txCount: 4,
@@ -223,7 +229,7 @@ describe('tx-path-parser', () => {
       const result1 = await parseTxPath({
         txRoot: root.hash,
         txPath: path1,
-        targetOffset: 1035000, // Within TX 1
+        targetOffset: BigInt(1035000), // Within TX 1
         blockWeaveSize,
         prevBlockWeaveSize,
         txCount: 4,
@@ -240,7 +246,7 @@ describe('tx-path-parser', () => {
       const result2 = await parseTxPath({
         txRoot: root.hash,
         txPath: path2,
-        targetOffset: 1060000, // Within TX 2
+        targetOffset: BigInt(1060000), // Within TX 2
         blockWeaveSize,
         prevBlockWeaveSize,
         txCount: 4,
@@ -257,7 +263,7 @@ describe('tx-path-parser', () => {
       const result3 = await parseTxPath({
         txRoot: root.hash,
         txPath: path3,
-        targetOffset: 1090000, // Within TX 3
+        targetOffset: BigInt(1090000), // Within TX 3
         blockWeaveSize,
         prevBlockWeaveSize,
         txCount: 4,
@@ -268,15 +274,15 @@ describe('tx-path-parser', () => {
 
     it('should reject path with invalid hash', async () => {
       const dataRoot = crypto.randomBytes(32);
-      const leaf = await createTxLeafNode(dataRoot, 1100000);
+      const leaf = await createTxLeafNode(dataRoot, BigInt(1100000));
       const wrongRoot = crypto.randomBytes(32); // Wrong tx_root
 
       const result = await parseTxPath({
         txRoot: wrongRoot,
         txPath: leaf.path,
-        targetOffset: 1050000,
-        blockWeaveSize: 1100000,
-        prevBlockWeaveSize: 1000000,
+        targetOffset: BigInt(1050000),
+        blockWeaveSize: BigInt(1100000),
+        prevBlockWeaveSize: BigInt(1000000),
         txCount: 1,
       });
 
@@ -286,9 +292,9 @@ describe('tx-path-parser', () => {
     it('should reject path with tampered branch hash', async () => {
       const dataRoot1 = crypto.randomBytes(32);
       const dataRoot2 = crypto.randomBytes(32);
-      const prevBlockWeaveSize = 1000000;
-      const tx1EndOffset = 1050000;
-      const tx2EndOffset = 1100000;
+      const prevBlockWeaveSize = BigInt(1000000);
+      const tx1EndOffset = BigInt(1050000);
+      const tx2EndOffset = BigInt(1100000);
 
       const leaf1 = await createTxLeafNode(dataRoot1, tx1EndOffset);
       const leaf2 = await createTxLeafNode(dataRoot2, tx2EndOffset);
@@ -305,7 +311,7 @@ describe('tx-path-parser', () => {
       const result = await parseTxPath({
         txRoot: branch.hash,
         txPath: tamperedPath,
-        targetOffset: 1025000,
+        targetOffset: BigInt(1025000),
         blockWeaveSize: tx2EndOffset,
         prevBlockWeaveSize,
         txCount: 2,
@@ -318,9 +324,9 @@ describe('tx-path-parser', () => {
       const result = await parseTxPath({
         txRoot: crypto.randomBytes(32),
         txPath: Buffer.alloc(64),
-        targetOffset: 1050000,
-        blockWeaveSize: 1100000,
-        prevBlockWeaveSize: 1000000,
+        targetOffset: BigInt(1050000),
+        blockWeaveSize: BigInt(1100000),
+        prevBlockWeaveSize: BigInt(1000000),
         txCount: 0, // Empty block
       });
 
@@ -331,9 +337,9 @@ describe('tx-path-parser', () => {
       const result = await parseTxPath({
         txRoot: crypto.randomBytes(32),
         txPath: Buffer.alloc(32), // Too short (minimum is 64)
-        targetOffset: 1050000,
-        blockWeaveSize: 1100000,
-        prevBlockWeaveSize: 1000000,
+        targetOffset: BigInt(1050000),
+        blockWeaveSize: BigInt(1100000),
+        prevBlockWeaveSize: BigInt(1000000),
         txCount: 1,
       });
 
@@ -344,13 +350,40 @@ describe('tx-path-parser', () => {
       const result = await parseTxPath({
         txRoot: crypto.randomBytes(32),
         txPath: Buffer.alloc(100), // Not aligned (not 64 + n*96)
-        targetOffset: 1050000,
-        blockWeaveSize: 1100000,
-        prevBlockWeaveSize: 1000000,
+        targetOffset: BigInt(1050000),
+        blockWeaveSize: BigInt(1100000),
+        prevBlockWeaveSize: BigInt(1000000),
         txCount: 1,
       });
 
       assert.equal(result, null, 'Should return null for misaligned path');
+    });
+
+    it('should handle large offsets exceeding Number.MAX_SAFE_INTEGER', async () => {
+      const dataRoot = crypto.randomBytes(32);
+      // Use an offset larger than Number.MAX_SAFE_INTEGER (2^53 - 1)
+      const largeOffset = BigInt('10000000000000000000'); // ~10 exabytes
+      const prevBlockWeaveSize = largeOffset - BigInt(100000);
+      const blockWeaveSize = largeOffset;
+
+      const leaf = await createTxLeafNode(dataRoot, largeOffset);
+
+      const result = await parseTxPath({
+        txRoot: leaf.hash,
+        txPath: leaf.path,
+        targetOffset: largeOffset - BigInt(50000), // Within the TX range
+        blockWeaveSize,
+        prevBlockWeaveSize,
+        txCount: 1,
+      });
+
+      assert(result !== null, 'Result should not be null for large offsets');
+      assert.equal(result.validated, true);
+      assert.equal(result.txIndex, 0);
+      assert.equal(result.txEndOffset, largeOffset);
+      assert.equal(result.txStartOffset, prevBlockWeaveSize);
+      assert.equal(result.txSize, largeOffset - prevBlockWeaveSize);
+      assert(result.dataRoot.equals(dataRoot));
     });
   });
 
@@ -400,7 +433,7 @@ describe('tx-path-parser', () => {
   describe('extractDataRootFromTxPath', () => {
     it('should extract dataRoot from valid path', async () => {
       const dataRoot = crypto.randomBytes(32);
-      const leaf = await createTxLeafNode(dataRoot, 1000000);
+      const leaf = await createTxLeafNode(dataRoot, BigInt(1000000));
 
       const extracted = extractDataRootFromTxPath(leaf.path);
       assert(extracted.equals(dataRoot), 'Extracted dataRoot should match');
@@ -408,11 +441,11 @@ describe('tx-path-parser', () => {
 
     it('should extract dataRoot from path with branches', async () => {
       const dataRoot = crypto.randomBytes(32);
-      const leaf = await createTxLeafNode(dataRoot, 1000000);
+      const leaf = await createTxLeafNode(dataRoot, BigInt(1000000));
       const branch = await createTxBranchNode(
         leaf.hash,
         crypto.randomBytes(32),
-        500000,
+        BigInt(500000),
       );
       const fullPath = Buffer.concat([branch.path, leaf.path]);
 
@@ -431,7 +464,16 @@ describe('tx-path-parser', () => {
   describe('extractTxEndOffsetFromTxPath', () => {
     it('should extract txEndOffset from valid path', async () => {
       const dataRoot = crypto.randomBytes(32);
-      const txEndOffset = 12345678;
+      const txEndOffset = BigInt(12345678);
+      const leaf = await createTxLeafNode(dataRoot, txEndOffset);
+
+      const extracted = extractTxEndOffsetFromTxPath(leaf.path);
+      assert.equal(extracted, txEndOffset);
+    });
+
+    it('should extract large txEndOffset exceeding Number.MAX_SAFE_INTEGER', async () => {
+      const dataRoot = crypto.randomBytes(32);
+      const txEndOffset = BigInt('10000000000000000000'); // ~10 exabytes
       const leaf = await createTxLeafNode(dataRoot, txEndOffset);
 
       const extracted = extractTxEndOffsetFromTxPath(leaf.path);
@@ -442,6 +484,29 @@ describe('tx-path-parser', () => {
       assert.throws(
         () => extractTxEndOffsetFromTxPath(Buffer.alloc(32)),
         /too short/,
+      );
+    });
+  });
+
+  describe('safeBigIntToNumber', () => {
+    it('should convert small bigint to number', () => {
+      const result = safeBigIntToNumber(BigInt(12345), 'test');
+      assert.equal(result, 12345);
+    });
+
+    it('should convert Number.MAX_SAFE_INTEGER to number', () => {
+      const result = safeBigIntToNumber(
+        BigInt(Number.MAX_SAFE_INTEGER),
+        'test',
+      );
+      assert.equal(result, Number.MAX_SAFE_INTEGER);
+    });
+
+    it('should throw for value exceeding Number.MAX_SAFE_INTEGER', () => {
+      const largeValue = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1);
+      assert.throws(
+        () => safeBigIntToNumber(largeValue, 'testField'),
+        /testField exceeds safe integer range/,
       );
     });
   });

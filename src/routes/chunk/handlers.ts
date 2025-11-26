@@ -37,7 +37,7 @@ import {
 } from '../../handlers/data-handler-utils.js';
 import { handleIfNoneMatch, parseContentLength } from '../../lib/http-utils.js';
 import { parseDataPath } from '../../lib/merkle-path-parser.js';
-import { parseTxPath } from '../../lib/tx-path-parser.js';
+import { parseTxPath, safeBigIntToNumber } from '../../lib/tx-path-parser.js';
 import { validateChunk } from '../../lib/validation.js';
 
 export const createChunkOffsetHandler = ({
@@ -257,23 +257,36 @@ export const createChunkOffsetHandler = ({
                 const parsedTxPath = await parseTxPath({
                   txRoot,
                   txPath: unvalidatedChunk.tx_path,
-                  targetOffset: offset,
-                  blockWeaveSize,
-                  prevBlockWeaveSize,
+                  targetOffset: BigInt(offset),
+                  blockWeaveSize: BigInt(blockWeaveSize),
+                  prevBlockWeaveSize: BigInt(prevBlockWeaveSize),
                   txCount: blockTxs.length,
                 });
 
                 if (parsedTxPath && parsedTxPath.validated) {
+                  // Convert BigInt values to numbers for API compatibility
+                  // (throws if exceeds Number.MAX_SAFE_INTEGER)
+                  const txSizeFromTxPath = safeBigIntToNumber(
+                    parsedTxPath.txSize,
+                    'txSize',
+                  );
+                  const txStartOffsetFromTxPath = safeBigIntToNumber(
+                    parsedTxPath.txStartOffset,
+                    'txStartOffset',
+                  );
+                  const txEndOffsetFromTxPath = safeBigIntToNumber(
+                    parsedTxPath.txEndOffset,
+                    'txEndOffset',
+                  );
+
                   span.addEvent('tx_path validation successful', {
-                    tx_size: parsedTxPath.txSize,
-                    tx_start_offset: parsedTxPath.txStartOffset,
-                    tx_end_offset: parsedTxPath.txEndOffset,
+                    tx_size: txSizeFromTxPath,
+                    tx_start_offset: txStartOffsetFromTxPath,
+                    tx_end_offset: txEndOffsetFromTxPath,
                   });
 
                   // Extract TX info from validated tx_path
                   const dataRootFromTxPath = parsedTxPath.dataRoot;
-                  const txSizeFromTxPath = parsedTxPath.txSize;
-                  const txStartOffsetFromTxPath = parsedTxPath.txStartOffset;
                   const relativeOffsetFromTxPath =
                     offset - txStartOffsetFromTxPath;
 
@@ -323,7 +336,7 @@ export const createChunkOffsetHandler = ({
                   finalDataSize = txSizeFromTxPath;
                   relativeOffset = relativeOffsetFromTxPath;
                   contiguousDataStartDelimiter = txStartOffsetFromTxPath;
-                  finalWeaveOffset = parsedTxPath.txEndOffset;
+                  finalWeaveOffset = txEndOffsetFromTxPath;
 
                   // Construct validated Chunk
                   chunk = {
@@ -875,23 +888,36 @@ export const createChunkOffsetDataHandler = ({
                 const parsedTxPath = await parseTxPath({
                   txRoot,
                   txPath: unvalidatedChunk.tx_path,
-                  targetOffset: offset,
-                  blockWeaveSize,
-                  prevBlockWeaveSize,
+                  targetOffset: BigInt(offset),
+                  blockWeaveSize: BigInt(blockWeaveSize),
+                  prevBlockWeaveSize: BigInt(prevBlockWeaveSize),
                   txCount: blockTxs.length,
                 });
 
                 if (parsedTxPath && parsedTxPath.validated) {
+                  // Convert BigInt values to numbers for API compatibility
+                  // (throws if exceeds Number.MAX_SAFE_INTEGER)
+                  const txSizeFromTxPath = safeBigIntToNumber(
+                    parsedTxPath.txSize,
+                    'txSize',
+                  );
+                  const txStartOffsetFromTxPath = safeBigIntToNumber(
+                    parsedTxPath.txStartOffset,
+                    'txStartOffset',
+                  );
+                  const txEndOffsetFromTxPath = safeBigIntToNumber(
+                    parsedTxPath.txEndOffset,
+                    'txEndOffset',
+                  );
+
                   span.addEvent('tx_path validation successful', {
-                    tx_size: parsedTxPath.txSize,
-                    tx_start_offset: parsedTxPath.txStartOffset,
-                    tx_end_offset: parsedTxPath.txEndOffset,
+                    tx_size: txSizeFromTxPath,
+                    tx_start_offset: txStartOffsetFromTxPath,
+                    tx_end_offset: txEndOffsetFromTxPath,
                   });
 
                   // Extract TX info from validated tx_path
                   const dataRootFromTxPath = parsedTxPath.dataRoot;
-                  const txSizeFromTxPath = parsedTxPath.txSize;
-                  const txStartOffsetFromTxPath = parsedTxPath.txStartOffset;
                   const relativeOffsetFromTxPath =
                     offset - txStartOffsetFromTxPath;
 
@@ -941,7 +967,7 @@ export const createChunkOffsetDataHandler = ({
                   finalDataSize = txSizeFromTxPath;
                   relativeOffset = relativeOffsetFromTxPath;
                   contiguousDataStartDelimiter = txStartOffsetFromTxPath;
-                  finalWeaveOffset = parsedTxPath.txEndOffset;
+                  finalWeaveOffset = txEndOffsetFromTxPath;
 
                   // Construct validated Chunk
                   chunk = {
