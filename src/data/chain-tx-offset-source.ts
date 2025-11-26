@@ -8,12 +8,8 @@ import winston from 'winston';
 
 import { TxOffsetSource, TxOffsetResult, TxPathContext } from '../types.js';
 import { ArweaveCompositeClient } from '../arweave/composite-client.js';
-import {
-  parseTxPath,
-  safeBigIntToNumber,
-  sortTxIdsByBinary,
-} from '../lib/tx-path-parser.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { parseTxPath, safeBigIntToNumber } from '../lib/tx-path-parser.js';
+import { toB64Url } from '../lib/encoding.js';
 
 /**
  * Chain-backed transaction offset source.
@@ -45,65 +41,40 @@ export class ChainTxOffsetSource implements TxOffsetSource {
       log.debug('Attempting tx_path fast path');
 
       try {
-        const parsed = await parseTxPath({
+        const { result: parsed, rejectionReason } = await parseTxPath({
           txRoot: txPathContext.txRoot,
           txPath: txPathContext.txPath,
           targetOffset: BigInt(offset),
           blockWeaveSize: BigInt(txPathContext.blockWeaveSize),
           prevBlockWeaveSize: BigInt(txPathContext.prevBlockWeaveSize),
-          txCount: txPathContext.blockTxs.length,
         });
 
-        if (parsed) {
-          // Sort block TXs by binary ID and look up TX ID by index
-          const sortedTxIds = sortTxIdsByBinary(txPathContext.blockTxs);
-          const txId = sortedTxIds[parsed.txIndex];
+        if (parsed !== null) {
+          // tx_path validated successfully - we have the dataRoot and boundaries
+          // Skip TX ID lookup since it requires iterating through all block TXs.
+          // The dataRoot is sufficient for chunk validation.
+          const txEndOffset = safeBigIntToNumber(
+            parsed.txEndOffset,
+            'txEndOffset',
+          );
+          const txSize = safeBigIntToNumber(parsed.txSize, 'txSize');
 
-          if (txId) {
-            // Fetch TX to validate dataRoot matches and get data_size
-            const tx = await this.arweaveClient.getTx({ txId });
+          log.debug('tx_path fast path successful', {
+            dataRoot: toB64Url(parsed.dataRoot),
+            txOffset: txEndOffset,
+            txSize,
+          });
 
-            if (tx?.data_root && tx?.data_size) {
-              // Validate dataRoot matches (catches format-1/format-2 mixed blocks)
-              const fetchedDataRoot = fromB64Url(tx.data_root);
-              if (fetchedDataRoot.equals(parsed.dataRoot)) {
-                // Convert BigInt to number for API compatibility
-                // (throws if exceeds Number.MAX_SAFE_INTEGER)
-                const txEndOffset = safeBigIntToNumber(
-                  parsed.txEndOffset,
-                  'txEndOffset',
-                );
-
-                log.debug('tx_path fast path successful', {
-                  txId,
-                  txIndex: parsed.txIndex,
-                  txOffset: txEndOffset,
-                });
-
-                return {
-                  data_root: tx.data_root,
-                  id: txId,
-                  offset: txEndOffset,
-                  data_size: parseInt(tx.data_size),
-                };
-              } else {
-                log.warn('tx_path fast path failed: dataRoot mismatch', {
-                  txId,
-                  expectedDataRoot: toB64Url(parsed.dataRoot),
-                  actualDataRoot: tx.data_root,
-                });
-              }
-            } else {
-              log.debug('tx_path fast path failed: invalid TX data', { txId });
-            }
-          } else {
-            log.debug('tx_path fast path failed: TX index out of bounds', {
-              txIndex: parsed.txIndex,
-              txCount: txPathContext.blockTxs.length,
-            });
-          }
+          return {
+            data_root: toB64Url(parsed.dataRoot),
+            id: undefined, // TX ID not available from tx_path alone
+            offset: txEndOffset,
+            data_size: txSize,
+          };
         } else {
-          log.debug('tx_path fast path failed: tx_path validation failed');
+          log.debug('tx_path fast path failed: tx_path validation failed', {
+            rejectionReason,
+          });
         }
       } catch (error: any) {
         log.debug('tx_path fast path error', { error: error.message });

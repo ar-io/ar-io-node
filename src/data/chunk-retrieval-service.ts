@@ -376,16 +376,36 @@ export class ChunkRetrievalService {
       });
 
       // Step 3: Parse and validate tx_path against block's tx_root
-      const parsedTxPath = await parseTxPath({
+      this.log.debug('Attempting tx_path parse', {
+        absoluteOffset,
+        blockWeaveSize,
+        prevBlockWeaveSize,
+        txCount: blockTxs.length,
+        txPathLength: unvalidatedChunk.tx_path.length,
+        txRootB64: toB64Url(txRoot),
+      });
+
+      const { result: parsedTxPath, rejectionReason } = await parseTxPath({
         txRoot,
         txPath: unvalidatedChunk.tx_path,
         targetOffset: BigInt(absoluteOffset),
         blockWeaveSize: BigInt(blockWeaveSize),
         prevBlockWeaveSize: BigInt(prevBlockWeaveSize),
-        txCount: blockTxs.length,
       });
 
-      if (!parsedTxPath || !parsedTxPath.validated) {
+      if (parsedTxPath === null || !parsedTxPath.validated) {
+        this.log.debug('tx_path validation failed', {
+          absoluteOffset,
+          rejectionReason,
+          parsedTxPath: parsedTxPath
+            ? {
+                validated: parsedTxPath.validated,
+                txEndOffset: parsedTxPath.txEndOffset.toString(),
+                txStartOffset: parsedTxPath.txStartOffset.toString(),
+                txSize: parsedTxPath.txSize.toString(),
+              }
+            : null,
+        });
         span.addEvent('tx_path validation failed');
         return null;
       }
@@ -409,7 +429,19 @@ export class ChunkRetrievalService {
 
       // Extract TX info from validated tx_path
       const dataRootFromTxPath = parsedTxPath.dataRoot;
-      const relativeOffset = absoluteOffset - txStartOffset;
+      // txStartOffset is exclusive lower bound; TX data starts at txStartOffset+1
+      const relativeOffset = absoluteOffset - txStartOffset - 1;
+
+      this.log.debug('tx_path parsed successfully, validating data_path', {
+        absoluteOffset,
+        txStartOffset,
+        txEndOffset,
+        txSize,
+        relativeOffset,
+        dataRootFromTxPath: toB64Url(dataRootFromTxPath),
+        dataPathLength: unvalidatedChunk.data_path.length,
+        chunkSize: unvalidatedChunk.chunk.length,
+      });
 
       // Step 4: Validate data_path against dataRoot
       await validateChunk(

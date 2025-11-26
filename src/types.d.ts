@@ -238,8 +238,6 @@ export interface TxPathContext {
   txPath: Buffer;
   /** The block's transaction Merkle root */
   txRoot: Buffer;
-  /** Array of transaction IDs in the block (unsorted) */
-  blockTxs: string[];
   /** Current block's weave_size (absolute end offset) */
   blockWeaveSize: number;
   /** Previous block's weave_size (absolute start offset) */

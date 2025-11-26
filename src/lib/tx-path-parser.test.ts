@@ -79,21 +79,22 @@ describe('tx-path-parser', () => {
       const prevBlockWeaveSize = BigInt(1000000);
       const blockWeaveSize = BigInt(1100000);
       const txEndOffset = blockWeaveSize;
+      // tx_path stores RELATIVE offsets within the block
+      const relativeEndOffset = txEndOffset - prevBlockWeaveSize;
 
-      const leaf = await createTxLeafNode(dataRoot, txEndOffset);
+      const leaf = await createTxLeafNode(dataRoot, relativeEndOffset);
 
-      const result = await parseTxPath({
+      const { result } = await parseTxPath({
         txRoot: leaf.hash,
         txPath: leaf.path,
-        targetOffset: BigInt(1050000), // Within the TX range
+        targetOffset: BigInt(1050000), // Absolute weave offset within TX range
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 1,
       });
 
       assert(result !== null, 'Result should not be null');
       assert.equal(result.validated, true);
-      assert.equal(result.txIndex, 0);
+      // Result txEndOffset is converted back to absolute
       assert.equal(result.txEndOffset, txEndOffset);
       assert.equal(result.txStartOffset, prevBlockWeaveSize);
       assert.equal(result.txSize, txEndOffset - prevBlockWeaveSize);
@@ -105,32 +106,35 @@ describe('tx-path-parser', () => {
       const dataRoot1 = crypto.randomBytes(32);
       const dataRoot2 = crypto.randomBytes(32);
       const prevBlockWeaveSize = BigInt(1000000);
-      const tx1EndOffset = BigInt(1050000); // TX 1 ends here
-      const tx2EndOffset = BigInt(1100000); // TX 2 ends here
+      const tx1EndOffset = BigInt(1050000); // TX 1 ends here (absolute)
+      const tx2EndOffset = BigInt(1100000); // TX 2 ends here (absolute)
       const blockWeaveSize = tx2EndOffset;
 
+      // tx_path stores RELATIVE offsets within the block
+      const relativeTx1EndOffset = tx1EndOffset - prevBlockWeaveSize;
+      const relativeTx2EndOffset = tx2EndOffset - prevBlockWeaveSize;
+
       // Build the tree: branch -> [leaf1, leaf2]
-      const leaf1 = await createTxLeafNode(dataRoot1, tx1EndOffset);
-      const leaf2 = await createTxLeafNode(dataRoot2, tx2EndOffset);
+      const leaf1 = await createTxLeafNode(dataRoot1, relativeTx1EndOffset);
+      const leaf2 = await createTxLeafNode(dataRoot2, relativeTx2EndOffset);
       const branch = await createTxBranchNode(
         leaf1.hash,
         leaf2.hash,
-        tx1EndOffset, // Boundary at TX 1's end offset
+        relativeTx1EndOffset, // Boundary at TX 1's end offset (relative)
       );
 
       // Path for TX 1 (left subtree): branch + leaf1
       const path1 = Buffer.concat([branch.path, leaf1.path]);
-      const result1 = await parseTxPath({
+      const { result: result1 } = await parseTxPath({
         txRoot: branch.hash,
         txPath: path1,
-        targetOffset: BigInt(1025000), // Within TX 1
+        targetOffset: BigInt(1025000), // Within TX 1 (absolute)
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 2,
       });
 
       assert(result1 !== null, 'Result1 should not be null');
-      assert.equal(result1.txIndex, 0, 'TX 1 should have index 0');
+      // Results are converted back to absolute offsets
       assert.equal(result1.txEndOffset, tx1EndOffset);
       assert.equal(result1.txStartOffset, prevBlockWeaveSize);
       assert(result1.dataRoot.equals(dataRoot1));
@@ -140,31 +144,34 @@ describe('tx-path-parser', () => {
       const dataRoot1 = crypto.randomBytes(32);
       const dataRoot2 = crypto.randomBytes(32);
       const prevBlockWeaveSize = BigInt(1000000);
-      const tx1EndOffset = BigInt(1050000);
-      const tx2EndOffset = BigInt(1100000);
+      const tx1EndOffset = BigInt(1050000); // Absolute
+      const tx2EndOffset = BigInt(1100000); // Absolute
       const blockWeaveSize = tx2EndOffset;
 
-      const leaf1 = await createTxLeafNode(dataRoot1, tx1EndOffset);
-      const leaf2 = await createTxLeafNode(dataRoot2, tx2EndOffset);
+      // tx_path stores RELATIVE offsets within the block
+      const relativeTx1EndOffset = tx1EndOffset - prevBlockWeaveSize;
+      const relativeTx2EndOffset = tx2EndOffset - prevBlockWeaveSize;
+
+      const leaf1 = await createTxLeafNode(dataRoot1, relativeTx1EndOffset);
+      const leaf2 = await createTxLeafNode(dataRoot2, relativeTx2EndOffset);
       const branch = await createTxBranchNode(
         leaf1.hash,
         leaf2.hash,
-        tx1EndOffset,
+        relativeTx1EndOffset, // Relative boundary
       );
 
       // Path for TX 2 (right subtree): branch + leaf2
       const path2 = Buffer.concat([branch.path, leaf2.path]);
-      const result2 = await parseTxPath({
+      const { result: result2 } = await parseTxPath({
         txRoot: branch.hash,
         txPath: path2,
-        targetOffset: BigInt(1075000), // Within TX 2
+        targetOffset: BigInt(1075000), // Within TX 2 (absolute)
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 2,
       });
 
       assert(result2 !== null, 'Result2 should not be null');
-      assert.equal(result2.txIndex, 1, 'TX 2 should have index 1');
+      // Results are converted back to absolute offsets
       assert.equal(result2.txEndOffset, tx2EndOffset);
       assert.equal(result2.txStartOffset, tx1EndOffset);
       assert(result2.dataRoot.equals(dataRoot2));
@@ -179,63 +186,65 @@ describe('tx-path-parser', () => {
         crypto.randomBytes(32),
       ];
       const prevBlockWeaveSize = BigInt(1000000);
-      const offsets = [
+      // Absolute offsets for each TX's end
+      const absoluteOffsets = [
         BigInt(1025000),
         BigInt(1050000),
         BigInt(1075000),
         BigInt(1100000),
       ];
-      const blockWeaveSize = offsets[3];
+      const blockWeaveSize = absoluteOffsets[3];
 
-      // Create leaves
+      // tx_path stores RELATIVE offsets within the block
+      const relativeOffsets = absoluteOffsets.map(
+        (o) => o - prevBlockWeaveSize,
+      );
+
+      // Create leaves with relative offsets
       const leaves = await Promise.all(
-        dataRoots.map((dr, i) => createTxLeafNode(dr, offsets[i])),
+        dataRoots.map((dr, i) => createTxLeafNode(dr, relativeOffsets[i])),
       );
 
       // Create level 1 branches (left: tx0+tx1, right: tx2+tx3)
       const leftBranch = await createTxBranchNode(
         leaves[0].hash,
         leaves[1].hash,
-        offsets[0], // Boundary between tx0 and tx1
+        relativeOffsets[0], // Boundary between tx0 and tx1 (relative)
       );
       const rightBranch = await createTxBranchNode(
         leaves[2].hash,
         leaves[3].hash,
-        offsets[2], // Boundary between tx2 and tx3
+        relativeOffsets[2], // Boundary between tx2 and tx3 (relative)
       );
 
       // Create root branch
       const root = await createTxBranchNode(
         leftBranch.hash,
         rightBranch.hash,
-        offsets[1], // Boundary between left and right subtrees
+        relativeOffsets[1], // Boundary between left and right subtrees (relative)
       );
 
       // Test TX 0 (leftmost)
       const path0 = Buffer.concat([root.path, leftBranch.path, leaves[0].path]);
-      const result0 = await parseTxPath({
+      const { result: result0 } = await parseTxPath({
         txRoot: root.hash,
         txPath: path0,
-        targetOffset: BigInt(1010000), // Within TX 0
+        targetOffset: BigInt(1010000), // Within TX 0 (absolute)
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 4,
       });
       assert(result0 !== null);
-      assert.equal(result0.txIndex, 0);
 
       // Test TX 1
       const path1 = Buffer.concat([root.path, leftBranch.path, leaves[1].path]);
-      const result1 = await parseTxPath({
+      const { result: result1 } = await parseTxPath({
         txRoot: root.hash,
         txPath: path1,
-        targetOffset: BigInt(1035000), // Within TX 1
+        targetOffset: BigInt(1035000), // Within TX 1 (absolute)
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 4,
       });
       assert(result1 !== null);
-      assert.equal(result1.txIndex, 1);
 
       // Test TX 2
       const path2 = Buffer.concat([
@@ -243,16 +252,14 @@ describe('tx-path-parser', () => {
         rightBranch.path,
         leaves[2].path,
       ]);
-      const result2 = await parseTxPath({
+      const { result: result2 } = await parseTxPath({
         txRoot: root.hash,
         txPath: path2,
-        targetOffset: BigInt(1060000), // Within TX 2
+        targetOffset: BigInt(1060000), // Within TX 2 (absolute)
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 4,
       });
       assert(result2 !== null);
-      assert.equal(result2.txIndex, 2);
 
       // Test TX 3 (rightmost)
       const path3 = Buffer.concat([
@@ -260,16 +267,14 @@ describe('tx-path-parser', () => {
         rightBranch.path,
         leaves[3].path,
       ]);
-      const result3 = await parseTxPath({
+      const { result: result3 } = await parseTxPath({
         txRoot: root.hash,
         txPath: path3,
-        targetOffset: BigInt(1090000), // Within TX 3
+        targetOffset: BigInt(1090000), // Within TX 3 (absolute)
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 4,
       });
       assert(result3 !== null);
-      assert.equal(result3.txIndex, 3);
     });
 
     it('should reject path with invalid hash', async () => {
@@ -277,13 +282,12 @@ describe('tx-path-parser', () => {
       const leaf = await createTxLeafNode(dataRoot, BigInt(1100000));
       const wrongRoot = crypto.randomBytes(32); // Wrong tx_root
 
-      const result = await parseTxPath({
+      const { result } = await parseTxPath({
         txRoot: wrongRoot,
         txPath: leaf.path,
         targetOffset: BigInt(1050000),
         blockWeaveSize: BigInt(1100000),
         prevBlockWeaveSize: BigInt(1000000),
-        txCount: 1,
       });
 
       assert.equal(result, null, 'Should return null for invalid hash');
@@ -308,52 +312,36 @@ describe('tx-path-parser', () => {
       const tamperedPath = Buffer.concat([branch.path, leaf1.path]);
       tamperedPath[0] ^= 0xff;
 
-      const result = await parseTxPath({
+      const { result } = await parseTxPath({
         txRoot: branch.hash,
         txPath: tamperedPath,
         targetOffset: BigInt(1025000),
         blockWeaveSize: tx2EndOffset,
         prevBlockWeaveSize,
-        txCount: 2,
       });
 
       assert.equal(result, null, 'Should return null for tampered path');
     });
 
-    it('should return null for empty block', async () => {
-      const result = await parseTxPath({
-        txRoot: crypto.randomBytes(32),
-        txPath: Buffer.alloc(64),
-        targetOffset: BigInt(1050000),
-        blockWeaveSize: BigInt(1100000),
-        prevBlockWeaveSize: BigInt(1000000),
-        txCount: 0, // Empty block
-      });
-
-      assert.equal(result, null, 'Should return null for empty block');
-    });
-
     it('should return null for path shorter than minimum', async () => {
-      const result = await parseTxPath({
+      const { result } = await parseTxPath({
         txRoot: crypto.randomBytes(32),
         txPath: Buffer.alloc(32), // Too short (minimum is 64)
         targetOffset: BigInt(1050000),
         blockWeaveSize: BigInt(1100000),
         prevBlockWeaveSize: BigInt(1000000),
-        txCount: 1,
       });
 
       assert.equal(result, null, 'Should return null for short path');
     });
 
     it('should return null for misaligned path', async () => {
-      const result = await parseTxPath({
+      const { result } = await parseTxPath({
         txRoot: crypto.randomBytes(32),
         txPath: Buffer.alloc(100), // Not aligned (not 64 + n*96)
         targetOffset: BigInt(1050000),
         blockWeaveSize: BigInt(1100000),
         prevBlockWeaveSize: BigInt(1000000),
-        txCount: 1,
       });
 
       assert.equal(result, null, 'Should return null for misaligned path');
@@ -362,28 +350,88 @@ describe('tx-path-parser', () => {
     it('should handle large offsets exceeding Number.MAX_SAFE_INTEGER', async () => {
       const dataRoot = crypto.randomBytes(32);
       // Use an offset larger than Number.MAX_SAFE_INTEGER (2^53 - 1)
-      const largeOffset = BigInt('10000000000000000000'); // ~10 exabytes
+      const largeOffset = BigInt('10000000000000000000'); // ~10 exabytes (absolute)
       const prevBlockWeaveSize = largeOffset - BigInt(100000);
       const blockWeaveSize = largeOffset;
 
-      const leaf = await createTxLeafNode(dataRoot, largeOffset);
+      // tx_path stores RELATIVE offsets within the block
+      const relativeEndOffset = largeOffset - prevBlockWeaveSize;
+      const leaf = await createTxLeafNode(dataRoot, relativeEndOffset);
 
-      const result = await parseTxPath({
+      const { result } = await parseTxPath({
         txRoot: leaf.hash,
         txPath: leaf.path,
-        targetOffset: largeOffset - BigInt(50000), // Within the TX range
+        targetOffset: largeOffset - BigInt(50000), // Within the TX range (absolute)
         blockWeaveSize,
         prevBlockWeaveSize,
-        txCount: 1,
       });
 
       assert(result !== null, 'Result should not be null for large offsets');
       assert.equal(result.validated, true);
-      assert.equal(result.txIndex, 0);
+      // Results are converted back to absolute offsets
       assert.equal(result.txEndOffset, largeOffset);
       assert.equal(result.txStartOffset, prevBlockWeaveSize);
       assert.equal(result.txSize, largeOffset - prevBlockWeaveSize);
       assert(result.dataRoot.equals(dataRoot));
+    });
+
+    it('should parse real tx_path from arweave.net chunk at offset 345449412246841', async () => {
+      // Real data from arweave.net for chunk at offset 345449412246841
+      // Block 1700011 contains this transaction
+      const txPathB64 =
+        'sTUh0vO-WLCLcQBmJkiSaNN-MCr9MSudPr7rhTQ-hzuIIWuarkgoxV4-ZG7MzmUie_vPGyxodraOp6to0dH9NgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATgAxCjY5HaedJPJPmvGXXHnWwRIq2BosulRQvXHHeIiMBR5r2wV8qJ_S2-5b_p6hCiFW8W3UfISIaW4TMCO-XM5m4kQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYjJxDxTVQX0-XYx0t0NmC_tJRl6eF2lq1SCHIGcS8w1Ck9tWmpN30eCOs-iDpR91EbW0lrv3eH8KWdmSjRa3d5df7PwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAThTrsCmpaQ1sosO568-yWsS3gACQQ5TwiH__4tZ7A6CErLzsj6S5_HEi62u3PYqFDUJrS9mDRHGsfD9jIV6rp_2vazgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiAAAym3Ru53ltXtgk-N00MCQ1NR84NkafeheORYNYg58dLYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGIycQw';
+
+      const txRootB64 = '7ROH2BJvqVL8exgIBxpVD7YCoAE8DhjFaWHttze-Gyg';
+
+      // Block 1700011 info:
+      // - weave_size: 345449412468982
+      // - Previous block (1700010) weave_size: 345449000378614
+      // - txs count: 35
+      const blockWeaveSize = BigInt('345449412468982');
+      const prevBlockWeaveSize = BigInt('345449000378614');
+      const targetOffset = BigInt('345449412246841');
+
+      const txPath = Buffer.from(txPathB64, 'base64url');
+      const txRoot = Buffer.from(txRootB64, 'base64url');
+
+      const { result, rejectionReason, branchCount } = await parseTxPath({
+        txRoot,
+        txPath,
+        targetOffset,
+        blockWeaveSize,
+        prevBlockWeaveSize,
+      });
+
+      // Debug info if it fails
+      if (result === null) {
+        console.log('Rejection reason:', rejectionReason);
+        console.log('Branch count:', branchCount);
+        console.log('txPath length:', txPath.length);
+      }
+
+      assert(
+        result !== null,
+        `Result should not be null. Rejection reason: ${rejectionReason}`,
+      );
+      assert.equal(result.validated, true);
+
+      // The dataRoot from the tx_path should be:
+      // ym3Ru53ltXtgk-N00MCQ1NR84NkafeheORYNYg58dLY (from the chunk response)
+      const expectedDataRoot = Buffer.from(
+        'ym3Ru53ltXtgk-N00MCQ1NR84NkafeheORYNYg58dLY',
+        'base64url',
+      );
+      assert(
+        result.dataRoot.equals(expectedDataRoot),
+        'dataRoot should match expected',
+      );
+
+      // The txEndOffset from the leaf is the TX's end offset (relative 411868227 + prevBlockWeaveSize)
+      assert.equal(
+        result.txEndOffset,
+        BigInt('345449412246841'),
+        'txEndOffset should match',
+      );
     });
   });
 
