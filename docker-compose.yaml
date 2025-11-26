@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-f7c5fd8f3ad894e7a9e12162941a252b129c04b1}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-4755fa0a2deb258bfaeaa91ba3154f1f7ef41fda}
     build:
       context: envoy/
     restart: unless-stopped
@@ -23,6 +23,7 @@ services:
       - TVAL_DATASETS_HOST=${DATASETS_PROXY_HOST:-core}
       - TVAL_DATASETS_PORT=${DATASETS_PROXY_PORT:-4000}
       - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
+      - TVAL_ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
     networks:
       - ar-io-network
     depends_on:
@@ -30,7 +31,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-2ea9703941aedc28cc15ee8e753764fecfce3a7a}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-4fc4c14ec6ef220298cfaad313f9448c286feec3}
     build:
       context: .
     restart: unless-stopped
@@ -58,6 +59,7 @@ services:
       - TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS=${TRUSTED_GATEWAYS_REQUEST_TIMEOUT_MS:-}
       - TRUSTED_GATEWAYS_BLOCKED_ORIGINS=${TRUSTED_GATEWAYS_BLOCKED_ORIGINS:-}
       - TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS=${TRUSTED_GATEWAYS_BLOCKED_IPS_AND_CIDRS:-}
+      - BUNDLER_URLS=${BUNDLER_URLS:-}
       - START_HEIGHT=${START_HEIGHT:-}
       - STOP_HEIGHT=${STOP_HEIGHT:-}
       - SKIP_CACHE=${SKIP_CACHE:-}
@@ -140,7 +142,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-58}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-59}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS=${CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
@@ -217,6 +219,8 @@ services:
       - CDP_API_KEY_ID=${CDP_API_KEY_ID:-}
       - CDP_API_KEY_SECRET=${CDP_API_KEY_SECRET:-}
       - CDP_API_KEY_SECRET_FILE=${CDP_API_KEY_SECRET_FILE:-}
+      - ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
+      - ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION=${ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION:-false}
     networks:
       - ar-io-network
     depends_on:
@@ -321,7 +325,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-fcd0f3642d5755c4b6adfdd4fb298d127dbb0f68}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-2515e6acf295cf238cda8a65469022a0386ac22a}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -340,7 +344,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-58}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-59}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
       - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}

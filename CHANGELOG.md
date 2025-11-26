@@ -4,6 +4,110 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 59] - 2025-11-24
+
+This is a **recommended release** due to important fixes for nested bundle data
+item offset handling that could cause incorrect data retrieval. The release
+fixes offset calculations in both the TurboDynamoDB data source and database
+root TX lookups, ensuring correct data is served for deeply nested bundle
+items. It also includes fixes for ArNS manifest path encoding and Observer
+wallet failure reporting for shared FQDN gateways. New features include a
+dry-run mode for testing transaction uploads without posting to the network,
+and a monitoring tool for historical DHA chunk nodes.
+
+### Added
+
+- **Historical DHA Chunk Nodes Monitoring Tool**: New operator utility for
+  monitoring response times and availability of Arweave data endpoints
+  (`tools/monitor-historical-dha-chunk-nodes`)
+  - Monitors data-N (1-17) and tip-N (1-5) endpoints with configurable ranges
+  - Continuous monitoring mode with real-time table output and statistics
+  - JSON export with detailed results and metadata
+  - Note: This is a special-purpose tool included for reference and potential
+    usefulness to operators debugging data retrieval issues
+
+- **Dry-Run Mode for Upload Testing**: New `ARWEAVE_POST_DRY_RUN` environment
+  variable enables testing transaction and chunk uploads without posting to the
+  Arweave network
+  - When enabled, both `POST /tx` and `POST /chunk` requests are simulated with
+    200 OK responses
+  - Works on both port 3000 (Envoy) and port 4000 (direct to Node.js app)
+  - Envoy routing is conditional: routes to core for dry-run, to Arweave nodes
+    when disabled
+  - Perfect for testing apps like ArDrive and large uploads without burning AR
+    tokens
+  - By default, transactions are validated (signature verification) and chunks
+    are validated (merkle proof verification) before returning success
+  - Set `ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION=true` to skip validation for faster
+    testing
+  - Only the final network broadcast is skipped
+
+### Changed
+
+- When CDP API keys are provided (`CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`),
+  the gateway now automatically uses the Coinbase facilitator with enhanced
+  Onramp integration, overriding the `X_402_USDC_FACILITATOR_URL` setting
+
+### Fixed
+
+- **PostgreSQL SSL Configuration**: Fixed inverted SSL flag logic where
+  `LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED=true` (default) was incorrectly disabling
+  certificate validation instead of enabling it
+  - Now correctly applies strict SSL validation by default
+  - Set to `false` to disable certificate validation for cloud providers with
+    self-signed certificates
+
+- **PostgreSQL Connection Timeouts**: Added timeout configuration for the legacy
+  PostgreSQL chunk metadata source to prevent system hangs
+  - Server-side `statement_timeout` (default: 5s) prevents queries from running
+    forever
+  - `idle_in_transaction_session_timeout` (default: 10s) cleans up stuck
+    transactions
+  - Connection pool settings: `max`, `idle_timeout`, `connect_timeout`,
+    `max_lifetime`
+  - All settings configurable via environment variables
+    (`LEGACY_PSQL_STATEMENT_TIMEOUT_MS`, etc.)
+  - Graceful Postgres connection cleanup on shutdown
+  - Prevents the chunk serving system from becoming completely unresponsive when
+    Postgres is slow or unreachable
+
+- **Security Dependency Updates**: Fixed 6 security vulnerabilities identified by
+  `yarn audit`
+  - Added `tar@7.5.2` resolution to fix moderate severity race condition in
+    duckdb-async dependency chain
+  - Upgraded `@cucumber/cucumber`, `@testcontainers/localstack`, `testcontainers`,
+    and `rimraf` to fix high severity glob CLI command injection vulnerabilities
+  - Upgraded `viem` to ^2.39.3
+  - All existing resolutions (secp256k1, elliptic, ws, semver) remain required for
+    vulnerabilities in `@dha-team/arbundles` transitive dependencies
+
+- **ArNS Manifest Path Encoding**: Fixed manifest paths with URL-encoded
+  characters (e.g., spaces as `%20`) failing when accessed via ArNS subdomain
+  - Direct TX ID access worked because Express auto-decodes `req.params`
+  - ArNS subdomain access failed because `req.path` is not auto-decoded
+  - Now decodes manifest paths in the ArNS middleware for consistent behavior
+- **TurboDynamoDB Data Source**: Fixed nested bundle data items having incorrect
+  `rootDataItemOffset` values when retrieved from Turbo's DynamoDB
+  - The raw data path was overwriting correct absolute offsets cached from the
+    `rootParentInfo` path with incorrect values (offset: 0, dataOffset: payloadDataStart)
+  - Now preserves the correct offsets by only caching size and contentType from raw data
+- **Database Root TX Offset Lookup**: Fixed `getRootTxFromData` returning incorrect
+  offset for nested bundle data items
+  - Was returning `root_parent_offset` (parent bundle offset) instead of
+    `root_data_item_offset` (absolute data item offset)
+  - Added fallback calculations for `rootDataItemOffset` and `rootDataOffset` when
+    pre-computed values are NULL
+- **Observer**: Updated to 2515e6a - Fixed incorrect wallet failure reporting
+  for shared FQDN gateways
+  - When multiple wallets share the same FQDN, now correctly identifies which
+    specific wallets failed ownership verification
+  - Reports non-matching wallets as failed even when gateway passes overall
+  - Ensures save-observations contract interactions accurately reflect actual
+    ownership failures
+- BUNDLER_URLS environment variable was missing from docker-compose.yaml
+- x402 payment processor now correctly uses Coinbase CDP facilitator when CDP
+  credentials are configured
+
 ## [Release 58] - 2025-11-10
 
 This is a **recommended release** due to significant improvements in data

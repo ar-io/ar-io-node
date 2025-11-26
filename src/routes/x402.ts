@@ -12,12 +12,19 @@ import * as config from '../config.js';
 import { RateLimiter } from '../limiter/types.js';
 import { PaymentProcessor } from '../payments/types.js';
 import { processPaymentAndTopUp } from '../payments/payment-processor-utils.js';
+import { createFacilitatorConfigFromCredentials } from '../payments/facilitator-utils.js';
 
 export interface X402RouterConfig {
   log: Logger;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
 }
+
+const facilitatorConfig = createFacilitatorConfigFromCredentials(
+  config.X_402_CDP_CLIENT_KEY,
+  config.X_402_CDP_CLIENT_SECRET,
+  config.X_402_USDC_FACILITATOR_URL as `${string}://${string}`,
+);
 
 export function createX402Router({
   log,
@@ -121,9 +128,7 @@ export function createX402Router({
             network: config.X_402_USDC_NETWORK,
           },
         },
-        {
-          url: config.X_402_USDC_FACILITATOR_URL,
-        },
+        facilitatorConfig,
       ),
     );
   }

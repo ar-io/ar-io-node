@@ -14,6 +14,7 @@ import {
   settleResponseHeader,
 } from 'x402/types';
 import { decodePayment } from 'x402/schemes';
+import { createFacilitatorConfigFromCredentials } from './facilitator-utils.js';
 import {
   processPriceToAtomicAmount,
   toJsonSafe,
@@ -45,6 +46,8 @@ export interface X402UsdcProcessorConfig {
   appName?: string;
   appLogo?: string;
   sessionTokenEndpoint?: string;
+  // CDP API secret for coinbase facilitator access
+  cdpClientSecret?: string;
 }
 
 /**
@@ -62,9 +65,13 @@ export class X402UsdcProcessor implements PaymentProcessor {
   constructor(config: X402UsdcProcessorConfig) {
     this.log = log.child({ class: 'X402UsdcProcessor' });
     this.config = config;
-    this.facilitator = useFacilitator({
-      url: config.facilitatorUrl,
-    });
+
+    const facilitatorConfig = createFacilitatorConfigFromCredentials(
+      this.config.cdpClientKey,
+      this.config.cdpClientSecret,
+      config.facilitatorUrl,
+    );
+    this.facilitator = useFacilitator(facilitatorConfig);
   }
 
   /**

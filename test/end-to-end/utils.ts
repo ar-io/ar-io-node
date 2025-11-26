@@ -5,12 +5,27 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import Sqlite, { Database } from 'better-sqlite3';
-import { DockerComposeEnvironment, Wait } from 'testcontainers';
+import {
+  DockerComposeEnvironment,
+  GenericContainer,
+  Wait,
+} from 'testcontainers';
 import { StartedGenericContainer } from 'testcontainers/build/generic-container/started-generic-container';
 import { Environment } from 'testcontainers/build/types.js';
 import axios from 'axios';
 import { rimraf } from 'rimraf';
 import { fromB64Url } from '../../src/lib/encoding.js';
+
+const USE_PREBUILT_IMAGE = process.env.USE_PREBUILT_IMAGE === 'true';
+
+export const getCoreContainer = async (): Promise<GenericContainer> => {
+  if (USE_PREBUILT_IMAGE) {
+    return new GenericContainer('core');
+  }
+  return GenericContainer.fromDockerfile(process.cwd()).build('core', {
+    deleteOnExit: false,
+  });
+};
 
 const DEFAULT_TIMEOUT = 60000;
 
@@ -117,19 +132,26 @@ export const composeUp = async ({
   if (ENVIRONMENT.SKIP_CLEAN_DB !== 'true') {
     await cleanDb();
   }
-  return new DockerComposeEnvironment(process.cwd(), 'docker-compose.yaml')
-    .withEnvironment({
-      START_HEIGHT,
-      STOP_HEIGHT,
-      ANS104_UNBUNDLE_FILTER,
-      ANS104_INDEX_FILTER,
-      ADMIN_API_KEY,
-      TRUSTED_NODE_URL,
-      TRUSTED_GATEWAYS_URLS,
-      BACKGROUND_RETRIEVAL_ORDER,
-      ...ENVIRONMENT,
-    })
-    .withBuild()
+  let compose = new DockerComposeEnvironment(
+    process.cwd(),
+    'docker-compose.yaml',
+  ).withEnvironment({
+    START_HEIGHT,
+    STOP_HEIGHT,
+    ANS104_UNBUNDLE_FILTER,
+    ANS104_INDEX_FILTER,
+    ADMIN_API_KEY,
+    TRUSTED_NODE_URL,
+    TRUSTED_GATEWAYS_URLS,
+    BACKGROUND_RETRIEVAL_ORDER,
+    ...ENVIRONMENT,
+  });
+
+  if (!USE_PREBUILT_IMAGE) {
+    compose = compose.withBuild();
+  }
+
+  return compose
     .withWaitStrategy('core-1', Wait.forHttp('/ar-io/info', 4000))
     .up(['core']);
 };

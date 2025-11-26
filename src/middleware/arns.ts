@@ -33,6 +33,19 @@ export const createArnsMiddleware = ({
       return;
     }
 
+    // Extract and decode manifest path once (req.path is URL-encoded,
+    // but req.params['*'] is auto-decoded by Express, so we decode here for parity)
+    let manifestPath: string | undefined;
+    if (req.path) {
+      try {
+        manifestPath = decodeURIComponent(req.path.slice(1));
+      } catch {
+        // Match Express behavior: return 400 for malformed URL encoding
+        res.status(400).send('Bad Request: Invalid URL encoding');
+        return;
+      }
+    }
+
     let arnsSubdomain: string | undefined;
     const hostNameIsArNSRoot = req.hostname === config.ARNS_ROOT_HOST;
     if (
@@ -49,7 +62,9 @@ export const createArnsMiddleware = ({
         req.path.match(/^\/chunk\//) ||
         req.path.match(/^\/api-docs(?:\/|$)/) ||
         req.path === '/openapi.json' ||
-        req.path === '/graphql'
+        req.path === '/graphql' ||
+        // Allow POST /tx and POST /chunk for transaction/chunk submission
+        (req.method === 'POST' && (req.path === '/tx' || req.path === '/chunk'))
       ) {
         next();
         return;
@@ -58,9 +73,7 @@ export const createArnsMiddleware = ({
       // Use apex ID as ArNS root data if it's set.
       if (config.APEX_TX_ID !== undefined) {
         req.dataId = config.APEX_TX_ID;
-        if (req.path) {
-          req.manifestPath = req.path.slice(1);
-        }
+        req.manifestPath = manifestPath;
         // Note: Not setting req.arns or headers for apex ID
         dataHandler(req, res, next);
         return;
@@ -120,9 +133,7 @@ export const createArnsMiddleware = ({
       // Successful ArNS resolution
       // Set request context
       req.dataId = resolvedId;
-      if (req.path) {
-        req.manifestPath = req.path.slice(1);
-      }
+      req.manifestPath = manifestPath;
 
       // Parse ArNS name components
       const parts = arnsSubdomain.split('_');
@@ -200,9 +211,7 @@ export const createArnsMiddleware = ({
       } else if (config.ARNS_NOT_FOUND_TX_ID !== undefined) {
         // Use custom 404 transaction ID
         req.dataId = config.ARNS_NOT_FOUND_TX_ID;
-        if (req.path) {
-          req.manifestPath = req.path.slice(1);
-        }
+        req.manifestPath = manifestPath;
       } else if (config.ARNS_NOT_FOUND_ARNS_NAME !== undefined) {
         // Resolve custom 404 ArNS name
         const custom404Resolution = await nameResolver.resolve({
@@ -210,9 +219,7 @@ export const createArnsMiddleware = ({
         });
         if (custom404Resolution.resolvedId !== undefined) {
           req.dataId = custom404Resolution.resolvedId;
-          if (req.path) {
-            req.manifestPath = req.path.slice(1);
-          }
+          req.manifestPath = manifestPath;
         } else {
           sendNotFound(res);
           return;

@@ -16,7 +16,7 @@ import {
 import { createServer } from 'node:http';
 import wait from '../../src/lib/wait.js';
 import axios from 'axios';
-import { cleanDb } from './utils.js';
+import { cleanDb, getCoreContainer } from './utils.js';
 import { isTestFiltered } from '../utils.js';
 
 const projectRootPath = process.cwd();
@@ -60,9 +60,7 @@ describe('WebhookEmitter', { skip: isTestFiltered(['flaky']) }, () => {
 
     await TestContainers.exposeHostPorts(4001);
 
-    containerBuilder = await GenericContainer.fromDockerfile(
-      projectRootPath,
-    ).build('core', { deleteOnExit: false });
+    containerBuilder = await getCoreContainer();
 
     await cleanDb();
 

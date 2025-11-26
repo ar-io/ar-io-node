@@ -432,6 +432,17 @@ export const CHUNK_POST_ABORT_TIMEOUT_MS =
     ? +CHUNK_POST_ABORT_TIMEOUT_MS_STRING
     : undefined;
 
+// Arweave POST dry-run mode (skip actual posting to chain for testing)
+// When enabled, skips posting both transaction headers and chunks to the Arweave network
+export const ARWEAVE_POST_DRY_RUN =
+  env.varOrDefault('ARWEAVE_POST_DRY_RUN', 'false').toLowerCase() === 'true';
+
+// Skip validation in dry-run mode (for faster testing without signature/merkle verification)
+export const ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION =
+  env
+    .varOrDefault('ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION', 'false')
+    .toLowerCase() === 'true';
+
 // Assumed size for base64-encoded chunk GET responses (used for x402 payment and rate limiting)
 // Default: 368,640 bytes (360 KiB) = 256 KiB raw data * 1.4 base64url encoding overhead
 export const CHUNK_GET_BASE64_SIZE_BYTES = +env.varOrDefault(
@@ -809,6 +820,38 @@ export const LEGACY_PSQL_PASSWORD_FILE = env.varOrUndefined(
 // see more: https://github.com/porsager/postgres?tab=readme-ov-file#ssl
 export const LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED =
   env.varOrDefault('LEGACY_PSQL_SSL_REJECT_UNAUTHORIZED', 'true') === 'true';
+
+// Connection pool settings
+export const LEGACY_PSQL_MAX_CONNECTIONS = +env.varOrDefault(
+  'LEGACY_PSQL_MAX_CONNECTIONS',
+  '10',
+);
+
+export const LEGACY_PSQL_IDLE_TIMEOUT_SECONDS = +env.varOrDefault(
+  'LEGACY_PSQL_IDLE_TIMEOUT_SECONDS',
+  '30',
+);
+
+export const LEGACY_PSQL_CONNECT_TIMEOUT_SECONDS = +env.varOrDefault(
+  'LEGACY_PSQL_CONNECT_TIMEOUT_SECONDS',
+  '10',
+);
+
+export const LEGACY_PSQL_MAX_LIFETIME_SECONDS = +env.varOrDefault(
+  'LEGACY_PSQL_MAX_LIFETIME_SECONDS',
+  '1800', // 30 minutes
+);
+
+// Server-level timeout settings (sent to PostgreSQL)
+export const LEGACY_PSQL_STATEMENT_TIMEOUT_MS = +env.varOrDefault(
+  'LEGACY_PSQL_STATEMENT_TIMEOUT_MS',
+  '5000', // 5 seconds - prevents queries from running forever
+);
+
+export const LEGACY_PSQL_IDLE_IN_TRANSACTION_TIMEOUT_MS = +env.varOrDefault(
+  'LEGACY_PSQL_IDLE_IN_TRANSACTION_TIMEOUT_MS',
+  '10000', // 10 seconds - cleans up stuck transactions
+);
 
 //
 // File system cleanup
@@ -1393,6 +1436,8 @@ if (CDP_API_KEY_SECRET_FILE !== undefined) {
     .toString()
     .trim();
 }
+
+export const X_402_CDP_CLIENT_SECRET = env.varOrUndefined('CDP_API_KEY_SECRET');
 
 // Validate X402 requires rate limiter
 if (ENABLE_X_402_USDC_DATA_EGRESS && !ENABLE_RATE_LIMITER) {

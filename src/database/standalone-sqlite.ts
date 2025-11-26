@@ -2679,12 +2679,31 @@ export class StandaloneSqliteDatabaseWorker {
   }
 
   getRootTxFromData(id: string) {
-    const row = this.stmts.data.selectRootTransactionId.get({ id: fromB64Url(id) });
+    const row = this.stmts.data.selectRootTransactionId.get({
+      id: fromB64Url(id),
+    });
     if (row?.root_transaction_id) {
+      // Compute root_data_item_offset with fallback
+      // root_data_item_offset = root_parent_offset + data_item_offset
+      const rootDataItemOffset =
+        row.root_data_item_offset ??
+        (row.root_parent_offset != null && row.data_item_offset != null
+          ? row.root_parent_offset + row.data_item_offset
+          : undefined);
+
+      // Compute root_data_offset with fallback
+      // root_data_offset = root_parent_offset + data_offset
+      // Note: data_offset is ABSOLUTE within parent bundle, not relative to data item
+      const rootDataOffset =
+        row.root_data_offset ??
+        (row.root_parent_offset != null && row.data_offset != null
+          ? row.root_parent_offset + row.data_offset
+          : undefined);
+
       return {
         rootTxId: toB64Url(row.root_transaction_id),
-        rootOffset: row.root_parent_offset ?? undefined,
-        rootDataOffset: row.root_data_offset ?? undefined,
+        rootOffset: rootDataItemOffset,
+        rootDataOffset: rootDataOffset,
         size: row.data_item_size ?? undefined,
         dataSize: row.data_size ?? undefined,
       };

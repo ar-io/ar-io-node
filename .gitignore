@@ -65,13 +65,13 @@ test-results.xml
 CLAUDE.local.md
 .claude/settings.local.json
 
-# WIP design documents
-/design/*
+# WIP scratch documents
+/scratch/*
 
 # Exceptions (keep these tracked)
 !/data/.gitkeep
 !/repos/.gitkeep
-!/design/.gitkeep
+!/scratch/.gitkeep
 
 # wallet files
 *wallet.json

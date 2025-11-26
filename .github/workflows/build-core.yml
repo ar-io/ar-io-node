@@ -32,10 +32,15 @@ jobs:
       - run: yarn lint:check
       - run: yarn test:ci
       # Run E2E tests if pushing to develop branch
-      - run: yarn test:e2e
+      - name: Build core Docker image
         if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
+        run: docker build -t core .
+      - name: Run E2E tests
+        if: github.ref == 'refs/heads/develop' && matrix.os == 'ubuntu-latest'
+        run: yarn test:e2e
         env:
           TEST_SKIP_TAGS: flaky
+          USE_PREBUILT_IMAGE: 'true'
 
       # Codecov report
       - name: Upload coverage reports to Codecov
