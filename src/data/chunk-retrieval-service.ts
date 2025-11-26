@@ -8,10 +8,7 @@
 import { Span } from '@opentelemetry/api';
 import winston from 'winston';
 
-import { ArweaveCompositeClient } from '../arweave/composite-client.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
-import { parseTxPath, safeBigIntToNumber } from '../lib/tx-path-parser.js';
-import { validateChunk } from '../lib/validation.js';
+import { toB64Url } from '../lib/encoding.js';
 import { startChildSpan } from '../tracing.js';
 import {
   Chunk,
@@ -19,8 +16,8 @@ import {
   ChunkDataStore,
   ChunkMetadataStore,
   RequestAttributes,
-  TxOffsetSource,
-  UnvalidatedChunkSource,
+  TxBoundary,
+  TxBoundarySource,
 } from '../types.js';
 
 // =============================================================================
@@ -55,53 +52,43 @@ export interface CacheHitResult extends ChunkRetrievalResultBase {
 }
 
 /**
- * Result when chunk is validated via tx_path against block's tx_root.
- * TX ID is not available because we derived TX boundaries from the merkle path,
- * not from a TX lookup.
+ * Result when chunk is retrieved via TX boundary lookup and chunk fetch.
+ * TX ID may be present depending on which boundary source was used:
+ * - Database source: has TX ID
+ * - tx_path validation: no TX ID (derived from merkle path)
+ * - Chain source: has TX ID
  */
-export interface TxPathValidatedResult extends ChunkRetrievalResultBase {
-  type: 'tx_path_validated';
-  // txId intentionally absent - derived from tx_path, not TX lookup
-}
-
-/**
- * Result when chunk is retrieved via the traditional fallback path using
- * txOffsetSource to look up TX info first.
- * TX ID is always present because it comes from the txOffsetSource lookup.
- */
-export interface FallbackResult extends ChunkRetrievalResultBase {
-  type: 'fallback';
-  /** Transaction ID - always present from txOffsetSource lookup */
-  txId: string;
+export interface BoundaryFetchResult extends ChunkRetrievalResultBase {
+  type: 'boundary_fetch';
+  /** Transaction ID - present if boundary came from DB or chain lookup */
+  txId?: string;
 }
 
 /**
  * Discriminated union of all possible chunk retrieval results.
  * Use the `type` field to narrow to specific variants.
  */
-export type ChunkRetrievalResult =
-  | CacheHitResult
-  | TxPathValidatedResult
-  | FallbackResult;
+export type ChunkRetrievalResult = CacheHitResult | BoundaryFetchResult;
 
 // =============================================================================
 // Type Guards
 // =============================================================================
 
 /**
- * Type guard to check if result has txId (only FallbackResult).
+ * Type guard to check if result has txId.
+ * Only BoundaryFetchResult can have txId, but it's optional.
  */
 export function hasTxId(
   result: ChunkRetrievalResult,
-): result is FallbackResult {
-  return result.type === 'fallback';
+): result is BoundaryFetchResult & { txId: string } {
+  return result.type === 'boundary_fetch' && result.txId !== undefined;
 }
 
 /**
- * Check if result came from the fast path (cache hit or tx_path validation).
+ * Check if result came from cache (fast path).
  */
-export function usedFastPath(result: ChunkRetrievalResult): boolean {
-  return result.type === 'cache_hit' || result.type === 'tx_path_validated';
+export function usedCachePath(result: ChunkRetrievalResult): boolean {
+  return result.type === 'cache_hit';
 }
 
 // =============================================================================
@@ -128,19 +115,17 @@ export class ChunkNotFoundError extends Error {
 export interface ChunkRetrievalServiceConfig {
   log: winston.Logger;
   chunkSource: ChunkByAnySource;
-  txOffsetSource: TxOffsetSource;
-  // Optional fast path dependencies
+  txBoundarySource: TxBoundarySource;
+  // Optional cache stores for fast path
   chunkDataStore?: ChunkDataStore;
   chunkMetadataStore?: ChunkMetadataStore;
-  arweaveClient?: ArweaveCompositeClient;
-  unvalidatedChunkSource?: UnvalidatedChunkSource;
 }
 
 /**
  * Service that encapsulates the complete chunk retrieval pipeline:
  * 1. Fast path: Cache lookup by absoluteOffset
- * 2. Fast path: tx_path validation against block's tx_root
- * 3. Fallback: Traditional txOffsetSource + chunkSource flow
+ * 2. TX boundary lookup via composite source (DB → tx_path → chain)
+ * 3. Chunk fetch using TX boundary info
  *
  * Returns discriminated union results that encode which path was used
  * and what data is available.
@@ -148,28 +133,24 @@ export interface ChunkRetrievalServiceConfig {
 export class ChunkRetrievalService {
   private log: winston.Logger;
   private chunkSource: ChunkByAnySource;
-  private txOffsetSource: TxOffsetSource;
-  // Optional fast path dependencies
+  private txBoundarySource: TxBoundarySource;
+  // Optional cache stores for fast path
   private chunkDataStore?: ChunkDataStore;
   private chunkMetadataStore?: ChunkMetadataStore;
-  private arweaveClient?: ArweaveCompositeClient;
-  private unvalidatedChunkSource?: UnvalidatedChunkSource;
 
   constructor(config: ChunkRetrievalServiceConfig) {
     this.log = config.log.child({ class: this.constructor.name });
     this.chunkSource = config.chunkSource;
-    this.txOffsetSource = config.txOffsetSource;
+    this.txBoundarySource = config.txBoundarySource;
     this.chunkDataStore = config.chunkDataStore;
     this.chunkMetadataStore = config.chunkMetadataStore;
-    this.arweaveClient = config.arweaveClient;
-    this.unvalidatedChunkSource = config.unvalidatedChunkSource;
   }
 
   /**
    * Retrieves a chunk by absolute weave offset.
    *
-   * Tries the fast path first (cache lookup, then tx_path validation),
-   * falling back to the traditional txOffsetSource flow if needed.
+   * Tries cache first, then uses TX boundary source to find the transaction
+   * and fetch the chunk.
    *
    * @param absoluteOffset - The absolute byte offset in the weave
    * @param requestAttributes - Optional request attributes for hop tracking
@@ -193,32 +174,42 @@ export class ChunkRetrievalService {
     );
 
     try {
-      // Try fast path first if dependencies are available
+      // 1. Try cache hit first
       if (this.chunkDataStore && this.chunkMetadataStore) {
-        // Try cache hit
         const cacheResult = await this.tryCacheHit(absoluteOffset, span);
         if (cacheResult) {
           span.setAttribute('chunk.retrieval_path', 'cache_hit');
           return cacheResult;
         }
-
-        // Try tx_path validation
-        if (this.unvalidatedChunkSource && this.arweaveClient) {
-          const txPathResult = await this.tryTxPathValidation(
-            absoluteOffset,
-            requestAttributes,
-            span,
-          );
-          if (txPathResult) {
-            span.setAttribute('chunk.retrieval_path', 'tx_path_validated');
-            return txPathResult;
-          }
-        }
       }
 
-      // Fallback to traditional path
-      span.setAttribute('chunk.retrieval_path', 'fallback');
-      return await this.fallbackPath(absoluteOffset, requestAttributes, span);
+      // 2. Get TX boundary from composite source (handles DB → tx_path → chain)
+      span.addEvent('Getting TX boundary');
+      const txBoundary = await this.txBoundarySource.getTxBoundary(
+        BigInt(absoluteOffset),
+      );
+
+      if (!txBoundary) {
+        throw new ChunkNotFoundError(
+          `No TX boundary found for offset ${absoluteOffset}`,
+          'boundary_not_found',
+        );
+      }
+
+      span.addEvent('TX boundary found', {
+        tx_id: txBoundary.id ?? 'unknown',
+        data_root: txBoundary.dataRoot,
+        data_size: txBoundary.dataSize,
+      });
+
+      // 3. Fetch chunk using TX boundary
+      span.setAttribute('chunk.retrieval_path', 'boundary_fetch');
+      return await this.fetchChunkWithBoundary(
+        absoluteOffset,
+        txBoundary,
+        requestAttributes,
+        span,
+      );
     } catch (error: any) {
       span.recordException(error);
       throw error;
@@ -310,285 +301,33 @@ export class ChunkRetrievalService {
   }
 
   /**
-   * Attempts to validate chunk via tx_path against block's tx_root.
-   * Returns null if validation fails or prerequisites are not met.
-   */
-  private async tryTxPathValidation(
-    absoluteOffset: number,
-    requestAttributes: RequestAttributes | undefined,
-    parentSpan: Span,
-  ): Promise<TxPathValidatedResult | null> {
-    const span = startChildSpan(
-      'ChunkRetrievalService.tryTxPathValidation',
-      { attributes: { 'chunk.absolute_offset': absoluteOffset } },
-      parentSpan,
-    );
-
-    try {
-      span.addEvent('Starting tx_path validation');
-      const txPathValidationStart = Date.now();
-
-      // Step 1: Fetch unvalidated chunk from source
-      const unvalidatedChunk =
-        await this.unvalidatedChunkSource!.getUnvalidatedChunk(
-          absoluteOffset,
-          requestAttributes,
-        );
-
-      span.addEvent('Fetched unvalidated chunk', {
-        has_tx_path: unvalidatedChunk.tx_path !== undefined,
-        source: unvalidatedChunk.source,
-      });
-
-      if (!unvalidatedChunk.tx_path) {
-        span.addEvent('No tx_path in chunk - cannot validate');
-        return null;
-      }
-
-      // Step 2: Get block info for tx_root validation
-      const containingBlock =
-        await this.arweaveClient!.binarySearchBlocks(absoluteOffset);
-
-      if (!containingBlock || !containingBlock.tx_root) {
-        span.addEvent('Block not found or missing tx_root');
-        return null;
-      }
-
-      const blockHeight = containingBlock.height;
-      const blockWeaveSize = parseInt(containingBlock.weave_size);
-      const blockTxs: string[] = containingBlock.txs || [];
-      const txRoot = fromB64Url(containingBlock.tx_root);
-
-      // Get previous block's weave_size for block start boundary
-      let prevBlockWeaveSize = 0;
-      if (blockHeight > 0) {
-        const prevBlock = await this.arweaveClient!.getBlockByHeight(
-          blockHeight - 1,
-        );
-        if (prevBlock !== undefined) {
-          prevBlockWeaveSize = parseInt(prevBlock.weave_size);
-        }
-      }
-
-      span.addEvent('Got block info', {
-        block_height: blockHeight,
-        block_tx_count: blockTxs.length,
-      });
-
-      // Step 3: Parse and validate tx_path against block's tx_root
-      this.log.debug('Attempting tx_path parse', {
-        absoluteOffset,
-        blockWeaveSize,
-        prevBlockWeaveSize,
-        txCount: blockTxs.length,
-        txPathLength: unvalidatedChunk.tx_path.length,
-        txRootB64: toB64Url(txRoot),
-      });
-
-      const { result: parsedTxPath, rejectionReason } = await parseTxPath({
-        txRoot,
-        txPath: unvalidatedChunk.tx_path,
-        targetOffset: BigInt(absoluteOffset),
-        blockWeaveSize: BigInt(blockWeaveSize),
-        prevBlockWeaveSize: BigInt(prevBlockWeaveSize),
-      });
-
-      if (parsedTxPath === null || !parsedTxPath.validated) {
-        this.log.debug('tx_path validation failed', {
-          absoluteOffset,
-          rejectionReason,
-          parsedTxPath: parsedTxPath
-            ? {
-                validated: parsedTxPath.validated,
-                txEndOffset: parsedTxPath.txEndOffset.toString(),
-                txStartOffset: parsedTxPath.txStartOffset.toString(),
-                txSize: parsedTxPath.txSize.toString(),
-              }
-            : null,
-        });
-        span.addEvent('tx_path validation failed');
-        return null;
-      }
-
-      // Convert BigInt values to numbers for API compatibility
-      const txSize = safeBigIntToNumber(parsedTxPath.txSize, 'txSize');
-      const txStartOffset = safeBigIntToNumber(
-        parsedTxPath.txStartOffset,
-        'txStartOffset',
-      );
-      const txEndOffset = safeBigIntToNumber(
-        parsedTxPath.txEndOffset,
-        'txEndOffset',
-      );
-
-      span.addEvent('tx_path validation successful', {
-        tx_size: txSize,
-        tx_start_offset: txStartOffset,
-        tx_end_offset: txEndOffset,
-      });
-
-      // Extract TX info from validated tx_path
-      const dataRootFromTxPath = parsedTxPath.dataRoot;
-      // txStartOffset is exclusive lower bound; TX data starts at txStartOffset+1
-      const relativeOffset = absoluteOffset - txStartOffset - 1;
-
-      this.log.debug('tx_path parsed successfully, validating data_path', {
-        absoluteOffset,
-        txStartOffset,
-        txEndOffset,
-        txSize,
-        relativeOffset,
-        dataRootFromTxPath: toB64Url(dataRootFromTxPath),
-        dataPathLength: unvalidatedChunk.data_path.length,
-        chunkSize: unvalidatedChunk.chunk.length,
-      });
-
-      // Step 4: Validate data_path against dataRoot
-      await validateChunk(
-        txSize,
-        {
-          chunk: unvalidatedChunk.chunk,
-          data_path: unvalidatedChunk.data_path,
-        },
-        dataRootFromTxPath,
-        relativeOffset,
-      );
-
-      span.addEvent('data_path validation successful');
-
-      // Step 5: Cache validated chunk with absoluteOffset
-      const dataRootB64 = toB64Url(dataRootFromTxPath);
-
-      await Promise.all([
-        this.chunkDataStore!.set(
-          dataRootB64,
-          relativeOffset,
-          {
-            hash: unvalidatedChunk.hash,
-            chunk: unvalidatedChunk.chunk,
-          },
-          absoluteOffset,
-        ),
-        this.chunkMetadataStore!.set(
-          {
-            data_root: dataRootFromTxPath,
-            data_size: txSize,
-            data_path: unvalidatedChunk.data_path,
-            offset: relativeOffset,
-            hash: unvalidatedChunk.hash,
-            tx_path: unvalidatedChunk.tx_path,
-          },
-          absoluteOffset,
-        ),
-      ]);
-
-      span.addEvent('Cached validated chunk');
-
-      // Construct validated Chunk
-      const chunk: Chunk = {
-        hash: unvalidatedChunk.hash,
-        chunk: unvalidatedChunk.chunk,
-        data_root: dataRootFromTxPath,
-        data_size: txSize,
-        data_path: unvalidatedChunk.data_path,
-        offset: relativeOffset,
-        tx_path: unvalidatedChunk.tx_path,
-        source: unvalidatedChunk.source,
-        sourceHost: unvalidatedChunk.sourceHost,
-      };
-
-      const txPathValidationDuration = Date.now() - txPathValidationStart;
-      span.setAttribute(
-        'chunk.tx_path_validation_duration_ms',
-        txPathValidationDuration,
-      );
-
-      this.log.debug('Fast path tx_path validation successful', {
-        absoluteOffset,
-        dataRoot: dataRootB64,
-        relativeOffset,
-        txSize,
-        durationMs: txPathValidationDuration,
-      });
-
-      return {
-        type: 'tx_path_validated',
-        chunk,
-        dataRoot: dataRootB64,
-        dataSize: txSize,
-        weaveOffset: txEndOffset,
-        relativeOffset,
-        contiguousDataStartDelimiter: txStartOffset,
-      };
-    } catch (error: any) {
-      span.recordException(error);
-      this.log.debug('tx_path validation failed', {
-        absoluteOffset,
-        error: error.message,
-      });
-      return null;
-    } finally {
-      span.end();
-    }
-  }
-
-  /**
-   * Fallback path using txOffsetSource to look up TX info, then fetch chunk.
+   * Fetches chunk using TX boundary info.
    * Always returns a result or throws ChunkNotFoundError.
    */
-  private async fallbackPath(
+  private async fetchChunkWithBoundary(
     absoluteOffset: number,
+    txBoundary: TxBoundary,
     requestAttributes: RequestAttributes | undefined,
     parentSpan: Span,
-  ): Promise<FallbackResult> {
+  ): Promise<BoundaryFetchResult> {
     const span = startChildSpan(
-      'ChunkRetrievalService.fallbackPath',
+      'ChunkRetrievalService.fetchChunkWithBoundary',
       { attributes: { 'chunk.absolute_offset': absoluteOffset } },
       parentSpan,
     );
 
     try {
-      span.addEvent('Looking up TX by offset');
-
-      // Get transaction info using composite source
-      let txResult;
-      try {
-        txResult = await this.txOffsetSource.getTxByOffset(absoluteOffset);
-      } catch (error: any) {
-        this.log.debug('Transaction offset lookup failed', {
-          offset: absoluteOffset,
-          error: error.message,
-        });
-        throw new ChunkNotFoundError(
-          `Transaction offset lookup failed: ${error.message}`,
-          'offset_lookup_failed',
-        );
-      }
-
-      const { data_root, id, data_size, offset: weaveOffset } = txResult;
-
-      // Check if result is valid
-      if (
-        data_root === undefined ||
-        weaveOffset === undefined ||
-        id === undefined ||
-        data_size === undefined
-      ) {
-        span.addEvent('Transaction not found');
-        throw new ChunkNotFoundError(
-          'Transaction not found for offset',
-          'tx_not_found',
-        );
-      }
+      const { dataRoot, dataSize, weaveOffset, id: txId } = txBoundary;
 
       // Calculate the relative offset
-      const contiguousDataStartDelimiter = weaveOffset - data_size + 1;
+      // weaveOffset is the end offset; data starts at (weaveOffset - dataSize + 1)
+      const contiguousDataStartDelimiter = weaveOffset - dataSize + 1;
       const relativeOffset = absoluteOffset - contiguousDataStartDelimiter;
 
       span.setAttributes({
-        'chunk.tx_id': id,
-        'chunk.data_root': data_root,
-        'chunk.data_size': data_size,
+        'chunk.tx_id': txId ?? 'unknown',
+        'chunk.data_root': dataRoot,
+        'chunk.data_size': dataSize,
         'chunk.weave_offset': weaveOffset,
         'chunk.relative_offset': relativeOffset,
       });
@@ -600,9 +339,9 @@ export class ChunkRetrievalService {
       let chunk: Chunk;
       try {
         chunk = await this.chunkSource.getChunkByAny({
-          txSize: data_size,
+          txSize: dataSize,
           absoluteOffset,
-          dataRoot: data_root,
+          dataRoot,
           relativeOffset,
           requestAttributes,
         });
@@ -623,11 +362,11 @@ export class ChunkRetrievalService {
       });
 
       return {
-        type: 'fallback',
+        type: 'boundary_fetch',
         chunk,
-        txId: id,
-        dataRoot: data_root,
-        dataSize: data_size,
+        txId,
+        dataRoot,
+        dataSize,
         weaveOffset,
         relativeOffset,
         contiguousDataStartDelimiter,

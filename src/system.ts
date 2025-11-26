@@ -24,6 +24,10 @@ import { Ans104OffsetSource } from './data/ans104-offset-source.js';
 import { CompositeTxOffsetSource } from './data/composite-tx-offset-source.js';
 import { DatabaseTxOffsetSource } from './data/database-tx-offset-source.js';
 import { ChainTxOffsetSource } from './data/chain-tx-offset-source.js';
+import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
+import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
+import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
+import { TxPathValidationSource } from './data/tx-path-validation-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -654,15 +658,34 @@ const chunkMetadataStore = new FsChunkMetadataStore({
   baseDir: 'data/chunks/metadata',
 });
 
+// Transaction boundary sources for chunk retrieval
+// Uses DB-first strategy: DB (fastest) → tx_path validation → chain (slowest)
+const dbBoundarySource = new DatabaseTxBoundarySource({ log, db });
+
+const txPathBoundarySource = new TxPathValidationSource({
+  log,
+  unvalidatedChunkSource: arIOChunkSource,
+  arweaveClient,
+});
+
+const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
+  ? new ChainTxBoundarySource({ log, arweaveClient })
+  : undefined;
+
+const txBoundarySource = new CompositeTxBoundarySource({
+  log,
+  dbSource: dbBoundarySource,
+  txPathSource: txPathBoundarySource,
+  chainSource: chainBoundarySource,
+});
+
 // ChunkRetrievalService encapsulates the chunk retrieval pipeline with fast path support
 export const chunkRetrievalService = new ChunkRetrievalService({
   log,
   chunkSource,
-  txOffsetSource,
+  txBoundarySource,
   chunkDataStore,
   chunkMetadataStore,
-  arweaveClient,
-  unvalidatedChunkSource: arIOChunkSource,
 });
 
 // Create the base TX chunks data source
