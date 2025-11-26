@@ -54,6 +54,8 @@ import log from './log.js';
 import * as metrics from './metrics.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
 import { FsDataStore } from './store/fs-data-store.js';
+import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
+import { FsChunkMetadataStore } from './store/fs-chunk-metadata-store.js';
 import {
   DataBlockListValidator,
   NameBlockListValidator,
@@ -766,6 +768,60 @@ export const chunkDataFsCacheCleanupWorker =
         },
       })
     : undefined;
+
+// Dead symlink cleanup for chunk offset indexes
+// Runs periodically to remove symlinks pointing to deleted chunk files
+let chunkSymlinkCleanupTimer: ReturnType<typeof setInterval> | undefined;
+if (config.ENABLE_CHUNK_SYMLINK_CLEANUP) {
+  const chunkDataStoreForCleanup = new FsChunkDataStore({
+    log,
+    baseDir: 'data/chunks',
+  });
+  const chunkMetadataStoreForCleanup = new FsChunkMetadataStore({
+    log,
+    baseDir: 'data/chunks/metadata',
+  });
+
+  const runSymlinkCleanup = async () => {
+    try {
+      log.info('Starting chunk symlink cleanup');
+      const startTime = Date.now();
+
+      const [dataCount, metadataCount] = await Promise.all([
+        chunkDataStoreForCleanup.cleanupDeadSymlinks(),
+        chunkMetadataStoreForCleanup.cleanupDeadSymlinks(),
+      ]);
+
+      const duration = Date.now() - startTime;
+      log.info('Chunk symlink cleanup completed', {
+        dataSymlinksRemoved: dataCount,
+        metadataSymlinksRemoved: metadataCount,
+        durationMs: duration,
+      });
+    } catch (error: any) {
+      log.error('Chunk symlink cleanup failed', {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  };
+
+  // Run initial cleanup after a short delay (1 minute)
+  setTimeout(runSymlinkCleanup, 60 * 1000);
+
+  // Schedule periodic cleanup
+  chunkSymlinkCleanupTimer = setInterval(
+    runSymlinkCleanup,
+    config.CHUNK_SYMLINK_CLEANUP_INTERVAL * 1000,
+  );
+
+  // Register cleanup handler
+  registerCleanupHandler('chunkSymlinkCleanup', async () => {
+    if (chunkSymlinkCleanupTimer) {
+      clearInterval(chunkSymlinkCleanupTimer);
+    }
+  });
+}
 
 function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   switch (sourceName) {

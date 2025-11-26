@@ -57,8 +57,11 @@ import {
   Region,
   ChunkDataByAnySourceParams,
   ChunkWithValidationParams,
+  RequestAttributes,
   TxOffsetSource,
   TxPathContext,
+  UnvalidatedChunk,
+  UnvalidatedChunkSource,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
 import { BlockOffsetMapping } from './block-offset-mapping.js';
@@ -121,7 +124,8 @@ export class ArweaveCompositeClient
     ChunkByAnySource,
     ChunkDataByAnySource,
     ChunkMetadataByAnySource,
-    ContiguousDataSource
+    ContiguousDataSource,
+    UnvalidatedChunkSource
 {
   private arweave: Arweave;
   private log: winston.Logger;
@@ -1769,6 +1773,157 @@ export class ArweaveCompositeClient
     return metadata;
   }
 
+  /**
+   * Fetch chunk from Arweave peers WITHOUT validation.
+   * Validation is deferred to the handler level.
+   */
+  async getUnvalidatedChunk(
+    absoluteOffset: number,
+    _requestAttributes?: RequestAttributes,
+  ): Promise<UnvalidatedChunk> {
+    const span = tracer.startSpan(
+      'ArweaveCompositeClient.getUnvalidatedChunk',
+      {
+        attributes: {
+          'chunk.absolute_offset': absoluteOffset,
+        },
+      },
+    );
+
+    try {
+      this.failureSimulator.maybeFail();
+
+      // Select peers for chunk retrieval
+      const peerSelectionCount = 10;
+      const retryCount = 5;
+
+      const bucketPeers = this.peerManager.selectBucketPeersForOffset(
+        absoluteOffset,
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      const allGeneralPeers = this.peerManager.selectPeers(
+        'getChunk',
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      const bucketPeerSet = new Set(bucketPeers);
+      const generalPeers = allGeneralPeers.filter(
+        (peer) => !bucketPeerSet.has(peer),
+      );
+
+      const orderedPeers = [...bucketPeers, ...generalPeers];
+
+      if (orderedPeers.length === 0) {
+        throw new Error('No peers available for chunk retrieval');
+      }
+
+      span.setAttributes({
+        'chunk.available_peers': orderedPeers.length,
+        'chunk.bucket_peers': bucketPeers.length,
+        'chunk.general_peers': generalPeers.length,
+      });
+
+      const maxAttempts = Math.min(orderedPeers.length, retryCount);
+
+      for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
+        const isBucketPeer = peerIndex < bucketPeers.length;
+        const peer = orderedPeers[peerIndex];
+        const peerHost = new URL(peer).hostname;
+
+        span.addEvent('Trying peer', {
+          peer_host: peerHost,
+          peer_index: peerIndex + 1,
+          peer_type: isBucketPeer ? 'bucket' : 'general',
+        });
+
+        const startTime = Date.now();
+
+        try {
+          // Fetch chunk from peer
+          const response = await axios({
+            method: 'GET',
+            url: `${peer}/chunk/${absoluteOffset}`,
+            timeout: 10000,
+          });
+
+          const responseTime = Date.now() - startTime;
+          const jsonChunk = response.data;
+
+          // Basic sanity check
+          sanityCheckChunk(jsonChunk);
+
+          // Parse chunk response
+          const txPathBuffer = jsonChunk.tx_path
+            ? fromB64Url(jsonChunk.tx_path)
+            : undefined;
+          const dataPathBuffer = fromB64Url(jsonChunk.data_path);
+          const hash = dataPathBuffer.slice(-64, -32);
+          const chunkBuffer = fromB64Url(jsonChunk.chunk);
+
+          span.addEvent('Unvalidated chunk retrieval successful', {
+            peer_host: peerHost,
+            chunk_size: chunkBuffer.length,
+            has_tx_path: txPathBuffer !== undefined,
+            response_time_ms: responseTime,
+          });
+
+          // Report success
+          this.handlePeerSuccess(
+            peer,
+            'peerGetChunk',
+            this.peerManager.isPreferredChunkGetPeer(peer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
+          );
+
+          // Return unvalidated chunk (NO validation performed)
+          return {
+            chunk: chunkBuffer,
+            hash,
+            data_path: dataPathBuffer,
+            tx_path: txPathBuffer,
+            source: 'arweave-peers',
+            sourceHost: peerHost,
+          };
+        } catch (error: any) {
+          const responseTime = Date.now() - startTime;
+          span.addEvent('Peer request failed', {
+            peer_host: peerHost,
+            error: error.message,
+            response_time_ms: responseTime,
+          });
+
+          // Report failure
+          this.handlePeerFailure(
+            peer,
+            'peerGetChunk',
+            this.peerManager.isPreferredChunkGetPeer(peer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
+          );
+          // Continue to next peer
+        }
+      }
+
+      // All retry attempts failed
+      const error = new Error(
+        `Failed to fetch unvalidated chunk from Arweave peers after ${maxAttempts} attempts`,
+      );
+      span.recordException(error);
+      throw error;
+    } catch (error: any) {
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
+  }
+
   async getData({
     id,
     region,
@@ -2151,9 +2306,13 @@ export class ArweaveCompositeClient
   }
 
   /**
-   * Binary search through blocks to find the one containing the given offset
+   * Binary search through blocks to find the one containing the given offset.
+   * Returns the block containing the target offset, or null if not found.
+   *
+   * @param targetOffset - The absolute weave offset to search for
+   * @returns Block data with tx_root, weave_size, height, txs, etc. or null
    */
-  private async binarySearchBlocks(targetOffset: number): Promise<any | null> {
+  public async binarySearchBlocks(targetOffset: number): Promise<any | null> {
     const cacheKey = `block_for_offset_${targetOffset}`;
     const cached = this.blockCache.get(cacheKey);
     if (cached) {
