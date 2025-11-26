@@ -8,7 +8,11 @@ import winston from 'winston';
 
 import { TxOffsetSource, TxOffsetResult, TxPathContext } from '../types.js';
 import { ArweaveCompositeClient } from '../arweave/composite-client.js';
-import { parseTxPath, sortTxIdsByBinary } from '../lib/tx-path-parser.js';
+import {
+  parseTxPath,
+  safeBigIntToNumber,
+  sortTxIdsByBinary,
+} from '../lib/tx-path-parser.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 
 /**
@@ -44,9 +48,9 @@ export class ChainTxOffsetSource implements TxOffsetSource {
         const parsed = await parseTxPath({
           txRoot: txPathContext.txRoot,
           txPath: txPathContext.txPath,
-          targetOffset: offset,
-          blockWeaveSize: txPathContext.blockWeaveSize,
-          prevBlockWeaveSize: txPathContext.prevBlockWeaveSize,
+          targetOffset: BigInt(offset),
+          blockWeaveSize: BigInt(txPathContext.blockWeaveSize),
+          prevBlockWeaveSize: BigInt(txPathContext.prevBlockWeaveSize),
           txCount: txPathContext.blockTxs.length,
         });
 
@@ -63,16 +67,23 @@ export class ChainTxOffsetSource implements TxOffsetSource {
               // Validate dataRoot matches (catches format-1/format-2 mixed blocks)
               const fetchedDataRoot = fromB64Url(tx.data_root);
               if (fetchedDataRoot.equals(parsed.dataRoot)) {
+                // Convert BigInt to number for API compatibility
+                // (throws if exceeds Number.MAX_SAFE_INTEGER)
+                const txEndOffset = safeBigIntToNumber(
+                  parsed.txEndOffset,
+                  'txEndOffset',
+                );
+
                 log.debug('tx_path fast path successful', {
                   txId,
                   txIndex: parsed.txIndex,
-                  txOffset: parsed.txEndOffset,
+                  txOffset: txEndOffset,
                 });
 
                 return {
                   data_root: tx.data_root,
                   id: txId,
-                  offset: parsed.txEndOffset,
+                  offset: txEndOffset,
                   data_size: parseInt(tx.data_size),
                 };
               } else {
