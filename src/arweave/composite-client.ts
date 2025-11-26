@@ -77,6 +77,7 @@ const CHUNK_CACHE_CAPACITY = 1000;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
+const PEER_CHUNK_REQUEST_TIMEOUT_MS = 500;
 
 /**
  * Type guard to check if params are ChunkWithValidationParams
@@ -1168,7 +1169,7 @@ export class ArweaveCompositeClient
           peerHost,
           absoluteOffset,
           requestUrl,
-          timeout: 500,
+          timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
           peerIndex: peerIndex + 1,
           totalPeers: orderedPeers.length,
           peerType: isBucketPeer ? 'bucket' : 'general',
@@ -1180,7 +1181,7 @@ export class ArweaveCompositeClient
           const response = await axios({
             method: 'GET',
             url: requestUrl,
-            timeout: 500,
+            timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
           });
           const responseTime = Date.now() - startTime;
 
@@ -1462,7 +1463,7 @@ export class ArweaveCompositeClient
           const response = await axios({
             method: 'GET',
             url: `${peer}/chunk/${absoluteOffset}`,
-            timeout: 500,
+            timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
           });
 
           const responseTime = Date.now() - startTime;
@@ -1844,7 +1845,7 @@ export class ArweaveCompositeClient
           const response = await axios({
             method: 'GET',
             url: `${peer}/chunk/${absoluteOffset}`,
-            timeout: 10000,
+            timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
           });
 
           const responseTime = Date.now() - startTime;
