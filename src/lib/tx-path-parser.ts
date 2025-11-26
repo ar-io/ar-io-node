@@ -30,21 +30,16 @@ export interface ParsedTxPath {
   txStartOffset: bigint;
   /** Transaction size (txEndOffset - txStartOffset) */
   txSize: bigint;
-  /** Position in sorted TX list (for TX ID lookup) */
-  txIndex: number;
   /** Whether the path was cryptographically validated against tx_root */
   validated: boolean;
 }
 
 /**
- * Context for tracking index bounds during Merkle tree traversal.
+ * Context for tracking bounds during Merkle tree traversal.
  */
 interface TxPathValidationContext {
-  txCount: number;
-  leftIndex: number;
-  rightIndex: number;
-  leftBound: bigint; // Absolute weave offset (start of block data)
-  rightBound: bigint; // Absolute weave offset (end of block data)
+  leftBound: bigint; // Current left bound (relative to block start)
+  rightBound: bigint; // Current right bound (relative to block start)
 }
 
 /**
@@ -128,17 +123,26 @@ function buffersEqual(a: Buffer, b: Buffer): boolean {
  * The TX Merkle tree is built from transactions sorted by binary ID.
  * We track index bounds during traversal to determine the final TX index.
  */
+/**
+ * Result with rejection reason for debugging.
+ */
+interface WalkResult {
+  result: ParsedTxPath | null;
+  rejectionReason?: string;
+  branchCount?: number;
+}
+
 async function walkTxMerklePath(params: {
   rootHash: Buffer;
   targetOffset: bigint;
   path: Buffer;
   context: TxPathValidationContext;
-}): Promise<ParsedTxPath | null> {
+}): Promise<WalkResult> {
   const { rootHash, targetOffset, path, context } = params;
 
   // Validate inputs
   if (context.rightBound <= BigInt(0)) {
-    return null;
+    return { result: null, rejectionReason: 'rightBound <= 0' };
   }
 
   let currentLeftBound = context.leftBound;
@@ -146,15 +150,16 @@ async function walkTxMerklePath(params: {
   let currentHash = rootHash;
   let pathOffset = 0;
 
-  // Track index range during traversal
-  let leftIndex = context.leftIndex;
-  let rightIndex = context.rightIndex;
+  let branchCount = 0;
 
   // Process branch nodes
   while (path.length - pathOffset > LEAF_SIZE) {
     if (pathOffset + BRANCH_SIZE > path.length) {
-      // Invalid path length
-      return null;
+      return {
+        result: null,
+        rejectionReason: `path too short at branch ${branchCount}`,
+        branchCount,
+      };
     }
 
     // Extract branch components
@@ -178,31 +183,34 @@ async function walkTxMerklePath(params: {
     ]);
 
     if (!buffersEqual(calculatedHash, currentHash)) {
-      // Hash mismatch - invalid proof
-      return null;
+      return {
+        result: null,
+        rejectionReason: `hash mismatch at branch ${branchCount}`,
+        branchCount,
+      };
     }
 
-    // Calculate midpoint index for TX selection
-    const midIndex = Math.floor((leftIndex + rightIndex) / 2);
-
     // Determine which side contains our target (BigInt comparison)
+    // Matches Arweave's ar_merkle.erl: case Dest < Note of true -> left; false -> right
     if (targetOffset < branchOffset) {
       // Target is in left subtree
       currentHash = leftHash;
       currentRightBound = bigIntMin(currentRightBound, branchOffset);
-      rightIndex = midIndex;
     } else {
       // Target is in right subtree
       currentHash = rightHash;
       currentLeftBound = bigIntMax(currentLeftBound, branchOffset);
-      leftIndex = midIndex + 1;
     }
+    branchCount++;
   }
 
   // Process leaf node
   if (pathOffset + LEAF_SIZE !== path.length) {
-    // Invalid path length
-    return null;
+    return {
+      result: null,
+      rejectionReason: `path length mismatch (pathOffset=${pathOffset}, pathLength=${path.length})`,
+      branchCount,
+    };
   }
 
   const leafDataRoot = path.slice(pathOffset, pathOffset + HASH_SIZE);
@@ -219,23 +227,22 @@ async function walkTxMerklePath(params: {
   ]);
 
   if (!buffersEqual(expectedLeafHash, currentHash)) {
-    // Leaf hash mismatch
-    return null;
-  }
-
-  // Final index should be narrowed to single TX
-  if (leftIndex !== rightIndex) {
-    // Index not resolved - this can happen with inconsistent tree
-    return null;
+    return {
+      result: null,
+      rejectionReason: 'leaf hash mismatch',
+      branchCount,
+    };
   }
 
   return {
-    dataRoot: leafDataRoot,
-    txEndOffset: leafOffset,
-    txStartOffset: currentLeftBound,
-    txSize: leafOffset - currentLeftBound,
-    txIndex: leftIndex,
-    validated: true,
+    result: {
+      dataRoot: leafDataRoot,
+      txEndOffset: leafOffset,
+      txStartOffset: currentLeftBound,
+      txSize: leafOffset - currentLeftBound,
+      validated: true,
+    },
+    branchCount,
   };
 }
 
@@ -254,9 +261,8 @@ async function walkTxMerklePath(params: {
  * @param params.targetOffset - The absolute weave offset being requested (bigint for precision)
  * @param params.blockWeaveSize - Current block's weave_size (bigint for precision)
  * @param params.prevBlockWeaveSize - Previous block's weave_size (bigint for precision)
- * @param params.txCount - Number of transactions in the block
  *
- * @returns Parsed tx_path with boundaries and TX index, or null on validation failure
+ * @returns Parsed tx_path with boundaries, or null on validation failure
  *
  * @remarks
  * The returned `ParsedTxPath` contains:
@@ -264,11 +270,7 @@ async function walkTxMerklePath(params: {
  * - `txEndOffset` - Absolute weave offset where transaction data ends (bigint)
  * - `txStartOffset` - Absolute weave offset where transaction data starts (bigint)
  * - `txSize` - Size of transaction data in bytes (bigint)
- * - `txIndex` - Index in sorted (by binary ID) transaction list
  * - `validated` - Whether the proof was cryptographically verified
- *
- * The `txIndex` can be used to look up the transaction ID from a sorted
- * list of block transactions (sorted by binary representation of TX ID).
  *
  * Returns `null` on any validation failure, which should trigger a fallback
  * to the traditional binary search approach.
@@ -281,63 +283,85 @@ async function walkTxMerklePath(params: {
  *   targetOffset: BigInt(absoluteOffset),
  *   blockWeaveSize: BigInt(block.weave_size),
  *   prevBlockWeaveSize: BigInt(prevBlock.weave_size),
- *   txCount: block.txs.length,
  * });
  *
  * if (parsed) {
- *   const sortedTxs = sortTxIdsByBinary(block.txs);
- *   const txId = sortedTxs[parsed.txIndex];
- *   console.log(`Transaction ${txId}: bytes ${parsed.txStartOffset}-${parsed.txEndOffset}`);
+ *   console.log(`TX boundaries: ${parsed.txStartOffset}-${parsed.txEndOffset}`);
+ *   console.log(`TX data_root: ${parsed.dataRoot.toString('hex')}`);
  * }
  * ```
  */
+/**
+ * Result type for parseTxPath that includes rejection reason for debugging.
+ */
+export interface ParseTxPathResult {
+  result: ParsedTxPath | null;
+  rejectionReason?: string;
+  branchCount?: number;
+}
+
 export async function parseTxPath(params: {
   txRoot: Buffer;
   txPath: Buffer;
   targetOffset: bigint;
   blockWeaveSize: bigint;
   prevBlockWeaveSize: bigint;
-  txCount: number;
-}): Promise<ParsedTxPath | null> {
-  const {
-    txRoot,
-    txPath,
-    targetOffset,
-    blockWeaveSize,
-    prevBlockWeaveSize,
-    txCount,
-  } = params;
-
-  // Validate input: empty blocks have no transactions
-  if (txCount === 0) {
-    return null;
-  }
+}): Promise<ParseTxPathResult> {
+  const { txRoot, txPath, targetOffset, blockWeaveSize, prevBlockWeaveSize } =
+    params;
 
   // Validate path structure
   if (txPath.length < LEAF_SIZE) {
-    return null;
+    return {
+      result: null,
+      rejectionReason: `path too short (${txPath.length} < ${LEAF_SIZE})`,
+    };
   }
 
   // Path must be leaf (64 bytes) + N branches (96 bytes each)
   if ((txPath.length - LEAF_SIZE) % BRANCH_SIZE !== 0) {
-    return null;
+    return {
+      result: null,
+      rejectionReason: `invalid path length (${txPath.length} != 64 + n*96)`,
+    };
   }
 
-  // Initialize context with block boundaries and full TX range
+  // IMPORTANT: tx_path uses offsets RELATIVE to the block start, not absolute weave offsets.
+  // Convert to relative offsets for tree traversal.
+  const blockSize = blockWeaveSize - prevBlockWeaveSize;
+
+  // Arweave uses (Offset - BlockStart - 1) for validation, matching how tx_path is generated
+  // with (TXEndOffset - 1). This ensures we validate with an offset INSIDE the TX/chunk,
+  // not at the boundary. See ar_data_sync.erl line 2048: ChunkOffset = Offset - BlockStart - 1
+  let relativeTargetOffset = targetOffset - prevBlockWeaveSize - BigInt(1);
+
+  // Clamp target offset to valid range [0, blockSize - 1]
+  if (relativeTargetOffset >= blockSize) {
+    relativeTargetOffset = blockSize - BigInt(1);
+  } else if (relativeTargetOffset < BigInt(0)) {
+    relativeTargetOffset = BigInt(0);
+  }
+
+  // Initialize context with block boundaries (relative)
   const context: TxPathValidationContext = {
-    txCount,
-    leftIndex: 0,
-    rightIndex: txCount - 1,
-    leftBound: prevBlockWeaveSize,
-    rightBound: blockWeaveSize,
+    leftBound: BigInt(0), // Relative start of block
+    rightBound: blockSize, // Relative end of block
   };
 
-  return walkTxMerklePath({
+  const walkResult = await walkTxMerklePath({
     rootHash: txRoot,
-    targetOffset,
+    targetOffset: relativeTargetOffset,
     path: txPath,
     context,
   });
+
+  // Convert result offsets back to absolute weave offsets
+  if (walkResult.result !== null) {
+    walkResult.result.txEndOffset += prevBlockWeaveSize;
+    walkResult.result.txStartOffset += prevBlockWeaveSize;
+  }
+
+  return walkResult;
 }
 
 /**
@@ -358,7 +382,6 @@ export async function parseTxPath(params: {
  * @example
  * ```typescript
  * const sortedTxIds = sortTxIdsByBinary(block.txs);
- * const txId = sortedTxIds[parsed.txIndex];
  * ```
  */
 export function sortTxIdsByBinary(txIds: string[]): string[] {

@@ -1490,7 +1490,6 @@ export class ArweaveCompositeClient
             const txPathContext: TxPathContext = {
               txPath,
               txRoot,
-              blockTxs,
               blockWeaveSize,
               prevBlockWeaveSize,
             };
@@ -1504,16 +1503,15 @@ export class ArweaveCompositeClient
 
             if (
               txOffsetResult.data_root !== undefined &&
-              txOffsetResult.id !== undefined &&
               txOffsetResult.offset !== undefined &&
               txOffsetResult.data_size !== undefined
             ) {
-              // Fast path succeeded
+              // Fast path succeeded (txId may be undefined when derived from tx_path)
               span.addEvent('TX offset fast path succeeded', {
-                tx_id: txOffsetResult.id,
+                tx_id: txOffsetResult.id ?? 'unknown',
               });
 
-              txId = txOffsetResult.id;
+              txId = txOffsetResult.id ?? 'unknown';
               dataRoot = txOffsetResult.data_root;
               txSize = txOffsetResult.data_size;
               txWeaveOffset = txOffsetResult.offset;
