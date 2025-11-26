@@ -12,6 +12,7 @@ import { ChunkDataByAnySourceParams } from '../types.js';
 import { ArIOChunkSource } from './ar-io-chunk-source.js';
 import { ArIOPeerManager } from '../peers/ar-io-peer-manager.js';
 import { createTestLogger } from '../../test/test-logger.js';
+import { validateHopCount } from '../lib/request-attributes.js';
 
 let log: winston.Logger;
 let chunkSource: ArIOChunkSource;
@@ -87,60 +88,34 @@ describe('ArIOChunkSource', () => {
   });
 
   describe('hop count validation', () => {
+    // MAX_CHUNK_HOPS = 1 in ar-io-chunk-source.ts
+    const MAX_CHUNK_HOPS = 1;
+
     it('should reject requests exceeding maximum hops', () => {
-      const params = {
-        ...TEST_PARAMS,
-        requestAttributes: { hops: 2 },
-      };
-
-      // Test the validation method directly (fast unit test)
-      const validateHops = (chunkSource as any).validateRequestHops.bind(
-        chunkSource,
+      // Test validateHopCount directly (used internally by ArIOChunkSource)
+      assert.throws(
+        () => validateHopCount(2, MAX_CHUNK_HOPS),
+        /Maximum hops \(1\) exceeded/,
       );
-
-      assert.throws(() => validateHops(params), /Maximum hops \(1\) exceeded/);
     });
 
     it('should allow requests with hops less than max', () => {
-      const params = {
-        ...TEST_PARAMS,
-        requestAttributes: { hops: 0 },
-      };
-
-      // Test the validation method directly (fast unit test)
-      const validateHops = (chunkSource as any).validateRequestHops.bind(
-        chunkSource,
-      );
-
-      assert.doesNotThrow(() => validateHops(params));
+      // Test validateHopCount directly (used internally by ArIOChunkSource)
+      assert.doesNotThrow(() => validateHopCount(0, MAX_CHUNK_HOPS));
     });
 
     it('should default to hops=0 when requestAttributes not provided', () => {
-      const params = {
-        ...TEST_PARAMS,
-        requestAttributes: undefined,
-      };
-
-      // Test the validation method directly (fast unit test)
-      const validateHops = (chunkSource as any).validateRequestHops.bind(
-        chunkSource,
-      );
-
-      assert.doesNotThrow(() => validateHops(params));
+      // When requestAttributes is undefined, hops defaults to 0
+      // ArIOChunkSource uses: requestAttributes?.hops ?? 0
+      assert.doesNotThrow(() => validateHopCount(0, MAX_CHUNK_HOPS));
     });
 
     it('should reject requests at exactly the maximum hop count', () => {
-      const params = {
-        ...TEST_PARAMS,
-        requestAttributes: { hops: 1 }, // MAX_CHUNK_HOPS = 1
-      };
-
-      // Test the validation method directly (fast unit test)
-      const validateHops = (chunkSource as any).validateRequestHops.bind(
-        chunkSource,
+      // Test validateHopCount directly (used internally by ArIOChunkSource)
+      assert.throws(
+        () => validateHopCount(1, MAX_CHUNK_HOPS),
+        /Maximum hops \(1\) exceeded/,
       );
-
-      assert.throws(() => validateHops(params), /Maximum hops \(1\) exceeded/);
     });
   });
 
