@@ -18,7 +18,7 @@ import {
   generateRequestAttributes,
   validateHopCount,
 } from '../lib/request-attributes.js';
-import { validateChunk } from '../lib/validation.js';
+import { isValidationParams, validateChunk } from '../lib/validation.js';
 import {
   ChunkData,
   ChunkDataByAnySource,
@@ -31,22 +31,6 @@ import {
   UnvalidatedChunk,
   UnvalidatedChunkSource,
 } from '../types.js';
-
-/**
- * Type guard to check if params are ChunkWithValidationParams
- */
-function isValidationParams(
-  params: ChunkDataByAnySourceParams,
-): params is ChunkWithValidationParams {
-  return (
-    'txSize' in params &&
-    'dataRoot' in params &&
-    'relativeOffset' in params &&
-    params.txSize !== undefined &&
-    params.dataRoot !== undefined &&
-    params.relativeOffset !== undefined
-  );
-}
 
 // Local constants (no configuration needed)
 const CHUNK_CACHE_CAPACITY = 100;

@@ -22,6 +22,7 @@ import { LRUCache } from 'lru-cache';
 import { FailureSimulator } from '../lib/chaos.js';
 import { fromB64Url } from '../lib/encoding.js';
 import {
+  isValidationParams,
   sanityCheckBlock,
   sanityCheckChunk,
   sanityCheckTx,
@@ -56,7 +57,6 @@ import {
   PartialJsonTransactionStore,
   Region,
   ChunkDataByAnySourceParams,
-  ChunkWithValidationParams,
   RequestAttributes,
   TxOffsetSource,
   TxPathContext,
@@ -78,22 +78,6 @@ const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
 const PEER_CHUNK_REQUEST_TIMEOUT_MS = 500;
-
-/**
- * Type guard to check if params are ChunkWithValidationParams
- */
-function isValidationParams(
-  params: ChunkDataByAnySourceParams,
-): params is ChunkWithValidationParams {
-  return (
-    'txSize' in params &&
-    'dataRoot' in params &&
-    'relativeOffset' in params &&
-    params.txSize !== undefined &&
-    params.dataRoot !== undefined &&
-    params.relativeOffset !== undefined
-  );
-}
 
 // Peer queue management types
 interface ChunkPostTask {
