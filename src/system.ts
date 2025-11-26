@@ -103,6 +103,7 @@ import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js'
 import { awsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
+import { ChunkRetrievalService } from './data/chunk-retrieval-service.js';
 import { FullChunkSource } from './data/full-chunk-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
@@ -641,6 +642,28 @@ export const chunkSource = new FullChunkSource(
   chunkMetaDataSource,
   chunkDataSource,
 );
+
+// Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
+const chunkDataStore = new FsChunkDataStore({
+  log,
+  baseDir: 'data/chunks',
+});
+
+const chunkMetadataStore = new FsChunkMetadataStore({
+  log,
+  baseDir: 'data/chunks/metadata',
+});
+
+// ChunkRetrievalService encapsulates the chunk retrieval pipeline with fast path support
+export const chunkRetrievalService = new ChunkRetrievalService({
+  log,
+  chunkSource,
+  txOffsetSource,
+  chunkDataStore,
+  chunkMetadataStore,
+  arweaveClient,
+  unvalidatedChunkSource: arIOChunkSource,
+});
 
 // Create the base TX chunks data source
 const baseTxChunksDataSource = new TxChunksDataSource({
