@@ -131,4 +131,56 @@ describe('ArIOChunkSource', () => {
       assert.ok(typeof chunkSource.getChunkMetadataByAny === 'function');
     });
   });
+
+  describe('hop count validation', () => {
+    // MAX_CHUNK_HOPS is 1, so hops >= 1 should be rejected
+    it('getChunkByAny should reject when hops equal max limit', async () => {
+      await assert.rejects(
+        () =>
+          chunkSource.getChunkByAny({
+            ...TEST_PARAMS,
+            requestAttributes: { hops: 1 },
+          }),
+        /Maximum hops \(1\) exceeded/,
+      );
+    });
+
+    it('getChunkByAny should reject when hops exceed max limit', async () => {
+      await assert.rejects(
+        () =>
+          chunkSource.getChunkByAny({
+            ...TEST_PARAMS,
+            requestAttributes: { hops: 2 },
+          }),
+        /Maximum hops \(1\) exceeded/,
+      );
+    });
+
+    it('getUnvalidatedChunk should reject when hops equal max limit', async () => {
+      await assert.rejects(
+        () => chunkSource.getUnvalidatedChunk(12345, { hops: 1 }),
+        /Maximum hops \(1\) exceeded/,
+      );
+    });
+
+    it('getUnvalidatedChunk should reject when hops exceed max limit', async () => {
+      await assert.rejects(
+        () => chunkSource.getUnvalidatedChunk(12345, { hops: 2 }),
+        /Maximum hops \(1\) exceeded/,
+      );
+    });
+
+    it('should not throw hop error when hops are below limit', async () => {
+      // With hops=0 (below limit), it should proceed past hop validation
+      // and fail for a different reason (peer fetch failure, not hop limit)
+      await assert.rejects(
+        () =>
+          chunkSource.getChunkByAny({
+            ...TEST_PARAMS,
+            requestAttributes: { hops: 0 },
+          }),
+        /Failed to fetch chunk from AR.IO peers/,
+      );
+    });
+  });
 });
