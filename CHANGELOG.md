@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Includes generation tool (`tools/generate-offset-mapping`) for updating
     mapping before releases
 
+- **tx_path Chunk Validation**: Optimize chunk retrieval by validating requests
+  using tx_path Merkle proofs, eliminating expensive TX binary search when
+  tx_path is available
+
+- **Chunk Cache by Absolute Offset**: Enable chunk cache lookups by absolute
+  weave offset for faster retrieval when chunk data is already cached
+
 ### Changed
 
 ### Fixed
