@@ -48,11 +48,25 @@ export class TxPathValidationSource implements TxBoundarySource {
     absoluteOffset: bigint,
     requestAttributes?: RequestAttributes,
   ): Promise<TxBoundary | null> {
-    const offsetNumber = Number(absoluteOffset);
     const log = this.log.child({
       method: 'getTxBoundary',
       absoluteOffset: absoluteOffset.toString(),
     });
+
+    // Validate offset is within safe integer range before conversion
+    // to prevent silent precision loss (current weave is well below this limit)
+    if (absoluteOffset > BigInt(Number.MAX_SAFE_INTEGER)) {
+      log.error(
+        'Absolute offset exceeds MAX_SAFE_INTEGER, cannot safely convert',
+        {
+          absoluteOffset: absoluteOffset.toString(),
+          maxSafeInteger: Number.MAX_SAFE_INTEGER.toString(),
+        },
+      );
+      return null;
+    }
+
+    const offsetNumber = Number(absoluteOffset);
 
     try {
       log.debug('Starting tx_path validation');

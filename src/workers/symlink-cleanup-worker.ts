@@ -139,10 +139,15 @@ export class SymlinkCleanupWorker {
           // Check if symlink target exists
           try {
             await fs.promises.stat(fullPath); // Follows symlink
-          } catch {
-            // Target doesn't exist - dead symlink
-            await fs.promises.unlink(fullPath);
-            cleanedCount++;
+          } catch (statError: any) {
+            if (statError.code === 'ENOENT') {
+              // Target doesn't exist - dead symlink
+              await fs.promises.unlink(fullPath);
+              cleanedCount++;
+            } else {
+              // Let outer catch handle non-ENOENT errors (permissions, ELOOP, etc.)
+              throw statError;
+            }
           }
         } else if (entry.isDirectory()) {
           // Recurse into subdirectories
