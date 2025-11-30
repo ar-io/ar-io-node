@@ -72,6 +72,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   mock.restoreAll();
+  peerManager.shutdown();
 });
 
 describe('ArIOChunkSource', () => {
