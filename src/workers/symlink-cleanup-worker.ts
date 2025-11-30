@@ -11,7 +11,7 @@ import * as winston from 'winston';
 
 import * as config from '../config.js';
 
-const DEFAULT_INTERVAL_MS = config.SYMLINK_CLEANUP_INTERVAL * 1000;
+const DEFAULT_INTERVAL_MS = config.CHUNK_SYMLINK_CLEANUP_INTERVAL * 1000;
 const INITIAL_DELAY_MS = 60 * 1000; // 1 minute
 
 /**
