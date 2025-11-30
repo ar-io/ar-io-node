@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Chunk Cache by Absolute Offset**: Enable chunk cache lookups by absolute
   weave offset for faster retrieval when chunk data is already cached
+  - Creates symlinks indexed by absolute offset for O(1) cache lookups
+  - Background worker periodically cleans up dead symlinks when cached data expires
+  - Configurable via `ENABLE_CHUNK_SYMLINK_CLEANUP` (default: true) and
+    `CHUNK_SYMLINK_CLEANUP_INTERVAL` (default: 24 hours)
 
 ### Changed
 

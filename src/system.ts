@@ -818,14 +818,14 @@ export const chunkDataFsCacheCleanupWorker =
 
 // Dead symlink cleanup worker
 // Runs periodically to remove symlinks pointing to deleted files
-const symlinkCleanupWorker = config.ENABLE_SYMLINK_CLEANUP
+const symlinkCleanupWorker = config.ENABLE_CHUNK_SYMLINK_CLEANUP
   ? new SymlinkCleanupWorker({
       log,
       directories: [
         'data/chunks/data/by-absolute-offset',
         'data/chunks/metadata/by-absolute-offset',
       ],
-      intervalMs: config.SYMLINK_CLEANUP_INTERVAL * 1000,
+      intervalMs: config.CHUNK_SYMLINK_CLEANUP_INTERVAL * 1000,
     })
   : undefined;
 
