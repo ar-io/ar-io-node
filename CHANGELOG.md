@@ -16,9 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Includes generation tool (`tools/generate-offset-mapping`) for updating
     mapping before releases
 
-- **tx_path Chunk Validation**: Optimize chunk retrieval by validating requests
-  using tx_path Merkle proofs, eliminating expensive TX binary search when
-  tx_path is available
+- **tx_path Chunk Validation**: Optimize chunk retrieval with a DB-first lookup
+  strategy that falls back to tx_path Merkle proof validation for unindexed data
+  - Lookup order: Database (fastest) → tx_path validation → Chain binary search (slowest)
+  - tx_path proofs are cryptographically validated against the block's tx_root
+  - Eliminates expensive chain binary search when tx_path is available from peers
 
 - **Chunk Cache by Absolute Offset**: Enable chunk cache lookups by absolute
   weave offset for faster retrieval when chunk data is already cached
