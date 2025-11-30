@@ -25,6 +25,7 @@ export class SymlinkCleanupWorker {
   private intervalId?: NodeJS.Timeout;
   private initialTimeoutId?: NodeJS.Timeout;
   private directories: string[];
+  private isStopped = false;
 
   constructor({
     log,
@@ -57,6 +58,7 @@ export class SymlinkCleanupWorker {
   }
 
   stop(): void {
+    this.isStopped = true;
     if (this.initialTimeoutId) {
       clearTimeout(this.initialTimeoutId);
     }
@@ -128,6 +130,8 @@ export class SymlinkCleanupWorker {
     });
 
     for (const entry of entries) {
+      if (this.isStopped) break;
+
       const fullPath = path.join(directory, entry.name);
 
       try {
@@ -144,8 +148,14 @@ export class SymlinkCleanupWorker {
           // Recurse into subdirectories
           cleanedCount += await this.cleanupRecursive(fullPath);
         }
-      } catch {
-        // Error processing entry, skip
+      } catch (error: any) {
+        // ENOENT is expected (concurrent deletion), log other errors for debugging
+        if (error.code !== 'ENOENT') {
+          this.log.debug('Error processing entry during cleanup', {
+            path: fullPath,
+            error: error.message,
+          });
+        }
       }
     }
 

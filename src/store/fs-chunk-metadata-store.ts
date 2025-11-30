@@ -153,7 +153,10 @@ export class FsChunkMetadataStore implements ChunkMetadataStore {
         this.chunkMetadataPath(dataRoot, relativeOffset),
       );
 
-      // Remove existing symlink if present (allows updating)
+      // Remove existing symlink if present (allows updating).
+      // Note: Race condition possible between unlink and symlink if another
+      // process creates a symlink at the same path. We catch all errors below
+      // to ensure cache write succeeds - symlink index is best-effort.
       try {
         await fs.promises.unlink(symlinkPath);
       } catch {
