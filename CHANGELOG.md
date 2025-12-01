@@ -31,6 +31,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **AR.IO Peer Chunk Retrieval Optimization**: Improved chunk retrieval
+  performance from AR.IO network peers
+  - Reduced per-peer request timeout from 10 seconds to 1 second
+  - Changed from sequential to parallel peer requests (3 peers raced simultaneously)
+  - Reduced retry strategy from 5 attempts to 2 attempts with different peers
+  - Selects all peers upfront to ensure different peers on each retry attempt
+  - Worst-case latency reduced from ~150 seconds to ~4 seconds
+  - Maximum peer requests reduced from 15 to 6
+
 ### Fixed
 
 ## [Release 59] - 2025-11-24

@@ -38,6 +38,11 @@ const CHUNK_CACHE_TTL_SECONDS = 60;
 const MAX_CHUNK_HOPS = 1;
 const CHUNK_CATEGORY = 'chunk';
 
+// Peer chunk retrieval constants
+const PEER_REQUEST_TIMEOUT_MS = 1000; // 1 second timeout per peer request
+const PEER_SELECTION_COUNT = 3; // Number of peers to try in parallel
+const MAX_RETRY_COUNT = 2; // Total attempts (initial + 1 retry)
+
 /**
  * Options for fetching chunks from AR.IO peers.
  * If validationParams is provided, the chunk will be validated and returned as Chunk.
@@ -118,6 +123,7 @@ export class ArIOChunkSource
 
   /**
    * Core method for fetching chunks from AR.IO peers with retry logic.
+   * Uses parallel peer requests for faster retrieval.
    * If validationParams is provided, validates and returns Chunk.
    * Otherwise returns UnvalidatedChunk.
    */
@@ -127,8 +133,8 @@ export class ArIOChunkSource
     const {
       absoluteOffset,
       requestAttributes,
-      retryCount = 5,
-      peerSelectionCount = 3,
+      retryCount = MAX_RETRY_COUNT,
+      peerSelectionCount = PEER_SELECTION_COUNT,
       validationParams,
     } = options;
 
@@ -193,232 +199,107 @@ export class ArIOChunkSource
 
       const headers = requestAttributesHeaders?.headers || {};
 
-      // Retry with different peers on failure
+      // Select all peers upfront to ensure different peers are used for each attempt
+      // (peer selection is cached, so selecting per-attempt would return the same peers)
+      const totalPeersNeeded = peerSelectionCount * retryCount;
+      let allSelectedPeers: string[];
+      try {
+        allSelectedPeers = this.selectChunkPeers(totalPeersNeeded);
+      } catch (error: any) {
+        span.recordException(error);
+        throw new Error(
+          `No AR.IO peers available for chunk retrieval: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
+      }
+
+      span.setAttributes({
+        'chunk.total_selected_peers': allSelectedPeers.length,
+        'chunk.total_peers_available': this.peerManager.getPeerUrls().length,
+      });
+
+      log.debug('Selected peers for all chunk retrieval attempts', {
+        peers: allSelectedPeers,
+        totalPeers: this.peerManager.getPeerUrls().length,
+      });
+
+      // Retry with different peers on failure (try peers in parallel each attempt)
       for (let attempt = 0; attempt < retryCount; attempt++) {
+        // Get the peers for this attempt
+        const startIdx = attempt * peerSelectionCount;
+        const endIdx = startIdx + peerSelectionCount;
+        const selectedPeers = allSelectedPeers.slice(startIdx, endIdx);
+
+        // Skip if no peers available for this attempt
+        if (selectedPeers.length === 0) {
+          log.debug('No peers available for attempt', { attempt: attempt + 1 });
+          continue;
+        }
+
         span.addEvent('Starting retry attempt', {
           attempt: attempt + 1,
           max_attempts: retryCount,
-        });
-
-        let selectedPeers: string[];
-        try {
-          selectedPeers = this.selectChunkPeers(peerSelectionCount);
-        } catch (error: any) {
-          span.recordException(error);
-          throw new Error(
-            `No AR.IO peers available for chunk retrieval: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          );
-        }
-
-        span.setAttributes({
-          'chunk.selected_peers_count': selectedPeers.length,
-          'chunk.total_peers_available': this.peerManager.getPeerUrls().length,
+          peer_count: selectedPeers.length,
         });
 
         log.debug(
           isValidated
-            ? 'Selected peers for chunk retrieval attempt'
-            : 'Selected peers for unvalidated chunk retrieval attempt',
+            ? 'Trying peers for chunk retrieval attempt'
+            : 'Trying peers for unvalidated chunk retrieval attempt',
           {
             attempt: attempt + 1,
             peers: selectedPeers,
-            totalPeers: this.peerManager.getPeerUrls().length,
           },
         );
 
-        // Try each selected peer
-        for (const selectedPeer of selectedPeers) {
-          const startTime = Date.now();
-          const peerHost = new URL(selectedPeer).hostname;
+        span.addEvent('Trying peers in parallel', {
+          peer_count: selectedPeers.length,
+          peers: selectedPeers.map((p) => new URL(p).hostname).join(', '),
+          attempt: attempt + 1,
+        });
 
-          span.addEvent('Trying peer', {
-            peer_host: peerHost,
-            attempt: attempt + 1,
+        // Try all selected peers in parallel, return first success
+        try {
+          const result = await Promise.any(
+            selectedPeers.map((peer) =>
+              this.fetchFromSinglePeer(
+                peer,
+                absoluteOffset,
+                headers,
+                validationParams,
+              ),
+            ),
+          );
+
+          span.setAttributes({
+            'chunk.successful_peer': result.sourceHost ?? 'unknown',
+            'chunk.final_attempt': attempt + 1,
+            'chunk.size': result.chunk?.length ?? 0,
           });
 
-          try {
-            const response = await fetch(
-              `${selectedPeer}/chunk/${absoluteOffset}`,
-              {
-                method: 'GET',
-                headers: {
-                  ...(config.AR_IO_NODE_RELEASE !== undefined
-                    ? { 'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE }
-                    : {}),
-                  ...headers,
-                },
-                signal: AbortSignal.timeout(10000), // 10 second timeout
-              },
-            );
-
-            const responseTime = Date.now() - startTime;
-
-            if (!response.ok) {
-              span.addEvent('Peer returned error response', {
-                peer_host: peerHost,
-                status_code: response.status,
-                response_time_ms: responseTime,
-              });
-
-              log.debug('Peer returned non-200 response', {
-                peer: selectedPeer,
-                status: response.status,
-                statusText: response.statusText,
-              });
-              this.handleChunkPeerFailure(selectedPeer);
-              continue; // Try next peer
-            }
-
-            const chunkResponse = await response.json();
-
-            // Validate response format
-            if (!chunkResponse.chunk || !chunkResponse.data_path) {
-              span.addEvent('Peer returned invalid chunk format', {
-                peer_host: peerHost,
-                response_time_ms: responseTime,
-              });
-
-              log.debug('Peer returned invalid chunk response format', {
-                peer: selectedPeer,
-              });
-              this.handleChunkPeerFailure(selectedPeer);
-              continue; // Try next peer
-            }
-
-            // Convert base64url to Buffer
-            const chunkBuffer = Buffer.from(chunkResponse.chunk, 'base64url');
-            const dataPathBuffer = Buffer.from(
-              chunkResponse.data_path,
-              'base64url',
-            );
-            const txPathBuffer = chunkResponse.tx_path
-              ? Buffer.from(chunkResponse.tx_path, 'base64url')
-              : undefined;
-
-            // Calculate hash
-            const crypto = await import('node:crypto');
-            const hash = crypto
-              .createHash('sha256')
-              .update(chunkBuffer)
-              .digest();
-
-            const responseTimeMs = Date.now() - startTime;
-
-            span.addEvent(
-              isValidated
-                ? 'Chunk retrieval successful'
-                : 'Unvalidated chunk retrieval successful',
-              {
-                peer_host: peerHost,
-                chunk_size: chunkBuffer.length,
-                data_path_size: dataPathBuffer.length,
-                ...(isValidated
-                  ? {}
-                  : { has_tx_path: txPathBuffer !== undefined }),
-                response_time_ms: responseTimeMs,
-                attempt: attempt + 1,
-              },
-            );
-
-            log.debug(
-              isValidated
-                ? 'Successfully fetched chunk from AR.IO peer'
-                : 'Successfully fetched unvalidated chunk from AR.IO peer',
-              {
-                peer: selectedPeer,
-                chunkSize: chunkBuffer.length,
-                dataPathSize: dataPathBuffer.length,
-                ...(isValidated
-                  ? {}
-                  : { hasTxPath: txPathBuffer !== undefined }),
-                responseTimeMs,
-                attempt: attempt + 1,
-              },
-            );
-
-            // Report success to update chunk-specific peer weights
-            this.handleChunkPeerSuccess(selectedPeer, responseTimeMs);
-
-            // Extract hostname from peer URL for source tracking
-            const sourceHost = new URL(selectedPeer).hostname;
-
-            if (isValidated) {
-              // Build full Chunk with validation
-              const chunk: Chunk = {
-                chunk: chunkBuffer,
-                hash,
-                data_path: dataPathBuffer,
-                data_root: Buffer.from(validationParams.dataRoot, 'base64url'),
-                data_size: validationParams.txSize,
-                offset: validationParams.relativeOffset,
-                tx_path: txPathBuffer,
-                source: 'ar-io-network',
-                sourceHost,
-              };
-
-              span.setAttributes({
-                'chunk.successful_peer': peerHost,
-                'chunk.final_attempt': attempt + 1,
-                'chunk.response_time_ms': responseTimeMs,
-                'chunk.size': chunkBuffer.length,
-              });
-
-              // Validate chunk integrity against Merkle tree structure
-              await validateChunk(
-                validationParams.txSize,
-                chunk,
-                Buffer.from(validationParams.dataRoot, 'base64url'),
-                validationParams.relativeOffset,
-              );
-
-              span.addEvent('Chunk validation successful');
-              return chunk;
-            } else {
-              // Return unvalidated chunk (NO validation performed)
-              return {
-                chunk: chunkBuffer,
-                hash,
-                data_path: dataPathBuffer,
-                tx_path: txPathBuffer,
-                source: 'ar-io-network',
-                sourceHost,
-              };
-            }
-          } catch (error: any) {
-            const responseTime = Date.now() - startTime;
-            span.addEvent('Peer request failed', {
-              peer_host: peerHost,
-              error: error.message,
-              response_time_ms: responseTime,
+          span.addEvent(
+            isValidated
+              ? 'Chunk retrieval successful'
+              : 'Unvalidated chunk retrieval successful',
+            {
+              source_host: result.sourceHost ?? 'unknown',
+              chunk_size: result.chunk?.length ?? 0,
               attempt: attempt + 1,
-            });
+            },
+          );
 
-            log.debug(
-              isValidated
-                ? 'Failed to fetch chunk from peer'
-                : 'Failed to fetch unvalidated chunk from peer',
-              {
-                peer: selectedPeer,
-                error: error.message,
-                attempt: attempt + 1,
-                responseTimeMs: responseTime,
-              },
-            );
-            this.handleChunkPeerFailure(selectedPeer);
-            // Continue to next peer
-          }
+          return result;
+        } catch (error: any) {
+          // AggregateError means all promises rejected
+          span.addEvent('All peers failed for attempt', {
+            attempt: attempt + 1,
+            peers_attempted: selectedPeers.length,
+          });
+
+          log.debug('All peers failed for attempt', {
+            attempt: attempt + 1,
+            peersAttempted: selectedPeers.length,
+          });
         }
-
-        // If we get here, all peers in this attempt failed
-        span.addEvent('All peers failed for attempt', {
-          attempt: attempt + 1,
-          peers_attempted: selectedPeers.length,
-        });
-
-        log.debug('All peers failed for attempt', {
-          attempt: attempt + 1,
-          peersAttempted: selectedPeers.length,
-        });
       }
 
       // All retry attempts failed
@@ -493,16 +374,148 @@ export class ArIOChunkSource
     }
   }
 
+  /**
+   * Fetches a chunk from a single peer with timeout handling.
+   * If validationParams is provided, validates and returns Chunk.
+   * Otherwise returns UnvalidatedChunk.
+   * Throws on failure.
+   */
+  private async fetchFromSinglePeer(
+    peer: string,
+    absoluteOffset: number,
+    headers: Record<string, string>,
+    validationParams?: {
+      txSize: number;
+      dataRoot: string;
+      relativeOffset: number;
+    },
+  ): Promise<Chunk | UnvalidatedChunk> {
+    const startTime = Date.now();
+    const peerHost = new URL(peer).hostname;
+    const isValidated = validationParams !== undefined;
+    const log = this.log.child({ method: 'fetchFromSinglePeer' });
+
+    try {
+      const response = await fetch(`${peer}/chunk/${absoluteOffset}`, {
+        method: 'GET',
+        headers: {
+          ...(config.AR_IO_NODE_RELEASE !== undefined
+            ? { 'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE }
+            : {}),
+          ...headers,
+        },
+        signal: AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        log.debug('Peer returned non-200 response', {
+          peer,
+          status: response.status,
+          statusText: response.statusText,
+        });
+        this.handleChunkPeerFailure(peer);
+        throw new Error(`Peer ${peerHost} returned status ${response.status}`);
+      }
+
+      const chunkResponse = await response.json();
+
+      // Validate response format
+      if (!chunkResponse.chunk || !chunkResponse.data_path) {
+        log.debug('Peer returned invalid chunk response format', { peer });
+        this.handleChunkPeerFailure(peer);
+        throw new Error(`Peer ${peerHost} returned invalid chunk format`);
+      }
+
+      // Convert base64url to Buffer
+      const chunkBuffer = Buffer.from(chunkResponse.chunk, 'base64url');
+      const dataPathBuffer = Buffer.from(chunkResponse.data_path, 'base64url');
+      const txPathBuffer = chunkResponse.tx_path
+        ? Buffer.from(chunkResponse.tx_path, 'base64url')
+        : undefined;
+
+      // Calculate hash
+      const crypto = await import('node:crypto');
+      const hash = crypto.createHash('sha256').update(chunkBuffer).digest();
+
+      const responseTimeMs = Date.now() - startTime;
+
+      log.debug(
+        isValidated
+          ? 'Successfully fetched chunk from AR.IO peer'
+          : 'Successfully fetched unvalidated chunk from AR.IO peer',
+        {
+          peer,
+          chunkSize: chunkBuffer.length,
+          dataPathSize: dataPathBuffer.length,
+          ...(isValidated ? {} : { hasTxPath: txPathBuffer !== undefined }),
+          responseTimeMs,
+        },
+      );
+
+      // Report success to update chunk-specific peer weights
+      this.handleChunkPeerSuccess(peer, responseTimeMs);
+
+      // Extract hostname from peer URL for source tracking
+      const sourceHost = new URL(peer).hostname;
+
+      if (isValidated) {
+        const chunk: Chunk = {
+          chunk: chunkBuffer,
+          hash,
+          data_path: dataPathBuffer,
+          data_root: Buffer.from(validationParams.dataRoot, 'base64url'),
+          data_size: validationParams.txSize,
+          offset: validationParams.relativeOffset,
+          tx_path: txPathBuffer,
+          source: 'ar-io-network',
+          sourceHost,
+        };
+
+        // Validate chunk integrity against Merkle tree structure
+        await validateChunk(
+          validationParams.txSize,
+          chunk,
+          Buffer.from(validationParams.dataRoot, 'base64url'),
+          validationParams.relativeOffset,
+        );
+
+        return chunk;
+      } else {
+        return {
+          chunk: chunkBuffer,
+          hash,
+          data_path: dataPathBuffer,
+          tx_path: txPathBuffer,
+          source: 'ar-io-network',
+          sourceHost,
+        };
+      }
+    } catch (error: any) {
+      const responseTime = Date.now() - startTime;
+      log.debug(
+        isValidated
+          ? 'Failed to fetch chunk from peer'
+          : 'Failed to fetch unvalidated chunk from peer',
+        {
+          peer,
+          error: error.message,
+          responseTimeMs: responseTime,
+        },
+      );
+      // Report failure to update chunk-specific peer weights
+      this.handleChunkPeerFailure(peer);
+      throw error;
+    }
+  }
+
   private async fetchChunkFromArIOPeer(
     params: ChunkWithValidationParams,
-    retryCount = 5,
-    peerSelectionCount = 3,
   ): Promise<Chunk> {
     return this.fetchChunkFromPeers({
       absoluteOffset: params.absoluteOffset,
       requestAttributes: params.requestAttributes,
-      retryCount,
-      peerSelectionCount,
+      retryCount: MAX_RETRY_COUNT,
+      peerSelectionCount: PEER_SELECTION_COUNT,
       validationParams: {
         txSize: params.txSize,
         dataRoot: params.dataRoot,
