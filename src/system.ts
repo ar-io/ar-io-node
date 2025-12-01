@@ -110,6 +110,7 @@ import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { ChunkRetrievalService } from './data/chunk-retrieval-service.js';
 import { FullChunkSource } from './data/full-chunk-source.js';
+import { RebroadcastingChunkSource } from './data/rebroadcasting-chunk-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 import { CompositeDataAttributesSource } from './data/composite-data-attributes-source.js';
@@ -643,10 +644,28 @@ const chunkDataSource = createChunkDataSource({
   chunkDataSourceParallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
 });
 
-export const chunkSource = new FullChunkSource(
+const fullChunkSource = new FullChunkSource(
   chunkMetaDataSource,
   chunkDataSource,
 );
+
+// Conditionally wrap with rebroadcasting if sources are configured
+export const chunkSource =
+  config.CHUNK_REBROADCAST_SOURCES.length > 0
+    ? new RebroadcastingChunkSource({
+        log,
+        chunkSource: fullChunkSource,
+        chunkBroadcaster: arweaveClient,
+        options: {
+          sources: config.CHUNK_REBROADCAST_SOURCES,
+          rateLimitTokens: config.CHUNK_REBROADCAST_RATE_LIMIT_TOKENS,
+          rateLimitInterval: config.CHUNK_REBROADCAST_RATE_LIMIT_INTERVAL,
+          maxConcurrent: config.CHUNK_REBROADCAST_MAX_CONCURRENT,
+          dedupTtlSeconds: config.CHUNK_REBROADCAST_DEDUP_TTL_SECONDS,
+          minSuccessCount: config.CHUNK_REBROADCAST_MIN_SUCCESS_COUNT,
+        },
+      })
+    : fullChunkSource;
 
 // Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
 const chunkDataStore = new FsChunkDataStore({
