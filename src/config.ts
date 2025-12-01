@@ -390,6 +390,12 @@ export const CHUNK_POST_PEER_CONCURRENCY = +env.varOrDefault(
   String(CHUNK_POST_MIN_SUCCESS_COUNT),
 );
 
+// Maximum consecutive 4xx failures before stopping broadcast (0 to disable)
+export const CHUNK_POST_MAX_CONSECUTIVE_FAILURES = +env.varOrDefault(
+  'CHUNK_POST_MAX_CONSECUTIVE_FAILURES',
+  '5',
+);
+
 // Maximum number of concurrent chunk posts per node
 export const CHUNK_POST_PER_NODE_CONCURRENCY = +env.varOrDefault(
   'CHUNK_POST_PER_NODE_CONCURRENCY',

@@ -12,6 +12,7 @@ import { default as request } from 'supertest';
 import {
   createChunkOffsetHandler,
   createChunkOffsetDataHandler,
+  determineClientStatusCode,
 } from './handlers.js';
 import log from '../../log.js';
 import * as merklePathParser from '../../lib/merkle-path-parser.js';
@@ -875,5 +876,133 @@ describe('Chunk routes', () => {
     // - Binary data integrity
     // - Content-Digest RFC 9530 format validation (sha-256=:base64:)
     // - Content-Digest only present when cached or HEAD request
+  });
+});
+
+describe('determineClientStatusCode', () => {
+  it('should return 500 when no peers were contacted', () => {
+    assert.strictEqual(determineClientStatusCode([]), 500);
+  });
+
+  it('should return 500 when all peers were skipped', () => {
+    const results = [
+      {
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: false,
+        skipped: true,
+      },
+      {
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: false,
+        skipped: true,
+      },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 500);
+  });
+
+  it('should return 400 when all peers return 400', () => {
+    const results = [
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 400);
+  });
+
+  it('should return 500 when all peers return 500', () => {
+    const results = [
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 500);
+  });
+
+  it('should return most common status code (400 over 500)', () => {
+    const results = [
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 400);
+  });
+
+  it('should prefer lowest 4xx when tied', () => {
+    const results = [
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 429, canceled: false, timedOut: false },
+      { success: false, statusCode: 429, canceled: false, timedOut: false },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 400);
+  });
+
+  it('should prefer 4xx over 5xx when tied', () => {
+    const results = [
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 400);
+  });
+
+  it('should return 504 when all peers timeout', () => {
+    const results = [
+      { success: false, statusCode: 0, canceled: false, timedOut: true },
+      { success: false, statusCode: 0, canceled: false, timedOut: true },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 504);
+  });
+
+  it('should return 502 when all peers have network errors', () => {
+    const results = [
+      { success: false, statusCode: 0, canceled: false, timedOut: false },
+      { success: false, statusCode: 0, canceled: false, timedOut: false },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 502);
+  });
+
+  it('should return 499 when all peers are canceled', () => {
+    const results = [
+      { success: false, statusCode: 0, canceled: true, timedOut: false },
+      { success: false, statusCode: 0, canceled: true, timedOut: false },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 499);
+  });
+
+  it('should exclude skipped peers from calculation', () => {
+    const results = [
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      {
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: false,
+        skipped: true,
+      },
+      {
+        success: false,
+        statusCode: 0,
+        canceled: false,
+        timedOut: false,
+        skipped: true,
+      },
+    ];
+    assert.strictEqual(determineClientStatusCode(results), 400);
+  });
+
+  it('should handle mixed results correctly', () => {
+    const results = [
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 0, canceled: false, timedOut: true }, // timeout -> 504
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+    ];
+    // 400 appears twice, others appear once
+    assert.strictEqual(determineClientStatusCode(results), 400);
   });
 });

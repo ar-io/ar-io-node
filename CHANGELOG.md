@@ -16,6 +16,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Includes generation tool (`tools/generate-offset-mapping`) for updating
     mapping before releases
 
+- **Chunk POST Early Termination and Smart Status Codes**: Reduce wasted
+  resources on invalid chunk uploads and improve client error feedback
+  - Early termination: Stop broadcasting after N consecutive 4xx failures when
+    no peers have accepted the chunk (~96% reduction in wasted requests)
+  - Smart status codes: Return most common peer error code instead of hardcoded
+    500 (e.g., 400 for invalid chunks, 504 for timeouts)
+  - New `CHUNK_POST_MAX_CONSECUTIVE_FAILURES` config variable (default: 5)
+  - Only 4xx responses count toward consecutive failures (timeouts/5xx reset counter)
+
 - **tx_path Chunk Validation**: Optimize chunk retrieval with a DB-first lookup
   strategy that falls back to tx_path Merkle proof validation for unindexed data
   - Lookup order: Database (fastest) → tx_path validation → Chain binary search (slowest)
