@@ -587,6 +587,41 @@ export const CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY = +env.varOrDefault(
   '5',
 );
 
+// Chunk rebroadcasting configuration
+// Comma-separated list of sources that trigger rebroadcasting
+// Valid sources: 'legacy-s3', 'ar-io-network', 'arweave-network'
+// Empty string disables rebroadcasting
+export const CHUNK_REBROADCAST_SOURCES = env
+  .varOrDefault('CHUNK_REBROADCAST_SOURCES', '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+export const CHUNK_REBROADCAST_RATE_LIMIT_TOKENS = +env.varOrDefault(
+  'CHUNK_REBROADCAST_RATE_LIMIT_TOKENS',
+  '60',
+);
+
+export const CHUNK_REBROADCAST_RATE_LIMIT_INTERVAL = env.varOrDefault(
+  'CHUNK_REBROADCAST_RATE_LIMIT_INTERVAL',
+  'minute',
+) as 'second' | 'minute' | 'hour' | 'day';
+
+export const CHUNK_REBROADCAST_MAX_CONCURRENT = +env.varOrDefault(
+  'CHUNK_REBROADCAST_MAX_CONCURRENT',
+  '5',
+);
+
+export const CHUNK_REBROADCAST_DEDUP_TTL_SECONDS = +env.varOrDefault(
+  'CHUNK_REBROADCAST_DEDUP_TTL_SECONDS',
+  '3600',
+);
+
+export const CHUNK_REBROADCAST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+  'CHUNK_REBROADCAST_MIN_SUCCESS_COUNT',
+  '1',
+);
+
 // Response size threshold (in bytes) above which Cache-Control will use 'private' directive.
 // This helps CDNs respect rate limiting and x402 payment requirements for large responses.
 // Default: 104857600 (100 MB)

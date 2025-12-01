@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Chunk Rebroadcasting**: Optional wrapper that asynchronously rebroadcasts
+  chunks from configured sources (e.g., legacy S3) to the Arweave network
+  - Fire-and-forget pattern that never blocks chunk fetches
+  - Configurable via `CHUNK_REBROADCAST_SOURCES` environment variable
+  - Includes rate limiting, deduplication cache, and concurrency controls
+  - Disabled by default (empty `CHUNK_REBROADCAST_SOURCES`)
+
 - **Block Search Optimization**: Ship static offset-to-block mapping to optimize
   binary search when looking up transactions by offset
   - Reduces block search iterations from ~21 to ~15 (~29% reduction)

@@ -371,6 +371,31 @@ export const chunkPeerTransitionTotal = new promClient.Counter({
 });
 
 //
+// Chunk rebroadcasting metrics
+//
+
+export const chunkRebroadcastAttemptsTotal = new promClient.Counter({
+  name: 'chunk_rebroadcast_attempts_total',
+  help: 'Count of chunk rebroadcast attempts',
+});
+
+export const chunkRebroadcastSuccessesTotal = new promClient.Counter({
+  name: 'chunk_rebroadcast_successes_total',
+  help: 'Count of successful chunk rebroadcasts',
+});
+
+export const chunkRebroadcastFailuresTotal = new promClient.Counter({
+  name: 'chunk_rebroadcast_failures_total',
+  help: 'Count of failed chunk rebroadcasts',
+});
+
+export const chunkRebroadcastSkippedTotal = new promClient.Counter({
+  name: 'chunk_rebroadcast_skipped_total',
+  help: 'Count of skipped chunk rebroadcasts',
+  labelNames: ['reason'] as const,
+});
+
+//
 // Queue length metrics
 //
 
