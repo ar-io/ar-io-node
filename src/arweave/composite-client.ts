@@ -1704,6 +1704,8 @@ export class ArweaveCompositeClient
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);
       let successCount = 0;
       let failureCount = 0;
+      let consecutive4xxFailures = 0;
+      let hasAnySuccess = false;
       const results: BroadcastChunkResponses[] = [];
 
       this.log.debug('Starting chunk broadcast', {
@@ -1729,6 +1731,30 @@ export class ArweaveCompositeClient
               canceled: false,
               timedOut: false,
               skipped: true,
+              skipReason: 'success_threshold' as const,
+            };
+          }
+
+          // Skip if consecutive 4xx failures reached (only when no successes)
+          if (
+            config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
+            !hasAnySuccess &&
+            consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES
+          ) {
+            this.log.debug(
+              'Skipping peer due to consecutive 4xx failures threshold',
+              {
+                peer,
+                consecutive4xxFailures,
+              },
+            );
+            return {
+              success: false,
+              statusCode: 0,
+              canceled: false,
+              timedOut: false,
+              skipped: true,
+              skipReason: 'consecutive_failures' as const,
             };
           }
 
@@ -1742,25 +1768,39 @@ export class ArweaveCompositeClient
               span,
             );
 
+            const statusCode = result.statusCode ?? 0;
+
             if (result.success) {
               successCount++;
+              hasAnySuccess = true;
+              consecutive4xxFailures = 0;
               this.log.debug('Chunk POST succeeded', { peer, successCount });
             } else {
               failureCount++;
+              // Only count 4xx responses toward consecutive failures
+              if (statusCode >= 400 && statusCode < 500) {
+                consecutive4xxFailures++;
+              } else {
+                consecutive4xxFailures = 0;
+              }
               this.log.debug('Chunk POST failed', {
                 peer,
+                statusCode,
+                consecutive4xxFailures,
                 error: result.error,
               });
             }
 
             return {
               success: result.success,
-              statusCode: result.statusCode ?? 0,
+              statusCode,
               canceled: result.canceled ?? false,
               timedOut: result.timedOut ?? false,
             };
           } catch (error: any) {
             failureCount++;
+            // Network errors reset the consecutive 4xx counter
+            consecutive4xxFailures = 0;
             this.log.debug('Chunk POST errored', {
               peer,
               error: error.message,
@@ -1796,17 +1836,32 @@ export class ArweaveCompositeClient
       const succeeded = successCount >= chunkPostMinSuccessCount;
       span.setAttribute('chunk.broadcast.succeeded', succeeded);
 
+      // Determine early termination reason
+      const earlyTerminationReason = succeeded
+        ? 'success_threshold'
+        : consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES
+          ? 'consecutive_failures'
+          : 'completed';
+      span.setAttribute(
+        'chunk.broadcast.early_termination_reason',
+        earlyTerminationReason,
+      );
+
       if (succeeded) {
         span.addEvent('Broadcast threshold reached');
+      } else if (earlyTerminationReason === 'consecutive_failures') {
+        span.addEvent('Broadcast stopped due to consecutive 4xx failures');
       }
 
       this.log.debug('Chunk broadcast complete', {
         successCount,
         failureCount,
+        consecutive4xxFailures,
         totalPeers: sortedPeers.length,
         resultsCount: results.length,
         duration,
         succeeded,
+        earlyTerminationReason,
       });
 
       // Update overall broadcast metrics

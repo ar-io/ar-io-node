@@ -655,6 +655,8 @@ type BroadcastChunkResponses = {
   statusCode: number;
   canceled: boolean;
   timedOut: boolean;
+  skipped?: boolean;
+  skipReason?: 'success_threshold' | 'consecutive_failures';
 };
 
 interface BroadcastChunkResult {

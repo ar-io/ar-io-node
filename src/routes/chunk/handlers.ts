@@ -17,6 +17,7 @@ import {
 import { headerNames } from '../../constants.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
+import { BroadcastChunkResponses } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
@@ -497,6 +498,65 @@ export const createChunkOffsetDataHandler = ({
 };
 
 /**
+ * Determines the appropriate HTTP status code to return to the client
+ * based on the responses from all contacted peers.
+ *
+ * - Excludes skipped peers (they were never contacted)
+ * - Maps special cases: canceled → 499, timeout → 504, network error → 502
+ * - Returns the most common status code among contacted peers
+ * - Tie-breaker: prefers lowest 4xx, then lowest 5xx
+ */
+export function determineClientStatusCode(
+  results: BroadcastChunkResponses[],
+): number {
+  // Filter out skipped peers - they were never contacted
+  const contactedResults = results.filter((r) => !r.skipped);
+
+  if (contactedResults.length === 0) {
+    return 500; // No peers contacted
+  }
+
+  // Count status codes, mapping special cases
+  const statusCounts = new Map<number, number>();
+
+  for (const result of contactedResults) {
+    let statusCode: number;
+    if (result.canceled) {
+      statusCode = 499; // Client Closed Request
+    } else if (result.timedOut) {
+      statusCode = 504; // Gateway Timeout
+    } else if (result.statusCode === 0 || result.statusCode === undefined) {
+      statusCode = 502; // Bad Gateway (network error)
+    } else {
+      statusCode = result.statusCode;
+    }
+    statusCounts.set(statusCode, (statusCounts.get(statusCode) ?? 0) + 1);
+  }
+
+  // Find most common status code with tie-breaker rules
+  let maxCount = 0;
+  let selectedCode = 500;
+
+  for (const [code, count] of statusCounts) {
+    if (count > maxCount) {
+      maxCount = count;
+      selectedCode = code;
+    } else if (count === maxCount) {
+      // Tie-breaker: prefer 4xx over 5xx, then lowest value
+      const selected4xx = selectedCode >= 400 && selectedCode < 500;
+      const current4xx = code >= 400 && code < 500;
+      if (current4xx && !selected4xx) {
+        selectedCode = code;
+      } else if (current4xx === selected4xx && code < selectedCode) {
+        selectedCode = code;
+      }
+    }
+  }
+
+  return selectedCode;
+}
+
+/**
  * Creates a handler for chunk posting (POST /chunk).
  */
 export const createChunkPostHandler = ({
@@ -544,11 +604,16 @@ export const createChunkPostHandler = ({
         span.setAttribute('http.status_code', 200);
         res.status(200).send(result);
       } else {
+        const clientStatusCode = determineClientStatusCode(result.results);
         span.setAttribute('chunk.broadcast.success', false);
         span.setAttribute('chunk.broadcast.success_count', result.successCount);
         span.setAttribute('chunk.broadcast.failure_count', result.failureCount);
-        span.setAttribute('http.status_code', 500);
-        res.status(500).send(result);
+        span.setAttribute(
+          'chunk.broadcast.client_status_code',
+          clientStatusCode,
+        );
+        span.setAttribute('http.status_code', clientStatusCode);
+        res.status(clientStatusCode).send(result);
       }
     } catch (error: any) {
       span.recordException(error);
