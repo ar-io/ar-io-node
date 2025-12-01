@@ -519,11 +519,24 @@ export interface JsonChunk {
   chunk: string;
 }
 
+/**
+ * JSON format for posting chunks to Arweave nodes (POST /chunk).
+ * All fields are base64url-encoded strings or stringified integers.
+ */
 export interface JsonChunkPost {
+  /** Base64url-encoded data root (merkle root of the transaction data) */
   data_root: string;
+  /** Base64url-encoded chunk data */
   chunk: string;
+  /** Total size of the transaction data in bytes (stringified integer) */
   data_size: string;
+  /** Base64url-encoded merkle proof path for this chunk */
   data_path: string;
+  /**
+   * End byte offset of this chunk relative to the start of the transaction data
+   * (stringified integer). This is NOT the absolute weave offset.
+   * Corresponds to (maxByteRange - 1) in the merkle tree leaf.
+   */
   offset: string;
 }
 
@@ -534,13 +547,27 @@ export interface ChunkData {
   sourceHost?: string;
 }
 
+/**
+ * Metadata for a chunk including merkle proof information.
+ */
 export interface ChunkMetadata {
+  /** Size of the chunk data in bytes */
   chunk_size?: number;
+  /** Merkle root of the transaction data */
   data_root: Buffer;
+  /** Total size of the transaction data in bytes */
   data_size: number;
+  /** Merkle proof path for this chunk */
   data_path: Buffer;
+  /**
+   * End byte offset of this chunk relative to the start of the transaction data.
+   * This is NOT the absolute weave offset. Corresponds to (maxByteRange - 1)
+   * in the merkle tree leaf.
+   */
   offset: number;
+  /** SHA-256 hash of the chunk data */
   hash: Buffer;
+  /** Merkle proof path from block to transaction (optional) */
   tx_path?: Buffer;
 }
 
@@ -585,10 +612,22 @@ export interface UnvalidatedChunkSource {
  * TX info must be known (e.g., from database or TxBoundarySource).
  */
 export interface ChunkWithValidationParams {
+  /** Total size of the transaction data in bytes */
   txSize: number;
+  /**
+   * Absolute byte offset in the weave (global offset across all Arweave data).
+   * Used to locate the chunk in the weave's linear byte range.
+   */
   absoluteOffset: number;
+  /** Base64url-encoded data root (merkle root of the transaction data) */
   dataRoot: string;
+  /**
+   * End byte offset of this chunk relative to the start of the transaction data.
+   * This is the offset used in merkle proofs and chunk POST requests.
+   * Corresponds to (maxByteRange - 1) in the merkle tree leaf.
+   */
   relativeOffset: number;
+  /** Optional request attributes for tracking and rate limiting */
   requestAttributes?: RequestAttributes;
 }
 
