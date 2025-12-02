@@ -12,7 +12,7 @@ import { default as request } from 'supertest';
 import {
   createChunkOffsetHandler,
   createChunkOffsetDataHandler,
-  determineClientStatusCode,
+  determineFailureStatusCode,
 } from './handlers.js';
 import log from '../../log.js';
 import * as merklePathParser from '../../lib/merkle-path-parser.js';
@@ -879,9 +879,9 @@ describe('Chunk routes', () => {
   });
 });
 
-describe('determineClientStatusCode', () => {
+describe('determineFailureStatusCode', () => {
   it('should return 500 when no peers were contacted', () => {
-    assert.strictEqual(determineClientStatusCode([]), 500);
+    assert.strictEqual(determineFailureStatusCode([]), 500);
   });
 
   it('should return 500 when all peers were skipped', () => {
@@ -901,7 +901,7 @@ describe('determineClientStatusCode', () => {
         skipped: true,
       },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 500);
+    assert.strictEqual(determineFailureStatusCode(results), 500);
   });
 
   it('should return 400 when all peers return 400', () => {
@@ -910,7 +910,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 400, canceled: false, timedOut: false },
       { success: false, statusCode: 400, canceled: false, timedOut: false },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 400);
+    assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should return 500 when all peers return 500', () => {
@@ -918,7 +918,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 500, canceled: false, timedOut: false },
       { success: false, statusCode: 500, canceled: false, timedOut: false },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 500);
+    assert.strictEqual(determineFailureStatusCode(results), 500);
   });
 
   it('should return most common status code (400 over 500)', () => {
@@ -929,7 +929,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 500, canceled: false, timedOut: false },
       { success: false, statusCode: 500, canceled: false, timedOut: false },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 400);
+    assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should prefer lowest 4xx when tied', () => {
@@ -939,7 +939,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 429, canceled: false, timedOut: false },
       { success: false, statusCode: 429, canceled: false, timedOut: false },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 400);
+    assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should prefer 4xx over 5xx when tied', () => {
@@ -947,7 +947,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 400, canceled: false, timedOut: false },
       { success: false, statusCode: 500, canceled: false, timedOut: false },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 400);
+    assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should return 504 when all peers timeout', () => {
@@ -955,7 +955,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 0, canceled: false, timedOut: true },
       { success: false, statusCode: 0, canceled: false, timedOut: true },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 504);
+    assert.strictEqual(determineFailureStatusCode(results), 504);
   });
 
   it('should return 502 when all peers have network errors', () => {
@@ -963,7 +963,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 0, canceled: false, timedOut: false },
       { success: false, statusCode: 0, canceled: false, timedOut: false },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 502);
+    assert.strictEqual(determineFailureStatusCode(results), 502);
   });
 
   it('should return 499 when all peers are canceled', () => {
@@ -971,7 +971,7 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 0, canceled: true, timedOut: false },
       { success: false, statusCode: 0, canceled: true, timedOut: false },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 499);
+    assert.strictEqual(determineFailureStatusCode(results), 499);
   });
 
   it('should exclude skipped peers from calculation', () => {
@@ -992,7 +992,7 @@ describe('determineClientStatusCode', () => {
         skipped: true,
       },
     ];
-    assert.strictEqual(determineClientStatusCode(results), 400);
+    assert.strictEqual(determineFailureStatusCode(results), 400);
   });
 
   it('should handle mixed results correctly', () => {
@@ -1003,6 +1003,37 @@ describe('determineClientStatusCode', () => {
       { success: false, statusCode: 500, canceled: false, timedOut: false },
     ];
     // 400 appears twice, others appear once
-    assert.strictEqual(determineClientStatusCode(results), 400);
+    assert.strictEqual(determineFailureStatusCode(results), 400);
+  });
+
+  it('should exclude successful peers from calculation', () => {
+    const results = [
+      { success: true, statusCode: 200, canceled: false, timedOut: false },
+      { success: true, statusCode: 200, canceled: false, timedOut: false },
+      { success: false, statusCode: 400, canceled: false, timedOut: false },
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+    ];
+    // Even though 200 is most common, we only count failures
+    // Between 400 and 500 (tied), 4xx is preferred
+    assert.strictEqual(determineFailureStatusCode(results), 400);
+  });
+
+  it('should return 500 when all contacted peers succeeded', () => {
+    const results = [
+      { success: true, statusCode: 200, canceled: false, timedOut: false },
+      { success: true, statusCode: 200, canceled: false, timedOut: false },
+    ];
+    // No failed peers to aggregate, return default 500
+    assert.strictEqual(determineFailureStatusCode(results), 500);
+  });
+
+  it('should prefer lowest 5xx when tied', () => {
+    const results = [
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      { success: false, statusCode: 500, canceled: false, timedOut: false },
+      { success: false, statusCode: 503, canceled: false, timedOut: false },
+      { success: false, statusCode: 503, canceled: false, timedOut: false },
+    ];
+    assert.strictEqual(determineFailureStatusCode(results), 500);
   });
 });

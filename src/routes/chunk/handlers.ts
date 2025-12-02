@@ -499,27 +499,28 @@ export const createChunkOffsetDataHandler = ({
 
 /**
  * Determines the appropriate HTTP status code to return to the client
- * based on the responses from all contacted peers.
+ * when a chunk broadcast has failed (successCount < threshold).
  *
  * - Excludes skipped peers (they were never contacted)
+ * - Excludes successful peers (we only aggregate errors for the failure response)
  * - Maps special cases: canceled → 499, timeout → 504, network error → 502
- * - Returns the most common status code among contacted peers
+ * - Returns the most common error status code among failed peers
  * - Tie-breaker: prefers lowest 4xx, then lowest 5xx
  */
-export function determineClientStatusCode(
+export function determineFailureStatusCode(
   results: BroadcastChunkResponses[],
 ): number {
-  // Filter out skipped peers - they were never contacted
-  const contactedResults = results.filter((r) => !r.skipped);
+  // Filter out skipped peers and successful posts - we only care about failures
+  const failedResults = results.filter((r) => !r.skipped && !r.success);
 
-  if (contactedResults.length === 0) {
-    return 500; // No peers contacted
+  if (failedResults.length === 0) {
+    return 500; // No failed peers to aggregate
   }
 
   // Count status codes, mapping special cases
   const statusCounts = new Map<number, number>();
 
-  for (const result of contactedResults) {
+  for (const result of failedResults) {
     let statusCode: number;
     if (result.canceled) {
       statusCode = 499; // Client Closed Request
@@ -604,16 +605,16 @@ export const createChunkPostHandler = ({
         span.setAttribute('http.status_code', 200);
         res.status(200).send(result);
       } else {
-        const clientStatusCode = determineClientStatusCode(result.results);
+        const failureStatusCode = determineFailureStatusCode(result.results);
         span.setAttribute('chunk.broadcast.success', false);
         span.setAttribute('chunk.broadcast.success_count', result.successCount);
         span.setAttribute('chunk.broadcast.failure_count', result.failureCount);
         span.setAttribute(
-          'chunk.broadcast.client_status_code',
-          clientStatusCode,
+          'chunk.broadcast.failure_status_code',
+          failureStatusCode,
         );
-        span.setAttribute('http.status_code', clientStatusCode);
-        res.status(clientStatusCode).send(result);
+        span.setAttribute('http.status_code', failureStatusCode);
+        res.status(failureStatusCode).send(result);
       }
     } catch (error: any) {
       span.recordException(error);
