@@ -650,6 +650,14 @@ export interface ChunkDataByAnySource {
   getChunkDataByAny(params: ChunkDataByAnySourceParams): Promise<ChunkData>;
 }
 
+/**
+ * Per-peer response from a chunk broadcast attempt.
+ *
+ * When `skipped` is true, the peer was never contacted (request was not sent).
+ * This happens when early termination conditions are met before reaching the peer.
+ * Skipped peers should be excluded from status code aggregation since they have
+ * no meaningful response to report.
+ */
 type BroadcastChunkResponses = {
   success: boolean;
   statusCode: number;

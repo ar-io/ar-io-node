@@ -1643,6 +1643,22 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
+  /**
+   * Broadcasts a chunk to multiple AR.IO peers in parallel with early termination.
+   *
+   * The broadcast uses two early termination conditions:
+   * 1. **Success threshold**: Stops when `chunkPostMinSuccessCount` peers accept the chunk
+   * 2. **Consecutive failures**: Stops after `CHUNK_POST_MAX_CONSECUTIVE_FAILURES` consecutive
+   *    4xx responses when no peers have accepted the chunk (configurable, 0 to disable)
+   *
+   * @param chunk - The chunk data to broadcast
+   * @param abortTimeout - Timeout for aborting in-flight requests after success threshold
+   * @param responseTimeout - Timeout for individual peer requests
+   * @param originAndHopsHeaders - Headers to propagate for request tracing
+   * @param chunkPostMinSuccessCount - Minimum successful posts to consider broadcast complete
+   * @param parentSpan - Optional parent span for distributed tracing
+   * @returns Results including success/failure counts and per-peer response details
+   */
   async broadcastChunk({
     chunk,
     abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
