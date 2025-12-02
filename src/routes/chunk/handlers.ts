@@ -17,7 +17,7 @@ import {
 import { headerNames } from '../../constants.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
-import { BroadcastChunkResponses } from '../../types.js';
+import type { BroadcastChunkResponses } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
