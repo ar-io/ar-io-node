@@ -1702,6 +1702,11 @@ export class ArweaveCompositeClient
 
       // 3. Broadcast in parallel with concurrency limit
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);
+
+      // Note: These counters are accessed concurrently by multiple tasks. This is
+      // acceptable because they're used for optimization heuristics (early termination),
+      // not correctness. Race conditions could cause undercounting, which means we may
+      // send a few extra requests before early termination kicks in.
       let successCount = 0;
       let failureCount = 0;
       let consecutive4xxFailures = 0;
