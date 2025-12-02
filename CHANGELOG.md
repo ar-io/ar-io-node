@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **OTEL Nested Bundle Sampling Policies**: Add targeted tail-sampling policies
+  to detect scenarios where nested bundle offset issues could occur
+  - `nested-bundle-policy`: Samples traces with `turbo.offsets_has_parent=true`
+    (default: 5%, configurable via `OTEL_TAIL_SAMPLING_NESTED_BUNDLE_RATE`)
+  - `offset-overwrite-risk-policy`: Samples traces where both offsets AND raw
+    data paths executed (default: 10%, configurable via
+    `OTEL_TAIL_SAMPLING_OFFSET_OVERWRITE_RATE`)
+  - Adds `turbo.cache_path` diagnostic span attribute to identify which caching
+    code path was used (rootParentInfo, parentInfo, or rawData)
+
 - **Chunk Rebroadcasting**: Optional wrapper that asynchronously rebroadcasts
   chunks from configured sources (e.g., legacy S3) to the Arweave network
   - Fire-and-forget pattern that never blocks chunk fetches
