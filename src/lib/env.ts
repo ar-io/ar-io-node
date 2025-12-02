@@ -34,3 +34,29 @@ export function varOrRandom(envVarName: string): string {
   }
   return value;
 }
+
+export function positiveIntOrDefault(
+  envVarName: string,
+  defaultValue: number,
+): number {
+  const raw = varOrDefault(envVarName, String(defaultValue));
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${envVarName} must be a positive integer, got: ${raw}`);
+  }
+  return value;
+}
+
+export function enumOrDefault<T extends string>(
+  envVarName: string,
+  validValues: readonly T[],
+  defaultValue: T,
+): T {
+  const value = varOrDefault(envVarName, defaultValue);
+  if (!validValues.includes(value as T)) {
+    throw new Error(
+      `${envVarName} must be one of [${validValues.join(', ')}], got: ${value}`,
+    );
+  }
+  return value as T;
+}

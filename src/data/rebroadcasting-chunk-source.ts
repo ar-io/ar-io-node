@@ -27,12 +27,19 @@ import {
 
 const DEDUP_CACHE_MAX_SIZE = 10000;
 
+/** Configuration options for chunk rebroadcasting behavior. */
 export interface RebroadcastOptions {
+  /** Chunk sources eligible for rebroadcast (e.g., 'legacy-s3') */
   sources: string[];
+  /** Maximum tokens in the rate limiter bucket */
   rateLimitTokens: number;
+  /** Time interval for rate limit token replenishment */
   rateLimitInterval: 'second' | 'minute' | 'hour' | 'day';
+  /** Maximum concurrent rebroadcast operations */
   maxConcurrent: number;
+  /** TTL in seconds for the deduplication cache */
   dedupTtlSeconds: number;
+  /** Minimum successful broadcasts to consider rebroadcast complete */
   minSuccessCount: number;
 }
 
