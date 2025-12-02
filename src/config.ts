@@ -597,29 +597,31 @@ export const CHUNK_REBROADCAST_SOURCES = env
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
-export const CHUNK_REBROADCAST_RATE_LIMIT_TOKENS = +env.varOrDefault(
+export const CHUNK_REBROADCAST_RATE_LIMIT_TOKENS = env.positiveIntOrDefault(
   'CHUNK_REBROADCAST_RATE_LIMIT_TOKENS',
-  '60',
+  60,
 );
 
-export const CHUNK_REBROADCAST_RATE_LIMIT_INTERVAL = env.varOrDefault(
+const VALID_RATE_LIMIT_INTERVALS = ['second', 'minute', 'hour', 'day'] as const;
+export const CHUNK_REBROADCAST_RATE_LIMIT_INTERVAL = env.enumOrDefault(
   'CHUNK_REBROADCAST_RATE_LIMIT_INTERVAL',
+  VALID_RATE_LIMIT_INTERVALS,
   'minute',
-) as 'second' | 'minute' | 'hour' | 'day';
+);
 
-export const CHUNK_REBROADCAST_MAX_CONCURRENT = +env.varOrDefault(
+export const CHUNK_REBROADCAST_MAX_CONCURRENT = env.positiveIntOrDefault(
   'CHUNK_REBROADCAST_MAX_CONCURRENT',
-  '5',
+  5,
 );
 
-export const CHUNK_REBROADCAST_DEDUP_TTL_SECONDS = +env.varOrDefault(
+export const CHUNK_REBROADCAST_DEDUP_TTL_SECONDS = env.positiveIntOrDefault(
   'CHUNK_REBROADCAST_DEDUP_TTL_SECONDS',
-  '3600',
+  3600,
 );
 
-export const CHUNK_REBROADCAST_MIN_SUCCESS_COUNT = +env.varOrDefault(
+export const CHUNK_REBROADCAST_MIN_SUCCESS_COUNT = env.positiveIntOrDefault(
   'CHUNK_REBROADCAST_MIN_SUCCESS_COUNT',
-  '1',
+  1,
 );
 
 // Response size threshold (in bytes) above which Cache-Control will use 'private' directive.
