@@ -98,7 +98,48 @@ processors:
               probabilistic:
                 sampling_percentage: ${env:OTEL_TAIL_SAMPLING_PAID_TOKENS_RATE}
 
-      # Policy 5: Probabilistic sampling of successful, fast, unpaid traces
+      # Policy 5: Sample nested bundle data retrievals at configurable rate
+      # Default: 5% (configurable via OTEL_TAIL_SAMPLING_NESTED_BUNDLE_RATE)
+      # Captures TurboDynamoDB retrievals involving nested data items (parent offsets)
+      # Helps detect issues like the Release 59 rootDataItemOffset bug
+      - name: nested-bundle-policy
+        type: and
+        and:
+          and_sub_policy:
+            - name: nested-bundle-condition
+              type: boolean_attribute
+              boolean_attribute:
+                key: turbo.offsets_has_parent
+                value: true
+            - name: nested-bundle-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_NESTED_BUNDLE_RATE}
+
+      # Policy 6: Sample traces where both offsets AND raw data paths executed
+      # Default: 10% (configurable via OTEL_TAIL_SAMPLING_OFFSET_OVERWRITE_RATE)
+      # This is the exact scenario that triggered the Release 59 offset overwrite bug
+      # Conservative default; increase if monitoring for regressions
+      - name: offset-overwrite-risk-policy
+        type: and
+        and:
+          and_sub_policy:
+            - name: offsets-found
+              type: boolean_attribute
+              boolean_attribute:
+                key: turbo.offsets_found
+                value: true
+            - name: raw-data-found
+              type: boolean_attribute
+              boolean_attribute:
+                key: turbo.raw_data_found
+                value: true
+            - name: overwrite-risk-sample-rate
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: ${env:OTEL_TAIL_SAMPLING_OFFSET_OVERWRITE_RATE}
+
+      # Policy 7: Probabilistic sampling of successful, fast, unpaid traces
       # Default: 1% (configurable via OTEL_TAIL_SAMPLING_SUCCESS_RATE)
       # This provides baseline visibility into normal free-tier operations
       - name: baseline-success-policy
