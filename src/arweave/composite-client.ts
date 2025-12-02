@@ -1722,7 +1722,8 @@ export class ArweaveCompositeClient
       // Note: These counters are accessed concurrently by multiple tasks. This is
       // acceptable because they're used for optimization heuristics (early termination),
       // not correctness. Race conditions could cause undercounting, which means we may
-      // send a few extra requests before early termination kicks in.
+      // send a few extra requests before early termination kicks in. Logged and traced
+      // counts may also be slightly inaccurate; use the results array for precise values.
       let successCount = 0;
       let failureCount = 0;
       let consecutive4xxFailures = 0;
