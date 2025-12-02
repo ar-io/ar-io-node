@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 60] - 2025-12-03
 
 ### Added
 
@@ -65,8 +65,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Selects all peers upfront to ensure different peers on each retry attempt
   - Worst-case latency reduced from ~150 seconds to ~4 seconds
   - Maximum peer requests reduced from 15 to 6
-
-### Fixed
 
 ## [Release 59] - 2025-11-24
 
