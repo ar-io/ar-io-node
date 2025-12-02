@@ -1837,9 +1837,18 @@ export class ArweaveCompositeClient
       span.setAttribute('chunk.broadcast.succeeded', succeeded);
 
       // Determine early termination reason
+      // Only report 'consecutive_failures' when:
+      // 1. Feature is enabled (config > 0)
+      // 2. No peers have accepted the chunk (!hasAnySuccess)
+      // 3. We hit the consecutive failure threshold
+      const terminatedDueToConsecutiveFailures =
+        config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
+        !hasAnySuccess &&
+        consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES;
+
       const earlyTerminationReason = succeeded
         ? 'success_threshold'
-        : consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES
+        : terminatedDueToConsecutiveFailures
           ? 'consecutive_failures'
           : 'completed';
       span.setAttribute(
