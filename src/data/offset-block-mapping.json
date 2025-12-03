@@ -1,0 +1,281 @@
+{
+  "version": "1.0",
+  "generatedAt": "2025-11-24T20:36:28.637Z",
+  "currentHeight": 1801982,
+  "currentWeaveSize": 373698117017846,
+  "intervalBytes": 5497558138880,
+  "intervals": [
+    {
+      "offset": 0,
+      "blockHeight": 0
+    },
+    {
+      "offset": 5497558138880,
+      "blockHeight": 642449
+    },
+    {
+      "offset": 10995116277760,
+      "blockHeight": 731523
+    },
+    {
+      "offset": 16492674416640,
+      "blockHeight": 779014
+    },
+    {
+      "offset": 21990232555520,
+      "blockHeight": 791467
+    },
+    {
+      "offset": 27487790694400,
+      "blockHeight": 807172
+    },
+    {
+      "offset": 32985348833280,
+      "blockHeight": 818085
+    },
+    {
+      "offset": 38482906972160,
+      "blockHeight": 831225
+    },
+    {
+      "offset": 43980465111040,
+      "blockHeight": 844593
+    },
+    {
+      "offset": 49478023249920,
+      "blockHeight": 863584
+    },
+    {
+      "offset": 54975581388800,
+      "blockHeight": 879470
+    },
+    {
+      "offset": 60473139527680,
+      "blockHeight": 893614
+    },
+    {
+      "offset": 65970697666560,
+      "blockHeight": 913045
+    },
+    {
+      "offset": 71468255805440,
+      "blockHeight": 929262
+    },
+    {
+      "offset": 76965813944320,
+      "blockHeight": 940368
+    },
+    {
+      "offset": 82463372083200,
+      "blockHeight": 956487
+    },
+    {
+      "offset": 87960930222080,
+      "blockHeight": 974405
+    },
+    {
+      "offset": 93458488360960,
+      "blockHeight": 992646
+    },
+    {
+      "offset": 98956046499840,
+      "blockHeight": 1013278
+    },
+    {
+      "offset": 104453604638720,
+      "blockHeight": 1031922
+    },
+    {
+      "offset": 109951162777600,
+      "blockHeight": 1045269
+    },
+    {
+      "offset": 115448720916480,
+      "blockHeight": 1050361
+    },
+    {
+      "offset": 120946279055360,
+      "blockHeight": 1066470
+    },
+    {
+      "offset": 126443837194240,
+      "blockHeight": 1095545
+    },
+    {
+      "offset": 131941395333120,
+      "blockHeight": 1119828
+    },
+    {
+      "offset": 137438953472000,
+      "blockHeight": 1148263
+    },
+    {
+      "offset": 142936511610880,
+      "blockHeight": 1194563
+    },
+    {
+      "offset": 148434069749760,
+      "blockHeight": 1251458
+    },
+    {
+      "offset": 153931627888640,
+      "blockHeight": 1297893
+    },
+    {
+      "offset": 159429186027520,
+      "blockHeight": 1326492
+    },
+    {
+      "offset": 164926744166400,
+      "blockHeight": 1346932
+    },
+    {
+      "offset": 170424302305280,
+      "blockHeight": 1361738
+    },
+    {
+      "offset": 175921860444160,
+      "blockHeight": 1384594
+    },
+    {
+      "offset": 181419418583040,
+      "blockHeight": 1410850
+    },
+    {
+      "offset": 186916976721920,
+      "blockHeight": 1431593
+    },
+    {
+      "offset": 192414534860800,
+      "blockHeight": 1446171
+    },
+    {
+      "offset": 197912092999680,
+      "blockHeight": 1460437
+    },
+    {
+      "offset": 203409651138560,
+      "blockHeight": 1472428
+    },
+    {
+      "offset": 208907209277440,
+      "blockHeight": 1484906
+    },
+    {
+      "offset": 214404767416320,
+      "blockHeight": 1502464
+    },
+    {
+      "offset": 219902325555200,
+      "blockHeight": 1517866
+    },
+    {
+      "offset": 225399883694080,
+      "blockHeight": 1532276
+    },
+    {
+      "offset": 230897441832960,
+      "blockHeight": 1544282
+    },
+    {
+      "offset": 236394999971840,
+      "blockHeight": 1556821
+    },
+    {
+      "offset": 241892558110720,
+      "blockHeight": 1567329
+    },
+    {
+      "offset": 247390116249600,
+      "blockHeight": 1575413
+    },
+    {
+      "offset": 252887674388480,
+      "blockHeight": 1583537
+    },
+    {
+      "offset": 258385232527360,
+      "blockHeight": 1591529
+    },
+    {
+      "offset": 263882790666240,
+      "blockHeight": 1599833
+    },
+    {
+      "offset": 269380348805120,
+      "blockHeight": 1606768
+    },
+    {
+      "offset": 274877906944000,
+      "blockHeight": 1612353
+    },
+    {
+      "offset": 280375465082880,
+      "blockHeight": 1616891
+    },
+    {
+      "offset": 285873023221760,
+      "blockHeight": 1621995
+    },
+    {
+      "offset": 291370581360640,
+      "blockHeight": 1627583
+    },
+    {
+      "offset": 296868139499520,
+      "blockHeight": 1631221
+    },
+    {
+      "offset": 302365697638400,
+      "blockHeight": 1634702
+    },
+    {
+      "offset": 307863255777280,
+      "blockHeight": 1642326
+    },
+    {
+      "offset": 313360813916160,
+      "blockHeight": 1653725
+    },
+    {
+      "offset": 318858372055040,
+      "blockHeight": 1660527
+    },
+    {
+      "offset": 324355930193920,
+      "blockHeight": 1663914
+    },
+    {
+      "offset": 329853488332800,
+      "blockHeight": 1666480
+    },
+    {
+      "offset": 335351046471680,
+      "blockHeight": 1670434
+    },
+    {
+      "offset": 340848604610560,
+      "blockHeight": 1686005
+    },
+    {
+      "offset": 346346162749440,
+      "blockHeight": 1702704
+    },
+    {
+      "offset": 351843720888320,
+      "blockHeight": 1717633
+    },
+    {
+      "offset": 357341279027200,
+      "blockHeight": 1732234
+    },
+    {
+      "offset": 362838837166080,
+      "blockHeight": 1748032
+    },
+    {
+      "offset": 368336395304960,
+      "blockHeight": 1771195
+    }
+  ]
+}

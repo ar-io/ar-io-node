@@ -6,11 +6,13 @@
  */
 
 import { tracer } from '../tracing.js';
+import { isValidationParams } from '../lib/validation.js';
 import {
   ChunkMetadataByAnySource,
   ChunkByAnySource,
   ChunkDataByAnySource,
   ChunkDataByAnySourceParams,
+  ChunkWithValidationParams,
   Chunk,
   ChunkData,
   ChunkMetadata,
@@ -31,6 +33,13 @@ export class FullChunkSource
   }
 
   async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+    // This source only supports validation params (txSize, dataRoot, relativeOffset)
+    if (!isValidationParams(params)) {
+      throw new Error(
+        'FullChunkSource requires validation params (txSize, dataRoot, relativeOffset)',
+      );
+    }
+
     const span = tracer.startSpan('FullChunkSource.getChunkByAny', {
       attributes: {
         'chunk.data_root': params.dataRoot,
@@ -60,7 +69,7 @@ export class FullChunkSource
         chunk_size: metadata.chunk_size,
       });
 
-      const chunkDataParams: ChunkDataByAnySourceParams = {
+      const chunkDataParams: ChunkWithValidationParams = {
         txSize: params.txSize,
         absoluteOffset: params.absoluteOffset,
         dataRoot: params.dataRoot,

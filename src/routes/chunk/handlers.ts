@@ -17,7 +17,7 @@ import {
 import { headerNames } from '../../constants.js';
 import { formatContentDigest } from '../../lib/digest.js';
 import { toB64Url } from '../../lib/encoding.js';
-import { Chunk, ChunkByAnySource, TxOffsetSource } from '../../types.js';
+import type { BroadcastChunkResponses } from '../../types.js';
 import { ArweaveCompositeClient } from '../../arweave/composite-client.js';
 import { Logger } from 'winston';
 import { tracer } from '../../tracing.js';
@@ -30,16 +30,25 @@ import {
 } from '../../handlers/data-handler-utils.js';
 import { handleIfNoneMatch, parseContentLength } from '../../lib/http-utils.js';
 import { parseDataPath } from '../../lib/merkle-path-parser.js';
+import {
+  ChunkRetrievalService,
+  ChunkNotFoundError,
+  hasTxId,
+} from '../../data/chunk-retrieval-service.js';
+import { setCommonChunkHeaders, setChunkETag } from './response-utils.js';
 
+/**
+ * Creates a handler for the chunk offset endpoint (GET/HEAD /chunk/:offset).
+ *
+ * Returns chunk data in JSON format with base64url encoding.
+ */
 export const createChunkOffsetHandler = ({
-  chunkSource,
-  txOffsetSource,
+  chunkRetrievalService,
   rateLimiter,
   paymentProcessor,
   log,
 }: {
-  chunkSource: ChunkByAnySource;
-  txOffsetSource: TxOffsetSource;
+  chunkRetrievalService: ChunkRetrievalService;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   log: Logger;
@@ -69,49 +78,33 @@ export const createChunkOffsetHandler = ({
       const requestAttributes = getRequestAttributes(request, response);
 
       // === PAYMENT AND RATE LIMIT CHECK ===
-      // Only perform checks if at least one enforcement mechanism is configured
       if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-        // For HEAD requests, use zero tokens since no body is sent
-        // For GET requests, use fixed size assumption
-        // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
-        // responses for chunks before fetching, since we don't have the chunk hash
-        // until after retrieval. This means some GET requests with If-None-Match
-        // that would return 304 might be charged/denied upfront. Tokens are adjusted
-        // to zero in the finish handler if 304 is returned (see line 146).
         const contentSize =
           request.method === 'HEAD' ? 0 : CHUNK_GET_BASE64_SIZE_BYTES;
 
         const limitCheck = await checkPaymentAndRateLimits({
           req: request,
           res: response,
-          // id is omitted - will be added to logs after txResult fetch
           contentSize,
-          contentType: undefined, // Chunks don't have content type
+          contentType: undefined,
           requestAttributes,
           rateLimiter,
           paymentProcessor,
           parentSpan: span,
-          // Use direct payment flow for browser requests (payment to original URL)
-          // This reduces latency for small chunk requests by avoiding redirect overhead
           browserPaymentFlow: 'direct',
         });
 
         if (!limitCheck.allowed) {
-          // Payment required (402) or rate limit exceeded (429) response already sent
           return;
         }
 
         // Schedule token adjustment based on actual response size
         if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
           response.on('finish', () => {
-            // Calculate actual response size based on status code
             let actualSize = 0;
             if (response.statusCode === 304 || request.method === 'HEAD') {
-              // 304 Not Modified or HEAD request - no body sent
-              // Note: adjustTokens will still consume minimum 1 token to prevent spam
               actualSize = 0;
             } else if (response.statusCode === 200) {
-              // GET request with body - calculate JSON response size
               const headers = {
                 'content-length': response.getHeader('content-length'),
               };
@@ -131,103 +124,40 @@ export const createChunkOffsetHandler = ({
         }
       }
 
-      // Get transaction info using composite source (database with chain fallback)
-      let txResult;
+      // === RETRIEVE CHUNK VIA SERVICE ===
+      let result;
       try {
-        txResult = await txOffsetSource.getTxByOffset(offset);
-      } catch (error: any) {
-        log.debug('Transaction offset lookup failed', {
+        result = await chunkRetrievalService.retrieveChunk(
           offset,
-          error: error.message,
-        });
-        span.setAttribute('http.status_code', 404);
-        span.setAttribute('chunk.retrieval.error', 'offset_lookup_failed');
-        response.sendStatus(404);
-        return;
-      }
-
-      const { data_root, id, data_size, offset: weaveOffset } = txResult;
-
-      // Check if result is valid
-      if (
-        data_root === undefined ||
-        weaveOffset === undefined ||
-        id === undefined ||
-        data_size === undefined
-      ) {
-        span.setAttribute('http.status_code', 404);
-        span.setAttribute('chunk.retrieval.error', 'tx_not_found');
-        span.addEvent('Transaction not found');
-        response.sendStatus(404);
-        return;
-      }
-
-      const finalDataRoot = data_root;
-      const finalId = id;
-      const finalDataSize = data_size;
-      const finalWeaveOffset = weaveOffset;
-
-      // Calculate the relative offset, needed for chunk data source
-      const contiguousDataStartDelimiter = finalWeaveOffset - finalDataSize + 1;
-      const relativeOffset = offset - contiguousDataStartDelimiter;
-
-      span.setAttributes({
-        'chunk.tx_id': finalId,
-        'chunk.data_root': finalDataRoot,
-        'chunk.data_size': finalDataSize,
-        'chunk.weave_offset': finalWeaveOffset,
-        'chunk.relative_offset': relativeOffset,
-      });
-
-      // composite-chunk-source returns chunk metadata and chunk data
-      let chunk: Chunk | undefined = undefined;
-
-      // actually fetch the chunk data
-      span.addEvent('Starting chunk retrieval');
-      const chunkRetrievalStart = Date.now();
-
-      try {
-        chunk = await chunkSource.getChunkByAny({
-          txSize: finalDataSize,
-          absoluteOffset: offset,
-          dataRoot: finalDataRoot,
-          relativeOffset,
           requestAttributes,
-        });
+          span,
+        );
       } catch (error: any) {
-        const retrievalDuration = Date.now() - chunkRetrievalStart;
-        span.setAttributes({
-          'http.status_code': 404,
-          'chunk.retrieval.error': 'fetch_failed',
-          'chunk.retrieval.duration_ms': retrievalDuration,
-        });
-        span.recordException(error);
-        response.sendStatus(404);
-        return;
+        if (error instanceof ChunkNotFoundError) {
+          span.setAttribute('http.status_code', 404);
+          span.setAttribute('chunk.retrieval.error', error.errorType);
+          response.sendStatus(404);
+          return;
+        }
+        throw error;
       }
 
-      const retrievalDuration = Date.now() - chunkRetrievalStart;
-      span.setAttribute('chunk.retrieval.duration_ms', retrievalDuration);
+      const { chunk, dataRoot, dataSize, weaveOffset, relativeOffset } = result;
 
-      if (chunk === undefined) {
-        span.setAttribute('http.status_code', 404);
-        span.setAttribute('chunk.retrieval.error', 'chunk_undefined');
-        response.sendStatus(404);
-        return;
+      // Set span attributes based on result type
+      span.setAttribute('chunk.retrieval_path', result.type);
+      span.setAttribute('chunk.data_root', dataRoot);
+      span.setAttribute('chunk.data_size', dataSize);
+      span.setAttribute('chunk.weave_offset', weaveOffset);
+      span.setAttribute('chunk.relative_offset', relativeOffset);
+
+      if (hasTxId(result)) {
+        span.setAttribute('chunk.tx_id', result.txId);
       }
 
-      span.addEvent('Chunk retrieval successful');
-
-      // Track chunk source information
-      if (chunk.source !== undefined) {
-        span.setAttribute('chunk.source', chunk.source);
-      }
-      if (chunk.sourceHost !== undefined) {
-        span.setAttribute('chunk.source_host', chunk.sourceHost);
-      }
-
-      let chunkBase64Url: string | undefined = undefined;
-      let dataPath: string | undefined = undefined;
+      // === PREPARE RESPONSE ===
+      let chunkBase64Url: string;
+      let dataPath: string;
 
       try {
         chunkBase64Url = toB64Url(chunk.chunk);
@@ -252,7 +182,7 @@ export const createChunkOffsetHandler = ({
         return;
       }
 
-      let txPath: string | undefined = undefined;
+      let txPath: string | undefined;
       if (chunk.tx_path !== undefined) {
         try {
           txPath = toB64Url(chunk.tx_path);
@@ -266,43 +196,24 @@ export const createChunkOffsetHandler = ({
         }
       }
 
-      // Add source tracking headers
-      if (chunk.source !== undefined && chunk.source !== '') {
-        response.setHeader(headerNames.chunkSourceType, chunk.source);
-      }
-      if (chunk.sourceHost !== undefined && chunk.sourceHost !== '') {
-        response.setHeader(headerNames.chunkHost, chunk.sourceHost);
-      }
+      // Set common headers (source tracking, cache status)
+      const { hashString } = setCommonChunkHeaders(response, chunk, span);
 
-      // Set cache status header
-      const cacheStatus = chunk.source === 'cache' ? 'HIT' : 'MISS';
-      response.setHeader(headerNames.cache, cacheStatus);
-      span.setAttribute('chunk.cache_status', cacheStatus);
-
-      // Add ETag header when hash is available
-      // Only add when data is cached OR it's a HEAD request (to prevent incorrect hashes on streamed data)
+      // Set ETag when hash is available (cache hits or HEAD requests)
       if (
-        chunk.hash !== undefined &&
+        hashString !== undefined &&
         (chunk.source === 'cache' || request.method === 'HEAD')
       ) {
-        const hashString = toB64Url(chunk.hash);
-        response.setHeader('ETag', `"${hashString}"`);
-        span.setAttribute('chunk.hash', hashString);
+        setChunkETag(response, hashString);
       }
 
-      // Set content type and prepare response data
+      // Set content type and prepare response
       response.setHeader('Content-Type', 'application/json; charset=utf-8');
 
-      // Calculate Content-Length for HEAD requests
       const responseBody = {
         chunk: chunkBase64Url,
-        ...(dataPath !== undefined && {
-          data_path: dataPath,
-        }),
-        ...(txPath !== undefined && {
-          tx_path: txPath,
-        }),
-        // as of today, ar-io-node doesn't pack chunks
+        ...(dataPath !== undefined && { data_path: dataPath }),
+        ...(txPath !== undefined && { tx_path: txPath }),
         packing: 'unpacked',
       };
       const responseBodyString = JSON.stringify(responseBody);
@@ -324,7 +235,7 @@ export const createChunkOffsetHandler = ({
         'chunk.raw_size': chunk.chunk.length,
       });
 
-      // Handle HEAD request - return headers only, no body
+      // Handle HEAD request
       if (request.method === 'HEAD') {
         span.addEvent('HEAD request - headers only');
         response.status(200).end();
@@ -332,9 +243,6 @@ export const createChunkOffsetHandler = ({
       }
 
       span.addEvent('Chunk response successful');
-
-      // Send the full response for GET requests
-      // We manually send JSON to preserve our custom ETag
       response.status(200).send(responseBodyString);
     } catch (error: any) {
       span.recordException(error);
@@ -353,53 +261,15 @@ export const createChunkOffsetHandler = ({
 /**
  * Creates a handler for the raw binary chunk data endpoint (GET/HEAD /chunk/:offset/data).
  *
- * This endpoint serves chunk data in raw binary format (application/octet-stream) instead of
- * base64url-encoded JSON, providing approximately 40% bandwidth savings. All chunk metadata
- * is provided via HTTP headers instead of a JSON response body.
- *
- * Rate limiting uses MAX_CHUNK_SIZE (256 KiB) instead of CHUNK_GET_BASE64_SIZE_BYTES (360 KiB)
- * used by the base64 endpoint, reflecting the smaller response size.
- *
- * @param chunkSource - Source for retrieving chunk data
- * @param txOffsetSource - Source for looking up transaction offset information
- * @param rateLimiter - Optional rate limiter for request throttling
- * @param paymentProcessor - Optional payment processor for x402 protocol
- * @param log - Logger instance for request logging
- *
- * @returns Express route handler
- *
- * @remarks
- * Response headers:
- * - `Content-Type`: Always `application/octet-stream`
- * - `Content-Length`: Size of the returned chunk in bytes
- * - `X-Arweave-Chunk-Data-Path`: Base64url-encoded merkle proof path for the chunk
- * - `X-Arweave-Chunk-Data-Root`: Base64url-encoded merkle tree root hash
- * - `X-Arweave-Chunk-Start-Offset`: Absolute start offset in the weave (inclusive, 0-based)
- * - `X-Arweave-Chunk-Relative-Start-Offset`: Relative start offset within the transaction
- * - `X-Arweave-Chunk-Read-Offset`: Position to start reading within the returned chunk
- * - `X-Arweave-Chunk-Tx-Data-Size`: Total transaction data size in bytes
- * - `X-Arweave-Chunk-Tx-Id`: Transaction ID containing this chunk
- * - `X-Arweave-Chunk-Tx-Start-Offset`: Absolute start offset of the transaction in the weave
- * - `X-Arweave-Chunk-Tx-Path`: Base64url-encoded transaction-level merkle path (if available)
- * - `ETag`: Base64url chunk hash (only for cached data or HEAD requests)
- * - `Content-Digest`: RFC 9530 format SHA-256 hash (only for cached data or HEAD requests)
- *
- * End offsets can be calculated from Content-Length:
- * - Exclusive: `start_offset + Content-Length`
- * - Inclusive: `start_offset + Content-Length - 1`
- *
- * Supports conditional requests via `If-None-Match` header, returning 304 Not Modified when
- * the ETag matches.
+ * Returns chunk data in raw binary format (application/octet-stream) with metadata in headers.
  */
 export const createChunkOffsetDataHandler = ({
-  chunkSource,
-  txOffsetSource,
+  chunkRetrievalService,
   rateLimiter,
   paymentProcessor,
   log,
 }: {
-  chunkSource: ChunkByAnySource;
-  txOffsetSource: TxOffsetSource;
+  chunkRetrievalService: ChunkRetrievalService;
   rateLimiter?: RateLimiter;
   paymentProcessor?: PaymentProcessor;
   log: Logger;
@@ -429,48 +299,32 @@ export const createChunkOffsetDataHandler = ({
       const requestAttributes = getRequestAttributes(request, response);
 
       // === PAYMENT AND RATE LIMIT CHECK ===
-      // Only perform checks if at least one enforcement mechanism is configured
       if (rateLimiter !== undefined || paymentProcessor !== undefined) {
-        // For HEAD requests, use zero tokens since no body is sent
-        // For GET requests, use raw chunk size (not base64 encoded)
-        // NOTE: Unlike data requests, we cannot reliably predict 304 Not Modified
-        // responses for chunks before fetching, since we don't have the chunk hash
-        // until after retrieval. This means some GET requests with If-None-Match
-        // that would return 304 might be charged/denied upfront. Tokens are adjusted
-        // to zero in the finish handler if 304 is returned.
         const contentSize = request.method === 'HEAD' ? 0 : MAX_CHUNK_SIZE;
 
         const limitCheck = await checkPaymentAndRateLimits({
           req: request,
           res: response,
-          // id is omitted - will be added to logs after txResult fetch
           contentSize,
-          contentType: undefined, // Chunks don't have content type
+          contentType: undefined,
           requestAttributes,
           rateLimiter,
           paymentProcessor,
           parentSpan: span,
-          // Use direct payment flow for browser requests (payment to original URL)
-          // This reduces latency for small chunk requests by avoiding redirect overhead
           browserPaymentFlow: 'direct',
         });
 
         if (!limitCheck.allowed) {
-          // Payment required (402) or rate limit exceeded (429) response already sent
           return;
         }
 
         // Schedule token adjustment based on actual response size
         if (rateLimiter && limitCheck.ipTokensConsumed !== undefined) {
           response.on('finish', () => {
-            // Calculate actual response size based on status code
             let actualSize = 0;
             if (response.statusCode === 304 || request.method === 'HEAD') {
-              // 304 Not Modified or HEAD request - no body sent
-              // Note: adjustTokens will still consume minimum 1 token to prevent spam
               actualSize = 0;
             } else if (response.statusCode === 200) {
-              // GET request with body - use actual chunk size from headers
               const headers = {
                 'content-length': response.getHeader('content-length'),
               };
@@ -490,107 +344,48 @@ export const createChunkOffsetDataHandler = ({
         }
       }
 
-      // Get transaction info using composite source (database with chain fallback)
-      let txResult;
+      // === RETRIEVE CHUNK VIA SERVICE ===
+      let result;
       try {
-        txResult = await txOffsetSource.getTxByOffset(offset);
-      } catch (error: any) {
-        log.debug('Transaction offset lookup failed', {
+        result = await chunkRetrievalService.retrieveChunk(
           offset,
-          error: error.message,
-        });
-        span.setAttribute('http.status_code', 404);
-        span.setAttribute('chunk.retrieval.error', 'offset_lookup_failed');
-        response.sendStatus(404);
-        return;
-      }
-
-      const { data_root, id, data_size, offset: weaveOffset } = txResult;
-
-      // Check if result is valid
-      if (
-        data_root === undefined ||
-        weaveOffset === undefined ||
-        id === undefined ||
-        data_size === undefined
-      ) {
-        span.setAttribute('http.status_code', 404);
-        span.setAttribute('chunk.retrieval.error', 'tx_not_found');
-        span.addEvent('Transaction not found');
-        response.sendStatus(404);
-        return;
-      }
-
-      const finalDataRoot = data_root;
-      const finalId = id;
-      const finalDataSize = data_size;
-      const finalWeaveOffset = weaveOffset;
-
-      // Calculate the relative offset, needed for chunk data source
-      const contiguousDataStartDelimiter = finalWeaveOffset - finalDataSize + 1;
-      const relativeOffset = offset - contiguousDataStartDelimiter;
-
-      span.setAttributes({
-        'chunk.tx_id': finalId,
-        'chunk.data_root': finalDataRoot,
-        'chunk.data_size': finalDataSize,
-        'chunk.weave_offset': finalWeaveOffset,
-        'chunk.relative_offset': relativeOffset,
-      });
-
-      // composite-chunk-source returns chunk metadata and chunk data
-      let chunk: Chunk | undefined = undefined;
-
-      // actually fetch the chunk data
-      span.addEvent('Starting chunk retrieval');
-      const chunkRetrievalStart = Date.now();
-
-      try {
-        chunk = await chunkSource.getChunkByAny({
-          txSize: finalDataSize,
-          absoluteOffset: offset,
-          dataRoot: finalDataRoot,
-          relativeOffset,
           requestAttributes,
-        });
+          span,
+        );
       } catch (error: any) {
-        const retrievalDuration = Date.now() - chunkRetrievalStart;
-        span.setAttributes({
-          'http.status_code': 404,
-          'chunk.retrieval.error': 'fetch_failed',
-          'chunk.retrieval.duration_ms': retrievalDuration,
-        });
-        span.recordException(error);
-        response.sendStatus(404);
-        return;
+        if (error instanceof ChunkNotFoundError) {
+          span.setAttribute('http.status_code', 404);
+          span.setAttribute('chunk.retrieval.error', error.errorType);
+          response.sendStatus(404);
+          return;
+        }
+        throw error;
       }
 
-      const retrievalDuration = Date.now() - chunkRetrievalStart;
-      span.setAttribute('chunk.retrieval.duration_ms', retrievalDuration);
+      const {
+        chunk,
+        dataRoot,
+        dataSize,
+        relativeOffset,
+        contiguousDataStartDelimiter,
+      } = result;
 
-      if (chunk === undefined) {
-        span.setAttribute('http.status_code', 404);
-        span.setAttribute('chunk.retrieval.error', 'chunk_undefined');
-        response.sendStatus(404);
-        return;
-      }
+      // Set span attributes based on result type
+      span.setAttribute('chunk.retrieval_path', result.type);
+      span.setAttribute('chunk.data_root', dataRoot);
+      span.setAttribute('chunk.data_size', dataSize);
+      span.setAttribute('chunk.relative_offset', relativeOffset);
 
-      span.addEvent('Chunk retrieval successful');
-
-      // Track chunk source information
-      if (chunk.source !== undefined) {
-        span.setAttribute('chunk.source', chunk.source);
-      }
-      if (chunk.sourceHost !== undefined) {
-        span.setAttribute('chunk.source_host', chunk.sourceHost);
+      if (hasTxId(result)) {
+        span.setAttribute('chunk.tx_id', result.txId);
       }
 
       // Parse merkle path to extract chunk boundaries
       let parsed;
       try {
         parsed = await parseDataPath({
-          dataRoot: Buffer.from(finalDataRoot, 'base64url'),
-          dataSize: finalDataSize,
+          dataRoot: Buffer.from(dataRoot, 'base64url'),
+          dataSize: dataSize,
           dataPath: chunk.data_path,
           offset: relativeOffset,
         });
@@ -607,8 +402,6 @@ export const createChunkOffsetDataHandler = ({
 
       // Calculate absolute offsets in the weave
       const absoluteStartOffset = contiguousDataStartDelimiter + startOffset;
-
-      // Calculate read offset within the returned chunk
       const readOffset = relativeOffset - startOffset;
 
       span.setAttributes({
@@ -618,11 +411,11 @@ export const createChunkOffsetDataHandler = ({
         'chunk.size': chunkSize,
       });
 
-      // Set content type for raw binary data
+      // === SET RESPONSE HEADERS ===
       response.setHeader('Content-Type', 'application/octet-stream');
       response.setHeader('Content-Length', chunk.chunk.length.toString());
 
-      // Set chunk metadata headers
+      // Chunk metadata headers
       response.setHeader(headerNames.chunkDataPath, toB64Url(chunk.data_path));
       response.setHeader(headerNames.chunkDataRoot, toB64Url(chunk.data_root));
       response.setHeader(
@@ -634,46 +427,38 @@ export const createChunkOffsetDataHandler = ({
         startOffset.toString(),
       );
       response.setHeader(headerNames.chunkReadOffset, readOffset.toString());
-      response.setHeader(headerNames.chunkTxDataSize, finalDataSize.toString());
-      response.setHeader(headerNames.chunkTxId, finalId);
+      response.setHeader(headerNames.chunkTxDataSize, dataSize.toString());
+
+      // TX ID header (only for fallback path results)
+      if (hasTxId(result)) {
+        response.setHeader(headerNames.chunkTxId, result.txId);
+      }
+
       response.setHeader(
         headerNames.chunkTxStartOffset,
         contiguousDataStartDelimiter.toString(),
       );
 
-      // Set tx_path header if available
+      // tx_path header
       if (chunk.tx_path !== undefined) {
         response.setHeader(headerNames.chunkTxPath, toB64Url(chunk.tx_path));
       } else {
         response.setHeader(headerNames.chunkTxPath, '');
       }
 
-      // Add source tracking headers
-      if (chunk.source !== undefined && chunk.source !== '') {
-        response.setHeader(headerNames.chunkSourceType, chunk.source);
-      }
-      if (chunk.sourceHost !== undefined && chunk.sourceHost !== '') {
-        response.setHeader(headerNames.chunkHost, chunk.sourceHost);
-      }
+      // Set common headers (source tracking, cache status)
+      const { hashString } = setCommonChunkHeaders(response, chunk, span);
 
-      // Set cache status header
-      const cacheStatus = chunk.source === 'cache' ? 'HIT' : 'MISS';
-      response.setHeader(headerNames.cache, cacheStatus);
-      span.setAttribute('chunk.cache_status', cacheStatus);
-
-      // Add ETag and Content-Digest headers when hash is available
-      // Only add when data is cached OR it's a HEAD request (to prevent incorrect hashes on streamed data)
+      // Set ETag and Content-Digest when hash is available (cache hits or HEAD requests)
       if (
-        chunk.hash !== undefined &&
+        hashString !== undefined &&
         (chunk.source === 'cache' || request.method === 'HEAD')
       ) {
-        const hashString = toB64Url(chunk.hash);
-        response.setHeader('ETag', `"${hashString}"`);
+        setChunkETag(response, hashString);
         response.setHeader(
           headerNames.contentDigest,
           formatContentDigest(hashString),
         );
-        span.setAttribute('chunk.hash', hashString);
       }
 
       // Handle conditional requests (If-None-Match)
@@ -689,7 +474,7 @@ export const createChunkOffsetDataHandler = ({
         'chunk.raw_size': chunk.chunk.length,
       });
 
-      // Handle HEAD request - return headers only, no body
+      // Handle HEAD request
       if (request.method === 'HEAD') {
         span.addEvent('HEAD request - headers only');
         response.status(200).end();
@@ -697,8 +482,6 @@ export const createChunkOffsetDataHandler = ({
       }
 
       span.addEvent('Chunk response successful');
-
-      // Send the raw binary chunk data
       response.status(200).send(chunk.chunk);
     } catch (error: any) {
       span.recordException(error);
@@ -714,6 +497,69 @@ export const createChunkOffsetDataHandler = ({
   });
 };
 
+/**
+ * Determines the appropriate HTTP status code to return to the client
+ * when a chunk broadcast has failed (successCount < threshold).
+ *
+ * - Excludes skipped peers (they were never contacted)
+ * - Excludes successful peers (we only aggregate errors for the failure response)
+ * - Maps special cases: canceled → 499, timeout → 504, network error → 502
+ * - Returns the most common error status code among failed peers
+ * - Tie-breaker: prefers lowest 4xx, then lowest 5xx
+ */
+export function determineFailureStatusCode(
+  results: BroadcastChunkResponses[],
+): number {
+  // Filter out skipped peers and successful posts - we only care about failures
+  const failedResults = results.filter((r) => !r.skipped && !r.success);
+
+  if (failedResults.length === 0) {
+    return 500; // No failed peers to aggregate
+  }
+
+  // Count status codes, mapping special cases
+  const statusCounts = new Map<number, number>();
+
+  for (const result of failedResults) {
+    let statusCode: number;
+    if (result.canceled) {
+      statusCode = 499; // Client Closed Request
+    } else if (result.timedOut) {
+      statusCode = 504; // Gateway Timeout
+    } else if (result.statusCode === 0 || result.statusCode === undefined) {
+      statusCode = 502; // Bad Gateway (network error)
+    } else {
+      statusCode = result.statusCode;
+    }
+    statusCounts.set(statusCode, (statusCounts.get(statusCode) ?? 0) + 1);
+  }
+
+  // Find most common status code with tie-breaker rules
+  let maxCount = 0;
+  let selectedCode = 500;
+
+  for (const [code, count] of statusCounts) {
+    if (count > maxCount) {
+      maxCount = count;
+      selectedCode = code;
+    } else if (count === maxCount) {
+      // Tie-breaker: prefer 4xx over 5xx, then lowest value
+      const selected4xx = selectedCode >= 400 && selectedCode < 500;
+      const current4xx = code >= 400 && code < 500;
+      if (current4xx && !selected4xx) {
+        selectedCode = code;
+      } else if (current4xx === selected4xx && code < selectedCode) {
+        selectedCode = code;
+      }
+    }
+  }
+
+  return selectedCode;
+}
+
+/**
+ * Creates a handler for chunk posting (POST /chunk).
+ */
 export const createChunkPostHandler = ({
   arweaveClient,
   log,
@@ -759,11 +605,16 @@ export const createChunkPostHandler = ({
         span.setAttribute('http.status_code', 200);
         res.status(200).send(result);
       } else {
+        const failureStatusCode = determineFailureStatusCode(result.results);
         span.setAttribute('chunk.broadcast.success', false);
         span.setAttribute('chunk.broadcast.success_count', result.successCount);
         span.setAttribute('chunk.broadcast.failure_count', result.failureCount);
-        span.setAttribute('http.status_code', 500);
-        res.status(500).send(result);
+        span.setAttribute(
+          'chunk.broadcast.failure_status_code',
+          failureStatusCode,
+        );
+        span.setAttribute('http.status_code', failureStatusCode);
+        res.status(failureStatusCode).send(result);
       }
     } catch (error: any) {
       span.recordException(error);

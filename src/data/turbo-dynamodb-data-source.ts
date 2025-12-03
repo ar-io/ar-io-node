@@ -281,6 +281,8 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
             offset: offsetsInfo.rootParentInfo.startOffsetInRootTx,
           };
 
+          span.setAttribute('turbo.cache_path', 'rootParentInfo');
+
           this.dataAttributesStore
             .setDataAttributes(id, attributes)
             .catch((error) => {
@@ -343,6 +345,8 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
           parentId: offsetsInfo.parentInfo.parentDataItemId,
           offset: offsetsInfo.parentInfo.startOffsetInParentPayload,
         };
+
+        span.setAttribute('turbo.cache_path', 'parentInfo');
 
         this.dataAttributesStore
           .setDataAttributes(id, attributes)
@@ -425,6 +429,8 @@ export class TurboDynamoDbDataSource implements ContiguousDataSource {
         this.log.debug(`Turbo DynamoDB: Found raw data for ${id}`, {
           payloadInfo: dataItem.info,
         });
+
+        span.setAttribute('turbo.cache_path', 'rawData');
 
         // Cache attributes discovered from raw data item
         // Not awaiting to avoid blocking the response

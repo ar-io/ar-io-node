@@ -423,6 +423,15 @@ export class ArIOPeerManager implements WithFormattedPeers {
   }
 
   /**
+   * Shutdown the peer manager and release all resources.
+   * This stops peer updates and shuts down the circuit breaker.
+   */
+  shutdown(): void {
+    this.stopUpdatingPeers();
+    this.arioGatewaysCircuitBreaker.shutdown();
+  }
+
+  /**
    * Force an immediate update of the peer list
    */
   async refreshPeers(): Promise<void> {

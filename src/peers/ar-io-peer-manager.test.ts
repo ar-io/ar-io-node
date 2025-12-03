@@ -62,7 +62,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   mock.restoreAll();
-  peerManager.stopUpdatingPeers();
+  peerManager.shutdown();
 });
 
 describe('ArIOPeerManager', () => {
@@ -95,7 +95,7 @@ describe('ArIOPeerManager', () => {
       });
 
       assert.deepEqual(newPeerManager.getPeers(), {});
-      newPeerManager.stopUpdatingPeers();
+      newPeerManager.shutdown();
     });
   });
 
@@ -180,7 +180,7 @@ describe('ArIOPeerManager', () => {
         /No weighted peers available for category: empty/,
       );
 
-      emptyPeerManager.stopUpdatingPeers();
+      emptyPeerManager.shutdown();
     });
 
     it('should auto-register category if not exists', () => {

@@ -4,6 +4,68 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 60] - 2025-12-03
+
+### Added
+
+- **OTEL Nested Bundle Sampling Policies**: Add targeted tail-sampling policies
+  to detect scenarios where nested bundle offset issues could occur
+  - `nested-bundle-policy`: Samples traces with `turbo.offsets_has_parent=true`
+    (default: 5%, configurable via `OTEL_TAIL_SAMPLING_NESTED_BUNDLE_RATE`)
+  - `offset-overwrite-risk-policy`: Samples traces where both offsets AND raw
+    data paths executed (default: 10%, configurable via
+    `OTEL_TAIL_SAMPLING_OFFSET_OVERWRITE_RATE`)
+  - Adds `turbo.cache_path` diagnostic span attribute to identify which caching
+    code path was used (rootParentInfo, parentInfo, or rawData)
+
+- **Chunk Rebroadcasting**: Optional wrapper that asynchronously rebroadcasts
+  chunks from configured sources (e.g., legacy S3) to the Arweave network
+  - Fire-and-forget pattern that never blocks chunk fetches
+  - Configurable via `CHUNK_REBROADCAST_SOURCES` environment variable
+  - Includes rate limiting, deduplication cache, and concurrency controls
+  - Disabled by default (empty `CHUNK_REBROADCAST_SOURCES`)
+
+- **Block Search Optimization**: Ship static offset-to-block mapping to optimize
+  binary search when looking up transactions by offset
+  - Reduces block search iterations from ~21 to ~15 (~29% reduction)
+  - Most significant impact during cold starts when block caches are empty
+  - Each saved iteration means one fewer network call to fetch a block
+  - Includes generation tool (`tools/generate-offset-mapping`) for updating
+    mapping before releases
+
+- **Chunk POST Early Termination and Smart Status Codes**: Reduce wasted
+  resources on invalid chunk uploads and improve client error feedback
+  - Early termination: Stop broadcasting after N consecutive 4xx failures when
+    no peers have accepted the chunk (~96% reduction in wasted requests)
+  - Smart status codes: Return most common peer error code instead of hardcoded
+    500 (e.g., 400 for invalid chunks, 504 for timeouts)
+  - New `CHUNK_POST_MAX_CONSECUTIVE_FAILURES` config variable (default: 5)
+  - Only 4xx responses count toward consecutive failures (timeouts/5xx reset counter)
+
+- **tx_path Chunk Validation**: Optimize chunk retrieval with a DB-first lookup
+  strategy that falls back to tx_path Merkle proof validation for unindexed data
+  - Lookup order: Database (fastest) → tx_path validation → Chain binary search (slowest)
+  - tx_path proofs are cryptographically validated against the block's tx_root
+  - Eliminates expensive chain binary search when tx_path is available from peers
+
+- **Chunk Cache by Absolute Offset**: Enable chunk cache lookups by absolute
+  weave offset for faster retrieval when chunk data is already cached
+  - Creates symlinks indexed by absolute offset for O(1) cache lookups
+  - Background worker periodically cleans up dead symlinks when cached data expires
+  - Configurable via `ENABLE_CHUNK_SYMLINK_CLEANUP` (default: true) and
+    `CHUNK_SYMLINK_CLEANUP_INTERVAL` (default: 24 hours)
+
+### Changed
+
+- **AR.IO Peer Chunk Retrieval Optimization**: Improved chunk retrieval
+  performance from AR.IO network peers
+  - Reduced per-peer request timeout from 10 seconds to 1 second
+  - Changed from sequential to parallel peer requests (3 peers raced simultaneously)
+  - Reduced retry strategy from 5 attempts to 2 attempts with different peers
+  - Selects all peers upfront to ensure different peers on each retry attempt
+  - Worst-case latency reduced from ~150 seconds to ~4 seconds
+  - Maximum peer requests reduced from 15 to 6
+
 ## [Release 59] - 2025-11-24
 
 This is a **recommended release** due to important fixes for nested bundle data

@@ -146,10 +146,12 @@ export interface OwnerStore extends B64UrlStore {
 export interface ChunkDataStore {
   has(dataRoot: string, relativeOffset: number): Promise<boolean>;
   get(dataRoot: string, relativeOffset: number): Promise<ChunkData | undefined>;
+  getByAbsoluteOffset(absoluteOffset: number): Promise<ChunkData | undefined>;
   set(
     dataRoot: string,
     relativeOffset: number,
     chunkData: ChunkData,
+    absoluteOffset?: number,
   ): Promise<void>;
 }
 
@@ -159,7 +161,10 @@ export interface ChunkMetadataStore {
     dataRoot: string,
     relativeOffset: number,
   ): Promise<ChunkMetadata | undefined>;
-  set(chunkMetadata: ChunkMetadata): Promise<void>;
+  getByAbsoluteOffset(
+    absoluteOffset: number,
+  ): Promise<ChunkMetadata | undefined>;
+  set(chunkMetadata: ChunkMetadata, absoluteOffset?: number): Promise<void>;
 }
 
 type Region = {
@@ -223,8 +228,52 @@ export interface TxOffsetResult {
   data_size: number | undefined;
 }
 
+/**
+ * Context for tx_path-based validation (optional fast path).
+ * When provided to getTxByOffset, enables validation of tx_path against
+ * the block's tx_root to derive transaction info without binary search.
+ */
+export interface TxPathContext {
+  /** The tx_path Merkle proof from the chunk response */
+  txPath: Buffer;
+  /** The block's transaction Merkle root */
+  txRoot: Buffer;
+  /** Current block's weave_size (absolute end offset) */
+  blockWeaveSize: number;
+  /** Previous block's weave_size (absolute start offset) */
+  prevBlockWeaveSize: number;
+}
+
 export interface TxOffsetSource {
-  getTxByOffset(offset: number): Promise<TxOffsetResult>;
+  getTxByOffset(
+    offset: number,
+    txPathContext?: TxPathContext,
+  ): Promise<TxOffsetResult>;
+}
+
+/**
+ * Transaction boundary information for a given offset.
+ * Contains the essential data needed to locate and validate a chunk
+ * within a transaction.
+ */
+export interface TxBoundary {
+  /** Transaction ID - may be undefined for tx_path validated results */
+  id?: string;
+  /** Transaction data root (Merkle root of data chunks) */
+  dataRoot: string;
+  /** Total size of transaction data in bytes */
+  dataSize: number;
+  /** Absolute weave offset (end offset of transaction) */
+  weaveOffset: number;
+}
+
+/**
+ * Source for looking up transaction boundaries by absolute offset.
+ * Implementations may use different strategies: database lookup, tx_path
+ * validation, or chain binary search.
+ */
+export interface TxBoundarySource {
+  getTxBoundary(absoluteOffset: bigint): Promise<TxBoundary | null>;
 }
 
 export interface BundleRecord {
@@ -470,11 +519,24 @@ export interface JsonChunk {
   chunk: string;
 }
 
+/**
+ * JSON format for posting chunks to Arweave nodes (POST /chunk).
+ * All fields are base64url-encoded strings or stringified integers.
+ */
 export interface JsonChunkPost {
+  /** Base64url-encoded data root (merkle root of the transaction data) */
   data_root: string;
+  /** Base64url-encoded chunk data */
   chunk: string;
+  /** Total size of the transaction data in bytes (stringified integer) */
   data_size: string;
+  /** Base64url-encoded merkle proof path for this chunk */
   data_path: string;
+  /**
+   * End byte offset of this chunk relative to the start of the transaction data
+   * (stringified integer). This is NOT the absolute weave offset.
+   * Corresponds to (maxByteRange - 1) in the merkle tree leaf.
+   */
   offset: string;
 }
 
@@ -485,27 +547,94 @@ export interface ChunkData {
   sourceHost?: string;
 }
 
+/**
+ * Metadata for a chunk including merkle proof information.
+ */
 export interface ChunkMetadata {
+  /** Size of the chunk data in bytes */
   chunk_size?: number;
+  /** Merkle root of the transaction data */
   data_root: Buffer;
+  /** Total size of the transaction data in bytes */
   data_size: number;
+  /** Merkle proof path for this chunk */
   data_path: Buffer;
+  /**
+   * End byte offset of this chunk relative to the start of the transaction data.
+   * This is NOT the absolute weave offset. Corresponds to (maxByteRange - 1)
+   * in the merkle tree leaf.
+   */
   offset: number;
+  /** SHA-256 hash of the chunk data */
   hash: Buffer;
+  /** Merkle proof path from block to transaction (optional) */
   tx_path?: Buffer;
 }
 
 export interface Chunk extends ChunkMetadata, ChunkData {
   tx_path?: Buffer;
+  /**
+   * Optional TX metadata populated when chunk is fetched via offset source path.
+   * These fields allow handlers to skip separate getTxByOffset calls.
+   */
+  txId?: string;
+  txDataRoot?: string; // Base64url encoded
+  txWeaveOffset?: number; // Absolute weave offset of TX end
 }
 
-export interface ChunkDataByAnySourceParams {
+/**
+ * Unvalidated chunk returned from network sources before tx_path/data_path validation.
+ * Used by the handler-level validation flow to fetch chunks without validating them
+ * at the source level.
+ */
+export interface UnvalidatedChunk {
+  chunk: Buffer;
+  hash: Buffer;
+  data_path: Buffer;
+  tx_path?: Buffer; // May be undefined if source doesn't have it
+  source?: string;
+  sourceHost?: string;
+}
+
+/**
+ * Source that can fetch unvalidated chunks by absolute offset.
+ * Validation is deferred to the handler level.
+ */
+export interface UnvalidatedChunkSource {
+  getUnvalidatedChunk(
+    absoluteOffset: number,
+    requestAttributes?: RequestAttributes,
+  ): Promise<UnvalidatedChunk>;
+}
+
+/**
+ * Parameters for chunk retrieval with validation info.
+ * TX info must be known (e.g., from database or TxBoundarySource).
+ */
+export interface ChunkWithValidationParams {
+  /** Total size of the transaction data in bytes */
   txSize: number;
+  /**
+   * Absolute byte offset in the weave (global offset across all Arweave data).
+   * Used to locate the chunk in the weave's linear byte range.
+   */
   absoluteOffset: number;
+  /** Base64url-encoded data root (merkle root of the transaction data) */
   dataRoot: string;
+  /**
+   * End byte offset of this chunk relative to the start of the transaction data.
+   * This is the offset used in merkle proofs and chunk POST requests.
+   * Corresponds to (maxByteRange - 1) in the merkle tree leaf.
+   */
   relativeOffset: number;
+  /** Optional request attributes for tracking and rate limiting */
   requestAttributes?: RequestAttributes;
 }
+
+/**
+ * Chunk retrieval parameters - requires validation params.
+ */
+export type ChunkDataByAnySourceParams = ChunkWithValidationParams;
 
 export interface ChunkByAnySource {
   getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk>;
@@ -521,11 +650,21 @@ export interface ChunkDataByAnySource {
   getChunkDataByAny(params: ChunkDataByAnySourceParams): Promise<ChunkData>;
 }
 
+/**
+ * Per-peer response from a chunk broadcast attempt.
+ *
+ * When `skipped` is true, the peer was never contacted (request was not sent).
+ * This happens when early termination conditions are met before reaching the peer.
+ * Skipped peers should be excluded from status code aggregation since they have
+ * no meaningful response to report.
+ */
 type BroadcastChunkResponses = {
   success: boolean;
   statusCode: number;
   canceled: boolean;
   timedOut: boolean;
+  skipped?: boolean;
+  skipReason?: 'success_threshold' | 'consecutive_failures';
 };
 
 interface BroadcastChunkResult {

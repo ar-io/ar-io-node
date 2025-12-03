@@ -56,8 +56,12 @@ import {
   PartialJsonTransactionStore,
   Region,
   ChunkDataByAnySourceParams,
+  RequestAttributes,
+  UnvalidatedChunk,
+  UnvalidatedChunkSource,
 } from '../types.js';
 import { MAX_FORK_DEPTH } from './constants.js';
+import { BlockOffsetMapping } from './block-offset-mapping.js';
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const DEFAULT_REQUEST_RETRY_COUNT = 5;
@@ -70,6 +74,7 @@ const CHUNK_CACHE_CAPACITY = 1000;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
+const PEER_CHUNK_REQUEST_TIMEOUT_MS = 500;
 
 // Peer queue management types
 interface ChunkPostTask {
@@ -101,7 +106,8 @@ export class ArweaveCompositeClient
     ChunkByAnySource,
     ChunkDataByAnySource,
     ChunkMetadataByAnySource,
-    ContiguousDataSource
+    ContiguousDataSource,
+    UnvalidatedChunkSource
 {
   private arweave: Arweave;
   private log: winston.Logger;
@@ -134,6 +140,10 @@ export class ArweaveCompositeClient
     max: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_SIZE,
     ttl: config.CHUNK_OFFSET_CHAIN_FALLBACK_TX_DATA_CACHE_TTL_MS,
   });
+
+  // Static offset-to-block mapping for optimizing binary search
+  private blockOffsetMapping?: BlockOffsetMapping;
+
   // New peer-based chunk POST system
   private peerChunkQueues: Map<string, PeerChunkQueue> = new Map();
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
@@ -174,6 +184,7 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
     cacheCheckPeriodSeconds = 10,
+    blockOffsetMapping,
   }: {
     log: winston.Logger;
     arweave: Arweave;
@@ -191,11 +202,13 @@ export class ArweaveCompositeClient
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
     cacheCheckPeriodSeconds?: number;
+    blockOffsetMapping?: BlockOffsetMapping;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.arweave = arweave;
     this.trustedNodeUrl = trustedNodeUrl.replace(/\/$/, '');
     this.peerManager = peerManager;
+    this.blockOffsetMapping = blockOffsetMapping;
 
     // Initialize memoized sorting function for chunk POST peers
     this.getSortedChunkPostPeers = memoize(
@@ -1125,7 +1138,7 @@ export class ArweaveCompositeClient
           peerHost,
           absoluteOffset,
           requestUrl,
-          timeout: 500,
+          timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
           peerIndex: peerIndex + 1,
           totalPeers: orderedPeers.length,
           peerType: isBucketPeer ? 'bucket' : 'general',
@@ -1137,7 +1150,7 @@ export class ArweaveCompositeClient
           const response = await axios({
             method: 'GET',
             url: requestUrl,
-            timeout: 500,
+            timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
           });
           const responseTime = Date.now() - startTime;
 
@@ -1301,16 +1314,13 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getChunkByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<Chunk> {
+  async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+    const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
+
     const span = tracer.startSpan('ArweaveCompositeClient.getChunkByAny', {
       attributes: {
-        'chunk.data_root': dataRoot,
         'chunk.absolute_offset': absoluteOffset,
+        'chunk.data_root': dataRoot,
         'chunk.relative_offset': relativeOffset,
         'chunk.tx_size': txSize,
       },
@@ -1342,18 +1352,11 @@ export class ArweaveCompositeClient
     }
   }
 
-  async getChunkDataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
-    const { hash, chunk, source, sourceHost } = await this.getChunkByAny({
-      txSize,
-      absoluteOffset,
-      dataRoot,
-      relativeOffset,
-    });
+  async getChunkDataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkData> {
+    const { hash, chunk, source, sourceHost } =
+      await this.getChunkByAny(params);
     return {
       hash,
       chunk,
@@ -1362,22 +1365,14 @@ export class ArweaveCompositeClient
     };
   }
 
-  async getChunkMetadataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkMetadata> {
+  async getChunkMetadataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkMetadata> {
     this.failureSimulator.maybeFail();
 
     // Fetch the full chunk using the existing getChunkByAny method
     // This leverages the existing chunk caching
-    const chunk = await this.getChunkByAny({
-      txSize,
-      absoluteOffset,
-      dataRoot,
-      relativeOffset,
-    });
+    const chunk = await this.getChunkByAny(params);
 
     // Extract and return only the metadata portion
     const metadata: ChunkMetadata = {
@@ -1399,6 +1394,157 @@ export class ArweaveCompositeClient
     }
 
     return metadata;
+  }
+
+  /**
+   * Fetch chunk from Arweave peers WITHOUT validation.
+   * Validation is deferred to the handler level.
+   */
+  async getUnvalidatedChunk(
+    absoluteOffset: number,
+    _requestAttributes?: RequestAttributes,
+  ): Promise<UnvalidatedChunk> {
+    const span = tracer.startSpan(
+      'ArweaveCompositeClient.getUnvalidatedChunk',
+      {
+        attributes: {
+          'chunk.absolute_offset': absoluteOffset,
+        },
+      },
+    );
+
+    try {
+      this.failureSimulator.maybeFail();
+
+      // Select peers for chunk retrieval
+      const peerSelectionCount = 10;
+      const retryCount = 5;
+
+      const bucketPeers = this.peerManager.selectBucketPeersForOffset(
+        absoluteOffset,
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      const allGeneralPeers = this.peerManager.selectPeers(
+        'getChunk',
+        Math.max(peerSelectionCount, retryCount),
+      );
+
+      const bucketPeerSet = new Set(bucketPeers);
+      const generalPeers = allGeneralPeers.filter(
+        (peer) => !bucketPeerSet.has(peer),
+      );
+
+      const orderedPeers = [...bucketPeers, ...generalPeers];
+
+      if (orderedPeers.length === 0) {
+        throw new Error('No peers available for chunk retrieval');
+      }
+
+      span.setAttributes({
+        'chunk.available_peers': orderedPeers.length,
+        'chunk.bucket_peers': bucketPeers.length,
+        'chunk.general_peers': generalPeers.length,
+      });
+
+      const maxAttempts = Math.min(orderedPeers.length, retryCount);
+
+      for (let peerIndex = 0; peerIndex < maxAttempts; peerIndex++) {
+        const isBucketPeer = peerIndex < bucketPeers.length;
+        const peer = orderedPeers[peerIndex];
+        const peerHost = new URL(peer).hostname;
+
+        span.addEvent('Trying peer', {
+          peer_host: peerHost,
+          peer_index: peerIndex + 1,
+          peer_type: isBucketPeer ? 'bucket' : 'general',
+        });
+
+        const startTime = Date.now();
+
+        try {
+          // Fetch chunk from peer
+          const response = await axios({
+            method: 'GET',
+            url: `${peer}/chunk/${absoluteOffset}`,
+            timeout: PEER_CHUNK_REQUEST_TIMEOUT_MS,
+          });
+
+          const responseTime = Date.now() - startTime;
+          const jsonChunk = response.data;
+
+          // Basic sanity check
+          sanityCheckChunk(jsonChunk);
+
+          // Parse chunk response
+          const txPathBuffer = jsonChunk.tx_path
+            ? fromB64Url(jsonChunk.tx_path)
+            : undefined;
+          const dataPathBuffer = fromB64Url(jsonChunk.data_path);
+          const hash = dataPathBuffer.slice(-64, -32);
+          const chunkBuffer = fromB64Url(jsonChunk.chunk);
+
+          span.addEvent('Unvalidated chunk retrieval successful', {
+            peer_host: peerHost,
+            chunk_size: chunkBuffer.length,
+            has_tx_path: txPathBuffer !== undefined,
+            response_time_ms: responseTime,
+          });
+
+          // Report success
+          this.handlePeerSuccess(
+            peer,
+            'peerGetChunk',
+            this.peerManager.isPreferredChunkGetPeer(peer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
+          );
+
+          // Return unvalidated chunk (NO validation performed)
+          return {
+            chunk: chunkBuffer,
+            hash,
+            data_path: dataPathBuffer,
+            tx_path: txPathBuffer,
+            source: 'arweave-peers',
+            sourceHost: peerHost,
+          };
+        } catch (error: any) {
+          const responseTime = Date.now() - startTime;
+          span.addEvent('Peer request failed', {
+            peer_host: peerHost,
+            error: error.message,
+            response_time_ms: responseTime,
+          });
+
+          // Report failure
+          this.handlePeerFailure(
+            peer,
+            'peerGetChunk',
+            this.peerManager.isPreferredChunkGetPeer(peer)
+              ? 'preferred'
+              : 'peer',
+            'getChunk',
+            isBucketPeer ? 'bucket' : 'general',
+          );
+          // Continue to next peer
+        }
+      }
+
+      // All retry attempts failed
+      const error = new Error(
+        `Failed to fetch unvalidated chunk from Arweave peers after ${maxAttempts} attempts`,
+      );
+      span.recordException(error);
+      throw error;
+    } catch (error: any) {
+      span.recordException(error);
+      throw error;
+    } finally {
+      span.end();
+    }
   }
 
   async getData({
@@ -1497,6 +1643,22 @@ export class ArweaveCompositeClient
     return response.data;
   }
 
+  /**
+   * Broadcasts a chunk to multiple AR.IO peers in parallel with early termination.
+   *
+   * The broadcast uses two early termination conditions:
+   * 1. **Success threshold**: Stops when `chunkPostMinSuccessCount` peers accept the chunk
+   * 2. **Consecutive failures**: Stops after `CHUNK_POST_MAX_CONSECUTIVE_FAILURES` consecutive
+   *    4xx responses when no peers have accepted the chunk (configurable, 0 to disable)
+   *
+   * @param chunk - The chunk data to broadcast
+   * @param abortTimeout - Timeout for aborting in-flight requests after success threshold
+   * @param responseTimeout - Timeout for individual peer requests
+   * @param originAndHopsHeaders - Headers to propagate for request tracing
+   * @param chunkPostMinSuccessCount - Minimum successful posts to consider broadcast complete
+   * @param parentSpan - Optional parent span for distributed tracing
+   * @returns Results including success/failure counts and per-peer response details
+   */
   async broadcastChunk({
     chunk,
     abortTimeout = DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS,
@@ -1556,8 +1718,16 @@ export class ArweaveCompositeClient
 
       // 3. Broadcast in parallel with concurrency limit
       const peerConcurrencyLimit = pLimit(config.CHUNK_POST_PEER_CONCURRENCY);
+
+      // Note: These counters are accessed concurrently by multiple tasks. This is
+      // acceptable because they're used for optimization heuristics (early termination),
+      // not correctness. Race conditions could cause undercounting, which means we may
+      // send a few extra requests before early termination kicks in. Logged and traced
+      // counts may also be slightly inaccurate; use the results array for precise values.
       let successCount = 0;
       let failureCount = 0;
+      let consecutive4xxFailures = 0;
+      let hasAnySuccess = false;
       const results: BroadcastChunkResponses[] = [];
 
       this.log.debug('Starting chunk broadcast', {
@@ -1583,6 +1753,30 @@ export class ArweaveCompositeClient
               canceled: false,
               timedOut: false,
               skipped: true,
+              skipReason: 'success_threshold' as const,
+            };
+          }
+
+          // Skip if consecutive 4xx failures reached (only when no successes)
+          if (
+            config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
+            !hasAnySuccess &&
+            consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES
+          ) {
+            this.log.debug(
+              'Skipping peer due to consecutive 4xx failures threshold',
+              {
+                peer,
+                consecutive4xxFailures,
+              },
+            );
+            return {
+              success: false,
+              statusCode: 0,
+              canceled: false,
+              timedOut: false,
+              skipped: true,
+              skipReason: 'consecutive_failures' as const,
             };
           }
 
@@ -1596,25 +1790,39 @@ export class ArweaveCompositeClient
               span,
             );
 
+            const statusCode = result.statusCode ?? 0;
+
             if (result.success) {
               successCount++;
+              hasAnySuccess = true;
+              consecutive4xxFailures = 0;
               this.log.debug('Chunk POST succeeded', { peer, successCount });
             } else {
               failureCount++;
+              // Only count 4xx responses toward consecutive failures
+              if (statusCode >= 400 && statusCode < 500) {
+                consecutive4xxFailures++;
+              } else {
+                consecutive4xxFailures = 0;
+              }
               this.log.debug('Chunk POST failed', {
                 peer,
+                statusCode,
+                consecutive4xxFailures,
                 error: result.error,
               });
             }
 
             return {
               success: result.success,
-              statusCode: result.statusCode ?? 0,
+              statusCode,
               canceled: result.canceled ?? false,
               timedOut: result.timedOut ?? false,
             };
           } catch (error: any) {
             failureCount++;
+            // Network errors reset the consecutive 4xx counter
+            consecutive4xxFailures = 0;
             this.log.debug('Chunk POST errored', {
               peer,
               error: error.message,
@@ -1650,17 +1858,41 @@ export class ArweaveCompositeClient
       const succeeded = successCount >= chunkPostMinSuccessCount;
       span.setAttribute('chunk.broadcast.succeeded', succeeded);
 
+      // Determine early termination reason
+      // Only report 'consecutive_failures' when:
+      // 1. Feature is enabled (config > 0)
+      // 2. No peers have accepted the chunk (!hasAnySuccess)
+      // 3. We hit the consecutive failure threshold
+      const terminatedDueToConsecutiveFailures =
+        config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES > 0 &&
+        !hasAnySuccess &&
+        consecutive4xxFailures >= config.CHUNK_POST_MAX_CONSECUTIVE_FAILURES;
+
+      const earlyTerminationReason = succeeded
+        ? 'success_threshold'
+        : terminatedDueToConsecutiveFailures
+          ? 'consecutive_failures'
+          : 'completed';
+      span.setAttribute(
+        'chunk.broadcast.early_termination_reason',
+        earlyTerminationReason,
+      );
+
       if (succeeded) {
         span.addEvent('Broadcast threshold reached');
+      } else if (earlyTerminationReason === 'consecutive_failures') {
+        span.addEvent('Broadcast stopped due to consecutive 4xx failures');
       }
 
       this.log.debug('Chunk broadcast complete', {
         successCount,
         failureCount,
+        consecutive4xxFailures,
         totalPeers: sortedPeers.length,
         resultsCount: results.length,
         duration,
         succeeded,
+        earlyTerminationReason,
       });
 
       // Update overall broadcast metrics
@@ -1783,9 +2015,13 @@ export class ArweaveCompositeClient
   }
 
   /**
-   * Binary search through blocks to find the one containing the given offset
+   * Binary search through blocks to find the one containing the given offset.
+   * Returns the block containing the target offset, or null if not found.
+   *
+   * @param targetOffset - The absolute weave offset to search for
+   * @returns Block data with tx_root, weave_size, height, txs, etc. or null
    */
-  private async binarySearchBlocks(targetOffset: number): Promise<any | null> {
+  public async binarySearchBlocks(targetOffset: number): Promise<any | null> {
     const cacheKey = `block_for_offset_${targetOffset}`;
     const cached = this.blockCache.get(cacheKey);
     if (cached) {
@@ -1801,13 +2037,36 @@ export class ArweaveCompositeClient
       const currentHeight = await this.getHeight();
       let left = 0;
       let right = currentHeight;
+
+      // Use offset mapping to narrow search bounds if available
+      const bounds = this.blockOffsetMapping?.getSearchBounds(
+        targetOffset,
+        currentHeight,
+      );
+      if (bounds) {
+        left = bounds.lowHeight;
+        // Use min to handle case where mapping is slightly outdated
+        right = Math.min(bounds.highHeight, currentHeight);
+
+        this.log.debug('Using offset mapping to narrow block search', {
+          targetOffset,
+          originalRange: `0-${currentHeight}`,
+          narrowedRange: `${left}-${right}`,
+          reductionPercent: (
+            (1 - (right - left) / currentHeight) *
+            100
+          ).toFixed(1),
+        });
+      }
+
       let result: any | null = null;
       let iteration = 0;
 
       this.log.debug('Starting binary search for blocks', {
         targetOffset,
         heightRange: `${left}-${right}`,
-        totalBlocks: currentHeight + 1,
+        totalBlocks: right - left + 1,
+        usingMapping: !!bounds,
       });
 
       while (left <= right) {

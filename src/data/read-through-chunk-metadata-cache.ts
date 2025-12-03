@@ -6,6 +6,7 @@
  */
 import winston from 'winston';
 
+import { isValidationParams } from '../lib/validation.js';
 import {
   ChunkDataByAnySourceParams,
   ChunkMetadata,
@@ -32,12 +33,18 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
     this.chunkMetadataStore = chunkMetadataStore;
   }
 
-  async getChunkMetadataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkMetadata> {
+  async getChunkMetadataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkMetadata> {
+    // This source only supports validation params (txSize, dataRoot, relativeOffset)
+    if (!isValidationParams(params)) {
+      throw new Error(
+        'ReadThroughChunkMetadataCache requires validation params (txSize, dataRoot, relativeOffset)',
+      );
+    }
+
+    const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
+
     const chunkMetadataPromise = this.chunkMetadataStore
       .get(dataRoot, relativeOffset)
       .then(async (cachedChunkMetadata) => {
@@ -59,7 +66,8 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
             relativeOffset,
           });
 
-        await this.chunkMetadataStore.set(chunkMetadata);
+        // Cache with absoluteOffset for symlink index
+        await this.chunkMetadataStore.set(chunkMetadata, absoluteOffset);
 
         return chunkMetadata;
       });

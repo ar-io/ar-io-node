@@ -53,7 +53,7 @@ export class S3ChunkSource implements ChunkDataByAnySource {
     });
 
     try {
-      if (!dataRoot || relativeOffset == null) {
+      if (dataRoot === undefined || relativeOffset == null) {
         const error = new Error(
           'S3ChunkSource.getChunkDataByAny called without dataRoot or relativeOffset',
         );

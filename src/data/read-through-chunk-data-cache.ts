@@ -6,6 +6,7 @@
  */
 import winston from 'winston';
 import { tracer } from '../tracing.js';
+import { isValidationParams } from '../lib/validation.js';
 
 import {
   ChunkData,
@@ -33,12 +34,18 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
     this.chunkStore = chunkDataStore;
   }
 
-  async getChunkDataByAny({
-    txSize,
-    absoluteOffset,
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
+  async getChunkDataByAny(
+    params: ChunkDataByAnySourceParams,
+  ): Promise<ChunkData> {
+    // This source only supports validation params (txSize, dataRoot, relativeOffset)
+    if (!isValidationParams(params)) {
+      throw new Error(
+        'ReadThroughChunkDataCache requires validation params (txSize, dataRoot, relativeOffset)',
+      );
+    }
+
+    const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
+
     const span = tracer.startSpan(
       'ReadThroughChunkDataCache.getChunkDataByAny',
       {
@@ -116,9 +123,14 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
         chunk_source: chunkData.source,
       });
 
-      // Cache the result
+      // Cache the result (with absoluteOffset for symlink index)
       const cacheStoreStart = Date.now();
-      await this.chunkStore.set(dataRoot, relativeOffset, chunkData);
+      await this.chunkStore.set(
+        dataRoot,
+        relativeOffset,
+        chunkData,
+        absoluteOffset,
+      );
       const cacheStoreDuration = Date.now() - cacheStoreStart;
 
       span.setAttributes({

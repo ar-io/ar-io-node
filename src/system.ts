@@ -11,6 +11,7 @@ import { AOProcess, ARIO, Logger as ARIOLogger } from '@ar.io/sdk';
 import postgres from 'postgres';
 
 import { ArweaveCompositeClient } from './arweave/composite-client.js';
+import { BlockOffsetMapping } from './arweave/block-offset-mapping.js';
 import { ArweavePeerManager } from './peers/arweave-peer-manager.js';
 import * as config from './config.js';
 import { GatewaysDataSource } from './data/gateways-data-source.js';
@@ -23,6 +24,10 @@ import { Ans104OffsetSource } from './data/ans104-offset-source.js';
 import { CompositeTxOffsetSource } from './data/composite-tx-offset-source.js';
 import { DatabaseTxOffsetSource } from './data/database-tx-offset-source.js';
 import { ChainTxOffsetSource } from './data/chain-tx-offset-source.js';
+import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
+import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
+import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
+import { TxPathValidationSource } from './data/tx-path-validation-source.js';
 import { DataImporter } from './workers/data-importer.js';
 import { CompositeClickHouseDatabase } from './database/composite-clickhouse.js';
 import { StandaloneSqliteDatabase } from './database/standalone-sqlite.js';
@@ -53,6 +58,8 @@ import log from './log.js';
 import * as metrics from './metrics.js';
 import { StreamingManifestPathResolver } from './resolution/streaming-manifest-path-resolver.js';
 import { FsDataStore } from './store/fs-data-store.js';
+import { FsChunkDataStore } from './store/fs-chunk-data-store.js';
+import { FsChunkMetadataStore } from './store/fs-chunk-metadata-store.js';
 import {
   DataBlockListValidator,
   NameBlockListValidator,
@@ -73,6 +80,7 @@ import { Ans104DataIndexer } from './workers/ans104-data-indexer.js';
 import { Ans104Unbundler } from './workers/ans104-unbundler.js';
 import { BlockImporter } from './workers/block-importer.js';
 import { BundleRepairWorker } from './workers/bundle-repair-worker.js';
+import { SymlinkCleanupWorker } from './workers/symlink-cleanup-worker.js';
 import { DataItemIndexer } from './workers/data-item-indexer.js';
 import { FsCleanupWorker } from './workers/fs-cleanup-worker.js';
 import { TransactionFetcher } from './workers/transaction-fetcher.js';
@@ -100,7 +108,9 @@ import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js'
 import { awsClient } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
+import { ChunkRetrievalService } from './data/chunk-retrieval-service.js';
 import { FullChunkSource } from './data/full-chunk-source.js';
+import { RebroadcastingChunkSource } from './data/rebroadcasting-chunk-source.js';
 import { TurboRedisDataSource } from './data/turbo-redis-data-source.js';
 import { TurboDynamoDbDataSource } from './data/turbo-dynamodb-data-source.js';
 import { CompositeDataAttributesSource } from './data/composite-data-attributes-source.js';
@@ -174,6 +184,13 @@ export const arweavePeerManager = new ArweavePeerManager({
   dnsResolver,
 });
 
+// Create block offset mapping for optimizing binary search
+const blockOffsetMapping = new BlockOffsetMapping({
+  log,
+  filePath: new URL('./data/offset-block-mapping.json', import.meta.url)
+    .pathname,
+});
+
 export const arweaveClient = new ArweaveCompositeClient({
   log,
   arweave,
@@ -191,6 +208,7 @@ export const arweaveClient = new ArweaveCompositeClient({
   failureSimulator: new UniformFailureSimulator({
     failureRate: config.SIMULATED_REQUEST_FAILURE_RATE,
   }),
+  blockOffsetMapping,
 });
 metrics.registerQueueLengthGauge('arweaveClientRequests', {
   length: () => arweaveClient.queueDepth(),
@@ -626,10 +644,69 @@ const chunkDataSource = createChunkDataSource({
   chunkDataSourceParallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
 });
 
-export const chunkSource = new FullChunkSource(
+const fullChunkSource = new FullChunkSource(
   chunkMetaDataSource,
   chunkDataSource,
 );
+
+// Conditionally wrap with rebroadcasting if sources are configured
+export const chunkSource =
+  config.CHUNK_REBROADCAST_SOURCES.length > 0
+    ? new RebroadcastingChunkSource({
+        log,
+        chunkSource: fullChunkSource,
+        chunkBroadcaster: arweaveClient,
+        options: {
+          sources: config.CHUNK_REBROADCAST_SOURCES,
+          rateLimitTokens: config.CHUNK_REBROADCAST_RATE_LIMIT_TOKENS,
+          rateLimitInterval: config.CHUNK_REBROADCAST_RATE_LIMIT_INTERVAL,
+          maxConcurrent: config.CHUNK_REBROADCAST_MAX_CONCURRENT,
+          dedupTtlSeconds: config.CHUNK_REBROADCAST_DEDUP_TTL_SECONDS,
+          minSuccessCount: config.CHUNK_REBROADCAST_MIN_SUCCESS_COUNT,
+        },
+      })
+    : fullChunkSource;
+
+// Create stores for ChunkRetrievalService fast path (cache lookup by absoluteOffset)
+const chunkDataStore = new FsChunkDataStore({
+  log,
+  baseDir: 'data/chunks',
+});
+
+const chunkMetadataStore = new FsChunkMetadataStore({
+  log,
+  baseDir: 'data/chunks/metadata',
+});
+
+// Transaction boundary sources for chunk retrieval
+// Uses DB-first strategy: DB (fastest) → tx_path validation → chain (slowest)
+const dbBoundarySource = new DatabaseTxBoundarySource({ log, db });
+
+const txPathBoundarySource = new TxPathValidationSource({
+  log,
+  unvalidatedChunkSource: arIOChunkSource,
+  arweaveClient,
+});
+
+const chainBoundarySource = config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
+  ? new ChainTxBoundarySource({ log, arweaveClient })
+  : undefined;
+
+const txBoundarySource = new CompositeTxBoundarySource({
+  log,
+  dbSource: dbBoundarySource,
+  txPathSource: txPathBoundarySource,
+  chainSource: chainBoundarySource,
+});
+
+// ChunkRetrievalService encapsulates the chunk retrieval pipeline with fast path support
+export const chunkRetrievalService = new ChunkRetrievalService({
+  log,
+  chunkSource,
+  txBoundarySource,
+  chunkDataStore,
+  chunkMetadataStore,
+});
 
 // Create the base TX chunks data source
 const baseTxChunksDataSource = new TxChunksDataSource({
@@ -757,6 +834,21 @@ export const chunkDataFsCacheCleanupWorker =
         },
       })
     : undefined;
+
+// Dead symlink cleanup worker
+// Runs periodically to remove symlinks pointing to deleted files
+const symlinkCleanupWorker = config.ENABLE_CHUNK_SYMLINK_CLEANUP
+  ? new SymlinkCleanupWorker({
+      log,
+      directories: [
+        'data/chunks/data/by-absolute-offset',
+        'data/chunks/metadata/by-absolute-offset',
+      ],
+      intervalMs: config.CHUNK_SYMLINK_CLEANUP_INTERVAL * 1000,
+    })
+  : undefined;
+
+symlinkCleanupWorker?.start();
 
 function getDataSource(sourceName: string): ContiguousDataSource | undefined {
   switch (sourceName) {
@@ -1211,6 +1303,7 @@ export const shutdown = async (exitCode = 0) => {
     await headerFsCacheCleanupWorker?.stop();
     await contiguousDataFsCacheCleanupWorker?.stop();
     await chunkDataFsCacheCleanupWorker?.stop();
+    symlinkCleanupWorker?.stop();
     await dataVerificationWorker?.stop();
 
     // Stop DNS periodic re-resolution if running

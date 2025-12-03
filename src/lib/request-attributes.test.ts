@@ -11,6 +11,7 @@ import { RequestAttributes } from '../types.js';
 import {
   generateRequestAttributes,
   parseRequestAttributesHeaders,
+  validateHopCount,
 } from './request-attributes.js';
 
 describe('Request attributes functions', () => {
@@ -183,6 +184,38 @@ describe('Request attributes functions', () => {
 
       const result = parseRequestAttributesHeaders({ headers });
       assert.deepStrictEqual(result, expected);
+    });
+  });
+
+  describe('validateHopCount', () => {
+    it('should throw when hops exceed maximum', () => {
+      assert.throws(
+        () => validateHopCount(2, 1),
+        /Maximum hops \(1\) exceeded/,
+      );
+    });
+
+    it('should throw when hops equal maximum', () => {
+      assert.throws(
+        () => validateHopCount(1, 1),
+        /Maximum hops \(1\) exceeded/,
+      );
+    });
+
+    it('should not throw when hops are below maximum', () => {
+      assert.doesNotThrow(() => validateHopCount(0, 1));
+    });
+
+    it('should work with different maxHops values', () => {
+      assert.doesNotThrow(() => validateHopCount(2, 3));
+      assert.throws(
+        () => validateHopCount(3, 3),
+        /Maximum hops \(3\) exceeded/,
+      );
+      assert.throws(
+        () => validateHopCount(4, 3),
+        /Maximum hops \(3\) exceeded/,
+      );
     });
   });
 });

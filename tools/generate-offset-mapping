@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Generate Offset-to-Block Mapping Tool
+#
+# This tool generates a static mapping file that maps byte offsets to block heights.
+# The mapping is used to optimize binary search when looking up transactions by offset.
+#
+# Usage: ./tools/generate-offset-mapping [options]
+#
+# Options:
+#   --gateway <url>   Gateway URL to fetch block data (default: https://arweave.net)
+#   --output <path>   Output file path (default: src/data/offset-block-mapping.json)
+#   --help            Show usage information
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+exec node --import ./register.js tools/lib/generate-offset-mapping.ts "$@"
