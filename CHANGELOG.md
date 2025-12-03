@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 60] - 2025-12-03
 
+This is a **recommended release** due to significant chunk retrieval performance
+improvements. AR.IO peer chunk fetching now uses parallel requests, reducing
+worst-case latency from ~150 seconds to ~4 seconds. Additional optimizations
+include tx_path Merkle proof validation to avoid expensive chain binary
+searches, offset-based chunk cache lookups via symlinks, and a static
+offset-to-block mapping that reduces block search iterations by ~29%.
+
 ### Added
 
 - **OTEL Nested Bundle Sampling Policies**: Add targeted tail-sampling policies
