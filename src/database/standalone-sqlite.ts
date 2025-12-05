@@ -18,7 +18,7 @@ import * as R from 'ramda';
 import sql from 'sql-bricks';
 import * as winston from 'winston';
 import CircuitBreaker from 'opossum';
-import NodeCache from 'node-cache';
+import { LRUCache } from 'lru-cache';
 
 // TODO enable eslint
 /* eslint-disable */
@@ -71,6 +71,10 @@ const STABLE_FLUSH_INTERVAL = 5;
 const NEW_TX_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const NEW_DATA_ITEM_CLEANUP_WAIT_SECS = 60 * 60 * 2;
 const BUNDLE_REPROCESS_WAIT_SECS = 60 * 15;
+
+// Dedupe cache settings (shared between worker and wrapper caches)
+const DEDUPE_CACHE_MAX_SIZE = 10000;
+const DEDUPE_CACHE_TTL_MS = 7 * 60 * 1000; // 7 minutes
 
 interface TxByOffsetResult {
   data_root: string | undefined;
@@ -416,7 +420,7 @@ export class StandaloneSqliteDatabaseWorker {
   private bundleFormatIds: { [filter: string]: number } = {};
   private filterIds: { [filter: string]: number } = {};
 
-  private insertDataHashCache: NodeCache;
+  private insertDataHashCache: LRUCache<string, boolean>;
 
   private tagSelectivity: Record<string, number>;
 
@@ -809,10 +813,9 @@ export class StandaloneSqliteDatabaseWorker {
         },
       );
 
-    this.insertDataHashCache = new NodeCache({
-      stdTTL: 60 * 7, // 7 minutes
-      checkperiod: 60, // 1 minute
-      useClones: false,
+    this.insertDataHashCache = new LRUCache<string, boolean>({
+      max: DEDUPE_CACHE_MAX_SIZE,
+      ttl: DEDUPE_CACHE_TTL_MS,
     });
 
     this.tagSelectivity = tagSelectivity;
@@ -2853,7 +2856,7 @@ export class StandaloneSqliteDatabase
     Awaited<ReturnType<StandaloneSqliteDatabase['getTransactionAttributes']>>
   >;
 
-  private saveDataContentAttributesCache: NodeCache;
+  private saveDataContentAttributesCache: LRUCache<string, boolean>;
 
   private newDataItemsCount: number = 0;
   private lastFlushDataItemsTime: number = Date.now();
@@ -2952,10 +2955,9 @@ export class StandaloneSqliteDatabase
     // Initialize method caches
     //
 
-    this.saveDataContentAttributesCache = new NodeCache({
-      stdTTL: 60 * 7, // 7 minutes
-      checkperiod: 60, // 1 minute
-      useClones: false,
+    this.saveDataContentAttributesCache = new LRUCache<string, boolean>({
+      max: DEDUPE_CACHE_MAX_SIZE,
+      ttl: DEDUPE_CACHE_TTL_MS,
     });
 
     //
