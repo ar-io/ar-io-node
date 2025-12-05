@@ -149,6 +149,7 @@ export class ArweaveCompositeClient
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
   // Timer references for cleanup
   private bucketFillerInterval?: NodeJS.Timeout;
+  private peerQueueCleanupInterval?: NodeJS.Timeout;
 
   // Block and TX promise caches used for prefetching
   private blockByHeightPromiseCache: NodeCache;
@@ -322,6 +323,12 @@ export class ArweaveCompositeClient
       }
     }, 1000);
 
+    // Start peer queue cleanup interval (hourly)
+    this.peerQueueCleanupInterval = setInterval(
+      () => this.cleanupStalePeerQueues(),
+      60 * 60 * 1000, // 1 hour
+    );
+
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
@@ -340,6 +347,7 @@ export class ArweaveCompositeClient
         totalSuccesses: 0,
       };
       this.peerChunkQueues.set(peer, peerQueue);
+      metrics.arweavePeerChunkQueuesGauge.set(this.peerChunkQueues.size);
     }
 
     return peerQueue;
@@ -353,6 +361,31 @@ export class ArweaveCompositeClient
         peerQueue.queue.length() < config.CHUNK_POST_QUEUE_DEPTH_THRESHOLD
       );
     });
+  }
+
+  /**
+   * Remove peer chunk queues for peers that are no longer in the active peer
+   * list. Only removes queues that are idle (no pending tasks).
+   */
+  private cleanupStalePeerQueues(): void {
+    const activePeers = new Set(this.peerManager.getPeerUrls('postChunk'));
+    let removedCount = 0;
+
+    for (const [peer, peerQueue] of this.peerChunkQueues) {
+      // Only remove if peer is no longer active AND queue is idle
+      if (!activePeers.has(peer) && peerQueue.queue.idle()) {
+        this.peerChunkQueues.delete(peer);
+        removedCount++;
+      }
+    }
+
+    if (removedCount > 0) {
+      this.log.info('Cleaned up stale peer chunk queues', {
+        removed: removedCount,
+        remaining: this.peerChunkQueues.size,
+      });
+      metrics.arweavePeerChunkQueuesGauge.set(this.peerChunkQueues.size);
+    }
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
@@ -2430,6 +2463,16 @@ export class ArweaveCompositeClient
       clearInterval(this.bucketFillerInterval);
       this.bucketFillerInterval = undefined;
     }
+
+    // Clear the peer queue cleanup interval
+    if (this.peerQueueCleanupInterval) {
+      clearInterval(this.peerQueueCleanupInterval);
+      this.peerQueueCleanupInterval = undefined;
+    }
+
+    // Clear peer chunk queues
+    this.peerChunkQueues.clear();
+    metrics.arweavePeerChunkQueuesGauge.set(0);
 
     // Clear NodeCache instances and stop their internal timers
     this.blockByHeightPromiseCache.close();

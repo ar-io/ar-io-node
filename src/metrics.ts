@@ -151,6 +151,11 @@ export const arweaveChunkBroadcastCounter = new promClient.Counter({
   labelNames: ['status'],
 });
 
+export const arweavePeerChunkQueuesGauge = new promClient.Gauge({
+  name: 'arweave_peer_chunk_queues_size',
+  help: 'Number of peer chunk queues in memory',
+});
+
 //
 // SQLite metrics
 //
