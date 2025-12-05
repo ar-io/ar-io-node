@@ -14,3 +14,6 @@ checkout = git clone https://github.com/permaweb/ao
 
 [repos/ar-io-observer]
 checkout = git clone https://github.com/ar-io/ar-io-observer
+
+[repos/cdb64-rs]
+checkout = git clone https://github.com/ever0de/cdb64-rs
