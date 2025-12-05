@@ -12,6 +12,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Memory Leak Prevention**: Address potential memory growth vectors identified
+  during OOM investigation on low-memory nodes
+  - Add hourly cleanup of stale `peerChunkQueues` entries for peers no longer in
+    the active peer list (only removes idle queues)
+  - Convert `blockByHeightPromiseCache` and `txPromiseCache` from unbounded
+    NodeCache to LRUCache with size limits (1000 blocks, 10000 transactions)
+  - Convert SQLite dedupe caches (`insertDataHashCache`,
+    `saveDataContentAttributesCache`) from unbounded NodeCache to LRUCache
+    (10000 entries each)
+  - Add `arweave_peer_chunk_queues_size` Prometheus gauge for monitoring
+
 ## [Release 60] - 2025-12-03
 
 This is a **recommended release** due to significant chunk retrieval performance
