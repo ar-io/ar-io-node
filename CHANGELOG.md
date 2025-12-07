@@ -4,11 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 61] - 2025-12-10
 
-### Added
+This release addresses potential memory growth issues observed on some r60 nodes
+by converting unbounded caches to bounded LRU caches and adding cleanup for
+stale peer chunk queues. Users currently on r60 experiencing memory issues
+should upgrade. Users on earlier releases may want to wait until these
+improvements have been confirmed in production.
 
 ### Changed
+
+- **Observer Performance Improvements**: Updated bundled observer with chunk
+  verification optimizations ported from ar-io-node
+  - TX path Merkle proof parsing eliminates 7-10 API calls per chunk by
+    extracting transaction boundaries directly from tx_path
+  - Pre-computed offset-to-block mapping narrows binary search range by 97-99%
+    (from ~1.8M to ~26K blocks)
 
 ### Fixed
 
