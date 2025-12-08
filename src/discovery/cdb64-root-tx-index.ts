@@ -9,10 +9,18 @@
  * CDB64-based Root TX Index
  *
  * Provides O(1) lookups of data item ID → root transaction ID mappings
- * from a pre-built CDB64 file. This acts as a distributable historical
+ * from pre-built CDB64 files. Supports both single file and directory
+ * containing multiple .cdb files. This acts as a distributable historical
  * index that can be used without network access to external APIs.
+ *
+ * When watching is enabled and a directory is configured, the index
+ * automatically detects when .cdb files are added or removed and
+ * updates the reader list accordingly.
  */
 
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { watch, FSWatcher } from 'chokidar';
 import winston from 'winston';
 import { DataItemRootIndex } from '../types.js';
 import { Cdb64Reader } from '../lib/cdb64.js';
@@ -21,19 +29,168 @@ import { fromB64Url, toB64Url } from '../lib/encoding.js';
 
 export class Cdb64RootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
-  private reader: Cdb64Reader;
+  private readers: Cdb64Reader[] = [];
+  private readerMap: Map<string, Cdb64Reader> = new Map();
   private cdbPath: string;
   private initialized = false;
   private initError: Error | null = null;
+  private isDirectory = false;
+  private watchEnabled: boolean;
+  private watcher: FSWatcher | null = null;
 
-  constructor({ log, cdbPath }: { log: winston.Logger; cdbPath: string }) {
+  constructor({
+    log,
+    cdbPath,
+    watch = true,
+  }: {
+    log: winston.Logger;
+    cdbPath: string;
+    watch?: boolean;
+  }) {
     this.log = log.child({ class: this.constructor.name });
     this.cdbPath = cdbPath;
-    this.reader = new Cdb64Reader(cdbPath);
+    this.watchEnabled = watch;
   }
 
   /**
-   * Initializes the reader by opening the CDB64 file.
+   * Discovers CDB64 files from the configured path.
+   * Supports both single file paths and directories containing .cdb files.
+   */
+  private async discoverCdbFiles(): Promise<string[]> {
+    const stat = await fs.stat(this.cdbPath);
+
+    if (stat.isFile()) {
+      // Single file - backward compatible
+      this.isDirectory = false;
+      return [this.cdbPath];
+    }
+
+    if (stat.isDirectory()) {
+      // Directory - find all .cdb files
+      this.isDirectory = true;
+      const entries = await fs.readdir(this.cdbPath);
+      const cdbFiles = entries
+        .filter((f) => f.endsWith('.cdb'))
+        .sort() // Alphabetical order for deterministic behavior
+        .map((f) => path.join(this.cdbPath, f));
+
+      if (cdbFiles.length === 0) {
+        this.log.warn('No .cdb files found in directory', {
+          path: this.cdbPath,
+        });
+      }
+
+      return cdbFiles;
+    }
+
+    throw new Error(
+      `CDB64 path is neither file nor directory: ${this.cdbPath}`,
+    );
+  }
+
+  /**
+   * Starts watching the directory for .cdb file changes.
+   * Only active when watching is enabled and path is a directory.
+   */
+  private startWatching(): void {
+    if (!this.watchEnabled || !this.isDirectory) return;
+
+    this.watcher = watch(this.cdbPath, {
+      ignored: (filePath: string) => {
+        // Allow directories to be traversed
+        // Only allow .cdb files
+        return !filePath.endsWith('.cdb') && filePath !== this.cdbPath;
+      },
+      persistent: true,
+      ignoreInitial: true, // Don't fire for existing files
+      awaitWriteFinish: {
+        // Wait for file to be fully written
+        stabilityThreshold: 1000,
+        pollInterval: 100,
+      },
+      depth: 0, // Only watch immediate directory, not subdirectories
+    });
+
+    this.watcher.on('add', async (filePath: string) => {
+      if (!filePath.endsWith('.cdb')) return;
+      await this.addReader(filePath);
+    });
+
+    this.watcher.on('unlink', async (filePath: string) => {
+      if (!filePath.endsWith('.cdb')) return;
+      await this.removeReader(filePath);
+    });
+
+    this.watcher.on('error', (error: Error) => {
+      this.log.error('CDB64 file watcher error', { error: error.message });
+    });
+
+    this.log.info('CDB64 file watcher started', { path: this.cdbPath });
+  }
+
+  /**
+   * Stops watching the directory.
+   */
+  private async stopWatching(): Promise<void> {
+    if (this.watcher) {
+      await this.watcher.close();
+      this.watcher = null;
+      this.log.info('CDB64 file watcher stopped');
+    }
+  }
+
+  /**
+   * Adds a new reader for a .cdb file.
+   */
+  private async addReader(filePath: string): Promise<void> {
+    if (this.readerMap.has(filePath)) return;
+
+    try {
+      const reader = new Cdb64Reader(filePath);
+      await reader.open();
+      this.readerMap.set(filePath, reader);
+      this.rebuildReaderList();
+      this.log.info('CDB64 file added', { path: filePath });
+    } catch (error: any) {
+      this.log.error('Failed to add CDB64 file', {
+        path: filePath,
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * Removes a reader for a .cdb file.
+   */
+  private async removeReader(filePath: string): Promise<void> {
+    const reader = this.readerMap.get(filePath);
+    if (!reader) return;
+
+    try {
+      if (reader.isOpen()) {
+        await reader.close();
+      }
+      this.readerMap.delete(filePath);
+      this.rebuildReaderList();
+      this.log.info('CDB64 file removed', { path: filePath });
+    } catch (error: any) {
+      this.log.error('Failed to remove CDB64 file', {
+        path: filePath,
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * Rebuilds the readers array from the readerMap in sorted order.
+   */
+  private rebuildReaderList(): void {
+    const sortedPaths = [...this.readerMap.keys()].sort();
+    this.readers = sortedPaths.map((p) => this.readerMap.get(p)!);
+  }
+
+  /**
+   * Initializes the readers by opening all CDB64 files.
    * Called lazily on first lookup.
    */
   private async ensureInitialized(): Promise<void> {
@@ -45,10 +202,22 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     }
 
     try {
-      await this.reader.open();
+      const cdbFiles = await this.discoverCdbFiles();
+
+      for (const filePath of cdbFiles) {
+        const reader = new Cdb64Reader(filePath);
+        await reader.open();
+        this.readerMap.set(filePath, reader);
+      }
+
+      this.rebuildReaderList();
+      this.startWatching();
+
       this.initialized = true;
       this.log.info('CDB64 root TX index initialized', {
         path: this.cdbPath,
+        fileCount: this.readers.length,
+        watching: this.watchEnabled && this.isDirectory,
       });
     } catch (error: any) {
       this.initialized = true;
@@ -97,32 +266,38 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         return undefined;
       }
 
-      // Look up in CDB64
-      const valueBuffer = await this.reader.get(keyBuffer);
+      // Snapshot readers array to avoid issues if list changes during iteration
+      const currentReaders = this.readers;
 
-      if (valueBuffer === undefined) {
-        return undefined;
+      // Search through all readers in order (first match wins)
+      for (const reader of currentReaders) {
+        const valueBuffer = await reader.get(keyBuffer);
+
+        if (valueBuffer !== undefined) {
+          // Decode MessagePack value
+          const value = decodeCdb64Value(valueBuffer);
+
+          // Convert binary rootTxId back to base64url
+          const rootTxId = toB64Url(value.rootTxId);
+
+          // Return result based on value format
+          if (isCompleteValue(value)) {
+            return {
+              rootTxId,
+              rootOffset: value.rootDataItemOffset,
+              rootDataOffset: value.rootDataOffset,
+            };
+          }
+
+          // Simple format - no offset information
+          return {
+            rootTxId,
+          };
+        }
       }
 
-      // Decode MessagePack value
-      const value = decodeCdb64Value(valueBuffer);
-
-      // Convert binary rootTxId back to base64url
-      const rootTxId = toB64Url(value.rootTxId);
-
-      // Return result based on value format
-      if (isCompleteValue(value)) {
-        return {
-          rootTxId,
-          rootOffset: value.rootDataItemOffset,
-          rootDataOffset: value.rootDataOffset,
-        };
-      }
-
-      // Simple format - no offset information
-      return {
-        rootTxId,
-      };
+      // Key not found in any file
+      return undefined;
     } catch (error: any) {
       this.log.error('Error looking up root TX in CDB64', {
         id,
@@ -133,13 +308,21 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Closes the CDB64 file handle.
+   * Closes all CDB64 file handles and stops watching.
    * Should be called during shutdown.
    */
   async close(): Promise<void> {
-    if (this.reader.isOpen()) {
-      await this.reader.close();
-      this.log.info('CDB64 root TX index closed');
+    await this.stopWatching();
+
+    for (const reader of this.readers) {
+      if (reader.isOpen()) {
+        await reader.close();
+      }
+    }
+    if (this.readers.length > 0) {
+      this.log.info('CDB64 root TX index closed', {
+        fileCount: this.readers.length,
+      });
     }
   }
 }
