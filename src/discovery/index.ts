@@ -8,3 +8,4 @@ export * from './graphql-root-tx-index.js';
 export * from './gateways-root-tx-index.js';
 export * from './composite-root-tx-index.js';
 export * from './turbo-root-tx-index.js';
+export * from './cdb64-root-tx-index.js';
