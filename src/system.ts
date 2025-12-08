@@ -325,6 +325,7 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
           new Cdb64RootTxIndex({
             log,
             cdbPath: config.CDB64_ROOT_TX_INDEX_PATH,
+            watch: config.CDB64_ROOT_TX_INDEX_WATCH,
           }),
         );
       } else {

@@ -35,6 +35,7 @@
     "axios": "^1.12.2",
     "better-sqlite3": "^9.4.5",
     "change-case": "^5.4.4",
+    "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "duckdb-async": "^1.4.0",
