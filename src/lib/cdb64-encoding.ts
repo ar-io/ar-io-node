@@ -8,12 +8,36 @@
 /**
  * CDB64 Value Encoding - MessagePack serialization for root TX index values.
  *
- * Supports two value formats:
- * 1. Simple format: Only root transaction ID
- * 2. Complete format: Root TX ID plus byte offsets for direct data access
+ * See docs/cdb64-format.md for the complete format specification.
  *
- * Uses the same msgpackr configuration as the rest of the codebase for
- * compatibility with other MessagePack implementations.
+ * ## Value Formats
+ *
+ * Values are MessagePack-encoded objects with short single-character keys
+ * for compactness. Two formats are supported:
+ *
+ * ### Simple Format
+ * Used when only the root transaction ID is known:
+ * ```
+ * { r: <Buffer 32 bytes> }
+ * ```
+ *
+ * ### Complete Format
+ * Used when offset information is available:
+ * ```
+ * { r: <Buffer 32 bytes>, i: <integer>, d: <integer> }
+ * ```
+ *
+ * ## Key Mapping
+ *
+ * | Key | Full Name            | Description                              |
+ * |-----|----------------------|------------------------------------------|
+ * | r   | rootTxId             | 32-byte root transaction ID (binary)     |
+ * | i   | rootDataItemOffset   | Byte offset of data item header          |
+ * | d   | rootDataOffset       | Byte offset of data payload              |
+ *
+ * The offsets correspond to HTTP headers:
+ * - `i` → `X-AR-IO-Root-Data-Item-Offset`
+ * - `d` → `X-AR-IO-Root-Data-Offset`
  */
 
 import { toMsgpack, fromMsgpack } from './encoding.js';

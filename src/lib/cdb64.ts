@@ -11,16 +11,42 @@
  * Based on the CDB format by D. J. Bernstein (https://cr.yp.to/cdb.html)
  * with modifications to support 64-bit file offsets for files >4GB.
  *
- * File format:
- * - Header: 256 table pointers (4096 bytes total)
- *   - Each pointer: position (64-bit LE) + length (64-bit LE) = 16 bytes
- * - Records: Sequential key-value pairs
- *   - key_length (32-bit LE)
- *   - value_length (32-bit LE)
- *   - key bytes
- *   - value bytes
- * - Hash tables: 256 separate tables
- *   - Each slot: hash (32-bit LE) + position (64-bit LE) = 12 bytes
+ * See docs/cdb64-format.md for the complete format specification.
+ *
+ * ## File Structure
+ *
+ * ```
+ * +------------------+
+ * |      Header      |  4096 bytes (256 × 16-byte pointers)
+ * +------------------+
+ * |     Records      |  Variable length key-value pairs
+ * +------------------+
+ * |   Hash Tables    |  256 tables for O(1) lookup
+ * +------------------+
+ * ```
+ *
+ * ## Header (4096 bytes)
+ * - 256 table pointers, each 16 bytes:
+ *   - position: uint64_le (byte offset of hash table)
+ *   - length: uint64_le (number of slots in table)
+ *
+ * ## Records
+ * - key_length: uint32_le
+ * - value_length: uint32_le
+ * - key: bytes[key_length]
+ * - value: bytes[value_length]
+ *
+ * ## Hash Tables
+ * - Each table has 2× the number of records that hash to it
+ * - Each slot is 12 bytes:
+ *   - hash: uint32_le (full 32-bit hash)
+ *   - position: uint64_le (record position, 0 = empty)
+ *
+ * ## Lookup Algorithm
+ * 1. hash = djb_hash(key)
+ * 2. table_index = hash % 256
+ * 3. starting_slot = (hash / 256) % table_length
+ * 4. Linear probe until: empty slot (not found) or matching key (found)
  */
 
 import * as fs from 'node:fs/promises';
@@ -41,7 +67,13 @@ const NUM_TABLES = 256;
 
 /**
  * DJB hash function used by CDB.
- * Returns an unsigned 32-bit integer.
+ *
+ * This is the same hash function used in the original CDB format.
+ * Formula: hash = ((hash << 5) + hash) ^ byte, starting with 5381.
+ * This is equivalent to: hash = hash * 33 ^ byte
+ *
+ * @param key - The key bytes to hash
+ * @returns An unsigned 32-bit integer hash value
  */
 export function cdb64Hash(key: Buffer): number {
   let h = 5381;
