@@ -40,17 +40,18 @@ describe('CDB64', () => {
       assert.notEqual(hash1, hash2);
     });
 
-    it('should return unsigned 32-bit integer', () => {
+    it('should return unsigned 64-bit bigint', () => {
       const key = Buffer.from('test');
       const hash = cdb64Hash(key);
-      assert(hash >= 0);
-      assert(hash <= 0xffffffff);
+      assert(typeof hash === 'bigint');
+      assert(hash >= 0n);
+      assert(hash <= 0xffffffffffffffffn);
     });
 
     it('should handle empty buffer', () => {
       const key = Buffer.alloc(0);
       const hash = cdb64Hash(key);
-      assert.equal(hash, 5381); // Initial hash value with no XOR operations
+      assert.equal(hash, 5381n); // Initial hash value with no XOR operations
     });
 
     it('should produce known hash value', () => {
@@ -60,7 +61,7 @@ describe('CDB64', () => {
       // h = 177573 ^ 97 = 177604
       const key = Buffer.from('a');
       const hash = cdb64Hash(key);
-      assert.equal(hash, 177604);
+      assert.equal(hash, 177604n);
     });
   });
 

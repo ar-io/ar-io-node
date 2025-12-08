@@ -45,33 +45,33 @@ Records are stored sequentially starting at byte offset 4096. Each record has th
 
 | Offset | Size | Type | Description |
 |--------|------|------|-------------|
-| 0 | 4 | uint32_le | Key length in bytes |
-| 4 | 4 | uint32_le | Value length in bytes |
-| 8 | key_length | bytes | Key data |
-| 8 + key_length | value_length | bytes | Value data |
+| 0 | 8 | uint64_le | Key length in bytes |
+| 8 | 8 | uint64_le | Value length in bytes |
+| 16 | key_length | bytes | Key data |
+| 16 + key_length | value_length | bytes | Value data |
 
 Records have no padding or alignment requirements.
 
 ### Hash Tables
 
-After all records, the file contains 256 hash tables. Each table has a variable number of slots (stored in the header). Each slot is 12 bytes:
+After all records, the file contains 256 hash tables. Each table has a variable number of slots (stored in the header). Each slot is 16 bytes:
 
 | Offset | Size | Type | Description |
 |--------|------|------|-------------|
-| 0 | 4 | uint32_le | Full 32-bit hash of the key |
-| 4 | 8 | uint64_le | Record position (0 if slot is empty) |
+| 0 | 8 | uint64_le | Full 64-bit hash of the key |
+| 8 | 8 | uint64_le | Record position (0 if slot is empty) |
 
 The number of slots in each table is always 2× the number of records that hash to that table (for efficient linear probing).
 
 ## Hash Function
 
-CDB64 uses the DJB hash function (same as original CDB):
+CDB64 uses the DJB hash function (same as original CDB), computed with 64-bit arithmetic:
 
 ```
 hash = 5381
 for each byte in key:
     hash = ((hash << 5) + hash) ^ byte
-    hash = hash & 0xFFFFFFFF  // Keep as 32-bit unsigned
+    hash = hash & 0xFFFFFFFFFFFFFFFF  // Keep as 64-bit unsigned
 ```
 
 The hash is used in two ways:
@@ -82,13 +82,13 @@ The hash is used in two ways:
 
 To look up a key:
 
-1. Compute `hash = djb_hash(key)`
+1. Compute `hash = djb_hash(key)` (64-bit)
 2. Select table: `table_index = hash % 256`
 3. Read table pointer from header at offset `table_index × 16`
 4. If table length is 0, key is not present
 5. Compute starting slot: `slot = (hash / 256) % table_length`
 6. Linear probe:
-   - Read slot at `table_position + slot × 12`
+   - Read slot at `table_position + slot × 16`
    - If slot position is 0, key is not present
    - If slot hash matches and key matches, return value
    - Otherwise: `slot = (slot + 1) % table_length`, repeat
@@ -119,11 +119,14 @@ To create a CDB64 file:
 |--------|--------------|-------|
 | Header pointer size | 8 bytes (4+4) | 16 bytes (8+8) |
 | Header total size | 2048 bytes | 4096 bytes |
-| Hash table slot size | 8 bytes (4+4) | 12 bytes (4+8) |
-| Maximum file size | 4 GB | 16 EB (practical: unlimited) |
+| Record header size | 8 bytes (4+4) | 16 bytes (8+8) |
+| Hash table slot size | 8 bytes (4+4) | 16 bytes (8+8) |
+| Hash value | 32-bit | 64-bit |
+| Key/value length fields | 32-bit | 64-bit |
 | Position fields | 32-bit | 64-bit |
+| Maximum file size | 4 GB | 16 EB (practical: unlimited) |
 
-The hash function and lookup algorithm are identical.
+The hash function algorithm is identical (DJB hash), but computed with 64-bit arithmetic.
 
 ---
 
