@@ -4,7 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 61] - 2025-12-10
+
+This release addresses potential memory growth issues observed on some r60 nodes
+by converting unbounded caches to bounded LRU caches and adding cleanup for
+stale peer chunk queues. Users currently on r60 experiencing memory issues
+should upgrade. Users on earlier releases may want to wait until these
+improvements have been confirmed in production.
+
+### Changed
+
+- **Observer Performance Improvements**: Updated bundled observer with chunk
+  verification optimizations ported from ar-io-node
+  - TX path Merkle proof parsing eliminates 7-10 API calls per chunk by
+    extracting transaction boundaries directly from tx_path
+  - Pre-computed offset-to-block mapping narrows binary search range by 97-99%
+    (from ~1.8M to ~26K blocks)
+
+### Fixed
+
+- **Memory Leak Prevention**: Address potential memory growth vectors identified
+  during OOM investigation on low-memory nodes
+  - Add hourly cleanup of stale `peerChunkQueues` entries for peers no longer in
+    the active peer list (only removes idle queues)
+  - Convert `blockByHeightPromiseCache` and `txPromiseCache` from unbounded
+    NodeCache to LRUCache with size limits (1000 blocks, 10000 transactions)
+  - Convert SQLite dedupe caches (`insertDataHashCache`,
+    `saveDataContentAttributesCache`) from unbounded NodeCache to LRUCache
+    (10000 entries each)
+  - Add `arweave_peer_chunk_queues_size` Prometheus gauge for monitoring
+
 ## [Release 60] - 2025-12-03
+
+This is a **recommended release** due to significant chunk retrieval performance
+improvements. AR.IO peer chunk fetching now uses parallel requests, reducing
+worst-case latency from ~150 seconds to ~4 seconds. Additional optimizations
+include tx_path Merkle proof validation to avoid expensive chain binary
+searches, offset-based chunk cache lookups via symlinks, and a static
+offset-to-block mapping that reduces block search iterations by ~29%.
 
 ### Added
 

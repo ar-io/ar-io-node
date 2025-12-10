@@ -8,7 +8,6 @@ import { default as Arweave } from 'arweave';
 import { AxiosRequestConfig, AxiosResponse, default as axios } from 'axios';
 import type { queueAsPromised } from 'fastq';
 import { default as fastq } from 'fastq';
-import { default as NodeCache } from 'node-cache';
 import { Readable } from 'node:stream';
 import * as rax from 'retry-axios';
 import wait from '../lib/wait.js';
@@ -71,6 +70,10 @@ const DEFAULT_BLOCK_PREFETCH_COUNT = 50;
 const DEFAULT_BLOCK_TX_PREFETCH_COUNT = 1;
 const CHUNK_CACHE_TTL_SECONDS = 5;
 const CHUNK_CACHE_CAPACITY = 1000;
+const BLOCK_BY_HEIGHT_PROMISE_CACHE_SIZE = 1000;
+const BLOCK_BY_HEIGHT_PROMISE_CACHE_TTL_MS = 30 * 1000;
+const TX_PROMISE_CACHE_SIZE = 10000;
+const TX_PROMISE_CACHE_TTL_MS = 60 * 1000;
 const DEFAULT_CHUNK_POST_ABORT_TIMEOUT_MS = 2000;
 const DEFAULT_CHUNK_POST_RESPONSE_TIMEOUT_MS = 5000;
 const DEFAULT_PEER_TX_TIMEOUT_MS = 5000;
@@ -149,10 +152,17 @@ export class ArweaveCompositeClient
   private getSortedChunkPostPeers: (eligiblePeers: string[]) => string[];
   // Timer references for cleanup
   private bucketFillerInterval?: NodeJS.Timeout;
+  private peerQueueCleanupInterval?: NodeJS.Timeout;
 
   // Block and TX promise caches used for prefetching
-  private blockByHeightPromiseCache: NodeCache;
-  private txPromiseCache: NodeCache;
+  private blockByHeightPromiseCache: LRUCache<
+    number,
+    Promise<PartialJsonBlock | undefined>
+  >;
+  private txPromiseCache: LRUCache<
+    string,
+    Promise<PartialJsonTransaction | undefined>
+  >;
 
   // Trusted node request queue
   private trustedNodeRequestQueue: queueAsPromised<
@@ -183,7 +193,6 @@ export class ArweaveCompositeClient
     blockPrefetchCount = DEFAULT_BLOCK_PREFETCH_COUNT,
     blockTxPrefetchCount = DEFAULT_BLOCK_TX_PREFETCH_COUNT,
     skipCache = false,
-    cacheCheckPeriodSeconds = 10,
     blockOffsetMapping,
   }: {
     log: winston.Logger;
@@ -201,7 +210,6 @@ export class ArweaveCompositeClient
     blockPrefetchCount?: number;
     blockTxPrefetchCount?: number;
     skipCache?: boolean;
-    cacheCheckPeriodSeconds?: number;
     blockOffsetMapping?: BlockOffsetMapping;
   }) {
     this.log = log.child({ class: this.constructor.name });
@@ -236,16 +244,14 @@ export class ArweaveCompositeClient
     this.blockStore = blockStore;
     this.skipCache = skipCache;
 
-    // Initialize NodeCache instances with configurable check period
-    this.blockByHeightPromiseCache = new NodeCache({
-      checkperiod: cacheCheckPeriodSeconds,
-      stdTTL: 30,
-      useClones: false, // cloning promises is unsafe
+    // Initialize LRU caches for block and tx promise deduplication
+    this.blockByHeightPromiseCache = new LRUCache({
+      max: BLOCK_BY_HEIGHT_PROMISE_CACHE_SIZE,
+      ttl: BLOCK_BY_HEIGHT_PROMISE_CACHE_TTL_MS,
     });
-    this.txPromiseCache = new NodeCache({
-      checkperiod: cacheCheckPeriodSeconds,
-      stdTTL: 60,
-      useClones: false, // cloning promises is unsafe
+    this.txPromiseCache = new LRUCache({
+      max: TX_PROMISE_CACHE_SIZE,
+      ttl: TX_PROMISE_CACHE_TTL_MS,
     });
 
     // Initialize chunk promise cache with read-through function
@@ -322,6 +328,12 @@ export class ArweaveCompositeClient
       }
     }, 1000);
 
+    // Start peer queue cleanup interval (hourly)
+    this.peerQueueCleanupInterval = setInterval(
+      () => this.cleanupStalePeerQueues(),
+      60 * 60 * 1000, // 1 hour
+    );
+
     // Initialize prefetch settings
     this.blockPrefetchCount = blockPrefetchCount;
     this.blockTxPrefetchCount = blockTxPrefetchCount;
@@ -340,6 +352,7 @@ export class ArweaveCompositeClient
         totalSuccesses: 0,
       };
       this.peerChunkQueues.set(peer, peerQueue);
+      metrics.arweavePeerChunkQueuesGauge.set(this.peerChunkQueues.size);
     }
 
     return peerQueue;
@@ -353,6 +366,31 @@ export class ArweaveCompositeClient
         peerQueue.queue.length() < config.CHUNK_POST_QUEUE_DEPTH_THRESHOLD
       );
     });
+  }
+
+  /**
+   * Remove peer chunk queues for peers that are no longer in the active peer
+   * list. Only removes queues that are idle (no pending tasks).
+   */
+  private cleanupStalePeerQueues(): void {
+    const activePeers = new Set(this.peerManager.getPeerUrls('postChunk'));
+    let removedCount = 0;
+
+    for (const [peer, peerQueue] of this.peerChunkQueues) {
+      // Only remove if peer is no longer active AND queue is idle
+      if (!activePeers.has(peer) && peerQueue.queue.idle()) {
+        this.peerChunkQueues.delete(peer);
+        removedCount++;
+      }
+    }
+
+    if (removedCount > 0) {
+      this.log.info('Cleaned up stale peer chunk queues', {
+        removed: removedCount,
+        remaining: this.peerChunkQueues.size,
+      });
+      metrics.arweavePeerChunkQueuesGauge.set(this.peerChunkQueues.size);
+    }
   }
 
   private async postChunkToPeer(task: ChunkPostTask): Promise<ChunkPostResult> {
@@ -727,12 +765,12 @@ export class ArweaveCompositeClient
       }
 
       // Remove prefetched request from cache so forks are handled correctly
-      this.blockByHeightPromiseCache.del(height);
+      this.blockByHeightPromiseCache.delete(height);
 
       return block;
     } catch (error) {
       // Remove failed requests from the cache so they get retried
-      this.blockByHeightPromiseCache.del(height);
+      this.blockByHeightPromiseCache.delete(height);
 
       throw error;
     }
@@ -887,7 +925,7 @@ export class ArweaveCompositeClient
       return tx;
     } catch (error: any) {
       // Remove failed requests from the cache so they get retried
-      this.txPromiseCache.del(txId);
+      this.txPromiseCache.delete(txId);
 
       throw error;
     }
@@ -2431,11 +2469,19 @@ export class ArweaveCompositeClient
       this.bucketFillerInterval = undefined;
     }
 
-    // Clear NodeCache instances and stop their internal timers
-    this.blockByHeightPromiseCache.close();
-    this.txPromiseCache.close();
+    // Clear the peer queue cleanup interval
+    if (this.peerQueueCleanupInterval) {
+      clearInterval(this.peerQueueCleanupInterval);
+      this.peerQueueCleanupInterval = undefined;
+    }
+
+    // Clear peer chunk queues
+    this.peerChunkQueues.clear();
+    metrics.arweavePeerChunkQueuesGauge.set(0);
 
     // Clear LRU caches
+    this.blockByHeightPromiseCache.clear();
+    this.txPromiseCache.clear();
     this.blockCache.clear();
     this.txOffsetCache.clear();
     this.txDataCache.clear();
