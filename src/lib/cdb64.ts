@@ -252,6 +252,8 @@ export class Cdb64Writer {
     const fileHandle = await fs.open(this.tempPath, 'r+');
     try {
       await fileHandle.write(header, 0, HEADER_SIZE, 0);
+      // Ensure data is flushed to disk before renaming (critical on macOS APFS)
+      await fileHandle.sync();
     } finally {
       await fileHandle.close();
     }
