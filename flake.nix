@@ -41,14 +41,14 @@
               jq
               mr
               nodePackages.typescript-language-server
-              nodejs_20
+              nodejs_22
+              yarn
               openjdk
               pandoc
               python3WithPackages
               sqlite-interactive
               typst
               yaml-language-server
-              yarn
             ];
           };
         };
