@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Export SQLite to CDB64 Tool
+#
+# This tool exports root TX mappings from the local data.db SQLite database
+# directly to CDB64 format.
+#
+# NOTE: It is recommended to stop the ar-io-node service before running
+# this tool to ensure data consistency during the export.
+#
+# Usage: ./tools/export-sqlite-to-cdb64 [options]
+#
+# Options:
+#   --data-db <path>   Path to data.db file (default: ./data/sqlite/data.db)
+#   --output <path>    Output CDB64 file path (required)
+#   --help             Show usage information
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+exec node --import ./register.js tools/lib/export-sqlite-to-cdb64.ts "$@"
