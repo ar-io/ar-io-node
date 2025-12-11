@@ -112,6 +112,27 @@ function parseArgs(): Config | null {
   return { inputPath, outputPath, skipHeader };
 }
 
+/**
+ * Checks if a line looks like a CSV header rather than data.
+ * Headers won't have valid 43-character base64url IDs in the first two columns.
+ */
+function looksLikeHeader(line: string): boolean {
+  const parts = line.split(',');
+  if (parts.length < 2) return true;
+
+  const first = parts[0].trim();
+  const second = parts[1].trim();
+
+  // Valid IDs are exactly 43 characters of base64url
+  if (first.length !== 43 || second.length !== 43) {
+    return true;
+  }
+
+  // Check for non-base64url characters
+  const base64urlPattern = /^[A-Za-z0-9_-]+$/;
+  return !base64urlPattern.test(first) || !base64urlPattern.test(second);
+}
+
 function parseBase64UrlId(value: string, fieldName: string): Buffer {
   const trimmed = value.trim();
 
@@ -150,9 +171,6 @@ async function generateIndex(config: Config): Promise<void> {
   console.log('=== CDB64 Root TX Index Generator ===\n');
   console.log(`Input:  ${config.inputPath}`);
   console.log(`Output: ${config.outputPath}`);
-  if (config.skipHeader) {
-    console.log('Skipping header line');
-  }
   console.log('');
 
   // Verify input file exists
@@ -168,6 +186,7 @@ async function generateIndex(config: Config): Promise<void> {
   let simpleCount = 0;
   let completeCount = 0;
   let errorCount = 0;
+  let headerSkipped = false;
 
   const fileStream = fs.createReadStream(config.inputPath);
   const rl = readline.createInterface({
@@ -179,21 +198,23 @@ async function generateIndex(config: Config): Promise<void> {
     for await (const line of rl) {
       lineNumber++;
 
-      // Skip header if requested
-      if (lineNumber === 1 && config.skipHeader) {
-        continue;
-      }
-
-      // Skip empty lines
+      // Skip empty lines first (before header detection)
       const trimmedLine = line.trim();
-      if (trimmedLine === '') {
+      if (trimmedLine === '' || trimmedLine.startsWith('#')) {
         continue;
       }
 
-      // Skip comment lines
-      if (trimmedLine.startsWith('#')) {
+      // Skip header: either explicitly requested or auto-detected on first data line
+      if (!headerSkipped && (config.skipHeader || looksLikeHeader(trimmedLine))) {
+        headerSkipped = true;
+        if (config.skipHeader) {
+          console.log('Skipping header (--skip-header)');
+        } else {
+          console.log('Header auto-detected, skipping first line');
+        }
         continue;
       }
+      headerSkipped = true; // Mark as checked even if not skipped
 
       try {
         const parts = trimmedLine.split(',');
