@@ -332,4 +332,188 @@ describe('CDB64', () => {
       await assert.rejects(async () => fs.stat(cdbPath), /ENOENT/);
     });
   });
+
+  describe('Cdb64Reader.entries()', () => {
+    it('should return no entries for empty database', async () => {
+      const cdbPath = path.join(tempDir, 'empty-entries.cdb');
+
+      // Write empty database
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      await writer.finalize();
+
+      // Iterate
+      const reader = new Cdb64Reader(cdbPath);
+      await reader.open();
+
+      const entries: { key: Buffer; value: Buffer }[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+      }
+
+      await reader.close();
+
+      assert.equal(entries.length, 0);
+    });
+
+    it('should return single entry', async () => {
+      const cdbPath = path.join(tempDir, 'single-entry.cdb');
+      const key = Buffer.from('test-key');
+      const value = Buffer.from('test-value');
+
+      // Write
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      await writer.add(key, value);
+      await writer.finalize();
+
+      // Iterate
+      const reader = new Cdb64Reader(cdbPath);
+      await reader.open();
+
+      const entries: { key: Buffer; value: Buffer }[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+      }
+
+      await reader.close();
+
+      assert.equal(entries.length, 1);
+      assert(entries[0].key.equals(key));
+      assert(entries[0].value.equals(value));
+    });
+
+    it('should return all entries in write order', async () => {
+      const cdbPath = path.join(tempDir, 'multi-entry.cdb');
+      const pairs = [
+        { key: Buffer.from('key1'), value: Buffer.from('value1') },
+        { key: Buffer.from('key2'), value: Buffer.from('value2') },
+        { key: Buffer.from('key3'), value: Buffer.from('value3') },
+      ];
+
+      // Write
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      for (const pair of pairs) {
+        await writer.add(pair.key, pair.value);
+      }
+      await writer.finalize();
+
+      // Iterate
+      const reader = new Cdb64Reader(cdbPath);
+      await reader.open();
+
+      const entries: { key: Buffer; value: Buffer }[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+      }
+
+      await reader.close();
+
+      assert.equal(entries.length, pairs.length);
+      for (let i = 0; i < pairs.length; i++) {
+        assert(
+          entries[i].key.equals(pairs[i].key),
+          `Key mismatch at index ${i}`,
+        );
+        assert(
+          entries[i].value.equals(pairs[i].value),
+          `Value mismatch at index ${i}`,
+        );
+      }
+    });
+
+    it('should handle many records', async () => {
+      const cdbPath = path.join(tempDir, 'many-entries.cdb');
+      const numRecords = 500;
+      const pairs: { key: Buffer; value: Buffer }[] = [];
+
+      for (let i = 0; i < numRecords; i++) {
+        pairs.push({
+          key: Buffer.from(`key-${i.toString().padStart(6, '0')}`),
+          value: Buffer.from(`value-${i}`),
+        });
+      }
+
+      // Write
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      for (const pair of pairs) {
+        await writer.add(pair.key, pair.value);
+      }
+      await writer.finalize();
+
+      // Iterate
+      const reader = new Cdb64Reader(cdbPath);
+      await reader.open();
+
+      const entries: { key: Buffer; value: Buffer }[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+      }
+
+      await reader.close();
+
+      assert.equal(entries.length, numRecords);
+
+      // Verify all entries match (in write order)
+      for (let i = 0; i < pairs.length; i++) {
+        assert(entries[i].key.equals(pairs[i].key));
+        assert(entries[i].value.equals(pairs[i].value));
+      }
+    });
+
+    it('should handle binary keys and values', async () => {
+      const cdbPath = path.join(tempDir, 'binary-entries.cdb');
+
+      // 32-byte keys (like transaction IDs)
+      const pairs = [];
+      for (let i = 0; i < 10; i++) {
+        const key = Buffer.alloc(32);
+        for (let j = 0; j < 32; j++) {
+          key[j] = (i * 32 + j) % 256;
+        }
+        const value = Buffer.alloc(64);
+        for (let j = 0; j < 64; j++) {
+          value[j] = (i * 64 + j * 7) % 256;
+        }
+        pairs.push({ key, value });
+      }
+
+      // Write
+      const writer = new Cdb64Writer(cdbPath);
+      await writer.open();
+      for (const pair of pairs) {
+        await writer.add(pair.key, pair.value);
+      }
+      await writer.finalize();
+
+      // Iterate
+      const reader = new Cdb64Reader(cdbPath);
+      await reader.open();
+
+      const entries: { key: Buffer; value: Buffer }[] = [];
+      for await (const entry of reader.entries()) {
+        entries.push(entry);
+      }
+
+      await reader.close();
+
+      assert.equal(entries.length, pairs.length);
+      for (let i = 0; i < pairs.length; i++) {
+        assert(entries[i].key.equals(pairs[i].key));
+        assert(entries[i].value.equals(pairs[i].value));
+      }
+    });
+
+    it('should throw error when iterating without opening', async () => {
+      const reader = new Cdb64Reader('/nonexistent.cdb');
+
+      await assert.rejects(async () => {
+        for await (const _ of reader.entries()) {
+          // Should not reach here
+        }
+      }, /Reader not opened/);
+    });
+  });
 });
