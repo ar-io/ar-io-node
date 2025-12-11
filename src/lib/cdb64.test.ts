@@ -516,4 +516,187 @@ describe('CDB64', () => {
       }, /Reader not opened/);
     });
   });
+
+  describe('CLI round-trip', () => {
+    const runTool = async (
+      tool: string,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string }> => {
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const execFileAsync = promisify(execFile);
+
+      const toolPath = path.join(process.cwd(), 'tools', tool);
+      const result = await execFileAsync(toolPath, args, {
+        cwd: process.cwd(),
+        env: { ...process.env },
+      });
+
+      return { stdout: result.stdout, stderr: result.stderr };
+    };
+
+    it('should round-trip simple format CSV through CDB', async () => {
+      const inputCsv = path.join(tempDir, 'input.csv');
+      const cdbFile = path.join(tempDir, 'index.cdb');
+      const outputCsv = path.join(tempDir, 'output.csv');
+
+      // Create input CSV (simple format - no offsets)
+      // IDs must be valid base64url-encoded 32-byte values for round-trip
+      const inputData = [
+        'IX5lt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg,LWWgC-YmKVG4sH8PXq7JtqAkDqPfpLmRsC0K76xRF88',
+        '7sDOjWxJ7sD6MhQYDwlcKb5wh95NkmFy67QnfF_K3Ts,qKkz3UNz_RhF4M5c0dVJLHg5sKPwJzKpPmHRRNbXUdI',
+        '0ZsbZUgy0f1xb-tvP6KjW-6VQVsYZqY65cXSV-2FdCo,r8V682gQbEsOn-pI_912xV9Ht1En2OO3vmwj3H2s3MU',
+      ];
+      await fs.writeFile(inputCsv, inputData.join('\n') + '\n');
+
+      // Generate CDB
+      await runTool('generate-cdb64-root-tx-index', [
+        '--input',
+        inputCsv,
+        '--output',
+        cdbFile,
+      ]);
+
+      // Export back to CSV
+      await runTool('export-cdb64-root-tx-index', [
+        '--input',
+        cdbFile,
+        '--output',
+        outputCsv,
+        '--no-header',
+      ]);
+
+      // Read output and compare
+      const outputContent = await fs.readFile(outputCsv, 'utf-8');
+      const outputLines = outputContent.trim().split('\n');
+
+      assert.equal(outputLines.length, inputData.length);
+
+      // Parse and compare (order may differ due to hash table placement)
+      const inputPairs = new Set(
+        inputData.map((line) => line.split(',').slice(0, 2).join(',')),
+      );
+      const outputPairs = new Set(
+        outputLines.map((line) => line.split(',').slice(0, 2).join(',')),
+      );
+
+      assert.deepEqual(inputPairs, outputPairs);
+    });
+
+    it('should round-trip complete format CSV through CDB', async () => {
+      const inputCsv = path.join(tempDir, 'input-complete.csv');
+      const cdbFile = path.join(tempDir, 'complete.cdb');
+      const outputCsv = path.join(tempDir, 'output-complete.csv');
+
+      // Create input CSV (complete format - with offsets)
+      const inputData = [
+        'IX5lt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg,LWWgC-YmKVG4sH8PXq7JtqAkDqPfpLmRsC0K76xRF88,1024,2048',
+        '7sDOjWxJ7sD6MhQYDwlcKb5wh95NkmFy67QnfF_K3Ts,qKkz3UNz_RhF4M5c0dVJLHg5sKPwJzKpPmHRRNbXUdI,4096,8192',
+      ];
+      await fs.writeFile(inputCsv, inputData.join('\n') + '\n');
+
+      // Generate CDB
+      await runTool('generate-cdb64-root-tx-index', [
+        '--input',
+        inputCsv,
+        '--output',
+        cdbFile,
+      ]);
+
+      // Export back to CSV
+      await runTool('export-cdb64-root-tx-index', [
+        '--input',
+        cdbFile,
+        '--output',
+        outputCsv,
+        '--no-header',
+      ]);
+
+      // Read output and compare
+      const outputContent = await fs.readFile(outputCsv, 'utf-8');
+      const outputLines = outputContent.trim().split('\n');
+
+      assert.equal(outputLines.length, inputData.length);
+
+      // Parse and compare all fields including offsets
+      const inputPairs = new Set(inputData);
+      const outputPairs = new Set(outputLines);
+
+      assert.deepEqual(inputPairs, outputPairs);
+    });
+
+    it('should handle CSV with header row', async () => {
+      const inputCsv = path.join(tempDir, 'input-header.csv');
+      const cdbFile = path.join(tempDir, 'header.cdb');
+      const outputCsv = path.join(tempDir, 'output-header.csv');
+
+      // Create input CSV with header
+      const header = 'data_item_id,root_tx_id';
+      const inputData = [
+        'IX5lt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg,LWWgC-YmKVG4sH8PXq7JtqAkDqPfpLmRsC0K76xRF88',
+      ];
+      await fs.writeFile(inputCsv, header + '\n' + inputData.join('\n') + '\n');
+
+      // Generate CDB (should auto-detect header)
+      await runTool('generate-cdb64-root-tx-index', [
+        '--input',
+        inputCsv,
+        '--output',
+        cdbFile,
+      ]);
+
+      // Export back to CSV without header
+      await runTool('export-cdb64-root-tx-index', [
+        '--input',
+        cdbFile,
+        '--output',
+        outputCsv,
+        '--no-header',
+      ]);
+
+      // Read output and compare
+      const outputContent = await fs.readFile(outputCsv, 'utf-8');
+      const outputLines = outputContent.trim().split('\n');
+
+      // Should have only 1 record (header was skipped)
+      assert.equal(outputLines.length, 1);
+
+      const outputPair = outputLines[0].split(',').slice(0, 2).join(',');
+      assert.equal(outputPair, inputData[0]);
+    });
+
+    it('should export to stdout', async () => {
+      const inputCsv = path.join(tempDir, 'input-stdout.csv');
+      const cdbFile = path.join(tempDir, 'stdout.cdb');
+
+      // Create input CSV
+      const inputData = [
+        'IX5lt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg,LWWgC-YmKVG4sH8PXq7JtqAkDqPfpLmRsC0K76xRF88',
+      ];
+      await fs.writeFile(inputCsv, inputData.join('\n') + '\n');
+
+      // Generate CDB
+      await runTool('generate-cdb64-root-tx-index', [
+        '--input',
+        inputCsv,
+        '--output',
+        cdbFile,
+      ]);
+
+      // Export to stdout
+      const result = await runTool('export-cdb64-root-tx-index', [
+        '--input',
+        cdbFile,
+        '--output',
+        '-',
+        '--no-header',
+      ]);
+
+      const outputLines = result.stdout.trim().split('\n');
+      assert.equal(outputLines.length, 1);
+
+      const outputPair = outputLines[0].split(',').slice(0, 2).join(',');
+      assert.equal(outputPair, inputData[0]);
+    });
+  });
 });
