@@ -134,6 +134,9 @@
     "viem": "^2.39.3",
     "x402-fetch": "^0.6.0"
   },
+  "optionalDependencies": {
+    "cdb64": "github:ever0de/cdb64-rs#main"
+  },
   "scripts": {
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json && yarn copy-files",
     "copy-files": "copyfiles -u 1 src/**/*.graphql src/**/*.sql src/lib/redis-lua/** dist",

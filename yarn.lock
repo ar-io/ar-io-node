@@ -7078,6 +7078,10 @@ capital-case@^1.0.4:
     preact "^10.16.0"
     sha.js "^2.4.11"
 
+"cdb64@github:ever0de/cdb64-rs#main":
+  version "0.0.0"
+  resolved "https://codeload.github.com/ever0de/cdb64-rs/tar.gz/45074120ee9bc1918b1274cff2045b1b6e543232"
+
 chalk@5.6.2, chalk@^5.4.1:
   version "5.6.2"
   resolved "https://registry.yarnpkg.com/chalk/-/chalk-5.6.2.tgz#b1238b6e23ea337af71c7f8a295db5af0c158aea"

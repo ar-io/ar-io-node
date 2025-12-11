@@ -121,8 +121,9 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       await this.removeReader(filePath);
     });
 
-    this.watcher.on('error', (error: Error) => {
-      this.log.error('CDB64 file watcher error', { error: error.message });
+    this.watcher.on('error', (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.error('CDB64 file watcher error', { error: message });
     });
 
     this.log.info('CDB64 file watcher started', { path: this.cdbPath });
