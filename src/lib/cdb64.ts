@@ -129,8 +129,14 @@ export class Cdb64Writer {
     const dir = path.dirname(this.outputPath);
     await fs.mkdir(dir, { recursive: true });
 
-    // Create write stream, skip header space (will write at end)
-    this.stream = createWriteStream(this.tempPath, { start: HEADER_SIZE });
+    // Pre-allocate header space with zeros to ensure proper file structure
+    // on all filesystems (critical for macOS APFS which may not properly
+    // handle sparse files created with start offset)
+    const placeholderHeader = Buffer.alloc(HEADER_SIZE);
+    await fs.writeFile(this.tempPath, placeholderHeader);
+
+    // Create write stream in append mode to continue after the header
+    this.stream = createWriteStream(this.tempPath, { flags: 'a' });
 
     // Wait for stream to be ready
     await new Promise<void>((resolve, reject) => {
