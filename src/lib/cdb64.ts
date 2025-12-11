@@ -418,6 +418,82 @@ export class Cdb64Reader {
   }
 
   /**
+   * Iterates over all key-value pairs in the database.
+   * Records are yielded in the order they were written (file order).
+   *
+   * Usage:
+   *   for await (const { key, value } of reader.entries()) {
+   *     // process key and value
+   *   }
+   */
+  async *entries(): AsyncGenerator<{ key: Buffer; value: Buffer }> {
+    if (!this.fileHandle) {
+      throw new Error('Reader not opened. Call open() first.');
+    }
+
+    // Find where records end by finding the minimum hash table position
+    // Hash tables with length 0 have position pointing to where they would be,
+    // but we need to find where actual hash table data starts
+    let recordsEndPosition = BigInt(Number.MAX_SAFE_INTEGER);
+    for (const pointer of this.tablePointers) {
+      if (pointer.length > 0n && pointer.position < recordsEndPosition) {
+        recordsEndPosition = pointer.position;
+      }
+    }
+
+    // If no hash tables have entries, there are no records
+    if (recordsEndPosition === BigInt(Number.MAX_SAFE_INTEGER)) {
+      return;
+    }
+
+    // Scan records sequentially from after header until hash tables
+    let position = BigInt(HEADER_SIZE);
+
+    while (position < recordsEndPosition) {
+      // Read record header (key_length + value_length = 16 bytes)
+      const recordHeader = Buffer.alloc(16);
+      const { bytesRead } = await this.fileHandle.read(
+        recordHeader,
+        0,
+        16,
+        Number(position),
+      );
+
+      if (bytesRead < 16) {
+        // Unexpected end of file
+        break;
+      }
+
+      const keyLength = Number(recordHeader.readBigUInt64LE(0));
+      const valueLength = Number(recordHeader.readBigUInt64LE(8));
+
+      // Sanity check to avoid reading garbage
+      if (keyLength > 1_000_000 || valueLength > 100_000_000) {
+        throw new Error(
+          `Invalid record at position ${position}: key=${keyLength}, value=${valueLength}`,
+        );
+      }
+
+      // Read key
+      const key = Buffer.alloc(keyLength);
+      await this.fileHandle.read(key, 0, keyLength, Number(position) + 16);
+
+      // Read value
+      const value = Buffer.alloc(valueLength);
+      await this.fileHandle.read(
+        value,
+        0,
+        valueLength,
+        Number(position) + 16 + keyLength,
+      );
+
+      yield { key, value };
+
+      position += BigInt(16 + keyLength + valueLength);
+    }
+  }
+
+  /**
    * Closes the file handle.
    */
   async close(): Promise<void> {
