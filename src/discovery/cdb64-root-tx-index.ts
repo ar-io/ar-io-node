@@ -319,23 +319,31 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       return undefined;
     }
 
+    // Convert base64url ID to 32-byte binary key
+    let keyBuffer: Buffer;
     try {
-      // Convert base64url ID to 32-byte binary key
-      const keyBuffer = fromB64Url(id);
+      keyBuffer = fromB64Url(id);
+    } catch {
+      // Invalid base64url encoding
+      this.log.debug('Invalid base64url encoding for data item ID', { id });
+      return undefined;
+    }
 
-      if (keyBuffer.length !== 32) {
-        this.log.debug('Invalid data item ID length', {
-          id,
-          length: keyBuffer.length,
-        });
-        return undefined;
-      }
+    if (keyBuffer.length !== 32) {
+      this.log.debug('Invalid data item ID length', {
+        id,
+        length: keyBuffer.length,
+      });
+      return undefined;
+    }
 
-      // Snapshot readers array to avoid issues if list changes during iteration
-      const currentReaders = this.readers;
+    // Snapshot readers array to avoid issues if list changes during iteration
+    const currentReaders = this.readers;
 
-      // Search through all readers in order (first match wins)
-      for (const reader of currentReaders) {
+    // Search through all readers in order (first match wins)
+    // Isolate per-reader failures so one bad file doesn't mask matches in others
+    for (const reader of currentReaders) {
+      try {
         const valueBuffer = await reader.get(keyBuffer);
 
         if (valueBuffer !== undefined) {
@@ -359,17 +367,20 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             rootTxId,
           };
         }
+      } catch (error: unknown) {
+        // Log per-reader errors at debug level and continue to next reader
+        // This allows lookups to succeed even if one CDB file is corrupted/being replaced
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.debug('Error reading from CDB64 file, trying next', {
+          id,
+          error: message,
+        });
+        continue;
       }
-
-      // Key not found in any file
-      return undefined;
-    } catch (error: any) {
-      this.log.error('Error looking up root TX in CDB64', {
-        id,
-        error: error.message,
-      });
-      return undefined;
     }
+
+    // Key not found in any file
+    return undefined;
   }
 
   /**
