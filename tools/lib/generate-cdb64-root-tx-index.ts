@@ -19,9 +19,10 @@
  */
 
 import * as fs from 'node:fs';
-import * as readline from 'node:readline';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { parse } from 'csv-parse';
 
 import { Cdb64Writer } from '../../src/lib/cdb64.js';
 import { encodeCdb64Value } from '../../src/lib/cdb64-encoding.js';
@@ -113,15 +114,14 @@ function parseArgs(): Config | null {
 }
 
 /**
- * Checks if a line looks like a CSV header rather than data.
+ * Checks if a record looks like a CSV header rather than data.
  * Headers won't have valid 43-character base64url IDs in the first two columns.
  */
-function looksLikeHeader(line: string): boolean {
-  const parts = line.split(',');
-  if (parts.length < 2) return true;
+function looksLikeHeader(record: string[]): boolean {
+  if (record.length < 2) return true;
 
-  const first = parts[0].trim();
-  const second = parts[1].trim();
+  const first = record[0].trim();
+  const second = record[1].trim();
 
   // Valid IDs are exactly 43 characters of base64url
   if (first.length !== 43 || second.length !== 43) {
@@ -181,31 +181,33 @@ async function generateIndex(config: Config): Promise<void> {
   const writer = new Cdb64Writer(config.outputPath);
   await writer.open();
 
-  let lineNumber = 0;
+  let recordNumber = 0;
   let recordCount = 0;
   let simpleCount = 0;
   let completeCount = 0;
   let errorCount = 0;
   let headerSkipped = false;
 
-  const fileStream = fs.createReadStream(config.inputPath);
-  const rl = readline.createInterface({
-    input: fileStream,
-    crlfDelay: Infinity,
-  });
+  // Create CSV parser with RFC 4180 support
+  const parser = fs.createReadStream(config.inputPath).pipe(
+    parse({
+      columns: false, // Return arrays, not objects
+      skip_empty_lines: true,
+      trim: true,
+      relax_quotes: true, // Handle minor quote issues gracefully
+      comment: '#', // Skip comment lines
+    }),
+  );
 
   try {
-    for await (const line of rl) {
-      lineNumber++;
+    for await (const record of parser) {
+      recordNumber++;
 
-      // Skip empty lines first (before header detection)
-      const trimmedLine = line.trim();
-      if (trimmedLine === '' || trimmedLine.startsWith('#')) {
-        continue;
-      }
-
-      // Skip header: either explicitly requested or auto-detected on first data line
-      if (!headerSkipped && (config.skipHeader || looksLikeHeader(trimmedLine))) {
+      // Skip header: either explicitly requested or auto-detected on first record
+      if (
+        !headerSkipped &&
+        (config.skipHeader || looksLikeHeader(record as string[]))
+      ) {
         headerSkipped = true;
         if (config.skipHeader) {
           console.log('Skipping header (--skip-header)');
@@ -217,17 +219,21 @@ async function generateIndex(config: Config): Promise<void> {
       headerSkipped = true; // Mark as checked even if not skipped
 
       try {
-        const parts = trimmedLine.split(',');
+        const parts = record as string[];
 
         if (parts.length < 2) {
-          throw new Error('CSV line must have at least 2 columns');
+          throw new Error('CSV record must have at least 2 columns');
         }
 
         const dataItemId = parseBase64UrlId(parts[0], 'data_item_id');
         const rootTxId = parseBase64UrlId(parts[1], 'root_tx_id');
 
         let value;
-        if (parts.length >= 4 && parts[2].trim() !== '' && parts[3].trim() !== '') {
+        if (
+          parts.length >= 4 &&
+          parts[2].trim() !== '' &&
+          parts[3].trim() !== ''
+        ) {
           // Complete format with offsets
           const rootDataItemOffset = parseOffset(
             parts[2],
@@ -256,7 +262,7 @@ async function generateIndex(config: Config): Promise<void> {
         }
       } catch (error: any) {
         errorCount++;
-        console.error(`Error on line ${lineNumber}: ${error.message}`);
+        console.error(`Error on record ${recordNumber}: ${error.message}`);
 
         // Stop on too many errors
         if (errorCount > 100) {
@@ -268,7 +274,7 @@ async function generateIndex(config: Config): Promise<void> {
     await writer.finalize();
 
     console.log('\n=== Generation Complete ===');
-    console.log(`Total lines processed: ${lineNumber.toLocaleString()}`);
+    console.log(`Total records processed: ${recordNumber.toLocaleString()}`);
     console.log(`Records written: ${recordCount.toLocaleString()}`);
     console.log(`  - Simple format: ${simpleCount.toLocaleString()}`);
     console.log(`  - Complete format: ${completeCount.toLocaleString()}`);
