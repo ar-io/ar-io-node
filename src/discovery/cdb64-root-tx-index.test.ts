@@ -173,9 +173,12 @@ describe('Cdb64RootTxIndex', () => {
       const cdbPath = path.join(tempDir, 'nonexistent.cdb');
 
       const index = new Cdb64RootTxIndex({ log, cdbPath });
-      const result = await index.getRootTx(toB64Url(createTxId(1)));
-
-      assert.equal(result, undefined);
+      try {
+        const result = await index.getRootTx(toB64Url(createTxId(1)));
+        assert.equal(result, undefined);
+      } finally {
+        await index.close();
+      }
     });
 
     it('should return undefined for invalid ID length', async () => {
