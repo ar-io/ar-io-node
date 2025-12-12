@@ -33,7 +33,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private readerMap: Map<string, Cdb64Reader> = new Map();
   private cdbPath: string;
   private initialized = false;
-  private initError: Error | null = null;
   private isDirectory = false;
   private watchEnabled: boolean;
   private watcher: FSWatcher | null = null;
@@ -226,9 +225,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       return;
     }
 
-    // Clear any previous error before retrying initialization
-    this.initError = null;
-
     try {
       const cdbFiles = await this.discoverCdbFiles();
 
@@ -257,9 +253,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       this.readerMap.clear();
       this.readers = [];
 
-      // Cache the error but don't set initialized = true
-      // This allows retry on transient errors (e.g., files not yet available)
-      this.initError = error;
+      // Don't set initialized = true - this allows retry on transient errors
+      // (e.g., files not yet available, temporary disk issues)
       this.log.error('Failed to initialize CDB64 root TX index', {
         path: this.cdbPath,
         error: error.message,
