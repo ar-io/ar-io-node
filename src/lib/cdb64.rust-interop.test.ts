@@ -33,8 +33,10 @@ const packr = new Packr({
 });
 
 // Conditionally load Rust bindings
-// The cdb64 package is an optionalDependency that requires Rust to compile
-// The cdb64-rs repo has Node bindings in the 'node' subdirectory
+// The cdb64 package is an optionalDependency that requires Rust to compile.
+// Import path: 'cdb64/node/index.js' matches the cdb64-rs package structure
+// (see https://github.com/ever0de/cdb64-rs). If the package structure changes,
+// this path may need to be updated. The test is skipped if import fails.
 let rustCdb64: typeof import('cdb64/node/index.js') | undefined;
 try {
   rustCdb64 = await import('cdb64/node/index.js');

@@ -66,6 +66,31 @@ const SLOT_SIZE = 16;
 // Number of hash tables
 const NUM_TABLES = 256;
 
+// Maximum file size supported (limited by safe integer precision for file I/O)
+const MAX_SAFE_FILE_SIZE = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * Safely converts a BigInt file position to Number for fs operations.
+ * Throws an error if the position exceeds JavaScript's safe integer range.
+ *
+ * Note: Node.js fs operations use Number for file positions. While BigInt
+ * can represent larger values, files >8TB (2^53 bytes) would require
+ * BigInt-native I/O which Node.js doesn't support natively.
+ *
+ * @param position - The BigInt file position to convert
+ * @returns The position as a safe Number
+ * @throws Error if position exceeds MAX_SAFE_INTEGER
+ */
+function toSafeFilePosition(position: bigint): number {
+  if (position > MAX_SAFE_FILE_SIZE) {
+    throw new Error(
+      `File position ${position} exceeds maximum safe integer (${Number.MAX_SAFE_INTEGER}). ` +
+        `CDB64 files larger than ~8TB are not supported.`,
+    );
+  }
+  return Number(position);
+}
+
 /**
  * DJB hash function used by CDB, extended to 64-bit.
  *
@@ -375,7 +400,7 @@ export class Cdb64Reader {
         slotBuffer,
         0,
         SLOT_SIZE,
-        Number(slotPosition),
+        toSafeFilePosition(slotPosition),
       );
 
       const slotHash = slotBuffer.readBigUInt64LE(0);
@@ -390,7 +415,12 @@ export class Cdb64Reader {
       if (slotHash === hash) {
         // Read record header
         const recordHeader = Buffer.alloc(16);
-        await this.fileHandle.read(recordHeader, 0, 16, Number(recordPosition));
+        await this.fileHandle.read(
+          recordHeader,
+          0,
+          16,
+          toSafeFilePosition(recordPosition),
+        );
 
         const keyLength = Number(recordHeader.readBigUInt64LE(0));
         const valueLength = Number(recordHeader.readBigUInt64LE(8));
@@ -401,7 +431,7 @@ export class Cdb64Reader {
           recordKey,
           0,
           keyLength,
-          Number(recordPosition) + 16,
+          toSafeFilePosition(recordPosition + 16n),
         );
 
         if (key.equals(recordKey)) {
@@ -411,7 +441,7 @@ export class Cdb64Reader {
             value,
             0,
             valueLength,
-            Number(recordPosition) + 16 + keyLength,
+            toSafeFilePosition(recordPosition + 16n + BigInt(keyLength)),
           );
           return value;
         }
@@ -464,7 +494,7 @@ export class Cdb64Reader {
         recordHeader,
         0,
         16,
-        Number(position),
+        toSafeFilePosition(position),
       );
 
       if (bytesRead < 16) {
@@ -484,7 +514,12 @@ export class Cdb64Reader {
 
       // Read key
       const key = Buffer.alloc(keyLength);
-      await this.fileHandle.read(key, 0, keyLength, Number(position) + 16);
+      await this.fileHandle.read(
+        key,
+        0,
+        keyLength,
+        toSafeFilePosition(position + 16n),
+      );
 
       // Read value
       const value = Buffer.alloc(valueLength);
@@ -492,7 +527,7 @@ export class Cdb64Reader {
         value,
         0,
         valueLength,
-        Number(position) + 16 + keyLength,
+        toSafeFilePosition(position + 16n + BigInt(keyLength)),
       );
 
       yield { key, value };

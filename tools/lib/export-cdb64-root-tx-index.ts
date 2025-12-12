@@ -44,10 +44,10 @@ data item ID to root transaction ID mappings.
 Usage: ./tools/export-cdb64-root-tx-index [options]
 
 Options:
-  --input <path>    Input CDB64 file path (required)
-  --output <path>   Output CSV file path (required, use "-" for stdout)
-  --no-header       Omit CSV header row
-  --help            Show this help message
+  --input, -i <path>   Input CDB64 file path (required)
+  --output, -o <path>  Output CSV file path (required, use "-" for stdout)
+  --no-header          Omit CSV header row
+  --help, -h           Show this help message
 
 CSV Output Format:
   data_item_id,root_tx_id,root_data_item_offset,root_data_offset
@@ -132,6 +132,14 @@ async function exportIndex(config: Config): Promise<void> {
     ? process.stdout
     : fs.createWriteStream(config.outputPath);
 
+  // Track output stream errors to fail fast
+  let outputError: Error | null = null;
+  if (!isStdout) {
+    outputStream.on('error', (err) => {
+      outputError = err;
+    });
+  }
+
   // Create CSV stringifier with RFC 4180 support
   const stringifier = stringify({
     header: config.includeHeader,
@@ -194,6 +202,11 @@ async function exportIndex(config: Config): Promise<void> {
           console.error(
             `Exported ${recordCount.toLocaleString()} records... (${recordsPerSec.toLocaleString()} records/sec)`,
           );
+        }
+
+        // Check for output stream errors
+        if (outputError) {
+          throw outputError;
         }
       } catch (error: any) {
         errorCount++;

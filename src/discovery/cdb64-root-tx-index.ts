@@ -223,11 +223,11 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
-      if (this.initError) {
-        throw this.initError;
-      }
       return;
     }
+
+    // Clear any previous error before retrying initialization
+    this.initError = null;
 
     try {
       const cdbFiles = await this.discoverCdbFiles();
@@ -248,7 +248,17 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         watching: this.watchEnabled && this.isDirectory,
       });
     } catch (error: any) {
-      this.initialized = true;
+      // Close any readers that were opened before the failure to avoid FD leaks
+      await Promise.allSettled(
+        [...this.readerMap.values()].map((r) =>
+          r.isOpen() ? r.close() : Promise.resolve(),
+        ),
+      );
+      this.readerMap.clear();
+      this.readers = [];
+
+      // Cache the error but don't set initialized = true
+      // This allows retry on transient errors (e.g., files not yet available)
       this.initError = error;
       this.log.error('Failed to initialize CDB64 root TX index', {
         path: this.cdbPath,

@@ -35,6 +35,7 @@ interface Config {
   inputPath: string;
   outputPath: string;
   skipHeader: boolean;
+  force: boolean;
 }
 
 function printUsage(): void {
@@ -47,10 +48,11 @@ data item ID to root transaction ID mappings.
 Usage: ./tools/generate-cdb64-root-tx-index [options]
 
 Options:
-  --input <path>    Input CSV file path (required)
-  --output <path>   Output CDB64 file path (required)
-  --skip-header     Skip the first line of the CSV (default: false)
-  --help            Show this help message
+  --input, -i <path>   Input CSV file path (required)
+  --output, -o <path>  Output CDB64 file path (required)
+  --skip-header        Skip the first line of the CSV (default: false)
+  --force, -f          Overwrite output file if it exists
+  --help, -h           Show this help message
 
 CSV Format:
   data_item_id,root_tx_id[,root_data_item_offset,root_data_offset]
@@ -73,6 +75,7 @@ function parseArgs(): Config | null {
   let inputPath: string | undefined;
   let outputPath: string | undefined;
   let skipHeader = false;
+  let force = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -94,6 +97,10 @@ function parseArgs(): Config | null {
       case '--skip-header':
         skipHeader = true;
         break;
+      case '--force':
+      case '-f':
+        force = true;
+        break;
       case '--help':
       case '-h':
         printUsage();
@@ -110,7 +117,7 @@ function parseArgs(): Config | null {
     throw new Error('--output is required');
   }
 
-  return { inputPath, outputPath, skipHeader };
+  return { inputPath, outputPath, skipHeader, force };
 }
 
 /**
@@ -164,6 +171,12 @@ function parseOffset(value: string, fieldName: string): number {
     );
   }
 
+  if (num > Number.MAX_SAFE_INTEGER) {
+    throw new Error(
+      `Invalid ${fieldName}: value ${trimmed} exceeds maximum safe integer (${Number.MAX_SAFE_INTEGER})`,
+    );
+  }
+
   return num;
 }
 
@@ -176,6 +189,13 @@ async function generateIndex(config: Config): Promise<void> {
   // Verify input file exists
   if (!fs.existsSync(config.inputPath)) {
     throw new Error(`Input file not found: ${config.inputPath}`);
+  }
+
+  // Check if output file exists (unless --force)
+  if (fs.existsSync(config.outputPath) && !config.force) {
+    throw new Error(
+      `Output file already exists: ${config.outputPath} (use --force to overwrite)`,
+    );
   }
 
   const writer = new Cdb64Writer(config.outputPath);
@@ -230,11 +250,18 @@ async function generateIndex(config: Config): Promise<void> {
         const rootTxId = parseBase64UrlId(parts[1], 'root_tx_id');
 
         let value;
-        if (
-          parts.length >= 4 &&
-          parts[2].trim() !== '' &&
-          parts[3].trim() !== ''
-        ) {
+        const hasOffsetCols = parts.length >= 4;
+        const hasOffset1 = hasOffsetCols && parts[2].trim() !== '';
+        const hasOffset2 = hasOffsetCols && parts[3].trim() !== '';
+
+        // Enforce both-or-neither for offset columns
+        if (hasOffset1 !== hasOffset2) {
+          throw new Error(
+            'If offset columns are present, both root_data_item_offset and root_data_offset must be provided',
+          );
+        }
+
+        if (hasOffset1 && hasOffset2) {
           // Complete format with offsets
           const rootDataItemOffset = parseOffset(
             parts[2],
