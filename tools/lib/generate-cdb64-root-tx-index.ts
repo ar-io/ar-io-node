@@ -187,6 +187,7 @@ async function generateIndex(config: Config): Promise<void> {
   let completeCount = 0;
   let errorCount = 0;
   let headerSkipped = false;
+  const startTime = Date.now();
 
   // Create CSV parser with RFC 4180 support
   const parser = fs.createReadStream(config.inputPath).pipe(
@@ -258,7 +259,11 @@ async function generateIndex(config: Config): Promise<void> {
 
         // Progress indicator
         if (recordCount % 100000 === 0) {
-          console.log(`Processed ${recordCount.toLocaleString()} records...`);
+          const elapsedSec = (Date.now() - startTime) / 1000;
+          const recordsPerSec = Math.round(recordCount / elapsedSec);
+          console.log(
+            `Processed ${recordCount.toLocaleString()} records... (${recordsPerSec.toLocaleString()} records/sec)`,
+          );
         }
       } catch (error: any) {
         errorCount++;
@@ -272,6 +277,10 @@ async function generateIndex(config: Config): Promise<void> {
     }
 
     await writer.finalize();
+
+    const totalElapsedSec = (Date.now() - startTime) / 1000;
+    const avgRecordsPerSec =
+      totalElapsedSec > 0 ? Math.round(recordCount / totalElapsedSec) : 0;
 
     console.log('\n=== Generation Complete ===');
     console.log(`Total records processed: ${recordNumber.toLocaleString()}`);
@@ -287,6 +296,9 @@ async function generateIndex(config: Config): Promise<void> {
     const stats = fs.statSync(config.outputPath);
     const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
     console.log(`File size: ${sizeMB} MB`);
+    console.log(
+      `Elapsed time: ${totalElapsedSec.toFixed(1)}s (${avgRecordsPerSec.toLocaleString()} records/sec)`,
+    );
   } catch (error) {
     // Clean up on error
     await writer.abort();
