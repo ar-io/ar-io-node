@@ -144,10 +144,36 @@ async function exportToCdb64(config: Config): Promise<void> {
     let recordCount = 0;
     let simpleCount = 0;
     let completeCount = 0;
+    let skippedCount = 0;
 
     try {
       // Iterate through all rows
       for (const row of query.iterate() as IterableIterator<DataRow>) {
+        // Validate that id is a 32-byte Buffer (required for proper CDB64 lookup semantics)
+        if (!Buffer.isBuffer(row.id) || row.id.length !== 32) {
+          skippedCount++;
+          continue;
+        }
+
+        // Validate that root_transaction_id is a 32-byte Buffer
+        if (
+          !Buffer.isBuffer(row.root_transaction_id) ||
+          row.root_transaction_id.length !== 32
+        ) {
+          skippedCount++;
+          continue;
+        }
+
+        // Check for partial offsets (data inconsistency - only one offset present)
+        const hasPartialOffsets =
+          (row.root_data_item_offset === null) !==
+          (row.root_data_offset === null);
+        if (hasPartialOffsets) {
+          // Data inconsistency: skip rather than silently downgrade to simple format
+          skippedCount++;
+          continue;
+        }
+
         const hasOffsets =
           row.root_data_item_offset !== null && row.root_data_offset !== null;
 
@@ -186,6 +212,9 @@ async function exportToCdb64(config: Config): Promise<void> {
       console.log(`Records exported: ${recordCount.toLocaleString()}`);
       console.log(`  - Simple format: ${simpleCount.toLocaleString()}`);
       console.log(`  - Complete format: ${completeCount.toLocaleString()}`);
+      if (skippedCount > 0) {
+        console.log(`Records skipped (invalid): ${skippedCount.toLocaleString()}`);
+      }
       console.log(`Output: ${config.outputPath}`);
 
       // Show file size
@@ -209,8 +238,9 @@ async function main(): Promise<void> {
     }
 
     await exportToCdb64(config);
-  } catch (error: any) {
-    console.error(`Error: ${error.message}`);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error: ${message}`);
     process.exit(1);
   }
 }
