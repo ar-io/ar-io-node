@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# AR.IO Gateway
+# Copyright (C) 2022-2025 Permanent Data Solutions, Inc. All Rights Reserved.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Generate CDB64 Root TX Index Tool (Rust)
+#
+# This tool generates a CDB64 index file from a CSV file containing
+# data item ID to root transaction ID mappings. Uses the Rust-backed
+# cdb64 library for improved performance.
+#
+# Usage: ./tools/generate-cdb64-root-tx-index-rs [options]
+#
+# Options:
+#   --input <path>    Input CSV file path (required)
+#   --output <path>   Output CDB64 file path (required)
+#   --skip-header     Skip the first line of the CSV (default: false)
+#   --help            Show usage information
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "${PROJECT_ROOT}"
+
+exec node --import ./register.js tools/lib/generate-cdb64-root-tx-index-rs.ts "$@"
