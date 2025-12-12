@@ -97,8 +97,8 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     this.watcher = watch(this.cdbPath, {
       ignored: (filePath: string) => {
-        // Allow directories to be traversed
-        // Only allow .cdb files
+        // Ignore everything except the root path and .cdb files
+        // Returns true to skip non-.cdb entries
         return !filePath.endsWith('.cdb') && filePath !== this.cdbPath;
       },
       persistent: true,
@@ -113,12 +113,24 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     this.watcher.on('add', async (filePath: string) => {
       if (!filePath.endsWith('.cdb')) return;
-      await this.addReader(filePath);
+      await this.addReader(filePath).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error('Failed handling CDB64 add event', {
+          path: filePath,
+          error: message,
+        });
+      });
     });
 
     this.watcher.on('unlink', async (filePath: string) => {
       if (!filePath.endsWith('.cdb')) return;
-      await this.removeReader(filePath);
+      await this.removeReader(filePath).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.error('Failed handling CDB64 unlink event', {
+          path: filePath,
+          error: message,
+        });
+      });
     });
 
     this.watcher.on('error', (error: unknown) => {
