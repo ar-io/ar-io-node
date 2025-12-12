@@ -396,12 +396,17 @@ export class Cdb64Reader {
 
       // Read slot
       const slotBuffer = Buffer.alloc(SLOT_SIZE);
-      await this.fileHandle.read(
+      const { bytesRead: slotBytesRead } = await this.fileHandle.read(
         slotBuffer,
         0,
         SLOT_SIZE,
         toSafeFilePosition(slotPosition),
       );
+      if (slotBytesRead !== SLOT_SIZE) {
+        throw new Error(
+          `Incomplete slot read: expected ${SLOT_SIZE} bytes, got ${slotBytesRead}`,
+        );
+      }
 
       const slotHash = slotBuffer.readBigUInt64LE(0);
       const recordPosition = slotBuffer.readBigUInt64LE(8);
@@ -415,34 +420,49 @@ export class Cdb64Reader {
       if (slotHash === hash) {
         // Read record header
         const recordHeader = Buffer.alloc(16);
-        await this.fileHandle.read(
+        const { bytesRead: headerBytesRead } = await this.fileHandle.read(
           recordHeader,
           0,
           16,
           toSafeFilePosition(recordPosition),
         );
+        if (headerBytesRead !== 16) {
+          throw new Error(
+            `Incomplete record header read: expected 16 bytes, got ${headerBytesRead}`,
+          );
+        }
 
         const keyLength = Number(recordHeader.readBigUInt64LE(0));
         const valueLength = Number(recordHeader.readBigUInt64LE(8));
 
         // Read and compare key
         const recordKey = Buffer.alloc(keyLength);
-        await this.fileHandle.read(
+        const { bytesRead: keyBytesRead } = await this.fileHandle.read(
           recordKey,
           0,
           keyLength,
           toSafeFilePosition(recordPosition + 16n),
         );
+        if (keyBytesRead !== keyLength) {
+          throw new Error(
+            `Incomplete key read: expected ${keyLength} bytes, got ${keyBytesRead}`,
+          );
+        }
 
         if (key.equals(recordKey)) {
           // Key matches - read and return value
           const value = Buffer.alloc(valueLength);
-          await this.fileHandle.read(
+          const { bytesRead: valueBytesRead } = await this.fileHandle.read(
             value,
             0,
             valueLength,
             toSafeFilePosition(recordPosition + 16n + BigInt(keyLength)),
           );
+          if (valueBytesRead !== valueLength) {
+            throw new Error(
+              `Incomplete value read: expected ${valueLength} bytes, got ${valueBytesRead}`,
+            );
+          }
           return value;
         }
       }
@@ -514,21 +534,31 @@ export class Cdb64Reader {
 
       // Read key
       const key = Buffer.alloc(keyLength);
-      await this.fileHandle.read(
+      const { bytesRead: keyBytesRead } = await this.fileHandle.read(
         key,
         0,
         keyLength,
         toSafeFilePosition(position + 16n),
       );
+      if (keyBytesRead !== keyLength) {
+        throw new Error(
+          `Incomplete key read at position ${position}: expected ${keyLength} bytes, got ${keyBytesRead}`,
+        );
+      }
 
       // Read value
       const value = Buffer.alloc(valueLength);
-      await this.fileHandle.read(
+      const { bytesRead: valueBytesRead } = await this.fileHandle.read(
         value,
         0,
         valueLength,
         toSafeFilePosition(position + 16n + BigInt(keyLength)),
       );
+      if (valueBytesRead !== valueLength) {
+        throw new Error(
+          `Incomplete value read at position ${position}: expected ${valueLength} bytes, got ${valueBytesRead}`,
+        );
+      }
 
       yield { key, value };
 
