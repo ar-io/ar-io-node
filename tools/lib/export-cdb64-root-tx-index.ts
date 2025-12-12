@@ -22,6 +22,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { stringify } from 'csv-stringify';
+
 import { Cdb64Reader } from '../../src/lib/cdb64.js';
 import { decodeCdb64Value, isCompleteValue } from '../../src/lib/cdb64-encoding.js';
 import { toB64Url } from '../../src/lib/encoding.js';
@@ -130,15 +132,19 @@ async function exportIndex(config: Config): Promise<void> {
     ? process.stdout
     : fs.createWriteStream(config.outputPath);
 
-  // Write header if requested
-  if (config.includeHeader) {
-    const header = 'data_item_id,root_tx_id,root_data_item_offset,root_data_offset\n';
-    if (isStdout) {
-      process.stdout.write(header);
-    } else {
-      (outputStream as fs.WriteStream).write(header);
-    }
-  }
+  // Create CSV stringifier with RFC 4180 support
+  const stringifier = stringify({
+    header: config.includeHeader,
+    columns: [
+      'data_item_id',
+      'root_tx_id',
+      'root_data_item_offset',
+      'root_data_offset',
+    ],
+  });
+
+  // Pipe stringifier to output stream
+  stringifier.pipe(outputStream);
 
   let recordCount = 0;
   let simpleCount = 0;
@@ -155,26 +161,27 @@ async function exportIndex(config: Config): Promise<void> {
         const dataItemId = toB64Url(key);
         const rootTxId = toB64Url(decoded.rootTxId);
 
-        // Build CSV line
-        let line: string;
+        // Build CSV record
+        let record: (string | number)[];
         if (isCompleteValue(decoded)) {
-          line = `${dataItemId},${rootTxId},${decoded.rootDataItemOffset},${decoded.rootDataOffset}\n`;
+          record = [
+            dataItemId,
+            rootTxId,
+            decoded.rootDataItemOffset,
+            decoded.rootDataOffset,
+          ];
           completeCount++;
         } else {
-          line = `${dataItemId},${rootTxId},,\n`;
+          record = [dataItemId, rootTxId, '', ''];
           simpleCount++;
         }
 
-        // Write line with backpressure handling
-        if (isStdout) {
-          process.stdout.write(line);
-        } else {
-          const canContinue = (outputStream as fs.WriteStream).write(line);
-          if (!canContinue) {
-            await new Promise<void>((resolve) =>
-              (outputStream as fs.WriteStream).once('drain', resolve),
-            );
-          }
+        // Write record with backpressure handling
+        const canContinue = stringifier.write(record);
+        if (!canContinue) {
+          await new Promise<void>((resolve) =>
+            stringifier.once('drain', resolve),
+          );
         }
 
         recordCount++;
@@ -194,13 +201,12 @@ async function exportIndex(config: Config): Promise<void> {
       }
     }
 
-    // Close output stream if it's a file
-    if (!isStdout) {
-      await new Promise<void>((resolve, reject) => {
-        (outputStream as fs.WriteStream).end(() => resolve());
-        (outputStream as fs.WriteStream).on('error', reject);
-      });
-    }
+    // End the stringifier and wait for it to finish
+    await new Promise<void>((resolve, reject) => {
+      stringifier.on('finish', resolve);
+      stringifier.on('error', reject);
+      stringifier.end();
+    });
 
     await reader.close();
 
@@ -221,6 +227,7 @@ async function exportIndex(config: Config): Promise<void> {
     }
   } catch (error) {
     await reader.close();
+    stringifier.destroy();
     if (!isStdout && outputStream !== process.stdout) {
       (outputStream as fs.WriteStream).destroy();
       // Clean up partial file

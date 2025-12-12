@@ -38,6 +38,8 @@
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
+    "csv-parse": "^5.6.0",
+    "csv-stringify": "^6.5.2",
     "duckdb-async": "^1.4.0",
     "express": "^4.21.2",
     "express-async-handler": "^1.2.0",
