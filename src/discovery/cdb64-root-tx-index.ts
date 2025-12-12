@@ -142,21 +142,48 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
   /**
    * Adds a new reader for a .cdb file.
+   *
+   * Note: There's a potential race condition where an unlink event could fire
+   * while we're awaiting reader.open(). To handle this, we verify the file
+   * still exists after opening before adding the reader to the map.
    */
   private async addReader(filePath: string): Promise<void> {
     if (this.readerMap.has(filePath)) return;
 
+    let reader: Cdb64Reader | undefined;
     try {
-      const reader = new Cdb64Reader(filePath);
+      reader = new Cdb64Reader(filePath);
       await reader.open();
+
+      // Verify file still exists after opening (race with unlink)
+      // If the file was deleted while we were opening, don't add the reader
+      await fs.stat(filePath);
+
       this.readerMap.set(filePath, reader);
       this.rebuildReaderList();
       this.log.info('CDB64 file added', { path: filePath });
     } catch (error: any) {
-      this.log.error('Failed to add CDB64 file', {
-        path: filePath,
-        error: error.message,
-      });
+      // Clean up the opened reader if we can't add it
+      if (reader?.isOpen()) {
+        try {
+          await reader.close();
+        } catch {
+          // Ignore close errors during cleanup
+        }
+      }
+
+      // Only log as error if it's not a "file doesn't exist" error
+      // (which is expected if file was deleted during open)
+      if (error.code !== 'ENOENT') {
+        this.log.error('Failed to add CDB64 file', {
+          path: filePath,
+          error: error.message,
+        });
+      } else {
+        this.log.debug('CDB64 file no longer exists, skipping', {
+          path: filePath,
+        });
+      }
     }
   }
 
