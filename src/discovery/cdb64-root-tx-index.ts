@@ -33,6 +33,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private readerMap: Map<string, Cdb64Reader> = new Map();
   private cdbPath: string;
   private initialized = false;
+  private initializationPromise: Promise<void> | null = null;
   private isDirectory = false;
   private watchEnabled: boolean;
   private watcher: FSWatcher | null = null;
@@ -225,6 +226,25 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       return;
     }
 
+    // Use promise guard to prevent double-init under concurrent access
+    if (this.initializationPromise !== null) {
+      return this.initializationPromise;
+    }
+
+    this.initializationPromise = this.doInitialize();
+
+    try {
+      await this.initializationPromise;
+    } finally {
+      // Clear promise on completion (success or failure) to allow retry
+      this.initializationPromise = null;
+    }
+  }
+
+  /**
+   * Performs the actual initialization work.
+   */
+  private async doInitialize(): Promise<void> {
     try {
       const cdbFiles = await this.discoverCdbFiles();
 
