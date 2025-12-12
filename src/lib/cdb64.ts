@@ -269,18 +269,18 @@ export class Cdb64Writer {
   }
 
   /**
-   * Writes data to the stream with backpressure handling.
+   * Writes data to the stream with proper error handling.
+   *
+   * Always waits for the write callback to fire before resolving,
+   * ensuring async write errors are properly captured. Backpressure
+   * is implicitly handled since we await each write sequentially.
    */
   private async writeToStream(data: Buffer): Promise<void> {
     return new Promise((resolve, reject) => {
-      const canContinue = this.stream!.write(data, (err) => {
-        if (err) reject(err);
-      });
-      if (canContinue) {
+      this.stream!.write(data, (err) => {
+        if (err) return reject(err);
         resolve();
-      } else {
-        this.stream!.once('drain', resolve);
-      }
+      });
     });
   }
 
