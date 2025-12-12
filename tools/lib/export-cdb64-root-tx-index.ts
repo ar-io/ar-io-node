@@ -150,6 +150,7 @@ async function exportIndex(config: Config): Promise<void> {
   let simpleCount = 0;
   let completeCount = 0;
   let errorCount = 0;
+  const startTime = Date.now();
 
   try {
     for await (const { key, value } of reader.entries()) {
@@ -188,7 +189,11 @@ async function exportIndex(config: Config): Promise<void> {
 
         // Progress indicator (only to stderr when not stdout)
         if (!isStdout && recordCount % 100000 === 0) {
-          console.error(`Exported ${recordCount.toLocaleString()} records...`);
+          const elapsedSec = (Date.now() - startTime) / 1000;
+          const recordsPerSec = Math.round(recordCount / elapsedSec);
+          console.error(
+            `Exported ${recordCount.toLocaleString()} records... (${recordsPerSec.toLocaleString()} records/sec)`,
+          );
         }
       } catch (error: any) {
         errorCount++;
@@ -211,6 +216,10 @@ async function exportIndex(config: Config): Promise<void> {
     await reader.close();
 
     if (!isStdout) {
+      const totalElapsedSec = (Date.now() - startTime) / 1000;
+      const avgRecordsPerSec =
+        totalElapsedSec > 0 ? Math.round(recordCount / totalElapsedSec) : 0;
+
       console.error('\n=== Export Complete ===');
       console.error(`Records exported: ${recordCount.toLocaleString()}`);
       console.error(`  - Simple format: ${simpleCount.toLocaleString()}`);
@@ -224,6 +233,9 @@ async function exportIndex(config: Config): Promise<void> {
       const stats = fs.statSync(config.outputPath);
       const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
       console.error(`File size: ${sizeMB} MB`);
+      console.error(
+        `Elapsed time: ${totalElapsedSec.toFixed(1)}s (${avgRecordsPerSec.toLocaleString()} records/sec)`,
+      );
     }
   } catch (error) {
     await reader.close();
