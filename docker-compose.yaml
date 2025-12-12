@@ -47,6 +47,7 @@ services:
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
       - ${DATASETS_PATH:-./data/datasets}:/app/data/datasets
+      - ${CDB64_ROOT_TX_INDEX_DATA_PATH:-./data/cdb64-root-tx-index}:/app/data/cdb64-root-tx-index
       - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
     environment:
       - NODE_ENV=${NODE_ENV:-production}
@@ -164,6 +165,7 @@ services:
       - MIN_DATA_VERIFICATION_PRIORITY=${MIN_DATA_VERIFICATION_PRIORITY:-}
       - BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS=${BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS:-}
       - ENABLE_DATA_ITEM_ROOT_TX_SEARCH=${ENABLE_DATA_ITEM_ROOT_TX_SEARCH:-}
+      - CDB64_ROOT_TX_INDEX_WATCH=${CDB64_ROOT_TX_INDEX_WATCH:-}
       - ENABLE_PASSTHROUGH_WITHOUT_OFFSETS=${ENABLE_PASSTHROUGH_WITHOUT_OFFSETS:-}
       - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-}

@@ -320,17 +320,13 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
       break;
 
     case 'cdb':
-      if (config.CDB64_ROOT_TX_INDEX_PATH !== undefined) {
-        rootTxIndexes.push(
-          new Cdb64RootTxIndex({
-            log,
-            cdbPath: config.CDB64_ROOT_TX_INDEX_PATH,
-            watch: config.CDB64_ROOT_TX_INDEX_WATCH,
-          }),
-        );
-      } else {
-        log.warn('CDB source configured but CDB64_ROOT_TX_INDEX_PATH not set');
-      }
+      rootTxIndexes.push(
+        new Cdb64RootTxIndex({
+          log,
+          cdbPath: 'data/cdb64-root-tx-index',
+          watch: config.CDB64_ROOT_TX_INDEX_WATCH,
+        }),
+      );
       break;
 
     default:
