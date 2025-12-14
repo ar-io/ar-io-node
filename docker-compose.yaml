@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     build:
       context: envoy/
     restart: unless-stopped
@@ -31,7 +31,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     build:
       context: .
     restart: unless-stopped
@@ -143,7 +143,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-62-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-62}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS=${CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
@@ -298,7 +298,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     profiles:
       - clickhouse
     build:
@@ -351,7 +351,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-62-pre}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-62}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
       - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
@@ -362,7 +362,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-latest}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     build:
       context: litestream/
       dockerfile: Dockerfile
