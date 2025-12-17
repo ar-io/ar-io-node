@@ -14,10 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 62] - 2025-12-14
 
-This release introduces the CDB64-based historical root TX index, a new lookup
-source for resolving data items to their root transactions. The CDB64 format
-provides fast O(1) lookups from pre-generated index files, enabling efficient
-root TX resolution for historical data without database queries.
+This is an **optional release** that introduces the CDB64-based historical root
+TX index, a new lookup source for resolving data items to their root
+transactions. The CDB64 format provides fast O(1) lookups from pre-generated
+index files, enabling efficient root TX resolution for historical data without
+database queries. Pre-generated CDB64 index files will be made available in the
+coming weeks.
 
 ### Added
 
