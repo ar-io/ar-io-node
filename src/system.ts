@@ -50,6 +50,7 @@ import {
   GraphQLRootTxIndex,
   TurboRootTxIndex,
   CachedTurboOffsets,
+  Cdb64RootTxIndex,
 } from './discovery/index.js';
 import { LRUCache } from 'lru-cache';
 import { makeContiguousMetadataStore } from './init/metadata-store.js';
@@ -317,6 +318,19 @@ for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
     case 'db':
       rootTxIndexes.push(db as DataItemRootIndex);
       break;
+
+    case 'cdb': {
+      const cdb64RootTxIndex = new Cdb64RootTxIndex({
+        log,
+        cdbPath: 'data/cdb64-root-tx-index',
+        watch: config.CDB64_ROOT_TX_INDEX_WATCH,
+      });
+      rootTxIndexes.push(cdb64RootTxIndex);
+      registerCleanupHandler('cdb64-root-tx-index', async () => {
+        await cdb64RootTxIndex.close();
+      });
+      break;
+    }
 
     default:
       log.warn('Unknown root TX source in configuration', {

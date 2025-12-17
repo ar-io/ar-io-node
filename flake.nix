@@ -2,7 +2,7 @@
   description = "AR.IO Node";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -33,6 +33,7 @@
             buildInputs = with pkgs; [
               bash
               bc
+              cargo
               clickhouse
               curl
               duckdb
@@ -41,14 +42,15 @@
               jq
               mr
               nodePackages.typescript-language-server
-              nodejs_20
+              nodejs_22
+              yarn
               openjdk
               pandoc
               python3WithPackages
+              rustc
               sqlite-interactive
               typst
               yaml-language-server
-              yarn
             ];
           };
         };

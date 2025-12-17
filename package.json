@@ -35,8 +35,11 @@
     "axios": "^1.12.2",
     "better-sqlite3": "^9.4.5",
     "change-case": "^5.4.4",
+    "chokidar": "^5.0.0",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
+    "csv-parse": "^5.6.0",
+    "csv-stringify": "^6.5.2",
     "duckdb-async": "^1.4.0",
     "express": "^4.21.2",
     "express-async-handler": "^1.2.0",
@@ -132,6 +135,9 @@
     "typescript": "^5.7.3",
     "viem": "^2.39.3",
     "x402-fetch": "^0.6.0"
+  },
+  "optionalDependencies": {
+    "cdb64": "github:ever0de/cdb64-rs#main"
   },
   "scripts": {
     "build": "yarn clean && npx tsc --project ./tsconfig.prod.json && yarn copy-files",

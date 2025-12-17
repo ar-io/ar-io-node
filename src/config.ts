@@ -271,6 +271,10 @@ export const ROOT_TX_LOOKUP_ORDER = env
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+// CDB64 root TX index configuration
+export const CDB64_ROOT_TX_INDEX_WATCH =
+  env.varOrDefault('CDB64_ROOT_TX_INDEX_WATCH', 'true') === 'true';
+
 // Shared root TX cache configuration
 export const ROOT_TX_CACHE_MAX_SIZE = +env.varOrDefault(
   'ROOT_TX_CACHE_MAX_SIZE',

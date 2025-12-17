@@ -1,7 +1,7 @@
 ---
 services:
   envoy:
-    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-4755fa0a2deb258bfaeaa91ba3154f1f7ef41fda}
+    image: ghcr.io/ar-io/ar-io-envoy:${ENVOY_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     build:
       context: envoy/
     restart: unless-stopped
@@ -31,7 +31,7 @@ services:
       - observer
 
   core:
-    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-b92874f2c9442b399ad27ab2c09c13fead654b35}
+    image: ghcr.io/ar-io/ar-io-core:${CORE_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     build:
       context: .
     restart: unless-stopped
@@ -47,6 +47,7 @@ services:
       - ${LMDB_DATA_PATH:-./data/lmdb}:/app/data/lmdb
       - ${PARQUET_DATA_PATH:-./data/parquet}:/app/data/parquet
       - ${DATASETS_PATH:-./data/datasets}:/app/data/datasets
+      - ${CDB64_ROOT_TX_INDEX_DATA_PATH:-./data/cdb64-root-tx-index}:/app/data/cdb64-root-tx-index
       - ${SECRETS_PATH:-./secrets}:/app/secrets:ro
     environment:
       - NODE_ENV=${NODE_ENV:-production}
@@ -142,7 +143,7 @@ services:
       - AWS_ELASTICACHE_TURBO_HOST=${AWS_ELASTICACHE_TURBO_HOST:-}
       - AWS_ELASTICACHE_TURBO_USE_TLS=${AWS_ELASTICACHE_TURBO_USE_TLS:-}
       - AWS_ELASTICACHE_TURBO_PORT=${AWS_ELASTICACHE_TURBO_PORT:-}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-61}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-62}
       - CHUNK_POST_MIN_SUCCESS_COUNT=${CHUNK_POST_MIN_SUCCESS_COUNT:-}
       - CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS=${CHUNK_POST_SORTED_PEERS_CACHE_DURATION_MS:-}
       - CHUNK_POST_RESPONSE_TIMEOUT_MS=${CHUNK_POST_RESPONSE_TIMEOUT_MS:-}
@@ -164,6 +165,8 @@ services:
       - MIN_DATA_VERIFICATION_PRIORITY=${MIN_DATA_VERIFICATION_PRIORITY:-}
       - BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS=${BACKGROUND_DATA_VERIFICATION_INTERVAL_SECONDS:-}
       - ENABLE_DATA_ITEM_ROOT_TX_SEARCH=${ENABLE_DATA_ITEM_ROOT_TX_SEARCH:-}
+      - ROOT_TX_LOOKUP_ORDER=${ROOT_TX_LOOKUP_ORDER:-}
+      - CDB64_ROOT_TX_INDEX_WATCH=${CDB64_ROOT_TX_INDEX_WATCH:-}
       - ENABLE_PASSTHROUGH_WITHOUT_OFFSETS=${ENABLE_PASSTHROUGH_WITHOUT_OFFSETS:-}
       - CLICKHOUSE_URL=${CLICKHOUSE_URL:-}
       - CLICKHOUSE_USER=${CLICKHOUSE_USER:-}
@@ -295,7 +298,7 @@ services:
       - ar-io-network
 
   clickhouse-auto-import:
-    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-4512361f3d6bdc0d8a44dd83eb796fd88804a384}
+    image: ghcr.io/ar-io/ar-io-clickhouse-auto-import:${CLICKHOUSE_AUTO_IMPORT_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     profiles:
       - clickhouse
     build:
@@ -348,7 +351,7 @@ services:
       - TURBO_UPLOAD_SERVICE_URL=${TURBO_UPLOAD_SERVICE_URL:-}
       - RUN_OBSERVER=${RUN_OBSERVER:-true}
       - MIN_RELEASE_NUMBER=${MIN_RELEASE_NUMBER:-0}
-      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-61}
+      - AR_IO_NODE_RELEASE=${AR_IO_NODE_RELEASE:-62}
       - AR_IO_SDK_LOG_LEVEL=${AR_IO_SDK_LOG_LEVEL:-none}
       - AO_CU_URL=${AO_CU_URL:-}
       - NETWORK_AO_CU_URL=${NETWORK_AO_CU_URL:-}
@@ -359,7 +362,7 @@ services:
       - ar-io-network
 
   litestream:
-    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-be121fc0ae24a9eb7cdb2b92d01f047039b5f5e8}
+    image: ghcr.io/ar-io/ar-io-litestream:${LITESTREAM_IMAGE_TAG:-b7523578c7e1103d2e50f3a19e39e71d6e466ebd}
     build:
       context: litestream/
       dockerfile: Dockerfile

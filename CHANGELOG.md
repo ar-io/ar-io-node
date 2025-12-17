@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+## [Release 62] - 2025-12-14
+
+This release introduces the CDB64-based historical root TX index, a new lookup
+source for resolving data items to their root transactions. The CDB64 format
+provides fast O(1) lookups from pre-generated index files, enabling efficient
+root TX resolution for historical data without database queries.
+
+### Added
+
+- **CDB64-Based Historical Root TX Index**: New lookup source for root
+  transaction IDs using the compact CDB64 file format
+  - Enable by adding 'cdb' to `ROOT_TX_LOOKUP_ORDER` (e.g.,
+    `db,cdb,gateways,graphql`)
+  - Reads from `data/cdb64-root-tx-index` directory (configurable via
+    `CDB64_ROOT_TX_INDEX_DATA_PATH` in Docker)
+  - Multi-file directory support with runtime file watching (new `.cdb` files
+    automatically loaded without restart)
+  - File watching can be disabled via `CDB64_ROOT_TX_INDEX_WATCH=false`
+  - CLI tools for index generation and data extraction:
+    - SQLite to CDB64 export (`tools/export-sqlite-to-cdb64`)
+    - CSV to CDB64 generation with RFC 4180 support
+      (`tools/generate-cdb64-root-tx-index`)
+    - Rust-backed CDB64 generation for high-throughput
+      (`tools/generate-cdb64-root-tx-index-rs`)
+    - CDB64 to CSV export (`tools/export-cdb64-root-tx-index`)
+  - Binary compatibility with Rust cdb64-rs for cross-language interoperability
+  - CDB64 file format specification documentation (`docs/cdb64-format.md`)
+
+### Fixed
+
+- Expose `ROOT_TX_LOOKUP_ORDER` environment variable in docker-compose.yaml
+  (was missing from previous releases)
+
 ## [Release 61] - 2025-12-10
 
 This release addresses potential memory growth issues observed on some r60 nodes
