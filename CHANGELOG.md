@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Data Retrieval Testing Tool**: New CLI tool for testing data item retrieval
+  from a gateway using TX/data item IDs from a CSV file
+  (`tools/test-data-retrieval`)
+  - Sequential mode: streams through file line by line
+  - Random mode: O(1) random byte seeking, no file scan required
+  - Continuous mode: runs indefinitely until Ctrl+C, writes JSON results to file
+  - Configurable concurrency for parallel requests
+  - Comprehensive statistics: success/failure rates, response time percentiles
+    (p50/p95/p99), cache hit rates, status codes, bytes transferred
+  - Console table and JSON output formats
+
 ### Changed
 
 ### Fixed
