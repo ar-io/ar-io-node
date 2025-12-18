@@ -19,6 +19,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     (p50/p95/p99), cache hit rates, status codes, bytes transferred
   - Console table and JSON output formats
 
+- **Separate Credentials for Legacy S3 Chunk Source**: Add ability to configure
+  separate AWS credentials for the legacy S3 chunk data source, enabling access
+  to S3 buckets in different AWS accounts
+  - `LEGACY_AWS_S3_ACCESS_KEY_ID`: AWS access key for legacy S3 bucket
+  - `LEGACY_AWS_S3_SECRET_ACCESS_KEY`: AWS secret key for legacy S3 bucket
+  - `LEGACY_AWS_S3_REGION`: AWS region (required when using separate credentials)
+  - `LEGACY_AWS_S3_ENDPOINT`: Custom endpoint (optional)
+  - Falls back to main AWS client when legacy credentials are not set
+
+- **Docker Compose Environment Variables**: Expose additional environment
+  variables in docker-compose.yaml for legacy chunk sources and chunk
+  rebroadcasting
+  - Legacy S3/PostgreSQL chunk source configuration
+  - Chunk rebroadcast rate limiting and deduplication settings
+
 ### Changed
 
 ### Fixed
