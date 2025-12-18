@@ -32,3 +32,26 @@ export const awsClient = (await canInitAwsClient())
       return undefined; // keep graceful fallback
     })
   : undefined;
+
+// Check if legacy S3 credentials are explicitly configured
+function hasLegacyS3Credentials() {
+  return (
+    process.env.LEGACY_AWS_S3_ACCESS_KEY_ID !== undefined &&
+    process.env.LEGACY_AWS_S3_SECRET_ACCESS_KEY !== undefined &&
+    process.env.LEGACY_AWS_S3_REGION !== undefined
+  );
+}
+
+// Separate AWS client for legacy S3 chunk source (optional - uses explicit credentials)
+export const legacyAwsS3Client = hasLegacyS3Credentials()
+  ? await awsLite({
+      accessKeyId: process.env.LEGACY_AWS_S3_ACCESS_KEY_ID,
+      secretAccessKey: process.env.LEGACY_AWS_S3_SECRET_ACCESS_KEY,
+      region: process.env.LEGACY_AWS_S3_REGION,
+      endpoint: process.env.LEGACY_AWS_S3_ENDPOINT,
+      plugins: [awsLiteS3],
+    }).catch((err) => {
+      console.error('Failed to initialize legacy AWS S3 client', err);
+      return undefined;
+    })
+  : undefined;

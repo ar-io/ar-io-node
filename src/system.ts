@@ -106,7 +106,7 @@ import { DataContentAttributeImporter } from './workers/data-content-attribute-i
 import { SignatureFetcher, OwnerFetcher } from './data/attribute-fetchers.js';
 import { SQLiteWalCleanupWorker } from './workers/sqlite-wal-cleanup-worker.js';
 import { KvArNSResolutionStore } from './store/kv-arns-name-resolution-store.js';
-import { awsClient } from './aws-client.js';
+import { awsClient, legacyAwsS3Client } from './aws-client.js';
 import { BlockedNamesCache } from './blocked-names-cache.js';
 import { KvArNSRegistryStore } from './store/kv-arns-base-name-store.js';
 import { ChunkRetrievalService } from './data/chunk-retrieval-service.js';
@@ -653,6 +653,7 @@ const chunkDataSource = createChunkDataSource({
   log,
   arweaveClient,
   awsS3Client: awsClient?.S3,
+  legacyAwsS3Client: legacyAwsS3Client?.S3,
   arIOChunkSource,
   chunkDataRetrievalOrder: config.CHUNK_DATA_RETRIEVAL_ORDER,
   chunkDataSourceParallelism: config.CHUNK_DATA_SOURCE_PARALLELISM,
