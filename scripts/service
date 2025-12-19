@@ -24,7 +24,9 @@ LOG_FILE="$PROJECT_ROOT/logs/service.log"
 LOG_DIR="$PROJECT_ROOT/logs"
 
 # Node command from yarn start
-NODE_CMD="node --no-deprecation --import ./register.js --env-file=.env src/app.ts"
+# Note: --import ./src/tracing.ts must come AFTER register.js (for ts-node) but BEFORE app.ts
+# so that Winston instrumentation is registered before the logger is created
+NODE_CMD="node --no-deprecation --import ./register.js --import ./src/tracing.ts --env-file=.env src/app.ts"
 
 # Ensure logs directory exists
 mkdir -p "$LOG_DIR"

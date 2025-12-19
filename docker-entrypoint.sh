@@ -16,4 +16,6 @@ if [ -z "$NODE_MAX_OLD_SPACE_SIZE" ]; then
 fi
 
 # Run the gateway service
-exec /nodejs/bin/node --max-old-space-size=$NODE_MAX_OLD_SPACE_SIZE dist/app.js
+# Note: --import ./dist/tracing.js must come before app.js so Winston instrumentation
+# is registered before the logger is created (enables trace ID correlation in logs)
+exec /nodejs/bin/node --max-old-space-size=$NODE_MAX_OLD_SPACE_SIZE --import ./dist/tracing.js dist/app.js

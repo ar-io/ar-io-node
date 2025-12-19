@@ -6,6 +6,7 @@
  */
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { WinstonInstrumentation } from '@opentelemetry/instrumentation-winston';
 import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import {
@@ -81,7 +82,6 @@ const sdk: NodeSDK = new NodeSDK({
     maxExportBatchSize: OTEL_BATCH_LOG_PROCESSOR_MAX_EXPORT_BATCH_SIZE,
   }),
   // TODO: decide what auto instrumentation to enable
-  // TODO: enable logging instrumentation once log levels have been adjusted
   instrumentations: [
     //getNodeAutoInstrumentations({
     //  // Disable fs automatic instrumentation because it can be noisy and
@@ -90,9 +90,10 @@ const sdk: NodeSDK = new NodeSDK({
     //    enabled: false,
     //  },
     //}),
-    //new WinstonInstrumentation({
-    //  logSeverity: SeverityNumber.INFO,
-    //}),
+    new WinstonInstrumentation({
+      disableLogSending: true, // Don't send logs to OTEL pipeline
+      disableLogCorrelation: false, // Inject trace_id/span_id (default)
+    }),
   ],
   sampler: new TraceIdRatioBasedSampler(
     1 / OTEL_TRACING_SAMPLING_RATE_DENOMINATOR,
@@ -121,17 +122,19 @@ export const tracer = isTestEnvironment
 // Export context utilities for consistent usage across the codebase
 export { context, trace, SpanStatusCode };
 
-// Helper function to start a child span with proper context inheritance
+// Helper function to start a child span with proper context inheritance.
+// If no parentSpan is provided, it will auto-detect from the active context.
 export function startChildSpan(
   name: string,
   options?: SpanOptions,
   parentSpan?: Span,
 ): Span {
-  if (parentSpan) {
+  const parent = parentSpan ?? trace.getActiveSpan();
+  if (parent) {
     return tracer.startSpan(
       name,
       options,
-      trace.setSpan(context.active(), parentSpan),
+      trace.setSpan(context.active(), parent),
     );
   }
   return tracer.startSpan(name, options);
