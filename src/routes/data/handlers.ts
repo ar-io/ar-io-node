@@ -12,7 +12,7 @@ import { Logger } from 'winston';
 import { headerNames } from '../../constants.js';
 import * as config from '../../config.js';
 import { release } from '../../version.js';
-import { tracer } from '../../tracing.js';
+import { tracer, context, trace } from '../../tracing.js';
 import { Span } from '@opentelemetry/api';
 
 import { MANIFEST_CONTENT_TYPE } from '../../lib/encoding.js';
@@ -699,83 +699,27 @@ export const createRawDataHandler = ({
       },
     });
 
-    try {
-      // Ensure this is a valid id
-      if (
-        id != null &&
-        id?.match(/^[a-zA-Z0-9-_]{43}$/) &&
-        Buffer.from(id, 'base64url').toString('base64url') !== id
-      ) {
-        span.setAttribute('http.status_code', 400);
-        span.setAttribute('data.error', 'invalid_id');
-        log.warn('Invalid ID', { id });
-        sendInvalidId(res, id);
-        return;
-      }
-
-      // Return 404 if the data is blocked by ID
-      span.addEvent('Checking blocklist for ID');
+    return context.with(trace.setSpan(context.active(), span), async () => {
       try {
-        if (await dataBlockListValidator.isIdBlocked(id)) {
-          span.setAttribute('http.status_code', 404);
-          span.setAttribute('data.error', 'id_blocked');
-          sendNotFound(res);
+        // Ensure this is a valid id
+        if (
+          id != null &&
+          id?.match(/^[a-zA-Z0-9-_]{43}$/) &&
+          Buffer.from(id, 'base64url').toString('base64url') !== id
+        ) {
+          span.setAttribute('http.status_code', 400);
+          span.setAttribute('data.error', 'invalid_id');
+          log.warn('Invalid ID', { id });
+          sendInvalidId(res, id);
           return;
         }
-      } catch (error: any) {
-        span.recordException(error);
-        log.error('Error checking blocklist:', {
-          dataId: id,
-          message: error.message,
-          stack: error.stack,
-        });
-        // TODO return 500
-      }
 
-      // Retrieve authoritative data attributes if they're available
-      let dataAttributes: ContiguousDataAttributes | undefined;
-      span.addEvent('Retrieving data attributes');
-      const attributesStartTime = Date.now();
-      try {
-        dataAttributes = await dataAttributesSource.getDataAttributes(id);
-        const attributesDuration = Date.now() - attributesStartTime;
-        span.setAttribute(
-          'data.attributes_retrieval_duration_ms',
-          attributesDuration,
-        );
-        if (dataAttributes) {
-          span.setAttributes({
-            'data.size': dataAttributes.size,
-            'data.hash': dataAttributes.hash,
-            'data.stable': dataAttributes.stable,
-            'data.verified': dataAttributes.verified,
-            'data.content_type': dataAttributes.contentType,
-          });
-        }
-      } catch (error: any) {
-        const attributesDuration = Date.now() - attributesStartTime;
-        span.setAttribute(
-          'data.attributes_retrieval_duration_ms',
-          attributesDuration,
-        );
-        span.recordException(error);
-        log.error('Error retrieving data attributes:', {
-          dataId: id,
-          message: error.message,
-          stack: error.stack,
-        });
-        span.setAttribute('http.status_code', 404);
-        sendNotFound(res);
-        return;
-      }
-
-      // Return 404 if the data is blocked by hash
-      if (dataAttributes?.hash !== undefined) {
-        span.addEvent('Checking blocklist for hash');
+        // Return 404 if the data is blocked by ID
+        span.addEvent('Checking blocklist for ID');
         try {
-          if (await dataBlockListValidator.isHashBlocked(dataAttributes.hash)) {
+          if (await dataBlockListValidator.isIdBlocked(id)) {
             span.setAttribute('http.status_code', 404);
-            span.setAttribute('data.error', 'hash_blocked');
+            span.setAttribute('data.error', 'id_blocked');
             sendNotFound(res);
             return;
           }
@@ -786,143 +730,203 @@ export const createRawDataHandler = ({
             message: error.message,
             stack: error.stack,
           });
+          // TODO return 500
         }
-      }
 
-      // Set headers and attempt to retrieve and stream data
-      let data: ContiguousData | undefined;
-      span.addEvent('Starting data retrieval');
-      const dataStartTime = Date.now();
-      try {
-        data = await dataSource.getData({
-          id,
-          requestAttributes,
-          parentSpan: span,
-        });
-        const dataDuration = Date.now() - dataStartTime;
-        span.setAttributes({
-          'data.retrieval.duration_ms': dataDuration,
-          'data.cached': data.cached,
-          'data.trusted': data.trusted,
-          'cache.status': data.cached ? 'HIT' : 'MISS',
-        });
-        span.addEvent('Data retrieval successful');
-
-        // Re-fetch attributes to ensure we have any offsets discovered during getData()
-        // This ensures offset headers are set on the first request, not just subsequent ones
-        span.addEvent('Re-fetching data attributes after getData');
+        // Retrieve authoritative data attributes if they're available
+        let dataAttributes: ContiguousDataAttributes | undefined;
+        span.addEvent('Retrieving data attributes');
+        const attributesStartTime = Date.now();
         try {
-          const updatedAttributes =
-            await dataAttributesSource.getDataAttributes(id);
-          if (updatedAttributes) {
-            dataAttributes = updatedAttributes;
-            span.addEvent('Updated data attributes with discovered offsets');
+          dataAttributes = await dataAttributesSource.getDataAttributes(id);
+          const attributesDuration = Date.now() - attributesStartTime;
+          span.setAttribute(
+            'data.attributes_retrieval_duration_ms',
+            attributesDuration,
+          );
+          if (dataAttributes) {
+            span.setAttributes({
+              'data.size': dataAttributes.size,
+              'data.hash': dataAttributes.hash,
+              'data.stable': dataAttributes.stable,
+              'data.verified': dataAttributes.verified,
+              'data.content_type': dataAttributes.contentType,
+            });
           }
         } catch (error: any) {
-          // If re-fetch fails, log but continue with original attributes
-          log.debug('Failed to re-fetch data attributes after getData:', {
+          const attributesDuration = Date.now() - attributesStartTime;
+          span.setAttribute(
+            'data.attributes_retrieval_duration_ms',
+            attributesDuration,
+          );
+          span.recordException(error);
+          log.error('Error retrieving data attributes:', {
             dataId: id,
             message: error.message,
+            stack: error.stack,
           });
-        }
-
-        // === PAYMENT AND RATE LIMIT CHECK ===
-        const allowed = await handleDataRateLimitingAndPayment({
-          req,
-          res,
-          id,
-          data,
-          dataAttributes,
-          requestAttributes,
-          rateLimiter,
-          paymentProcessor,
-          parentSpan: span,
-          log,
-        });
-
-        if (!allowed) {
+          span.setAttribute('http.status_code', 404);
+          sendNotFound(res);
           return;
         }
 
-        // Check if the request includes a Range header
-        const rangeHeader = req.headers.range;
-        if (rangeHeader !== undefined) {
-          span.addEvent('Handling range request');
-          span.setAttribute('data.request.range_request', true);
-          // Range requests create new streams so the original is no longer
-          // needed
-          data.stream.destroy();
-          setDataHeaders({ req, res, dataAttributes, data, id });
+        // Return 404 if the data is blocked by hash
+        if (dataAttributes?.hash !== undefined) {
+          span.addEvent('Checking blocklist for hash');
+          try {
+            if (
+              await dataBlockListValidator.isHashBlocked(dataAttributes.hash)
+            ) {
+              span.setAttribute('http.status_code', 404);
+              span.setAttribute('data.error', 'hash_blocked');
+              sendNotFound(res);
+              return;
+            }
+          } catch (error: any) {
+            span.recordException(error);
+            log.error('Error checking blocklist:', {
+              dataId: id,
+              message: error.message,
+              stack: error.stack,
+            });
+          }
+        }
 
-          await handleRangeRequest({
-            log,
-            dataSource,
-            rangeHeader,
-            res,
-            req,
-            data,
+        // Set headers and attempt to retrieve and stream data
+        let data: ContiguousData | undefined;
+        span.addEvent('Starting data retrieval');
+        const dataStartTime = Date.now();
+        try {
+          data = await dataSource.getData({
             id,
+            requestAttributes,
+            parentSpan: span,
+          });
+          const dataDuration = Date.now() - dataStartTime;
+          span.setAttributes({
+            'data.retrieval.duration_ms': dataDuration,
+            'data.cached': data.cached,
+            'data.trusted': data.trusted,
+            'cache.status': data.cached ? 'HIT' : 'MISS',
+          });
+          span.addEvent('Data retrieval successful');
+
+          // Re-fetch attributes to ensure we have any offsets discovered during getData()
+          // This ensures offset headers are set on the first request, not just subsequent ones
+          span.addEvent('Re-fetching data attributes after getData');
+          try {
+            const updatedAttributes =
+              await dataAttributesSource.getDataAttributes(id);
+            if (updatedAttributes) {
+              dataAttributes = updatedAttributes;
+              span.addEvent('Updated data attributes with discovered offsets');
+            }
+          } catch (error: any) {
+            // If re-fetch fails, log but continue with original attributes
+            log.debug('Failed to re-fetch data attributes after getData:', {
+              dataId: id,
+              message: error.message,
+            });
+          }
+
+          // === PAYMENT AND RATE LIMIT CHECK ===
+          const allowed = await handleDataRateLimitingAndPayment({
+            req,
+            res,
+            id,
+            data,
             dataAttributes,
             requestAttributes,
+            rateLimiter,
+            paymentProcessor,
+            parentSpan: span,
+            log,
           });
-          span.setAttribute('http.status_code', res.statusCode);
-        } else {
-          // Set headers and stream data
-          setDataHeaders({ req, res, dataAttributes, data, id });
-          if (data.size > 0) {
-            res.header('Content-Length', data.size.toString());
-          }
 
-          // Handle If-None-Match for both HEAD and GET requests
-          if (handleIfNoneMatch(req, res)) {
-            span.setAttribute('http.status_code', 304);
-            span.addEvent('Not modified - ETag match');
-            res.end();
-            data.stream.destroy();
+          if (!allowed) {
             return;
           }
 
-          if (req.method === REQUEST_METHOD_HEAD) {
+          // Check if the request includes a Range header
+          const rangeHeader = req.headers.range;
+          if (rangeHeader !== undefined) {
+            span.addEvent('Handling range request');
+            span.setAttribute('data.request.range_request', true);
+            // Range requests create new streams so the original is no longer
+            // needed
+            data.stream.destroy();
+            setDataHeaders({ req, res, dataAttributes, data, id });
+
+            await handleRangeRequest({
+              log,
+              dataSource,
+              rangeHeader,
+              res,
+              req,
+              data,
+              id,
+              dataAttributes,
+              requestAttributes,
+            });
+            span.setAttribute('http.status_code', res.statusCode);
+          } else {
+            // Set headers and stream data
+            setDataHeaders({ req, res, dataAttributes, data, id });
+            if (data.size > 0) {
+              res.header('Content-Length', data.size.toString());
+            }
+
+            // Handle If-None-Match for both HEAD and GET requests
+            if (handleIfNoneMatch(req, res)) {
+              span.setAttribute('http.status_code', 304);
+              span.addEvent('Not modified - ETag match');
+              res.end();
+              data.stream.destroy();
+              return;
+            }
+
+            if (req.method === REQUEST_METHOD_HEAD) {
+              span.setAttribute('http.status_code', res.statusCode || 200);
+              span.addEvent('HEAD request - headers only');
+              res.end();
+              data.stream.destroy();
+              return;
+            }
+
             span.setAttribute('http.status_code', res.statusCode || 200);
-            span.addEvent('HEAD request - headers only');
-            res.end();
-            data.stream.destroy();
-            return;
+            span.addEvent('Streaming data to client');
+            data.stream.pipe(res);
           }
-
-          span.setAttribute('http.status_code', res.statusCode || 200);
-          span.addEvent('Streaming data to client');
-          data.stream.pipe(res);
+        } catch (error: any) {
+          const dataDuration = Date.now() - dataStartTime;
+          span.setAttributes({
+            'data.retrieval.duration_ms': dataDuration,
+            'http.status_code': 404,
+            'data.retrieval.error': 'retrieval_failed',
+          });
+          span.recordException(error);
+          log.warn('Unable to retrieve contiguous data:', {
+            dataId: id,
+            message: error.message,
+            stack: error.stack,
+          });
+          sendNotFound(res);
+          data?.stream.destroy();
+          return;
         }
       } catch (error: any) {
-        const dataDuration = Date.now() - dataStartTime;
-        span.setAttributes({
-          'data.retrieval.duration_ms': dataDuration,
-          'http.status_code': 404,
-          'data.retrieval.error': 'retrieval_failed',
-        });
         span.recordException(error);
-        log.warn('Unable to retrieve contiguous data:', {
+        span.setAttribute('http.status_code', 500);
+        log.error('Unexpected error in raw data handler:', {
           dataId: id,
           message: error.message,
           stack: error.stack,
         });
-        sendNotFound(res);
-        data?.stream.destroy();
-        return;
+        res.status(500).send('Internal server error');
+      } finally {
+        span.end();
       }
-    } catch (error: any) {
-      span.recordException(error);
-      span.setAttribute('http.status_code', 500);
-      log.error('Unexpected error in raw data handler:', {
-        dataId: id,
-        message: error.message,
-        stack: error.stack,
-      });
-      res.status(500).send('Internal server error');
-    } finally {
-      span.end();
-    }
+    });
   });
 };
 
@@ -1131,87 +1135,30 @@ export const createDataHandler = ({
       },
     });
 
-    let data: ContiguousData | undefined;
+    return context.with(trace.setSpan(context.active(), span), async () => {
+      let data: ContiguousData | undefined;
 
-    try {
-      // TODO: remove regex match if possible
-      // Ensure this is a valid id
-      if (
-        id != null &&
-        id?.match(/^[a-zA-Z0-9-_]{43}$/) &&
-        Buffer.from(id, 'base64url').toString('base64url') !== id
-      ) {
-        span.setAttribute('http.status_code', 400);
-        span.setAttribute('data.error', 'invalid_id');
-        log.warn('Invalid ID', { id });
-        sendInvalidId(res, id);
-        return;
-      }
-
-      // Return 404 if the data is blocked by ID
-      span.addEvent('Checking blocklist for ID');
       try {
-        if (await dataBlockListValidator.isIdBlocked(id)) {
-          span.setAttribute('http.status_code', 404);
-          span.setAttribute('data.error', 'id_blocked');
-          sendNotFound(res);
+        // TODO: remove regex match if possible
+        // Ensure this is a valid id
+        if (
+          id != null &&
+          id?.match(/^[a-zA-Z0-9-_]{43}$/) &&
+          Buffer.from(id, 'base64url').toString('base64url') !== id
+        ) {
+          span.setAttribute('http.status_code', 400);
+          span.setAttribute('data.error', 'invalid_id');
+          log.warn('Invalid ID', { id });
+          sendInvalidId(res, id);
           return;
         }
-      } catch (error: any) {
-        span.recordException(error);
-        log.error('Error checking blocklist:', {
-          dataId: id,
-          message: error.message,
-          stack: error.stack,
-        });
-      }
 
-      let dataAttributes: ContiguousDataAttributes | undefined;
-
-      // Retrieve authoritative data attributes if available
-      span.addEvent('Retrieving data attributes');
-      const attributesStartTime = Date.now();
-      try {
-        dataAttributes = await dataAttributesSource.getDataAttributes(id);
-        const attributesDuration = Date.now() - attributesStartTime;
-        span.setAttribute(
-          'data.attributes_retrieval_duration_ms',
-          attributesDuration,
-        );
-        if (dataAttributes) {
-          span.setAttributes({
-            'data.size': dataAttributes.size,
-            'data.hash': dataAttributes.hash,
-            'data.stable': dataAttributes.stable,
-            'data.verified': dataAttributes.verified,
-            'data.is_manifest': dataAttributes.isManifest,
-            'data.content_type': dataAttributes.contentType,
-          });
-        }
-      } catch (error: any) {
-        const attributesDuration = Date.now() - attributesStartTime;
-        span.setAttribute(
-          'data.attributes_retrieval_duration_ms',
-          attributesDuration,
-        );
-        span.recordException(error);
-        log.error('Error retrieving data attributes:', {
-          dataId: id,
-          message: error.message,
-          stack: error.stack,
-        });
-        span.setAttribute('http.status_code', 404);
-        sendNotFound(res);
-        return;
-      }
-
-      // Return 404 if the data is blocked by hash
-      if (dataAttributes?.hash !== undefined) {
-        span.addEvent('Checking blocklist for hash');
+        // Return 404 if the data is blocked by ID
+        span.addEvent('Checking blocklist for ID');
         try {
-          if (await dataBlockListValidator.isHashBlocked(dataAttributes.hash)) {
+          if (await dataBlockListValidator.isIdBlocked(id)) {
             span.setAttribute('http.status_code', 404);
-            span.setAttribute('data.error', 'hash_blocked');
+            span.setAttribute('data.error', 'id_blocked');
             sendNotFound(res);
             return;
           }
@@ -1223,243 +1170,305 @@ export const createDataHandler = ({
             stack: error.stack,
           });
         }
-      }
 
-      // Attempt manifest path resolution from the index (without data parsing)
-      if (dataAttributes?.isManifest) {
-        span.addEvent('Resolving manifest path from index');
-        const manifestStartTime = Date.now();
-        const manifestResolution = await manifestPathResolver.resolveFromIndex(
-          id,
-          manifestPath,
-        );
-        const manifestDuration = Date.now() - manifestStartTime;
-        span.setAttribute('manifest.resolution_duration_ms', manifestDuration);
-        if (
-          manifestResolution.resolvedId !== undefined &&
-          manifestResolution.resolvedId !== ''
-        ) {
+        let dataAttributes: ContiguousDataAttributes | undefined;
+
+        // Retrieve authoritative data attributes if available
+        span.addEvent('Retrieving data attributes');
+        const attributesStartTime = Date.now();
+        try {
+          dataAttributes = await dataAttributesSource.getDataAttributes(id);
+          const attributesDuration = Date.now() - attributesStartTime;
           span.setAttribute(
-            'manifest.resolved_id',
-            manifestResolution.resolvedId,
+            'data.attributes_retrieval_duration_ms',
+            attributesDuration,
           );
+          if (dataAttributes) {
+            span.setAttributes({
+              'data.size': dataAttributes.size,
+              'data.hash': dataAttributes.hash,
+              'data.stable': dataAttributes.stable,
+              'data.verified': dataAttributes.verified,
+              'data.is_manifest': dataAttributes.isManifest,
+              'data.content_type': dataAttributes.contentType,
+            });
+          }
+        } catch (error: any) {
+          const attributesDuration = Date.now() - attributesStartTime;
+          span.setAttribute(
+            'data.attributes_retrieval_duration_ms',
+            attributesDuration,
+          );
+          span.recordException(error);
+          log.error('Error retrieving data attributes:', {
+            dataId: id,
+            message: error.message,
+            stack: error.stack,
+          });
+          span.setAttribute('http.status_code', 404);
+          sendNotFound(res);
+          return;
         }
 
-        // Send response based on manifest resolution (data ID and
-        // completeness)
-        if (
-          await sendManifestResponse({
-            log,
+        // Return 404 if the data is blocked by hash
+        if (dataAttributes?.hash !== undefined) {
+          span.addEvent('Checking blocklist for hash');
+          try {
+            if (
+              await dataBlockListValidator.isHashBlocked(dataAttributes.hash)
+            ) {
+              span.setAttribute('http.status_code', 404);
+              span.setAttribute('data.error', 'hash_blocked');
+              sendNotFound(res);
+              return;
+            }
+          } catch (error: any) {
+            span.recordException(error);
+            log.error('Error checking blocklist:', {
+              dataId: id,
+              message: error.message,
+              stack: error.stack,
+            });
+          }
+        }
+
+        // Attempt manifest path resolution from the index (without data parsing)
+        if (dataAttributes?.isManifest) {
+          span.addEvent('Resolving manifest path from index');
+          const manifestStartTime = Date.now();
+          const manifestResolution =
+            await manifestPathResolver.resolveFromIndex(id, manifestPath);
+          const manifestDuration = Date.now() - manifestStartTime;
+          span.setAttribute(
+            'manifest.resolution_duration_ms',
+            manifestDuration,
+          );
+          if (
+            manifestResolution.resolvedId !== undefined &&
+            manifestResolution.resolvedId !== ''
+          ) {
+            span.setAttribute(
+              'manifest.resolved_id',
+              manifestResolution.resolvedId,
+            );
+          }
+
+          // Send response based on manifest resolution (data ID and
+          // completeness)
+          if (
+            await sendManifestResponse({
+              log,
+              req,
+              res,
+              dataAttributesSource,
+              dataSource,
+              requestAttributes,
+              rateLimiter,
+              paymentProcessor,
+              parentSpan: span,
+              ...manifestResolution,
+            })
+          ) {
+            span.setAttribute('http.status_code', res.statusCode);
+            span.addEvent('Manifest response sent successfully');
+            // Manifest response successfully sent
+            return;
+          }
+        }
+
+        // Attempt to retrieve data
+        span.addEvent('Starting data retrieval');
+        const dataStartTime = Date.now();
+        try {
+          data = await dataSource.getData({
+            id,
+            requestAttributes,
+            parentSpan: span,
+          });
+          const dataDuration = Date.now() - dataStartTime;
+          span.setAttributes({
+            'data.retrieval.duration_ms': dataDuration,
+            'data.cached': data.cached,
+            'data.trusted': data.trusted,
+            'cache.status': data.cached ? 'HIT' : 'MISS',
+          });
+          span.addEvent('Data retrieval successful');
+
+          // Re-fetch attributes to ensure we have any offsets discovered during getData()
+          // This ensures offset headers are set on the first request, not just subsequent ones
+          span.addEvent('Re-fetching data attributes after getData');
+          try {
+            const updatedAttributes =
+              await dataAttributesSource.getDataAttributes(id);
+            if (updatedAttributes) {
+              dataAttributes = updatedAttributes;
+              span.addEvent('Updated data attributes with discovered offsets');
+            }
+          } catch (error: any) {
+            // If re-fetch fails, log but continue with original attributes
+            log.debug('Failed to re-fetch data attributes after getData:', {
+              dataId: id,
+              message: error.message,
+            });
+          }
+
+          // === PAYMENT AND RATE LIMIT CHECK ===
+          const allowed = await handleDataRateLimitingAndPayment({
             req,
             res,
-            dataAttributesSource,
-            dataSource,
+            id,
+            data,
+            dataAttributes,
             requestAttributes,
             rateLimiter,
             paymentProcessor,
             parentSpan: span,
-            ...manifestResolution,
-          })
-        ) {
-          span.setAttribute('http.status_code', res.statusCode);
-          span.addEvent('Manifest response sent successfully');
-          // Manifest response successfully sent
-          return;
-        }
-      }
+            log,
+          });
 
-      // Attempt to retrieve data
-      span.addEvent('Starting data retrieval');
-      const dataStartTime = Date.now();
-      try {
-        data = await dataSource.getData({
-          id,
-          requestAttributes,
-          parentSpan: span,
-        });
-        const dataDuration = Date.now() - dataStartTime;
-        span.setAttributes({
-          'data.retrieval.duration_ms': dataDuration,
-          'data.cached': data.cached,
-          'data.trusted': data.trusted,
-          'cache.status': data.cached ? 'HIT' : 'MISS',
-        });
-        span.addEvent('Data retrieval successful');
-
-        // Re-fetch attributes to ensure we have any offsets discovered during getData()
-        // This ensures offset headers are set on the first request, not just subsequent ones
-        span.addEvent('Re-fetching data attributes after getData');
-        try {
-          const updatedAttributes =
-            await dataAttributesSource.getDataAttributes(id);
-          if (updatedAttributes) {
-            dataAttributes = updatedAttributes;
-            span.addEvent('Updated data attributes with discovered offsets');
+          if (!allowed) {
+            return;
           }
         } catch (error: any) {
-          // If re-fetch fails, log but continue with original attributes
-          log.debug('Failed to re-fetch data attributes after getData:', {
+          const dataDuration = Date.now() - dataStartTime;
+          span.setAttributes({
+            'data.retrieval.duration_ms': dataDuration,
+            'http.status_code': 404,
+            'data.retrieval.error': 'retrieval_failed',
+          });
+          span.recordException(error);
+          log.warn('Unable to retrieve contiguous data:', {
             dataId: id,
             message: error.message,
+            stack: error.stack,
           });
-        }
-
-        // === PAYMENT AND RATE LIMIT CHECK ===
-        const allowed = await handleDataRateLimitingAndPayment({
-          req,
-          res,
-          id,
-          data,
-          dataAttributes,
-          requestAttributes,
-          rateLimiter,
-          paymentProcessor,
-          parentSpan: span,
-          log,
-        });
-
-        if (!allowed) {
+          sendNotFound(res);
           return;
         }
+
+        // Fall back to on-demand manifest parsing
+        if (
+          (dataAttributes?.contentType ?? data.sourceContentType) ===
+          MANIFEST_CONTENT_TYPE
+        ) {
+          span.addEvent('Resolving manifest path from data');
+          const manifestStartTime = Date.now();
+          const manifestResolution = await manifestPathResolver.resolveFromData(
+            data,
+            id,
+            manifestPath,
+          );
+          const manifestDuration = Date.now() - manifestStartTime;
+          span.setAttribute(
+            'manifest.resolution_from_data_duration_ms',
+            manifestDuration,
+          );
+
+          // The original stream is no longer needed after path resolution
+          data.stream.destroy();
+
+          // Send response based on manifest resolution (data ID and
+          // completeness)
+          if (
+            !(await sendManifestResponse({
+              log,
+              req,
+              res,
+              dataAttributesSource,
+              dataSource,
+              requestAttributes,
+              rateLimiter,
+              paymentProcessor,
+              ...manifestResolution,
+            }))
+          ) {
+            // This should be unreachable since resolution from data is always
+            // considered complete, but just in case...
+            span.setAttribute('http.status_code', 404);
+            sendNotFound(res);
+          } else {
+            span.setAttribute('http.status_code', res.statusCode);
+          }
+          return;
+        }
+
+        // Check if the request includes a Range header
+        const rangeHeader = req.headers.range;
+        if (rangeHeader !== undefined && data !== undefined) {
+          span.addEvent('Handling range request');
+          span.setAttribute('data.range_request', true);
+          // Range requests create new streams so the original is no longer
+          // needed
+          data.stream.destroy();
+
+          setDataHeaders({
+            req,
+            res,
+            dataAttributes,
+            data,
+            id,
+          });
+
+          await handleRangeRequest({
+            log,
+            dataSource,
+            rangeHeader,
+            res,
+            req,
+            data,
+            id,
+            dataAttributes,
+            requestAttributes,
+          });
+          span.setAttribute('http.status_code', res.statusCode);
+        } else {
+          // Set headers and stream data
+          setDataHeaders({
+            req,
+            res,
+            dataAttributes,
+            data,
+            id,
+          });
+          if (data.size > 0) {
+            res.header('Content-Length', data.size.toString());
+          }
+
+          // Handle If-None-Match for both HEAD and GET requests
+          if (handleIfNoneMatch(req, res)) {
+            span.setAttribute('http.status_code', 304);
+            span.addEvent('Not modified - ETag match');
+            res.end();
+            data.stream.destroy();
+            return;
+          }
+
+          if (req.method === REQUEST_METHOD_HEAD) {
+            span.setAttribute('http.status_code', res.statusCode || 200);
+            span.addEvent('HEAD request - headers only');
+            res.end();
+            data.stream.destroy();
+            return;
+          }
+
+          span.setAttribute('http.status_code', res.statusCode || 200);
+          span.addEvent('Streaming data to client');
+          data.stream.pipe(res);
+        }
       } catch (error: any) {
-        const dataDuration = Date.now() - dataStartTime;
-        span.setAttributes({
-          'data.retrieval.duration_ms': dataDuration,
-          'http.status_code': 404,
-          'data.retrieval.error': 'retrieval_failed',
-        });
         span.recordException(error);
-        log.warn('Unable to retrieve contiguous data:', {
+        span.setAttribute('http.status_code', 404);
+        log.error('Error retrieving data:', {
           dataId: id,
+          manifestPath,
           message: error.message,
           stack: error.stack,
         });
         sendNotFound(res);
-        return;
+        data?.stream.destroy();
+      } finally {
+        span.end();
       }
-
-      // Fall back to on-demand manifest parsing
-      if (
-        (dataAttributes?.contentType ?? data.sourceContentType) ===
-        MANIFEST_CONTENT_TYPE
-      ) {
-        span.addEvent('Resolving manifest path from data');
-        const manifestStartTime = Date.now();
-        const manifestResolution = await manifestPathResolver.resolveFromData(
-          data,
-          id,
-          manifestPath,
-        );
-        const manifestDuration = Date.now() - manifestStartTime;
-        span.setAttribute(
-          'manifest.resolution_from_data_duration_ms',
-          manifestDuration,
-        );
-
-        // The original stream is no longer needed after path resolution
-        data.stream.destroy();
-
-        // Send response based on manifest resolution (data ID and
-        // completeness)
-        if (
-          !(await sendManifestResponse({
-            log,
-            req,
-            res,
-            dataAttributesSource,
-            dataSource,
-            requestAttributes,
-            rateLimiter,
-            paymentProcessor,
-            ...manifestResolution,
-          }))
-        ) {
-          // This should be unreachable since resolution from data is always
-          // considered complete, but just in case...
-          span.setAttribute('http.status_code', 404);
-          sendNotFound(res);
-        } else {
-          span.setAttribute('http.status_code', res.statusCode);
-        }
-        return;
-      }
-
-      // Check if the request includes a Range header
-      const rangeHeader = req.headers.range;
-      if (rangeHeader !== undefined && data !== undefined) {
-        span.addEvent('Handling range request');
-        span.setAttribute('data.range_request', true);
-        // Range requests create new streams so the original is no longer
-        // needed
-        data.stream.destroy();
-
-        setDataHeaders({
-          req,
-          res,
-          dataAttributes,
-          data,
-          id,
-        });
-
-        await handleRangeRequest({
-          log,
-          dataSource,
-          rangeHeader,
-          res,
-          req,
-          data,
-          id,
-          dataAttributes,
-          requestAttributes,
-        });
-        span.setAttribute('http.status_code', res.statusCode);
-      } else {
-        // Set headers and stream data
-        setDataHeaders({
-          req,
-          res,
-          dataAttributes,
-          data,
-          id,
-        });
-        if (data.size > 0) {
-          res.header('Content-Length', data.size.toString());
-        }
-
-        // Handle If-None-Match for both HEAD and GET requests
-        if (handleIfNoneMatch(req, res)) {
-          span.setAttribute('http.status_code', 304);
-          span.addEvent('Not modified - ETag match');
-          res.end();
-          data.stream.destroy();
-          return;
-        }
-
-        if (req.method === REQUEST_METHOD_HEAD) {
-          span.setAttribute('http.status_code', res.statusCode || 200);
-          span.addEvent('HEAD request - headers only');
-          res.end();
-          data.stream.destroy();
-          return;
-        }
-
-        span.setAttribute('http.status_code', res.statusCode || 200);
-        span.addEvent('Streaming data to client');
-        data.stream.pipe(res);
-      }
-    } catch (error: any) {
-      span.recordException(error);
-      span.setAttribute('http.status_code', 404);
-      log.error('Error retrieving data:', {
-        dataId: id,
-        manifestPath,
-        message: error.message,
-        stack: error.stack,
-      });
-      sendNotFound(res);
-      data?.stream.destroy();
-    } finally {
-      span.end();
-    }
+    });
   });
 };
