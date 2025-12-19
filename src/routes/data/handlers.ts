@@ -867,6 +867,7 @@ export const createRawDataHandler = ({
               id,
               dataAttributes,
               requestAttributes,
+              parentSpan: span,
             });
             span.setAttribute('http.status_code', res.statusCode);
           } else {
@@ -1419,6 +1420,7 @@ export const createDataHandler = ({
             id,
             dataAttributes,
             requestAttributes,
+            parentSpan: span,
           });
           span.setAttribute('http.status_code', res.statusCode);
         } else {
