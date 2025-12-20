@@ -34,6 +34,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Legacy S3/PostgreSQL chunk source configuration
   - Chunk rebroadcast rate limiting and deduplication settings
 
+- **OTEL Winston Integration for Trace ID Correlation**: Automatic injection of
+  OpenTelemetry trace context (`trace_id`, `span_id`, `trace_flags`) into all
+  Winston log entries, enabling correlation of logs with distributed traces
+  - All logs within a request share the same `trace_id` for easy filtering
+  - Spans properly nested via `span_id` for hierarchical trace analysis
+  - Request handlers (data, chunk, ArNS) wrapped with active OTEL context
+  - ArNS middleware includes span attributes for resolution timing and results
+  - `startChildSpan()` helper auto-detects parent from active context
+
 ### Changed
 
 ### Fixed
