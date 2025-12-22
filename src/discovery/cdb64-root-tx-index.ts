@@ -10,11 +10,12 @@
  *
  * Provides O(1) lookups of data item ID → root transaction ID mappings
  * from pre-built CDB64 files. Supports both single file and directory
- * containing multiple .cdb files. This acts as a distributable historical
- * index that can be used without network access to external APIs.
+ * containing multiple CDB64 files (.cdb or .cdb64). This acts as a
+ * distributable historical index that can be used without network access
+ * to external APIs.
  *
  * When watching is enabled and a directory is configured, the index
- * automatically detects when .cdb files are added or removed and
+ * automatically detects when CDB64 files are added or removed and
  * updates the reader list accordingly.
  */
 
@@ -26,6 +27,14 @@ import { DataItemRootIndex } from '../types.js';
 import { Cdb64Reader } from '../lib/cdb64.js';
 import { decodeCdb64Value, isCompleteValue } from '../lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
+
+/** Valid CDB64 file extensions */
+const CDB64_EXTENSIONS = ['.cdb', '.cdb64'];
+
+/** Check if a file path has a valid CDB64 extension */
+function isCdb64File(filePath: string): boolean {
+  return CDB64_EXTENSIONS.some((ext) => filePath.endsWith(ext));
+}
 
 export class Cdb64RootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
@@ -54,7 +63,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
   /**
    * Discovers CDB64 files from the configured path.
-   * Supports both single file paths and directories containing .cdb files.
+   * Supports both single file paths and directories containing CDB64 files.
    */
   private async discoverCdbFiles(): Promise<string[]> {
     const stat = await fs.stat(this.cdbPath);
@@ -66,16 +75,16 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     }
 
     if (stat.isDirectory()) {
-      // Directory - find all .cdb files
+      // Directory - find all CDB64 files
       this.isDirectory = true;
       const entries = await fs.readdir(this.cdbPath);
       const cdbFiles = entries
-        .filter((f) => f.endsWith('.cdb'))
+        .filter(isCdb64File)
         .sort() // Alphabetical order for deterministic behavior
         .map((f) => path.join(this.cdbPath, f));
 
       if (cdbFiles.length === 0) {
-        this.log.warn('No .cdb files found in directory', {
+        this.log.warn('No CDB64 files found in directory', {
           path: this.cdbPath,
         });
       }
@@ -89,7 +98,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Starts watching the directory for .cdb file changes.
+   * Starts watching the directory for CDB64 file changes.
    * Only active when watching is enabled and path is a directory.
    */
   private startWatching(): void {
@@ -97,9 +106,9 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
     this.watcher = watch(this.cdbPath, {
       ignored: (filePath: string) => {
-        // Ignore everything except the root path and .cdb files
-        // Returns true to skip non-.cdb entries
-        return !filePath.endsWith('.cdb') && filePath !== this.cdbPath;
+        // Ignore everything except the root path and CDB64 files
+        // Returns true to skip non-CDB64 entries
+        return !isCdb64File(filePath) && filePath !== this.cdbPath;
       },
       persistent: true,
       ignoreInitial: true, // Don't fire for existing files
@@ -112,7 +121,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     });
 
     this.watcher.on('add', async (filePath: string) => {
-      if (!filePath.endsWith('.cdb')) return;
+      if (!isCdb64File(filePath)) return;
       await this.addReader(filePath).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         this.log.error('Failed handling CDB64 add event', {
@@ -123,7 +132,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     });
 
     this.watcher.on('unlink', async (filePath: string) => {
-      if (!filePath.endsWith('.cdb')) return;
+      if (!isCdb64File(filePath)) return;
       await this.removeReader(filePath).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         this.log.error('Failed handling CDB64 unlink event', {
@@ -153,7 +162,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Adds a new reader for a .cdb file.
+   * Adds a new reader for a CDB64 file.
    *
    * Note: There's a potential race condition where an unlink event could fire
    * while we're awaiting reader.open(). To handle this, we verify the file
@@ -200,7 +209,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Removes a reader for a .cdb file.
+   * Removes a reader for a CDB64 file.
    */
   private async removeReader(filePath: string): Promise<void> {
     const reader = this.readerMap.get(filePath);
