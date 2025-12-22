@@ -4,9 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 63] - 2025-12-22
+
+This is an **optional release** focusing on operator tooling and observability
+improvements. Key additions include a data retrieval testing tool for gateway
+validation, separate credentials support for legacy S3 chunk sources, and
+OTEL-Winston integration for distributed trace correlation in logs.
 
 ### Added
+
+- **CDB64 Extension Support**: Accept `.cdb64` file extension in addition to
+  `.cdb` for CDB64 root TX index files
 
 - **Data Retrieval Testing Tool**: New CLI tool for testing data item retrieval
   from a gateway using TX/data item IDs from a CSV file
@@ -43,9 +51,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - ArNS middleware includes span attributes for resolution timing and results
   - `startChildSpan()` helper auto-detects parent from active context
 
-### Changed
-
 ### Fixed
+
+- Fix missing `parentSpan` parameter in `handleRangeRequest` calls for proper
+  OTEL trace hierarchy in range requests
 
 ## [Release 62] - 2025-12-14
 
