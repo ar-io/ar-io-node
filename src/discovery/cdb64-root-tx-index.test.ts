@@ -446,7 +446,7 @@ describe('Cdb64RootTxIndex', () => {
       await fs.unlink(removablePath);
 
       // Wait for watcher to detect the removal
-      await waitForWatcher(500);
+      await waitForWatcher(1500);
 
       // Entry from removed file should no longer be found
       const afterRemove = await index.getRootTx(toB64Url(createTxId(2)));

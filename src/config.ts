@@ -1318,6 +1318,18 @@ export const LEGACY_AWS_S3_CHUNK_DATA_PREFIX = env.varOrUndefined(
   'LEGACY_AWS_S3_CHUNK_DATA_PREFIX',
 );
 
+// Legacy S3 chunk data credentials (optional - falls back to main AWS credentials)
+export const LEGACY_AWS_S3_ACCESS_KEY_ID = env.varOrUndefined(
+  'LEGACY_AWS_S3_ACCESS_KEY_ID',
+);
+export const LEGACY_AWS_S3_SECRET_ACCESS_KEY = env.varOrUndefined(
+  'LEGACY_AWS_S3_SECRET_ACCESS_KEY',
+);
+export const LEGACY_AWS_S3_REGION = env.varOrUndefined('LEGACY_AWS_S3_REGION');
+export const LEGACY_AWS_S3_ENDPOINT = env.varOrUndefined(
+  'LEGACY_AWS_S3_ENDPOINT',
+);
+
 //
 // Development and testing
 //

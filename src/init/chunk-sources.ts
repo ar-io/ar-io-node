@@ -30,20 +30,24 @@ function getChunkDataSource({
   sourceName,
   arweaveClient,
   awsS3Client,
+  legacyAwsS3Client,
   arIOChunkSource,
   log,
 }: {
   sourceName: string;
   arweaveClient: ArweaveCompositeClient;
   awsS3Client?: AwsLiteS3;
+  legacyAwsS3Client?: AwsLiteS3;
   arIOChunkSource?: ArIOChunkSource;
   log: winston.Logger;
 }): ChunkDataByAnySource | undefined {
   switch (sourceName) {
     case 'arweave-network':
       return arweaveClient;
-    case 'legacy-s3':
-      if (!awsS3Client) {
+    case 'legacy-s3': {
+      // Use legacy-specific client if available, otherwise fall back to main client
+      const s3ClientForLegacy = legacyAwsS3Client ?? awsS3Client;
+      if (!s3ClientForLegacy) {
         throw new Error(
           'AWS S3 client is required for legacy-s3 chunk data source',
         );
@@ -55,12 +59,13 @@ function getChunkDataSource({
       }
       return new S3ChunkSource({
         log,
-        s3Client: awsS3Client,
+        s3Client: s3ClientForLegacy,
         s3Bucket: config.LEGACY_AWS_S3_CHUNK_DATA_BUCKET,
         ...(config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX !== undefined && {
           s3Prefix: config.LEGACY_AWS_S3_CHUNK_DATA_PREFIX,
         }),
       });
+    }
     case 'ar-io-network':
       if (!arIOChunkSource) {
         throw new Error(
@@ -115,6 +120,7 @@ export function createChunkDataSource({
   log,
   arweaveClient,
   awsS3Client,
+  legacyAwsS3Client,
   arIOChunkSource,
   chunkDataRetrievalOrder,
   chunkDataSourceParallelism,
@@ -122,6 +128,7 @@ export function createChunkDataSource({
   log: winston.Logger;
   arweaveClient: ArweaveCompositeClient;
   awsS3Client?: AwsLiteS3;
+  legacyAwsS3Client?: AwsLiteS3;
   arIOChunkSource?: ArIOChunkSource;
   chunkDataRetrievalOrder: string[];
   chunkDataSourceParallelism: number;
@@ -133,6 +140,7 @@ export function createChunkDataSource({
       sourceName,
       arweaveClient,
       awsS3Client,
+      legacyAwsS3Client,
       arIOChunkSource,
       log,
     });
@@ -255,6 +263,7 @@ export function createChunkSourcesWithStores({
   log,
   arweaveClient,
   awsS3Client,
+  legacyAwsS3Client,
   arIOChunkSource,
   legacyPsql,
   chunkDataRetrievalOrder,
@@ -265,6 +274,7 @@ export function createChunkSourcesWithStores({
   log: winston.Logger;
   arweaveClient: ArweaveCompositeClient;
   awsS3Client?: AwsLiteS3;
+  legacyAwsS3Client?: AwsLiteS3;
   arIOChunkSource?: ArIOChunkSource;
   legacyPsql?: any;
   chunkDataRetrievalOrder: string[];
@@ -281,6 +291,7 @@ export function createChunkSourcesWithStores({
       sourceName,
       arweaveClient,
       awsS3Client,
+      legacyAwsS3Client,
       arIOChunkSource,
       log,
     });

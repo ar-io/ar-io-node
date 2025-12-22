@@ -4,20 +4,66 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [Release 63] - 2025-12-22
+
+This is an **optional release** focusing on operator tooling and observability
+improvements. Key additions include a data retrieval testing tool for gateway
+validation, separate credentials support for legacy S3 chunk sources, and
+OTEL-Winston integration for distributed trace correlation in logs.
 
 ### Added
 
-### Changed
+- **CDB64 Extension Support**: Accept `.cdb64` file extension in addition to
+  `.cdb` for CDB64 root TX index files
+
+- **Data Retrieval Testing Tool**: New CLI tool for testing data item retrieval
+  from a gateway using TX/data item IDs from a CSV file
+  (`tools/test-data-retrieval`)
+  - Sequential mode: streams through file line by line
+  - Random mode: O(1) random byte seeking, no file scan required
+  - Continuous mode: runs indefinitely until Ctrl+C, writes JSON results to file
+  - Configurable concurrency for parallel requests
+  - Comprehensive statistics: success/failure rates, response time percentiles
+    (p50/p95/p99), cache hit rates, status codes, bytes transferred
+  - Console table and JSON output formats
+
+- **Separate Credentials for Legacy S3 Chunk Source**: Add ability to configure
+  separate AWS credentials for the legacy S3 chunk data source, enabling access
+  to S3 buckets in different AWS accounts
+  - `LEGACY_AWS_S3_ACCESS_KEY_ID`: AWS access key for legacy S3 bucket
+  - `LEGACY_AWS_S3_SECRET_ACCESS_KEY`: AWS secret key for legacy S3 bucket
+  - `LEGACY_AWS_S3_REGION`: AWS region (required when using separate credentials)
+  - `LEGACY_AWS_S3_ENDPOINT`: Custom endpoint (optional)
+  - Falls back to main AWS client when legacy credentials are not set
+
+- **Docker Compose Environment Variables**: Expose additional environment
+  variables in docker-compose.yaml for legacy chunk sources and chunk
+  rebroadcasting
+  - Legacy S3/PostgreSQL chunk source configuration
+  - Chunk rebroadcast rate limiting and deduplication settings
+
+- **OTEL Winston Integration for Trace ID Correlation**: Automatic injection of
+  OpenTelemetry trace context (`trace_id`, `span_id`, `trace_flags`) into all
+  Winston log entries, enabling correlation of logs with distributed traces
+  - All logs within a request share the same `trace_id` for easy filtering
+  - Spans properly nested via `span_id` for hierarchical trace analysis
+  - Request handlers (data, chunk, ArNS) wrapped with active OTEL context
+  - ArNS middleware includes span attributes for resolution timing and results
+  - `startChildSpan()` helper auto-detects parent from active context
 
 ### Fixed
 
+- Fix missing `parentSpan` parameter in `handleRangeRequest` calls for proper
+  OTEL trace hierarchy in range requests
+
 ## [Release 62] - 2025-12-14
 
-This release introduces the CDB64-based historical root TX index, a new lookup
-source for resolving data items to their root transactions. The CDB64 format
-provides fast O(1) lookups from pre-generated index files, enabling efficient
-root TX resolution for historical data without database queries.
+This is an **optional release** that introduces the CDB64-based historical root
+TX index, a new lookup source for resolving data items to their root
+transactions. The CDB64 format provides fast O(1) lookups from pre-generated
+index files, enabling efficient root TX resolution for historical data without
+database queries. Pre-generated CDB64 index files will be made available in the
+coming weeks.
 
 ### Added
 
