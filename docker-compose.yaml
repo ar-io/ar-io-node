@@ -24,6 +24,10 @@ services:
       - TVAL_DATASETS_PORT=${DATASETS_PROXY_PORT:-4000}
       - TVAL_ARNS_ROOT_HOST=${ARNS_ROOT_HOST:-}
       - TVAL_ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     networks:
       - ar-io-network
     depends_on:
@@ -247,6 +251,10 @@ services:
       - CDP_API_KEY_SECRET_FILE=${CDP_API_KEY_SECRET_FILE:-}
       - ARWEAVE_POST_DRY_RUN=${ARWEAVE_POST_DRY_RUN:-false}
       - ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION=${ARWEAVE_POST_DRY_RUN_SKIP_VALIDATION:-false}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     networks:
       - ar-io-network
     depends_on:
