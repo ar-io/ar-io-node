@@ -353,7 +353,7 @@ services:
       - clickhouse
 
   observer:
-    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-0380592e095cd7bf645f6d132b97301d2dad8101}
+    image: ghcr.io/ar-io/ar-io-observer:${OBSERVER_IMAGE_TAG:-e34a7f01768d505360a4e0877fe40d55230e864a}
     restart: unless-stopped
     ports:
       - ${OBSERVER_PORT:-5050}:5050
@@ -361,6 +361,7 @@ services:
       - ${TEMP_DATA_PATH:-./data/tmp}:/app/data/tmp
       - ${REPORTS_DATA_PATH:-./data/reports}:/app/data/reports
       - ${WALLETS_PATH:-./wallets}:/app/wallets
+      - ${OBSERVER_STATE_PATH:-./data/observer}:/app/data/observer
     environment:
       - LOG_LEVEL=${OBSERVER_LOG_LEVEL:-}
       - OBSERVER_WALLET=${OBSERVER_WALLET:-}

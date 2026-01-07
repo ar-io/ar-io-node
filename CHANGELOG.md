@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Observer Update**: Updated observer to version `e34a7f0` with continuous
+  observation mode support
+  - New `OBSERVER_STATE_PATH` environment variable for configuring observer
+    state storage location (default: `./data/observer`)
+  - Added volume mount for observer state persistence across container restarts
+  - Increased default chunk observation sample rate to 10%
+
 ### Fixed
 
 ## [Release 63] - 2025-12-22
