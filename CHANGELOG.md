@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 64] - 2026-01-07
+
+This is an **optional release** focusing on observer improvements and container
+reliability. Key changes include the updated observer with continuous observation
+mode support and explicit file descriptor limits for core and envoy services that
+may improve reliability for some operators.
+
+### Changed
+
+- **Observer Update**: Updated observer to version `e34a7f0` with continuous
+  observation mode support
+  - New `OBSERVER_STATE_PATH` environment variable for configuring observer
+    state storage location (default: `./data/observer`)
+  - Added volume mount for observer state persistence across container restarts
+  - Increased default chunk observation sample rate to 10%
+
+- **File Descriptor Limits**: Added explicit `ulimits` configuration for core
+  and envoy services in docker-compose.yaml
+  - Sets `nofile` soft/hard limits to 65536 for both services
+  - Ensures consistent behavior across different host configurations
+  - May help resolve connection issues some operators have been experiencing
+
 ## [Release 63] - 2025-12-22
 
 This is an **optional release** focusing on operator tooling and observability
