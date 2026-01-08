@@ -288,17 +288,17 @@ export const CDB64_ROOT_TX_INDEX_SOURCES = env
   .filter((s) => s.length > 0);
 
 // CDB64 remote source caching configuration
-export const CDB64_REMOTE_CACHE_MAX_REGIONS = +env.varOrDefault(
+export const CDB64_REMOTE_CACHE_MAX_REGIONS = env.positiveIntOrDefault(
   'CDB64_REMOTE_CACHE_MAX_REGIONS',
-  '100',
+  100,
 );
-export const CDB64_REMOTE_CACHE_TTL_MS = +env.varOrDefault(
+export const CDB64_REMOTE_CACHE_TTL_MS = env.positiveIntOrDefault(
   'CDB64_REMOTE_CACHE_TTL_MS',
-  '300000', // 5 minutes
+  300000, // 5 minutes
 );
-export const CDB64_REMOTE_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+export const CDB64_REMOTE_REQUEST_TIMEOUT_MS = env.positiveIntOrDefault(
   'CDB64_REMOTE_REQUEST_TIMEOUT_MS',
-  '30000', // 30 seconds
+  30000, // 30 seconds
 );
 
 // CDB64 remote retrieval order for fetching CDB files from Arweave
