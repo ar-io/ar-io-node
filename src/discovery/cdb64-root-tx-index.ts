@@ -66,7 +66,12 @@ type ParsedSource =
 function parseSourceSpec(spec: string): ParsedSource {
   // HTTP URL
   if (spec.startsWith('http://') || spec.startsWith('https://')) {
-    return { type: 'http', url: spec };
+    try {
+      new URL(spec);
+      return { type: 'http', url: spec };
+    } catch {
+      throw new Error(`Invalid HTTP URL: ${spec}`);
+    }
   }
 
   // Check for bundle data item format: txId:offset:size
@@ -237,9 +242,29 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
   /**
    * Starts watching a directory for CDB64 file changes.
+   *
+   * Note: Only one directory can be watched at a time. If multiple directory
+   * sources are configured, only the first will be watched.
    */
   private startWatching(dirPath: string): void {
     if (!this.watchEnabled) return;
+
+    // Only one directory can be watched at a time
+    if (this.watchedDirectory !== null && this.watchedDirectory !== dirPath) {
+      this.log.warn(
+        'Multiple directory sources configured; only one can be watched',
+        {
+          watchedDirectory: this.watchedDirectory,
+          skippedDirectory: dirPath,
+        },
+      );
+      return;
+    }
+
+    // Already watching this directory
+    if (this.watcher && this.watchedDirectory === dirPath) {
+      return;
+    }
 
     this.watchedDirectory = dirPath;
     this.watcher = watch(dirPath, {
@@ -579,15 +604,26 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   async close(): Promise<void> {
     await this.stopWatching();
 
-    for (const entry of this.readers) {
-      if (entry.reader.isOpen()) {
-        await entry.reader.close();
-      }
+    const readerCount = this.readers.length;
+
+    // Use Promise.allSettled to ensure all readers are closed even if some fail
+    const closeResults = await Promise.allSettled(
+      this.readers.map((entry) =>
+        entry.reader.isOpen() ? entry.reader.close() : Promise.resolve(),
+      ),
+    );
+
+    const failures = closeResults.filter((r) => r.status === 'rejected');
+    if (failures.length > 0) {
+      this.log.warn('Some readers failed to close', {
+        failedCount: failures.length,
+        totalCount: readerCount,
+      });
     }
 
-    if (this.readers.length > 0) {
+    if (readerCount > 0) {
       this.log.info('CDB64 root TX index closed', {
-        readerCount: this.readers.length,
+        readerCount,
       });
     }
 

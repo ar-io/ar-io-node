@@ -14,10 +14,15 @@ import { ContiguousDataSource } from '../types.js';
  */
 async function streamToBuffer(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  try {
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  } catch (error) {
+    stream.destroy();
+    throw error;
   }
-  return Buffer.concat(chunks);
 }
 
 /**
