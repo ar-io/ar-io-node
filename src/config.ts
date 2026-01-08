@@ -275,6 +275,41 @@ export const ROOT_TX_LOOKUP_ORDER = env
 export const CDB64_ROOT_TX_INDEX_WATCH =
   env.varOrDefault('CDB64_ROOT_TX_INDEX_WATCH', 'true') === 'true';
 
+// CDB64 index sources (comma-separated list)
+// Supported formats:
+//   - Local path: "data/cdb64-root-tx-index" (file or directory)
+//   - Arweave TX ID: "ABC123def456..." (43-char base64url)
+//   - Bundle data item: "TxId:offset:size" (offset and size in bytes)
+//   - HTTP URL: "https://example.com/index.cdb"
+export const CDB64_ROOT_TX_INDEX_SOURCES = env
+  .varOrDefault('CDB64_ROOT_TX_INDEX_SOURCES', 'data/cdb64-root-tx-index')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+// CDB64 remote source caching configuration
+export const CDB64_REMOTE_CACHE_MAX_REGIONS = +env.varOrDefault(
+  'CDB64_REMOTE_CACHE_MAX_REGIONS',
+  '100',
+);
+export const CDB64_REMOTE_CACHE_TTL_MS = +env.varOrDefault(
+  'CDB64_REMOTE_CACHE_TTL_MS',
+  '300000', // 5 minutes
+);
+export const CDB64_REMOTE_REQUEST_TIMEOUT_MS = +env.varOrDefault(
+  'CDB64_REMOTE_REQUEST_TIMEOUT_MS',
+  '30000', // 30 seconds
+);
+
+// CDB64 remote retrieval order for fetching CDB files from Arweave
+// Available sources: gateways, chunks, tx-data
+// Note: These are base sources without root TX resolution (to avoid circular deps)
+export const CDB64_REMOTE_RETRIEVAL_ORDER = env
+  .varOrDefault('CDB64_REMOTE_RETRIEVAL_ORDER', 'gateways,chunks')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter((s) => s.length > 0);
+
 // Shared root TX cache configuration
 export const ROOT_TX_CACHE_MAX_SIZE = +env.varOrDefault(
   'ROOT_TX_CACHE_MAX_SIZE',

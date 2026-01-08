@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Remote CDB64 Index Sources**: CDB64 root TX indexes can now be loaded from
+  remote sources in addition to local files (GitHub #569, PE-8812)
+  - Arweave transactions: specify a 43-character TX ID
+  - Bundle data items: use `txId:offset:size` format for indexes stored within bundles
+  - HTTP URLs: load indexes from S3, CDNs, or dedicated index servers
+  - New environment variables:
+    - `CDB64_ROOT_TX_INDEX_SOURCES`: comma-separated list of sources (local paths,
+      TX IDs, bundle items, URLs)
+    - `CDB64_REMOTE_RETRIEVAL_ORDER`: data sources for fetching remote indexes
+      (gateways, chunks, tx-data)
+    - `CDB64_REMOTE_CACHE_MAX_REGIONS`: max cached byte-range regions per source
+    - `CDB64_REMOTE_CACHE_TTL_MS`: TTL for cached regions
+    - `CDB64_REMOTE_REQUEST_TIMEOUT_MS`: request timeout for remote sources
+  - Intelligent caching: CDB64 headers (4KB) cached permanently, other regions
+    use LRU cache with configurable size and TTL
+
 ### Changed
 
 ### Fixed

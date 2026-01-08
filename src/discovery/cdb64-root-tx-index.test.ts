@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import { Cdb64RootTxIndex } from './cdb64-root-tx-index.js';
 import { Cdb64Writer } from '../lib/cdb64.js';
 import { encodeCdb64Value } from '../lib/cdb64-encoding.js';
-import { fromB64Url, toB64Url } from '../lib/encoding.js';
+import { toB64Url } from '../lib/encoding.js';
 import { createTestLogger } from '../../test/test-logger.js';
 
 const log = createTestLogger({ suite: 'Cdb64RootTxIndex' });
@@ -74,7 +74,7 @@ describe('Cdb64RootTxIndex', () => {
       const cdbPath = path.join(tempDir, 'test.cdb');
       await createTestCdb(cdbPath, []);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
       assert(typeof index.getRootTx === 'function');
       await index.close();
     });
@@ -88,7 +88,7 @@ describe('Cdb64RootTxIndex', () => {
 
       await createTestCdb(cdbPath, [{ dataItemId, rootTxId }]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
       const result = await index.getRootTx(toB64Url(dataItemId));
 
       assert(result !== undefined);
@@ -110,7 +110,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId, rootTxId, rootDataItemOffset, rootDataOffset },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
       const result = await index.getRootTx(toB64Url(dataItemId));
 
       assert(result !== undefined);
@@ -130,7 +130,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: existingId, rootTxId: createTxId(100) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
       const result = await index.getRootTx(toB64Url(missingId));
 
       assert.equal(result, undefined);
@@ -153,7 +153,7 @@ describe('Cdb64RootTxIndex', () => {
 
       await createTestCdb(cdbPath, entries);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
 
       // Test all entries
       for (const entry of entries) {
@@ -172,7 +172,7 @@ describe('Cdb64RootTxIndex', () => {
     it('should return undefined when CDB file does not exist', async () => {
       const cdbPath = path.join(tempDir, 'nonexistent.cdb');
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
       try {
         const result = await index.getRootTx(toB64Url(createTxId(1)));
         assert.equal(result, undefined);
@@ -187,7 +187,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: createTxId(1), rootTxId: createTxId(100) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
 
       // Use a short ID (not 32 bytes when decoded)
       const shortId = toB64Url(Buffer.from('short'));
@@ -205,7 +205,7 @@ describe('Cdb64RootTxIndex', () => {
 
       await createTestCdb(cdbPath, [{ dataItemId, rootTxId }]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
 
       // First lookup should trigger initialization
       const result1 = await index.getRootTx(toB64Url(dataItemId));
@@ -227,7 +227,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: createTxId(1), rootTxId: createTxId(100) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
 
       // Trigger initialization
       await index.getRootTx(toB64Url(createTxId(1)));
@@ -239,7 +239,7 @@ describe('Cdb64RootTxIndex', () => {
     it('should close without error when not initialized', async () => {
       const cdbPath = path.join(tempDir, 'uninitialized.cdb');
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
 
       // Close without ever calling getRootTx
       await index.close();
@@ -259,7 +259,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: createTxId(2), rootTxId: createTxId(200) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbDir] });
 
       // Should find entries from both files
       const result1 = await index.getRootTx(toB64Url(createTxId(1)));
@@ -292,7 +292,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId, rootTxId: createTxId(200) }, // This should be ignored
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbDir] });
       const result = await index.getRootTx(toB64Url(dataItemId));
 
       assert(result !== undefined);
@@ -318,7 +318,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId, rootTxId: createTxId(100) }, // First alphabetically
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbDir] });
       const result = await index.getRootTx(toB64Url(dataItemId));
 
       // Should get result from a.cdb (first alphabetically)
@@ -332,7 +332,7 @@ describe('Cdb64RootTxIndex', () => {
       const cdbDir = path.join(tempDir, 'empty');
       await fs.mkdir(cdbDir);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbDir] });
       const result = await index.getRootTx(toB64Url(createTxId(1)));
 
       assert.equal(result, undefined);
@@ -353,7 +353,7 @@ describe('Cdb64RootTxIndex', () => {
       await fs.writeFile(path.join(cdbDir, 'readme.txt'), 'test');
       await fs.writeFile(path.join(cdbDir, 'data.json'), '{}');
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbDir] });
       const result = await index.getRootTx(toB64Url(createTxId(1)));
 
       assert(result !== undefined);
@@ -368,7 +368,7 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: createTxId(1), rootTxId: createTxId(100) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath });
+      const index = new Cdb64RootTxIndex({ log, sources: [cdbPath] });
       const result = await index.getRootTx(toB64Url(createTxId(1)));
 
       assert(result !== undefined);
@@ -392,7 +392,11 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: createTxId(1), rootTxId: createTxId(100) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir, watch: true });
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [cdbDir],
+        watch: true,
+      });
 
       // Trigger initialization
       const result1 = await index.getRootTx(toB64Url(createTxId(1)));
@@ -433,7 +437,11 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: createTxId(2), rootTxId: createTxId(200) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir, watch: true });
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [cdbDir],
+        watch: true,
+      });
 
       // Trigger initialization and verify both entries exist
       const result1 = await index.getRootTx(toB64Url(createTxId(1)));
@@ -470,7 +478,7 @@ describe('Cdb64RootTxIndex', () => {
 
       const index = new Cdb64RootTxIndex({
         log,
-        cdbPath: cdbDir,
+        sources: [cdbDir],
         watch: false,
       });
 
@@ -499,7 +507,11 @@ describe('Cdb64RootTxIndex', () => {
       ]);
 
       // Even with watch: true, single file paths should not start a watcher
-      const index = new Cdb64RootTxIndex({ log, cdbPath, watch: true });
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [cdbPath],
+        watch: true,
+      });
 
       // Trigger initialization
       const result = await index.getRootTx(toB64Url(createTxId(1)));
@@ -517,7 +529,11 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId: createTxId(1), rootTxId: createTxId(100) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir, watch: true });
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [cdbDir],
+        watch: true,
+      });
 
       // Trigger initialization to start watcher
       await index.getRootTx(toB64Url(createTxId(1)));
@@ -545,7 +561,11 @@ describe('Cdb64RootTxIndex', () => {
         { dataItemId, rootTxId: createTxId(300) },
       ]);
 
-      const index = new Cdb64RootTxIndex({ log, cdbPath: cdbDir, watch: true });
+      const index = new Cdb64RootTxIndex({
+        log,
+        sources: [cdbDir],
+        watch: true,
+      });
 
       // Should get value from c.cdb
       let result = await index.getRootTx(toB64Url(dataItemId));
