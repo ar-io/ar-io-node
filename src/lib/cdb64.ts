@@ -53,6 +53,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createWriteStream, WriteStream } from 'node:fs';
+import { ByteRangeSource, FileByteRangeSource } from './byte-range-source.js';
 
 // Header size: 256 pointers * 16 bytes each = 4096 bytes
 const HEADER_SIZE = 4096;
@@ -326,34 +327,91 @@ export class Cdb64Writer {
 }
 
 /**
- * CDB64 Reader - Performs lookups in CDB64 files.
+ * CDB64 Reader - Performs lookups in CDB64 data.
  *
- * Usage:
+ * Supports reading from any ByteRangeSource, enabling access to CDB64 data
+ * stored in local files, HTTP endpoints, or Arweave transactions.
+ *
+ * Usage with file path (convenience):
  *   const reader = new Cdb64Reader('/path/to/data.cdb');
+ *   await reader.open();
+ *   const value = await reader.get(key);
+ *   await reader.close();
+ *
+ * Usage with ByteRangeSource (advanced):
+ *   const source = new HttpByteRangeSource({ url: 'https://...' });
+ *   const reader = Cdb64Reader.fromSource(source);
  *   await reader.open();
  *   const value = await reader.get(key);
  *   await reader.close();
  */
 export class Cdb64Reader {
-  private filePath: string;
-  private fileHandle: fs.FileHandle | null = null;
+  private source: ByteRangeSource;
+  private ownsSource: boolean;
   private tablePointers: { position: bigint; length: bigint }[] = [];
+  private opened = false;
 
-  constructor(filePath: string) {
-    this.filePath = filePath;
+  /**
+   * Creates a reader for a local file path.
+   * This is a convenience constructor that creates a FileByteRangeSource internally.
+   *
+   * @param filePath - Path to the CDB64 file
+   */
+  constructor(filePath: string);
+
+  /**
+   * Creates a reader from a ByteRangeSource.
+   * Use the static fromSource() method for clarity.
+   *
+   * @param source - The ByteRangeSource to read from
+   * @param ownsSource - If true, close() will also close the source
+   */
+  constructor(source: ByteRangeSource, ownsSource?: boolean);
+
+  constructor(filePathOrSource: string | ByteRangeSource, ownsSource = true) {
+    if (typeof filePathOrSource === 'string') {
+      this.source = new FileByteRangeSource(filePathOrSource);
+      this.ownsSource = true;
+    } else {
+      this.source = filePathOrSource;
+      this.ownsSource = ownsSource;
+    }
   }
 
   /**
-   * Opens the CDB64 file and reads the header.
+   * Creates a reader from a ByteRangeSource.
+   *
+   * @param source - The ByteRangeSource to read from
+   * @param ownsSource - If true (default), close() will also close the source
+   */
+  static fromSource(source: ByteRangeSource, ownsSource = true): Cdb64Reader {
+    return new Cdb64Reader(source, ownsSource);
+  }
+
+  /**
+   * Opens the reader and reads the header.
+   * For FileByteRangeSource, this also opens the underlying file.
    */
   async open(): Promise<void> {
-    this.fileHandle = await fs.open(this.filePath, 'r');
+    if (this.opened) {
+      return;
+    }
+
+    // Open the source if it has an open method (FileByteRangeSource)
+    if ('open' in this.source && typeof this.source.open === 'function') {
+      await (this.source as FileByteRangeSource).open();
+    }
 
     // Read header
-    const header = Buffer.alloc(HEADER_SIZE);
-    const { bytesRead } = await this.fileHandle.read(header, 0, HEADER_SIZE, 0);
+    let header: Buffer;
+    try {
+      header = await this.source.read(0, HEADER_SIZE);
+    } catch (error: any) {
+      await this.close();
+      throw new Error(`Failed to read CDB64 header: ${error.message}`);
+    }
 
-    if (bytesRead !== HEADER_SIZE) {
+    if (header.length !== HEADER_SIZE) {
       await this.close();
       throw new Error('Invalid CDB64 file: header too short');
     }
@@ -367,6 +425,8 @@ export class Cdb64Reader {
         length: header.readBigUInt64LE(offset + 8),
       });
     }
+
+    this.opened = true;
   }
 
   /**
@@ -374,7 +434,7 @@ export class Cdb64Reader {
    * Returns the value if found, undefined otherwise.
    */
   async get(key: Buffer): Promise<Buffer | undefined> {
-    if (!this.fileHandle) {
+    if (!this.opened) {
       throw new Error('Reader not opened. Call open() first.');
     }
 
@@ -395,18 +455,10 @@ export class Cdb64Reader {
       const slotPosition = pointer.position + BigInt(slot * SLOT_SIZE);
 
       // Read slot
-      const slotBuffer = Buffer.alloc(SLOT_SIZE);
-      const { bytesRead: slotBytesRead } = await this.fileHandle.read(
-        slotBuffer,
-        0,
-        SLOT_SIZE,
+      const slotBuffer = await this.source.read(
         toSafeFilePosition(slotPosition),
+        SLOT_SIZE,
       );
-      if (slotBytesRead !== SLOT_SIZE) {
-        throw new Error(
-          `Incomplete slot read: expected ${SLOT_SIZE} bytes, got ${slotBytesRead}`,
-        );
-      }
 
       const slotHash = slotBuffer.readBigUInt64LE(0);
       const recordPosition = slotBuffer.readBigUInt64LE(8);
@@ -419,50 +471,26 @@ export class Cdb64Reader {
       // Hash match - verify key
       if (slotHash === hash) {
         // Read record header
-        const recordHeader = Buffer.alloc(16);
-        const { bytesRead: headerBytesRead } = await this.fileHandle.read(
-          recordHeader,
-          0,
-          16,
+        const recordHeader = await this.source.read(
           toSafeFilePosition(recordPosition),
+          16,
         );
-        if (headerBytesRead !== 16) {
-          throw new Error(
-            `Incomplete record header read: expected 16 bytes, got ${headerBytesRead}`,
-          );
-        }
 
         const keyLength = Number(recordHeader.readBigUInt64LE(0));
         const valueLength = Number(recordHeader.readBigUInt64LE(8));
 
         // Read and compare key
-        const recordKey = Buffer.alloc(keyLength);
-        const { bytesRead: keyBytesRead } = await this.fileHandle.read(
-          recordKey,
-          0,
-          keyLength,
+        const recordKey = await this.source.read(
           toSafeFilePosition(recordPosition + 16n),
+          keyLength,
         );
-        if (keyBytesRead !== keyLength) {
-          throw new Error(
-            `Incomplete key read: expected ${keyLength} bytes, got ${keyBytesRead}`,
-          );
-        }
 
         if (key.equals(recordKey)) {
           // Key matches - read and return value
-          const value = Buffer.alloc(valueLength);
-          const { bytesRead: valueBytesRead } = await this.fileHandle.read(
-            value,
-            0,
-            valueLength,
+          const value = await this.source.read(
             toSafeFilePosition(recordPosition + 16n + BigInt(keyLength)),
+            valueLength,
           );
-          if (valueBytesRead !== valueLength) {
-            throw new Error(
-              `Incomplete value read: expected ${valueLength} bytes, got ${valueBytesRead}`,
-            );
-          }
           return value;
         }
       }
@@ -485,7 +513,7 @@ export class Cdb64Reader {
    *   }
    */
   async *entries(): AsyncGenerator<{ key: Buffer; value: Buffer }> {
-    if (!this.fileHandle) {
+    if (!this.opened) {
       throw new Error('Reader not opened. Call open() first.');
     }
 
@@ -509,18 +537,10 @@ export class Cdb64Reader {
 
     while (position < recordsEndPosition) {
       // Read record header (key_length + value_length = 16 bytes)
-      const recordHeader = Buffer.alloc(16);
-      const { bytesRead } = await this.fileHandle.read(
-        recordHeader,
-        0,
-        16,
+      const recordHeader = await this.source.read(
         toSafeFilePosition(position),
+        16,
       );
-
-      if (bytesRead < 16) {
-        // Unexpected end of file
-        break;
-      }
 
       const keyLength = Number(recordHeader.readBigUInt64LE(0));
       const valueLength = Number(recordHeader.readBigUInt64LE(8));
@@ -533,32 +553,16 @@ export class Cdb64Reader {
       }
 
       // Read key
-      const key = Buffer.alloc(keyLength);
-      const { bytesRead: keyBytesRead } = await this.fileHandle.read(
-        key,
-        0,
-        keyLength,
+      const key = await this.source.read(
         toSafeFilePosition(position + 16n),
+        keyLength,
       );
-      if (keyBytesRead !== keyLength) {
-        throw new Error(
-          `Incomplete key read at position ${position}: expected ${keyLength} bytes, got ${keyBytesRead}`,
-        );
-      }
 
       // Read value
-      const value = Buffer.alloc(valueLength);
-      const { bytesRead: valueBytesRead } = await this.fileHandle.read(
-        value,
-        0,
-        valueLength,
+      const value = await this.source.read(
         toSafeFilePosition(position + 16n + BigInt(keyLength)),
+        valueLength,
       );
-      if (valueBytesRead !== valueLength) {
-        throw new Error(
-          `Incomplete value read at position ${position}: expected ${valueLength} bytes, got ${valueBytesRead}`,
-        );
-      }
 
       yield { key, value };
 
@@ -567,19 +571,27 @@ export class Cdb64Reader {
   }
 
   /**
-   * Closes the file handle.
+   * Closes the reader and optionally the underlying source.
    */
   async close(): Promise<void> {
-    if (this.fileHandle) {
-      await this.fileHandle.close();
-      this.fileHandle = null;
+    if (this.ownsSource) {
+      await this.source.close();
     }
+    this.opened = false;
+    this.tablePointers = [];
   }
 
   /**
    * Checks if the reader is currently open.
    */
   isOpen(): boolean {
-    return this.fileHandle !== null;
+    return this.opened;
+  }
+
+  /**
+   * Returns the underlying ByteRangeSource.
+   */
+  getSource(): ByteRangeSource {
+    return this.source;
   }
 }
