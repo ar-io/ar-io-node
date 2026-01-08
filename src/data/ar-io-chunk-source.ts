@@ -40,7 +40,7 @@ const CHUNK_CATEGORY = 'chunk';
 
 // Peer chunk retrieval constants
 const PEER_REQUEST_TIMEOUT_MS = 1000; // 1 second timeout per peer request
-const PEER_SELECTION_COUNT = 3; // Number of peers to try in parallel
+const PEER_SELECTION_COUNT = 2; // Number of peers to try in parallel
 const MAX_RETRY_COUNT = 2; // Total attempts (initial + 1 retry)
 
 /**
@@ -257,6 +257,9 @@ export class ArIOChunkSource
           attempt: attempt + 1,
         });
 
+        // Create AbortController to cancel losing requests when one succeeds
+        const controller = new AbortController();
+
         // Try all selected peers in parallel, return first success
         try {
           const result = await Promise.any(
@@ -266,9 +269,13 @@ export class ArIOChunkSource
                 absoluteOffset,
                 headers,
                 validationParams,
+                controller.signal,
               ),
             ),
           );
+
+          // Abort remaining in-flight requests to free resources
+          controller.abort();
 
           span.setAttributes({
             'chunk.successful_peer': result.sourceHost ?? 'unknown',
@@ -289,6 +296,9 @@ export class ArIOChunkSource
 
           return result;
         } catch (error: any) {
+          // Abort any stragglers before retrying with new peers
+          controller.abort();
+
           // AggregateError means all promises rejected
           span.addEvent('All peers failed for attempt', {
             attempt: attempt + 1,
@@ -379,6 +389,9 @@ export class ArIOChunkSource
    * If validationParams is provided, validates and returns Chunk.
    * Otherwise returns UnvalidatedChunk.
    * Throws on failure.
+   *
+   * @param externalSignal - Optional AbortSignal to cancel the request early
+   *                         (e.g., when another peer succeeds first)
    */
   private async fetchFromSinglePeer(
     peer: string,
@@ -389,11 +402,20 @@ export class ArIOChunkSource
       dataRoot: string;
       relativeOffset: number;
     },
+    externalSignal?: AbortSignal,
   ): Promise<Chunk | UnvalidatedChunk> {
     const startTime = Date.now();
     const peerHost = new URL(peer).hostname;
     const isValidated = validationParams !== undefined;
     const log = this.log.child({ method: 'fetchFromSinglePeer' });
+
+    // Combine timeout with external abort signal (for canceling losing requests)
+    const signal = externalSignal
+      ? AbortSignal.any([
+          AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS),
+          externalSignal,
+        ])
+      : AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS);
 
     try {
       const response = await fetch(`${peer}/chunk/${absoluteOffset}`, {
@@ -404,7 +426,7 @@ export class ArIOChunkSource
             : {}),
           ...headers,
         },
-        signal: AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS),
+        signal,
       });
 
       if (!response.ok) {
@@ -580,15 +602,11 @@ export class ArIOChunkSource
   private async fetchUnvalidatedChunkFromArIOPeer(
     absoluteOffset: number,
     requestAttributes?: RequestAttributes,
-    retryCount = 5,
-    peerSelectionCount = 3,
   ): Promise<UnvalidatedChunk> {
     return this.fetchChunkFromPeers({
       absoluteOffset,
       requestAttributes,
-      retryCount,
-      peerSelectionCount,
-      // No validationParams = returns UnvalidatedChunk
+      // Uses default constants: MAX_RETRY_COUNT and PEER_SELECTION_COUNT
     }) as Promise<UnvalidatedChunk>;
   }
 }
