@@ -265,91 +265,6 @@ const gatewayOffsetsCache = new LRUCache<string, CachedGatewayOffsets>({
   ttl: config.ROOT_TX_CACHE_TTL_MS,
 });
 
-// Build indexes based on configuration
-// NOTE: 'cdb' source is handled later after base data sources are created,
-// since CDB64 remote sources need a ContiguousDataSource for fetching.
-// We use a placeholder approach to maintain the configured order.
-type RootTxIndexEntry =
-  | { type: 'index'; index: DataItemRootIndex }
-  | { type: 'cdb-placeholder' };
-const rootTxIndexEntries: RootTxIndexEntry[] = [];
-
-for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
-  switch (sourceName.toLowerCase()) {
-    case 'turbo':
-      rootTxIndexEntries.push({
-        type: 'index',
-        index: new TurboRootTxIndex({
-          log,
-          turboEndpoint: config.TURBO_ENDPOINT,
-          requestTimeoutMs: config.TURBO_REQUEST_TIMEOUT_MS,
-          requestRetryCount: config.TURBO_REQUEST_RETRY_COUNT,
-          cache: turboOffsetsCache,
-        }),
-      });
-      break;
-
-    case 'gateways':
-      if (Object.keys(config.GATEWAYS_ROOT_TX_URLS).length > 0) {
-        rootTxIndexEntries.push({
-          type: 'index',
-          index: new GatewaysRootTxIndex({
-            log,
-            trustedGatewaysUrls: config.GATEWAYS_ROOT_TX_URLS,
-            requestTimeoutMs: config.GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS,
-            rateLimitBurstSize: config.GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
-            rateLimitTokensPerInterval:
-              config.GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
-            rateLimitInterval: config.GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL,
-            cache: gatewayOffsetsCache,
-          }),
-        });
-      } else {
-        log.warn('Gateways source configured but no gateways defined');
-      }
-      break;
-
-    case 'graphql':
-      if (Object.keys(config.GRAPHQL_ROOT_TX_GATEWAYS_URLS).length > 0) {
-        rootTxIndexEntries.push({
-          type: 'index',
-          index: new GraphQLRootTxIndex({
-            log,
-            trustedGatewaysUrls: config.GRAPHQL_ROOT_TX_GATEWAYS_URLS,
-            cache: rootTxCache,
-          }),
-        });
-      } else {
-        log.warn('GraphQL source configured but no GraphQL gateways defined');
-      }
-      break;
-
-    case 'db':
-      rootTxIndexEntries.push({
-        type: 'index',
-        index: db as DataItemRootIndex,
-      });
-      break;
-
-    case 'cdb':
-      // Placeholder - actual CDB index created later after base data sources
-      rootTxIndexEntries.push({ type: 'cdb-placeholder' });
-      break;
-
-    default:
-      log.warn('Unknown root TX source in configuration', {
-        source: sourceName,
-      });
-  }
-}
-
-// Validate that at least one source is configured
-if (rootTxIndexEntries.length === 0) {
-  log.warn(
-    'No valid root TX sources configured - root resolution will be unavailable',
-  );
-}
-
 export const chainIndex: ChainIndex = db;
 export const chainOffsetIndex: ChainOffsetIndex = db;
 export const bundleIndex: BundleIndex = db;
@@ -771,28 +686,89 @@ const cdb64BaseDataSource =
     ? new SequentialDataSource({ log, dataSources: cdb64DataSources })
     : undefined;
 
-// Create CDB64 index if configured, then build the final root TX index list
+// Build root TX indexes based on configuration
 let cdb64RootTxIndex: Cdb64RootTxIndex | undefined;
 const rootTxIndexes: DataItemRootIndex[] = [];
 
-for (const entry of rootTxIndexEntries) {
-  if (entry.type === 'index') {
-    rootTxIndexes.push(entry.index);
-  } else if (entry.type === 'cdb-placeholder') {
-    cdb64RootTxIndex = new Cdb64RootTxIndex({
-      log,
-      sources: config.CDB64_ROOT_TX_INDEX_SOURCES,
-      watch: config.CDB64_ROOT_TX_INDEX_WATCH,
-      contiguousDataSource: cdb64BaseDataSource,
-      remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
-      remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
-      remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
-    });
-    rootTxIndexes.push(cdb64RootTxIndex);
-    registerCleanupHandler('cdb64-root-tx-index', async () => {
-      await cdb64RootTxIndex!.close();
-    });
+for (const sourceName of config.ROOT_TX_LOOKUP_ORDER) {
+  switch (sourceName.toLowerCase()) {
+    case 'turbo':
+      rootTxIndexes.push(
+        new TurboRootTxIndex({
+          log,
+          turboEndpoint: config.TURBO_ENDPOINT,
+          requestTimeoutMs: config.TURBO_REQUEST_TIMEOUT_MS,
+          requestRetryCount: config.TURBO_REQUEST_RETRY_COUNT,
+          cache: turboOffsetsCache,
+        }),
+      );
+      break;
+
+    case 'gateways':
+      if (Object.keys(config.GATEWAYS_ROOT_TX_URLS).length > 0) {
+        rootTxIndexes.push(
+          new GatewaysRootTxIndex({
+            log,
+            trustedGatewaysUrls: config.GATEWAYS_ROOT_TX_URLS,
+            requestTimeoutMs: config.GATEWAYS_ROOT_TX_REQUEST_TIMEOUT_MS,
+            rateLimitBurstSize: config.GATEWAYS_ROOT_TX_RATE_LIMIT_BURST_SIZE,
+            rateLimitTokensPerInterval:
+              config.GATEWAYS_ROOT_TX_RATE_LIMIT_TOKENS_PER_INTERVAL,
+            rateLimitInterval: config.GATEWAYS_ROOT_TX_RATE_LIMIT_INTERVAL,
+            cache: gatewayOffsetsCache,
+          }),
+        );
+      } else {
+        log.warn('Gateways source configured but no gateways defined');
+      }
+      break;
+
+    case 'graphql':
+      if (Object.keys(config.GRAPHQL_ROOT_TX_GATEWAYS_URLS).length > 0) {
+        rootTxIndexes.push(
+          new GraphQLRootTxIndex({
+            log,
+            trustedGatewaysUrls: config.GRAPHQL_ROOT_TX_GATEWAYS_URLS,
+            cache: rootTxCache,
+          }),
+        );
+      } else {
+        log.warn('GraphQL source configured but no GraphQL gateways defined');
+      }
+      break;
+
+    case 'db':
+      rootTxIndexes.push(db as DataItemRootIndex);
+      break;
+
+    case 'cdb':
+      cdb64RootTxIndex = new Cdb64RootTxIndex({
+        log,
+        sources: config.CDB64_ROOT_TX_INDEX_SOURCES,
+        watch: config.CDB64_ROOT_TX_INDEX_WATCH,
+        contiguousDataSource: cdb64BaseDataSource,
+        remoteCacheMaxRegions: config.CDB64_REMOTE_CACHE_MAX_REGIONS,
+        remoteCacheTtlMs: config.CDB64_REMOTE_CACHE_TTL_MS,
+        remoteRequestTimeoutMs: config.CDB64_REMOTE_REQUEST_TIMEOUT_MS,
+      });
+      rootTxIndexes.push(cdb64RootTxIndex);
+      registerCleanupHandler('cdb64-root-tx-index', async () => {
+        await cdb64RootTxIndex!.close();
+      });
+      break;
+
+    default:
+      log.warn('Unknown root TX source in configuration', {
+        source: sourceName,
+      });
   }
+}
+
+// Validate that at least one source is configured
+if (rootTxIndexes.length === 0) {
+  log.warn(
+    'No valid root TX sources configured - root resolution will be unavailable',
+  );
 }
 
 // Create composite root TX index with circuit breakers
