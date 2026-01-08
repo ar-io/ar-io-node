@@ -46,8 +46,8 @@ export class HttpByteRangeSource implements ByteRangeSource {
         transformResponse: [],
         // Don't follow redirects automatically for range requests
         maxRedirects: 0,
-        // Validate 2xx and 3xx status codes
-        validateStatus: (status) => status >= 200 && status < 400,
+        // Only accept 2xx status codes (we require 206 Partial Content)
+        validateStatus: (status) => status >= 200 && status < 300,
       });
   }
 
