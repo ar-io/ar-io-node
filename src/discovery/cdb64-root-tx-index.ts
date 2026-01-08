@@ -50,7 +50,6 @@ function isCdb64File(filePath: string): boolean {
 /** Parsed source specification */
 type ParsedSource =
   | { type: 'file'; path: string }
-  | { type: 'directory'; path: string }
   | { type: 'arweave-tx'; id: string }
   | { type: 'arweave-bundle-item'; id: string; offset: number; size: number }
   | { type: 'http'; url: string };
@@ -209,26 +208,10 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
   /**
    * Creates a reader for a single source specification.
+   * Note: Caller should check for directories before calling this method.
    */
   private async createReader(sourceSpec: string): Promise<ReaderEntry> {
     const parsed = parseSourceSpec(sourceSpec);
-
-    // For file paths, check if it's actually a directory
-    if (parsed.type === 'file') {
-      try {
-        const stat = await fs.stat(parsed.path);
-        if (stat.isDirectory()) {
-          // Return a placeholder - directories are handled specially
-          throw new Error('DIRECTORY');
-        }
-      } catch (error: any) {
-        if (error.message === 'DIRECTORY') {
-          throw error;
-        }
-        // File doesn't exist or can't be stat'd - will fail on open
-      }
-    }
-
     const source = this.createByteRangeSource(parsed);
     const reader = Cdb64Reader.fromSource(source, true);
 
@@ -410,11 +393,71 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
+   * Checks if a local path is a directory.
+   * Returns the path if it's a directory, undefined otherwise.
+   */
+  private async checkIfDirectory(
+    sourceSpec: string,
+  ): Promise<string | undefined> {
+    const parsed = parseSourceSpec(sourceSpec);
+    if (parsed.type !== 'file') {
+      return undefined;
+    }
+
+    try {
+      const stat = await fs.stat(parsed.path);
+      return stat.isDirectory() ? parsed.path : undefined;
+    } catch {
+      // File doesn't exist or can't be stat'd - not a directory
+      return undefined;
+    }
+  }
+
+  /**
+   * Initializes all CDB64 files from a directory.
+   */
+  private async initializeDirectory(dirPath: string): Promise<void> {
+    const files = await this.discoverFilesInDirectory(dirPath);
+
+    if (files.length === 0) {
+      this.log.warn('No CDB64 files found in directory', { path: dirPath });
+    }
+
+    for (const filePath of files) {
+      try {
+        const source = new FileByteRangeSource(filePath);
+        const reader = Cdb64Reader.fromSource(source, true);
+        await reader.open();
+        this.readerMap.set(filePath, {
+          reader,
+          sourceSpec: filePath,
+          sourceType: 'file',
+        });
+      } catch (fileError: any) {
+        this.log.error('Failed to initialize CDB64 file in directory', {
+          path: filePath,
+          error: fileError.message,
+        });
+        // Continue with other files
+      }
+    }
+
+    this.startWatching(dirPath);
+  }
+
+  /**
    * Performs the actual initialization work.
    */
   private async doInitialize(): Promise<void> {
     try {
       for (const sourceSpec of this.sources) {
+        // Check if this is a directory before trying to create a reader
+        const dirPath = await this.checkIfDirectory(sourceSpec);
+        if (dirPath !== undefined) {
+          await this.initializeDirectory(dirPath);
+          continue;
+        }
+
         try {
           const entry = await this.createReader(sourceSpec);
           this.readerMap.set(sourceSpec, entry);
@@ -423,51 +466,11 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             type: entry.sourceType,
           });
         } catch (error: any) {
-          // Handle directory sources
-          if (error.message === 'DIRECTORY') {
-            const parsed = parseSourceSpec(sourceSpec);
-            if (parsed.type === 'file') {
-              const dirPath = parsed.path;
-              const files = await this.discoverFilesInDirectory(dirPath);
-
-              if (files.length === 0) {
-                this.log.warn('No CDB64 files found in directory', {
-                  path: dirPath,
-                });
-              }
-
-              for (const filePath of files) {
-                try {
-                  const source = new FileByteRangeSource(filePath);
-                  const reader = Cdb64Reader.fromSource(source, true);
-                  await reader.open();
-                  this.readerMap.set(filePath, {
-                    reader,
-                    sourceSpec: filePath,
-                    sourceType: 'file',
-                  });
-                } catch (fileError: any) {
-                  this.log.error(
-                    'Failed to initialize CDB64 file in directory',
-                    {
-                      path: filePath,
-                      error: fileError.message,
-                    },
-                  );
-                  // Continue with other files
-                }
-              }
-
-              // Start watching this directory
-              this.startWatching(dirPath);
-            }
-          } else {
-            this.log.error('Failed to initialize CDB64 source', {
-              source: sourceSpec,
-              error: error.message,
-            });
-            // Continue with other sources - don't fail completely
-          }
+          this.log.error('Failed to initialize CDB64 source', {
+            source: sourceSpec,
+            error: error.message,
+          });
+          // Continue with other sources - don't fail completely
         }
       }
 
