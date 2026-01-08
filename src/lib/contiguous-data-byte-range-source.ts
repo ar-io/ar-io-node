@@ -34,7 +34,7 @@ export class ContiguousDataByteRangeSource implements ByteRangeSource {
   private id: string;
   private baseOffset: number;
   private totalSize?: number;
-  private opened = false;
+  private opened = true;
 
   /**
    * Creates a ContiguousDataByteRangeSource.

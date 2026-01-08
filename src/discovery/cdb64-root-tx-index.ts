@@ -320,23 +320,23 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   private async addFileReader(filePath: string): Promise<void> {
     if (this.readerMap.has(filePath)) return;
 
-    let entry: ReaderEntry | undefined;
+    let reader: Cdb64Reader | undefined;
     try {
       const source = new FileByteRangeSource(filePath);
-      const reader = Cdb64Reader.fromSource(source, true);
+      reader = Cdb64Reader.fromSource(source, true);
       await reader.open();
 
       // Verify file still exists after opening
       await fs.stat(filePath);
 
-      entry = { reader, sourceSpec: filePath, sourceType: 'file' };
+      const entry = { reader, sourceSpec: filePath, sourceType: 'file' };
       this.readerMap.set(filePath, entry);
       this.rebuildReaderList();
       this.log.info('CDB64 file added', { path: filePath });
     } catch (error: any) {
-      if (entry?.reader?.isOpen()) {
+      if (reader?.isOpen()) {
         try {
-          await entry.reader.close();
+          await reader.close();
         } catch {
           // Ignore close errors during cleanup
         }
@@ -437,14 +437,25 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
               }
 
               for (const filePath of files) {
-                const source = new FileByteRangeSource(filePath);
-                const reader = Cdb64Reader.fromSource(source, true);
-                await reader.open();
-                this.readerMap.set(filePath, {
-                  reader,
-                  sourceSpec: filePath,
-                  sourceType: 'file',
-                });
+                try {
+                  const source = new FileByteRangeSource(filePath);
+                  const reader = Cdb64Reader.fromSource(source, true);
+                  await reader.open();
+                  this.readerMap.set(filePath, {
+                    reader,
+                    sourceSpec: filePath,
+                    sourceType: 'file',
+                  });
+                } catch (fileError: any) {
+                  this.log.error(
+                    'Failed to initialize CDB64 file in directory',
+                    {
+                      path: filePath,
+                      error: fileError.message,
+                    },
+                  );
+                  // Continue with other files
+                }
               }
 
               // Start watching this directory
