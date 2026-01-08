@@ -23,7 +23,7 @@ import { buildRangeHeader } from './http-utils.js';
 export class HttpByteRangeSource implements ByteRangeSource {
   private url: string;
   private httpClient: AxiosInstance;
-  private opened = false;
+  private opened = true;
 
   constructor({
     url,
