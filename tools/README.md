@@ -31,62 +31,90 @@ SKIP_COVERAGE=true ./tools/generate-architecture-pdf
 - `architecture-review.md` - Comprehensive markdown analysis
 - `architecture-review.pdf` - E-reader optimized PDF (Kindle format)
 
-### `sample-chunk-offsets`
-Continuously samples random chunk offsets within the Arweave weave and tests chunk retrieval against a specified gateway URL, reporting success rates and performance statistics. Useful for monitoring gateway health and debugging chunk retrieval issues.
+### `test-chunk-retrieval`
+Load testing tool for chunk retrieval endpoints. Tests `/chunk/{offset}` requests with configurable concurrency, duration, and resource monitoring. Useful for stress testing, identifying resource leaks, and validating stability under load.
 
 **Usage:**
 ```bash
-./tools/sample-chunk-offsets --gateway https://ar-io.dev
+# Basic load test for 60 seconds (10 concurrent requests)
+./tools/test-chunk-retrieval --gateway http://localhost:4000 --duration 60
 
-# With custom delay between requests (500ms)
-./tools/sample-chunk-offsets --gateway http://localhost:4000 --delay 500
+# High concurrency with file descriptor tracking
+./tools/test-chunk-retrieval --gateway http://localhost:4000 \
+  --concurrency 100 --duration 120 --track-fds $(pgrep -f "node.*system")
 
-# Test local gateway using external chain reference for weave size
-./tools/sample-chunk-offsets --gateway http://localhost:4000 --chain-url https://arweave.net
+# Fixed count test
+./tools/test-chunk-retrieval --gateway http://localhost:4000 \
+  --count 5000 --concurrency 50
 
-# With verbose output showing each request
-./tools/sample-chunk-offsets --gateway https://gateway.example.com --verbose
+# Stress test
+./tools/test-chunk-retrieval --gateway http://localhost:4000 \
+  --concurrency 500 --duration 300
 
-# With custom timeout and all options
-./tools/sample-chunk-offsets --gateway https://ar-io.dev --delay 200 --timeout 15000 --verbose
+# With chain reference for weave size
+./tools/test-chunk-retrieval --gateway http://localhost:4000 \
+  --chain-url https://arweave.net --duration 60
 ```
 
 **Options:**
 - `--gateway <url>` - Gateway URL to test (required)
-- `--chain-url <url>` - Chain reference URL for weave size discovery (optional)
-- `--delay <ms>` - Delay between requests in milliseconds (default: 100)
-- `--timeout <ms>` - Request timeout in milliseconds (default: 300000)
-- `--max-offset <number>` - Override maximum offset for testing smaller ranges
+- `--concurrency <n>` - Number of parallel requests (default: 10)
+- `--count <n>` - Stop after N total requests
+- `--duration <seconds>` - Run for specified duration
+- `--delay <ms>` - Delay between requests per slot (default: 0)
+- `--timeout <ms>` - Request timeout in milliseconds (default: 30000)
+- `--chain-url <url>` - Chain reference URL for weave size discovery
+- `--max-offset <number>` - Override maximum offset for testing
+- `--track-fds <pid>` - Track file descriptors for specified PID (Linux only)
+- `--fd-interval <ms>` - FD sampling interval in ms (default: 1000)
 - `--verbose` - Show detailed logs for each request
 - `--help` - Show help message
 
 **Output:**
-The tool runs continuously until interrupted with Ctrl+C, then displays comprehensive statistics:
 ```
-=== Chunk Offset Sampling Results ===
-Gateway: https://ar-io.dev
-Duration: 5m 32s
-Total Attempts: 3,320
-Successes: 3,150 (94.88%)
-Failures: 170 (5.12%)
-  - 404 Not Found: 150
-  - 500 Server Error: 15
-  - Timeout: 5
+=== Chunk Retrieval Load Test Results ===
+Gateway: http://localhost:4000
+Duration: 2m 0s
+Concurrency: 100
+Requests/sec: 104.5
+Total Requests: 12,543
+Successes: 11,987 (95.57%)
+Failures: 556 (4.43%)
+
+Status Codes:
+  - 200 OK: 11,987
+  - 404 Not Found: 312
+  - 0 Network Error: 244
+
+Error Codes:
+  - ECONNABORTED: 189
+  - ECONNRESET: 55
+  - EMFILE: 3 [RESOURCE EXHAUSTION]
+
 Response Times:
-  - Min: 45ms
-  - Max: 2,340ms
-  - Average: 234ms
-  - p50: 180ms
-  - p95: 890ms
-  - p99: 1,850ms
+  - Min: 8ms
+  - Max: 5,234ms
+  - Avg: 156ms
+  - p50: 98ms
+  - p95: 567ms
+  - p99: 1,892ms
+
+File Descriptor Tracking (PID: 12345):
+  - Initial: 127
+  - Final: 412
+  - Min: 127
+  - Max: 523
+  - Average: 298.4
+  - Delta: +285
+  - WARNING: Significant FD growth detected!
 ```
 
 **Use Cases:**
-- Monitor chunk retrieval health across the network
-- Test gateway reliability and performance
-- Debug offset-aware chunk retrieval issues
-- Gather empirical data on chunk availability
-- Validate gateway configuration and performance
+- Load test chunk retrieval under high concurrency
+- Identify resource leaks (file descriptors, connections)
+- Validate stability fixes under sustained load
+- Stress test gateway configuration limits
+- Monitor resource usage during load tests
 
 ### `generate-offset-mapping`
 Generates a static offset-to-block mapping file that maps Arweave weave byte offsets to approximate block heights. This mapping is used to optimize binary search when looking up transactions by offset, reducing the search space from the entire blockchain to a much smaller range.
