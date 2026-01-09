@@ -273,7 +273,10 @@ export interface TxBoundary {
  * validation, or chain binary search.
  */
 export interface TxBoundarySource {
-  getTxBoundary(absoluteOffset: bigint): Promise<TxBoundary | null>;
+  getTxBoundary(
+    absoluteOffset: bigint,
+    signal?: AbortSignal,
+  ): Promise<TxBoundary | null>;
 }
 
 export interface BundleRecord {
@@ -604,6 +607,7 @@ export interface UnvalidatedChunkSource {
   getUnvalidatedChunk(
     absoluteOffset: number,
     requestAttributes?: RequestAttributes,
+    signal?: AbortSignal,
   ): Promise<UnvalidatedChunk>;
 }
 
@@ -637,17 +641,24 @@ export interface ChunkWithValidationParams {
 export type ChunkDataByAnySourceParams = ChunkWithValidationParams;
 
 export interface ChunkByAnySource {
-  getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk>;
+  getChunkByAny(
+    params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
+  ): Promise<Chunk>;
 }
 
 export interface ChunkMetadataByAnySource {
   getChunkMetadataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkMetadata>;
 }
 
 export interface ChunkDataByAnySource {
-  getChunkDataByAny(params: ChunkDataByAnySourceParams): Promise<ChunkData>;
+  getChunkDataByAny(
+    params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
+  ): Promise<ChunkData>;
 }
 
 /**

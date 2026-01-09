@@ -30,7 +30,13 @@ export class ChainTxBoundarySource implements TxBoundarySource {
     this.arweaveClient = arweaveClient;
   }
 
-  async getTxBoundary(absoluteOffset: bigint): Promise<TxBoundary | null> {
+  async getTxBoundary(
+    absoluteOffset: bigint,
+    signal?: AbortSignal,
+  ): Promise<TxBoundary | null> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     const log = this.log.child({
       method: 'getTxBoundary',
       absoluteOffset: absoluteOffset.toString(),
@@ -41,11 +47,15 @@ export class ChainTxBoundarySource implements TxBoundarySource {
 
       const chainResult = await this.arweaveClient.findTxByOffset(
         Number(absoluteOffset),
+        signal,
       );
       if (!chainResult) {
         log.debug('Transaction not found on chain');
         return null;
       }
+
+      // Check for abort before second chain call
+      signal?.throwIfAborted();
 
       // Get transaction details from chain
       const tx = await this.arweaveClient.getTx({ txId: chainResult.txId });
@@ -73,6 +83,10 @@ export class ChainTxBoundarySource implements TxBoundarySource {
         weaveOffset: chainResult.txOffset,
       };
     } catch (error: any) {
+      // Re-throw AbortError
+      if (error.name === 'AbortError') {
+        throw error;
+      }
       log.debug('Chain lookup failed', { error: error.message });
       return null;
     }

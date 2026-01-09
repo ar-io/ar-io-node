@@ -16,6 +16,8 @@ declare global {
       timedout: boolean;
       resourceBucket?: TokenBucket;
       ipBucket?: TokenBucket;
+      /** AbortSignal that is aborted when client disconnects. Set by abort-signal middleware. */
+      signal: AbortSignal;
     }
   }
 }

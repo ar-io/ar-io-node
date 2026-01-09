@@ -155,6 +155,7 @@ export class ChunkRetrievalService {
    * @param absoluteOffset - The absolute byte offset in the weave
    * @param requestAttributes - Optional request attributes for hop tracking
    * @param parentSpan - Optional parent span for tracing
+   * @param signal - Optional abort signal to cancel the request
    * @returns Discriminated union result indicating which path was used
    * @throws ChunkNotFoundError if chunk cannot be retrieved
    */
@@ -162,6 +163,7 @@ export class ChunkRetrievalService {
     absoluteOffset: number,
     requestAttributes?: RequestAttributes,
     parentSpan?: Span,
+    signal?: AbortSignal,
   ): Promise<ChunkRetrievalResult> {
     const span = startChildSpan(
       'ChunkRetrievalService.retrieveChunk',
@@ -174,6 +176,9 @@ export class ChunkRetrievalService {
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
+
       // 1. Try cache hit first
       if (this.chunkDataStore && this.chunkMetadataStore) {
         const cacheResult = await this.tryCacheHit(absoluteOffset, span);
@@ -183,10 +188,14 @@ export class ChunkRetrievalService {
         }
       }
 
+      // Check for abort before TX boundary lookup
+      signal?.throwIfAborted();
+
       // 2. Get TX boundary from composite source (handles DB → tx_path → chain)
       span.addEvent('Getting TX boundary');
       const txBoundary = await this.txBoundarySource.getTxBoundary(
         BigInt(absoluteOffset),
+        signal,
       );
 
       if (!txBoundary) {
@@ -209,9 +218,13 @@ export class ChunkRetrievalService {
         txBoundary,
         requestAttributes,
         span,
+        signal,
       );
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as an exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();
@@ -309,6 +322,7 @@ export class ChunkRetrievalService {
     txBoundary: TxBoundary,
     requestAttributes: RequestAttributes | undefined,
     parentSpan: Span,
+    signal?: AbortSignal,
   ): Promise<BoundaryFetchResult> {
     const span = startChildSpan(
       'ChunkRetrievalService.fetchChunkWithBoundary',
@@ -317,6 +331,9 @@ export class ChunkRetrievalService {
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
+
       const { dataRoot, dataSize, weaveOffset, id: txId } = txBoundary;
 
       // Calculate the relative offset
@@ -338,16 +355,23 @@ export class ChunkRetrievalService {
 
       let chunk: Chunk;
       try {
-        chunk = await this.chunkSource.getChunkByAny({
-          txSize: dataSize,
-          absoluteOffset,
-          dataRoot,
-          relativeOffset,
-          requestAttributes,
-        });
+        chunk = await this.chunkSource.getChunkByAny(
+          {
+            txSize: dataSize,
+            absoluteOffset,
+            dataRoot,
+            relativeOffset,
+            requestAttributes,
+          },
+          signal,
+        );
       } catch (error: any) {
         const retrievalDuration = Date.now() - chunkRetrievalStart;
         span.setAttribute('chunk.retrieval.duration_ms', retrievalDuration);
+        // Re-throw AbortError without wrapping
+        if (error.name === 'AbortError') {
+          throw error;
+        }
         throw new ChunkNotFoundError(
           `Chunk fetch failed: ${error.message}`,
           'fetch_failed',
@@ -372,7 +396,10 @@ export class ChunkRetrievalService {
         contiguousDataStartDelimiter,
       };
     } catch (error: any) {
-      if (!(error instanceof ChunkNotFoundError)) {
+      if (
+        !(error instanceof ChunkNotFoundError) &&
+        error.name !== 'AbortError'
+      ) {
         span.recordException(error);
       }
       throw error;
