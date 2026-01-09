@@ -221,36 +221,6 @@ export interface ChainOffsetIndex {
   saveTxOffset(txId: string, offset: number): Promise<void>;
 }
 
-export interface TxOffsetResult {
-  data_root: string | undefined;
-  id: string | undefined;
-  offset: number | undefined;
-  data_size: number | undefined;
-}
-
-/**
- * Context for tx_path-based validation (optional fast path).
- * When provided to getTxByOffset, enables validation of tx_path against
- * the block's tx_root to derive transaction info without binary search.
- */
-export interface TxPathContext {
-  /** The tx_path Merkle proof from the chunk response */
-  txPath: Buffer;
-  /** The block's transaction Merkle root */
-  txRoot: Buffer;
-  /** Current block's weave_size (absolute end offset) */
-  blockWeaveSize: number;
-  /** Previous block's weave_size (absolute start offset) */
-  prevBlockWeaveSize: number;
-}
-
-export interface TxOffsetSource {
-  getTxByOffset(
-    offset: number,
-    txPathContext?: TxPathContext,
-  ): Promise<TxOffsetResult>;
-}
-
 /**
  * Transaction boundary information for a given offset.
  * Contains the essential data needed to locate and validate a chunk
