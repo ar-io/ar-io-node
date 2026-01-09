@@ -36,7 +36,11 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
 
   async getChunkDataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkData> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     // This source only supports validation params (txSize, dataRoot, relativeOffset)
     if (!isValidationParams(params)) {
       throw new Error(
@@ -93,6 +97,9 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
         };
       }
 
+      // Check for abort before fetching from source
+      signal?.throwIfAborted();
+
       // Cache miss - need to fetch from source
       span.setAttributes({
         'chunk.cache_hit': false,
@@ -104,12 +111,15 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
       });
 
       const sourceStart = Date.now();
-      const chunkData = await this.chunkSource.getChunkDataByAny({
-        txSize,
-        absoluteOffset,
-        dataRoot,
-        relativeOffset,
-      });
+      const chunkData = await this.chunkSource.getChunkDataByAny(
+        {
+          txSize,
+          absoluteOffset,
+          dataRoot,
+          relativeOffset,
+        },
+        signal,
+      );
       const sourceDuration = Date.now() - sourceStart;
 
       span.setAttributes({
@@ -143,7 +153,10 @@ export class ReadThroughChunkDataCache implements ChunkDataByAnySource {
 
       return chunkData;
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as an exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();

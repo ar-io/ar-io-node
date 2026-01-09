@@ -39,10 +39,13 @@ export class S3ChunkSource implements ChunkDataByAnySource {
     this.s3Prefix = s3Prefix;
   }
 
-  async getChunkDataByAny({
-    dataRoot,
-    relativeOffset,
-  }: ChunkDataByAnySourceParams): Promise<ChunkData> {
+  async getChunkDataByAny(
+    { dataRoot, relativeOffset }: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
+  ): Promise<ChunkData> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     const span = tracer.startSpan('S3ChunkSource.getChunkDataByAny', {
       attributes: {
         'chunk.data_root': dataRoot,

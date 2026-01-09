@@ -35,7 +35,11 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
 
   async getChunkMetadataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkMetadata> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     // This source only supports validation params (txSize, dataRoot, relativeOffset)
     if (!isValidationParams(params)) {
       throw new Error(
@@ -45,33 +49,37 @@ export class ReadThroughChunkMetadataCache implements ChunkMetadataByAnySource {
 
     const { txSize, absoluteOffset, dataRoot, relativeOffset } = params;
 
-    const chunkMetadataPromise = this.chunkMetadataStore
-      .get(dataRoot, relativeOffset)
-      .then(async (cachedChunkMetadata) => {
-        // Chunk metadata is cached
-        if (cachedChunkMetadata) {
-          this.log.debug('Successfully fetched chunk data from cache', {
-            dataRoot,
-            relativeOffset,
-          });
-          return cachedChunkMetadata;
-        }
+    const cachedChunkMetadata = await this.chunkMetadataStore.get(
+      dataRoot,
+      relativeOffset,
+    );
 
-        // Fetch from ChunkMetadataSource
-        const chunkMetadata =
-          await this.chunkMetadataSource.getChunkMetadataByAny({
-            txSize,
-            absoluteOffset,
-            dataRoot,
-            relativeOffset,
-          });
-
-        // Cache with absoluteOffset for symlink index
-        await this.chunkMetadataStore.set(chunkMetadata, absoluteOffset);
-
-        return chunkMetadata;
+    // Chunk metadata is cached
+    if (cachedChunkMetadata) {
+      this.log.debug('Successfully fetched chunk data from cache', {
+        dataRoot,
+        relativeOffset,
       });
+      return cachedChunkMetadata;
+    }
 
-    return chunkMetadataPromise;
+    // Check for abort before fetching from source
+    signal?.throwIfAborted();
+
+    // Fetch from ChunkMetadataSource
+    const chunkMetadata = await this.chunkMetadataSource.getChunkMetadataByAny(
+      {
+        txSize,
+        absoluteOffset,
+        dataRoot,
+        relativeOffset,
+      },
+      signal,
+    );
+
+    // Cache with absoluteOffset for symlink index
+    await this.chunkMetadataStore.set(chunkMetadata, absoluteOffset);
+
+    return chunkMetadata;
   }
 }
