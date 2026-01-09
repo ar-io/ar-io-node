@@ -16,28 +16,36 @@ import { TxBoundary, TxBoundarySource } from '../types.js';
  * 3. Chain fallback (slowest) - binary search through chain
  *
  * Returns the first successful result from any source.
+ *
+ * Chain fallback has a configurable concurrency limit to prevent resource
+ * exhaustion from expensive binary search operations.
  */
 export class CompositeTxBoundarySource implements TxBoundarySource {
   private log: winston.Logger;
   private dbSource: TxBoundarySource;
   private txPathSource?: TxBoundarySource;
   private chainSource?: TxBoundarySource;
+  private chainFallbackConcurrencyLimit: number;
+  private activeChainFallbackCount = 0;
 
   constructor({
     log,
     dbSource,
     txPathSource,
     chainSource,
+    chainFallbackConcurrencyLimit = 5,
   }: {
     log: winston.Logger;
     dbSource: TxBoundarySource;
     txPathSource?: TxBoundarySource;
     chainSource?: TxBoundarySource;
+    chainFallbackConcurrencyLimit?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dbSource = dbSource;
     this.txPathSource = txPathSource;
     this.chainSource = chainSource;
+    this.chainFallbackConcurrencyLimit = chainFallbackConcurrencyLimit;
   }
 
   async getTxBoundary(
@@ -105,10 +113,23 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
     // Check for abort before chain fallback
     signal?.throwIfAborted();
 
-    // 3. Try chain fallback (slowest)
+    // 3. Try chain fallback (slowest) with concurrency limit
     if (this.chainSource) {
+      // Check concurrency limit before attempting chain fallback
+      if (this.activeChainFallbackCount >= this.chainFallbackConcurrencyLimit) {
+        log.debug('Skipping chain fallback - concurrency limit reached', {
+          activeChainFallbackCount: this.activeChainFallbackCount,
+          chainFallbackConcurrencyLimit: this.chainFallbackConcurrencyLimit,
+        });
+        return null;
+      }
+
+      this.activeChainFallbackCount++;
       try {
-        log.debug('Attempting chain fallback');
+        log.debug('Attempting chain fallback', {
+          activeChainFallbackCount: this.activeChainFallbackCount,
+          chainFallbackConcurrencyLimit: this.chainFallbackConcurrencyLimit,
+        });
         const chainResult = await this.chainSource.getTxBoundary(
           absoluteOffset,
           signal,
@@ -127,6 +148,8 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
           throw error;
         }
         log.debug('Chain fallback failed', { error: error.message });
+      } finally {
+        this.activeChainFallbackCount--;
       }
     }
 

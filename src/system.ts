@@ -21,9 +21,6 @@ import { SequentialDataSource } from './data/sequential-data-source.js';
 import { TxChunksDataSource } from './data/tx-chunks-data-source.js';
 import { RootParentDataSource } from './data/root-parent-data-source.js';
 import { Ans104OffsetSource } from './data/ans104-offset-source.js';
-import { CompositeTxOffsetSource } from './data/composite-tx-offset-source.js';
-import { DatabaseTxOffsetSource } from './data/database-tx-offset-source.js';
-import { ChainTxOffsetSource } from './data/chain-tx-offset-source.js';
 import { CompositeTxBoundarySource } from './data/composite-tx-boundary-source.js';
 import { DatabaseTxBoundarySource } from './data/database-tx-boundary-source.js';
 import { ChainTxBoundarySource } from './data/chain-tx-boundary-source.js';
@@ -226,17 +223,6 @@ export const db = new StandaloneSqliteDatabase({
   moderationDbPath: 'data/sqlite/moderation.db',
   bundlesDbPath: 'data/sqlite/bundles.db',
   tagSelectivity: config.TAG_SELECTIVITY,
-});
-
-// Transaction offset source with database primary and chain fallback
-export const txOffsetSource = new CompositeTxOffsetSource({
-  log,
-  primarySource: new DatabaseTxOffsetSource({ log, db }),
-  fallbackSource: config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED
-    ? new ChainTxOffsetSource({ log, arweaveClient })
-    : undefined,
-  fallbackEnabled: config.CHUNK_OFFSET_CHAIN_FALLBACK_ENABLED,
-  fallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
 });
 
 export const dataAttributesStore: ContiguousDataAttributesStore =
@@ -624,6 +610,7 @@ const txBoundarySource = new CompositeTxBoundarySource({
   dbSource: dbBoundarySource,
   txPathSource: txPathBoundarySource,
   chainSource: chainBoundarySource,
+  chainFallbackConcurrencyLimit: config.CHUNK_OFFSET_CHAIN_FALLBACK_CONCURRENCY,
 });
 
 // ChunkRetrievalService encapsulates the chunk retrieval pipeline with fast path support
