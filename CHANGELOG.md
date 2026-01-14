@@ -24,9 +24,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Intelligent caching: CDB64 headers (4KB) cached permanently, other regions
     use LRU cache with configurable size and TTL
 
+- **Chunk Retrieval Load Testing Tool**: New CLI tool for load testing chunk
+  retrieval endpoints (`tools/test-chunk-retrieval`) (PE-8833)
+  - Configurable concurrency with `--concurrency` flag (default: 10)
+  - Duration mode (`--duration`) and count mode (`--count`) for flexible testing
+  - File descriptor tracking (`--track-fds <pid>`) for resource monitoring
+  - Error categorization with resource exhaustion detection (EMFILE, etc.)
+  - Response time percentiles and requests/second metrics
+
 ### Changed
 
+- **AbortSignal Propagation in Chunk Retrieval**: Client disconnections now
+  abort all downstream operations promptly (PE-8833)
+  - Adds middleware that attaches AbortSignal to all requests
+  - Propagates signal through retrieval service, composite sources, and caches
+  - Returns HTTP 499 status for client-aborted requests
+  - Prevents wasted work when clients disconnect during chunk requests
+
+- **Reduced Parallel Peer Requests**: Lowered parallel peer request count from
+  3 to 2 to reduce resource pressure during chunk retrieval (PE-8833)
+
+- **Chain Fallback Concurrency Limit**: Added concurrency limit to
+  CompositeTxBoundarySource for chain fallback operations to prevent resource
+  exhaustion from expensive binary search operations (PE-8833)
+
 ### Fixed
+
+- **Abort Losing Parallel Peer Requests**: Parallel peer chunk requests now
+  properly abort when one peer succeeds, freeing resources immediately instead
+  of letting losing requests complete wastefully (PE-8833)
+
+- **Dead TxOffsetSource Code Removed**: Removed obsolete TxOffsetSource
+  implementation files that were superseded by TxBoundarySource refactor
 
 ## [Release 64] - 2026-01-07
 
