@@ -642,6 +642,7 @@ function parseArguments(): TestConfig {
         break;
 
       case '--help':
+      // falls through
       case '-h':
         printUsage();
         process.exit(0);
