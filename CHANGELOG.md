@@ -53,6 +53,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   process termination instead of throwing a catchable RangeError. This affects
   applications using OpenTelemetry and other APM tools.
 
+- **Dependency Security Updates**: Addressed high-severity vulnerabilities
+  - Added resolution for `qs@6.14.1` (fixes DoS via memory exhaustion in Express)
+  - Added resolution for `cookie@0.7.0` (fixes out-of-bounds character handling)
+  - Updated `@aws-sdk/client-dynamodb` and `@aws-sdk/credential-providers` to
+    3.968.0
+
 ### Fixed
 
 - **Abort Losing Parallel Peer Requests**: Parallel peer chunk requests now

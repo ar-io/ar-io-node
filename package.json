@@ -14,8 +14,8 @@
     "@ardrive/ardrive-promise-cache": "^1.4.0",
     "@aws-lite/client": "^0.23.2",
     "@aws-lite/s3": "^0.2.6",
-    "@aws-sdk/client-dynamodb": "^3.895.0",
-    "@aws-sdk/credential-providers": "^3.895.0",
+    "@aws-sdk/client-dynamodb": "^3.968.0",
+    "@aws-sdk/credential-providers": "^3.968.0",
     "@clickhouse/client": "^1.12.1",
     "@coinbase/x402": "^0.7.1",
     "@dha-team/arbundles": "^1.0.4",
@@ -83,7 +83,9 @@
     "elliptic": "6.6.1",
     "ws": "7.5.10",
     "semver": "7.6.3",
-    "tar": "7.5.2"
+    "tar": "7.5.2",
+    "qs": "6.14.1",
+    "cookie": "0.7.0"
   },
   "devDependencies": {
     "@aws-lite/s3-types": "^0.2.6",
