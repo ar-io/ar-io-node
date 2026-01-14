@@ -71,7 +71,7 @@ Load testing tool for chunk retrieval endpoints. Tests `/chunk/{offset}` request
 - `--help` - Show help message
 
 **Output:**
-```
+```text
 === Chunk Retrieval Load Test Results ===
 Gateway: http://localhost:4000
 Duration: 2m 0s

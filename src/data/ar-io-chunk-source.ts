@@ -545,8 +545,10 @@ export class ArIOChunkSource
           responseTimeMs: responseTime,
         },
       );
-      // Report failure to update chunk-specific peer weights
-      this.handleChunkPeerFailure(peer);
+      // Only report failure for actual errors, not aborted requests
+      if (error.name !== 'AbortError') {
+        this.handleChunkPeerFailure(peer);
+      }
       throw error;
     }
   }

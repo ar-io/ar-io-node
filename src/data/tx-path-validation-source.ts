@@ -95,8 +95,10 @@ export class TxPathValidationSource implements TxBoundarySource {
       signal?.throwIfAborted();
 
       // Step 2: Get block info for tx_root validation
-      const containingBlock =
-        await this.arweaveClient.binarySearchBlocks(offsetNumber);
+      const containingBlock = await this.arweaveClient.binarySearchBlocks(
+        offsetNumber,
+        signal,
+      );
 
       if (!containingBlock || !containingBlock.tx_root) {
         log.debug('Block not found or missing tx_root');
