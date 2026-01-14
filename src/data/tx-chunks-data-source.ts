@@ -47,11 +47,13 @@ export class TxChunksDataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'TxChunksDataSource.getData',
@@ -69,6 +71,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
+
       this.log.debug('Fetching chunk data for TX', { id });
 
       span.addEvent('Starting chain source requests');
@@ -112,6 +117,7 @@ export class TxChunksDataSource implements ContiguousDataSource {
           rangeEnd: region.offset + region.size,
           getChunkByAny,
           log: this.log,
+          signal,
         });
 
         const rangeStream = Readable.from(rangeResult.stream);
@@ -245,6 +251,9 @@ export class TxChunksDataSource implements ContiguousDataSource {
         autoDestroy: true,
         read: async function () {
           try {
+            // Check for abort before each chunk read
+            signal?.throwIfAborted();
+
             if (!chunkDataPromise) {
               this.push(null);
               return;
@@ -317,6 +326,14 @@ export class TxChunksDataSource implements ContiguousDataSource {
           generateRequestAttributes(requestAttributes)?.attributes,
       };
     } catch (error: any) {
+      // Don't record AbortError as exception
+      if (error.name === 'AbortError') {
+        span.addEvent('Request aborted', {
+          'data.retrieval.error': 'client_disconnected',
+        });
+        throw error;
+      }
+
       span.recordException(error);
       span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
 

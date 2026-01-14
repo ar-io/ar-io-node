@@ -974,11 +974,13 @@ export interface ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData>;
 }
 
