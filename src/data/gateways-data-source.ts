@@ -59,11 +59,13 @@ export class GatewaysDataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'GatewaysDataSource.getData',
@@ -83,6 +85,8 @@ export class GatewaysDataSource implements ContiguousDataSource {
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
       const path = `/raw/${id}`;
       const requestAttributesHeaders =
         generateRequestAttributes(requestAttributes);
@@ -112,9 +116,19 @@ export class GatewaysDataSource implements ContiguousDataSource {
           const shuffledGateways = shuffleArray([...gatewaysInTier]);
 
           for (const gatewayUrl of shuffledGateways) {
+            // Check for abort before each gateway attempt
+            signal?.throwIfAborted();
+
+            // Combine timeout with client abort signal
+            const signals: AbortSignal[] = [
+              AbortSignal.timeout(this.requestTimeoutMs),
+            ];
+            if (signal) signals.push(signal);
+            const combinedSignal = AbortSignal.any(signals);
+
             const gatewayAxios = axios.create({
               baseURL: gatewayUrl,
-              timeout: this.requestTimeoutMs,
+              signal: combinedSignal,
               headers: {
                 'X-AR-IO-Node-Release': config.AR_IO_NODE_RELEASE,
               },
@@ -290,6 +304,16 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 }),
               };
             } catch (error: any) {
+              // Re-throw AbortError immediately - don't try next gateway
+              if (error.name === 'AbortError') {
+                span.addEvent('Request aborted', {
+                  'gateways.url': gatewayUrl,
+                  'gateways.tier.priority': priority,
+                  'data.retrieval.error': 'client_disconnected',
+                });
+                throw error;
+              }
+
               const gatewayRequestDuration = Date.now() - gatewayRequestStart;
               lastError = error as Error;
 
@@ -328,7 +352,10 @@ export class GatewaysDataSource implements ContiguousDataSource {
       span.recordException(finalError);
       throw finalError;
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();

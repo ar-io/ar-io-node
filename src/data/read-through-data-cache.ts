@@ -257,6 +257,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
@@ -265,6 +266,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       size: number;
     };
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'ReadThroughDataCache.getData',
@@ -286,6 +288,8 @@ export class ReadThroughDataCache implements ContiguousDataSource {
     });
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
       // Get data attributes
       const attributes = await this.dataAttributesStore.getDataAttributes(id);
 
@@ -403,6 +407,7 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         requestAttributes,
         region,
         parentSpan: span,
+        signal,
       });
       const upstreamDuration = Date.now() - upstreamStart;
 
@@ -440,6 +445,18 @@ export class ReadThroughDataCache implements ContiguousDataSource {
         pipeline(data.stream, cacheStream, async (error: any) => {
           const cachingDuration = Date.now() - cachingStart;
           if (error !== undefined) {
+            // Handle abort errors specially - just log at debug level
+            if (error.name === 'AbortError') {
+              span.addEvent('Caching aborted due to client disconnect', {
+                'cache.duration_ms': cachingDuration,
+              });
+              this.log.debug('Caching aborted due to client disconnect', {
+                id,
+              });
+              await this.dataStore.cleanup(cacheStream);
+              return;
+            }
+
             span.addEvent('Cache storage failed', {
               'cache.duration_ms': cachingDuration,
               'error.message': error.message,
@@ -631,6 +648,14 @@ export class ReadThroughDataCache implements ContiguousDataSource {
       span.addEvent('Returning data from upstream');
       return data;
     } catch (error: any) {
+      // Don't record AbortError as exception
+      if (error.name === 'AbortError') {
+        span.addEvent('Request aborted', {
+          'data.retrieval.error': 'client_disconnected',
+        });
+        throw error;
+      }
+
       span.recordException(error);
       span.setAttribute('data.error', error.message);
       metrics.getDataErrorsTotal.inc({
