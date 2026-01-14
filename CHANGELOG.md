@@ -48,10 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   CompositeTxBoundarySource for chain fallback operations to prevent resource
   exhaustion from expensive binary search operations (PE-8833)
 
-- **Node.js Security Update**: Bumped Node.js from 20.11.1 to 20.20.0 to address
-  async_hooks DoS vulnerability where stack overflow errors cause immediate
-  process termination instead of throwing a catchable RangeError. This affects
-  applications using OpenTelemetry and other APM tools.
+- **Node.js Update**: Bumped Node.js from 20.11.1 to 20.19.6 (latest available
+  Docker image)
 
 - **Dependency Security Updates**: Addressed high-severity vulnerabilities
   - Added resolution for `qs@6.14.1` (fixes DoS via memory exhaustion in Express)
