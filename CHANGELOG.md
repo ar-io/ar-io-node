@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 65] - 2026-01-14
 
+This is a **recommended release** focusing on **resource stability** and **remote
+index distribution**. Key improvements include AbortSignal propagation through
+the chunk retrieval pipeline to prevent wasted work when clients disconnect,
+reduced parallel peer requests and concurrency limits to lower resource pressure,
+and the ability to load CDB64 root TX indexes from remote sources (Arweave
+transactions, bundle data items, or HTTP URLs). Several high-severity dependency
+vulnerabilities have also been addressed.
+
 ### Added
 
 - **Remote CDB64 Index Sources**: CDB64 root TX indexes can now be loaded from
