@@ -34,7 +34,11 @@ export class CompositeChunkMetadataSource implements ChunkMetadataByAnySource {
 
   async getChunkMetadataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkMetadata> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     if (this.sources.length === 0) {
       throw new Error('No chunk metadata sources configured');
     }
@@ -46,13 +50,13 @@ export class CompositeChunkMetadataSource implements ChunkMetadataByAnySource {
     // Create all promises at once, controlled by pLimit
     const promises = this.sources.map((source) =>
       limit(async () => {
-        // Check if we already have a success before starting
-        if (successResult) {
+        // Check if we already have a success or abort before starting
+        if (successResult || signal?.aborted) {
           return null;
         }
 
         try {
-          const result = await source.getChunkMetadataByAny(params);
+          const result = await source.getChunkMetadataByAny(params, signal);
 
           // Check again after async operation
           if (successResult !== undefined) {
@@ -69,6 +73,11 @@ export class CompositeChunkMetadataSource implements ChunkMetadataByAnySource {
           successResult = result;
           return result;
         } catch (error: any) {
+          // Re-throw AbortError to propagate cancellation
+          if (error.name === 'AbortError') {
+            throw error;
+          }
+
           // Check again if we got a success while this was running
           if (successResult) {
             return null;
@@ -88,6 +97,9 @@ export class CompositeChunkMetadataSource implements ChunkMetadataByAnySource {
 
     // Wait for all promises to complete
     await Promise.all(promises);
+
+    // Check if aborted after all promises complete
+    signal?.throwIfAborted();
 
     // Return success if we got one
     if (successResult) {

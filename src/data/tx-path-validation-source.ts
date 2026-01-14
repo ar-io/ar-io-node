@@ -10,7 +10,6 @@ import {
   TxBoundary,
   TxBoundarySource,
   UnvalidatedChunkSource,
-  RequestAttributes,
 } from '../types.js';
 import { ArweaveCompositeClient } from '../arweave/composite-client.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
@@ -46,8 +45,11 @@ export class TxPathValidationSource implements TxBoundarySource {
 
   async getTxBoundary(
     absoluteOffset: bigint,
-    requestAttributes?: RequestAttributes,
+    signal?: AbortSignal,
   ): Promise<TxBoundary | null> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     const log = this.log.child({
       method: 'getTxBoundary',
       absoluteOffset: absoluteOffset.toString(),
@@ -75,7 +77,8 @@ export class TxPathValidationSource implements TxBoundarySource {
       const unvalidatedChunk =
         await this.unvalidatedChunkSource.getUnvalidatedChunk(
           offsetNumber,
-          requestAttributes,
+          undefined, // requestAttributes not passed through TxBoundarySource interface
+          signal,
         );
 
       if (!unvalidatedChunk.tx_path) {
@@ -88,9 +91,14 @@ export class TxPathValidationSource implements TxBoundarySource {
         txPathLength: unvalidatedChunk.tx_path.length,
       });
 
+      // Check for abort before block lookup
+      signal?.throwIfAborted();
+
       // Step 2: Get block info for tx_root validation
-      const containingBlock =
-        await this.arweaveClient.binarySearchBlocks(offsetNumber);
+      const containingBlock = await this.arweaveClient.binarySearchBlocks(
+        offsetNumber,
+        signal,
+      );
 
       if (!containingBlock || !containingBlock.tx_root) {
         log.debug('Block not found or missing tx_root');
@@ -100,6 +108,9 @@ export class TxPathValidationSource implements TxBoundarySource {
       const blockHeight = containingBlock.height;
       const blockWeaveSize = parseInt(containingBlock.weave_size);
       const txRoot = fromB64Url(containingBlock.tx_root);
+
+      // Check for abort before previous block lookup
+      signal?.throwIfAborted();
 
       // Get previous block's weave_size for block start boundary
       let prevBlockWeaveSize = 0;
@@ -164,6 +175,10 @@ export class TxPathValidationSource implements TxBoundarySource {
         weaveOffset: txEndOffset,
       };
     } catch (error: any) {
+      // Re-throw AbortError
+      if (error.name === 'AbortError') {
+        throw error;
+      }
       log.debug('tx_path validation failed', {
         error: error.message,
       });

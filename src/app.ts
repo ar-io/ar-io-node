@@ -10,6 +10,7 @@ import { Server } from 'node:http';
 import * as config from './config.js';
 import { headerNames } from './constants.js';
 import log from './log.js';
+import { createAbortSignalMiddleware } from './middleware/abort-signal.js';
 import { rootRouter } from './routes/root.js';
 import { arIoRouter } from './routes/ar-io.js';
 import { arnsRouter } from './routes/arns.js';
@@ -68,6 +69,9 @@ app.use(
     ],
   }),
 );
+
+// Attach AbortSignal to all requests for client disconnect handling
+app.use(createAbortSignalMiddleware());
 
 app.use(
   createX402Router({

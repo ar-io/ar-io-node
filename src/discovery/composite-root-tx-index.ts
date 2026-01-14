@@ -45,11 +45,6 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     circuitBreakerOptions?: CircuitBreaker.Options;
   }) {
     this.log = log.child({ class: this.constructor.name });
-
-    if (indexes.length === 0) {
-      throw new Error('At least one index must be provided');
-    }
-
     this.indexes = indexes;
 
     // Create a circuit breaker for each index

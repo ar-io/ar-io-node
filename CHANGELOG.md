@@ -4,6 +4,76 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 65] - 2026-01-14
+
+This is a **recommended release** focusing on **resource stability** and **remote
+index distribution**. Key improvements include AbortSignal propagation through
+the chunk retrieval pipeline to prevent wasted work when clients disconnect,
+reduced parallel peer requests and concurrency limits to lower resource pressure,
+and the ability to load CDB64 root TX indexes from remote sources (Arweave
+transactions, bundle data items, or HTTP URLs). Several high-severity dependency
+vulnerabilities have also been addressed.
+
+### Added
+
+- **Remote CDB64 Index Sources**: CDB64 root TX indexes can now be loaded from
+  remote sources in addition to local files (GitHub #569, PE-8812)
+  - Arweave transactions: specify a 43-character TX ID
+  - Bundle data items: use `txId:offset:size` format for indexes stored within bundles
+  - HTTP URLs: load indexes from S3, CDNs, or dedicated index servers
+  - New environment variables:
+    - `CDB64_ROOT_TX_INDEX_SOURCES`: comma-separated list of sources (local paths,
+      TX IDs, bundle items, URLs)
+    - `CDB64_REMOTE_RETRIEVAL_ORDER`: data sources for fetching remote indexes
+      (gateways, chunks, tx-data)
+    - `CDB64_REMOTE_CACHE_MAX_REGIONS`: max cached byte-range regions per source
+    - `CDB64_REMOTE_CACHE_TTL_MS`: TTL for cached regions
+    - `CDB64_REMOTE_REQUEST_TIMEOUT_MS`: request timeout for remote sources
+  - Intelligent caching: CDB64 headers (4KB) cached permanently, other regions
+    use LRU cache with configurable size and TTL
+
+- **Chunk Retrieval Load Testing Tool**: New CLI tool for load testing chunk
+  retrieval endpoints (`tools/test-chunk-retrieval`) (PE-8833)
+  - Configurable concurrency with `--concurrency` flag (default: 10)
+  - Duration mode (`--duration`) and count mode (`--count`) for flexible testing
+  - File descriptor tracking (`--track-fds <pid>`) for resource monitoring
+  - Error categorization with resource exhaustion detection (EMFILE, etc.)
+  - Response time percentiles and requests/second metrics
+
+### Changed
+
+- **AbortSignal Propagation in Chunk Retrieval**: Client disconnections now
+  abort all downstream operations promptly (PE-8833)
+  - Adds middleware that attaches AbortSignal to all requests
+  - Propagates signal through retrieval service, composite sources, and caches
+  - Returns HTTP 499 status for client-aborted requests
+  - Prevents wasted work when clients disconnect during chunk requests
+
+- **Reduced Parallel Peer Requests**: Lowered parallel peer request count from
+  3 to 2 to reduce resource pressure during chunk retrieval (PE-8833)
+
+- **Chain Fallback Concurrency Limit**: Added concurrency limit to
+  CompositeTxBoundarySource for chain fallback operations to prevent resource
+  exhaustion from expensive binary search operations (PE-8833)
+
+- **Node.js Update**: Bumped Node.js from 20.11.1 to 20.19.6 (latest available
+  Docker image)
+
+- **Dependency Security Updates**: Addressed high-severity vulnerabilities
+  - Added resolution for `qs@6.14.1` (fixes DoS via memory exhaustion in Express)
+  - Added resolution for `cookie@0.7.0` (fixes out-of-bounds character handling)
+  - Updated `@aws-sdk/client-dynamodb` and `@aws-sdk/credential-providers` to
+    3.968.0
+
+### Fixed
+
+- **Abort Losing Parallel Peer Requests**: Parallel peer chunk requests now
+  properly abort when one peer succeeds, freeing resources immediately instead
+  of letting losing requests complete wastefully (PE-8833)
+
+- **Dead TxOffsetSource Code Removed**: Removed obsolete TxOffsetSource
+  implementation files that were superseded by TxBoundarySource refactor
+
 ## [Release 64] - 2026-01-07
 
 This is an **optional release** focusing on observer improvements and container

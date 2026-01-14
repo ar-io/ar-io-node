@@ -32,7 +32,13 @@ export class FullChunkSource
     this.chunkDataSource = chunkDataSource;
   }
 
-  async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+  async getChunkByAny(
+    params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
+  ): Promise<Chunk> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     // This source only supports validation params (txSize, dataRoot, relativeOffset)
     if (!isValidationParams(params)) {
       throw new Error(
@@ -53,8 +59,10 @@ export class FullChunkSource
       span.addEvent('Fetching chunk metadata');
       const metadataStart = Date.now();
 
-      const metadata =
-        await this.chunkMetadataSource.getChunkMetadataByAny(params);
+      const metadata = await this.chunkMetadataSource.getChunkMetadataByAny(
+        params,
+        signal,
+      );
       const metadataDuration = Date.now() - metadataStart;
 
       span.setAttributes({
@@ -69,6 +77,9 @@ export class FullChunkSource
         chunk_size: metadata.chunk_size,
       });
 
+      // Check for abort before fetching data
+      signal?.throwIfAborted();
+
       const chunkDataParams: ChunkWithValidationParams = {
         txSize: params.txSize,
         absoluteOffset: params.absoluteOffset,
@@ -79,8 +90,10 @@ export class FullChunkSource
       span.addEvent('Fetching chunk data');
       const dataStart = Date.now();
 
-      const data =
-        await this.chunkDataSource.getChunkDataByAny(chunkDataParams);
+      const data = await this.chunkDataSource.getChunkDataByAny(
+        chunkDataParams,
+        signal,
+      );
       const dataDuration = Date.now() - dataStart;
 
       span.setAttributes({
@@ -104,7 +117,10 @@ export class FullChunkSource
       span.addEvent('Full chunk assembly complete');
       return result;
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as an exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();
@@ -113,13 +129,15 @@ export class FullChunkSource
 
   async getChunkDataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkData> {
-    return this.chunkDataSource.getChunkDataByAny(params);
+    return this.chunkDataSource.getChunkDataByAny(params, signal);
   }
 
   async getChunkMetadataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkMetadata> {
-    return this.chunkMetadataSource.getChunkMetadataByAny(params);
+    return this.chunkMetadataSource.getChunkMetadataByAny(params, signal);
   }
 }

@@ -44,6 +44,7 @@ export class CompositeChunkDataSource
 
   async getChunkDataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkData> {
     const span = tracer.startSpan(
       'CompositeChunkDataSource.getChunkDataByAny',
@@ -60,6 +61,9 @@ export class CompositeChunkDataSource
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
+
       if (this.sources.length === 0) {
         const error = new Error('No chunk data sources configured');
         span.recordException(error);
@@ -78,11 +82,12 @@ export class CompositeChunkDataSource
       // Create all promises at once, controlled by pLimit
       const promises = this.sources.map((source, index) =>
         limit(async () => {
-          // Check if we already have a success before starting
-          if (successResult) {
-            span.addEvent('Skipping source due to early success', {
+          // Check if we already have a success or abort before starting
+          if (successResult || signal?.aborted) {
+            span.addEvent('Skipping source', {
               source: source.constructor.name,
               source_index: index,
+              reason: signal?.aborted ? 'aborted' : 'early_success',
             });
             return null;
           }
@@ -94,7 +99,7 @@ export class CompositeChunkDataSource
           });
 
           try {
-            const result = await source.getChunkDataByAny(params);
+            const result = await source.getChunkDataByAny(params, signal);
             const sourceDuration = Date.now() - sourceStartTime;
 
             // Check again after async operation
@@ -130,6 +135,11 @@ export class CompositeChunkDataSource
           } catch (error: any) {
             const sourceDuration = Date.now() - sourceStartTime;
 
+            // Re-throw AbortError to propagate cancellation
+            if (error.name === 'AbortError') {
+              throw error;
+            }
+
             // Check again if we got a success while this was running
             if (successResult) {
               span.addEvent('Source failed but result already available', {
@@ -162,6 +172,9 @@ export class CompositeChunkDataSource
       // Wait for all promises to complete
       await Promise.all(promises);
 
+      // Check if aborted after all promises complete
+      signal?.throwIfAborted();
+
       // Return success if we got one
       if (successResult) {
         span.setAttributes({
@@ -187,7 +200,10 @@ export class CompositeChunkDataSource
       span.recordException(error);
       throw error;
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as an exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();
@@ -197,6 +213,7 @@ export class CompositeChunkDataSource
   async getUnvalidatedChunk(
     absoluteOffset: number,
     requestAttributes?: RequestAttributes,
+    signal?: AbortSignal,
   ): Promise<UnvalidatedChunk> {
     const span = tracer.startSpan(
       'CompositeChunkDataSource.getUnvalidatedChunk',
@@ -210,6 +227,9 @@ export class CompositeChunkDataSource
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
+
       if (this.unvalidatedSources.length === 0) {
         const error = new Error('No unvalidated chunk sources configured');
         span.recordException(error);
@@ -230,11 +250,12 @@ export class CompositeChunkDataSource
       // Create all promises at once, controlled by pLimit
       const promises = this.unvalidatedSources.map((source, index) =>
         limit(async () => {
-          // Check if we already have a success before starting
-          if (successResult) {
-            span.addEvent('Skipping source due to early success', {
+          // Check if we already have a success or abort before starting
+          if (successResult || signal?.aborted) {
+            span.addEvent('Skipping source', {
               source: source.constructor.name,
               source_index: index,
+              reason: signal?.aborted ? 'aborted' : 'early_success',
             });
             return null;
           }
@@ -249,6 +270,7 @@ export class CompositeChunkDataSource
             const result = await source.getUnvalidatedChunk(
               absoluteOffset,
               requestAttributes,
+              signal,
             );
             const sourceDuration = Date.now() - sourceStartTime;
 
@@ -288,6 +310,11 @@ export class CompositeChunkDataSource
           } catch (error: any) {
             const sourceDuration = Date.now() - sourceStartTime;
 
+            // Re-throw AbortError to propagate cancellation
+            if (error.name === 'AbortError') {
+              throw error;
+            }
+
             // Check again if we got a success while this was running
             if (successResult) {
               span.addEvent('Source failed but result already available', {
@@ -319,6 +346,9 @@ export class CompositeChunkDataSource
       // Wait for all promises to complete
       await Promise.all(promises);
 
+      // Check if aborted after all promises complete
+      signal?.throwIfAborted();
+
       // Return success if we got one
       if (successResult) {
         span.setAttributes({
@@ -344,7 +374,10 @@ export class CompositeChunkDataSource
       span.recordException(error);
       throw error;
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as an exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();

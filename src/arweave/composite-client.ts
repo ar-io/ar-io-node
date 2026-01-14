@@ -1960,13 +1960,19 @@ export class ArweaveCompositeClient
   /**
    * Find transaction that contains the given offset using binary search on the chain
    */
-  async findTxByOffset(offset: number): Promise<{
+  async findTxByOffset(
+    offset: number,
+    signal?: AbortSignal,
+  ): Promise<{
     txId: string;
     txOffset: number;
     txSize: number;
     txStartOffset: number;
     txEndOffset: number;
   } | null> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     const searchId = Math.random().toString(36).substring(7);
     this.log.debug('Starting binary search for transaction by offset', {
       offset,
@@ -1980,7 +1986,7 @@ export class ArweaveCompositeClient
         searchId,
       });
 
-      const containingBlock = await this.binarySearchBlocks(offset);
+      const containingBlock = await this.binarySearchBlocks(offset, signal);
       if (!containingBlock) {
         this.log.debug(
           'Binary search completed: No block found containing offset',
@@ -2015,6 +2021,7 @@ export class ArweaveCompositeClient
       const result = await this.binarySearchTransactions(
         containingBlock,
         offset,
+        signal,
       );
       if (!result) {
         this.log.debug(
@@ -2057,9 +2064,16 @@ export class ArweaveCompositeClient
    * Returns the block containing the target offset, or null if not found.
    *
    * @param targetOffset - The absolute weave offset to search for
+   * @param signal - Optional abort signal to cancel the search
    * @returns Block data with tx_root, weave_size, height, txs, etc. or null
    */
-  public async binarySearchBlocks(targetOffset: number): Promise<any | null> {
+  public async binarySearchBlocks(
+    targetOffset: number,
+    signal?: AbortSignal,
+  ): Promise<any | null> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     const cacheKey = `block_for_offset_${targetOffset}`;
     const cached = this.blockCache.get(cacheKey);
     if (cached) {
@@ -2108,6 +2122,9 @@ export class ArweaveCompositeClient
       });
 
       while (left <= right) {
+        // Check for abort before fetching next block
+        signal?.throwIfAborted();
+
         iteration++;
         const mid = Math.floor((left + right) / 2);
 
@@ -2211,6 +2228,7 @@ export class ArweaveCompositeClient
   private async binarySearchTransactions(
     block: any,
     targetOffset: number,
+    signal?: AbortSignal,
   ): Promise<{
     txId: string;
     txOffset: number;
@@ -2218,6 +2236,9 @@ export class ArweaveCompositeClient
     txStartOffset: number;
     txEndOffset: number;
   } | null> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     const txIds = block.txs || [];
     if (txIds.length === 0) {
       this.log.debug('Block has no transactions', {
@@ -2280,6 +2301,9 @@ export class ArweaveCompositeClient
     }[] = [];
 
     while (left <= right) {
+      // Check for abort before fetching tx offset
+      signal?.throwIfAborted();
+
       iteration++;
       const mid = Math.floor((left + right) / 2);
       const txId = sortedTxIds[mid];

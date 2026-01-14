@@ -9,22 +9,33 @@
  * CDB64-based Root TX Index
  *
  * Provides O(1) lookups of data item ID → root transaction ID mappings
- * from pre-built CDB64 files. Supports both single file and directory
- * containing multiple CDB64 files (.cdb or .cdb64). This acts as a
- * distributable historical index that can be used without network access
- * to external APIs.
+ * from pre-built CDB64 files. Supports multiple source types:
  *
- * When watching is enabled and a directory is configured, the index
- * automatically detects when CDB64 files are added or removed and
- * updates the reader list accordingly.
+ * - Local files and directories (with optional file watching)
+ * - Arweave transactions (via ContiguousDataSource)
+ * - Bundle data items with offset addressing (for unindexed bundles)
+ * - HTTP URLs (S3, CDN, dedicated index servers)
+ *
+ * Source format examples:
+ *   - "data/cdb64-root-tx-index" - Local path (file or directory)
+ *   - "ABC123def456..." - Arweave TX ID (43-char base64url)
+ *   - "TxId:1024:500000" - Bundle data item (txId:offset:size)
+ *   - "https://example.com/index.cdb" - HTTP URL
  */
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { watch, FSWatcher } from 'chokidar';
 import winston from 'winston';
-import { DataItemRootIndex } from '../types.js';
+import { ContiguousDataSource, DataItemRootIndex } from '../types.js';
 import { Cdb64Reader } from '../lib/cdb64.js';
+import {
+  ByteRangeSource,
+  FileByteRangeSource,
+} from '../lib/byte-range-source.js';
+import { HttpByteRangeSource } from '../lib/http-byte-range-source.js';
+import { ContiguousDataByteRangeSource } from '../lib/contiguous-data-byte-range-source.js';
+import { CachingByteRangeSource } from '../lib/caching-byte-range-source.js';
 import { decodeCdb64Value, isCompleteValue } from '../lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 
@@ -36,93 +47,242 @@ function isCdb64File(filePath: string): boolean {
   return CDB64_EXTENSIONS.some((ext) => filePath.endsWith(ext));
 }
 
+/** Parsed source specification */
+type ParsedSource =
+  | { type: 'file'; path: string }
+  | { type: 'arweave-tx'; id: string }
+  | { type: 'arweave-bundle-item'; id: string; offset: number; size: number }
+  | { type: 'http'; url: string };
+
+/**
+ * Parses a source specification string into a structured format.
+ *
+ * Supported formats:
+ * - HTTP URLs: "https://..." or "http://..."
+ * - Arweave TX ID: 43-char base64url string
+ * - Bundle data item: "txId:offset:size" (colon-separated)
+ * - Local path: anything else (file or directory, determined at runtime)
+ */
+function parseSourceSpec(spec: string): ParsedSource {
+  // HTTP URL
+  if (spec.startsWith('http://') || spec.startsWith('https://')) {
+    try {
+      new URL(spec);
+      return { type: 'http', url: spec };
+    } catch {
+      throw new Error(`Invalid HTTP URL: ${spec}`);
+    }
+  }
+
+  // Check for bundle data item format: txId:offset:size
+  const colonParts = spec.split(':');
+  if (colonParts.length === 3) {
+    const [id, offsetStr, sizeStr] = colonParts;
+    // Validate that it looks like a TX ID (43 chars, base64url)
+    if (/^[A-Za-z0-9_-]{43}$/.test(id)) {
+      const offset = parseInt(offsetStr, 10);
+      const size = parseInt(sizeStr, 10);
+
+      if (!isNaN(offset) && !isNaN(size) && offset >= 0 && size > 0) {
+        return { type: 'arweave-bundle-item', id, offset, size };
+      }
+    }
+  }
+
+  // Simple Arweave TX ID (43 chars, base64url, no colons)
+  if (/^[A-Za-z0-9_-]{43}$/.test(spec)) {
+    return { type: 'arweave-tx', id: spec };
+  }
+
+  // Default to local path (file vs directory determined at runtime)
+  return { type: 'file', path: spec };
+}
+
+/** Reader entry with metadata for logging */
+interface ReaderEntry {
+  reader: Cdb64Reader;
+  sourceSpec: string;
+  sourceType: string;
+}
+
 export class Cdb64RootTxIndex implements DataItemRootIndex {
   private log: winston.Logger;
-  private readers: Cdb64Reader[] = [];
-  private readerMap: Map<string, Cdb64Reader> = new Map();
-  private cdbPath: string;
+  private readers: ReaderEntry[] = [];
+  private readerMap: Map<string, ReaderEntry> = new Map();
+  private sources: string[];
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
-  private isDirectory = false;
   private watchEnabled: boolean;
   private watcher: FSWatcher | null = null;
+  private watchedDirectory: string | null = null;
+
+  // Dependencies for remote sources
+  private contiguousDataSource?: ContiguousDataSource;
+
+  // Cache configuration
+  private remoteCacheMaxRegions: number;
+  private remoteCacheTtlMs: number;
+  private remoteRequestTimeoutMs: number;
 
   constructor({
     log,
-    cdbPath,
+    sources,
     watch = true,
+    contiguousDataSource,
+    remoteCacheMaxRegions = 100,
+    remoteCacheTtlMs = 300000,
+    remoteRequestTimeoutMs = 30000,
   }: {
     log: winston.Logger;
-    cdbPath: string;
+    /** List of source specifications (local paths, TX IDs, URLs) */
+    sources: string[];
+    /** Enable file watching for local directories (default: true) */
     watch?: boolean;
+    /** ContiguousDataSource for Arweave-based sources (required for TX/bundle sources) */
+    contiguousDataSource?: ContiguousDataSource;
+    /** Max cached regions per remote source (default: 100) */
+    remoteCacheMaxRegions?: number;
+    /** TTL for cached regions in ms (default: 300000 = 5 minutes) */
+    remoteCacheTtlMs?: number;
+    /** Request timeout for remote sources in ms (default: 30000 = 30 seconds) */
+    remoteRequestTimeoutMs?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
-    this.cdbPath = cdbPath;
+    this.sources = sources;
     this.watchEnabled = watch;
+    this.contiguousDataSource = contiguousDataSource;
+    this.remoteCacheMaxRegions = remoteCacheMaxRegions;
+    this.remoteCacheTtlMs = remoteCacheTtlMs;
+    this.remoteRequestTimeoutMs = remoteRequestTimeoutMs;
   }
 
   /**
-   * Discovers CDB64 files from the configured path.
-   * Supports both single file paths and directories containing CDB64 files.
+   * Creates a ByteRangeSource for a parsed source specification.
    */
-  private async discoverCdbFiles(): Promise<string[]> {
-    const stat = await fs.stat(this.cdbPath);
+  private createByteRangeSource(parsed: ParsedSource): ByteRangeSource {
+    switch (parsed.type) {
+      case 'file':
+        return new FileByteRangeSource(parsed.path);
 
-    if (stat.isFile()) {
-      // Single file - backward compatible
-      this.isDirectory = false;
-      return [this.cdbPath];
-    }
-
-    if (stat.isDirectory()) {
-      // Directory - find all CDB64 files
-      this.isDirectory = true;
-      const entries = await fs.readdir(this.cdbPath);
-      const cdbFiles = entries
-        .filter(isCdb64File)
-        .sort() // Alphabetical order for deterministic behavior
-        .map((f) => path.join(this.cdbPath, f));
-
-      if (cdbFiles.length === 0) {
-        this.log.warn('No CDB64 files found in directory', {
-          path: this.cdbPath,
+      case 'http':
+        return new CachingByteRangeSource({
+          source: new HttpByteRangeSource({
+            url: parsed.url,
+            timeout: this.remoteRequestTimeoutMs,
+          }),
+          cacheMaxSize: this.remoteCacheMaxRegions,
+          cacheTtlMs: this.remoteCacheTtlMs,
         });
-      }
 
-      return cdbFiles;
+      case 'arweave-tx':
+        if (!this.contiguousDataSource) {
+          throw new Error(
+            'ContiguousDataSource required for Arweave TX sources',
+          );
+        }
+        return new CachingByteRangeSource({
+          source: new ContiguousDataByteRangeSource({
+            dataSource: this.contiguousDataSource,
+            id: parsed.id,
+          }),
+          cacheMaxSize: this.remoteCacheMaxRegions,
+          cacheTtlMs: this.remoteCacheTtlMs,
+        });
+
+      case 'arweave-bundle-item':
+        if (!this.contiguousDataSource) {
+          throw new Error(
+            'ContiguousDataSource required for Arweave bundle item sources',
+          );
+        }
+        return new CachingByteRangeSource({
+          source: new ContiguousDataByteRangeSource({
+            dataSource: this.contiguousDataSource,
+            id: parsed.id,
+            baseOffset: parsed.offset,
+            totalSize: parsed.size,
+          }),
+          cacheMaxSize: this.remoteCacheMaxRegions,
+          cacheTtlMs: this.remoteCacheTtlMs,
+        });
+
+      default:
+        throw new Error(`Unknown source type: ${(parsed as any).type}`);
     }
-
-    throw new Error(
-      `CDB64 path is neither file nor directory: ${this.cdbPath}`,
-    );
   }
 
   /**
-   * Starts watching the directory for CDB64 file changes.
-   * Only active when watching is enabled and path is a directory.
+   * Creates a reader for a single source specification.
+   * Note: Caller should check for directories before calling this method.
    */
-  private startWatching(): void {
-    if (!this.watchEnabled || !this.isDirectory) return;
+  private async createReader(sourceSpec: string): Promise<ReaderEntry> {
+    const parsed = parseSourceSpec(sourceSpec);
+    const source = this.createByteRangeSource(parsed);
+    const reader = Cdb64Reader.fromSource(source, true);
 
-    this.watcher = watch(this.cdbPath, {
+    await reader.open();
+
+    return {
+      reader,
+      sourceSpec,
+      sourceType: parsed.type,
+    };
+  }
+
+  /**
+   * Discovers CDB64 files from a directory path.
+   */
+  private async discoverFilesInDirectory(dirPath: string): Promise<string[]> {
+    const entries = await fs.readdir(dirPath);
+    return entries
+      .filter(isCdb64File)
+      .sort() // Alphabetical order for deterministic behavior
+      .map((f) => path.join(dirPath, f));
+  }
+
+  /**
+   * Starts watching a directory for CDB64 file changes.
+   *
+   * Note: Only one directory can be watched at a time. If multiple directory
+   * sources are configured, only the first will be watched.
+   */
+  private startWatching(dirPath: string): void {
+    if (!this.watchEnabled) return;
+
+    // Only one directory can be watched at a time
+    if (this.watchedDirectory !== null && this.watchedDirectory !== dirPath) {
+      this.log.warn(
+        'Multiple directory sources configured; only one can be watched',
+        {
+          watchedDirectory: this.watchedDirectory,
+          skippedDirectory: dirPath,
+        },
+      );
+      return;
+    }
+
+    // Already watching this directory
+    if (this.watcher && this.watchedDirectory === dirPath) {
+      return;
+    }
+
+    this.watchedDirectory = dirPath;
+    this.watcher = watch(dirPath, {
       ignored: (filePath: string) => {
-        // Ignore everything except the root path and CDB64 files
-        // Returns true to skip non-CDB64 entries
-        return !isCdb64File(filePath) && filePath !== this.cdbPath;
+        return !isCdb64File(filePath) && filePath !== dirPath;
       },
       persistent: true,
-      ignoreInitial: true, // Don't fire for existing files
+      ignoreInitial: true,
       awaitWriteFinish: {
-        // Wait for file to be fully written
         stabilityThreshold: 1000,
         pollInterval: 100,
       },
-      depth: 0, // Only watch immediate directory, not subdirectories
+      depth: 0,
     });
 
     this.watcher.on('add', async (filePath: string) => {
       if (!isCdb64File(filePath)) return;
-      await this.addReader(filePath).catch((error: unknown) => {
+      await this.addFileReader(filePath).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         this.log.error('Failed handling CDB64 add event', {
           path: filePath,
@@ -147,7 +307,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       this.log.error('CDB64 file watcher error', { error: message });
     });
 
-    this.log.info('CDB64 file watcher started', { path: this.cdbPath });
+    this.log.info('CDB64 file watcher started', { path: dirPath });
   }
 
   /**
@@ -157,34 +317,31 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;
+      this.watchedDirectory = null;
       this.log.info('CDB64 file watcher stopped');
     }
   }
 
   /**
-   * Adds a new reader for a CDB64 file.
-   *
-   * Note: There's a potential race condition where an unlink event could fire
-   * while we're awaiting reader.open(). To handle this, we verify the file
-   * still exists after opening before adding the reader to the map.
+   * Adds a reader for a local CDB64 file (used by file watcher).
    */
-  private async addReader(filePath: string): Promise<void> {
+  private async addFileReader(filePath: string): Promise<void> {
     if (this.readerMap.has(filePath)) return;
 
     let reader: Cdb64Reader | undefined;
     try {
-      reader = new Cdb64Reader(filePath);
+      const source = new FileByteRangeSource(filePath);
+      reader = Cdb64Reader.fromSource(source, true);
       await reader.open();
 
-      // Verify file still exists after opening (race with unlink)
-      // If the file was deleted while we were opening, don't add the reader
+      // Verify file still exists after opening
       await fs.stat(filePath);
 
-      this.readerMap.set(filePath, reader);
+      const entry = { reader, sourceSpec: filePath, sourceType: 'file' };
+      this.readerMap.set(filePath, entry);
       this.rebuildReaderList();
       this.log.info('CDB64 file added', { path: filePath });
     } catch (error: any) {
-      // Clean up the opened reader if we can't add it
       if (reader?.isOpen()) {
         try {
           await reader.close();
@@ -193,8 +350,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
         }
       }
 
-      // Only log as error if it's not a "file doesn't exist" error
-      // (which is expected if file was deleted during open)
       if (error.code !== 'ENOENT') {
         this.log.error('Failed to add CDB64 file', {
           path: filePath,
@@ -209,22 +364,25 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   }
 
   /**
-   * Removes a reader for a CDB64 file.
+   * Removes a reader by its source specification key.
    */
-  private async removeReader(filePath: string): Promise<void> {
-    const reader = this.readerMap.get(filePath);
-    if (!reader) return;
+  private async removeReader(key: string): Promise<void> {
+    const entry = this.readerMap.get(key);
+    if (!entry) return;
 
     try {
-      if (reader.isOpen()) {
-        await reader.close();
+      if (entry.reader.isOpen()) {
+        await entry.reader.close();
       }
-      this.readerMap.delete(filePath);
+      this.readerMap.delete(key);
       this.rebuildReaderList();
-      this.log.info('CDB64 file removed', { path: filePath });
+      this.log.info('CDB64 source removed', {
+        source: key,
+        type: entry.sourceType,
+      });
     } catch (error: any) {
-      this.log.error('Failed to remove CDB64 file', {
-        path: filePath,
+      this.log.error('Failed to remove CDB64 source', {
+        source: key,
         error: error.message,
       });
     }
@@ -234,20 +392,18 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    * Rebuilds the readers array from the readerMap in sorted order.
    */
   private rebuildReaderList(): void {
-    const sortedPaths = [...this.readerMap.keys()].sort();
-    this.readers = sortedPaths.map((p) => this.readerMap.get(p)!);
+    const sortedKeys = [...this.readerMap.keys()].sort();
+    this.readers = sortedKeys.map((k) => this.readerMap.get(k)!);
   }
 
   /**
-   * Initializes the readers by opening all CDB64 files.
-   * Called lazily on first lookup.
+   * Initializes the readers for all configured sources.
    */
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
     }
 
-    // Use promise guard to prevent double-init under concurrent access
     if (this.initializationPromise !== null) {
       return this.initializationPromise;
     }
@@ -257,9 +413,61 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     try {
       await this.initializationPromise;
     } finally {
-      // Clear promise on completion (success or failure) to allow retry
       this.initializationPromise = null;
     }
+  }
+
+  /**
+   * Checks if a local path is a directory.
+   * Returns the path if it's a directory, undefined otherwise.
+   */
+  private async checkIfDirectory(
+    sourceSpec: string,
+  ): Promise<string | undefined> {
+    const parsed = parseSourceSpec(sourceSpec);
+    if (parsed.type !== 'file') {
+      return undefined;
+    }
+
+    try {
+      const stat = await fs.stat(parsed.path);
+      return stat.isDirectory() ? parsed.path : undefined;
+    } catch {
+      // File doesn't exist or can't be stat'd - not a directory
+      return undefined;
+    }
+  }
+
+  /**
+   * Initializes all CDB64 files from a directory.
+   */
+  private async initializeDirectory(dirPath: string): Promise<void> {
+    const files = await this.discoverFilesInDirectory(dirPath);
+
+    if (files.length === 0) {
+      this.log.warn('No CDB64 files found in directory', { path: dirPath });
+    }
+
+    for (const filePath of files) {
+      try {
+        const source = new FileByteRangeSource(filePath);
+        const reader = Cdb64Reader.fromSource(source, true);
+        await reader.open();
+        this.readerMap.set(filePath, {
+          reader,
+          sourceSpec: filePath,
+          sourceType: 'file',
+        });
+      } catch (fileError: any) {
+        this.log.error('Failed to initialize CDB64 file in directory', {
+          path: filePath,
+          error: fileError.message,
+        });
+        // Continue with other files
+      }
+    }
+
+    this.startWatching(dirPath);
   }
 
   /**
@@ -267,37 +475,49 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
    */
   private async doInitialize(): Promise<void> {
     try {
-      const cdbFiles = await this.discoverCdbFiles();
+      for (const sourceSpec of this.sources) {
+        // Check if this is a directory before trying to create a reader
+        const dirPath = await this.checkIfDirectory(sourceSpec);
+        if (dirPath !== undefined) {
+          await this.initializeDirectory(dirPath);
+          continue;
+        }
 
-      for (const filePath of cdbFiles) {
-        const reader = new Cdb64Reader(filePath);
-        await reader.open();
-        this.readerMap.set(filePath, reader);
+        try {
+          const entry = await this.createReader(sourceSpec);
+          this.readerMap.set(sourceSpec, entry);
+          this.log.info('CDB64 source initialized', {
+            source: sourceSpec,
+            type: entry.sourceType,
+          });
+        } catch (error: any) {
+          this.log.error('Failed to initialize CDB64 source', {
+            source: sourceSpec,
+            error: error.message,
+          });
+          // Continue with other sources - don't fail completely
+        }
       }
 
       this.rebuildReaderList();
-      this.startWatching();
-
       this.initialized = true;
+
       this.log.info('CDB64 root TX index initialized', {
-        path: this.cdbPath,
-        fileCount: this.readers.length,
-        watching: this.watchEnabled && this.isDirectory,
+        sourceCount: this.sources.length,
+        readerCount: this.readers.length,
+        watching: this.watchedDirectory !== null,
       });
     } catch (error: any) {
-      // Close any readers that were opened before the failure to avoid FD leaks
+      // Close any readers that were opened before the failure
       await Promise.allSettled(
-        [...this.readerMap.values()].map((r) =>
-          r.isOpen() ? r.close() : Promise.resolve(),
+        [...this.readerMap.values()].map((e) =>
+          e.reader.isOpen() ? e.reader.close() : Promise.resolve(),
         ),
       );
       this.readerMap.clear();
       this.readers = [];
 
-      // Don't set initialized = true - this allows retry on transient errors
-      // (e.g., files not yet available, temporary disk issues)
       this.log.error('Failed to initialize CDB64 root TX index', {
-        path: this.cdbPath,
         error: error.message,
       });
       throw error;
@@ -306,9 +526,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
   /**
    * Looks up a data item ID and returns its root transaction information.
-   *
-   * @param id - Base64URL-encoded data item ID (43 characters)
-   * @returns Root TX info if found, undefined otherwise
    */
   async getRootTx(id: string): Promise<
     | {
@@ -324,7 +541,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     try {
       await this.ensureInitialized();
     } catch {
-      // If initialization failed, return undefined to allow fallback
       return undefined;
     }
 
@@ -333,7 +549,6 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
     try {
       keyBuffer = fromB64Url(id);
     } catch {
-      // Invalid base64url encoding
       this.log.debug('Invalid base64url encoding for data item ID', { id });
       return undefined;
     }
@@ -346,23 +561,18 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
       return undefined;
     }
 
-    // Snapshot readers array to avoid issues if list changes during iteration
+    // Snapshot readers array to avoid issues during iteration
     const currentReaders = this.readers;
 
     // Search through all readers in order (first match wins)
-    // Isolate per-reader failures so one bad file doesn't mask matches in others
-    for (const reader of currentReaders) {
+    for (const entry of currentReaders) {
       try {
-        const valueBuffer = await reader.get(keyBuffer);
+        const valueBuffer = await entry.reader.get(keyBuffer);
 
         if (valueBuffer !== undefined) {
-          // Decode MessagePack value
           const value = decodeCdb64Value(valueBuffer);
-
-          // Convert binary rootTxId back to base64url
           const rootTxId = toB64Url(value.rootTxId);
 
-          // Return result based on value format
           if (isCompleteValue(value)) {
             return {
               rootTxId,
@@ -371,43 +581,54 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
             };
           }
 
-          // Simple format - no offset information
-          return {
-            rootTxId,
-          };
+          return { rootTxId };
         }
       } catch (error: unknown) {
-        // Log per-reader errors at debug level and continue to next reader
-        // This allows lookups to succeed even if one CDB file is corrupted/being replaced
         const message = error instanceof Error ? error.message : String(error);
-        this.log.debug('Error reading from CDB64 file, trying next', {
+        this.log.debug('Error reading from CDB64 source, trying next', {
           id,
+          source: entry.sourceSpec,
+          type: entry.sourceType,
           error: message,
         });
         continue;
       }
     }
 
-    // Key not found in any file
     return undefined;
   }
 
   /**
-   * Closes all CDB64 file handles and stops watching.
-   * Should be called during shutdown.
+   * Closes all readers and stops watching.
    */
   async close(): Promise<void> {
     await this.stopWatching();
 
-    for (const reader of this.readers) {
-      if (reader.isOpen()) {
-        await reader.close();
-      }
-    }
-    if (this.readers.length > 0) {
-      this.log.info('CDB64 root TX index closed', {
-        fileCount: this.readers.length,
+    const readerCount = this.readers.length;
+
+    // Use Promise.allSettled to ensure all readers are closed even if some fail
+    const closeResults = await Promise.allSettled(
+      this.readers.map((entry) =>
+        entry.reader.isOpen() ? entry.reader.close() : Promise.resolve(),
+      ),
+    );
+
+    const failures = closeResults.filter((r) => r.status === 'rejected');
+    if (failures.length > 0) {
+      this.log.warn('Some readers failed to close', {
+        failedCount: failures.length,
+        totalCount: readerCount,
       });
     }
+
+    if (readerCount > 0) {
+      this.log.info('CDB64 root TX index closed', {
+        readerCount,
+      });
+    }
+
+    this.readerMap.clear();
+    this.readers = [];
+    this.initialized = false;
   }
 }

@@ -132,8 +132,17 @@ export const createChunkOffsetHandler = ({
             offset,
             requestAttributes,
             span,
+            request.signal,
           );
         } catch (error: any) {
+          if (error.name === 'AbortError') {
+            span.setAttribute('http.status_code', 499);
+            span.setAttribute('chunk.retrieval.error', 'client_disconnected');
+            if (!response.headersSent) {
+              response.status(499).end();
+            }
+            return;
+          }
           if (error instanceof ChunkNotFoundError) {
             span.setAttribute('http.status_code', 404);
             span.setAttribute('chunk.retrieval.error', error.errorType);
@@ -361,8 +370,17 @@ export const createChunkOffsetDataHandler = ({
             offset,
             requestAttributes,
             span,
+            request.signal,
           );
         } catch (error: any) {
+          if (error.name === 'AbortError') {
+            span.setAttribute('http.status_code', 499);
+            span.setAttribute('chunk.retrieval.error', 'client_disconnected');
+            if (!response.headersSent) {
+              response.status(499).end();
+            }
+            return;
+          }
           if (error instanceof ChunkNotFoundError) {
             span.setAttribute('http.status_code', 404);
             span.setAttribute('chunk.retrieval.error', error.errorType);

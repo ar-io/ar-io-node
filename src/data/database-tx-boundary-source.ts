@@ -29,7 +29,13 @@ export class DatabaseTxBoundarySource implements TxBoundarySource {
     this.db = db;
   }
 
-  async getTxBoundary(absoluteOffset: bigint): Promise<TxBoundary | null> {
+  async getTxBoundary(
+    absoluteOffset: bigint,
+    signal?: AbortSignal,
+  ): Promise<TxBoundary | null> {
+    // Check for abort before starting (DB queries are fast but check anyway)
+    signal?.throwIfAborted();
+
     const log = this.log.child({
       method: 'getTxBoundary',
       absoluteOffset: absoluteOffset.toString(),

@@ -16,40 +16,57 @@ import { TxBoundary, TxBoundarySource } from '../types.js';
  * 3. Chain fallback (slowest) - binary search through chain
  *
  * Returns the first successful result from any source.
+ *
+ * Chain fallback has a configurable concurrency limit to prevent resource
+ * exhaustion from expensive binary search operations.
  */
 export class CompositeTxBoundarySource implements TxBoundarySource {
   private log: winston.Logger;
   private dbSource: TxBoundarySource;
   private txPathSource?: TxBoundarySource;
   private chainSource?: TxBoundarySource;
+  private chainFallbackConcurrencyLimit: number;
+  private activeChainFallbackCount = 0;
 
   constructor({
     log,
     dbSource,
     txPathSource,
     chainSource,
+    chainFallbackConcurrencyLimit = 5,
   }: {
     log: winston.Logger;
     dbSource: TxBoundarySource;
     txPathSource?: TxBoundarySource;
     chainSource?: TxBoundarySource;
+    chainFallbackConcurrencyLimit?: number;
   }) {
     this.log = log.child({ class: this.constructor.name });
     this.dbSource = dbSource;
     this.txPathSource = txPathSource;
     this.chainSource = chainSource;
+    this.chainFallbackConcurrencyLimit = chainFallbackConcurrencyLimit;
   }
 
-  async getTxBoundary(absoluteOffset: bigint): Promise<TxBoundary | null> {
+  async getTxBoundary(
+    absoluteOffset: bigint,
+    signal?: AbortSignal,
+  ): Promise<TxBoundary | null> {
     const log = this.log.child({
       method: 'getTxBoundary',
       absoluteOffset: absoluteOffset.toString(),
     });
 
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     // 1. Try database source first (fastest)
     try {
       log.debug('Attempting database lookup');
-      const dbResult = await this.dbSource.getTxBoundary(absoluteOffset);
+      const dbResult = await this.dbSource.getTxBoundary(
+        absoluteOffset,
+        signal,
+      );
       if (dbResult) {
         log.debug('Database lookup successful', {
           txId: dbResult.id,
@@ -59,15 +76,24 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
       }
       log.debug('Database lookup returned no result');
     } catch (error: any) {
+      // Re-throw AbortError to propagate cancellation
+      if (error.name === 'AbortError') {
+        throw error;
+      }
       log.debug('Database lookup failed', { error: error.message });
     }
+
+    // Check for abort before tx_path validation
+    signal?.throwIfAborted();
 
     // 2. Try tx_path validation (for unindexed data)
     if (this.txPathSource) {
       try {
         log.debug('Attempting tx_path validation');
-        const txPathResult =
-          await this.txPathSource.getTxBoundary(absoluteOffset);
+        const txPathResult = await this.txPathSource.getTxBoundary(
+          absoluteOffset,
+          signal,
+        );
         if (txPathResult) {
           log.debug('tx_path validation successful', {
             dataRoot: txPathResult.dataRoot,
@@ -76,16 +102,38 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
         }
         log.debug('tx_path validation returned no result');
       } catch (error: any) {
+        // Re-throw AbortError to propagate cancellation
+        if (error.name === 'AbortError') {
+          throw error;
+        }
         log.debug('tx_path validation failed', { error: error.message });
       }
     }
 
-    // 3. Try chain fallback (slowest)
+    // Check for abort before chain fallback
+    signal?.throwIfAborted();
+
+    // 3. Try chain fallback (slowest) with concurrency limit
     if (this.chainSource) {
+      // Check concurrency limit before attempting chain fallback
+      if (this.activeChainFallbackCount >= this.chainFallbackConcurrencyLimit) {
+        log.debug('Skipping chain fallback - concurrency limit reached', {
+          activeChainFallbackCount: this.activeChainFallbackCount,
+          chainFallbackConcurrencyLimit: this.chainFallbackConcurrencyLimit,
+        });
+        return null;
+      }
+
+      this.activeChainFallbackCount++;
       try {
-        log.debug('Attempting chain fallback');
-        const chainResult =
-          await this.chainSource.getTxBoundary(absoluteOffset);
+        log.debug('Attempting chain fallback', {
+          activeChainFallbackCount: this.activeChainFallbackCount,
+          chainFallbackConcurrencyLimit: this.chainFallbackConcurrencyLimit,
+        });
+        const chainResult = await this.chainSource.getTxBoundary(
+          absoluteOffset,
+          signal,
+        );
         if (chainResult) {
           log.debug('Chain fallback successful', {
             txId: chainResult.id,
@@ -95,7 +143,13 @@ export class CompositeTxBoundarySource implements TxBoundarySource {
         }
         log.debug('Chain fallback returned no result');
       } catch (error: any) {
+        // Re-throw AbortError to propagate cancellation
+        if (error.name === 'AbortError') {
+          throw error;
+        }
         log.debug('Chain fallback failed', { error: error.message });
+      } finally {
+        this.activeChainFallbackCount--;
       }
     }
 

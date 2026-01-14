@@ -40,7 +40,7 @@ const CHUNK_CATEGORY = 'chunk';
 
 // Peer chunk retrieval constants
 const PEER_REQUEST_TIMEOUT_MS = 1000; // 1 second timeout per peer request
-const PEER_SELECTION_COUNT = 3; // Number of peers to try in parallel
+const PEER_SELECTION_COUNT = 2; // Number of peers to try in parallel
 const MAX_RETRY_COUNT = 2; // Total attempts (initial + 1 retry)
 
 /**
@@ -59,6 +59,8 @@ interface FetchChunkOptions {
     dataRoot: string;
     relativeOffset: number;
   };
+  /** Optional abort signal from client request to cancel operations */
+  clientSignal?: AbortSignal;
 }
 
 export class ArIOChunkSource
@@ -136,7 +138,11 @@ export class ArIOChunkSource
       retryCount = MAX_RETRY_COUNT,
       peerSelectionCount = PEER_SELECTION_COUNT,
       validationParams,
+      clientSignal,
     } = options;
+
+    // Check for abort before starting
+    clientSignal?.throwIfAborted();
 
     const isValidated = validationParams !== undefined;
     const spanName = isValidated
@@ -257,6 +263,9 @@ export class ArIOChunkSource
           attempt: attempt + 1,
         });
 
+        // Create AbortController to cancel losing requests when one succeeds
+        const controller = new AbortController();
+
         // Try all selected peers in parallel, return first success
         try {
           const result = await Promise.any(
@@ -266,9 +275,14 @@ export class ArIOChunkSource
                 absoluteOffset,
                 headers,
                 validationParams,
+                controller.signal,
+                clientSignal,
               ),
             ),
           );
+
+          // Abort remaining in-flight requests to free resources
+          controller.abort();
 
           span.setAttributes({
             'chunk.successful_peer': result.sourceHost ?? 'unknown',
@@ -289,6 +303,9 @@ export class ArIOChunkSource
 
           return result;
         } catch (error: any) {
+          // Abort any stragglers before retrying with new peers
+          controller.abort();
+
           // AggregateError means all promises rejected
           span.addEvent('All peers failed for attempt', {
             attempt: attempt + 1,
@@ -322,7 +339,13 @@ export class ArIOChunkSource
     }
   }
 
-  async getChunkByAny(params: ChunkDataByAnySourceParams): Promise<Chunk> {
+  async getChunkByAny(
+    params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
+  ): Promise<Chunk> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     // This source only supports validation params (txSize, dataRoot, relativeOffset)
     if (!isValidationParams(params)) {
       throw new Error(
@@ -357,7 +380,15 @@ export class ArIOChunkSource
       span.addEvent('Creating new fetch promise');
 
       // Create new promise that fetches with FULL params including request attributes
-      const chunkPromise = this.fetchChunkFromArIOPeer(params);
+      // Remove cache entry on abort to prevent polluting subsequent requests
+      const chunkPromise = this.fetchChunkFromArIOPeer(params, signal).catch(
+        (error) => {
+          if (error.name === 'AbortError') {
+            this.chunkPromiseCache.delete(cacheKey);
+          }
+          throw error;
+        },
+      );
 
       // Store promise in cache
       this.chunkPromiseCache.set(cacheKey, chunkPromise);
@@ -367,7 +398,10 @@ export class ArIOChunkSource
       span.setAttribute('chunk.source_host', result.sourceHost ?? 'unknown');
       return result;
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as an exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();
@@ -379,6 +413,10 @@ export class ArIOChunkSource
    * If validationParams is provided, validates and returns Chunk.
    * Otherwise returns UnvalidatedChunk.
    * Throws on failure.
+   *
+   * @param internalSignal - Optional AbortSignal to cancel the request early
+   *                         (e.g., when another peer succeeds first)
+   * @param clientSignal - Optional AbortSignal from client request (e.g., client disconnect)
    */
   private async fetchFromSinglePeer(
     peer: string,
@@ -389,11 +427,22 @@ export class ArIOChunkSource
       dataRoot: string;
       relativeOffset: number;
     },
+    internalSignal?: AbortSignal,
+    clientSignal?: AbortSignal,
   ): Promise<Chunk | UnvalidatedChunk> {
     const startTime = Date.now();
     const peerHost = new URL(peer).hostname;
     const isValidated = validationParams !== undefined;
     const log = this.log.child({ method: 'fetchFromSinglePeer' });
+
+    // Combine timeout with internal abort signal (for canceling losing requests)
+    // and client abort signal (for client disconnects)
+    const signals: AbortSignal[] = [
+      AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS),
+    ];
+    if (internalSignal) signals.push(internalSignal);
+    if (clientSignal) signals.push(clientSignal);
+    const signal = AbortSignal.any(signals);
 
     try {
       const response = await fetch(`${peer}/chunk/${absoluteOffset}`, {
@@ -404,7 +453,7 @@ export class ArIOChunkSource
             : {}),
           ...headers,
         },
-        signal: AbortSignal.timeout(PEER_REQUEST_TIMEOUT_MS),
+        signal,
       });
 
       if (!response.ok) {
@@ -502,14 +551,17 @@ export class ArIOChunkSource
           responseTimeMs: responseTime,
         },
       );
-      // Report failure to update chunk-specific peer weights
-      this.handleChunkPeerFailure(peer);
+      // Only report failure for actual errors, not aborted requests
+      if (error.name !== 'AbortError') {
+        this.handleChunkPeerFailure(peer);
+      }
       throw error;
     }
   }
 
   private async fetchChunkFromArIOPeer(
     params: ChunkWithValidationParams,
+    signal?: AbortSignal,
   ): Promise<Chunk> {
     return this.fetchChunkFromPeers({
       absoluteOffset: params.absoluteOffset,
@@ -521,13 +573,15 @@ export class ArIOChunkSource
         dataRoot: params.dataRoot,
         relativeOffset: params.relativeOffset,
       },
+      clientSignal: signal,
     }) as Promise<Chunk>;
   }
 
   async getChunkDataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkData> {
-    const chunk = await this.getChunkByAny(params);
+    const chunk = await this.getChunkByAny(params, signal);
     return {
       hash: chunk.hash,
       chunk: chunk.chunk,
@@ -538,8 +592,9 @@ export class ArIOChunkSource
 
   async getChunkMetadataByAny(
     params: ChunkDataByAnySourceParams,
+    signal?: AbortSignal,
   ): Promise<ChunkMetadata> {
-    const chunk = await this.getChunkByAny(params);
+    const chunk = await this.getChunkByAny(params, signal);
     return {
       data_root: chunk.data_root,
       data_size: chunk.data_size,
@@ -557,7 +612,11 @@ export class ArIOChunkSource
   async getUnvalidatedChunk(
     absoluteOffset: number,
     requestAttributes?: RequestAttributes,
+    signal?: AbortSignal,
   ): Promise<UnvalidatedChunk> {
+    // Check for abort before starting
+    signal?.throwIfAborted();
+
     const span = tracer.startSpan('ArIOChunkSource.getUnvalidatedChunk', {
       attributes: {
         'chunk.absolute_offset': absoluteOffset,
@@ -568,9 +627,13 @@ export class ArIOChunkSource
       return await this.fetchUnvalidatedChunkFromArIOPeer(
         absoluteOffset,
         requestAttributes,
+        signal,
       );
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as an exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();
@@ -580,15 +643,13 @@ export class ArIOChunkSource
   private async fetchUnvalidatedChunkFromArIOPeer(
     absoluteOffset: number,
     requestAttributes?: RequestAttributes,
-    retryCount = 5,
-    peerSelectionCount = 3,
+    signal?: AbortSignal,
   ): Promise<UnvalidatedChunk> {
     return this.fetchChunkFromPeers({
       absoluteOffset,
       requestAttributes,
-      retryCount,
-      peerSelectionCount,
-      // No validationParams = returns UnvalidatedChunk
+      clientSignal: signal,
+      // Uses default constants: MAX_RETRY_COUNT and PEER_SELECTION_COUNT
     }) as Promise<UnvalidatedChunk>;
   }
 }
