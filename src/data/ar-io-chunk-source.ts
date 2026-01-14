@@ -142,9 +142,7 @@ export class ArIOChunkSource
     } = options;
 
     // Check for abort before starting
-    if (clientSignal?.aborted) {
-      throw new DOMException('Request aborted', 'AbortError');
-    }
+    clientSignal?.throwIfAborted();
 
     const isValidated = validationParams !== undefined;
     const spanName = isValidated
@@ -382,7 +380,15 @@ export class ArIOChunkSource
       span.addEvent('Creating new fetch promise');
 
       // Create new promise that fetches with FULL params including request attributes
-      const chunkPromise = this.fetchChunkFromArIOPeer(params, signal);
+      // Remove cache entry on abort to prevent polluting subsequent requests
+      const chunkPromise = this.fetchChunkFromArIOPeer(params, signal).catch(
+        (error) => {
+          if (error.name === 'AbortError') {
+            this.chunkPromiseCache.delete(cacheKey);
+          }
+          throw error;
+        },
+      );
 
       // Store promise in cache
       this.chunkPromiseCache.set(cacheKey, chunkPromise);

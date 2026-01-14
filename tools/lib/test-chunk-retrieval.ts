@@ -347,13 +347,13 @@ class ChunkLoadTester {
     console.log(`FD tracking enabled for PID ${this.config.trackFdsPid}`);
   }
 
-  private stopFdTracking(): void {
+  private async stopFdTracking(): Promise<void> {
     if (this.fdTrackingInterval) {
       clearInterval(this.fdTrackingInterval);
       this.fdTrackingInterval = undefined;
     }
     // Take final sample
-    this.sampleFdCount();
+    await this.sampleFdCount();
   }
 
   async start(): Promise<void> {
@@ -418,7 +418,7 @@ class ChunkLoadTester {
     await Promise.all(activeTasks);
 
     // Stop FD tracking
-    this.stopFdTracking();
+    await this.stopFdTracking();
   }
 
   stop(): void {
@@ -496,11 +496,16 @@ class ChunkLoadTester {
 
     // Response times
     if (this.stats.responseTimes.length > 0) {
-      const min = Math.min(...this.stats.responseTimes);
-      const max = Math.max(...this.stats.responseTimes);
-      const avg =
-        this.stats.responseTimes.reduce((a, b) => a + b, 0) /
-        this.stats.responseTimes.length;
+      // Use iterative approach to avoid call stack overflow for large arrays
+      let min = Infinity;
+      let max = -Infinity;
+      let sum = 0;
+      for (const time of this.stats.responseTimes) {
+        if (time < min) min = time;
+        if (time > max) max = time;
+        sum += time;
+      }
+      const avg = sum / this.stats.responseTimes.length;
       const p50 = this.calculatePercentile(this.stats.responseTimes, 50);
       const p95 = this.calculatePercentile(this.stats.responseTimes, 95);
       const p99 = this.calculatePercentile(this.stats.responseTimes, 99);
@@ -642,10 +647,10 @@ function parseArguments(): TestConfig {
         break;
 
       case '--help':
-      // falls through
       case '-h':
         printUsage();
         process.exit(0);
+        break; // unreachable but satisfies linter
 
       default:
         throw new Error(`Unknown argument: ${arg}`);
