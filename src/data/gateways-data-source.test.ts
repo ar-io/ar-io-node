@@ -517,5 +517,50 @@ describe('GatewayDataSource', () => {
         assert.equal(requestParams.params['ar-io-arns-basename'], undefined);
       });
     });
+
+    describe('abort signal handling', () => {
+      it('should throw immediately when signal is already aborted', async () => {
+        const controller = new AbortController();
+        controller.abort();
+
+        await assert.rejects(
+          dataSource.getData({
+            id: 'test-id',
+            signal: controller.signal,
+          }),
+          { name: 'AbortError' },
+        );
+      });
+
+      it('should not try next gateway when AbortError is thrown', async () => {
+        const requestLog: string[] = [];
+
+        const dataSourceMultiGateway = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway1.com': 1,
+            'https://gateway2.com': 2,
+          },
+        });
+
+        mock.method(axios, 'create', (config: any) => ({
+          request: async () => {
+            requestLog.push(config.baseURL);
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            throw error;
+          },
+          ...axiosMockCommonParams(config),
+        }));
+
+        await assert.rejects(
+          dataSourceMultiGateway.getData({ id: 'test-id' }),
+          { name: 'AbortError' },
+        );
+
+        // Only first gateway should be tried
+        assert.equal(requestLog.length, 1);
+      });
+    });
   });
 });
