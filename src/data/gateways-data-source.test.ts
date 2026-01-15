@@ -557,7 +557,10 @@ describe('GatewayDataSource', () => {
         }));
 
         await assert.rejects(
-          dataSourceMultiGateway.getData({ id: 'test-id', signal: controller.signal }),
+          dataSourceMultiGateway.getData({
+            id: 'test-id',
+            signal: controller.signal,
+          }),
           { name: 'AbortError' },
         );
 
