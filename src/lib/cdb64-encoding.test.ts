@@ -324,6 +324,19 @@ describe('CDB64 Encoding', () => {
         );
       });
 
+      it('should accept path with exactly MAX_BUNDLE_NESTING_DEPTH elements', () => {
+        const value: Cdb64RootTxValuePath = {
+          path: Array.from({ length: 10 }, (_, i) => createTestTxId(i)),
+        };
+
+        // Should not throw - 10 elements is the maximum allowed
+        const encoded = encodeCdb64Value(value);
+        const decoded = decodeCdb64Value(encoded);
+
+        assert.ok(isPathValue(decoded));
+        assert.equal(decoded.path.length, 10);
+      });
+
       it('should throw error for path exceeding MAX_BUNDLE_NESTING_DEPTH', () => {
         const value: Cdb64RootTxValuePath = {
           path: Array.from({ length: 11 }, (_, i) => createTestTxId(i)),
