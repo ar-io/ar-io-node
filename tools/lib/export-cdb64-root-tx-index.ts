@@ -9,10 +9,17 @@
  * CLI tool to export a CDB64 root TX index to CSV format.
  *
  * CSV output format:
- *   data_item_id,root_tx_id[,root_data_item_offset,root_data_offset]
+ *   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
  *
- * - First two columns are always present (base64url-encoded IDs)
- * - Offset columns are present if the value has complete format
+ * - data_item_id and root_tx_id are always present (base64url-encoded IDs)
+ * - path column contains JSON array of base64url IDs for path-based entries
+ * - offset columns are present if the value has complete format (legacy or path)
+ *
+ * Supports all 4 CDB64 value formats:
+ * - Simple: rootTxId only
+ * - Complete: rootTxId + offsets
+ * - Path: path array (rootTxId derived from path[0])
+ * - Path Complete: path array + offsets
  *
  * Usage:
  *   ./tools/export-cdb64-root-tx-index --input index.cdb --output data.csv
@@ -25,7 +32,14 @@ import * as path from 'node:path';
 import { stringify } from 'csv-stringify';
 
 import { Cdb64Reader } from '../../src/lib/cdb64.js';
-import { decodeCdb64Value, isCompleteValue } from '../../src/lib/cdb64-encoding.js';
+import {
+  decodeCdb64Value,
+  getRootTxId,
+  getPath,
+  isPathValue,
+  isPathCompleteValue,
+  isCompleteValue,
+} from '../../src/lib/cdb64-encoding.js';
 import { toB64Url } from '../../src/lib/encoding.js';
 
 interface Config {
@@ -50,12 +64,20 @@ Options:
   --help, -h           Show this help message
 
 CSV Output Format:
-  data_item_id,root_tx_id,root_data_item_offset,root_data_offset
+  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
 
   - data_item_id: Base64URL-encoded data item ID (43 characters)
   - root_tx_id: Base64URL-encoded root transaction ID (43 characters)
+  - path: JSON array of base64url IDs for nested bundles (empty if not path format)
+          Format: ["rootId","bundle1Id","bundle2Id",...,"parentId"]
   - root_data_item_offset: Byte offset (empty if not available)
   - root_data_offset: Byte offset (empty if not available)
+
+Supported Value Formats:
+  - Simple: rootTxId only (legacy)
+  - Complete: rootTxId + offsets (legacy)
+  - Path: bundle traversal path (nested bundles)
+  - Path Complete: path + offsets (nested bundles with offsets)
 
 Example:
   ./tools/export-cdb64-root-tx-index --input index.cdb --output data.csv
@@ -146,6 +168,7 @@ async function exportIndex(config: Config): Promise<void> {
     columns: [
       'data_item_id',
       'root_tx_id',
+      'path',
       'root_data_item_offset',
       'root_data_offset',
     ],
@@ -157,6 +180,8 @@ async function exportIndex(config: Config): Promise<void> {
   let recordCount = 0;
   let simpleCount = 0;
   let completeCount = 0;
+  let pathCount = 0;
+  let pathCompleteCount = 0;
   let errorCount = 0;
   const startTime = Date.now();
 
@@ -168,20 +193,37 @@ async function exportIndex(config: Config): Promise<void> {
 
         // Convert binary IDs to base64url
         const dataItemId = toB64Url(key);
-        const rootTxId = toB64Url(decoded.rootTxId);
+        const rootTxId = toB64Url(getRootTxId(decoded));
 
-        // Build CSV record
+        // Get path if present (as JSON array of base64url strings)
+        const path = getPath(decoded);
+        const pathJson = path ? JSON.stringify(path.map((id) => toB64Url(id))) : '';
+
+        // Build CSV record based on format type
         let record: (string | number)[];
-        if (isCompleteValue(decoded)) {
+        if (isPathCompleteValue(decoded)) {
           record = [
             dataItemId,
             rootTxId,
+            pathJson,
+            decoded.rootDataItemOffset,
+            decoded.rootDataOffset,
+          ];
+          pathCompleteCount++;
+        } else if (isPathValue(decoded)) {
+          record = [dataItemId, rootTxId, pathJson, '', ''];
+          pathCount++;
+        } else if (isCompleteValue(decoded)) {
+          record = [
+            dataItemId,
+            rootTxId,
+            '',
             decoded.rootDataItemOffset,
             decoded.rootDataOffset,
           ];
           completeCount++;
         } else {
-          record = [dataItemId, rootTxId, '', ''];
+          record = [dataItemId, rootTxId, '', '', ''];
           simpleCount++;
         }
 
@@ -235,8 +277,12 @@ async function exportIndex(config: Config): Promise<void> {
 
       console.error('\n=== Export Complete ===');
       console.error(`Records exported: ${recordCount.toLocaleString()}`);
-      console.error(`  - Simple format: ${simpleCount.toLocaleString()}`);
-      console.error(`  - Complete format: ${completeCount.toLocaleString()}`);
+      console.error('  Legacy formats:');
+      console.error(`    - Simple: ${simpleCount.toLocaleString()}`);
+      console.error(`    - Complete: ${completeCount.toLocaleString()}`);
+      console.error('  Path formats:');
+      console.error(`    - Path: ${pathCount.toLocaleString()}`);
+      console.error(`    - Path Complete: ${pathCompleteCount.toLocaleString()}`);
       if (errorCount > 0) {
         console.error(`Errors: ${errorCount}`);
       }
