@@ -36,7 +36,13 @@ import {
 import { HttpByteRangeSource } from '../lib/http-byte-range-source.js';
 import { ContiguousDataByteRangeSource } from '../lib/contiguous-data-byte-range-source.js';
 import { CachingByteRangeSource } from '../lib/caching-byte-range-source.js';
-import { decodeCdb64Value, isCompleteValue } from '../lib/cdb64-encoding.js';
+import {
+  decodeCdb64Value,
+  isCompleteValue,
+  isPathCompleteValue,
+  getRootTxId,
+  getPath,
+} from '../lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../lib/encoding.js';
 
 /** Valid CDB64 file extensions */
@@ -530,6 +536,7 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
   async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
+        path?: string[];
         rootOffset?: number;
         rootDataOffset?: number;
         contentType?: string;
@@ -571,17 +578,32 @@ export class Cdb64RootTxIndex implements DataItemRootIndex {
 
         if (valueBuffer !== undefined) {
           const value = decodeCdb64Value(valueBuffer);
-          const rootTxId = toB64Url(value.rootTxId);
+          const rootTxId = toB64Url(getRootTxId(value));
 
-          if (isCompleteValue(value)) {
+          // Convert path buffers to base64url strings if present
+          const pathBuffers = getPath(value);
+          const path = pathBuffers?.map((buf) => toB64Url(buf));
+
+          // Check for offset information (both legacy complete and path complete)
+          if (isPathCompleteValue(value)) {
             return {
               rootTxId,
+              path,
               rootOffset: value.rootDataItemOffset,
               rootDataOffset: value.rootDataOffset,
             };
           }
 
-          return { rootTxId };
+          if (isCompleteValue(value)) {
+            return {
+              rootTxId,
+              path,
+              rootOffset: value.rootDataItemOffset,
+              rootDataOffset: value.rootDataOffset,
+            };
+          }
+
+          return { rootTxId, path };
         }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

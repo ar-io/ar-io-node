@@ -138,6 +138,7 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
   async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
+        path?: string[];
         rootOffset?: number;
         rootDataOffset?: number;
         contentType?: string;
@@ -157,6 +158,9 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
 
     // Keep track of visited IDs to prevent infinite loops
     const visited = new Set<string>();
+    // Collect the traversal path from data item to root
+    // Will be reversed at the end to get [root, ..., parent]
+    const traversalPath: string[] = [];
     let currentId = id;
     let depth = 0;
 
@@ -183,19 +187,31 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
 
       if (queryResult === undefined) {
         // This is a root transaction (not bundled)
+        // If we traversed any bundles, build the path [root, ..., parent]
+        const path =
+          traversalPath.length > 0
+            ? [currentId, ...traversalPath.reverse()]
+            : undefined;
+
         log.debug('Found root transaction', {
           originalId: id,
           rootTxId: currentId,
           depth: depth - 1,
+          pathLength: path?.length,
         });
         return {
           rootTxId: currentId,
+          path,
           contentType: originalMetadata?.contentType,
           dataSize: parseNonNegativeInt(originalMetadata?.size),
         };
       }
 
-      // Continue following the chain
+      // queryResult is the parent bundle ID
+      // Add current bundle to path (skip first iteration where currentId is data item)
+      if (depth > 1) {
+        traversalPath.push(currentId);
+      }
       currentId = queryResult;
     }
 
@@ -222,13 +238,8 @@ export class GraphQLRootTxIndex implements DataItemRootIndex {
     }
 
     // If we get here, currentId should be falsy (loop exited normally)
-    return currentId
-      ? {
-          rootTxId: currentId,
-          contentType: originalMetadata?.contentType,
-          dataSize: parseNonNegativeInt(originalMetadata?.size),
-        }
-      : undefined;
+    // This is a fallback case that shouldn't normally be reached
+    return undefined;
   }
 
   private async queryBundleId(

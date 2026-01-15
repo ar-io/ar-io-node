@@ -958,6 +958,8 @@ export interface DataItemRootIndex {
   getRootTx(id: string): Promise<
     | {
         rootTxId: string;
+        /** Path from root TX to immediate parent bundle [root, ..., parent] */
+        path?: string[];
         rootOffset?: number;
         rootDataOffset?: number;
         contentType?: string;

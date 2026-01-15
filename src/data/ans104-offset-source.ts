@@ -107,6 +107,196 @@ export class Ans104OffsetSource {
     }
   }
 
+  /**
+   * Finds the offset and size of a data item using a known traversal path.
+   * Much faster than linear search when the path is available.
+   *
+   * Path structure: [rootTxId, nestedBundle1, ..., parentBundle]
+   * - path[0] is always the root transaction ID
+   * - path[path.length-1] is the immediate parent bundle containing the data item
+   *
+   * @param dataItemId - The ID of the data item to find
+   * @param path - Array of TX IDs from root to immediate parent
+   * @returns Object with offsets, sizes, and content type if found, null otherwise
+   */
+  async getDataItemOffsetWithPath(
+    dataItemId: string,
+    path: string[],
+  ): Promise<{
+    itemOffset: number;
+    dataOffset: number;
+    itemSize: number;
+    dataSize: number;
+    contentType?: string;
+  } | null> {
+    const log = this.log.child({
+      method: 'getDataItemOffsetWithPath',
+      dataItemId,
+      pathLength: path.length,
+    });
+
+    if (path.length === 0) {
+      log.warn('Empty path provided');
+      return null;
+    }
+
+    const rootBundleId = path[0];
+
+    log.debug('Navigating to data item via path', {
+      rootBundleId,
+      pathDepth: path.length,
+    });
+
+    try {
+      return await this.navigatePathAndFind(dataItemId, path, rootBundleId);
+    } catch (error: any) {
+      log.warn('Path-guided navigation failed, falling back to linear search', {
+        error: error.message,
+        dataItemId,
+        pathLength: path.length,
+      });
+      // Graceful fallback to existing linear search method
+      return this.getDataItemOffset(dataItemId, rootBundleId);
+    }
+  }
+
+  /**
+   * Navigates through a bundle hierarchy using a known path and finds the target item.
+   */
+  private async navigatePathAndFind(
+    dataItemId: string,
+    path: string[],
+    rootBundleId: string,
+  ): Promise<{
+    itemOffset: number;
+    dataOffset: number;
+    itemSize: number;
+    dataSize: number;
+    contentType?: string;
+  } | null> {
+    const log = this.log.child({
+      method: 'navigatePathAndFind',
+      dataItemId,
+      rootBundleId,
+    });
+
+    let currentOffset = 0;
+
+    // Navigate through each level of the path (skip index 0 which is root)
+    // Path: [root, bundle1, bundle2, ..., parentBundle]
+    // We need to navigate through bundle1, bundle2, etc. to reach parentBundle
+    for (let level = 1; level < path.length; level++) {
+      const nextBundleId = path[level];
+
+      log.debug('Navigating to next bundle in path', {
+        level,
+        nextBundleId,
+        currentOffset,
+      });
+
+      // Parse bundle headers at current offset
+      const bundleInfo = await this.parseBundleHeadersAtOffset(
+        rootBundleId,
+        currentOffset,
+      );
+
+      // Find the next bundle in the path
+      const nextBundle = bundleInfo.items.find(
+        (item) => item.id === nextBundleId,
+      );
+      if (!nextBundle) {
+        throw new Error(
+          `Bundle ${nextBundleId} not found at path level ${level}`,
+        );
+      }
+
+      // Parse the bundle's header to get payload start offset
+      const bundleHeaderInfo = await this.parseDataItemHeader(
+        rootBundleId,
+        currentOffset + nextBundle.offset,
+        nextBundle.size,
+      );
+
+      // Move offset into the nested bundle's payload
+      currentOffset += nextBundle.offset + bundleHeaderInfo.headerSize;
+    }
+
+    // Now we're at the final level (the immediate parent bundle)
+    // Parse its headers and search for the target data item
+    log.debug('Searching for target in parent bundle', {
+      currentOffset,
+    });
+
+    const parentBundleInfo = await this.parseBundleHeadersAtOffset(
+      rootBundleId,
+      currentOffset,
+    );
+
+    const targetItem = parentBundleInfo.items.find(
+      (item) => item.id === dataItemId,
+    );
+    if (!targetItem) {
+      log.debug('Target data item not found in parent bundle', {
+        dataItemId,
+        itemCount: parentBundleInfo.items.length,
+      });
+      return null;
+    }
+
+    // Parse the target data item's header
+    const itemOffset = currentOffset + targetItem.offset;
+    const dataItemInfo = await this.parseDataItemHeader(
+      rootBundleId,
+      itemOffset,
+      targetItem.size,
+    );
+
+    log.debug('Found data item via path navigation', {
+      itemOffset,
+      dataOffset: itemOffset + dataItemInfo.headerSize,
+      itemSize: targetItem.size,
+      dataSize: dataItemInfo.payloadSize,
+      contentType: dataItemInfo.contentType,
+    });
+
+    return {
+      itemOffset,
+      dataOffset: itemOffset + dataItemInfo.headerSize,
+      itemSize: targetItem.size,
+      dataSize: dataItemInfo.payloadSize,
+      contentType: dataItemInfo.contentType,
+    };
+  }
+
+  /**
+   * Parses bundle headers at a specific offset in the root bundle.
+   */
+  private async parseBundleHeadersAtOffset(
+    rootBundleId: string,
+    offset: number,
+  ): Promise<{ items: DataItemHeader[] }> {
+    // Fetch item count (first 32 bytes)
+    const countData = await this.dataSource.getData({
+      id: rootBundleId,
+      region: { offset, size: 32 },
+    });
+    const itemCount = await this.parseItemCount(countData.stream);
+
+    if (itemCount === 0) {
+      return { items: [] };
+    }
+
+    // Fetch and parse headers
+    const headerSize = 32 + 64 * itemCount;
+    const headerData = await this.dataSource.getData({
+      id: rootBundleId,
+      region: { offset, size: headerSize },
+    });
+    const items = await this.parseHeaders(headerData.stream, itemCount);
+
+    return { items };
+  }
+
   private async findInBundle(
     dataItemId: string,
     bundleId: string,
