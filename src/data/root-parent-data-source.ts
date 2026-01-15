@@ -614,10 +614,27 @@ export class RootParentDataSource implements ContiguousDataSource {
         } | null = null;
 
         try {
-          bundleParseResult = await this.ans104OffsetSource.getDataItemOffset(
-            id,
-            rootTxId,
-          );
+          // Use path-guided navigation when path is available for faster lookup
+          if (rootResult?.path && rootResult.path.length > 0) {
+            bundleParseResult =
+              await this.ans104OffsetSource.getDataItemOffsetWithPath(
+                id,
+                rootResult.path,
+              );
+            offsetParseSpan.setAttributes({
+              'offset.method': 'path_guided',
+              'offset.path_length': rootResult.path.length,
+            });
+          } else {
+            // Fallback to linear search when path is not available
+            bundleParseResult = await this.ans104OffsetSource.getDataItemOffset(
+              id,
+              rootTxId,
+            );
+            offsetParseSpan.setAttributes({
+              'offset.method': 'linear_search',
+            });
+          }
           offsetParseSpan.setAttributes({
             'offset.found': bundleParseResult !== null,
             'offset.data_offset': bundleParseResult?.dataOffset,
