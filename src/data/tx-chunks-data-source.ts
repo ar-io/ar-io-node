@@ -189,13 +189,15 @@ export class TxChunksDataSource implements ContiguousDataSource {
         });
 
         rangeStream.on('error', (error) => {
-          span.recordException(error);
-
-          metrics.getDataStreamErrorsTotal.inc({
-            class: this.constructor.name,
-            source: 'chunks',
-            request_type: 'range',
-          });
+          // Don't record AbortError as exception
+          if (error.name !== 'AbortError') {
+            span.recordException(error);
+            metrics.getDataStreamErrorsTotal.inc({
+              class: this.constructor.name,
+              source: 'chunks',
+              request_type: 'range',
+            });
+          }
         });
 
         return {
@@ -291,13 +293,15 @@ export class TxChunksDataSource implements ContiguousDataSource {
       });
 
       stream.on('error', (error) => {
-        span.recordException(error);
-
-        metrics.getDataStreamErrorsTotal.inc({
-          class: this.constructor.name,
-          source: 'chunks',
-          request_type: 'full',
-        });
+        // Don't record AbortError as exception
+        if (error.name !== 'AbortError') {
+          span.recordException(error);
+          metrics.getDataStreamErrorsTotal.inc({
+            class: this.constructor.name,
+            source: 'chunks',
+            request_type: 'full',
+          });
+        }
       });
 
       stream.on('end', () => {

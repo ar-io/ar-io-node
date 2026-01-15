@@ -532,7 +532,40 @@ describe('GatewayDataSource', () => {
         );
       });
 
-      it('should not try next gateway when AbortError is thrown', async () => {
+      it('should not try next gateway when client disconnects', async () => {
+        const requestLog: string[] = [];
+        const controller = new AbortController();
+
+        const dataSourceMultiGateway = new GatewaysDataSource({
+          log,
+          trustedGatewaysUrls: {
+            'https://gateway1.com': 1,
+            'https://gateway2.com': 2,
+          },
+        });
+
+        mock.method(axios, 'create', (config: any) => ({
+          request: async () => {
+            requestLog.push(config.baseURL);
+            // Simulate client disconnect by aborting the controller
+            controller.abort();
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            throw error;
+          },
+          ...axiosMockCommonParams(config),
+        }));
+
+        await assert.rejects(
+          dataSourceMultiGateway.getData({ id: 'test-id', signal: controller.signal }),
+          { name: 'AbortError' },
+        );
+
+        // Only first gateway should be tried on client disconnect
+        assert.equal(requestLog.length, 1);
+      });
+
+      it('should try next gateway on timeout', async () => {
         const requestLog: string[] = [];
 
         const dataSourceMultiGateway = new GatewaysDataSource({
@@ -546,7 +579,8 @@ describe('GatewayDataSource', () => {
         mock.method(axios, 'create', (config: any) => ({
           request: async () => {
             requestLog.push(config.baseURL);
-            const error = new Error('aborted');
+            // Simulate timeout by throwing AbortError without client signal being aborted
+            const error = new Error('timeout');
             error.name = 'AbortError';
             throw error;
           },
@@ -558,8 +592,8 @@ describe('GatewayDataSource', () => {
           { name: 'AbortError' },
         );
 
-        // Only first gateway should be tried
-        assert.equal(requestLog.length, 1);
+        // Both gateways should be tried on timeout
+        assert.equal(requestLog.length, 2);
       });
     });
   });
