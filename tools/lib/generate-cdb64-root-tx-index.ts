@@ -9,10 +9,17 @@
  * CLI tool to generate a CDB64 root TX index from a CSV file.
  *
  * CSV format:
- *   data_item_id,root_tx_id[,root_data_item_offset,root_data_offset]
+ *   data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
  *
- * - First two columns are required (base64url-encoded IDs)
- * - Offset columns are optional; if present, complete format is used
+ * - data_item_id and root_tx_id are always required (base64url-encoded IDs)
+ * - path column contains JSON array of base64url IDs for nested bundles (optional)
+ * - offset columns are optional; if present, complete format is used
+ *
+ * Supports all 4 CDB64 value formats:
+ * - Simple: rootTxId only
+ * - Complete: rootTxId + offsets
+ * - Path: path array (for nested bundles)
+ * - Path Complete: path array + offsets
  *
  * Usage:
  *   ./tools/generate-cdb64-root-tx-index --input data.csv --output index.cdb
@@ -25,7 +32,10 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'csv-parse';
 
 import { Cdb64Writer } from '../../src/lib/cdb64.js';
-import { encodeCdb64Value } from '../../src/lib/cdb64-encoding.js';
+import {
+  encodeCdb64Value,
+  Cdb64RootTxValue,
+} from '../../src/lib/cdb64-encoding.js';
 import { fromB64Url } from '../../src/lib/encoding.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -55,14 +65,22 @@ Options:
   --help, -h           Show this help message
 
 CSV Format:
-  data_item_id,root_tx_id[,root_data_item_offset,root_data_offset]
+  data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
 
   - data_item_id: Base64URL-encoded data item ID (43 characters)
   - root_tx_id: Base64URL-encoded root transaction ID (43 characters)
-  - root_data_item_offset: (optional) Byte offset to data item header
-  - root_data_offset: (optional) Byte offset to data payload
+  - path: JSON array of base64url IDs for nested bundles (empty if not path format)
+          Format: ["rootId","bundle1Id","bundle2Id",...,"parentId"]
+  - root_data_item_offset: Byte offset (empty if not available)
+  - root_data_offset: Byte offset (empty if not available)
 
   If offset columns are present, both must be provided.
+
+Supported Value Formats:
+  - Simple: rootTxId only (legacy)
+  - Complete: rootTxId + offsets (legacy)
+  - Path: bundle traversal path (nested bundles)
+  - Path Complete: path + offsets (nested bundles with offsets)
 
 Example:
   ./tools/generate-cdb64-root-tx-index --input mappings.csv --output index.cdb
@@ -180,6 +198,31 @@ function parseOffset(value: string, fieldName: string): number {
   return num;
 }
 
+function parsePath(
+  pathStr: string,
+  recordNumber: number,
+): Buffer[] | undefined {
+  const trimmed = pathStr.trim();
+  if (trimmed === '') {
+    return undefined;
+  }
+
+  let pathArray: string[];
+  try {
+    pathArray = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`Invalid path JSON at record ${recordNumber}`);
+  }
+
+  if (!Array.isArray(pathArray) || pathArray.length === 0) {
+    throw new Error(`Path must be a non-empty array at record ${recordNumber}`);
+  }
+
+  return pathArray.map((id, idx) =>
+    parseBase64UrlId(id, `path[${idx}] at record ${recordNumber}`),
+  );
+}
+
 async function generateIndex(config: Config): Promise<void> {
   console.log('=== CDB64 Root TX Index Generator ===\n');
   console.log(`Input:  ${config.inputPath}`);
@@ -205,6 +248,8 @@ async function generateIndex(config: Config): Promise<void> {
   let recordCount = 0;
   let simpleCount = 0;
   let completeCount = 0;
+  let pathCount = 0;
+  let pathCompleteCount = 0;
   let errorCount = 0;
   let headerSkipped = false;
   const startTime = Date.now();
@@ -249,10 +294,14 @@ async function generateIndex(config: Config): Promise<void> {
         const dataItemId = parseBase64UrlId(parts[0], 'data_item_id');
         const rootTxId = parseBase64UrlId(parts[1], 'root_tx_id');
 
-        let value;
-        const hasOffsetCols = parts.length >= 4;
-        const hasOffset1 = hasOffsetCols && parts[2].trim() !== '';
-        const hasOffset2 = hasOffsetCols && parts[3].trim() !== '';
+        // Parse optional path (column 3)
+        const path =
+          parts.length >= 3 ? parsePath(parts[2], recordNumber) : undefined;
+
+        // Check for offset columns (columns 4-5)
+        const hasOffsetCols = parts.length >= 5;
+        const hasOffset1 = hasOffsetCols && parts[3].trim() !== '';
+        const hasOffset2 = hasOffsetCols && parts[4].trim() !== '';
 
         // Enforce both-or-neither for offset columns
         if (hasOffset1 !== hasOffset2) {
@@ -261,24 +310,44 @@ async function generateIndex(config: Config): Promise<void> {
           );
         }
 
-        if (hasOffset1 && hasOffset2) {
-          // Complete format with offsets
-          const rootDataItemOffset = parseOffset(
-            parts[2],
-            'root_data_item_offset',
-          );
-          const rootDataOffset = parseOffset(parts[3], 'root_data_offset');
-
-          value = {
-            rootTxId,
-            rootDataItemOffset,
-            rootDataOffset,
-          };
-          completeCount++;
+        // Build value based on format type
+        let value: Cdb64RootTxValue;
+        if (path !== undefined) {
+          // Path-based formats
+          if (hasOffset1 && hasOffset2) {
+            const rootDataItemOffset = parseOffset(
+              parts[3],
+              'root_data_item_offset',
+            );
+            const rootDataOffset = parseOffset(parts[4], 'root_data_offset');
+            value = {
+              path,
+              rootDataItemOffset,
+              rootDataOffset,
+            };
+            pathCompleteCount++;
+          } else {
+            value = { path };
+            pathCount++;
+          }
         } else {
-          // Simple format
-          value = { rootTxId };
-          simpleCount++;
+          // Legacy formats
+          if (hasOffset1 && hasOffset2) {
+            const rootDataItemOffset = parseOffset(
+              parts[3],
+              'root_data_item_offset',
+            );
+            const rootDataOffset = parseOffset(parts[4], 'root_data_offset');
+            value = {
+              rootTxId,
+              rootDataItemOffset,
+              rootDataOffset,
+            };
+            completeCount++;
+          } else {
+            value = { rootTxId };
+            simpleCount++;
+          }
         }
 
         await writer.add(dataItemId, encodeCdb64Value(value));
@@ -312,8 +381,12 @@ async function generateIndex(config: Config): Promise<void> {
     console.log('\n=== Generation Complete ===');
     console.log(`Total records processed: ${recordNumber.toLocaleString()}`);
     console.log(`Records written: ${recordCount.toLocaleString()}`);
-    console.log(`  - Simple format: ${simpleCount.toLocaleString()}`);
-    console.log(`  - Complete format: ${completeCount.toLocaleString()}`);
+    console.log('  Legacy formats:');
+    console.log(`    - Simple: ${simpleCount.toLocaleString()}`);
+    console.log(`    - Complete: ${completeCount.toLocaleString()}`);
+    console.log('  Path formats:');
+    console.log(`    - Path: ${pathCount.toLocaleString()}`);
+    console.log(`    - Path Complete: ${pathCompleteCount.toLocaleString()}`);
     if (errorCount > 0) {
       console.log(`Errors: ${errorCount}`);
     }
