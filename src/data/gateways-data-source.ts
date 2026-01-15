@@ -304,14 +304,22 @@ export class GatewaysDataSource implements ContiguousDataSource {
                 }),
               };
             } catch (error: any) {
-              // Re-throw AbortError immediately - don't try next gateway
+              // Handle AbortError - distinguish client disconnect from timeout
               if (error.name === 'AbortError') {
+                const isClientDisconnect = signal?.aborted === true;
                 span.addEvent('Request aborted', {
                   'gateways.url': gatewayUrl,
                   'gateways.tier.priority': priority,
-                  'data.retrieval.error': 'client_disconnected',
+                  'data.retrieval.error': isClientDisconnect
+                    ? 'client_disconnected'
+                    : 'timeout',
                 });
-                throw error;
+                // Only skip remaining gateways on client disconnect, not timeout
+                if (isClientDisconnect) {
+                  throw error;
+                }
+                lastError = error;
+                continue;
               }
 
               const gatewayRequestDuration = Date.now() - gatewayRequestStart;

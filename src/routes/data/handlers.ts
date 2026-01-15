@@ -610,22 +610,30 @@ const handleRangeRequest = async ({
       // Get data streams for all ranges
       const rangeStreams: { range: rangeParser.Range; stream: Readable }[] = [];
 
-      for (const range of ranges) {
-        const start = range.start;
-        const end = range.end;
+      try {
+        for (const range of ranges) {
+          const start = range.start;
+          const end = range.end;
 
-        const rangeData = await dataSource.getData({
-          id,
-          requestAttributes,
-          region: {
-            offset: start,
-            size: end - start + 1,
-          },
-          parentSpan: span,
-          signal: req.signal,
-        });
+          const rangeData = await dataSource.getData({
+            id,
+            requestAttributes,
+            region: {
+              offset: start,
+              size: end - start + 1,
+            },
+            parentSpan: span,
+            signal: req.signal,
+          });
 
-        rangeStreams.push({ range, stream: rangeData.stream });
+          rangeStreams.push({ range, stream: rangeData.stream });
+        }
+      } catch (error) {
+        // Clean up any already-fetched streams on error
+        for (const { stream } of rangeStreams) {
+          stream.destroy();
+        }
+        throw error;
       }
 
       // Write response using pre-built parts
