@@ -63,6 +63,7 @@ interface Statistics {
   endTime: number;
   // Reference comparison stats
   referenceComparisons: number;
+  totalMismatches: number;
   statusMismatches: number;
   contentLengthMismatches: number;
   contentTypeMismatches: number;
@@ -98,6 +99,7 @@ class DataRetrievalTester {
       endTime: 0,
       // Reference comparison stats
       referenceComparisons: 0,
+      totalMismatches: 0,
       statusMismatches: 0,
       contentLengthMismatches: 0,
       contentTypeMismatches: 0,
@@ -448,6 +450,13 @@ class DataRetrievalTester {
       if (result.referenceError) {
         this.stats.referenceErrors++;
       } else {
+        const hasAnyMismatch =
+          result.statusMatch === false ||
+          result.contentLengthMatch === false ||
+          result.contentTypeMatch === false;
+        if (hasAnyMismatch) {
+          this.stats.totalMismatches++;
+        }
         if (result.statusMatch === false) {
           this.stats.statusMismatches++;
         }
@@ -655,20 +664,13 @@ class DataRetrievalTester {
 
     // Reference comparison results
     if (this.config.reference && this.stats.referenceComparisons > 0) {
-      const matchRate =
-        this.stats.referenceComparisons > 0
-          ? (
-              ((this.stats.referenceComparisons -
-                this.stats.referenceErrors -
-                Math.max(
-                  this.stats.statusMismatches,
-                  this.stats.contentLengthMismatches,
-                  this.stats.contentTypeMismatches,
-                )) /
-                this.stats.referenceComparisons) *
-              100
-            ).toFixed(2)
-          : '0.00';
+      const matchRate = (
+        ((this.stats.referenceComparisons -
+          this.stats.referenceErrors -
+          this.stats.totalMismatches) /
+          this.stats.referenceComparisons) *
+        100
+      ).toFixed(2);
 
       console.log('\nReference Comparison:');
       console.log(`  Reference Gateway: ${this.config.reference}`);
@@ -744,6 +746,7 @@ class DataRetrievalTester {
           ? {
               referenceGateway: this.config.reference,
               comparisons: this.stats.referenceComparisons,
+              totalMismatches: this.stats.totalMismatches,
               statusMismatches: this.stats.statusMismatches,
               contentLengthMismatches: this.stats.contentLengthMismatches,
               contentTypeMismatches: this.stats.contentTypeMismatches,
