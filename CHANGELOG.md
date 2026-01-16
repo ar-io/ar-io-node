@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Nested Bundle Path Support**: CDB64 root TX indexes now support path-based
+  formats for efficient retrieval of deeply nested data items (PE-8838)
+  - New value formats: path-only `{p}` and path-complete `{p, i, d}` store the
+    bundle hierarchy from root to parent
+  - Enables O(n) navigation through nested bundles instead of O(n*m) linear
+    search at each level
+  - GraphQL parent chain traversal now collects and returns path information
+  - `Ans104OffsetSource` uses path-guided navigation with fallback to legacy
+    behavior
+  - CDB64 tools updated to generate and export path-based indexes
+
+- **Reference Gateway Comparison in Data Retrieval Tool**: New `--reference`
+  option in `tools/test-data-retrieval` compares responses against a reference
+  gateway
+  - Compares status codes, Content-Length, and Content-Type headers
+  - Shows detailed mismatch info in verbose mode
+  - Includes comparison stats in summary and JSON output
+
 ### Changed
 
 ### Fixed
