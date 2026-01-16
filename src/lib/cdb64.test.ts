@@ -588,10 +588,11 @@ describe('CDB64', () => {
       const cdbFile = path.join(tempDir, 'complete.cdb');
       const outputCsv = path.join(tempDir, 'output-complete.csv');
 
-      // Create input CSV (complete format - with offsets)
+      // Create input CSV (complete format - with offsets, empty path column)
+      // Format: data_item_id,root_tx_id,path,root_data_item_offset,root_data_offset
       const inputData = [
-        'IX5lt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg,LWWgC-YmKVG4sH8PXq7JtqAkDqPfpLmRsC0K76xRF88,1024,2048',
-        '7sDOjWxJ7sD6MhQYDwlcKb5wh95NkmFy67QnfF_K3Ts,qKkz3UNz_RhF4M5c0dVJLHg5sKPwJzKpPmHRRNbXUdI,4096,8192',
+        'IX5lt26pAoko02PrP8Zith9UiJWidZLxxHEDfGK91jg,LWWgC-YmKVG4sH8PXq7JtqAkDqPfpLmRsC0K76xRF88,,1024,2048',
+        '7sDOjWxJ7sD6MhQYDwlcKb5wh95NkmFy67QnfF_K3Ts,qKkz3UNz_RhF4M5c0dVJLHg5sKPwJzKpPmHRRNbXUdI,,4096,8192',
       ];
       await fs.writeFile(inputCsv, inputData.join('\n') + '\n');
 
