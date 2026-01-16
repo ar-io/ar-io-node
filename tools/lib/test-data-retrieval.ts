@@ -14,6 +14,7 @@ import pLimit from 'p-limit';
 interface TestConfig {
   csvPath: string;
   gateway: string;
+  reference: string | undefined;
   mode: 'random' | 'sequential';
   count: number | undefined;
   concurrency: number;
@@ -32,8 +33,19 @@ interface RequestResult {
   statusCode: number;
   responseTime: number;
   contentLength: number | undefined;
+  contentType: string | undefined;
   cacheStatus: string | undefined;
   error?: string;
+  // Reference comparison fields (only present when --reference is used)
+  referenceStatusCode?: number;
+  referenceContentLength?: number | undefined;
+  referenceContentType?: string | undefined;
+  referenceResponseTime?: number;
+  referenceError?: string;
+  // Comparison results
+  statusMatch?: boolean;
+  contentLengthMatch?: boolean;
+  contentTypeMatch?: boolean;
 }
 
 interface Statistics {
@@ -49,6 +61,12 @@ interface Statistics {
   totalBytes: number;
   startTime: number;
   endTime: number;
+  // Reference comparison stats
+  referenceComparisons: number;
+  statusMismatches: number;
+  contentLengthMismatches: number;
+  contentTypeMismatches: number;
+  referenceErrors: number;
 }
 
 // Valid base64url TX/data item ID pattern (43 characters)
@@ -78,6 +96,12 @@ class DataRetrievalTester {
       totalBytes: 0,
       startTime: 0,
       endTime: 0,
+      // Reference comparison stats
+      referenceComparisons: 0,
+      statusMismatches: 0,
+      contentLengthMismatches: 0,
+      contentTypeMismatches: 0,
+      referenceErrors: 0,
     };
   }
 
@@ -261,9 +285,13 @@ class DataRetrievalTester {
 
     try {
       // Use HEAD request to test availability without downloading content
+      // Use Accept-Encoding: identity to get actual Content-Length (not chunked)
       const response = await axios.head(`${this.config.gateway}/raw/${id}`, {
         timeout: this.config.timeout,
-        headers: { 'User-Agent': 'ar-io-node-data-retrieval-tester/1.0' },
+        headers: {
+          'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+          'Accept-Encoding': 'identity',
+        },
         validateStatus: () => true,
       });
 
@@ -271,16 +299,25 @@ class DataRetrievalTester {
       const contentLength = response.headers['content-length']
         ? parseInt(response.headers['content-length'], 10)
         : undefined;
+      const contentType = response.headers['content-type'] as string | undefined;
       const cacheStatus = response.headers['x-cache'] as string | undefined;
 
-      return {
+      const result: RequestResult = {
         id,
         success: response.status >= 200 && response.status < 300,
         statusCode: response.status,
         responseTime,
         contentLength,
+        contentType,
         cacheStatus,
       };
+
+      // If reference gateway is configured, make comparison request
+      if (this.config.reference) {
+        await this.compareWithReference(id, result);
+      }
+
+      return result;
     } catch (error: any) {
       const responseTime = performance.now() - startTime;
 
@@ -291,6 +328,7 @@ class DataRetrievalTester {
           statusCode: 0,
           responseTime,
           contentLength: undefined,
+          contentType: undefined,
           cacheStatus: undefined,
           error: 'Timeout',
         };
@@ -302,9 +340,66 @@ class DataRetrievalTester {
         statusCode: 0,
         responseTime,
         contentLength: undefined,
+        contentType: undefined,
         cacheStatus: undefined,
         error: error.message,
       };
+    }
+  }
+
+  /**
+   * Compare the test result with a reference gateway response.
+   */
+  private async compareWithReference(id: string, result: RequestResult): Promise<void> {
+    const refStartTime = performance.now();
+
+    try {
+      const refResponse = await axios.head(`${this.config.reference}/raw/${id}`, {
+        timeout: this.config.timeout,
+        headers: {
+          'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+          'Accept-Encoding': 'identity',
+        },
+        validateStatus: () => true,
+      });
+
+      result.referenceResponseTime = performance.now() - refStartTime;
+      result.referenceStatusCode = refResponse.status;
+      result.referenceContentLength = refResponse.headers['content-length']
+        ? parseInt(refResponse.headers['content-length'], 10)
+        : undefined;
+      result.referenceContentType = refResponse.headers['content-type'] as string | undefined;
+
+      // Compare status codes (both should be success or both should be same error)
+      const testSuccess = result.statusCode >= 200 && result.statusCode < 300;
+      const refSuccess = refResponse.status >= 200 && refResponse.status < 300;
+      result.statusMatch = testSuccess === refSuccess;
+
+      // Compare content length and type only if both succeeded
+      // If test gateway returns error (e.g., 404), status mismatch is the finding
+      if (testSuccess && refSuccess) {
+        result.contentLengthMatch = result.contentLength === result.referenceContentLength;
+
+        // Compare content type (normalize by taking just the mime type, ignoring charset etc.)
+        const normalizeContentType = (ct: string | undefined): string | undefined => {
+          if (!ct) return undefined;
+          return ct.split(';')[0].trim().toLowerCase();
+        };
+        const testCt = normalizeContentType(result.contentType);
+        const refCt = normalizeContentType(result.referenceContentType);
+        result.contentTypeMatch = testCt === refCt;
+      } else {
+        // Don't flag content mismatches when test gateway returned an error
+        // The status mismatch (if any) is the meaningful finding
+        result.contentLengthMatch = true;
+        result.contentTypeMatch = true;
+      }
+    } catch (error: any) {
+      result.referenceResponseTime = performance.now() - refStartTime;
+      result.referenceError = error.code === 'ECONNABORTED' ? 'Timeout' : error.message;
+      result.statusMatch = false;
+      result.contentLengthMatch = false;
+      result.contentTypeMatch = false;
     }
   }
 
@@ -344,6 +439,25 @@ class DataRetrievalTester {
     this.stats.responseTimes.push(result.responseTime);
     if (result.contentLength) {
       this.stats.totalBytes += result.contentLength;
+    }
+
+    // Track reference comparison results
+    if (result.referenceStatusCode !== undefined || result.referenceError !== undefined) {
+      this.stats.referenceComparisons++;
+
+      if (result.referenceError) {
+        this.stats.referenceErrors++;
+      } else {
+        if (result.statusMatch === false) {
+          this.stats.statusMismatches++;
+        }
+        if (result.contentLengthMatch === false) {
+          this.stats.contentLengthMismatches++;
+        }
+        if (result.contentTypeMatch === false) {
+          this.stats.contentTypeMismatches++;
+        }
+      }
     }
   }
 
@@ -401,8 +515,35 @@ class DataRetrievalTester {
     const error = result.error ? ` (${result.error})` : '';
     const size = result.contentLength ? ` ${this.formatBytes(result.contentLength)}` : '';
 
+    let refInfo = '';
+    if (this.config.reference) {
+      if (result.referenceError) {
+        refInfo = ` | REF: error (${result.referenceError})`;
+      } else if (result.referenceStatusCode !== undefined) {
+        const mismatches: string[] = [];
+        if (!result.statusMatch) {
+          mismatches.push(`status: ${result.statusCode} (test) vs ${result.referenceStatusCode} (ref)`);
+        }
+        if (!result.contentLengthMatch) {
+          const testLen = result.contentLength ?? 'none';
+          const refLen = result.referenceContentLength ?? 'none';
+          mismatches.push(`length: ${testLen} (test) vs ${refLen} (ref)`);
+        }
+        if (!result.contentTypeMatch) {
+          const normalizeCt = (ct: string | undefined) => ct?.split(';')[0].trim().toLowerCase() ?? 'none';
+          mismatches.push(`type: ${normalizeCt(result.contentType)} (test) vs ${normalizeCt(result.referenceContentType)} (ref)`);
+        }
+
+        if (mismatches.length > 0) {
+          refInfo = ` | MISMATCH [${mismatches.join('; ')}]`;
+        } else {
+          refInfo = ` | REF: OK`;
+        }
+      }
+    }
+
     console.log(
-      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${error}`,
+      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${error}${refInfo}`,
     );
   }
 
@@ -511,6 +652,45 @@ class DataRetrievalTester {
         console.log(`  ${error}: ${count.toLocaleString()}`);
       }
     }
+
+    // Reference comparison results
+    if (this.config.reference && this.stats.referenceComparisons > 0) {
+      const matchRate =
+        this.stats.referenceComparisons > 0
+          ? (
+              ((this.stats.referenceComparisons -
+                this.stats.referenceErrors -
+                Math.max(
+                  this.stats.statusMismatches,
+                  this.stats.contentLengthMismatches,
+                  this.stats.contentTypeMismatches,
+                )) /
+                this.stats.referenceComparisons) *
+              100
+            ).toFixed(2)
+          : '0.00';
+
+      console.log('\nReference Comparison:');
+      console.log(`  Reference Gateway: ${this.config.reference}`);
+      console.log(`  Comparisons: ${this.stats.referenceComparisons.toLocaleString()}`);
+      console.log(`  Match Rate: ${matchRate}%`);
+      if (this.stats.statusMismatches > 0) {
+        console.log(`  Status Mismatches: ${this.stats.statusMismatches.toLocaleString()}`);
+      }
+      if (this.stats.contentLengthMismatches > 0) {
+        console.log(
+          `  Content-Length Mismatches: ${this.stats.contentLengthMismatches.toLocaleString()}`,
+        );
+      }
+      if (this.stats.contentTypeMismatches > 0) {
+        console.log(
+          `  Content-Type Mismatches: ${this.stats.contentTypeMismatches.toLocaleString()}`,
+        );
+      }
+      if (this.stats.referenceErrors > 0) {
+        console.log(`  Reference Errors: ${this.stats.referenceErrors.toLocaleString()}`);
+      }
+    }
   }
 
   private getJsonResults(): object {
@@ -559,6 +739,17 @@ class DataRetrievalTester {
             }
           : null,
       errors: Object.fromEntries(this.stats.errorCounts),
+      referenceComparison:
+        this.config.reference && this.stats.referenceComparisons > 0
+          ? {
+              referenceGateway: this.config.reference,
+              comparisons: this.stats.referenceComparisons,
+              statusMismatches: this.stats.statusMismatches,
+              contentLengthMismatches: this.stats.contentLengthMismatches,
+              contentTypeMismatches: this.stats.contentTypeMismatches,
+              referenceErrors: this.stats.referenceErrors,
+            }
+          : null,
     };
   }
 
@@ -727,6 +918,7 @@ function parseArguments(): TestConfig {
   const config: TestConfig = {
     csvPath: '',
     gateway: 'http://localhost:4000',
+    reference: undefined,
     mode: 'sequential',
     count: undefined,
     concurrency: 1,
@@ -757,6 +949,14 @@ function parseArguments(): TestConfig {
           throw new Error('--gateway requires a URL');
         }
         config.gateway = nextArg;
+        i++;
+        break;
+
+      case '--reference':
+        if (!nextArg) {
+          throw new Error('--reference requires a URL');
+        }
+        config.reference = nextArg;
         i++;
         break;
 
@@ -851,6 +1051,14 @@ function parseArguments(): TestConfig {
   // Remove trailing slash
   config.gateway = config.gateway.replace(/\/$/, '');
 
+  // Normalize reference URL if provided
+  if (config.reference) {
+    if (!config.reference.startsWith('http://') && !config.reference.startsWith('https://')) {
+      config.reference = `https://${config.reference}`;
+    }
+    config.reference = config.reference.replace(/\/$/, '');
+  }
+
   return config;
 }
 
@@ -863,6 +1071,7 @@ Usage: ./tools/test-data-retrieval [options]
 Options:
   --csv <file>           CSV file with TX/data item IDs in first column (required)
   --gateway <url>        Gateway URL to test (default: http://localhost:4000)
+  --reference <url>      Reference gateway URL for comparison (optional)
   --mode <mode>          Sampling mode: 'random' or 'sequential' (default: sequential)
   --count <n>            Number of IDs to test (default: all for sequential, 100 for random)
   --concurrency <n>      Number of concurrent requests (default: 1)
@@ -875,12 +1084,25 @@ Options:
   --verbose              Show detailed logs for each request
   --help, -h             Show this help message
 
+Reference Comparison:
+  When --reference is specified, the tool makes a HEAD request to both the test
+  gateway and the reference gateway for each ID, comparing:
+    - Status code (both success or both error)
+    - Content-Length header
+    - Content-Type header (normalized, ignoring charset)
+
+  Mismatches are reported in verbose mode and summarized in results.
+
 Examples:
   ./tools/test-data-retrieval --csv ids.csv
   ./tools/test-data-retrieval --csv ids.csv --gateway https://ar-io.dev
   ./tools/test-data-retrieval --csv ids.csv --mode random --count 500
   ./tools/test-data-retrieval --csv ids.csv --concurrency 10 --verbose
   ./tools/test-data-retrieval --csv ids.csv --json > results.json
+
+  # Compare with reference gateway
+  ./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \\
+    --reference https://arweave.net --verbose
 
   # Continuous random sampling (Ctrl+C to stop and save results)
   ./tools/test-data-retrieval --csv ids.csv --continuous --concurrency 10
