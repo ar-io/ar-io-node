@@ -44,6 +44,38 @@ const PEER_SELECTION_COUNT = 2; // Number of peers to try in parallel
 const MAX_RETRY_COUNT = 2; // Total attempts (initial + 1 retry)
 
 /**
+ * Races a promise against an abort signal.
+ * Allows each caller to respect their own abort signal when sharing a cached promise.
+ */
+function withAbortSignal<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      const error = new Error('This operation was aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    promise
+      .then((result) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(result);
+      })
+      .catch((error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      });
+  });
+}
+
+/**
  * Options for fetching chunks from AR.IO peers.
  * If validationParams is provided, the chunk will be validated and returned as Chunk.
  * Otherwise, the chunk is returned as UnvalidatedChunk.
@@ -370,7 +402,7 @@ export class ArIOChunkSource
       if (existingPromise) {
         span.setAttribute('chunk.cache_hit', true);
         span.addEvent('Using cached promise');
-        const result = await existingPromise;
+        const result = await withAbortSignal(existingPromise, signal);
         span.setAttribute('chunk.source', result.source ?? 'unknown');
         span.setAttribute('chunk.source_host', result.sourceHost ?? 'unknown');
         return result;

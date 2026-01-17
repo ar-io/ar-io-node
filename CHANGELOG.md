@@ -30,6 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Abort Signal Race Condition in Cached Chunk Requests**: Fixed a race
+  condition in `ArIOChunkSource` where subsequent callers could not abort their
+  requests when sharing a cached promise (PE-8867)
+  - Added `withAbortSignal()` helper that races a promise against the caller's
+    abort signal
+  - Each caller now respects their own abort signal independently when using
+    cached chunk promises
+
 ## [Release 65] - 2026-01-14
 
 This is a **recommended release** focusing on **resource stability** and **remote
