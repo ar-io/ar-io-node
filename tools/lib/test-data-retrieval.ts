@@ -11,10 +11,16 @@ import readline from 'node:readline';
 import { performance } from 'node:perf_hooks';
 import pLimit from 'p-limit';
 
+import { Cdb64Reader } from '../../src/lib/cdb64.js';
+import { decodeCdb64Value, getPath } from '../../src/lib/cdb64-encoding.js';
+import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
+
 interface TestConfig {
   csvPath: string;
   gateway: string;
   reference: string | undefined;
+  cdb64Path: string | undefined;
+  failedIdsPath: string | undefined;
   mode: 'random' | 'sequential';
   count: number | undefined;
   concurrency: number;
@@ -46,6 +52,8 @@ interface RequestResult {
   statusMatch?: boolean;
   contentLengthMatch?: boolean;
   contentTypeMatch?: boolean;
+  // GraphQL verification (for 404 mismatches with --cdb64)
+  graphqlVerification?: GraphQLVerificationResult;
 }
 
 interface Statistics {
@@ -68,6 +76,63 @@ interface Statistics {
   contentLengthMismatches: number;
   contentTypeMismatches: number;
   referenceErrors: number;
+  // GraphQL verification stats
+  graphqlVerification?: GraphQLVerificationStats;
+  // CDB64 verification stats (for every tested ID)
+  cdb64Verification?: Cdb64VerificationStats;
+}
+
+interface Cdb64LookupResult {
+  /** Bundle path [rootTxId, ...intermediates, parentId] as base64url strings */
+  path: string[];
+  /** Root transaction ID (path[0]) */
+  rootTxId: string;
+  /** Immediate parent bundle ID (path[path.length - 1]) */
+  parentId: string;
+}
+
+interface BundleVerificationResult {
+  bundleId: string;
+  bundleExists: boolean;
+  expectedParent?: string;
+  actualParent?: string;
+  parentMatch: boolean;
+}
+
+interface GraphQLVerificationResult {
+  dataItemId: string;
+  dataItemExists: boolean;
+  expectedParent?: string;
+  actualParent?: string;
+  parentMatch: boolean;
+  pathVerification?: BundleVerificationResult[];
+  diagnosis:
+    | 'not-in-cdb64'
+    | 'data-item-missing'
+    | 'parent-mismatch'
+    | 'path-broken'
+    | 'root-missing'
+    | 'verified-ok'
+    | 'error';
+  errorMessage?: string;
+}
+
+interface GraphQLVerificationStats {
+  totalEligible: number;
+  notInCdb64: number;
+  dataItemMissing: number;
+  parentMismatch: number;
+  pathBroken: number;
+  rootMissing: number;
+  verifiedOk: number;
+  errors: number;
+}
+
+interface Cdb64VerificationStats {
+  totalChecked: number;
+  foundInCdb64: number;
+  notFoundInCdb64: number;
+  lookupErrors: number;
 }
 
 // Valid base64url TX/data item ID pattern (43 characters)
@@ -81,6 +146,8 @@ class DataRetrievalTester {
   private totalToProcess: number = 0;
   private fileSize: number = 0;
   private resultsDisplayed: boolean = false;
+  private cdb64Reader: Cdb64Reader | null = null;
+  private failedIds: string[] = [];
 
   constructor(config: TestConfig) {
     this.config = config;
@@ -105,6 +172,232 @@ class DataRetrievalTester {
       contentTypeMismatches: 0,
       referenceErrors: 0,
     };
+  }
+
+  /**
+   * Initialize resources (e.g., open CDB64 reader).
+   */
+  async initialize(): Promise<void> {
+    if (this.config.cdb64Path) {
+      this.cdb64Reader = new Cdb64Reader(this.config.cdb64Path);
+      await this.cdb64Reader.open();
+      // Initialize CDB64 verification stats (for every tested ID)
+      this.stats.cdb64Verification = {
+        totalChecked: 0,
+        foundInCdb64: 0,
+        notFoundInCdb64: 0,
+        lookupErrors: 0,
+      };
+      // Initialize GraphQL verification stats (for 404 mismatches with --reference)
+      this.stats.graphqlVerification = {
+        totalEligible: 0,
+        notInCdb64: 0,
+        dataItemMissing: 0,
+        parentMismatch: 0,
+        pathBroken: 0,
+        rootMissing: 0,
+        verifiedOk: 0,
+        errors: 0,
+      };
+    }
+  }
+
+  /**
+   * Cleanup resources (e.g., close CDB64 reader).
+   */
+  async cleanup(): Promise<void> {
+    if (this.cdb64Reader) {
+      await this.cdb64Reader.close();
+      this.cdb64Reader = null;
+    }
+  }
+
+  /**
+   * Look up an ID in the CDB64 file and return the bundle path.
+   */
+  private async lookupCdb64(id: string): Promise<Cdb64LookupResult | undefined> {
+    if (!this.cdb64Reader) return undefined;
+
+    try {
+      // Convert base64url ID to buffer for lookup
+      const keyBuffer = fromB64Url(id);
+      const valueBuffer = await this.cdb64Reader.get(keyBuffer);
+
+      if (!valueBuffer) {
+        return undefined;
+      }
+
+      // Decode the value to get the path
+      const decoded = decodeCdb64Value(valueBuffer);
+      const pathBuffers = getPath(decoded);
+
+      if (!pathBuffers || pathBuffers.length === 0) {
+        // Legacy format without path - can't verify
+        return undefined;
+      }
+
+      // Convert path buffers to base64url strings
+      const path = pathBuffers.map((buf) => toB64Url(buf));
+
+      return {
+        path,
+        rootTxId: path[0],
+        parentId: path[path.length - 1],
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Query the reference gateway's GraphQL endpoint for transaction info.
+   */
+  private async queryReferenceGraphQL(
+    id: string,
+  ): Promise<{ id: string; bundledIn?: { id: string } } | null> {
+    if (!this.config.reference) return null;
+
+    const query = `
+      query getTransaction($id: ID!) {
+        transaction(id: $id) {
+          id
+          bundledIn { id }
+        }
+      }
+    `;
+
+    try {
+      const response = await axios.post(
+        `${this.config.reference}/graphql`,
+        { query, variables: { id } },
+        {
+          timeout: this.config.timeout,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'ar-io-node-data-retrieval-tester/1.0',
+          },
+        },
+      );
+
+      const data = response.data?.data?.transaction;
+      if (!data) return null;
+
+      return {
+        id: data.id,
+        bundledIn: data.bundledIn ? { id: data.bundledIn.id } : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Verify a 404 mismatch using GraphQL against the CDB64 path.
+   */
+  private async verifyWithGraphQL(
+    id: string,
+    cdb64Lookup: Cdb64LookupResult,
+  ): Promise<GraphQLVerificationResult> {
+    try {
+      // Query the data item from reference GraphQL
+      const dataItemInfo = await this.queryReferenceGraphQL(id);
+
+      // Data item not indexed in reference gateway
+      if (!dataItemInfo) {
+        return {
+          dataItemId: id,
+          dataItemExists: false,
+          expectedParent: cdb64Lookup.parentId,
+          parentMatch: false,
+          diagnosis: 'data-item-missing',
+        };
+      }
+
+      // Data item exists - check parent
+      const actualParent = dataItemInfo.bundledIn?.id;
+      const expectedParent = cdb64Lookup.parentId;
+      const parentMatch = actualParent === expectedParent;
+
+      if (parentMatch) {
+        // Parent matches - this is a timing issue or other transient problem
+        return {
+          dataItemId: id,
+          dataItemExists: true,
+          expectedParent,
+          actualParent,
+          parentMatch: true,
+          diagnosis: 'verified-ok',
+        };
+      }
+
+      // Parent mismatch - verify the full path
+      const pathVerification: BundleVerificationResult[] = [];
+
+      // Check each bundle in the path (except the root which is a regular TX)
+      for (let i = 1; i < cdb64Lookup.path.length; i++) {
+        const bundleId = cdb64Lookup.path[i];
+        const expectedBundleParent =
+          i > 0 ? cdb64Lookup.path[i - 1] : undefined;
+
+        const bundleInfo = await this.queryReferenceGraphQL(bundleId);
+        const actualBundleParent = bundleInfo?.bundledIn?.id;
+
+        pathVerification.push({
+          bundleId,
+          bundleExists: bundleInfo !== null,
+          expectedParent: expectedBundleParent,
+          actualParent: actualBundleParent,
+          parentMatch:
+            !expectedBundleParent || actualBundleParent === expectedBundleParent,
+        });
+
+        // Stop if we find a broken link
+        if (!bundleInfo) {
+          return {
+            dataItemId: id,
+            dataItemExists: true,
+            expectedParent,
+            actualParent,
+            parentMatch: false,
+            pathVerification,
+            diagnosis: 'path-broken',
+          };
+        }
+      }
+
+      // Check if root TX exists
+      const rootInfo = await this.queryReferenceGraphQL(cdb64Lookup.rootTxId);
+      if (!rootInfo) {
+        return {
+          dataItemId: id,
+          dataItemExists: true,
+          expectedParent,
+          actualParent,
+          parentMatch: false,
+          pathVerification,
+          diagnosis: 'root-missing',
+        };
+      }
+
+      // Full path verified but parent still doesn't match
+      return {
+        dataItemId: id,
+        dataItemExists: true,
+        expectedParent,
+        actualParent,
+        parentMatch: false,
+        pathVerification,
+        diagnosis: 'parent-mismatch',
+      };
+    } catch (error: any) {
+      return {
+        dataItemId: id,
+        dataItemExists: false,
+        parentMatch: false,
+        diagnosis: 'error',
+        errorMessage: error.message,
+      };
+    }
   }
 
   /**
@@ -319,6 +612,21 @@ class DataRetrievalTester {
         await this.compareWithReference(id, result);
       }
 
+      // Check CDB64 for every tested ID when --cdb64 is provided
+      if (this.cdb64Reader && this.stats.cdb64Verification) {
+        this.stats.cdb64Verification.totalChecked++;
+        try {
+          const cdb64Result = await this.lookupCdb64(id);
+          if (cdb64Result) {
+            this.stats.cdb64Verification.foundInCdb64++;
+          } else {
+            this.stats.cdb64Verification.notFoundInCdb64++;
+          }
+        } catch {
+          this.stats.cdb64Verification.lookupErrors++;
+        }
+      }
+
       return result;
     } catch (error: any) {
       const responseTime = performance.now() - startTime;
@@ -396,6 +704,27 @@ class DataRetrievalTester {
         result.contentLengthMatch = true;
         result.contentTypeMatch = true;
       }
+
+      // Perform GraphQL verification for 404 mismatches when CDB64 is available
+      const is404Mismatch =
+        result.statusCode === 404 && refSuccess && this.cdb64Reader;
+      if (is404Mismatch) {
+        const cdb64Lookup = await this.lookupCdb64(id);
+        if (cdb64Lookup) {
+          result.graphqlVerification = await this.verifyWithGraphQL(
+            id,
+            cdb64Lookup,
+          );
+        } else {
+          // ID not in CDB64 or no path available
+          result.graphqlVerification = {
+            dataItemId: id,
+            dataItemExists: false,
+            parentMatch: false,
+            diagnosis: 'not-in-cdb64',
+          };
+        }
+      }
     } catch (error: any) {
       result.referenceResponseTime = performance.now() - refStartTime;
       result.referenceError = error.code === 'ECONNABORTED' ? 'Timeout' : error.message;
@@ -467,6 +796,45 @@ class DataRetrievalTester {
           this.stats.contentTypeMismatches++;
         }
       }
+    }
+
+    // Track GraphQL verification results
+    if (result.graphqlVerification && this.stats.graphqlVerification) {
+      this.stats.graphqlVerification.totalEligible++;
+      switch (result.graphqlVerification.diagnosis) {
+        case 'not-in-cdb64':
+          this.stats.graphqlVerification.notInCdb64++;
+          break;
+        case 'data-item-missing':
+          this.stats.graphqlVerification.dataItemMissing++;
+          break;
+        case 'parent-mismatch':
+          this.stats.graphqlVerification.parentMismatch++;
+          break;
+        case 'path-broken':
+          this.stats.graphqlVerification.pathBroken++;
+          break;
+        case 'root-missing':
+          this.stats.graphqlVerification.rootMissing++;
+          break;
+        case 'verified-ok':
+          this.stats.graphqlVerification.verifiedOk++;
+          break;
+        case 'error':
+          this.stats.graphqlVerification.errors++;
+          break;
+      }
+    }
+
+    // Collect failed IDs (test failed, reference succeeded)
+    if (
+      result.statusMatch === false &&
+      result.referenceStatusCode !== undefined &&
+      result.referenceStatusCode >= 200 &&
+      result.referenceStatusCode < 300 &&
+      this.config.failedIdsPath
+    ) {
+      this.failedIds.push(result.id);
     }
   }
 
@@ -551,8 +919,21 @@ class DataRetrievalTester {
       }
     }
 
+    // Add GraphQL verification info for 404 mismatches
+    let cdb64Info = '';
+    if (result.graphqlVerification) {
+      const v = result.graphqlVerification;
+      if (v.diagnosis === 'not-in-cdb64') {
+        cdb64Info = ' | CDB64: not in index';
+      } else if (v.diagnosis === 'parent-mismatch') {
+        cdb64Info = ` | CDB64: parent-mismatch (expected: ${v.expectedParent?.slice(0, 8)}..., actual: ${v.actualParent?.slice(0, 8) ?? 'none'}...)`;
+      } else {
+        cdb64Info = ` | CDB64: ${v.diagnosis}`;
+      }
+    }
+
     console.log(
-      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${error}${refInfo}`,
+      `${status} ${result.id}: ${result.statusCode} in ${time}ms${cache}${size}${error}${refInfo}${cdb64Info}`,
     );
   }
 
@@ -693,6 +1074,52 @@ class DataRetrievalTester {
         console.log(`  Reference Errors: ${this.stats.referenceErrors.toLocaleString()}`);
       }
     }
+
+    // CDB64 verification results (for every tested ID)
+    if (this.stats.cdb64Verification && this.stats.cdb64Verification.totalChecked > 0) {
+      const cv = this.stats.cdb64Verification;
+      const pct =
+        cv.totalChecked > 0 ? ((cv.foundInCdb64 / cv.totalChecked) * 100).toFixed(1) : '0.0';
+      console.log('\nCDB64 Verification:');
+      console.log(`  CDB64 File: ${this.config.cdb64Path}`);
+      console.log(`  Total Checked: ${cv.totalChecked.toLocaleString()}`);
+      console.log(`  Found in CDB64: ${cv.foundInCdb64.toLocaleString()} (${pct}%)`);
+      console.log(`  Not in CDB64: ${cv.notFoundInCdb64.toLocaleString()}`);
+      if (cv.lookupErrors > 0) {
+        console.log(`  Lookup Errors: ${cv.lookupErrors.toLocaleString()}`);
+      }
+    }
+
+    // GraphQL verification results for 404 mismatches
+    if (this.stats.graphqlVerification && this.stats.graphqlVerification.totalEligible > 0) {
+      const gv = this.stats.graphqlVerification;
+      console.log('\nGraphQL Verification (404 Mismatches):');
+      console.log(`  CDB64 File: ${this.config.cdb64Path}`);
+      console.log(`  Reference: ${this.config.reference}`);
+      console.log(`  Total Eligible: ${gv.totalEligible.toLocaleString()}`);
+      console.log('  Diagnoses:');
+      if (gv.notInCdb64 > 0) {
+        console.log(`    Not in CDB64: ${gv.notInCdb64.toLocaleString()}`);
+      }
+      if (gv.dataItemMissing > 0) {
+        console.log(`    Data item not indexed: ${gv.dataItemMissing.toLocaleString()}`);
+      }
+      if (gv.parentMismatch > 0) {
+        console.log(`    Parent mismatch: ${gv.parentMismatch.toLocaleString()}`);
+      }
+      if (gv.pathBroken > 0) {
+        console.log(`    Path broken: ${gv.pathBroken.toLocaleString()}`);
+      }
+      if (gv.rootMissing > 0) {
+        console.log(`    Root TX missing: ${gv.rootMissing.toLocaleString()}`);
+      }
+      if (gv.verifiedOk > 0) {
+        console.log(`    Verified OK: ${gv.verifiedOk.toLocaleString()}`);
+      }
+      if (gv.errors > 0) {
+        console.log(`    Errors: ${gv.errors.toLocaleString()}`);
+      }
+    }
   }
 
   private getJsonResults(): object {
@@ -751,6 +1178,39 @@ class DataRetrievalTester {
               contentLengthMismatches: this.stats.contentLengthMismatches,
               contentTypeMismatches: this.stats.contentTypeMismatches,
               referenceErrors: this.stats.referenceErrors,
+            }
+          : null,
+      cdb64Verification:
+        this.stats.cdb64Verification && this.stats.cdb64Verification.totalChecked > 0
+          ? {
+              cdb64File: this.config.cdb64Path,
+              totalChecked: this.stats.cdb64Verification.totalChecked,
+              foundInCdb64: this.stats.cdb64Verification.foundInCdb64,
+              notFoundInCdb64: this.stats.cdb64Verification.notFoundInCdb64,
+              lookupErrors: this.stats.cdb64Verification.lookupErrors,
+              foundRate: parseFloat(
+                (
+                  (this.stats.cdb64Verification.foundInCdb64 /
+                    this.stats.cdb64Verification.totalChecked) *
+                  100
+                ).toFixed(2),
+              ),
+            }
+          : null,
+      graphqlVerification:
+        this.stats.graphqlVerification &&
+        this.stats.graphqlVerification.totalEligible > 0
+          ? {
+              cdb64File: this.config.cdb64Path,
+              reference: this.config.reference,
+              totalEligible: this.stats.graphqlVerification.totalEligible,
+              notInCdb64: this.stats.graphqlVerification.notInCdb64,
+              dataItemMissing: this.stats.graphqlVerification.dataItemMissing,
+              parentMismatch: this.stats.graphqlVerification.parentMismatch,
+              pathBroken: this.stats.graphqlVerification.pathBroken,
+              rootMissing: this.stats.graphqlVerification.rootMissing,
+              verifiedOk: this.stats.graphqlVerification.verifiedOk,
+              errors: this.stats.graphqlVerification.errors,
             }
           : null,
     };
@@ -913,6 +1373,14 @@ class DataRetrievalTester {
         `data-retrieval-results-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
       this.writeJsonToFile(outputFile);
     }
+
+    // Write failed IDs to file if configured
+    if (this.config.failedIdsPath && this.failedIds.length > 0) {
+      fs.writeFileSync(this.config.failedIdsPath, this.failedIds.join('\n') + '\n');
+      console.log(
+        `\nFailed IDs written to: ${this.config.failedIdsPath} (${this.failedIds.length} IDs)`,
+      );
+    }
   }
 }
 
@@ -922,6 +1390,8 @@ function parseArguments(): TestConfig {
     csvPath: '',
     gateway: 'http://localhost:4000',
     reference: undefined,
+    cdb64Path: undefined,
+    failedIdsPath: undefined,
     mode: 'sequential',
     count: undefined,
     concurrency: 1,
@@ -960,6 +1430,22 @@ function parseArguments(): TestConfig {
           throw new Error('--reference requires a URL');
         }
         config.reference = nextArg;
+        i++;
+        break;
+
+      case '--cdb64':
+        if (!nextArg) {
+          throw new Error('--cdb64 requires a file path');
+        }
+        config.cdb64Path = nextArg;
+        i++;
+        break;
+
+      case '--failed-ids':
+        if (!nextArg) {
+          throw new Error('--failed-ids requires a file path');
+        }
+        config.failedIdsPath = nextArg;
         i++;
         break;
 
@@ -1062,6 +1548,18 @@ function parseArguments(): TestConfig {
     config.reference = config.reference.replace(/\/$/, '');
   }
 
+  // Validate CDB64 option
+  if (config.cdb64Path) {
+    if (!fs.existsSync(config.cdb64Path)) {
+      throw new Error(`CDB64 file not found: ${config.cdb64Path}`);
+    }
+  }
+
+  // Validate --failed-ids option
+  if (config.failedIdsPath && !config.reference) {
+    throw new Error('--failed-ids requires --reference to also be specified');
+  }
+
   return config;
 }
 
@@ -1075,6 +1573,8 @@ Options:
   --csv <file>           CSV file with TX/data item IDs in first column (required)
   --gateway <url>        Gateway URL to test (default: http://localhost:4000)
   --reference <url>      Reference gateway URL for comparison (optional)
+  --cdb64 <file>         CDB64 file for verifying IDs exist in the index (optional)
+  --failed-ids <file>    Write IDs that fail on test but succeed on reference to file (requires --reference)
   --mode <mode>          Sampling mode: 'random' or 'sequential' (default: sequential)
   --count <n>            Number of IDs to test (default: all for sequential, 100 for random)
   --concurrency <n>      Number of concurrent requests (default: 1)
@@ -1096,6 +1596,28 @@ Reference Comparison:
 
   Mismatches are reported in verbose mode and summarized in results.
 
+CDB64 Verification:
+  When --cdb64 is specified, every tested ID is checked against the CDB64 file
+  to verify it exists in the index. This provides visibility into what percentage
+  of the tested IDs are covered by the CDB64 index.
+
+  Can be used standalone (without --reference) to check index coverage.
+
+GraphQL Verification (404 Mismatches):
+  When both --cdb64 and --reference are specified, the tool performs additional
+  verification on 404 mismatches (test gateway returns 404, reference returns 2xx).
+  It queries the reference gateway's GraphQL endpoint to verify CDB64 parent/child
+  relationships.
+
+  Diagnoses:
+    - not-in-cdb64: ID not found in the CDB64 file
+    - data-item-missing: Data item not indexed in reference gateway
+    - parent-mismatch: CDB64 has different parent than GraphQL reports
+    - path-broken: An intermediate bundle in the path is missing from GraphQL
+    - root-missing: Root transaction not found in GraphQL index
+    - verified-ok: Everything matches (likely a timing issue)
+    - error: GraphQL query failure
+
 Examples:
   ./tools/test-data-retrieval --csv ids.csv
   ./tools/test-data-retrieval --csv ids.csv --gateway https://ar-io.dev
@@ -1106,6 +1628,17 @@ Examples:
   # Compare with reference gateway
   ./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \\
     --reference https://arweave.net --verbose
+
+  # Save IDs that fail on test gateway but succeed on reference
+  ./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \\
+    --reference https://arweave.net --failed-ids /tmp/missing-ids.txt
+
+  # Verify IDs exist in CDB64 index (standalone, no reference needed)
+  ./tools/test-data-retrieval --csv ids.csv --cdb64 /path/to/root-tx-index.cdb
+
+  # Verify 404 mismatches with CDB64 GraphQL verification
+  ./tools/test-data-retrieval --csv ids.csv --gateway http://localhost:4000 \\
+    --reference https://arweave.net --cdb64 /path/to/root-tx-index.cdb --verbose
 
   # Continuous random sampling (Ctrl+C to stop and save results)
   ./tools/test-data-retrieval --csv ids.csv --continuous --concurrency 10
@@ -1118,6 +1651,9 @@ async function main(): Promise<void> {
     const config = parseArguments();
     const tester = new DataRetrievalTester(config);
 
+    // Initialize resources (e.g., CDB64 reader)
+    await tester.initialize();
+
     // Handle graceful shutdown
     process.on('SIGINT', () => {
       if (!config.jsonOutput) {
@@ -1125,14 +1661,16 @@ async function main(): Promise<void> {
       }
       tester.stop();
       // Wait a moment for in-flight requests to complete
-      setTimeout(() => {
+      setTimeout(async () => {
         tester.displayResults();
+        await tester.cleanup();
         process.exit(0);
       }, 500);
     });
 
     await tester.run();
     tester.displayResults();
+    await tester.cleanup();
   } catch (error: any) {
     console.error(`Error: ${error.message}`);
     console.log('\nUse --help for usage information');
