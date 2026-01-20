@@ -136,7 +136,7 @@ export class FsCleanupWorker {
       return;
     }
 
-    this.log.info(`Deleting ${batch.length} files in ${this.basePath}}`);
+    this.log.info(`Deleting ${batch.length} files in ${this.basePath}`);
 
     // Throttle concurrent deletes to avoid file descriptor exhaustion
     const limit = pLimit(DELETE_CONCURRENCY);
@@ -144,11 +144,7 @@ export class FsCleanupWorker {
       batch.map((file) =>
         limit(async () => {
           metrics.filesCleanedTotal.inc();
-          if (this.deleteCallback !== undefined) {
-            return this.deleteCallback(file);
-          } else {
-            return fs.promises.unlink(file);
-          }
+          return this.deleteCallback(file);
         }),
       ),
     );

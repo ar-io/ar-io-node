@@ -18,6 +18,12 @@ import {
   getRootTxId,
 } from '../../src/lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
+import {
+  ID_PATTERN,
+  getFileSize,
+  getRandomIdFromFile,
+  formatDuration,
+} from './csv-utils.js';
 
 interface TestConfig {
   csvPath: string;
@@ -138,9 +144,6 @@ interface Cdb64VerificationStats {
   notFoundInCdb64: number;
   lookupErrors: number;
 }
-
-// Valid base64url TX/data item ID pattern (43 characters)
-const ID_PATTERN = /^[a-zA-Z0-9_-]{43}$/;
 
 class DataRetrievalTester {
   private config: TestConfig;
@@ -479,62 +482,10 @@ class DataRetrievalTester {
   }
 
   /**
-   * Get file size for random seeking.
+   * Get a random valid ID from the CSV file.
    */
-  private getFileSize(): number {
-    const stat = fs.statSync(this.config.csvPath);
-    return stat.size;
-  }
-
-  /**
-   * Get a random ID by seeking to a random position in the file.
-   * Seeks to random byte, finds next line boundary, reads that line.
-   */
-  private getRandomIdFromFile(): string | null {
-    const fd = fs.openSync(this.config.csvPath, 'r');
-    try {
-      // Pick random position (leave room to find a complete line)
-      const randomPos = Math.floor(Math.random() * Math.max(1, this.fileSize - 100));
-
-      // Read a chunk starting from random position
-      const chunkSize = 256; // Enough for a line with ID
-      const buffer = Buffer.alloc(chunkSize);
-      const bytesRead = fs.readSync(fd, buffer, 0, chunkSize, randomPos);
-
-      if (bytesRead === 0) return null;
-
-      const chunk = buffer.toString('utf-8', 0, bytesRead);
-
-      // Find start of next complete line (skip partial line we landed in)
-      let lineStart = chunk.indexOf('\n');
-      if (lineStart === -1) return null;
-      lineStart++; // Move past the newline
-
-      // Find end of that line
-      let lineEnd = chunk.indexOf('\n', lineStart);
-      if (lineEnd === -1) lineEnd = bytesRead;
-
-      const line = chunk.substring(lineStart, lineEnd);
-      return this.parseLineForId(line);
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
-
-  /**
-   * Get a random valid ID, retrying if we land on an invalid line.
-   */
-  private async getRandomId(): Promise<string> {
-    let attempts = 0;
-    const maxAttempts = 100;
-
-    while (attempts < maxAttempts) {
-      const id = this.getRandomIdFromFile();
-      if (id) return id;
-      attempts++;
-    }
-
-    throw new Error('Failed to find valid ID after maximum attempts');
+  private getRandomId(): string {
+    return getRandomIdFromFile(this.config.csvPath, this.fileSize);
   }
 
   /**
@@ -550,7 +501,7 @@ class DataRetrievalTester {
         const task = limit(async () => {
           if (!this.running) return;
 
-          const id = await this.getRandomId();
+          const id = this.getRandomId();
           const result = await this.testId(id);
           this.updateStatistics(result);
           this.logVerboseResult(result);
@@ -983,17 +934,6 @@ class DataRetrievalTester {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
-  formatDuration(ms: number): string {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-
-    if (minutes > 0) {
-      return `${minutes}m ${remainingSeconds}s`;
-    }
-    return `${seconds}s`;
-  }
-
   displayConsoleResults(): void {
     const duration = this.stats.endTime - this.stats.startTime;
     const successRate =
@@ -1011,7 +951,7 @@ class DataRetrievalTester {
     console.log(`CSV File: ${this.config.csvPath}`);
     console.log(`Gateway: ${this.config.gateway}`);
     console.log(`Mode: ${modeStr} | Concurrency: ${this.config.concurrency}`);
-    console.log(`Duration: ${this.formatDuration(duration)}`);
+    console.log(`Duration: ${formatDuration(duration)}`);
 
     console.log('\nRequests:');
     console.log(`  Total: ${this.stats.totalRequests.toLocaleString()}`);
@@ -1268,7 +1208,7 @@ class DataRetrievalTester {
 
     if (this.config.continuous) {
       // Continuous random sampling mode - no pre-indexing needed
-      this.fileSize = this.getFileSize();
+      this.fileSize = getFileSize(this.config.csvPath);
       console.log(`File size: ${this.formatBytes(this.fileSize)}`);
       this.totalToProcess = 0; // Unknown - continuous
       console.log('Press Ctrl+C to stop and view results...\n');
@@ -1276,7 +1216,7 @@ class DataRetrievalTester {
       await this.runContinuous();
     } else if (this.config.mode === 'random') {
       // Random mode: use random byte seeking
-      this.fileSize = this.getFileSize();
+      this.fileSize = getFileSize(this.config.csvPath);
       const count = this.config.count ?? 100;
       this.totalToProcess = count;
       console.log(`File size: ${this.formatBytes(this.fileSize)}`);
@@ -1290,7 +1230,7 @@ class DataRetrievalTester {
         limit(async () => {
           if (!this.running) return;
 
-          const id = await this.getRandomId();
+          const id = this.getRandomId();
           const result = await this.testId(id);
           this.updateStatistics(result);
           this.logVerboseResult(result);
@@ -1548,7 +1488,6 @@ function parseArguments(): TestConfig {
       case '-h':
         printUsage();
         process.exit(0);
-        break;
 
       default:
         throw new Error(`Unknown argument: ${arg}`);

@@ -19,6 +19,12 @@ import { performance } from 'node:perf_hooks';
 import { Cdb64Reader } from '../../src/lib/cdb64.js';
 import { decodeCdb64Value, getRootTxId } from '../../src/lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
+import {
+  ID_PATTERN,
+  getFileSize,
+  getRandomLineFromFile,
+  formatDuration,
+} from './csv-utils.js';
 
 interface Config {
   cdb64Path: string;
@@ -42,9 +48,6 @@ interface Stats {
   startTime: number;
   endTime: number;
 }
-
-// Valid base64url TX/data item ID pattern (43 characters)
-const ID_PATTERN = /^[a-zA-Z0-9_-]{43}$/;
 
 interface CsvRow {
   id: string;
@@ -81,49 +84,6 @@ function parseLineForRow(line: string): CsvRow | null {
 }
 
 /**
- * Get file size for random seeking.
- */
-function getFileSize(csvPath: string): number {
-  const stat = fs.statSync(csvPath);
-  return stat.size;
-}
-
-/**
- * Get a random row by seeking to a random position in the file.
- * Seeks to random byte, finds next line boundary, reads that line.
- */
-function getRandomRowFromFile(csvPath: string, fileSize: number): CsvRow | null {
-  const fd = fs.openSync(csvPath, 'r');
-  try {
-    // Pick random position (leave room to find a complete line)
-    const randomPos = Math.floor(Math.random() * Math.max(1, fileSize - 100));
-
-    // Read a chunk starting from random position
-    const chunkSize = 512; // Enough for a line with ID and root TX ID
-    const buffer = Buffer.alloc(chunkSize);
-    const bytesRead = fs.readSync(fd, buffer, 0, chunkSize, randomPos);
-
-    if (bytesRead === 0) return null;
-
-    const chunk = buffer.toString('utf-8', 0, bytesRead);
-
-    // Find start of next complete line (skip partial line we landed in)
-    let lineStart = chunk.indexOf('\n');
-    if (lineStart === -1) return null;
-    lineStart++; // Move past the newline
-
-    // Find end of that line
-    let lineEnd = chunk.indexOf('\n', lineStart);
-    if (lineEnd === -1) lineEnd = bytesRead;
-
-    const line = chunk.substring(lineStart, lineEnd);
-    return parseLineForRow(line);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-/**
  * Get a random valid row, retrying if we land on an invalid line.
  */
 function getRandomRow(csvPath: string, fileSize: number): CsvRow {
@@ -131,8 +91,11 @@ function getRandomRow(csvPath: string, fileSize: number): CsvRow {
   const maxAttempts = 100;
 
   while (attempts < maxAttempts) {
-    const row = getRandomRowFromFile(csvPath, fileSize);
-    if (row) return row;
+    const line = getRandomLineFromFile(csvPath, fileSize);
+    if (line) {
+      const row = parseLineForRow(line);
+      if (row) return row;
+    }
     attempts++;
   }
 
@@ -173,20 +136,6 @@ async function* streamCsvRowsSequential(
       }
     }
   }
-}
-
-/**
- * Format duration for human-readable display.
- */
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-
-  if (minutes > 0) {
-    return `${minutes}m ${remainingSeconds}s`;
-  }
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 /**
