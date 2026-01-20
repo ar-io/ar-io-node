@@ -6,9 +6,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import pLimit from 'p-limit';
 import * as winston from 'winston';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
+
+// Limit concurrent delete operations to avoid file descriptor exhaustion
+const DELETE_CONCURRENCY = 50;
 
 export class FsCleanupWorker {
   // Dependencies
@@ -134,15 +138,19 @@ export class FsCleanupWorker {
 
     this.log.info(`Deleting ${batch.length} files in ${this.basePath}}`);
 
+    // Throttle concurrent deletes to avoid file descriptor exhaustion
+    const limit = pLimit(DELETE_CONCURRENCY);
     await Promise.all(
-      batch.map((file) => {
-        metrics.filesCleanedTotal.inc();
-        if (this.deleteCallback !== undefined) {
-          return this.deleteCallback(file);
-        } else {
-          return fs.promises.unlink(file);
-        }
-      }),
+      batch.map((file) =>
+        limit(async () => {
+          metrics.filesCleanedTotal.inc();
+          if (this.deleteCallback !== undefined) {
+            return this.deleteCallback(file);
+          } else {
+            return fs.promises.unlink(file);
+          }
+        }),
+      ),
     );
 
     this.lastPath = batch[batch.length - 1];
