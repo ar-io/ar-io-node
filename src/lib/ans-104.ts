@@ -381,6 +381,7 @@ if (!isMainThread) {
       if (start > end) {
         hasher.update('');
         resolve(hasher.digest('base64url'));
+        return; // Early return to prevent creating unused stream
       }
 
       const stream = fs.createReadStream(bundlePath, { start, end });
@@ -394,6 +395,7 @@ if (!isMainThread) {
       });
 
       stream.on('error', (err) => {
+        stream.destroy(); // Ensure file descriptor is released
         reject(err);
       });
     });
