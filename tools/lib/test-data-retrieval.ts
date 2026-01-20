@@ -581,6 +581,7 @@ class DataRetrievalTester {
 
   async testId(id: string): Promise<RequestResult> {
     const startTime = performance.now();
+    let result: RequestResult;
 
     try {
       // Use HEAD request to test availability without downloading content
@@ -601,7 +602,7 @@ class DataRetrievalTester {
       const contentType = response.headers['content-type'] as string | undefined;
       const cacheStatus = response.headers['x-cache'] as string | undefined;
 
-      const result: RequestResult = {
+      result = {
         id,
         success: response.status >= 200 && response.status < 300,
         statusCode: response.status,
@@ -615,37 +616,11 @@ class DataRetrievalTester {
       if (this.config.reference) {
         await this.compareWithReference(id, result);
       }
-
-      // Check CDB64 for every tested ID when --cdb64 is provided
-      // Verifies the value decodes and has a valid root TX ID (matches verify-cdb64 behavior)
-      if (this.cdb64Reader && this.stats.cdb64Verification) {
-        this.stats.cdb64Verification.totalChecked++;
-        try {
-          const keyBuffer = fromB64Url(id);
-          const valueBuffer = await this.cdb64Reader.get(keyBuffer);
-          if (valueBuffer) {
-            // Decode and verify the value has a valid root TX ID
-            const decoded = decodeCdb64Value(valueBuffer);
-            const rootTxId = getRootTxId(decoded);
-            if (rootTxId && rootTxId.length === 32) {
-              this.stats.cdb64Verification.foundInCdb64++;
-            } else {
-              this.stats.cdb64Verification.notFoundInCdb64++;
-            }
-          } else {
-            this.stats.cdb64Verification.notFoundInCdb64++;
-          }
-        } catch {
-          this.stats.cdb64Verification.lookupErrors++;
-        }
-      }
-
-      return result;
     } catch (error: any) {
       const responseTime = performance.now() - startTime;
 
       if (error.code === 'ECONNABORTED') {
-        return {
+        result = {
           id,
           success: false,
           statusCode: 0,
@@ -655,19 +630,46 @@ class DataRetrievalTester {
           cacheStatus: undefined,
           error: 'Timeout',
         };
+      } else {
+        result = {
+          id,
+          success: false,
+          statusCode: 0,
+          responseTime,
+          contentLength: undefined,
+          contentType: undefined,
+          cacheStatus: undefined,
+          error: error.message,
+        };
       }
-
-      return {
-        id,
-        success: false,
-        statusCode: 0,
-        responseTime,
-        contentLength: undefined,
-        contentType: undefined,
-        cacheStatus: undefined,
-        error: error.message,
-      };
     }
+
+    // Check CDB64 for every tested ID when --cdb64 is provided
+    // This runs regardless of HTTP request success/failure
+    // Verifies the value decodes and has a valid root TX ID (matches verify-cdb64 behavior)
+    if (this.cdb64Reader && this.stats.cdb64Verification) {
+      this.stats.cdb64Verification.totalChecked++;
+      try {
+        const keyBuffer = fromB64Url(id);
+        const valueBuffer = await this.cdb64Reader.get(keyBuffer);
+        if (valueBuffer) {
+          // Decode and verify the value has a valid root TX ID
+          const decoded = decodeCdb64Value(valueBuffer);
+          const rootTxId = getRootTxId(decoded);
+          if (rootTxId && rootTxId.length === 32) {
+            this.stats.cdb64Verification.foundInCdb64++;
+          } else {
+            this.stats.cdb64Verification.notFoundInCdb64++;
+          }
+        } else {
+          this.stats.cdb64Verification.notFoundInCdb64++;
+        }
+      } catch {
+        this.stats.cdb64Verification.lookupErrors++;
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -720,22 +722,38 @@ class DataRetrievalTester {
 
       // Perform GraphQL verification for 404 mismatches when CDB64 is available
       const is404Mismatch =
-        result.statusCode === 404 && refSuccess && this.cdb64Reader;
+        result.statusCode === 404 && refSuccess && this.cdb64Reader !== null;
       if (is404Mismatch) {
-        const cdb64Lookup = await this.lookupCdb64(id);
-        if (cdb64Lookup) {
-          result.graphqlVerification = await this.verifyWithGraphQL(
-            id,
-            cdb64Lookup,
-          );
-        } else {
-          // ID not in CDB64 or no path available
+        // First check if ID exists in CDB64 at all (cdb64Reader is non-null per condition above)
+        const keyBuffer = fromB64Url(id);
+        const valueBuffer = await this.cdb64Reader!.get(keyBuffer);
+
+        if (!valueBuffer) {
+          // ID not in CDB64
           result.graphqlVerification = {
             dataItemId: id,
             dataItemExists: false,
             parentMatch: false,
             diagnosis: 'not-in-cdb64',
           };
+        } else {
+          // ID exists - check if it has path info for verification
+          let cdb64Lookup = await this.lookupCdb64(id);
+          if (!cdb64Lookup) {
+            // Legacy format without path - use rootTxId as single-level path
+            // This handles data items directly in the root bundle
+            const decoded = decodeCdb64Value(valueBuffer);
+            const rootTxId = toB64Url(getRootTxId(decoded));
+            cdb64Lookup = {
+              path: [rootTxId],
+              rootTxId,
+              parentId: rootTxId,
+            };
+          }
+          result.graphqlVerification = await this.verifyWithGraphQL(
+            id,
+            cdb64Lookup,
+          );
         }
       }
     } catch (error: any) {
