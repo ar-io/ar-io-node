@@ -12,7 +12,11 @@ import { performance } from 'node:perf_hooks';
 import pLimit from 'p-limit';
 
 import { Cdb64Reader } from '../../src/lib/cdb64.js';
-import { decodeCdb64Value, getPath } from '../../src/lib/cdb64-encoding.js';
+import {
+  decodeCdb64Value,
+  getPath,
+  getRootTxId,
+} from '../../src/lib/cdb64-encoding.js';
 import { fromB64Url, toB64Url } from '../../src/lib/encoding.js';
 
 interface TestConfig {
@@ -613,12 +617,21 @@ class DataRetrievalTester {
       }
 
       // Check CDB64 for every tested ID when --cdb64 is provided
+      // Verifies the value decodes and has a valid root TX ID (matches verify-cdb64 behavior)
       if (this.cdb64Reader && this.stats.cdb64Verification) {
         this.stats.cdb64Verification.totalChecked++;
         try {
-          const cdb64Result = await this.lookupCdb64(id);
-          if (cdb64Result) {
-            this.stats.cdb64Verification.foundInCdb64++;
+          const keyBuffer = fromB64Url(id);
+          const valueBuffer = await this.cdb64Reader.get(keyBuffer);
+          if (valueBuffer) {
+            // Decode and verify the value has a valid root TX ID
+            const decoded = decodeCdb64Value(valueBuffer);
+            const rootTxId = getRootTxId(decoded);
+            if (rootTxId && rootTxId.length === 32) {
+              this.stats.cdb64Verification.foundInCdb64++;
+            } else {
+              this.stats.cdb64Verification.notFoundInCdb64++;
+            }
           } else {
             this.stats.cdb64Verification.notFoundInCdb64++;
           }

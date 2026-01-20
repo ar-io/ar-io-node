@@ -17,6 +17,7 @@ import readline from 'node:readline';
 import { performance } from 'node:perf_hooks';
 
 import { Cdb64Reader } from '../../src/lib/cdb64.js';
+import { decodeCdb64Value, getRootTxId } from '../../src/lib/cdb64-encoding.js';
 import { fromB64Url } from '../../src/lib/encoding.js';
 
 interface Config {
@@ -171,6 +172,7 @@ function formatDuration(ms: number): string {
 
 /**
  * Check a single ID against the CDB64 reader and update stats.
+ * Verifies the value decodes and has a valid root TX ID.
  */
 async function checkId(
   id: string,
@@ -180,10 +182,20 @@ async function checkId(
 ): Promise<void> {
   try {
     const keyBuffer = fromB64Url(id);
-    const result = await reader.get(keyBuffer);
+    const valueBuffer = await reader.get(keyBuffer);
 
-    if (result) {
-      stats.found++;
+    if (valueBuffer) {
+      // Decode and verify the value has a valid root TX ID
+      const decoded = decodeCdb64Value(valueBuffer);
+      const rootTxId = getRootTxId(decoded);
+      if (rootTxId && rootTxId.length === 32) {
+        stats.found++;
+      } else {
+        stats.notFound++;
+        if (config.verbose) {
+          stats.missingIds.push(`${id} (invalid value)`);
+        }
+      }
     } else {
       stats.notFound++;
       if (config.verbose) {
