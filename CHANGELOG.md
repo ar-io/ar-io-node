@@ -26,9 +26,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Shows detailed mismatch info in verbose mode
   - Includes comparison stats in summary and JSON output
 
+- **CDB64 Verification Tool**: New CLI tool for validating CDB64 root TX index
+  completeness (`tools/verify-cdb64`)
+  - Random and sequential sampling modes for efficient verification of large
+    indexes
+  - Value comparison mode to validate stored values match actual gateway
+    responses
+  - Detailed statistics on index coverage and discrepancies
+
+- **CDB64 Verification in Data Retrieval Tool**: The data retrieval test tool
+  now verifies CDB64 index entries for every tested ID, reporting match rates
+  and discrepancies
+
 ### Changed
 
+- **Abort Signal Propagation to Data Requests**: Extended abort signal handling
+  to contiguous data sources (PE-8863)
+  - Client disconnections now abort all in-flight data requests, not just chunk
+    requests
+  - Prevents wasted bandwidth and resources on abandoned data transfers
+
 ### Fixed
+
+- **Stream Leak in ANS-104 Worker**: Fixed stream not being properly destroyed
+  in `hashDataItemData` function, which could cause file descriptor exhaustion
+  during bundle processing
+
+- **Stream Leak in Data-Root Worker**: Fixed read stream not being destroyed
+  after use, preventing file descriptor leaks during data root verification
+
+- **fs-cleanup-worker Resource Exhaustion**: Improved cleanup worker to reduce
+  file descriptor pressure
+  - Throttled concurrent file deletes to prevent overwhelming the filesystem
+  - Reduced parallel file operations during cleanup cycles
 
 - **Abort Signal Race Condition in Cached Chunk Requests**: Fixed a race
   condition in `ArIOChunkSource` where subsequent callers could not abort their
