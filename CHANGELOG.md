@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Release 66] - 2026-01-21
 
+This is a **recommended release** focusing on **nested bundle performance** and
+**resource stability**. Key improvements include path-based CDB64 indexes that
+enable O(n) navigation through deeply nested bundles (vs O(n*m) previously), new
+CDB64 verification tools for validating index completeness, and several fixes
+for stream leaks and file descriptor exhaustion. Abort signal handling has also
+been extended to contiguous data requests, preventing wasted work when clients
+disconnect.
+
 ### Added
 
 - **Nested Bundle Path Support**: CDB64 root TX indexes now support path-based
