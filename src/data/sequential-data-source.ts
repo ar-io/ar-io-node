@@ -35,11 +35,13 @@ export class SequentialDataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'SequentialDataSource.getData',
@@ -58,6 +60,9 @@ export class SequentialDataSource implements ContiguousDataSource {
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
+
       this.log.debug('Sequentialy fetching from data sources', {
         id,
       });
@@ -67,6 +72,9 @@ export class SequentialDataSource implements ContiguousDataSource {
       });
 
       for (let i = 0; i < this.dataSources.length; i++) {
+        // Check for abort before each source attempt
+        signal?.throwIfAborted();
+
         const dataSource = this.dataSources[i];
         const sourceStart = Date.now();
 
@@ -94,6 +102,7 @@ export class SequentialDataSource implements ContiguousDataSource {
             requestAttributes,
             region,
             parentSpan: sourceSpan,
+            signal,
           });
 
           const sourceDuration = Date.now() - sourceStart;
@@ -124,6 +133,21 @@ export class SequentialDataSource implements ContiguousDataSource {
           return data;
         } catch (error: any) {
           const sourceDuration = Date.now() - sourceStart;
+
+          // Re-throw AbortError immediately - don't try next source
+          if (error.name === 'AbortError') {
+            span.addEvent('Request aborted', {
+              'sequential.source_index': i,
+              'sequential.source_name': dataSource.constructor.name,
+              'data.retrieval.error': 'client_disconnected',
+            });
+            sourceSpan.setAttributes({
+              'sequential.attempt.result': 'aborted',
+              'sequential.attempt.duration_ms': sourceDuration,
+            });
+            sourceSpan.end();
+            throw error;
+          }
 
           span.addEvent('Data source failed', {
             'sequential.source_index': i,
@@ -158,7 +182,10 @@ export class SequentialDataSource implements ContiguousDataSource {
       span.recordException(finalError);
       throw finalError;
     } catch (error: any) {
-      span.recordException(error);
+      // Don't record AbortError as exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+      }
       throw error;
     } finally {
       span.end();

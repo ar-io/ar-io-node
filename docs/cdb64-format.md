@@ -144,9 +144,11 @@ Key: <32 bytes> - Raw data item ID
 
 ## Value Format
 
-Values are MessagePack-encoded objects with short keys for compactness:
+Values are MessagePack-encoded objects with short keys for compactness. Four formats are supported to handle both legacy data and nested bundle hierarchies.
 
-### Simple Format
+### Legacy Formats
+
+#### Simple Format
 
 Used when only the root transaction ID is known:
 
@@ -156,7 +158,7 @@ Used when only the root transaction ID is known:
 }
 ```
 
-### Complete Format
+#### Complete Format
 
 Used when offset information is available:
 
@@ -168,11 +170,55 @@ Used when offset information is available:
 }
 ```
 
+### Path Formats
+
+Path formats are used for nested bundles (bundles containing bundles). The path array provides the traversal route from the L1 root transaction through intermediate bundles to the immediate parent bundle.
+
+#### Path Format
+
+Used when the bundle traversal path is known but offsets are not:
+
+```javascript
+{
+  p: [<Buffer 32 bytes>, ...]  // Array of bundle IDs from root to parent
+}
+```
+
+#### Path Complete Format
+
+Used when both path and offset information are available:
+
+```javascript
+{
+  p: [<Buffer 32 bytes>, ...],  // Array of bundle IDs from root to parent
+  i: <integer>,                  // Root data item offset
+  d: <integer>                   // Root data offset
+}
+```
+
+### Path Structure
+
+The path array contains transaction/data item IDs representing the bundle hierarchy:
+
+- `path[0]` is always the L1 root transaction ID
+- `path[1..n-1]` are intermediate nested bundle IDs (if any)
+- `path[n-1]` (last element) is the immediate parent bundle containing the data item
+- The data item ID itself is NOT included in the path
+
+**Example path for a deeply nested data item:**
+```
+Root TX → Bundle A → Bundle B → Data Item
+path = [RootTxId, BundleAId, BundleBId]
+```
+
+For path formats, the root TX ID is derived from `path[0]`, eliminating the need for a separate `r` field.
+
 ### Field Mapping
 
 | MessagePack Key | Full Name | Description |
 |-----------------|-----------|-------------|
-| `r` | rootTxId | 32-byte root transaction ID |
+| `r` | rootTxId | 32-byte root transaction ID (legacy formats only) |
+| `p` | path | Array of 32-byte bundle IDs [root, ..., parent] |
 | `i` | rootDataItemOffset | Byte offset of nested data item within root TX |
 | `d` | rootDataOffset | Byte offset of data payload within root TX |
 
@@ -180,13 +226,19 @@ These offsets correspond to the HTTP headers:
 - `i` → `X-AR-IO-Root-Data-Item-Offset`
 - `d` → `X-AR-IO-Root-Data-Offset`
 
-## Example
+### Maximum Nesting Depth
 
-For a data item `abc123...` nested in root TX `xyz789...` at offset 1024 with data at offset 1536:
+The path array is limited to a maximum of 10 elements (`MAX_BUNDLE_NESTING_DEPTH`), which supports bundle nesting up to 9 levels deep (root TX + 9 nested bundles).
+
+## Examples
+
+### Legacy Complete Format
+
+For a data item `abc123...` nested directly in root TX `xyz789...` at offset 1024 with data at offset 1536:
 
 **Key** (32 bytes):
 ```
-6abc123... (raw binary data item ID)
+abc123... (raw binary data item ID)
 ```
 
 **Value** (MessagePack encoded):
@@ -199,6 +251,30 @@ For a data item `abc123...` nested in root TX `xyz789...` at offset 1024 with da
 ```
 
 **Encoded size**: ~40-45 bytes depending on offset values
+
+### Path Complete Format
+
+For a data item `def456...` nested inside Bundle B (`bbb...`) which is inside Bundle A (`aaa...`) which is inside root TX `xyz789...`:
+
+**Key** (32 bytes):
+```
+def456... (raw binary data item ID)
+```
+
+**Value** (MessagePack encoded):
+```javascript
+{
+  p: [
+    Buffer<xyz789...>,  // Root TX ID (32 bytes)
+    Buffer<aaa...>,     // Bundle A ID (32 bytes)
+    Buffer<bbb...>      // Bundle B ID - immediate parent (32 bytes)
+  ],
+  i: 5000,
+  d: 5512
+}
+```
+
+**Encoded size**: ~110-115 bytes for 3-element path with offsets
 
 ---
 

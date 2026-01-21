@@ -384,5 +384,16 @@ related protocols:
   - Reference for: Network monitoring, gateway health checks, observation
     protocols
 
-Use `mr update` to clone/update these repositories. They are excluded from git
+- **repos/cdb64-rs** - Rust implementation of CDB (constant database) with
+  64-bit support
+  - Source: https://github.com/ever0de/cdb64-rs
+  - Reference for: CDB file format, fast O(1) key-value lookups, Node.js
+    bindings via napi-rs
+
+- **repos/private-gateway-legacy** - ArweaveTeam's original gateway
+  implementation (symlink, not managed by mr)
+  - Source: https://github.com/ar-io/private-gateway-legacy
+  - Reference for: Legacy gateway patterns, historical implementation details
+
+Use `mr update` to clone/update the mr-managed repositories. They are excluded from git
 tracking via `.gitignore`.

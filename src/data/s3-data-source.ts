@@ -56,11 +56,13 @@ export class S3DataSource implements ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'S3DataSource.getData',
@@ -81,6 +83,8 @@ export class S3DataSource implements ContiguousDataSource {
 
     const log = this.log.child({ method: 'getData', id });
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
       log.debug('Fetching contiguous data from S3', {
         bucket: this.s3Bucket,
         prefix: this.s3Prefix,
@@ -91,6 +95,9 @@ export class S3DataSource implements ContiguousDataSource {
       span.setAttribute('s3.request.object_key', objectKey);
       span.addEvent('Starting S3 head request');
       const headRequestStart = Date.now();
+
+      // Check for abort before S3 HeadObject
+      signal?.throwIfAborted();
 
       const head = await this.awsClient.S3.HeadObject({
         Bucket: this.s3Bucket,
@@ -162,6 +169,9 @@ export class S3DataSource implements ContiguousDataSource {
       });
 
       span.addEvent('Starting S3 GetObject request');
+
+      // Check for abort before S3 GetObject
+      signal?.throwIfAborted();
 
       const getObjectStart = Date.now();
       const response = await this.s3Client.GetObject({
@@ -238,6 +248,14 @@ export class S3DataSource implements ContiguousDataSource {
         requestAttributes: requestAttributesHeaders?.attributes,
       };
     } catch (error: any) {
+      // Don't record AbortError as exception
+      if (error.name === 'AbortError') {
+        span.addEvent('Request aborted', {
+          'data.retrieval.error': 'client_disconnected',
+        });
+        throw error;
+      }
+
       span.recordException(error);
       span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
 

@@ -18,6 +18,7 @@ export interface StreamRangeDataParams {
   rangeEnd: number;
   getChunkByAny: (params: ChunkWithValidationParams) => Promise<Chunk>;
   log: winston.Logger;
+  signal?: AbortSignal;
 }
 
 export interface StreamRangeDataResult {
@@ -46,6 +47,7 @@ export function streamRangeData(params: StreamRangeDataParams): {
       rangeEnd,
       getChunkByAny,
       log,
+      signal,
     } = params;
     // Validate range
     if (rangeStart >= rangeEnd || rangeStart < 0 || rangeEnd > txSize) {
@@ -72,6 +74,9 @@ export function streamRangeData(params: StreamRangeDataParams): {
     });
 
     while (totalBytesYielded < targetBytes) {
+      // Check for abort before fetching each chunk
+      signal?.throwIfAborted();
+
       try {
         // Fetch chunk containing current offset
         const chunk = await getChunkByAny({
@@ -127,6 +132,11 @@ export function streamRangeData(params: StreamRangeDataParams): {
           break;
         }
       } catch (error) {
+        // Don't log AbortError as an error - it's expected on client disconnect
+        if (error instanceof Error && error.name === 'AbortError') {
+          log.debug('Range stream aborted', { txId });
+          throw error;
+        }
         log.error('Error streaming chunk for range', {
           txId,
           currentAbsoluteOffset,

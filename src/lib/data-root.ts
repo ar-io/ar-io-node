@@ -252,10 +252,11 @@ if (!isMainThread) {
 
     const { id, dataPath } = message;
     const fnLog = log.child({ id, worker: true });
+    let dataStream: fs.ReadStream | undefined;
     try {
-      const dataBuffer = fs.createReadStream(dataPath);
+      dataStream = fs.createReadStream(dataPath);
       fnLog.debug('Computing data root...');
-      const dataRootB64Url = await computeDataRootFromReadable(dataBuffer);
+      const dataRootB64Url = await computeDataRootFromReadable(dataStream);
       fnLog.debug('Computed data root...', { dataRoot: dataRootB64Url });
 
       parentPort?.postMessage({
@@ -269,6 +270,10 @@ if (!isMainThread) {
       });
       parentPort?.postMessage({ eventName: DATA_ROOT_FAILURE });
     } finally {
+      // Destroy the stream to release file descriptor (safe even if already consumed)
+      if (dataStream !== undefined) {
+        dataStream.destroy();
+      }
       try {
         await fsPromises.unlink(dataPath);
       } catch (error: any) {

@@ -4,6 +4,78 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Release 66] - 2026-01-21
+
+This is a **recommended release** focusing on **nested bundle performance** and
+**resource stability**. Key improvements include path-based CDB64 indexes that
+enable O(n) navigation through deeply nested bundles (vs O(n*m) previously), new
+CDB64 verification tools for validating index completeness, and several fixes
+for stream leaks and file descriptor exhaustion. Abort signal handling has also
+been extended to contiguous data requests, preventing wasted work when clients
+disconnect.
+
+### Added
+
+- **Nested Bundle Path Support**: CDB64 root TX indexes now support path-based
+  formats for efficient retrieval of deeply nested data items (PE-8838)
+  - New value formats: path-only `{p}` and path-complete `{p, i, d}` store the
+    bundle hierarchy from root to parent
+  - Enables O(n) navigation through nested bundles instead of O(n*m) linear
+    search at each level
+  - GraphQL parent chain traversal now collects and returns path information
+  - `Ans104OffsetSource` uses path-guided navigation with fallback to legacy
+    behavior
+  - CDB64 tools updated to generate and export path-based indexes
+
+- **Reference Gateway Comparison in Data Retrieval Tool**: New `--reference`
+  option in `tools/test-data-retrieval` compares responses against a reference
+  gateway
+  - Compares status codes, Content-Length, and Content-Type headers
+  - Shows detailed mismatch info in verbose mode
+  - Includes comparison stats in summary and JSON output
+
+- **CDB64 Verification Tool**: New CLI tool for validating CDB64 root TX index
+  completeness (`tools/verify-cdb64`)
+  - Random and sequential sampling modes for efficient verification of large
+    indexes
+  - Value comparison mode to validate stored values match actual gateway
+    responses
+  - Detailed statistics on index coverage and discrepancies
+
+- **CDB64 Verification in Data Retrieval Tool**: The data retrieval test tool
+  now verifies CDB64 index entries for every tested ID, reporting match rates
+  and discrepancies
+
+### Changed
+
+- **Abort Signal Propagation to Data Requests**: Extended abort signal handling
+  to contiguous data sources (PE-8863)
+  - Client disconnections now abort all in-flight data requests, not just chunk
+    requests
+  - Prevents wasted bandwidth and resources on abandoned data transfers
+
+### Fixed
+
+- **Stream Leak in ANS-104 Worker**: Fixed stream not being properly destroyed
+  in `hashDataItemData` function, which could cause file descriptor exhaustion
+  during bundle processing
+
+- **Stream Leak in Data-Root Worker**: Fixed read stream not being destroyed
+  after use, preventing file descriptor leaks during data root verification
+
+- **fs-cleanup-worker Resource Exhaustion**: Improved cleanup worker to reduce
+  file descriptor pressure
+  - Throttled concurrent file deletes to prevent overwhelming the filesystem
+  - Reduced parallel file operations during cleanup cycles
+
+- **Abort Signal Race Condition in Cached Chunk Requests**: Fixed a race
+  condition in `ArIOChunkSource` where subsequent callers could not abort their
+  requests when sharing a cached promise (PE-8867)
+  - Added `withAbortSignal()` helper that races a promise against the caller's
+    abort signal
+  - Each caller now respects their own abort signal independently when using
+    cached chunk promises
+
 ## [Release 65] - 2026-01-14
 
 This is a **recommended release** focusing on **resource stability** and **remote
@@ -17,7 +89,7 @@ vulnerabilities have also been addressed.
 ### Added
 
 - **Remote CDB64 Index Sources**: CDB64 root TX indexes can now be loaded from
-  remote sources in addition to local files (GitHub #569, PE-8812)
+  remote sources in addition to local files (GitHub #569)
   - Arweave transactions: specify a 43-character TX ID
   - Bundle data items: use `txId:offset:size` format for indexes stored within bundles
   - HTTP URLs: load indexes from S3, CDNs, or dedicated index servers
@@ -33,7 +105,7 @@ vulnerabilities have also been addressed.
     use LRU cache with configurable size and TTL
 
 - **Chunk Retrieval Load Testing Tool**: New CLI tool for load testing chunk
-  retrieval endpoints (`tools/test-chunk-retrieval`) (PE-8833)
+  retrieval endpoints (`tools/test-chunk-retrieval`)
   - Configurable concurrency with `--concurrency` flag (default: 10)
   - Duration mode (`--duration`) and count mode (`--count`) for flexible testing
   - File descriptor tracking (`--track-fds <pid>`) for resource monitoring
@@ -43,18 +115,18 @@ vulnerabilities have also been addressed.
 ### Changed
 
 - **AbortSignal Propagation in Chunk Retrieval**: Client disconnections now
-  abort all downstream operations promptly (PE-8833)
+  abort all downstream operations promptly
   - Adds middleware that attaches AbortSignal to all requests
   - Propagates signal through retrieval service, composite sources, and caches
   - Returns HTTP 499 status for client-aborted requests
   - Prevents wasted work when clients disconnect during chunk requests
 
 - **Reduced Parallel Peer Requests**: Lowered parallel peer request count from
-  3 to 2 to reduce resource pressure during chunk retrieval (PE-8833)
+  3 to 2 to reduce resource pressure during chunk retrieval
 
 - **Chain Fallback Concurrency Limit**: Added concurrency limit to
   CompositeTxBoundarySource for chain fallback operations to prevent resource
-  exhaustion from expensive binary search operations (PE-8833)
+  exhaustion from expensive binary search operations
 
 - **Node.js Update**: Bumped Node.js from 20.11.1 to 20.19.6 (latest available
   Docker image)
@@ -69,7 +141,7 @@ vulnerabilities have also been addressed.
 
 - **Abort Losing Parallel Peer Requests**: Parallel peer chunk requests now
   properly abort when one peer succeeds, freeing resources immediately instead
-  of letting losing requests complete wastefully (PE-8833)
+  of letting losing requests complete wastefully
 
 - **Dead TxOffsetSource Code Removed**: Removed obsolete TxOffsetSource
   implementation files that were superseded by TxBoundarySource refactor

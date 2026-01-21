@@ -6,14 +6,19 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import pLimit from 'p-limit';
 import * as winston from 'winston';
 import * as config from '../config.js';
 import * as metrics from '../metrics.js';
 
+// Limit concurrent delete operations to avoid file descriptor exhaustion
+const DELETE_CONCURRENCY = 50;
+
 export class FsCleanupWorker {
   // Dependencies
   private log: winston.Logger;
-  private shouldDelete: (path: string) => Promise<boolean>;
+  // Callback receives stats to avoid double-stat (worker stats once, passes to callback)
+  private shouldDelete: (path: string, stats: fs.Stats) => Promise<boolean>;
   private deleteCallback: (path: string) => Promise<void>;
 
   private basePath: string;
@@ -44,7 +49,8 @@ export class FsCleanupWorker {
     log: winston.Logger;
     basePath: string;
     dataType: string;
-    shouldDelete?: (path: string) => Promise<boolean>;
+    // Stats are passed to avoid redundant stat calls - use them instead of calling stat again
+    shouldDelete?: (path: string, stats: fs.Stats) => Promise<boolean>;
     deleteCallback?: (path: string) => Promise<void>;
     batchSize?: number;
     pauseDuration?: number;
@@ -52,7 +58,8 @@ export class FsCleanupWorker {
     initialDelay?: number;
   }) {
     this.log = log.child({ class: this.constructor.name, dataType });
-    this.shouldDelete = shouldDelete ?? (() => Promise.resolve(true));
+    this.shouldDelete =
+      shouldDelete ?? ((_path, _stats) => Promise.resolve(true));
     this.deleteCallback =
       deleteCallback ?? ((file: string) => fs.promises.unlink(file));
 
@@ -129,17 +136,17 @@ export class FsCleanupWorker {
       return;
     }
 
-    this.log.info(`Deleting ${batch.length} files in ${this.basePath}}`);
+    this.log.info(`Deleting ${batch.length} files in ${this.basePath}`);
 
+    // Throttle concurrent deletes to avoid file descriptor exhaustion
+    const limit = pLimit(DELETE_CONCURRENCY);
     await Promise.all(
-      batch.map((file) => {
-        metrics.filesCleanedTotal.inc();
-        if (this.deleteCallback !== undefined) {
+      batch.map((file) =>
+        limit(async () => {
+          metrics.filesCleanedTotal.inc();
           return this.deleteCallback(file);
-        } else {
-          return fs.promises.unlink(file);
-        }
-      }),
+        }),
+      ),
     );
 
     this.lastPath = batch[batch.length - 1];
@@ -159,15 +166,21 @@ export class FsCleanupWorker {
     let keptFileSize = 0;
 
     const walk = async (dir: string) => {
-      // Check if directory exists before trying to read it
+      let files;
       try {
-        await fs.promises.access(dir, fs.constants.F_OK);
-      } catch (error) {
-        this.log.debug('Directory does not exist, skipping', { dir });
-        return;
+        files = await fs.promises.readdir(dir, { withFileTypes: true });
+      } catch (error: any) {
+        // Directory doesn't exist or isn't accessible - skip silently
+        if (error.code === 'ENOENT' || error.code === 'EACCES') {
+          this.log.debug('Directory not accessible, skipping', {
+            dir,
+            code: error.code,
+          });
+          return;
+        }
+        throw error;
       }
 
-      const files = await fs.promises.readdir(dir, { withFileTypes: true });
       files.sort((a, b) => a.name.localeCompare(b.name));
 
       for (const file of files) {
@@ -189,17 +202,24 @@ export class FsCleanupWorker {
         } else {
           if (lastPath === null || fullPath > lastPath) {
             if (file.isFile()) {
-              if (await this.shouldDelete(fullPath)) {
-                batch.push(fullPath);
-                totalFilesProcessed++;
-              } else {
-                // Track kept files
-                try {
-                  const stats = await fs.promises.stat(fullPath);
+              // Stat once and reuse for both shouldDelete check and metrics
+              try {
+                const stats = await fs.promises.stat(fullPath);
+                if (await this.shouldDelete(fullPath, stats)) {
+                  batch.push(fullPath);
+                  totalFilesProcessed++;
+                } else {
+                  // Track kept files using already-fetched stats
                   keptFileCount++;
                   keptFileSize += stats.size;
-                } catch {
-                  // File may not exist or be inaccessible, skip
+                }
+              } catch (error: any) {
+                // File may have been deleted between readdir and stat, skip
+                if (error.code !== 'ENOENT') {
+                  this.log.debug('Error checking file', {
+                    path: fullPath,
+                    error: error.message,
+                  });
                 }
               }
             }

@@ -359,9 +359,9 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
       basePath: 'data/contiguous',
       dataType: 'contiguous_data',
       initialDelay: contiguousDataCacheCleanupThresholdSeconds * 1000, // Use cleanup threshold as initial delay
-      shouldDelete: async (path) => {
+      // Stats are passed by the worker to avoid redundant stat calls
+      shouldDelete: async (path, stats) => {
         try {
-          const stats = await fs.promises.stat(path);
           const hash = path.split('/').pop() ?? '';
           const metadata = await contiguousMetadataStore.get(hash);
 
@@ -404,7 +404,7 @@ export const contiguousDataFsCacheCleanupWorker = !isNaN(
 
           return shouldDeleteFile;
         } catch (err) {
-          log.error(`Error getting file stats for ${path}`, err);
+          log.error(`Error during cleanup check for ${path}`, err);
           return false;
         }
       },
@@ -844,30 +844,22 @@ export const chunkDataFsCacheCleanupWorker =
         log,
         basePath: 'data/chunks',
         dataType: 'chunk_data',
-        shouldDelete: async (path) => {
-          try {
-            const stats = await fs.promises.stat(path);
-            // Use the more recent of atime or mtime, matching contiguous data cleanup pattern
-            const mostRecentTimeMs =
-              stats.atime > stats.mtime ? stats.atimeMs : stats.mtimeMs;
-            const ageInSeconds = (Date.now() - mostRecentTimeMs) / 1000;
+        // Stats are passed by the worker to avoid redundant stat calls
+        shouldDelete: async (_path, stats) => {
+          // Use the more recent of atime or mtime, matching contiguous data cleanup pattern
+          const mostRecentTimeMs =
+            stats.atime > stats.mtime ? stats.atimeMs : stats.mtimeMs;
+          const ageInSeconds = (Date.now() - mostRecentTimeMs) / 1000;
 
-            // Delete if file is older than threshold
-            if (
-              config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD > 0 &&
-              ageInSeconds > config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD
-            ) {
-              return true;
-            }
-
-            return false;
-          } catch (error: any) {
-            log.error('Error checking chunk file for cleanup', {
-              path,
-              error: error.message,
-            });
-            return false;
+          // Delete if file is older than threshold
+          if (
+            config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD > 0 &&
+            ageInSeconds > config.CHUNK_DATA_CACHE_CLEANUP_THRESHOLD
+          ) {
+            return true;
           }
+
+          return false;
         },
       })
     : undefined;

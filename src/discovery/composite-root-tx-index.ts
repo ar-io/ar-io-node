@@ -19,6 +19,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
       [string],
       | {
           rootTxId: string;
+          path?: string[];
           rootOffset?: number;
           rootDataOffset?: number;
           contentType?: string;
@@ -82,6 +83,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
   async getRootTx(id: string): Promise<
     | {
         rootTxId: string;
+        path?: string[];
         rootOffset?: number;
         rootDataOffset?: number;
         contentType?: string;
@@ -96,6 +98,7 @@ export class CompositeRootTxIndex implements DataItemRootIndex {
     let fallbackResult:
       | {
           rootTxId: string;
+          path?: string[];
           rootOffset?: number;
           rootDataOffset?: number;
           contentType?: string;

@@ -935,4 +935,63 @@ describe('ReadThroughDataCache', function () {
       assert.equal(receivedData, 'test data');
     });
   });
+
+  describe('abort signal handling', () => {
+    it('should throw immediately when signal is already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      let upstreamCalled = false;
+      mockContiguousDataSource.getData = async () => {
+        upstreamCalled = true;
+        return {
+          stream: Readable.from(['data']),
+          size: 4,
+          verified: false,
+          trusted: true,
+          cached: false,
+        };
+      };
+
+      await assert.rejects(
+        readThroughDataCache.getData({
+          id: 'test-id',
+          signal: controller.signal,
+        }),
+        { name: 'AbortError' },
+      );
+
+      // Verify upstream was not called
+      assert.equal(upstreamCalled, false);
+    });
+
+    it('should pass signal to upstream data source', async () => {
+      const controller = new AbortController();
+      let receivedSignal: AbortSignal | undefined;
+
+      mockContiguousDataSource.getData = async (params: {
+        signal?: AbortSignal;
+      }) => {
+        receivedSignal = params.signal;
+        return {
+          stream: Readable.from(['data']),
+          size: 4,
+          verified: false,
+          trusted: true,
+          cached: false,
+        };
+      };
+
+      // Return cache miss to force upstream fetch
+      mockDataAttributesStore.getDataAttributes = async () => undefined;
+      mockContiguousDataIndex.getDataParent = async () => undefined;
+
+      await readThroughDataCache.getData({
+        id: 'uncached-id',
+        signal: controller.signal,
+      });
+
+      assert.strictEqual(receivedSignal, controller.signal);
+    });
+  });
 });

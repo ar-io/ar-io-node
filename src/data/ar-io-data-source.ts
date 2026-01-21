@@ -102,13 +102,20 @@ export class ArIODataSource implements ContiguousDataSource {
     id,
     headers,
     requestAttributesHeaders,
+    signal,
   }: {
     peerAddress: string;
     id: string;
     headers: { [key: string]: string };
     requestAttributesHeaders?: ReturnType<typeof generateRequestAttributes>;
+    signal?: AbortSignal;
   }): Promise<AxiosResponse> {
     const path = `/raw/${id}`;
+
+    // Combine timeout with client abort signal
+    const signals: AbortSignal[] = [AbortSignal.timeout(this.requestTimeoutMs)];
+    if (signal) signals.push(signal);
+    const combinedSignal = AbortSignal.any(signals);
 
     const response = await axios.get(`${peerAddress}${path}`, {
       headers: {
@@ -117,7 +124,7 @@ export class ArIODataSource implements ContiguousDataSource {
         ...headers,
       },
       responseType: 'stream',
-      timeout: this.requestTimeoutMs,
+      signal: combinedSignal,
       params: {
         'ar-io-hops': requestAttributesHeaders?.attributes.hops,
         'ar-io-origin': requestAttributesHeaders?.attributes.origin,
@@ -142,12 +149,14 @@ export class ArIODataSource implements ContiguousDataSource {
     region,
     retryCount,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     retryCount?: number;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData> {
     const span = startChildSpan(
       'ArIODataSource.getData',
@@ -167,6 +176,8 @@ export class ArIODataSource implements ContiguousDataSource {
     );
 
     try {
+      // Check for abort before starting
+      signal?.throwIfAborted();
       const log = this.log.child({ method: 'getData' });
       const totalRetryCount =
         retryCount ??
@@ -202,6 +213,9 @@ export class ArIODataSource implements ContiguousDataSource {
         await this.dataAttributesStore.getDataAttributes(id);
 
       for (let i = 0; i < randomPeers.length; i++) {
+        // Check for abort before each peer attempt
+        signal?.throwIfAborted();
+
         const currentPeer = randomPeers[i];
         const peerRequestStart = Date.now();
 
@@ -229,6 +243,7 @@ export class ArIODataSource implements ContiguousDataSource {
                 : {}),
             },
             requestAttributesHeaders,
+            signal,
           });
           const ttfb = Date.now() - requestStartTime;
           const peerRequestDuration = Date.now() - peerRequestStart;
@@ -261,6 +276,16 @@ export class ArIODataSource implements ContiguousDataSource {
             region,
           });
         } catch (error: any) {
+          // Re-throw AbortError immediately - don't try next peer
+          if (error.name === 'AbortError') {
+            span.addEvent('Request aborted', {
+              'ario.peer.url': currentPeer,
+              'ario.peer.index': i,
+              'data.retrieval.error': 'client_disconnected',
+            });
+            throw error;
+          }
+
           span.addEvent('Peer request failed', {
             'ario.peer.url': currentPeer,
             'ario.peer.index': i,
@@ -281,8 +306,11 @@ export class ArIODataSource implements ContiguousDataSource {
 
       throw new Error('Failed to fetch contiguous data from ArIO peers');
     } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+      // Don't record AbortError as exception
+      if (error.name !== 'AbortError') {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+      }
       throw error;
     } finally {
       span.end();

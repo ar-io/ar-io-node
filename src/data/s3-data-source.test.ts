@@ -445,5 +445,51 @@ describe('S3DataSource', () => {
 
       assert.equal(result.requestAttributes, undefined);
     });
+
+    describe('abort signal handling', () => {
+      it('should throw immediately when signal is already aborted', async () => {
+        const controller = new AbortController();
+        controller.abort();
+
+        await assert.rejects(
+          s3DataSource.getData({
+            id: testId,
+            signal: controller.signal,
+          }),
+          { name: 'AbortError' },
+        );
+
+        // Verify no S3 calls were made
+        assert.equal((mockAwsClient.S3.HeadObject as any).mock.callCount(), 0);
+        assert.equal((mockS3Client.GetObject as any).mock.callCount(), 0);
+      });
+
+      it('should throw when signal is aborted before GetObject', async () => {
+        const controller = new AbortController();
+
+        // HeadObject succeeds but aborts before GetObject
+        mockAwsClient.S3.HeadObject = mock.fn(async () => {
+          controller.abort();
+          return {
+            ContentLength: 9,
+            ContentType: 'application/octet-stream',
+            Metadata: {},
+            $metadata: {},
+          };
+        });
+
+        await assert.rejects(
+          s3DataSource.getData({
+            id: testId,
+            signal: controller.signal,
+          }),
+          { name: 'AbortError' },
+        );
+
+        // HeadObject was called but GetObject should not have been
+        assert.equal((mockAwsClient.S3.HeadObject as any).mock.callCount(), 1);
+        assert.equal((mockS3Client.GetObject as any).mock.callCount(), 0);
+      });
+    });
   });
 });

@@ -958,6 +958,8 @@ export interface DataItemRootIndex {
   getRootTx(id: string): Promise<
     | {
         rootTxId: string;
+        /** Path from root TX to immediate parent bundle [root, ..., parent] */
+        path?: string[];
         rootOffset?: number;
         rootDataOffset?: number;
         contentType?: string;
@@ -974,11 +976,13 @@ export interface ContiguousDataSource {
     requestAttributes,
     region,
     parentSpan,
+    signal,
   }: {
     id: string;
     requestAttributes?: RequestAttributes;
     region?: Region;
     parentSpan?: Span;
+    signal?: AbortSignal;
   }): Promise<ContiguousData>;
 }
 

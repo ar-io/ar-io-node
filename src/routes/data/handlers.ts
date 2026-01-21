@@ -561,6 +561,7 @@ const handleRangeRequest = async ({
           size: end - start + 1,
         },
         parentSpan: span,
+        signal: req.signal,
       });
 
       rangeData.stream.pipe(res);
@@ -609,21 +610,30 @@ const handleRangeRequest = async ({
       // Get data streams for all ranges
       const rangeStreams: { range: rangeParser.Range; stream: Readable }[] = [];
 
-      for (const range of ranges) {
-        const start = range.start;
-        const end = range.end;
+      try {
+        for (const range of ranges) {
+          const start = range.start;
+          const end = range.end;
 
-        const rangeData = await dataSource.getData({
-          id,
-          requestAttributes,
-          region: {
-            offset: start,
-            size: end - start + 1,
-          },
-          parentSpan: span,
-        });
+          const rangeData = await dataSource.getData({
+            id,
+            requestAttributes,
+            region: {
+              offset: start,
+              size: end - start + 1,
+            },
+            parentSpan: span,
+            signal: req.signal,
+          });
 
-        rangeStreams.push({ range, stream: rangeData.stream });
+          rangeStreams.push({ range, stream: rangeData.stream });
+        }
+      } catch (error) {
+        // Clean up any already-fetched streams on error
+        for (const { stream } of rangeStreams) {
+          stream.destroy();
+        }
+        throw error;
       }
 
       // Write response using pre-built parts
@@ -642,7 +652,10 @@ const handleRangeRequest = async ({
       res.end();
     }
   } catch (error: any) {
-    span.recordException(error);
+    // Don't record AbortError as exception - just re-throw
+    if (error.name !== 'AbortError') {
+      span.recordException(error);
+    }
     throw error;
   } finally {
     span.end();
@@ -801,6 +814,7 @@ export const createRawDataHandler = ({
             id,
             requestAttributes,
             parentSpan: span,
+            signal: req.signal,
           });
           const dataDuration = Date.now() - dataStartTime;
           span.setAttributes({
@@ -899,6 +913,17 @@ export const createRawDataHandler = ({
             data.stream.pipe(res);
           }
         } catch (error: any) {
+          // Handle client disconnect (AbortError) specially
+          if (error.name === 'AbortError') {
+            span.setAttribute('http.status_code', 499);
+            span.setAttribute('data.retrieval.error', 'client_disconnected');
+            data?.stream.destroy();
+            if (!res.headersSent) {
+              res.status(499).end();
+            }
+            return;
+          }
+
           const dataDuration = Date.now() - dataStartTime;
           span.setAttributes({
             'data.retrieval.duration_ms': dataDuration,
@@ -916,6 +941,16 @@ export const createRawDataHandler = ({
           return;
         }
       } catch (error: any) {
+        // Handle client disconnect (AbortError) specially
+        if (error.name === 'AbortError') {
+          span.setAttribute('http.status_code', 499);
+          span.setAttribute('data.retrieval.error', 'client_disconnected');
+          if (!res.headersSent) {
+            res.status(499).end();
+          }
+          return;
+        }
+
         span.recordException(error);
         span.setAttribute('http.status_code', 500);
         log.error('Unexpected error in raw data handler:', {
@@ -990,8 +1025,13 @@ const sendManifestResponse = async ({
         id: resolvedId,
         requestAttributes,
         parentSpan,
+        signal: req.signal,
       });
     } catch (error: any) {
+      // Re-throw AbortError to be handled by caller
+      if (error.name === 'AbortError') {
+        throw error;
+      }
       log.warn('Unable to retrieve contiguous data:', {
         dataId: resolvedId,
         message: error.message,
@@ -1285,6 +1325,7 @@ export const createDataHandler = ({
             id,
             requestAttributes,
             parentSpan: span,
+            signal: req.signal,
           });
           const dataDuration = Date.now() - dataStartTime;
           span.setAttributes({
@@ -1331,6 +1372,17 @@ export const createDataHandler = ({
             return;
           }
         } catch (error: any) {
+          // Handle client disconnect (AbortError) specially
+          if (error.name === 'AbortError') {
+            span.setAttribute('http.status_code', 499);
+            span.setAttribute('data.retrieval.error', 'client_disconnected');
+            data?.stream.destroy();
+            if (!res.headersSent) {
+              res.status(499).end();
+            }
+            return;
+          }
+
           const dataDuration = Date.now() - dataStartTime;
           span.setAttributes({
             'data.retrieval.duration_ms': dataDuration,
@@ -1458,6 +1510,17 @@ export const createDataHandler = ({
           data.stream.pipe(res);
         }
       } catch (error: any) {
+        // Handle client disconnect (AbortError) specially
+        if (error.name === 'AbortError') {
+          span.setAttribute('http.status_code', 499);
+          span.setAttribute('data.retrieval.error', 'client_disconnected');
+          data?.stream.destroy();
+          if (!res.headersSent) {
+            res.status(499).end();
+          }
+          return;
+        }
+
         span.recordException(error);
         span.setAttribute('http.status_code', 404);
         log.error('Error retrieving data:', {
